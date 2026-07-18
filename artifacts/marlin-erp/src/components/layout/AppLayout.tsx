@@ -227,10 +227,16 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               </div>
             )}
 
-            {/* Collapse toggle — visible on md+ */}
+            {/* Collapse toggle — always visible */}
             <button
-              onClick={() => setCollapsed(!collapsed)}
-              className="hidden md:flex items-center justify-center w-7 h-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
+              onClick={() => {
+                if (window.innerWidth < 768) {
+                  setSidebarOpen(false);
+                } else {
+                  setCollapsed(!collapsed);
+                }
+              }}
+              className="flex items-center justify-center w-7 h-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
               title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             >
               {collapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
