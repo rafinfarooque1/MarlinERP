@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'wouter';
 import { 
   LayoutDashboard, 
@@ -24,6 +24,8 @@ import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+
+const LOGO_KEY = 'marlin_company_logo';
 
 const navigation = [
   {
@@ -184,13 +186,21 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const { data: user } = useGetMe();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
+  const [logo, setLogo] = useState<string | null>(() => localStorage.getItem(LOGO_KEY));
+
+  // Listen for logo changes from Profile page
+  useEffect(() => {
+    const handler = (e: Event) => {
+      setLogo((e as CustomEvent).detail);
+    };
+    window.addEventListener('marlin_logo_changed', handler);
+    return () => window.removeEventListener('marlin_logo_changed', handler);
+  }, []);
 
   const handleLogout = () => {
-    logoutMutation.mutate(undefined, {
-      onSuccess: () => {
-        setLocation('/login');
-      }
-    });
+    localStorage.removeItem('marlin_auth_token');
+    localStorage.removeItem('marlin_user');
+    setLocation('/login');
   };
 
   return (
@@ -217,13 +227,23 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           {/* Logo row */}
           <div className="h-16 flex items-center justify-between px-4 border-b border-border shrink-0">
             {!collapsed && (
-              <h1 className="text-xl font-bold font-sans tracking-tight text-primary select-none">
-                MARLIN<span className="text-foreground">ERP</span>
-              </h1>
+              logo ? (
+                <Link href="/" className="flex items-center h-10 max-w-[160px]">
+                  <img src={logo} alt="Company logo" className="h-full w-full object-contain object-left" />
+                </Link>
+              ) : (
+                <h1 className="text-xl font-bold font-sans tracking-tight text-primary select-none">
+                  MARLIN<span className="text-foreground">ERP</span>
+                </h1>
+              )
             )}
             {collapsed && (
               <div className="w-full flex justify-center">
-                <span className="text-lg font-bold text-primary select-none">M</span>
+                {logo ? (
+                  <img src={logo} alt="Logo" className="w-8 h-8 object-contain" />
+                ) : (
+                  <span className="text-lg font-bold text-primary select-none">M</span>
+                )}
               </div>
             )}
 
@@ -284,6 +304,13 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             </div>
 
             <div className="flex items-center gap-2 lg:gap-4">
+              {/* Company logo in header (visible on mobile when sidebar is hidden) */}
+              {logo && (
+                <div className="md:hidden flex items-center h-8">
+                  <img src={logo} alt="Company logo" className="h-full object-contain max-w-[100px]" />
+                </div>
+              )}
+
               <Button variant="ghost" size="icon" className="relative text-muted-foreground hover:text-foreground">
                 <Bell className="w-5 h-5" />
                 <span className="absolute top-2 right-2 w-2 h-2 bg-primary rounded-full" />

@@ -4,197 +4,178 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
+import { Textarea } from '@/components/ui/textarea';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Edit2, Trash2, Building2 } from 'lucide-react';
-import { useToast } from '@/hooks/use-toast';
+import { Plus, Search, Edit2, Trash2, Warehouse, Download, Eye } from 'lucide-react';
+import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
+import { downloadCSV } from '@/lib/download';
+import { Badge } from '@/components/ui/badge';
 
 const schema = z.object({
-  name: z.string().min(1, 'Name is required'),
-  state: z.string().min(1, 'State is required'),
-  gstNumber: z.string().min(15, 'Valid GST Number is required').max(15),
+  name: z.string().min(1, 'Name required'),
+  state: z.string().min(1, 'State required'),
+  gstNumber: z.string().optional(),
   address: z.string().optional(),
   contactPerson: z.string().optional(),
   phone: z.string().optional(),
 });
+type FormValues = z.infer<typeof schema>;
 
 export default function Warehouses() {
-  const { data: warehouses, isLoading } = useListWarehouses();
+  const { data: warehouses = [], isLoading } = useListWarehouses();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const { toast } = useToast();
+  const [viewItem, setViewItem] = useState<any>(null);
   const queryClient = useQueryClient();
-
   const createMutation = useCreateWarehouse();
   const updateMutation = useUpdateWarehouse();
   const deleteMutation = useDeleteWarehouse();
 
-  const form = useForm<z.infer<typeof schema>>({
-    resolver: zodResolver(schema),
-    defaultValues: { name: '', state: '', gstNumber: '', address: '', contactPerson: '', phone: '' },
-  });
+  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', state: '', gstNumber: '', address: '', contactPerson: '', phone: '' } });
 
-  const onSubmit = (data: z.infer<typeof schema>) => {
-    if (editingId) {
-      updateMutation.mutate({ id: editingId, data }, {
-        onSuccess: () => {
-          queryClient.invalidateQueries({ queryKey: getListWarehousesQueryKey() });
-          setIsOpen(false);
-          toast({ title: 'Warehouse updated' });
-        }
-      });
-    } else {
-      createMutation.mutate({ data }, {
-        onSuccess: () => {
-          queryClient.invalidateQueries({ queryKey: getListWarehousesQueryKey() });
-          setIsOpen(false);
-          toast({ title: 'Warehouse created' });
-        }
-      });
-    }
+  const openAdd = () => { setEditingId(null); form.reset({ name: '', state: '', gstNumber: '', address: '', contactPerson: '', phone: '' }); setIsOpen(true); };
+  const openEdit = (w: any) => { setEditingId(w.id); form.reset({ name: w.name, state: w.state, gstNumber: w.gstNumber || '', address: w.address || '', contactPerson: w.contactPerson || '', phone: w.phone || '' }); setIsOpen(true); };
+
+  const onSubmit = (data: FormValues) => {
+    const opts = {
+      onSuccess: () => { toast.success(editingId ? 'Warehouse updated' : 'Warehouse added'); queryClient.invalidateQueries({ queryKey: getListWarehousesQueryKey() }); setIsOpen(false); },
+      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+    };
+    if (editingId) updateMutation.mutate({ id: editingId, data }, opts);
+    else createMutation.mutate({ data }, opts);
   };
 
-  const handleEdit = (warehouse: any) => {
-    setEditingId(warehouse.id);
-    form.reset({
-      name: warehouse.name,
-      state: warehouse.state,
-      gstNumber: warehouse.gstNumber,
-      address: warehouse.address || '',
-      contactPerson: warehouse.contactPerson || '',
-      phone: warehouse.phone || '',
+  const handleDelete = (id: number, name: string) => {
+    if (!confirm(`Delete "${name}"?`)) return;
+    deleteMutation.mutate({ id }, {
+      onSuccess: () => { toast.success('Deleted'); queryClient.invalidateQueries({ queryKey: getListWarehousesQueryKey() }); },
+      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
-    setIsOpen(true);
   };
 
-  const handleDelete = (id: number) => {
-    if (confirm('Are you sure you want to delete this warehouse?')) {
-      deleteMutation.mutate({ id }, {
-        onSuccess: () => {
-          queryClient.invalidateQueries({ queryKey: getListWarehousesQueryKey() });
-          toast({ title: 'Warehouse deleted' });
-        }
-      });
-    }
-  };
-
-  const filtered = warehouses?.filter(w => w.name.toLowerCase().includes(search.toLowerCase()) || w.state.toLowerCase().includes(search.toLowerCase())) || [];
+  const filtered = warehouses.filter(w => w.name.toLowerCase().includes(search.toLowerCase()) || w.state?.toLowerCase().includes(search.toLowerCase()));
+  const isPending = createMutation.isPending || updateMutation.isPending;
 
   return (
     <AppLayout>
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Building2 className="w-6 h-6 text-primary" /> Warehouses
-            </h1>
-            <p className="text-muted-foreground mt-1">Manage regional distribution centers</p>
+            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Warehouse className="w-6 h-6 text-primary" /> Warehouses</h1>
+            <p className="text-muted-foreground mt-1">Regional distribution centre management</p>
           </div>
-          
-          <Dialog open={isOpen} onOpenChange={(open) => {
-            setIsOpen(open);
-            if (!open) { setEditingId(null); form.reset(); }
-          }}>
-            <DialogTrigger asChild>
-              <Button><Plus className="w-4 h-4 mr-2" /> Add Warehouse</Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-xl">
-              <DialogHeader>
-                <DialogTitle>{editingId ? 'Edit Warehouse' : 'Add Warehouse'}</DialogTitle>
-              </DialogHeader>
-              <Form {...form}>
-                <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <FormField control={form.control} name="name" render={({field}) => (
-                      <FormItem><FormLabel>Warehouse Name</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
-                    )} />
-                    <FormField control={form.control} name="gstNumber" render={({field}) => (
-                      <FormItem><FormLabel>GST Number</FormLabel><FormControl><Input {...field} className="uppercase font-mono" /></FormControl><FormMessage /></FormItem>
-                    )} />
-                    <FormField control={form.control} name="state" render={({field}) => (
-                      <FormItem><FormLabel>State</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
-                    )} />
-                    <FormField control={form.control} name="contactPerson" render={({field}) => (
-                      <FormItem><FormLabel>Contact Person</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
-                    )} />
-                    <FormField control={form.control} name="phone" render={({field}) => (
-                      <FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
-                    )} />
-                    <FormField control={form.control} name="address" render={({field}) => (
-                      <FormItem className="col-span-2"><FormLabel>Address</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
-                    )} />
-                  </div>
-                  <DialogFooter>
-                    <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>Save</Button>
-                  </DialogFooter>
-                </form>
-              </Form>
-            </DialogContent>
-          </Dialog>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => downloadCSV('warehouses.csv', filtered.map(w => ({ Name: w.name, State: w.state, GST: w.gstNumber || '', Contact: w.contactPerson || '', Phone: w.phone || '' })))}>
+              <Download className="w-4 h-4 mr-2" /> Export
+            </Button>
+            <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Warehouse</Button>
+          </div>
         </div>
 
-        <div className="bg-card border border-border rounded-md shadow-sm">
-          <div className="p-4 border-b border-border flex items-center gap-2">
+        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
             <Search className="w-4 h-4 text-muted-foreground" />
-            <Input 
-              placeholder="Search warehouses..." 
-              value={search} 
-              onChange={e => setSearch(e.target.value)}
-              className="max-w-xs border-transparent bg-muted/50 focus-visible:bg-transparent"
-            />
+            <Input placeholder="Search by name or state..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-xs" />
           </div>
-          
           <Table>
             <TableHeader>
-              <TableRow>
+              <TableRow className="bg-muted/10">
                 <TableHead>Name</TableHead>
                 <TableHead>State</TableHead>
-                <TableHead>GST Number</TableHead>
+                <TableHead>GST No.</TableHead>
                 <TableHead>Contact</TableHead>
-                <TableHead>Outlets</TableHead>
+                <TableHead>Phone</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">Loading...</TableCell></TableRow>
-              ) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No warehouses found</TableCell></TableRow>
-              ) : (
-                filtered.map(warehouse => (
-                  <TableRow key={warehouse.id}>
-                    <TableCell className="font-medium">{warehouse.name}</TableCell>
-                    <TableCell>{warehouse.state}</TableCell>
-                    <TableCell className="font-mono text-xs">{warehouse.gstNumber}</TableCell>
-                    <TableCell>
-                      <div className="text-sm">
-                        <div>{warehouse.contactPerson || '-'}</div>
-                        <div className="text-muted-foreground text-xs">{warehouse.phone}</div>
-                      </div>
-                    </TableCell>
-                    <TableCell className="font-mono text-primary font-bold">{warehouse.outletCount || 0}</TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        <Button variant="ghost" size="icon" onClick={() => handleEdit(warehouse)}>
-                          <Edit2 className="w-4 h-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive" onClick={() => handleDelete(warehouse.id)}>
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
+              {isLoading ? [...Array(3)].map((_, i) => (
+                <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+              )) : filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
+                  <Warehouse className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No warehouses found</p>
+                </TableCell></TableRow>
+              ) : filtered.map(w => (
+                <TableRow key={w.id} className="hover:bg-muted/10">
+                  <TableCell className="font-semibold">{w.name}</TableCell>
+                  <TableCell><Badge variant="outline">{w.state}</Badge></TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">{w.gstNumber || '—'}</TableCell>
+                  <TableCell className="text-sm">{w.contactPerson || '—'}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{w.phone || '—'}</TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(w)}><Eye className="w-4 h-4" /></Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(w)}><Edit2 className="w-4 h-4" /></Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => handleDelete(w.id, w.name)}><Trash2 className="w-4 h-4" /></Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
             </TableBody>
           </Table>
         </div>
       </div>
+
+      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditingId(null); form.reset(); } }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader><DialogTitle>{editingId ? 'Edit Warehouse' : 'Add Warehouse'}</DialogTitle></DialogHeader>
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
+              <div className="grid grid-cols-2 gap-4">
+                <FormField control={form.control} name="name" render={({ field }) => (
+                  <FormItem className="col-span-2"><FormLabel>Warehouse Name <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="e.g. Bengaluru Hub" {...field} /></FormControl><FormMessage /></FormItem>
+                )} />
+                <FormField control={form.control} name="state" render={({ field }) => (
+                  <FormItem><FormLabel>State <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="Karnataka" {...field} /></FormControl><FormMessage /></FormItem>
+                )} />
+                <FormField control={form.control} name="gstNumber" render={({ field }) => (
+                  <FormItem><FormLabel>GST Number</FormLabel><FormControl><Input placeholder="29XXXXX" className="font-mono" {...field} /></FormControl><FormMessage /></FormItem>
+                )} />
+                <FormField control={form.control} name="contactPerson" render={({ field }) => (
+                  <FormItem><FormLabel>Contact Person</FormLabel><FormControl><Input placeholder="Name" {...field} /></FormControl></FormItem>
+                )} />
+                <FormField control={form.control} name="phone" render={({ field }) => (
+                  <FormItem><FormLabel>Phone</FormLabel><FormControl><Input placeholder="+91 ..." {...field} /></FormControl></FormItem>
+                )} />
+              </div>
+              <FormField control={form.control} name="address" render={({ field }) => (
+                <FormItem><FormLabel>Address</FormLabel><FormControl><Textarea placeholder="Full address..." rows={2} {...field} /></FormControl></FormItem>
+              )} />
+              <DialogFooter>
+                <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
+                <Button type="submit" disabled={isPending}>{isPending ? 'Saving…' : 'Save'}</Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+
+      <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
+        <SheetContent>
+          <SheetHeader>
+            <SheetTitle className="flex items-center gap-2"><Warehouse className="w-5 h-5 text-primary" />{viewItem?.name}</SheetTitle>
+            <SheetDescription>{viewItem?.state}</SheetDescription>
+          </SheetHeader>
+          {viewItem && (
+            <div className="mt-6 space-y-4">
+              {[['State', viewItem.state], ['GST Number', viewItem.gstNumber || '—'], ['Contact Person', viewItem.contactPerson || '—'], ['Phone', viewItem.phone || '—'], ['Address', viewItem.address || '—']].map(([k, v]) => (
+                <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
+                  <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
+                  <span className="font-medium">{v}</span>
+                </div>
+              ))}
+              <Button className="w-full" onClick={() => { setViewItem(null); openEdit(viewItem); }}><Edit2 className="w-4 h-4 mr-2" /> Edit</Button>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
     </AppLayout>
   );
 }

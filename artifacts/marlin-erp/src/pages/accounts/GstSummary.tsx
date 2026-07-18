@@ -4,126 +4,126 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Calculator, Download, Calendar } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
+import { Receipt, Download, TrendingUp, TrendingDown } from 'lucide-react';
+import { downloadCSV } from '@/lib/download';
 
 export default function GstSummary() {
-  const currentMonth = new Date().getMonth();
-  const currentYear = new Date().getFullYear();
-  
-  const [fromDate, setFromDate] = useState(new Date(currentYear, currentMonth, 1).toISOString().split('T')[0]);
-  const [toDate, setToDate] = useState(new Date(currentYear, currentMonth + 1, 0).toISOString().split('T')[0]); // Last day of current month
+  const now = new Date();
+  const [fromDate, setFromDate] = useState(`${now.getFullYear()}-04-01`);
+  const [toDate, setToDate] = useState(now.toISOString().split('T')[0]);
 
-  const { data: summary, isLoading } = useGetGstSummary({ fromDate, toDate });
+  const { data: gst, isLoading } = useGetGstSummary({ fromDate, toDate });
+
+  const salesData = gst?.salesByRate || [];
+  const purchasesData = gst?.purchasesByRate || [];
+
+  const totalOutputTax = salesData.reduce((s: number, r: any) => s + Number(r.taxAmount || 0), 0);
+  const totalInputTax = purchasesData.reduce((s: number, r: any) => s + Number(r.taxAmount || 0), 0);
+  const netGst = totalOutputTax - totalInputTax;
 
   return (
     <AppLayout>
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Calculator className="w-6 h-6 text-primary" /> GST Summary
-            </h1>
-            <p className="text-muted-foreground mt-1">Tax liability and input tax credit overview</p>
+            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Receipt className="w-6 h-6 text-primary" /> GST Summary</h1>
+            <p className="text-muted-foreground mt-1">Input / Output tax and net GST liability</p>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-2 border border-input rounded-md px-2 py-1 bg-card shadow-sm">
-              <Calendar className="w-4 h-4 text-muted-foreground" />
-              <Input 
-                type="date" 
-                value={fromDate} 
-                onChange={(e) => setFromDate(e.target.value)} 
-                className="h-7 w-[130px] border-transparent p-0 bg-transparent focus-visible:ring-0 text-sm"
-              />
-              <span className="text-muted-foreground text-xs">to</span>
-              <Input 
-                type="date" 
-                value={toDate} 
-                onChange={(e) => setToDate(e.target.value)} 
-                className="h-7 w-[130px] border-transparent p-0 bg-transparent focus-visible:ring-0 text-sm"
-              />
+          <Button variant="outline" size="sm" onClick={() => {
+            const rows = [...salesData.map((r: any) => ({ Type: 'Output (Sales)', 'Tax Rate': `${r.taxRate}%`, 'Taxable Value': r.taxableValue, 'Tax Amount': r.taxAmount })),
+              ...purchasesData.map((r: any) => ({ Type: 'Input (Purchases)', 'Tax Rate': `${r.taxRate}%`, 'Taxable Value': r.taxableValue, 'Tax Amount': r.taxAmount }))];
+            downloadCSV('gst-summary.csv', rows);
+          }}>
+            <Download className="w-4 h-4 mr-2" /> Export
+          </Button>
+        </div>
+
+        {/* Date Filters */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="text-sm text-muted-foreground">Period:</span>
+          <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="w-36" />
+          <span className="text-muted-foreground">to</span>
+          <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-36" />
+        </div>
+
+        {/* Summary Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="bg-card border border-border rounded-xl p-5">
+            <div className="flex items-center gap-2 mb-2">
+              <TrendingUp className="w-4 h-4 text-emerald-500" />
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">Output Tax (Sales)</p>
             </div>
-            <Button variant="outline" size="sm" className="h-9"><Download className="w-4 h-4 mr-2" /> Export</Button>
+            <p className="text-2xl font-bold text-emerald-500 font-mono">₹{totalOutputTax.toLocaleString('en-IN')}</p>
+          </div>
+          <div className="bg-card border border-border rounded-xl p-5">
+            <div className="flex items-center gap-2 mb-2">
+              <TrendingDown className="w-4 h-4 text-primary" />
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">Input Tax (Purchases)</p>
+            </div>
+            <p className="text-2xl font-bold text-primary font-mono">₹{totalInputTax.toLocaleString('en-IN')}</p>
+          </div>
+          <div className="bg-card border border-border rounded-xl p-5">
+            <div className="flex items-center gap-2 mb-2">
+              <Receipt className="w-4 h-4 text-amber-500" />
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">Net GST Payable</p>
+            </div>
+            <p className={`text-2xl font-bold font-mono ${netGst > 0 ? 'text-red-500' : 'text-emerald-500'}`}>₹{Math.abs(netGst).toLocaleString('en-IN')} {netGst < 0 ? '(refund)' : ''}</p>
           </div>
         </div>
 
-        {isLoading ? (
-          <div className="flex items-center justify-center py-20 text-muted-foreground">Calculating GST data...</div>
-        ) : summary ? (
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-card border border-border p-4 rounded-md shadow-sm relative overflow-hidden group">
-                <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:scale-110 transition-transform"><Calculator className="w-12 h-12" /></div>
-                <div className="text-sm font-medium text-muted-foreground mb-1">Total Sales</div>
-                <div className="text-2xl font-bold font-mono">₹{summary.totalSales?.toLocaleString('en-IN') || 0}</div>
-              </div>
-              <div className="bg-card border border-border p-4 rounded-md shadow-sm relative overflow-hidden group">
-                <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:scale-110 transition-transform"><Calculator className="w-12 h-12" /></div>
-                <div className="text-sm font-medium text-muted-foreground mb-1">Total Purchases</div>
-                <div className="text-2xl font-bold font-mono">₹{summary.totalPurchases?.toLocaleString('en-IN') || 0}</div>
-              </div>
-              <div className="bg-card border border-border p-4 rounded-md shadow-sm relative overflow-hidden group border-l-4 border-l-destructive">
-                <div className="text-sm font-medium text-muted-foreground mb-1">Output Tax (Collected)</div>
-                <div className="text-2xl font-bold font-mono text-destructive">₹{summary.totalTaxCollected?.toLocaleString('en-IN') || 0}</div>
-              </div>
-              <div className="bg-card border border-border p-4 rounded-md shadow-sm relative overflow-hidden group border-l-4 border-l-emerald-500">
-                <div className="text-sm font-medium text-muted-foreground mb-1">Input Tax Credit (Paid)</div>
-                <div className="text-2xl font-bold font-mono text-emerald-500">₹{summary.totalTaxPaid?.toLocaleString('en-IN') || 0}</div>
-              </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-border bg-muted/20">
+              <h3 className="font-semibold flex items-center gap-2"><TrendingUp className="w-4 h-4 text-emerald-500" /> Output Tax (Sales)</h3>
             </div>
-
-            <div className="bg-card border border-border p-6 rounded-md shadow-sm flex flex-col md:flex-row items-center justify-between gap-6">
-              <div>
-                <h3 className="text-lg font-bold">Net GST Liability</h3>
-                <p className="text-sm text-muted-foreground mt-1">Output Tax - Input Tax Credit for the selected period.</p>
-              </div>
-              <div className="text-right">
-                <div className={`text-4xl font-black font-mono tracking-tighter ${(summary.netGstLiability || 0) > 0 ? 'text-primary' : 'text-emerald-500'}`}>
-                  ₹{summary.netGstLiability?.toLocaleString('en-IN') || 0}
-                </div>
-                {(summary.netGstLiability || 0) <= 0 && <Badge className="mt-2 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 border-none">Net Credit Available</Badge>}
-              </div>
-            </div>
-
-            <h3 className="text-lg font-bold mt-8 mb-4">Branch-wise Breakdown</h3>
-            <div className="bg-card border border-border rounded-md shadow-sm">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Warehouse / Branch</TableHead>
-                    <TableHead>GST Number</TableHead>
-                    <TableHead className="text-right">Sales Tax Collected</TableHead>
-                    <TableHead className="text-right">Purchase Tax Paid</TableHead>
-                    <TableHead className="text-right">Net Liability</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {!summary.byWarehouse || summary.byWarehouse.length === 0 ? (
-                    <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No branch data available</TableCell></TableRow>
-                  ) : (
-                    summary.byWarehouse.map((branch, idx) => {
-                      const net = (branch.salesTax || 0) - (branch.purchaseTax || 0);
-                      return (
-                        <TableRow key={branch.warehouseId || idx}>
-                          <TableCell className="font-medium">{branch.warehouseName}</TableCell>
-                          <TableCell className="font-mono text-xs text-muted-foreground">{branch.gstNumber || '-'}</TableCell>
-                          <TableCell className="text-right font-mono text-destructive">₹{branch.salesTax?.toLocaleString('en-IN') || 0}</TableCell>
-                          <TableCell className="text-right font-mono text-emerald-500">₹{branch.purchaseTax?.toLocaleString('en-IN') || 0}</TableCell>
-                          <TableCell className="text-right font-mono font-bold">₹{net.toLocaleString('en-IN')}</TableCell>
-                        </TableRow>
-                      );
-                    })
-                  )}
-                </TableBody>
-              </Table>
-            </div>
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/10">
+                  <TableHead>Tax Rate</TableHead>
+                  <TableHead className="text-right">Taxable Value</TableHead>
+                  <TableHead className="text-right">Tax Amount</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {isLoading ? <TableRow><TableCell colSpan={3}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                  : salesData.length === 0 ? <TableRow><TableCell colSpan={3} className="text-center py-6 text-muted-foreground">No sales data</TableCell></TableRow>
+                  : salesData.map((r: any) => (
+                    <TableRow key={r.taxRate} className="hover:bg-muted/10">
+                      <TableCell className="font-bold text-primary">{r.taxRate}%</TableCell>
+                      <TableCell className="text-right font-mono">₹{Number(r.taxableValue).toLocaleString('en-IN')}</TableCell>
+                      <TableCell className="text-right font-mono font-bold text-emerald-500">₹{Number(r.taxAmount).toLocaleString('en-IN')}</TableCell>
+                    </TableRow>
+                  ))}
+              </TableBody>
+            </Table>
           </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center p-12 border border-dashed border-border rounded-md text-muted-foreground">
-            <Calculator className="w-12 h-12 mb-4 opacity-20" />
-            <p>Failed to load GST data. Please try adjusting the date range.</p>
+
+          <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-border bg-muted/20">
+              <h3 className="font-semibold flex items-center gap-2"><TrendingDown className="w-4 h-4 text-primary" /> Input Tax (Purchases)</h3>
+            </div>
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/10">
+                  <TableHead>Tax Rate</TableHead>
+                  <TableHead className="text-right">Taxable Value</TableHead>
+                  <TableHead className="text-right">Tax Amount</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {isLoading ? <TableRow><TableCell colSpan={3}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                  : purchasesData.length === 0 ? <TableRow><TableCell colSpan={3} className="text-center py-6 text-muted-foreground">No purchase data</TableCell></TableRow>
+                  : purchasesData.map((r: any) => (
+                    <TableRow key={r.taxRate} className="hover:bg-muted/10">
+                      <TableCell className="font-bold text-primary">{r.taxRate}%</TableCell>
+                      <TableCell className="text-right font-mono">₹{Number(r.taxableValue).toLocaleString('en-IN')}</TableCell>
+                      <TableCell className="text-right font-mono font-bold text-primary">₹{Number(r.taxAmount).toLocaleString('en-IN')}</TableCell>
+                    </TableRow>
+                  ))}
+              </TableBody>
+            </Table>
           </div>
-        )}
+        </div>
       </div>
     </AppLayout>
   );

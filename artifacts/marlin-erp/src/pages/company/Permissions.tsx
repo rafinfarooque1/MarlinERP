@@ -1,147 +1,132 @@
-import { useState, useMemo } from 'react';
-import { useListPermissions, useListHierarchies, useSetPermission, getListPermissionsQueryKey } from '@workspace/api-client-react';
+import { useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Checkbox } from '@/components/ui/checkbox';
-import { ShieldCheck } from 'lucide-react';
-import { useToast } from '@/hooks/use-toast';
-import { useQueryClient } from '@tanstack/react-query';
+import { Switch } from '@/components/ui/switch';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { ShieldCheck, Save, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 
-const MODULES = [
-  'Dashboard', 'Materials', 'RawMaterials', 'Items', 'Purchases', 'Production', 
-  'StockTransfers', 'Warehouses', 'Outlets', 'StockLedger', 'ItemPrices', 'Sales',
-  'Hierarchy', 'Employees', 'Payroll', 'Attendance', 'Leave', 'Customers', 
-  'Vendors', 'Coupons', 'ChartOfAccounts', 'Ledger', 'CashBank', 'Expenses', 
-  'GstSummary', 'Settings'
+const ROLES = ['Admin', 'Manager', 'Production Staff', 'Warehouse Staff', 'Sales Staff', 'Accountant', 'HR'];
+
+const MODULE_GROUPS = [
+  {
+    title: 'Production',
+    modules: ['Materials', 'Raw Materials', 'Items', 'Purchases', 'Production', 'Stock Transfers'],
+  },
+  {
+    title: 'Head Office',
+    modules: ['Warehouses', 'Outlets', 'Stock', 'HO Transfers', 'Item Prices', 'Sales'],
+  },
+  {
+    title: 'HR',
+    modules: ['Hierarchy', 'Employees', 'Payroll', 'Attendance', 'Leave'],
+  },
+  {
+    title: 'Customers',
+    modules: ['Customers', 'Vendors', 'Coupons'],
+  },
+  {
+    title: 'Accounts',
+    modules: ['Chart of Accounts', 'Ledger', 'Cash & Bank', 'Expenses', 'GST Summary'],
+  },
+  {
+    title: 'Company',
+    modules: ['Settings', 'Permissions', 'Profile'],
+  },
 ];
 
+const DEFAULT_PERMS: Record<string, Record<string, boolean>> = {
+  Admin: Object.fromEntries(MODULE_GROUPS.flatMap(g => g.modules.map(m => [m, true]))),
+  Manager: Object.fromEntries(MODULE_GROUPS.flatMap(g => g.modules.map(m => [m, !['Settings', 'Permissions'].includes(m)]))),
+  'Production Staff': Object.fromEntries(MODULE_GROUPS.flatMap(g => g.modules.map(m => [m, g.title === 'Production']))),
+  'Warehouse Staff': Object.fromEntries(MODULE_GROUPS.flatMap(g => g.modules.map(m => [m, ['Warehouses', 'Stock', 'Stock Transfers', 'HO Transfers'].includes(m)]))),
+  'Sales Staff': Object.fromEntries(MODULE_GROUPS.flatMap(g => g.modules.map(m => [m, ['Sales', 'Customers', 'Coupons', 'Outlets', 'Item Prices'].includes(m)]))),
+  Accountant: Object.fromEntries(MODULE_GROUPS.flatMap(g => g.modules.map(m => [m, g.title === 'Accounts' || ['Customers', 'Vendors'].includes(m)]))),
+  HR: Object.fromEntries(MODULE_GROUPS.flatMap(g => g.modules.map(m => [m, g.title === 'HR']))),
+};
+
+function loadPerms() {
+  const saved = localStorage.getItem('marlin_permissions');
+  return saved ? JSON.parse(saved) : DEFAULT_PERMS;
+}
+
 export default function Permissions() {
-  const { data: hierarchies, isLoading: loadingHierarchies } = useListHierarchies();
-  const { data: permissions, isLoading: loadingPermissions } = useListPermissions();
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
-  const setPermissionMutation = useSetPermission();
+  const [selectedRole, setSelectedRole] = useState('Admin');
+  const [perms, setPerms] = useState<typeof DEFAULT_PERMS>(loadPerms);
+  const [saving, setSaving] = useState(false);
 
-  const handleToggle = (hierarchyId: number, module: string, action: 'canView' | 'canAdd' | 'canEdit' | 'canDelete' | 'canDownload', currentValue: boolean) => {
-    // Find if this permission record exists
-    const existing = permissions?.find(p => p.hierarchyId === hierarchyId && p.module === module);
-    
-    // Construct payload based on existing or default false
-    const payload = {
-      hierarchyId,
-      module,
-      canView: existing?.canView || false,
-      canAdd: existing?.canAdd || false,
-      canEdit: existing?.canEdit || false,
-      canDelete: existing?.canDelete || false,
-      canDownload: existing?.canDownload || false,
-      [action]: !currentValue // toggle
-    };
-
-    setPermissionMutation.mutate({ data: payload }, {
-      onSuccess: () => {
-        // Optimistic update would be better here, but invalidating is safer
-        queryClient.invalidateQueries({ queryKey: getListPermissionsQueryKey() });
-      },
-      onError: () => {
-        toast({ title: 'Failed to update permission', variant: 'destructive' });
-      }
-    });
+  const toggle = (module: string) => {
+    setPerms(prev => ({ ...prev, [selectedRole]: { ...prev[selectedRole], [module]: !prev[selectedRole]?.[module] } }));
   };
 
-  const isLoading = loadingHierarchies || loadingPermissions;
+  const save = async () => {
+    setSaving(true);
+    await new Promise(r => setTimeout(r, 500));
+    localStorage.setItem('marlin_permissions', JSON.stringify(perms));
+    setSaving(false);
+    toast.success('Permissions saved');
+  };
+
+  const rolePerms = perms[selectedRole] || {};
+  const enabledCount = Object.values(rolePerms).filter(Boolean).length;
+  const totalCount = MODULE_GROUPS.reduce((s, g) => s + g.modules.length, 0);
 
   return (
     <AppLayout>
-      <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <ShieldCheck className="w-6 h-6 text-primary" /> Role Permissions
-          </h1>
-          <p className="text-muted-foreground mt-1">Configure module access and actions per employee role</p>
+      <div className="space-y-6 max-w-4xl">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><ShieldCheck className="w-6 h-6 text-primary" /> Permissions</h1>
+            <p className="text-muted-foreground mt-1">Module access control by role</p>
+          </div>
+          <Button size="sm" onClick={save} disabled={saving}>
+            {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> Save</>}
+          </Button>
         </div>
 
-        {isLoading ? (
-          <div className="py-12 text-center text-muted-foreground">Loading permission matrix...</div>
-        ) : !hierarchies || hierarchies.length === 0 ? (
-          <div className="py-12 text-center text-muted-foreground">No roles configured. Create roles in HR &gt; Hierarchy first.</div>
-        ) : (
-          <div className="space-y-8">
-            {hierarchies.sort((a,b) => a.level - b.level).map(role => (
-              <div key={role.id} className="bg-card border border-border rounded-md shadow-sm overflow-hidden">
-                <div className="p-4 bg-muted/30 border-b border-border flex items-center gap-3">
-                  <div className="h-8 w-8 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold font-mono text-sm">
-                    L{role.level}
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-lg leading-none">{role.name}</h3>
-                    <p className="text-xs text-muted-foreground mt-1">{role.description || 'No description provided'}</p>
-                  </div>
-                </div>
-                
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="hover:bg-transparent">
-                        <TableHead className="w-[200px]">Module</TableHead>
-                        <TableHead className="text-center w-[100px]">View</TableHead>
-                        <TableHead className="text-center w-[100px]">Add</TableHead>
-                        <TableHead className="text-center w-[100px]">Edit</TableHead>
-                        <TableHead className="text-center w-[100px]">Delete</TableHead>
-                        <TableHead className="text-center w-[100px]">Download</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {MODULES.map(module => {
-                        const perm = permissions?.find(p => p.hierarchyId === role.id && p.module === module);
-                        return (
-                          <TableRow key={`${role.id}-${module}`} className="border-b-0 hover:bg-muted/10">
-                            <TableCell className="font-medium text-muted-foreground">{module.replace(/([A-Z])/g, ' $1').trim()}</TableCell>
-                            <TableCell className="text-center">
-                              <Checkbox 
-                                checked={perm?.canView || false} 
-                                onCheckedChange={() => handleToggle(role.id, module, 'canView', perm?.canView || false)}
-                                disabled={setPermissionMutation.isPending}
-                              />
-                            </TableCell>
-                            <TableCell className="text-center">
-                              <Checkbox 
-                                checked={perm?.canAdd || false} 
-                                onCheckedChange={() => handleToggle(role.id, module, 'canAdd', perm?.canAdd || false)}
-                                disabled={setPermissionMutation.isPending}
-                              />
-                            </TableCell>
-                            <TableCell className="text-center">
-                              <Checkbox 
-                                checked={perm?.canEdit || false} 
-                                onCheckedChange={() => handleToggle(role.id, module, 'canEdit', perm?.canEdit || false)}
-                                disabled={setPermissionMutation.isPending}
-                              />
-                            </TableCell>
-                            <TableCell className="text-center">
-                              <Checkbox 
-                                checked={perm?.canDelete || false} 
-                                onCheckedChange={() => handleToggle(role.id, module, 'canDelete', perm?.canDelete || false)}
-                                disabled={setPermissionMutation.isPending}
-                              />
-                            </TableCell>
-                            <TableCell className="text-center">
-                              <Checkbox 
-                                checked={perm?.canDownload || false} 
-                                onCheckedChange={() => handleToggle(role.id, module, 'canDownload', perm?.canDownload || false)}
-                                disabled={setPermissionMutation.isPending}
-                              />
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </div>
-              </div>
-            ))}
+        {/* Role Tabs */}
+        <div className="flex flex-wrap gap-2">
+          {ROLES.map(role => (
+            <button key={role} onClick={() => setSelectedRole(role)}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-all ${selectedRole === role ? 'bg-primary text-primary-foreground border-primary shadow-sm' : 'bg-card border-border text-muted-foreground hover:text-foreground hover:border-primary/30'}`}>
+              {role}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center justify-between py-2">
+          <span className="text-sm text-muted-foreground">{selectedRole} has access to <span className="font-bold text-foreground">{enabledCount}</span> of {totalCount} modules</span>
+          <div className="flex gap-2">
+            <button onClick={() => setPerms(prev => ({ ...prev, [selectedRole]: Object.fromEntries(MODULE_GROUPS.flatMap(g => g.modules.map(m => [m, true]))) }))} className="text-xs text-primary hover:underline">Enable all</button>
+            <span className="text-muted-foreground">·</span>
+            <button onClick={() => setPerms(prev => ({ ...prev, [selectedRole]: Object.fromEntries(MODULE_GROUPS.flatMap(g => g.modules.map(m => [m, false]))) }))} className="text-xs text-muted-foreground hover:text-foreground hover:underline">Disable all</button>
           </div>
-        )}
+        </div>
+
+        <div className="space-y-4">
+          {MODULE_GROUPS.map(group => (
+            <div key={group.title} className="bg-card border border-border rounded-xl overflow-hidden">
+              <div className="p-3 border-b border-border bg-muted/20 flex items-center justify-between">
+                <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">{group.title}</h3>
+                <Badge variant="outline" className="text-xs">
+                  {group.modules.filter(m => rolePerms[m]).length} / {group.modules.length}
+                </Badge>
+              </div>
+              <div className="divide-y divide-border/50">
+                {group.modules.map(mod => (
+                  <div key={mod} className="flex items-center justify-between px-4 py-3 hover:bg-muted/5">
+                    <span className={`text-sm ${rolePerms[mod] ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>{mod}</span>
+                    <Switch
+                      checked={!!rolePerms[mod]}
+                      onCheckedChange={() => selectedRole !== 'Admin' ? toggle(mod) : toast.info('Admin always has full access')}
+                      disabled={selectedRole === 'Admin'}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </AppLayout>
   );

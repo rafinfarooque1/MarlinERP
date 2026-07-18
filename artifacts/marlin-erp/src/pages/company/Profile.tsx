@@ -1,171 +1,208 @@
 import { useState, useRef, useEffect } from 'react';
-import { useGetMe, useUpdateEmployee, getGetMeQueryKey } from '@workspace/api-client-react';
+import { useGetCompanySettings, useUpdateCompanySettings } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { User, Camera, ShieldAlert } from 'lucide-react';
-import { useToast } from '@/hooks/use-toast';
-import { useQueryClient } from '@tanstack/react-query';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Link } from 'wouter';
+import { Building2, Save, Loader2, Upload, X, ImageIcon } from 'lucide-react';
+import { toast } from 'sonner';
+
+const LOGO_KEY = 'marlin_company_logo';
 
 const schema = z.object({
-  name: z.string().min(1, 'Name is required'),
-  email: z.string().email('Invalid email').optional().or(z.literal('')),
+  name: z.string().min(1, 'Company name required'),
+  gstNumber: z.string().optional(),
+  pan: z.string().optional(),
   phone: z.string().optional(),
-  photoUrl: z.string().optional(),
+  email: z.string().email().optional().or(z.literal('')),
+  website: z.string().optional(),
+  address: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  pincode: z.string().optional(),
+  bankName: z.string().optional(),
+  bankAccount: z.string().optional(),
+  ifscCode: z.string().optional(),
 });
+type FormValues = z.infer<typeof schema>;
 
 export default function Profile() {
-  const { data: me, isLoading } = useGetMe();
-  const updateMutation = useUpdateEmployee();
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { data: profile, isLoading } = useGetCompanySettings();
+  const updateMutation = useUpdateCompanySettings();
+  const [saved, setSaved] = useState(false);
+  const [logo, setLogo] = useState<string | null>(() => localStorage.getItem(LOGO_KEY));
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
-
-  const form = useForm<z.infer<typeof schema>>({
+  const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', email: '', phone: '', photoUrl: '' },
+    values: profile ? {
+      name: profile.name || '',
+      gstNumber: profile.gstNumber || '',
+      pan: profile.pan || '',
+      phone: profile.phone || '',
+      email: profile.email || '',
+      website: profile.website || '',
+      address: profile.address || '',
+      city: profile.city || '',
+      state: profile.state || '',
+      pincode: profile.pincode || '',
+      bankName: profile.bankName || '',
+      bankAccount: profile.bankAccount || '',
+      ifscCode: profile.ifscCode || '',
+    } : undefined,
   });
 
-  useEffect(() => {
-    if (me) {
-      form.reset({
-        name: me.name || '',
-        email: me.email || '',
-        phone: me.phone || '',
-        photoUrl: me.photoUrl || '',
-      });
-      setPhotoPreview(me.photoUrl || null);
-    }
-  }, [me, form]);
-
-  const onSubmit = (data: z.infer<typeof schema>) => {
-    if (!me) return;
-    updateMutation.mutate({ id: me.id, data }, {
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: getGetMeQueryKey() });
-        toast({ title: 'Profile updated successfully' });
-      }
+  const onSubmit = (data: FormValues) => {
+    updateMutation.mutate({ data: data as any }, {
+      onSuccess: () => { toast.success('Company profile updated'); setSaved(true); setTimeout(() => setSaved(false), 2000); },
+      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed to save'),
     });
   };
 
-  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const url = URL.createObjectURL(file);
-      setPhotoPreview(url);
-      form.setValue('photoUrl', url, { shouldDirty: true });
-    }
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) { toast.error('Logo must be under 2 MB'); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const b64 = reader.result as string;
+      localStorage.setItem(LOGO_KEY, b64);
+      setLogo(b64);
+      // Broadcast to AppLayout
+      window.dispatchEvent(new CustomEvent('marlin_logo_changed', { detail: b64 }));
+      toast.success('Logo saved — it now appears in the sidebar');
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const removeLogo = () => {
+    localStorage.removeItem(LOGO_KEY);
+    setLogo(null);
+    window.dispatchEvent(new CustomEvent('marlin_logo_changed', { detail: null }));
+    toast.success('Logo removed');
   };
 
   return (
     <AppLayout>
-      <div className="max-w-3xl mx-auto space-y-6">
+      <div className="space-y-6 max-w-3xl">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <User className="w-6 h-6 text-primary" /> My Profile
-          </h1>
-          <p className="text-muted-foreground mt-1">Manage your personal information</p>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Building2 className="w-6 h-6 text-primary" /> Company Profile</h1>
+          <p className="text-muted-foreground mt-1">Legal information, contact details, and bank account for invoices</p>
+        </div>
+
+        {/* Logo Upload */}
+        <div className="bg-card border border-border rounded-xl p-5 space-y-4">
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider border-b border-border pb-2">Company Logo</h3>
+          <p className="text-xs text-muted-foreground">Upload your logo — it will appear in the sidebar across the entire application. PNG or JPEG, max 2 MB.</p>
+          <div className="flex items-center gap-5">
+            <div className="w-28 h-20 rounded-lg border-2 border-dashed border-border flex items-center justify-center bg-muted/20 overflow-hidden shrink-0">
+              {logo ? (
+                <img src={logo} alt="Company logo" className="w-full h-full object-contain p-1" />
+              ) : (
+                <div className="flex flex-col items-center gap-1 text-muted-foreground">
+                  <ImageIcon className="w-7 h-7 opacity-30" />
+                  <span className="text-[10px]">No logo</span>
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col gap-2">
+              <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" className="hidden" onChange={handleLogoChange} />
+              <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
+                <Upload className="w-4 h-4 mr-2" /> {logo ? 'Replace Logo' : 'Upload Logo'}
+              </Button>
+              {logo && (
+                <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={removeLogo}>
+                  <X className="w-4 h-4 mr-2" /> Remove
+                </Button>
+              )}
+            </div>
+          </div>
         </div>
 
         {isLoading ? (
-          <div className="py-12 text-center text-muted-foreground">Loading profile...</div>
-        ) : !me ? (
-          <div className="py-12 text-center text-destructive">Failed to load profile.</div>
+          <div className="flex items-center gap-3 py-10 text-muted-foreground">
+            <Loader2 className="w-5 h-5 animate-spin" /> Loading profile…
+          </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            
-            <div className="col-span-1 space-y-6">
-              <div className="bg-card border border-border rounded-lg p-6 shadow-sm flex flex-col items-center text-center">
-                <div className="relative group mb-4">
-                  <Avatar className="h-32 w-32 border-4 border-background shadow-lg">
-                    <AvatarImage src={photoPreview || undefined} />
-                    <AvatarFallback className="text-4xl bg-primary/10 text-primary">{me.name?.charAt(0)}</AvatarFallback>
-                  </Avatar>
-                  <button 
-                    onClick={() => fileInputRef.current?.click()}
-                    className="absolute bottom-0 right-0 h-10 w-10 bg-primary text-primary-foreground rounded-full flex items-center justify-center shadow-md hover:bg-primary/90 transition-colors"
-                  >
-                    <Camera className="w-5 h-5" />
-                  </button>
-                  <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handlePhotoChange} />
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+              <Section title="Basic Information">
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField control={form.control} name="name" render={({ field }) => (
+                    <FormItem className="col-span-2"><FormLabel>Company Name <span className="text-destructive">*</span></FormLabel><FormControl><Input {...field} className="text-base font-semibold" /></FormControl><FormMessage /></FormItem>
+                  )} />
+                  <FormField control={form.control} name="gstNumber" render={({ field }) => (
+                    <FormItem><FormLabel>GSTIN</FormLabel><FormControl><Input className="font-mono" {...field} /></FormControl></FormItem>
+                  )} />
+                  <FormField control={form.control} name="pan" render={({ field }) => (
+                    <FormItem><FormLabel>PAN</FormLabel><FormControl><Input className="font-mono uppercase" {...field} /></FormControl></FormItem>
+                  )} />
                 </div>
-                <h2 className="text-xl font-bold">{me.name}</h2>
-                <p className="text-primary font-mono text-sm mt-1">{me.hierarchyName}</p>
-                <div className="w-full h-px bg-border my-4" />
-                <div className="w-full flex justify-between text-sm">
-                  <span className="text-muted-foreground">Location</span>
-                  <span className="font-medium">{me.branchName}</span>
-                </div>
-                <div className="w-full flex justify-between text-sm mt-2">
-                  <span className="text-muted-foreground">Status</span>
-                  <span className="font-medium text-emerald-500">Active</span>
-                </div>
-              </div>
+              </Section>
 
-              <div className="bg-card border border-border rounded-lg p-6 shadow-sm">
-                <div className="flex items-center gap-2 mb-4">
-                  <ShieldAlert className="w-5 h-5 text-muted-foreground" />
-                  <h3 className="font-medium">Security</h3>
+              <Section title="Contact Details">
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField control={form.control} name="phone" render={({ field }) => (
+                    <FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                  )} />
+                  <FormField control={form.control} name="email" render={({ field }) => (
+                    <FormItem><FormLabel>Email</FormLabel><FormControl><Input type="email" {...field} /></FormControl><FormMessage /></FormItem>
+                  )} />
+                  <FormField control={form.control} name="website" render={({ field }) => (
+                    <FormItem className="col-span-2"><FormLabel>Website</FormLabel><FormControl><Input placeholder="https://..." {...field} /></FormControl></FormItem>
+                  )} />
+                  <FormField control={form.control} name="address" render={({ field }) => (
+                    <FormItem className="col-span-2"><FormLabel>Address</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
+                  )} />
+                  <FormField control={form.control} name="city" render={({ field }) => (
+                    <FormItem><FormLabel>City</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                  )} />
+                  <FormField control={form.control} name="state" render={({ field }) => (
+                    <FormItem><FormLabel>State</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                  )} />
+                  <FormField control={form.control} name="pincode" render={({ field }) => (
+                    <FormItem><FormLabel>PIN Code</FormLabel><FormControl><Input className="font-mono" {...field} /></FormControl></FormItem>
+                  )} />
                 </div>
-                <p className="text-sm text-muted-foreground mb-4">It's a good idea to update your password regularly to keep your account secure.</p>
-                <Button variant="outline" className="w-full" asChild>
-                  <Link href="/change-password">Change Password</Link>
+              </Section>
+
+              <Section title="Bank Details">
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField control={form.control} name="bankName" render={({ field }) => (
+                    <FormItem><FormLabel>Bank Name</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                  )} />
+                  <FormField control={form.control} name="ifscCode" render={({ field }) => (
+                    <FormItem><FormLabel>IFSC Code</FormLabel><FormControl><Input className="font-mono" {...field} /></FormControl></FormItem>
+                  )} />
+                  <FormField control={form.control} name="bankAccount" render={({ field }) => (
+                    <FormItem className="col-span-2"><FormLabel>Account Number</FormLabel><FormControl><Input className="font-mono" {...field} /></FormControl></FormItem>
+                  )} />
+                </div>
+              </Section>
+
+              <div className="flex justify-end">
+                <Button type="submit" size="lg" disabled={updateMutation.isPending} className={saved ? 'bg-emerald-600 hover:bg-emerald-700' : ''}>
+                  {updateMutation.isPending ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> {saved ? 'Saved!' : 'Save Profile'}</>}
                 </Button>
               </div>
-            </div>
-
-            <div className="col-span-1 md:col-span-2">
-              <div className="bg-card border border-border rounded-lg p-6 shadow-sm">
-                <h3 className="text-lg font-medium border-b border-border pb-2 mb-6">Personal Details</h3>
-                
-                <Form {...form}>
-                  <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-                    <FormField control={form.control} name="name" render={({field}) => (
-                      <FormItem>
-                        <FormLabel>Full Name</FormLabel>
-                        <FormControl><Input {...field} /></FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )} />
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <FormField control={form.control} name="phone" render={({field}) => (
-                        <FormItem>
-                          <FormLabel>Phone Number</FormLabel>
-                          <FormControl><Input {...field} /></FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )} />
-                      <FormField control={form.control} name="email" render={({field}) => (
-                        <FormItem>
-                          <FormLabel>Email Address</FormLabel>
-                          <FormControl><Input type="email" {...field} /></FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )} />
-                    </div>
-
-                    <div className="pt-4 border-t border-border flex justify-end">
-                      <Button type="submit" disabled={updateMutation.isPending || !form.formState.isDirty}>
-                        {updateMutation.isPending ? 'Saving...' : 'Save Profile'}
-                      </Button>
-                    </div>
-                  </form>
-                </Form>
-              </div>
-            </div>
-
-          </div>
+            </form>
+          </Form>
         )}
       </div>
     </AppLayout>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="bg-card border border-border rounded-xl p-5 space-y-4">
+      <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider border-b border-border pb-2">{title}</h3>
+      {children}
+    </div>
   );
 }

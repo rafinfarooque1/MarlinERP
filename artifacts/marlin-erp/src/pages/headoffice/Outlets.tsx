@@ -4,201 +4,177 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Edit2, Trash2, Store } from 'lucide-react';
-import { useToast } from '@/hooks/use-toast';
+import { Plus, Search, Edit2, Trash2, Store, Download, Eye } from 'lucide-react';
+import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
+import { downloadCSV } from '@/lib/download';
 
 const schema = z.object({
-  name: z.string().min(1, 'Name is required'),
-  warehouseId: z.coerce.number().min(1, 'Warehouse is required'),
+  name: z.string().min(1, 'Name required'),
+  warehouseId: z.coerce.number().min(1, 'Warehouse required'),
   address: z.string().optional(),
   contactPerson: z.string().optional(),
   phone: z.string().optional(),
 });
+type FormValues = z.infer<typeof schema>;
 
 export default function Outlets() {
-  const { data: outlets, isLoading } = useListOutlets();
-  const { data: warehouses } = useListWarehouses();
+  const { data: outlets = [], isLoading } = useListOutlets();
+  const { data: warehouses = [] } = useListWarehouses();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const { toast } = useToast();
+  const [viewItem, setViewItem] = useState<any>(null);
   const queryClient = useQueryClient();
-
   const createMutation = useCreateOutlet();
   const updateMutation = useUpdateOutlet();
   const deleteMutation = useDeleteOutlet();
 
-  const form = useForm<z.infer<typeof schema>>({
-    resolver: zodResolver(schema),
-    defaultValues: { name: '', warehouseId: 0, address: '', contactPerson: '', phone: '' },
-  });
+  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', warehouseId: 0, address: '', contactPerson: '', phone: '' } });
 
-  const onSubmit = (data: z.infer<typeof schema>) => {
-    if (editingId) {
-      updateMutation.mutate({ id: editingId, data }, {
-        onSuccess: () => {
-          queryClient.invalidateQueries({ queryKey: getListOutletsQueryKey() });
-          setIsOpen(false);
-          toast({ title: 'Outlet updated' });
-        }
-      });
-    } else {
-      createMutation.mutate({ data }, {
-        onSuccess: () => {
-          queryClient.invalidateQueries({ queryKey: getListOutletsQueryKey() });
-          setIsOpen(false);
-          toast({ title: 'Outlet created' });
-        }
-      });
-    }
+  const openAdd = () => { setEditingId(null); form.reset({ name: '', warehouseId: 0, address: '', contactPerson: '', phone: '' }); setIsOpen(true); };
+  const openEdit = (o: any) => { setEditingId(o.id); form.reset({ name: o.name, warehouseId: o.warehouseId, address: o.address || '', contactPerson: o.contactPerson || '', phone: o.phone || '' }); setIsOpen(true); };
+
+  const onSubmit = (data: FormValues) => {
+    const opts = {
+      onSuccess: () => { toast.success(editingId ? 'Outlet updated' : 'Outlet added'); queryClient.invalidateQueries({ queryKey: getListOutletsQueryKey() }); setIsOpen(false); },
+      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+    };
+    if (editingId) updateMutation.mutate({ id: editingId, data }, opts);
+    else createMutation.mutate({ data }, opts);
   };
 
-  const handleEdit = (outlet: any) => {
-    setEditingId(outlet.id);
-    form.reset({
-      name: outlet.name,
-      warehouseId: outlet.warehouseId,
-      address: outlet.address || '',
-      contactPerson: outlet.contactPerson || '',
-      phone: outlet.phone || '',
+  const handleDelete = (id: number, name: string) => {
+    if (!confirm(`Delete outlet "${name}"?`)) return;
+    deleteMutation.mutate({ id }, {
+      onSuccess: () => { toast.success('Outlet deleted'); queryClient.invalidateQueries({ queryKey: getListOutletsQueryKey() }); },
+      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
-    setIsOpen(true);
   };
 
-  const handleDelete = (id: number) => {
-    if (confirm('Are you sure you want to delete this outlet?')) {
-      deleteMutation.mutate({ id }, {
-        onSuccess: () => {
-          queryClient.invalidateQueries({ queryKey: getListOutletsQueryKey() });
-          toast({ title: 'Outlet deleted' });
-        }
-      });
-    }
-  };
-
-  const filtered = outlets?.filter(o => o.name.toLowerCase().includes(search.toLowerCase()) || o.warehouseName?.toLowerCase().includes(search.toLowerCase())) || [];
+  const filtered = outlets.filter(o => o.name.toLowerCase().includes(search.toLowerCase()) || o.warehouseName?.toLowerCase().includes(search.toLowerCase()));
+  const isPending = createMutation.isPending || updateMutation.isPending;
 
   return (
     <AppLayout>
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Store className="w-6 h-6 text-primary" /> Retail Outlets
-            </h1>
-            <p className="text-muted-foreground mt-1">Manage points of sale under warehouses</p>
+            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Store className="w-6 h-6 text-primary" /> Retail Outlets</h1>
+            <p className="text-muted-foreground mt-1">Point-of-sale locations management</p>
           </div>
-          
-          <Dialog open={isOpen} onOpenChange={(open) => {
-            setIsOpen(open);
-            if (!open) { setEditingId(null); form.reset(); }
-          }}>
-            <DialogTrigger asChild>
-              <Button><Plus className="w-4 h-4 mr-2" /> Add Outlet</Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-xl">
-              <DialogHeader>
-                <DialogTitle>{editingId ? 'Edit Outlet' : 'Add Outlet'}</DialogTitle>
-              </DialogHeader>
-              <Form {...form}>
-                <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <FormField control={form.control} name="name" render={({field}) => (
-                      <FormItem className="col-span-2"><FormLabel>Outlet Name</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
-                    )} />
-                    <FormField control={form.control} name="warehouseId" render={({field}) => (
-                      <FormItem className="col-span-2">
-                        <FormLabel>Parent Warehouse</FormLabel>
-                        <Select onValueChange={(val) => field.onChange(Number(val))} value={field.value ? field.value.toString() : ''}>
-                          <FormControl><SelectTrigger><SelectValue placeholder="Select parent warehouse" /></SelectTrigger></FormControl>
-                          <SelectContent>
-                            {warehouses?.map(w => <SelectItem key={w.id} value={w.id.toString()}>{w.name} ({w.state})</SelectItem>)}
-                          </SelectContent>
-                        </Select>
-                        <FormMessage />
-                      </FormItem>
-                    )} />
-                    <FormField control={form.control} name="contactPerson" render={({field}) => (
-                      <FormItem><FormLabel>Contact Person</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
-                    )} />
-                    <FormField control={form.control} name="phone" render={({field}) => (
-                      <FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
-                    )} />
-                    <FormField control={form.control} name="address" render={({field}) => (
-                      <FormItem className="col-span-2"><FormLabel>Address</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
-                    )} />
-                  </div>
-                  <DialogFooter>
-                    <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>Save</Button>
-                  </DialogFooter>
-                </form>
-              </Form>
-            </DialogContent>
-          </Dialog>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => downloadCSV('outlets.csv', filtered.map(o => ({ Name: o.name, Warehouse: o.warehouseName || '', Contact: o.contactPerson || '', Phone: o.phone || '', Address: o.address || '' })))}>
+              <Download className="w-4 h-4 mr-2" /> Export
+            </Button>
+            <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Outlet</Button>
+          </div>
         </div>
 
-        <div className="bg-card border border-border rounded-md shadow-sm">
-          <div className="p-4 border-b border-border flex items-center gap-2">
+        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
             <Search className="w-4 h-4 text-muted-foreground" />
-            <Input 
-              placeholder="Search outlets..." 
-              value={search} 
-              onChange={e => setSearch(e.target.value)}
-              className="max-w-xs border-transparent bg-muted/50 focus-visible:bg-transparent"
-            />
+            <Input placeholder="Search outlets..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-xs" />
           </div>
-          
           <Table>
             <TableHeader>
-              <TableRow>
-                <TableHead>Outlet Name</TableHead>
-                <TableHead>Parent Warehouse</TableHead>
-                <TableHead>Contact Info</TableHead>
-                <TableHead>Address</TableHead>
+              <TableRow className="bg-muted/10">
+                <TableHead>Name</TableHead>
+                <TableHead>Warehouse</TableHead>
+                <TableHead>Contact</TableHead>
+                <TableHead>Phone</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? (
-                <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">Loading...</TableCell></TableRow>
-              ) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No outlets found</TableCell></TableRow>
-              ) : (
-                filtered.map(outlet => (
-                  <TableRow key={outlet.id}>
-                    <TableCell className="font-medium text-primary">{outlet.name}</TableCell>
-                    <TableCell>{outlet.warehouseName}</TableCell>
-                    <TableCell>
-                      <div className="text-sm">
-                        <div>{outlet.contactPerson || '-'}</div>
-                        <div className="text-muted-foreground text-xs">{outlet.phone}</div>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-sm max-w-[200px] truncate">{outlet.address || '-'}</TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        <Button variant="ghost" size="icon" onClick={() => handleEdit(outlet)}>
-                          <Edit2 className="w-4 h-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive" onClick={() => handleDelete(outlet.id)}>
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
+              {isLoading ? [...Array(3)].map((_, i) => (
+                <TableRow key={i}><TableCell colSpan={5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+              )) : filtered.length === 0 ? (
+                <TableRow><TableCell colSpan={5} className="text-center py-16 text-muted-foreground">
+                  <Store className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No outlets found</p>
+                </TableCell></TableRow>
+              ) : filtered.map(o => (
+                <TableRow key={o.id} className="hover:bg-muted/10">
+                  <TableCell className="font-semibold">{o.name}</TableCell>
+                  <TableCell className="text-muted-foreground text-sm">{o.warehouseName}</TableCell>
+                  <TableCell className="text-sm">{o.contactPerson || '—'}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{o.phone || '—'}</TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(o)}><Eye className="w-4 h-4" /></Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(o)}><Edit2 className="w-4 h-4" /></Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => handleDelete(o.id, o.name)}><Trash2 className="w-4 h-4" /></Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
             </TableBody>
           </Table>
         </div>
       </div>
+
+      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditingId(null); form.reset(); } }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader><DialogTitle>{editingId ? 'Edit Outlet' : 'Add Outlet'}</DialogTitle></DialogHeader>
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
+              <FormField control={form.control} name="name" render={({ field }) => (
+                <FormItem><FormLabel>Outlet Name <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="e.g. Indiranagar Store" {...field} /></FormControl><FormMessage /></FormItem>
+              )} />
+              <FormField control={form.control} name="warehouseId" render={({ field }) => (
+                <FormItem><FormLabel>Parent Warehouse <span className="text-destructive">*</span></FormLabel>
+                  <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Select warehouse" /></SelectTrigger></FormControl>
+                    <SelectContent>{warehouses.map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}</SelectContent>
+                  </Select><FormMessage /></FormItem>
+              )} />
+              <div className="grid grid-cols-2 gap-4">
+                <FormField control={form.control} name="contactPerson" render={({ field }) => (
+                  <FormItem><FormLabel>Contact Person</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                )} />
+                <FormField control={form.control} name="phone" render={({ field }) => (
+                  <FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                )} />
+              </div>
+              <FormField control={form.control} name="address" render={({ field }) => (
+                <FormItem><FormLabel>Address</FormLabel><FormControl><Textarea placeholder="Full address..." rows={2} {...field} /></FormControl></FormItem>
+              )} />
+              <DialogFooter>
+                <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
+                <Button type="submit" disabled={isPending}>{isPending ? 'Saving…' : 'Save'}</Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+
+      <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
+        <SheetContent>
+          <SheetHeader>
+            <SheetTitle className="flex items-center gap-2"><Store className="w-5 h-5 text-primary" />{viewItem?.name}</SheetTitle>
+            <SheetDescription>{viewItem?.warehouseName}</SheetDescription>
+          </SheetHeader>
+          {viewItem && (
+            <div className="mt-6 space-y-4">
+              {[['Parent Warehouse', viewItem.warehouseName], ['Contact', viewItem.contactPerson || '—'], ['Phone', viewItem.phone || '—'], ['Address', viewItem.address || '—']].map(([k, v]) => (
+                <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
+                  <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
+                  <span className="font-medium">{v}</span>
+                </div>
+              ))}
+              <Button className="w-full" onClick={() => { setViewItem(null); openEdit(viewItem); }}><Edit2 className="w-4 h-4 mr-2" /> Edit</Button>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
     </AppLayout>
   );
 }

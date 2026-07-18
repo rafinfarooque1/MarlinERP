@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Toaster } from '@/components/ui/toaster';
+import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { Route, Switch, Router as WouterRouter } from 'wouter';
+import { Route, Switch, Router as WouterRouter, useLocation, Redirect } from 'wouter';
 
 import Login from './pages/auth/Login';
 import ChangePassword from './pages/auth/ChangePassword';
@@ -41,7 +41,17 @@ import CompanySettings from './pages/company/Settings';
 import Permissions from './pages/company/Permissions';
 import Profile from './pages/company/Profile';
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: 1, staleTime: 30_000 },
+  },
+});
+
+function AuthGuard({ children }: { children: React.ReactNode }) {
+  const token = localStorage.getItem('marlin_auth_token');
+  if (!token) return <Redirect to="/login" />;
+  return <>{children}</>;
+}
 
 function NotFound() {
   return (
@@ -59,60 +69,65 @@ function Router() {
   return (
     <Switch>
       <Route path="/login" component={Login} />
-      <Route path="/change-password" component={ChangePassword} />
-      <Route path="/" component={Dashboard} />
-      <Route path="/dashboard" component={Dashboard} />
-      
-      <Route path="/production/materials" component={Materials} />
-      <Route path="/production/raw-materials" component={RawMaterials} />
-      <Route path="/production/items" component={Items} />
-      <Route path="/production/purchase" component={Purchases} />
-      <Route path="/production/production" component={ProductionList} />
-      <Route path="/production/stock-transfer" component={StockTransfers} />
-      
-      <Route path="/headoffice/warehouses" component={Warehouses} />
-      <Route path="/headoffice/outlets" component={Outlets} />
-      <Route path="/headoffice/stock" component={Stock} />
-      <Route path="/headoffice/transfers" component={HoTransfers} />
-      <Route path="/headoffice/item-price" component={ItemPrices} />
-      <Route path="/headoffice/sales" component={Sales} />
 
-      <Route path="/hr/hierarchy" component={Hierarchy} />
-      <Route path="/hr/employees" component={Employees} />
-      <Route path="/hr/payroll" component={Payroll} />
-      <Route path="/hr/attendance" component={Attendance} />
-      <Route path="/hr/leave" component={Leave} />
+      <Route path="/">
+        <AuthGuard><Dashboard /></AuthGuard>
+      </Route>
+      <Route path="/dashboard">
+        <AuthGuard><Dashboard /></AuthGuard>
+      </Route>
+      <Route path="/change-password">
+        <AuthGuard><ChangePassword /></AuthGuard>
+      </Route>
 
-      <Route path="/customers" component={Customers} />
-      <Route path="/vendors" component={Vendors} />
-      <Route path="/coupons" component={Coupons} />
+      <Route path="/production/materials"><AuthGuard><Materials /></AuthGuard></Route>
+      <Route path="/production/raw-materials"><AuthGuard><RawMaterials /></AuthGuard></Route>
+      <Route path="/production/items"><AuthGuard><Items /></AuthGuard></Route>
+      <Route path="/production/purchase"><AuthGuard><Purchases /></AuthGuard></Route>
+      <Route path="/production/production"><AuthGuard><ProductionList /></AuthGuard></Route>
+      <Route path="/production/stock-transfer"><AuthGuard><StockTransfers /></AuthGuard></Route>
 
-      <Route path="/accounts/chart" component={ChartOfAccounts} />
-      <Route path="/accounts/ledger" component={Ledger} />
-      <Route path="/accounts/cash-bank" component={CashBank} />
-      <Route path="/accounts/expenses" component={Expenses} />
-      <Route path="/accounts/gst" component={GstSummary} />
+      <Route path="/headoffice/warehouses"><AuthGuard><Warehouses /></AuthGuard></Route>
+      <Route path="/headoffice/outlets"><AuthGuard><Outlets /></AuthGuard></Route>
+      <Route path="/headoffice/stock"><AuthGuard><Stock /></AuthGuard></Route>
+      <Route path="/headoffice/transfers"><AuthGuard><HoTransfers /></AuthGuard></Route>
+      <Route path="/headoffice/item-price"><AuthGuard><ItemPrices /></AuthGuard></Route>
+      <Route path="/headoffice/sales"><AuthGuard><Sales /></AuthGuard></Route>
 
-      <Route path="/company/settings" component={CompanySettings} />
-      <Route path="/company/permissions" component={Permissions} />
-      <Route path="/company/profile" component={Profile} />
+      <Route path="/hr/hierarchy"><AuthGuard><Hierarchy /></AuthGuard></Route>
+      <Route path="/hr/employees"><AuthGuard><Employees /></AuthGuard></Route>
+      <Route path="/hr/payroll"><AuthGuard><Payroll /></AuthGuard></Route>
+      <Route path="/hr/attendance"><AuthGuard><Attendance /></AuthGuard></Route>
+      <Route path="/hr/leave"><AuthGuard><Leave /></AuthGuard></Route>
+
+      <Route path="/customers"><AuthGuard><Customers /></AuthGuard></Route>
+      <Route path="/vendors"><AuthGuard><Vendors /></AuthGuard></Route>
+      <Route path="/coupons"><AuthGuard><Coupons /></AuthGuard></Route>
+
+      <Route path="/accounts/chart"><AuthGuard><ChartOfAccounts /></AuthGuard></Route>
+      <Route path="/accounts/ledger"><AuthGuard><Ledger /></AuthGuard></Route>
+      <Route path="/accounts/cash-bank"><AuthGuard><CashBank /></AuthGuard></Route>
+      <Route path="/accounts/expenses"><AuthGuard><Expenses /></AuthGuard></Route>
+      <Route path="/accounts/gst"><AuthGuard><GstSummary /></AuthGuard></Route>
+
+      <Route path="/company/settings"><AuthGuard><CompanySettings /></AuthGuard></Route>
+      <Route path="/company/permissions"><AuthGuard><Permissions /></AuthGuard></Route>
+      <Route path="/company/profile"><AuthGuard><Profile /></AuthGuard></Route>
 
       <Route component={NotFound} />
     </Switch>
   );
 }
 
-function App() {
+export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
           <Router />
         </WouterRouter>
-        <Toaster />
+        <Toaster richColors position="top-right" />
       </TooltipProvider>
     </QueryClientProvider>
   );
 }
-
-export default App;
