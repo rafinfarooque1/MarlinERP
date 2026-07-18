@@ -1,0 +1,1 @@
+- [Marlin ERP architecture](marlin-erp-arch.md) — Full ERP stack: api-server (Express+Drizzle), marlin-erp (React+Vite), shared libs; login: username=admin password=admin123

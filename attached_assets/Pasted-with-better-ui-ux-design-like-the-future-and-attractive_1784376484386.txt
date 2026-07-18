@@ -1,0 +1,107 @@
+with better ui/ux design like the future and attractive and catchy design. 
+
+
+
+in production there will purchase the material and the raw material like fruits and the packing material will purchase in production unit in production unit onlyhave the right to purchase other like head office and warehouse and outlet will not have the right to purchase only production have the right to purchase . in that material nad raw material will show only in product unit that name only shows in production means raw material and material assign to production unit and the item name will assign to head office , warehouse and outlet.
+
+in production section will add materia and raw material and will produce a item means will add material and raw material used quantity and will add item name and the quantity and also will add hsn code and cost and the tax like craeting a item name in master ( once a item name is created it shows in the list avoid duplication so there must be item master ) ( then there will item master , material master, raw material master production and stock . by using material and raw material will have quantity in item master that will be the stock that stock will transfer to head office with a cost so production unit and head office will have seperate modulethis all will come under pruduction unit . in headoffice under there will warehouse and outlet . in headoffice stock will transfer like headoffice to warehouse to outlet. ware house to outlet and outlet to warehouse only . warehouse to warehouse is ok but not outlet to outlet . we have no of warehiuse with different gst. so if karnataka have a ware house have 10 in that stock can transfer to internaly and we have tamilnadu with gst . if a stock is transferred from karnataka to tamilnadu it will sale and purchase in backend in front it will only transfer.. so purchase and will ready a stock by using material and raw material will happen in production unit and stock transffer and sales will done in headoffice . 
+
+marlin frozen fruits 
+
+	production unit
+
+		material ( craetion only )
+
+		raw material ( craetion only )
+
+		item master ( craetion only )
+
+		purchase ( purchase only material and raw material )
+
+		production ( using raw material and material will add quantity in item and that item will the stock )
+
+		transffer stock to headoffice ( delivery challan download )
+
+	headoffice 
+
+		warehouse creation
+
+		outlet creation and under warehouse
+
+		stock ( item with quantity and cost will show the list with branch )
+
+		stock transfer( delivery challan download )
+
+		item price( outlet wise price updation )
+
+		sale ( only select item name and quantity balance all will come automtically )
+
+	hr
+
+		hirerachy creation
+
+		employee creation ( assign hirerachy )
+
+		payroll (monthly salary list with warehouse and outlet wise with paid button )
+
+		attendance ( check in and check out with location )
+
+		leave apply and approval 
+
+customer & vendor
+
+                 customer ( creation and list )
+
+                  vendor ( creation & list )
+
+                  coupon code ( valide day ) 
+
+
+
+	accounts
+
+		chart of accounts  ( as per accounts ledger will create in under )
+
+		leger statement ( as chart of accounts )
+
+		cash & bank ( creation of cash and bank )
+
+		expense tracking
+
+		gst
+
+	company 
+
+		setting ( add deatails of comapny )
+
+		permission  ( setting permission for edit,delete,view,adding,download in hirerachy wise )
+
+		profile ( will upload photo and there employee full deatils by them )
+
+
+
+
+
+this is the layout i need with standard and user freindly erp . everything needs to be connected if a ledger is created under expense then when wxpense is creating that ledger will only shows. same to payment mode , what cash & bank is created that only will shoe=ws in payment mode no other system creation not needed.
+
+there will be common password for every employee firt after that they will change the password , only show the item which have stock inthat branch which is assignned to them while in stock report and in sales and also in poduction .
+
+
+
+
+
+marlin 
+
+	prdoction
+
+	headoffice
+
+	hr
+
+	accounts
+
+	company
+
+this is the main list in this under there sub list will come 
+
+

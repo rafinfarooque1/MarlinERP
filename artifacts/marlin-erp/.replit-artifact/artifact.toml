@@ -1,0 +1,27 @@
+kind = "web"
+previewPath = "/"
+title = "Marlin Frozen Fruits ERP"
+version = "1.0.0"
+id = "artifacts/marlin-erp"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 21940
+
+[services.development]
+run = "pnpm --filter @workspace/marlin-erp run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/marlin-erp", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/marlin-erp/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "21940"
+BASE_PATH = "/"
