@@ -14,13 +14,16 @@ import {
   Menu,
   Bell,
   Search,
-  User
+  User,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useLogout, useGetMe } from '@workspace/api-client-react';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 const navigation = [
   {
@@ -94,16 +97,51 @@ const navigation = [
   },
 ];
 
-function NavItem({ item, isActive, currentPath }: { item: any, isActive: boolean, currentPath: string }) {
+function NavItem({ item, isActive, currentPath, collapsed }: { item: any, isActive: boolean, currentPath: string, collapsed: boolean }) {
   const [isOpen, setIsOpen] = useState(isActive);
   const Icon = item.icon;
 
   if (!item.children) {
+    if (collapsed) {
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Link href={item.href} className={`flex items-center justify-center w-10 h-10 rounded-md transition-colors ${isActive ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>
+              <Icon className="w-5 h-5" />
+            </Link>
+          </TooltipTrigger>
+          <TooltipContent side="right" className="font-sans">{item.name}</TooltipContent>
+        </Tooltip>
+      );
+    }
     return (
       <Link href={item.href} className={`flex items-center gap-3 px-3 py-2 rounded-md transition-colors text-sm font-medium ${isActive ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>
-        <Icon className="w-4 h-4" />
+        <Icon className="w-4 h-4 shrink-0" />
         {item.name}
       </Link>
+    );
+  }
+
+  if (collapsed) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            onClick={() => setIsOpen(!isOpen)}
+            className={`flex items-center justify-center w-10 h-10 rounded-md transition-colors ${isActive ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
+          >
+            <Icon className="w-5 h-5" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right" className="font-sans">
+          <p className="font-medium mb-1">{item.name}</p>
+          {item.children.map((child: any) => (
+            <Link key={child.href} href={child.href} className="block text-xs text-muted-foreground hover:text-foreground py-0.5">
+              {child.name}
+            </Link>
+          ))}
+        </TooltipContent>
+      </Tooltip>
     );
   }
 
@@ -114,10 +152,10 @@ function NavItem({ item, isActive, currentPath }: { item: any, isActive: boolean
         className={`w-full flex items-center justify-between gap-3 px-3 py-2 rounded-md transition-colors text-sm font-medium ${isActive ? 'text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
       >
         <div className="flex items-center gap-3">
-          <Icon className="w-4 h-4" />
+          <Icon className="w-4 h-4 shrink-0" />
           {item.name}
         </div>
-        {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+        {isOpen ? <ChevronDown className="w-4 h-4 shrink-0" /> : <ChevronRight className="w-4 h-4 shrink-0" />}
       </button>
       
       {isOpen && (
@@ -145,6 +183,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const logoutMutation = useLogout();
   const { data: user } = useGetMe();
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [collapsed, setCollapsed] = useState(false);
 
   const handleLogout = () => {
     logoutMutation.mutate(undefined, {
@@ -155,88 +194,140 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <div className="min-h-screen bg-background flex flex-col md:flex-row">
-      {/* Sidebar */}
-      <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-card border-r border-border transform transition-transform duration-200 ease-in-out ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:relative md:translate-x-0`}>
-        <div className="flex flex-col h-full">
-          <div className="h-16 flex items-center px-6 border-b border-border">
-            <h1 className="text-xl font-bold font-sans tracking-tight text-primary">MARLIN<span className="text-foreground">ERP</span></h1>
+    <TooltipProvider delayDuration={200}>
+      <div className="min-h-screen bg-background flex flex-col md:flex-row">
+        {/* Mobile overlay */}
+        {sidebarOpen && (
+          <div
+            className="fixed inset-0 z-40 bg-black/50 md:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
+
+        {/* Sidebar */}
+        <aside
+          className={`
+            fixed inset-y-0 left-0 z-50 bg-card border-r border-border
+            transform transition-all duration-200 ease-in-out flex flex-col
+            ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+            md:relative md:translate-x-0
+            ${collapsed ? 'w-[68px]' : 'w-64'}
+          `}
+        >
+          {/* Logo row */}
+          <div className="h-16 flex items-center justify-between px-4 border-b border-border shrink-0">
+            {!collapsed && (
+              <h1 className="text-xl font-bold font-sans tracking-tight text-primary select-none">
+                MARLIN<span className="text-foreground">ERP</span>
+              </h1>
+            )}
+            {collapsed && (
+              <div className="w-full flex justify-center">
+                <span className="text-lg font-bold text-primary select-none">M</span>
+              </div>
+            )}
+
+            {/* Collapse toggle — visible on md+ */}
+            <button
+              onClick={() => setCollapsed(!collapsed)}
+              className="hidden md:flex items-center justify-center w-7 h-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
+              title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            >
+              {collapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+            </button>
           </div>
-          
-          <div className="flex-1 overflow-y-auto py-4 px-3 space-y-1">
+
+          {/* Nav items */}
+          <div className={`flex-1 overflow-y-auto py-4 space-y-1 ${collapsed ? 'px-[14px]' : 'px-3'}`}>
             {navigation.map((item) => {
-              const isActive = item.href ? location === item.href : item.children?.some(c => location.startsWith(c.href));
-              return <NavItem key={item.name} item={item} isActive={!!isActive} currentPath={location} />;
+              const isActive = item.href
+                ? location === item.href
+                : item.children?.some(c => location.startsWith(c.href));
+              return (
+                <NavItem
+                  key={item.name}
+                  item={item}
+                  isActive={!!isActive}
+                  currentPath={location}
+                  collapsed={collapsed}
+                />
+              );
             })}
           </div>
-        </div>
-      </aside>
+        </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Top Header */}
-        <header className="h-16 bg-card border-b border-border flex items-center justify-between px-4 lg:px-8 z-40 sticky top-0">
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setSidebarOpen(!sidebarOpen)}>
-              <Menu className="w-5 h-5" />
-            </Button>
-            
-            <div className="hidden md:flex items-center relative w-64 lg:w-96">
-              <Search className="w-4 h-4 absolute left-3 text-muted-foreground" />
-              <Input placeholder="Search everywhere..." className="pl-9 bg-muted/50 border-transparent focus-visible:bg-transparent" />
+        {/* Main Content */}
+        <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          {/* Top Header */}
+          <header className="h-16 bg-card border-b border-border flex items-center justify-between px-4 lg:px-8 z-40 sticky top-0">
+            <div className="flex items-center gap-4">
+              {/* Mobile hamburger */}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="md:hidden"
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+              >
+                <Menu className="w-5 h-5" />
+              </Button>
+
+              <div className="hidden md:flex items-center relative w-64 lg:w-96">
+                <Search className="w-4 h-4 absolute left-3 text-muted-foreground" />
+                <Input placeholder="Search everywhere..." className="pl-9 bg-muted/50 border-transparent focus-visible:bg-transparent" />
+              </div>
             </div>
-          </div>
-          
-          <div className="flex items-center gap-2 lg:gap-4">
-            <Button variant="ghost" size="icon" className="relative text-muted-foreground hover:text-foreground">
-              <Bell className="w-5 h-5" />
-              <span className="absolute top-2 right-2 w-2 h-2 bg-primary rounded-full" />
-            </Button>
-            
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="relative h-9 w-9 rounded-full">
-                  <Avatar className="h-9 w-9 border border-border">
-                    <AvatarImage src={user?.photoUrl || undefined} alt={user?.name} />
-                    <AvatarFallback className="bg-primary/20 text-primary">{user?.name?.charAt(0) || 'U'}</AvatarFallback>
-                  </Avatar>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56 font-sans">
-                <DropdownMenuLabel className="font-normal">
-                  <div className="flex flex-col space-y-1">
-                    <p className="text-sm font-medium leading-none">{user?.name}</p>
-                    <p className="text-xs leading-none text-muted-foreground">{user?.email || user?.username}</p>
-                  </div>
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                  <Link href="/company/profile" className="cursor-pointer w-full flex items-center">
-                    <User className="mr-2 h-4 w-4" />
-                    Profile
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/company/settings" className="cursor-pointer w-full flex items-center">
-                    <Settings className="mr-2 h-4 w-4" />
-                    Settings
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={handleLogout} className="text-destructive cursor-pointer">
-                  <LogOut className="mr-2 h-4 w-4" />
-                  Log out
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </header>
 
-        {/* Page Content */}
-        <div className="flex-1 overflow-auto p-4 lg:p-8 bg-background relative">
-          {children}
-        </div>
-      </main>
-    </div>
+            <div className="flex items-center gap-2 lg:gap-4">
+              <Button variant="ghost" size="icon" className="relative text-muted-foreground hover:text-foreground">
+                <Bell className="w-5 h-5" />
+                <span className="absolute top-2 right-2 w-2 h-2 bg-primary rounded-full" />
+              </Button>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" className="relative h-9 w-9 rounded-full">
+                    <Avatar className="h-9 w-9 border border-border">
+                      <AvatarImage src={user?.photoUrl || undefined} alt={user?.name} />
+                      <AvatarFallback className="bg-primary/20 text-primary">{user?.name?.charAt(0) || 'U'}</AvatarFallback>
+                    </Avatar>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56 font-sans">
+                  <DropdownMenuLabel className="font-normal">
+                    <div className="flex flex-col space-y-1">
+                      <p className="text-sm font-medium leading-none">{user?.name}</p>
+                      <p className="text-xs leading-none text-muted-foreground">{user?.email || user?.username}</p>
+                    </div>
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild>
+                    <Link href="/company/profile" className="cursor-pointer w-full flex items-center">
+                      <User className="mr-2 h-4 w-4" />
+                      Profile
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <Link href="/company/settings" className="cursor-pointer w-full flex items-center">
+                      <Settings className="mr-2 h-4 w-4" />
+                      Settings
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={handleLogout} className="text-destructive cursor-pointer">
+                    <LogOut className="mr-2 h-4 w-4" />
+                    Log out
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </header>
+
+          {/* Page Content */}
+          <div className="flex-1 overflow-auto p-4 lg:p-8 bg-background relative">
+            {children}
+          </div>
+        </main>
+      </div>
+    </TooltipProvider>
   );
 }
