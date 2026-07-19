@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db, itemsTable, salesTable, stockEntriesTable, employeesTable, stockTransfersTable, attendanceTable, leavesTable } from "@workspace/db";
+import { db, itemsTable, salesTable, stockEntriesTable, employeesTable, stockTransfersTable, attendanceTable, leavesTable, productionsTable } from "@workspace/db";
 import { count, sum, eq, sql } from "drizzle-orm";
 
 const router = Router();
@@ -65,6 +65,58 @@ router.get("/dashboard/recent-activity", async (req, res): Promise<void> => {
     user: a.user,
     timestamp: a.createdAt.toISOString(),
   })));
+});
+
+// ── Analytics endpoints ──────────────────────────────────────────────────────
+
+router.get("/dashboard/sales-trend", async (req, res): Promise<void> => {
+  const days = Math.min(Math.max(parseInt(req.query.days as string) || 30, 1), 365);
+  const rows = await db.execute(sql`
+    SELECT
+      sale_date::text            AS date,
+      COALESCE(SUM(total_amount), 0)::float  AS revenue,
+      COUNT(*)::int              AS invoices
+    FROM sales
+    WHERE sale_date >= CURRENT_DATE - (${days}::int * INTERVAL '1 day')
+    GROUP BY sale_date
+    ORDER BY sale_date
+  `);
+  res.json(rows.rows);
+});
+
+router.get("/dashboard/top-items", async (req, res): Promise<void> => {
+  const days = Math.min(Math.max(parseInt(req.query.days as string) || 30, 1), 365);
+  const rows = await db.execute(sql`
+    SELECT
+      (li->>'itemId')::int                                                        AS item_id,
+      COALESCE(i.name, 'Unknown')                                                  AS item_name,
+      COALESCE(SUM((li->>'quantity')::numeric
+        * COALESCE((li->>'unitPrice')::numeric, 0)), 0)::float                    AS revenue,
+      COALESCE(SUM((li->>'quantity')::numeric), 0)::float                         AS quantity
+    FROM sales s
+    CROSS JOIN LATERAL jsonb_array_elements(s.line_items) AS li
+    LEFT JOIN items i ON i.id = (li->>'itemId')::int
+    WHERE s.sale_date >= CURRENT_DATE - (${days}::int * INTERVAL '1 day')
+    GROUP BY (li->>'itemId')::int, i.name
+    ORDER BY revenue DESC
+    LIMIT 10
+  `);
+  res.json(rows.rows);
+});
+
+router.get("/dashboard/production-trend", async (req, res): Promise<void> => {
+  const days = Math.min(Math.max(parseInt(req.query.days as string) || 30, 1), 365);
+  const rows = await db.execute(sql`
+    SELECT
+      production_date::text                          AS date,
+      COALESCE(SUM(produced_quantity), 0)::float     AS quantity,
+      COUNT(*)::int                                  AS batches
+    FROM productions
+    WHERE production_date >= CURRENT_DATE - (${days}::int * INTERVAL '1 day')
+    GROUP BY production_date
+    ORDER BY production_date
+  `);
+  res.json(rows.rows);
 });
 
 export default router;
