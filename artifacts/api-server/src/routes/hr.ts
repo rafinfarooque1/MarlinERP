@@ -458,23 +458,61 @@ router.post("/hr/payroll/:id/pay", async (req, res): Promise<void> => {
 // ── Attendance ────────────────────────────────────────────────────────────
 router.get("/hr/attendance", async (req, res): Promise<void> => {
   const qp = ListAttendanceQueryParams.safeParse(req.query);
-  let rows = await db.select().from(attendanceTable).orderBy(attendanceTable.id);
-  if (qp.success) {
-    if (qp.data.employeeId) rows = rows.filter((r) => r.employeeId === Number(qp.data.employeeId));
-    if (qp.data.date) rows = rows.filter((r) => r.date === qp.data.date);
-  }
-  const employees = await db.select().from(employeesTable);
-  const eMap = new Map(employees.map((e) => [e.id, e.name]));
-  res.json(rows.map((r) => ({
-    ...r,
-    employeeName: eMap.get(r.employeeId) ?? "",
-    checkIn: r.checkIn?.toISOString() ?? null,
-    checkOut: r.checkOut?.toISOString() ?? null,
-    checkInLat: r.checkInLat ? Number(r.checkInLat) : null,
-    checkInLng: r.checkInLng ? Number(r.checkInLng) : null,
-    checkOutLat: r.checkOutLat ? Number(r.checkOutLat) : null,
-    checkOutLng: r.checkOutLng ? Number(r.checkOutLng) : null,
-  })));
+  const targetDate = (qp.success && qp.data.date) ? qp.data.date : new Date().toISOString().split("T")[0];
+  const filterEmployeeId = qp.success && qp.data.employeeId ? Number(qp.data.employeeId) : null;
+
+  // All active employees (or just one if filtered)
+  let allEmployees = await db.select().from(employeesTable).where(eq(employeesTable.isActive, true));
+  if (filterEmployeeId) allEmployees = allEmployees.filter((e) => e.id === filterEmployeeId);
+
+  // Existing attendance rows for that date
+  const rows = await db.select().from(attendanceTable)
+    .where(eq(attendanceTable.date, targetDate));
+  const attMap = new Map(rows.map((r) => [r.employeeId, r]));
+
+  // Merge: every active employee gets a row (synthetic absent if no record)
+  const result = allEmployees.map((emp) => {
+    const r = attMap.get(emp.id);
+    if (r) {
+      return {
+        id: r.id,
+        employeeId: emp.id,
+        employeeName: emp.name,
+        date: r.date,
+        checkIn: r.checkIn?.toISOString() ?? null,
+        checkOut: r.checkOut?.toISOString() ?? null,
+        checkInLat: r.checkInLat ? Number(r.checkInLat) : null,
+        checkInLng: r.checkInLng ? Number(r.checkInLng) : null,
+        checkOutLat: r.checkOutLat ? Number(r.checkOutLat) : null,
+        checkOutLng: r.checkOutLng ? Number(r.checkOutLng) : null,
+        status: r.status,
+        hoursWorked: r.hoursWorked ?? null,
+      };
+    }
+    // No record yet — synthetic absent row
+    return {
+      id: null,
+      employeeId: emp.id,
+      employeeName: emp.name,
+      date: targetDate,
+      checkIn: null,
+      checkOut: null,
+      checkInLat: null,
+      checkInLng: null,
+      checkOutLat: null,
+      checkOutLng: null,
+      status: "absent",
+      hoursWorked: null,
+    };
+  });
+
+  // Sort: employees with check-in first, then absent; alphabetical within each group
+  result.sort((a, b) => {
+    if (!!a.checkIn !== !!b.checkIn) return a.checkIn ? -1 : 1;
+    return a.employeeName.localeCompare(b.employeeName);
+  });
+
+  res.json(result);
 });
 
 router.post("/hr/attendance/check-in", async (req, res): Promise<void> => {

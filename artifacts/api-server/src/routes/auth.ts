@@ -34,6 +34,11 @@ router.post("/auth/login", async (req, res): Promise<void> => {
     return;
   }
 
+  if (!emp.isActive) {
+    res.status(403).json({ error: "Your account has been deactivated. Please contact your administrator." });
+    return;
+  }
+
   const [hierarchy] = await db
     .select()
     .from(hierarchiesTable)
@@ -103,6 +108,10 @@ router.get("/auth/me", async (req, res): Promise<void> => {
     const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, empId)).limit(1);
     if (!emp) {
       res.status(404).json({ error: "Not found" });
+      return;
+    }
+    if (!emp.isActive) {
+      res.status(403).json({ error: "Account deactivated" });
       return;
     }
     const [hierarchy] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, emp.hierarchyId)).limit(1);
