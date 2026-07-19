@@ -1,5 +1,9 @@
 import { useState } from 'react';
-import { useListEmployees, useCreateEmployee, useListHierarchies, useListWarehouses, useListOutlets, getListEmployeesQueryKey } from '@workspace/api-client-react';
+import {
+  useListEmployees, useCreateEmployee, useListHierarchies, useListWarehouses, useListOutlets,
+  getListEmployeesQueryKey, useGetPayComponents, useSetPayComponents, getPayComponentsQueryKey,
+  type PayComponent, type PayComponents,
+} from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,15 +12,19 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Users, Download, Eye } from 'lucide-react';
+import { Plus, Search, Users, Download, Eye, Settings2, Trash2, Check, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
+import { Separator } from '@/components/ui/separator';
 
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
@@ -31,6 +39,170 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
+// Allowances: only fixed or percent_of_basic (percent_of_gross not valid here —
+// gross is not known when allowances are computed; use it only in deductions).
+const ALLOWANCE_COMP_TYPES = [
+  { value: 'fixed', label: 'Fixed ₹' },
+  { value: 'percent_of_basic', label: '% of Basic' },
+];
+const DEDUCTION_COMP_TYPES = [
+  { value: 'fixed', label: 'Fixed ₹' },
+  { value: 'percent_of_basic', label: '% of Basic' },
+  { value: 'percent_of_gross', label: '% of Gross' },
+];
+
+// ── Pay Structure Editor ────────────────────────────────────────────────────
+
+function PayStructureEditor({ employee }: { employee: any }) {
+  const queryClient = useQueryClient();
+  const { data: pc, isLoading } = useGetPayComponents(employee.id);
+  const setMutation = useSetPayComponents();
+
+  const [workingDays, setWorkingDays] = useState<number | null>(null);
+  const [allowances, setAllowances] = useState<PayComponent[] | null>(null);
+  const [deductions, setDeductions] = useState<PayComponent[] | null>(null);
+
+  const effectiveWD = workingDays ?? pc?.workingDaysPerMonth ?? 26;
+  const effectiveAllowances = allowances ?? pc?.allowances ?? [];
+  const effectiveDeductions = deductions ?? pc?.deductions ?? [];
+
+  // Sync from server data when first loaded
+  if (pc && allowances === null) setAllowances(pc.allowances);
+  if (pc && deductions === null) setDeductions(pc.deductions);
+  if (pc && workingDays === null) setWorkingDays(pc.workingDaysPerMonth);
+
+  const handleSave = () => {
+    setMutation.mutate({ employeeId: employee.id, data: { workingDaysPerMonth: effectiveWD, allowances: effectiveAllowances, deductions: effectiveDeductions } }, {
+      onSuccess: () => {
+        toast.success('Pay structure saved');
+        queryClient.invalidateQueries({ queryKey: getPayComponentsQueryKey(employee.id) });
+      },
+      onError: (e: any) => toast.error(e?.message || 'Failed to save'),
+    });
+  };
+
+  const addComp = (kind: 'allowances' | 'deductions') => {
+    const newComp: PayComponent = { name: '', type: 'fixed', value: 0, enabled: true };
+    if (kind === 'allowances') setAllowances([...effectiveAllowances, newComp]);
+    else setDeductions([...effectiveDeductions, newComp]);
+  };
+
+  const updateComp = (kind: 'allowances' | 'deductions', idx: number, field: keyof PayComponent, val: any) => {
+    const list = kind === 'allowances' ? [...effectiveAllowances] : [...effectiveDeductions];
+    (list[idx] as any)[field] = val;
+    if (kind === 'allowances') setAllowances(list);
+    else setDeductions(list);
+  };
+
+  const removeComp = (kind: 'allowances' | 'deductions', idx: number) => {
+    if (kind === 'allowances') setAllowances(effectiveAllowances.filter((_, i) => i !== idx));
+    else setDeductions(effectiveDeductions.filter((_, i) => i !== idx));
+  };
+
+  // Compute preview
+  const basicSalary = employee.salary;
+  const perDay = basicSalary / effectiveWD;
+  const grossWithAllowances = effectiveAllowances.reduce((sum, a) => {
+    if (a.enabled === false) return sum;
+    return sum + (a.type === 'fixed' ? a.value : basicSalary * a.value / 100);
+  }, basicSalary);
+  const totalDeductions = effectiveDeductions.reduce((sum, d) => {
+    if (d.enabled === false) return sum;
+    const base = d.type === 'percent_of_basic' ? basicSalary : d.type === 'percent_of_gross' ? grossWithAllowances : 0;
+    return sum + (d.type === 'fixed' ? d.value : base * d.value / 100);
+  }, 0);
+
+  if (isLoading) return <div className="py-8 text-center text-muted-foreground text-sm">Loading pay structure…</div>;
+
+  const CompList = ({ kind }: { kind: 'allowances' | 'deductions' }) => {
+    const list = kind === 'allowances' ? effectiveAllowances : effectiveDeductions;
+    const color = kind === 'allowances' ? 'text-emerald-600' : 'text-red-500';
+    return (
+      <div className="space-y-2">
+        {list.map((comp, idx) => (
+          <div key={idx} className="flex items-center gap-2 p-2 bg-muted/20 rounded-lg border border-border">
+            <Switch
+              checked={comp.enabled !== false}
+              onCheckedChange={v => updateComp(kind, idx, 'enabled', v)}
+              className="flex-shrink-0"
+            />
+            <Input
+              placeholder="Component name"
+              value={comp.name}
+              onChange={e => updateComp(kind, idx, 'name', e.target.value)}
+              className="h-7 text-xs flex-1"
+            />
+            <Select value={comp.type} onValueChange={v => updateComp(kind, idx, 'type', v)}>
+              <SelectTrigger className="h-7 w-36 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {(kind === 'allowances' ? ALLOWANCE_COMP_TYPES : DEDUCTION_COMP_TYPES).map(t => (
+                  <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Input
+              type="number" min={0} step={0.01}
+              value={comp.value}
+              onChange={e => updateComp(kind, idx, 'value', Number(e.target.value))}
+              className={`h-7 w-20 text-xs text-right font-mono ${color}`}
+            />
+            <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive flex-shrink-0" onClick={() => removeComp(kind, idx)}>
+              <Trash2 className="w-3 h-3" />
+            </Button>
+          </div>
+        ))}
+        <Button type="button" variant="outline" size="sm" className="w-full h-7 text-xs border-dashed" onClick={() => addComp(kind)}>
+          <Plus className="w-3 h-3 mr-1" /> Add {kind === 'allowances' ? 'Allowance' : 'Deduction'}
+        </Button>
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-5 mt-2">
+      <div className="flex items-center gap-3">
+        <Label className="text-xs text-muted-foreground whitespace-nowrap">Working days/month</Label>
+        <Input type="number" min={1} max={31} value={effectiveWD}
+          onChange={e => setWorkingDays(Number(e.target.value))}
+          className="h-7 w-20 text-sm text-right" />
+      </div>
+
+      <Tabs defaultValue="allowances">
+        <TabsList className="w-full">
+          <TabsTrigger value="allowances" className="flex-1">Allowances ({effectiveAllowances.filter(a => a.enabled !== false).length} active)</TabsTrigger>
+          <TabsTrigger value="deductions" className="flex-1">Deductions ({effectiveDeductions.filter(d => d.enabled !== false).length} active)</TabsTrigger>
+        </TabsList>
+        <TabsContent value="allowances" className="mt-3"><CompList kind="allowances" /></TabsContent>
+        <TabsContent value="deductions" className="mt-3"><CompList kind="deductions" /></TabsContent>
+      </Tabs>
+
+      {/* Preview */}
+      <div className="p-3 bg-muted/30 rounded-lg text-xs space-y-1 border border-border">
+        <p className="text-muted-foreground font-medium uppercase tracking-wider mb-2">Monthly Preview (full attendance)</p>
+        <div className="flex justify-between"><span>Basic</span><span className="font-mono">₹{basicSalary.toLocaleString('en-IN')}</span></div>
+        {effectiveAllowances.filter(a => a.enabled !== false).map((a, i) => {
+          const amt = a.type === 'fixed' ? a.value : basicSalary * a.value / 100;
+          return <div key={i} className="flex justify-between text-emerald-600"><span>+ {a.name}</span><span className="font-mono">₹{amt.toFixed(0)}</span></div>;
+        })}
+        <div className="flex justify-between font-semibold border-t border-border pt-1 mt-1"><span>Gross</span><span className="font-mono">₹{grossWithAllowances.toFixed(0)}</span></div>
+        {effectiveDeductions.filter(d => d.enabled !== false).map((d, i) => {
+          const base = d.type === 'percent_of_basic' ? basicSalary : d.type === 'percent_of_gross' ? grossWithAllowances : 0;
+          const amt = d.type === 'fixed' ? d.value : base * d.value / 100;
+          return <div key={i} className="flex justify-between text-red-500"><span>- {d.name}</span><span className="font-mono">₹{amt.toFixed(2)}</span></div>;
+        })}
+        <div className="flex justify-between font-bold border-t border-border pt-1 mt-1 text-sm text-primary"><span>Net Pay</span><span className="font-mono">₹{(grossWithAllowances - totalDeductions).toFixed(0)}</span></div>
+        <p className="text-muted-foreground mt-1 pt-1 border-t border-border">Per day (LOP): ₹{perDay.toFixed(2)}</p>
+      </div>
+
+      <Button className="w-full" onClick={handleSave} disabled={setMutation.isPending}>
+        {setMutation.isPending ? 'Saving…' : 'Save Pay Structure'}
+      </Button>
+    </div>
+  );
+}
+
+// ── Main Component ──────────────────────────────────────────────────────────
+
 export default function Employees() {
   const { data: employees = [], isLoading } = useListEmployees();
   const { data: hierarchies = [] } = useListHierarchies();
@@ -39,6 +211,7 @@ export default function Employees() {
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
+  const [payStructureEmp, setPayStructureEmp] = useState<any>(null);
   const queryClient = useQueryClient();
   const createMutation = useCreateEmployee();
 
@@ -63,7 +236,7 @@ export default function Employees() {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Users className="w-6 h-6 text-primary" /> Employee Directory</h1>
-            <p className="text-muted-foreground mt-1">Personnel, roles, and branch assignments</p>
+            <p className="text-muted-foreground mt-1">Personnel, roles, branch assignments, and pay structures</p>
           </div>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => downloadCSV('employees.csv', filtered.map(e => ({ Name: e.name, Username: e.username, Role: e.hierarchyName, Branch: e.branchName, Type: e.branchType, Salary: e.salary, Status: e.isActive ? 'Active' : 'Inactive' })))}>
@@ -123,7 +296,10 @@ export default function Employees() {
                     </Badge>
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(emp)}><Eye className="w-4 h-4" /></Button>
+                    <div className="flex justify-end gap-1">
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(emp)} title="View"><Eye className="w-4 h-4" /></Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setPayStructureEmp(emp)} title="Pay Structure"><Settings2 className="w-4 h-4" /></Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -132,6 +308,7 @@ export default function Employees() {
         </div>
       </div>
 
+      {/* Add Employee Dialog */}
       <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) form.reset(); }}>
         <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Add Employee</DialogTitle></DialogHeader>
@@ -161,7 +338,7 @@ export default function Employees() {
                     </Select><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="salary" render={({ field }) => (
-                  <FormItem><FormLabel>Monthly Salary ₹</FormLabel><FormControl><Input type="number" min={0} {...field} /></FormControl></FormItem>
+                  <FormItem><FormLabel>Monthly Basic Salary ₹</FormLabel><FormControl><Input type="number" min={0} {...field} /></FormControl></FormItem>
                 )} />
                 <FormField control={form.control} name="joinDate" render={({ field }) => (
                   <FormItem><FormLabel>Join Date <span className="text-destructive">*</span></FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
@@ -210,6 +387,7 @@ export default function Employees() {
         </DialogContent>
       </Dialog>
 
+      {/* Employee detail sheet */}
       <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
         <SheetContent>
           <SheetHeader>
@@ -221,14 +399,32 @@ export default function Employees() {
           </SheetHeader>
           {viewItem && (
             <div className="mt-6 space-y-4">
-              {[['Role', viewItem.hierarchyName], ['Location', `${viewItem.branchName} (${viewItem.branchType})`], ['Email', viewItem.email || '—'], ['Phone', viewItem.phone || '—'], ['Salary', `₹${Number(viewItem.salary || 0).toLocaleString('en-IN')}/mo`], ['Join Date', viewItem.joinDate ? new Date(viewItem.joinDate).toLocaleDateString('en-IN') : '—'], ['Status', viewItem.isActive ? 'Active' : 'Inactive']].map(([k, v]) => (
+              {[['Role', viewItem.hierarchyName], ['Location', `${viewItem.branchName} (${viewItem.branchType})`], ['Email', viewItem.email || '—'], ['Phone', viewItem.phone || '—'], ['Basic Salary', `₹${Number(viewItem.salary || 0).toLocaleString('en-IN')}/mo`], ['Join Date', viewItem.joinDate ? new Date(viewItem.joinDate).toLocaleDateString('en-IN') : '—'], ['Status', viewItem.isActive ? 'Active' : 'Inactive']].map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
                   <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                   <span className="font-medium">{v}</span>
                 </div>
               ))}
+              <Button variant="outline" className="w-full" onClick={() => { setViewItem(null); setPayStructureEmp(viewItem); }}>
+                <Settings2 className="w-4 h-4 mr-2" /> Configure Pay Structure
+              </Button>
             </div>
           )}
+        </SheetContent>
+      </Sheet>
+
+      {/* Pay Structure Sheet */}
+      <Sheet open={!!payStructureEmp} onOpenChange={v => !v && setPayStructureEmp(null)}>
+        <SheetContent className="sm:max-w-md overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle className="flex items-center gap-2">
+              <Settings2 className="w-5 h-5 text-primary" /> Pay Structure
+            </SheetTitle>
+            <SheetDescription>
+              {payStructureEmp?.name} · Basic ₹{Number(payStructureEmp?.salary || 0).toLocaleString('en-IN')}/mo
+            </SheetDescription>
+          </SheetHeader>
+          {payStructureEmp && <PayStructureEditor employee={payStructureEmp} />}
         </SheetContent>
       </Sheet>
     </AppLayout>

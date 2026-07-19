@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, numeric, integer, boolean, date } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, numeric, integer, boolean, date, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -34,12 +34,37 @@ export const payrollTable = pgTable("payroll", {
   month: integer("month").notNull(),
   year: integer("year").notNull(),
   baseSalary: numeric("base_salary", { precision: 10, scale: 2 }).notNull().default("0"),
+  // Extended payroll fields
+  workingDays: integer("working_days").notNull().default(26),
+  presentDays: integer("present_days").notNull().default(26),
+  lopDays: integer("lop_days").notNull().default(0),
+  lopDeduction: numeric("lop_deduction", { precision: 10, scale: 2 }).notNull().default("0"),
+  grossPay: numeric("gross_pay", { precision: 10, scale: 2 }).notNull().default("0"),
+  allowancesTotal: numeric("allowances_total", { precision: 10, scale: 2 }).notNull().default("0"),
+  allowancesBreakdown: jsonb("allowances_breakdown").notNull().default([]),
   deductions: numeric("deductions", { precision: 10, scale: 2 }).notNull().default("0"),
+  deductionsBreakdown: jsonb("deductions_breakdown").notNull().default([]),
+  netPay: numeric("net_pay", { precision: 10, scale: 2 }).notNull().default("0"),
+  // Legacy / bonuses
   bonus: numeric("bonus", { precision: 10, scale: 2 }).notNull().default("0"),
   totalAmount: numeric("total_amount", { precision: 10, scale: 2 }).notNull().default("0"),
+  notes: text("notes"),
   isPaid: boolean("is_paid").notNull().default(false),
   paidDate: date("paid_date", { mode: "string" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Pay structure per employee (allowances + deduction config)
+export const payComponentsTable = pgTable("pay_components", {
+  id: serial("id").primaryKey(),
+  employeeId: integer("employee_id").notNull().unique().references(() => employeesTable.id),
+  workingDaysPerMonth: integer("working_days_per_month").notNull().default(26),
+  // allowances: [{name, type: 'fixed'|'percent_of_basic', value}]
+  allowances: jsonb("allowances").notNull().default([]),
+  // deductions: [{name, type: 'fixed'|'percent_of_basic'|'percent_of_gross', value, enabled}]
+  deductions: jsonb("deductions").notNull().default([]),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });
 
 export const attendanceTable = pgTable("attendance", {
