@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db, stockEntriesTable, stockTransfersTable, itemsTable, warehousesTable, outletsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { CreateStockTransferBody, GetStockTransferParams, ListStockQueryParams } from "@workspace/api-zod";
+import { logActivity } from "../lib/audit";
 
 const router = Router();
 
@@ -135,12 +136,16 @@ router.post("/stock/transfers", async (req, res): Promise<void> => {
     }
   }
 
-  res.status(201).json({
-    ...row,
-    fromName: await getBranchName(row.fromType, row.fromId),
-    toName: await getBranchName(row.toType, row.toId),
-    lineItems: row.lineItems ?? [],
-  });
+  const fromName = await getBranchName(row.fromType, row.fromId);
+  const toName   = await getBranchName(row.toType,   row.toId);
+
+  logActivity({
+    action: "CREATE", module: "transfers", entityType: "stock_transfer", entityId: row.id,
+    description: `Stock transfer ${challanNumber}: ${fromName} → ${toName} (${lineItems.length} line${lineItems.length !== 1 ? 's' : ''})`,
+    metadata: { after: { challanNumber, fromType: row.fromType, fromId: row.fromId, fromName, toType: row.toType, toId: row.toId, toName, lineCount: lineItems.length, isInterstate } },
+  }).catch(() => {});
+
+  res.status(201).json({ ...row, fromName, toName, lineItems: row.lineItems ?? [] });
 });
 
 router.get("/stock/transfers/:id", async (req, res): Promise<void> => {

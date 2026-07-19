@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db, salesTable, outletsTable, customersTable, stockEntriesTable, itemsTable, itemPricesTable, companySettingsTable } from "@workspace/db";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import { CreateSaleBody, GetSaleParams, SetItemPriceBody, ListItemPricesQueryParams } from "@workspace/api-zod";
+import { logActivity } from "../lib/audit";
 
 const router = Router();
 
@@ -199,6 +200,12 @@ router.post("/sales", async (req, res): Promise<void> => {
   const customerName = row.customerId
     ? (await db.select().from(customersTable).where(eq(customersTable.id, row.customerId)).limit(1))[0]?.name ?? null
     : null;
+
+  logActivity({
+    action: "CREATE", module: "sales", entityType: "sale", entityId: row.id,
+    description: `New sale ${invoiceNumber} — ${customerName ?? "Walk-in"} — ₹${totalAmount.toFixed(2)}`,
+    metadata: { after: { invoiceNumber, outletId: row.outletId, customerId: row.customerId, totalAmount, lineCount: lineItems.length } },
+  }).catch(() => {});
 
   res.status(201).json({
     ...row,

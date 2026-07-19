@@ -42,6 +42,7 @@ import GstSummary from './pages/accounts/GstSummary';
 import CompanySettings from './pages/company/Settings';
 import Permissions from './pages/company/Permissions';
 import Profile from './pages/company/Profile';
+import AuditLog from './pages/company/AuditLog';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -117,6 +118,7 @@ function Router() {
       <Route path="/company/settings"><AuthGuard><CompanySettings /></AuthGuard></Route>
       <Route path="/company/permissions"><AuthGuard><Permissions /></AuthGuard></Route>
       <Route path="/company/profile"><AuthGuard><Profile /></AuthGuard></Route>
+      <Route path="/company/audit"><AuthGuard><AuditLog /></AuthGuard></Route>
 
       <Route component={NotFound} />
     </Switch>

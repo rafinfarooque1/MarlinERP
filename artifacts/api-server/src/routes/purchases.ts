@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db, purchasesTable, vendorsTable, materialsTable, rawMaterialsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { CreatePurchaseBody, GetPurchaseParams } from "@workspace/api-zod";
+import { logActivity } from "../lib/audit";
 
 const router = Router();
 
@@ -47,6 +48,13 @@ router.post("/purchases", async (req, res): Promise<void> => {
   }
 
   const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, row.vendorId)).limit(1);
+
+  logActivity({
+    action: "CREATE", module: "purchases", entityType: "purchase", entityId: row.id,
+    description: `New purchase from ${vendor?.name ?? "Vendor"} — ₹${totalAmount.toFixed(2)}${row.invoiceNumber ? ` (Ref: ${row.invoiceNumber})` : ""}`,
+    metadata: { after: { vendorId: row.vendorId, vendorName: vendor?.name, totalAmount, lineCount: lineItems.length, invoiceNumber: row.invoiceNumber } },
+  }).catch(() => {});
+
   res.status(201).json({ ...row, vendorName: vendor?.name ?? "", totalAmount: Number(row.totalAmount), lineItems: row.lineItems ?? [] });
 });
 

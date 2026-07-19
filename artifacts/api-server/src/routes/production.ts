@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db, productionsTable, itemsTable, stockEntriesTable, materialsTable, rawMaterialsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { CreateProductionBody, GetProductionParams } from "@workspace/api-zod";
+import { logActivity } from "../lib/audit";
 
 const router = Router();
 
@@ -69,6 +70,13 @@ router.post("/productions", async (req, res): Promise<void> => {
   }
 
   const [item] = await db.select().from(itemsTable).where(eq(itemsTable.id, row.itemId)).limit(1);
+
+  logActivity({
+    action: "CREATE", module: "production", entityType: "production", entityId: row.id,
+    description: `Produced ${parsed.data.producedQuantity} × ${item?.name ?? `Item #${parsed.data.itemId}`} on ${parsed.data.productionDate}`,
+    metadata: { after: { itemId: row.itemId, itemName: item?.name, producedQuantity: parsed.data.producedQuantity, materialCount: materialUsed.length } },
+  }).catch(() => {});
+
   res.status(201).json({ ...row, itemName: item?.name ?? "", producedQuantity: Number(row.producedQuantity), materialUsed: row.materialUsed ?? [] });
 });
 

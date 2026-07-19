@@ -5,3 +5,4 @@ export type { AuthTokenGetter } from "./custom-fetch";
 export * from "./analytics";
 export * from "./bom";
 export * from "./payroll";
+export * from "./audit";

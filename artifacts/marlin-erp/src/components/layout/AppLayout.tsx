@@ -97,6 +97,7 @@ const navigation = [
       { name: 'Settings', href: '/company/settings' },
       { name: 'Permissions', href: '/company/permissions' },
       { name: 'Profile', href: '/company/profile' },
+      { name: 'Audit Log', href: '/company/audit' },
     ],
   },
 ];

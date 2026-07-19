@@ -4,6 +4,7 @@ import {
   leavesTable, warehousesTable, outletsTable, payComponentsTable,
 } from "@workspace/db";
 import { eq, and, gte, lte, sql } from "drizzle-orm";
+import { logActivity } from "../lib/audit";
 import {
   CreateHierarchyBody, UpdateHierarchyBody, DeleteHierarchyParams,
   CreateEmployeeBody, UpdateEmployeeBody, GetEmployeeParams, DeleteEmployeeParams,
@@ -190,6 +191,13 @@ router.post("/hr/employees", async (req, res): Promise<void> => {
     passwordHash: "default123",
   }).returning();
   const [h] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, row.hierarchyId)).limit(1);
+
+  logActivity({
+    action: "CREATE", module: "hr", entityType: "employee", entityId: row.id,
+    description: `New employee ${row.name} added (${h?.name ?? "role"}) — salary ₹${Number(row.salary).toLocaleString("en-IN")}`,
+    metadata: { after: { id: row.id, name: row.name, salary: Number(row.salary), hierarchyName: h?.name } },
+  }).catch(() => {});
+
   res.status(201).json({
     ...row, hierarchyName: h?.name ?? "",
     branchName: await getBranchName(row.branchType, row.branchId),
@@ -213,6 +221,7 @@ router.get("/hr/employees/:id", async (req, res): Promise<void> => {
 
 router.patch("/hr/employees/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
+  const [before] = await db.select().from(employeesTable).where(eq(employeesTable.id, id)).limit(1);
   const parsed = UpdateEmployeeBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const updateData: Record<string, unknown> = { ...parsed.data };
@@ -220,6 +229,17 @@ router.patch("/hr/employees/:id", async (req, res): Promise<void> => {
   const [row] = await db.update(employeesTable).set(updateData).where(eq(employeesTable.id, id)).returning();
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const [h] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, row.hierarchyId)).limit(1);
+
+  logActivity({
+    action: "UPDATE", module: "hr", entityType: "employee", entityId: row.id,
+    description: `Employee ${row.name} updated`,
+    metadata: {
+      before: before ? { name: before.name, salary: Number(before.salary), isActive: before.isActive } : undefined,
+      after: { name: row.name, salary: Number(row.salary), isActive: row.isActive },
+      changes: Object.keys(parsed.data),
+    },
+  }).catch(() => {});
+
   res.json({
     id: row.id, name: row.name, username: row.username, email: row.email ?? null, phone: row.phone ?? null,
     hierarchyId: row.hierarchyId, hierarchyName: h?.name ?? "",
@@ -231,7 +251,13 @@ router.patch("/hr/employees/:id", async (req, res): Promise<void> => {
 
 router.delete("/hr/employees/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
+  const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, id)).limit(1);
   await db.delete(employeesTable).where(eq(employeesTable.id, id));
+  logActivity({
+    action: "DELETE", module: "hr", entityType: "employee", entityId: id,
+    description: `Employee ${emp?.name ?? `#${id}`} deleted`,
+    metadata: { before: emp ? { id: emp.id, name: emp.name, salary: Number(emp.salary) } : undefined },
+  }).catch(() => {});
   res.status(204).send();
 });
 
@@ -415,6 +441,13 @@ router.post("/hr/payroll/:id/pay", async (req, res): Promise<void> => {
   const [row] = await db.update(payrollTable).set({ isPaid: true, paidDate: today }).where(eq(payrollTable.id, id)).returning();
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, row.employeeId)).limit(1);
+
+  logActivity({
+    action: "UPDATE", module: "payroll", entityType: "payroll", entityId: row.id,
+    description: `Payroll marked paid for ${emp?.name ?? `Employee #${row.employeeId}`} — ${row.month}/${row.year} — ₹${Number(row.netPay ?? 0).toLocaleString("en-IN")}`,
+    metadata: { after: { employeeId: row.employeeId, month: row.month, year: row.year, netPay: Number(row.netPay), paidDate: today } },
+  }).catch(() => {});
+
   res.json({
     ...enrichPayroll(row),
     employeeName: emp?.name ?? "",
