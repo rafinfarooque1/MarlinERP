@@ -17,7 +17,10 @@ import {
   User,
   PanelLeftClose,
   PanelLeftOpen,
+  Sun,
+  Moon,
 } from 'lucide-react';
+import { useTheme } from '@/lib/theme';
 import { Button } from '@/components/ui/button';
 import { useLogout, useGetMe } from '@workspace/api-client-react';
 import { Input } from '@/components/ui/input';
@@ -187,6 +190,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation();
   const logoutMutation = useLogout();
   const { data: user } = useGetMe();
+  const { theme, toggleTheme } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
   const [logo, setLogo] = useState<string | null>(() => localStorage.getItem(LOGO_KEY));
@@ -313,6 +317,17 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                   <img src={logo} alt="Company logo" className="h-full object-contain max-w-[100px]" />
                 </div>
               )}
+
+              {/* Theme toggle */}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-muted-foreground hover:text-foreground"
+                onClick={toggleTheme}
+                title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              >
+                {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+              </Button>
 
               <Button variant="ghost" size="icon" className="relative text-muted-foreground hover:text-foreground">
                 <Bell className="w-5 h-5" />
