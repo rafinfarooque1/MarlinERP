@@ -84,12 +84,44 @@ router.post("/auth/logout", async (_req, res): Promise<void> => {
 });
 
 router.post("/auth/change-password", async (req, res): Promise<void> => {
-  const { employeeId, newPassword } = req.body;
-  if (!employeeId || !newPassword) {
-    res.status(400).json({ error: "Missing fields" });
+  // Resolve the employee from the bearer token
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    res.status(401).json({ error: "Not authenticated" });
     return;
   }
-  await db.update(employeesTable).set({ passwordHash: newPassword }).where(eq(employeesTable.id, Number(employeeId)));
+  const token = authHeader.replace("Bearer ", "");
+  let empId: number;
+  try {
+    const decoded = Buffer.from(token, "base64").toString("utf-8");
+    empId = parseInt(decoded.split(":")[0], 10);
+    if (isNaN(empId)) throw new Error("bad token");
+  } catch {
+    res.status(401).json({ error: "Invalid token" });
+    return;
+  }
+
+  const { currentPassword, newPassword } = req.body;
+  if (!currentPassword || !newPassword) {
+    res.status(400).json({ error: "currentPassword and newPassword are required" });
+    return;
+  }
+  if (newPassword.length < 6) {
+    res.status(400).json({ error: "New password must be at least 6 characters" });
+    return;
+  }
+
+  const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, empId)).limit(1);
+  if (!emp) {
+    res.status(404).json({ error: "Employee not found" });
+    return;
+  }
+  if (!checkPassword(emp.passwordHash, currentPassword)) {
+    res.status(401).json({ error: "Current password is incorrect" });
+    return;
+  }
+
+  await db.update(employeesTable).set({ passwordHash: newPassword }).where(eq(employeesTable.id, empId));
   res.json({ success: true });
 });
 

@@ -19,14 +19,20 @@ import {
   PanelLeftOpen,
   Sun,
   Moon,
+  KeyRound,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { useTheme } from '@/lib/theme';
 import { Button } from '@/components/ui/button';
-import { useLogout, useGetMe } from '@workspace/api-client-react';
+import { useLogout, useGetMe, useChangePassword } from '@workspace/api-client-react';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
+import { toast } from 'sonner';
 
 const LOGO_KEY = 'marlin_company_logo';
 
@@ -43,88 +49,118 @@ const navigation = [
       { name: 'Units', href: '/production/units' },
       { name: 'Materials', href: '/production/materials' },
       { name: 'Raw Materials', href: '/production/raw-materials' },
-      { name: 'Items', href: '/production/items' },
-      { name: 'BOM Templates', href: '/production/bom-templates' },
-      { name: 'Purchases', href: '/production/purchase' },
-      { name: 'Production', href: '/production/production' },
-      { name: 'Stock Transfer', href: '/production/stock-transfer' },
+      { name: 'BOM Templates', href: '/production/bom' },
+      { name: 'Batches', href: '/production/batches' },
     ],
   },
   {
-    name: 'Head Office',
+    name: 'Inventory',
     icon: Building2,
     children: [
-      { name: 'Warehouses', href: '/headoffice/warehouses' },
-      { name: 'Outlets', href: '/headoffice/outlets' },
-      { name: 'Stock', href: '/headoffice/stock' },
-      { name: 'Transfers', href: '/headoffice/transfers' },
-      { name: 'Item Prices', href: '/headoffice/item-price' },
-      { name: 'Sales', href: '/headoffice/sales' },
+      { name: 'Stock', href: '/inventory/stock' },
+      { name: 'Transfers', href: '/inventory/transfers' },
+      { name: 'Warehouses', href: '/inventory/warehouses' },
+    ],
+  },
+  {
+    name: 'Sales',
+    icon: Calculator,
+    children: [
+      { name: 'Orders', href: '/sales/orders' },
+      { name: 'Customers', href: '/sales/customers' },
+      { name: 'Vendors', href: '/sales/vendors' },
+      { name: 'Purchases', href: '/sales/purchases' },
     ],
   },
   {
     name: 'HR',
     icon: Users,
     children: [
-      { name: 'Hierarchy', href: '/hr/hierarchy' },
       { name: 'Employees', href: '/hr/employees' },
-      { name: 'Payroll', href: '/hr/payroll' },
       { name: 'Attendance', href: '/hr/attendance' },
       { name: 'Leave', href: '/hr/leave' },
-    ],
-  },
-  {
-    name: 'Customer & Vendor',
-    icon: UsersRound,
-    children: [
-      { name: 'Customers', href: '/customers' },
-      { name: 'Vendors', href: '/vendors' },
-      { name: 'Coupons', href: '/coupons' },
+      { name: 'Payroll', href: '/hr/payroll' },
     ],
   },
   {
     name: 'Accounts',
-    icon: Calculator,
+    icon: UsersRound,
     children: [
-      { name: 'Chart of Accounts', href: '/accounts/chart' },
       { name: 'Ledger', href: '/accounts/ledger' },
       { name: 'Cash & Bank', href: '/accounts/cash-bank' },
       { name: 'Expenses', href: '/accounts/expenses' },
-      { name: 'GST Summary', href: '/accounts/gst' },
     ],
   },
   {
     name: 'Company',
-    icon: Settings,
+    icon: Building2,
     children: [
       { name: 'Settings', href: '/company/settings' },
-      { name: 'Permissions', href: '/company/permissions' },
       { name: 'Profile', href: '/company/profile' },
+      { name: 'Branches', href: '/company/branches' },
+      { name: 'Hierarchy', href: '/company/hierarchy' },
+      { name: 'Permissions', href: '/company/permissions' },
       { name: 'Audit Log', href: '/company/audit' },
     ],
   },
 ];
 
-function NavItem({ item, isActive, currentPath, collapsed }: { item: any, isActive: boolean, currentPath: string, collapsed: boolean }) {
-  const [isOpen, setIsOpen] = useState(isActive);
-  const Icon = item.icon;
+function PasswordInput({ value, onChange, placeholder, id, autoComplete }: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  id?: string;
+  autoComplete?: string;
+}) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="relative">
+      <Input
+        id={id}
+        type={show ? 'text' : 'password'}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoComplete={autoComplete}
+        className="pr-10"
+      />
+      <button
+        type="button"
+        onClick={() => setShow(s => !s)}
+        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+        tabIndex={-1}
+      >
+        {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+      </button>
+    </div>
+  );
+}
 
-  if (!item.children) {
+function NavItem({ item, isActive, currentPath, collapsed }: any) {
+  const [isOpen, setIsOpen] = useState(isActive);
+
+  if (item.href) {
     if (collapsed) {
       return (
         <Tooltip>
           <TooltipTrigger asChild>
-            <Link href={item.href} className={`flex items-center justify-center w-10 h-10 rounded-md transition-colors ${isActive ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>
-              <Icon className="w-5 h-5" />
+            <Link
+              href={item.href}
+              className={`flex items-center justify-center w-10 h-10 rounded-md transition-colors ${isActive ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
+            >
+              <item.icon className="w-5 h-5 shrink-0" />
             </Link>
           </TooltipTrigger>
-          <TooltipContent side="right" className="font-sans">{item.name}</TooltipContent>
+          <TooltipContent side="right">{item.name}</TooltipContent>
         </Tooltip>
       );
     }
     return (
-      <Link href={item.href} className={`flex items-center gap-3 px-3 py-2 rounded-md transition-colors text-sm font-medium ${isActive ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>
-        <Icon className="w-4 h-4 shrink-0" />
+      <Link
+        href={item.href}
+        className={`flex items-center gap-3 px-3 py-2 rounded-md transition-colors text-sm font-medium ${isActive ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
+      >
+        <item.icon className="w-4 h-4 shrink-0" />
         {item.name}
       </Link>
     );
@@ -135,32 +171,24 @@ function NavItem({ item, isActive, currentPath, collapsed }: { item: any, isActi
       <Tooltip>
         <TooltipTrigger asChild>
           <button
-            onClick={() => setIsOpen(!isOpen)}
             className={`flex items-center justify-center w-10 h-10 rounded-md transition-colors ${isActive ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
           >
-            <Icon className="w-5 h-5" />
+            <item.icon className="w-5 h-5 shrink-0" />
           </button>
         </TooltipTrigger>
-        <TooltipContent side="right" className="font-sans">
-          <p className="font-medium mb-1">{item.name}</p>
-          {item.children.map((child: any) => (
-            <Link key={child.href} href={child.href} className="block text-xs text-muted-foreground hover:text-foreground py-0.5">
-              {child.name}
-            </Link>
-          ))}
-        </TooltipContent>
+        <TooltipContent side="right">{item.name}</TooltipContent>
       </Tooltip>
     );
   }
 
   return (
-    <div className="space-y-1">
-      <button 
+    <div>
+      <button
         onClick={() => setIsOpen(!isOpen)}
         className={`w-full flex items-center justify-between gap-3 px-3 py-2 rounded-md transition-colors text-sm font-medium ${isActive ? 'text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
       >
         <div className="flex items-center gap-3">
-          <Icon className="w-4 h-4 shrink-0" />
+          <item.icon className="w-4 h-4 shrink-0" />
           {item.name}
         </div>
         {isOpen ? <ChevronDown className="w-4 h-4 shrink-0" /> : <ChevronRight className="w-4 h-4 shrink-0" />}
@@ -195,6 +223,14 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [logo, setLogo] = useState<string | null>(() => localStorage.getItem(LOGO_KEY));
 
+  // Change-password dialog state
+  const [pwOpen, setPwOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [pwError, setPwError] = useState('');
+  const changePasswordMutation = useChangePassword();
+
   // Listen for logo changes from Profile page
   useEffect(() => {
     const handler = (e: Event) => {
@@ -208,6 +244,35 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     localStorage.removeItem('marlin_auth_token');
     localStorage.removeItem('marlin_user');
     setLocation('/login');
+  };
+
+  const openChangePw = () => {
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setPwError('');
+    setPwOpen(true);
+  };
+
+  const handleChangePw = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPwError('');
+    if (newPassword.length < 6) {
+      setPwError('New password must be at least 6 characters.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPwError('New passwords do not match.');
+      return;
+    }
+    try {
+      await changePasswordMutation.mutateAsync({ data: { currentPassword, newPassword } });
+      toast.success('Password changed successfully.');
+      setPwOpen(false);
+    } catch (err: any) {
+      const msg = err?.response?.data?.error ?? err?.message ?? 'Failed to change password.';
+      setPwError(msg);
+    }
   };
 
   return (
@@ -357,6 +422,10 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                       Profile
                     </Link>
                   </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={openChangePw} className="cursor-pointer">
+                    <KeyRound className="mr-2 h-4 w-4" />
+                    Change Password
+                  </DropdownMenuItem>
                   <DropdownMenuItem asChild>
                     <Link href="/company/settings" className="cursor-pointer w-full flex items-center">
                       <Settings className="mr-2 h-4 w-4" />
@@ -379,6 +448,67 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
         </main>
       </div>
+
+      {/* ── Change Password Dialog ─────────────────────────────── */}
+      <Dialog open={pwOpen} onOpenChange={setPwOpen}>
+        <DialogContent className="sm:max-w-md font-sans">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <KeyRound className="w-5 h-5 text-primary" />
+              Change Password
+            </DialogTitle>
+            <DialogDescription>
+              Enter your current password, then choose a new one.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleChangePw} className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="cp-current">Current Password</Label>
+              <PasswordInput
+                id="cp-current"
+                value={currentPassword}
+                onChange={setCurrentPassword}
+                placeholder="Your current password"
+                autoComplete="current-password"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="cp-new">New Password</Label>
+              <PasswordInput
+                id="cp-new"
+                value={newPassword}
+                onChange={setNewPassword}
+                placeholder="At least 6 characters"
+                autoComplete="new-password"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="cp-confirm">Confirm New Password</Label>
+              <PasswordInput
+                id="cp-confirm"
+                value={confirmPassword}
+                onChange={setConfirmPassword}
+                placeholder="Repeat new password"
+                autoComplete="new-password"
+              />
+            </div>
+
+            {pwError && (
+              <p className="text-sm text-destructive">{pwError}</p>
+            )}
+
+            <DialogFooter className="pt-2">
+              <Button type="button" variant="outline" onClick={() => setPwOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={changePasswordMutation.isPending}>
+                {changePasswordMutation.isPending ? 'Saving…' : 'Save Password'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </TooltipProvider>
   );
 }

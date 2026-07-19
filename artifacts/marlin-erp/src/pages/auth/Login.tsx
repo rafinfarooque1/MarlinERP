@@ -109,9 +109,6 @@ export default function Login() {
             </form>
           </Form>
 
-          <p className="mt-6 text-center text-xs text-muted-foreground">
-            Default: <span className="font-mono text-primary">admin</span> / <span className="font-mono text-primary">admin123</span>
-          </p>
         </div>
       </div>
     </div>
