@@ -7,15 +7,18 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Edit2, Trash2, Leaf, Download, Eye } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, Leaf, Download, Eye, Ruler } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
+import { useUnits } from '@/lib/useUnits';
+import { Link } from 'wouter';
 
 const schema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -26,6 +29,7 @@ type FormValues = z.infer<typeof schema>;
 
 export default function RawMaterials() {
   const { data: rawMaterials = [], isLoading } = useListRawMaterials();
+  const { units } = useUnits();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -37,7 +41,7 @@ export default function RawMaterials() {
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', unit: '', description: '' } });
 
-  const openAdd = () => { setEditingId(null); form.reset({ name: '', unit: '', description: '' }); setIsOpen(true); };
+  const openAdd = () => { setEditingId(null); form.reset({ name: '', unit: units[0] || '', description: '' }); setIsOpen(true); };
   const openEdit = (m: any) => { setEditingId(m.id); form.reset({ name: m.name, unit: m.unit, description: m.description || '' }); setIsOpen(true); };
 
   const onSubmit = (data: FormValues) => {
@@ -133,7 +137,21 @@ export default function RawMaterials() {
                 <FormItem><FormLabel>Name <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="e.g. Alphonso Mangoes" {...field} /></FormControl><FormMessage /></FormItem>
               )} />
               <FormField control={form.control} name="unit" render={({ field }) => (
-                <FormItem><FormLabel>Unit <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="e.g. kg, litre" {...field} /></FormControl><FormMessage /></FormItem>
+                <FormItem>
+                  <FormLabel className="flex items-center justify-between">
+                    Unit <span className="text-destructive">*</span>
+                    <Link href="/production/units" className="text-[10px] text-primary hover:underline flex items-center gap-0.5" onClick={() => setIsOpen(false)}>
+                      <Ruler className="w-3 h-3" /> Manage
+                    </Link>
+                  </FormLabel>
+                  <Select onValueChange={field.onChange} value={field.value}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Select unit" /></SelectTrigger></FormControl>
+                    <SelectContent>
+                      {units.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
               )} />
               <FormField control={form.control} name="description" render={({ field }) => (
                 <FormItem><FormLabel>Description</FormLabel><FormControl><Textarea placeholder="Optional..." rows={2} {...field} /></FormControl><FormMessage /></FormItem>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useListSales, useCreateSale, useListOutlets, useListCustomers, useListItems, useListItemPrices, getListSalesQueryKey, useListCoupons } from '@workspace/api-client-react';
+import { useListSales, useCreateSale, useListOutlets, useListCustomers, useListItems, useListItemPrices, useListStock, getListSalesQueryKey, useListCoupons } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Trash2, CreditCard, Calendar, Receipt, Download, Eye, Printer } from 'lucide-react';
+import { Plus, Search, Trash2, CreditCard, Calendar, Receipt, Download, Eye, Printer, PackageOpen } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
@@ -51,9 +51,26 @@ export default function Sales() {
   });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
   const watchOutletId = form.watch('outletId');
+
+  // Load prices for the selected outlet
   const { data: outletPrices = [] } = useListItemPrices({ outletId: watchOutletId }, { query: { enabled: !!watchOutletId && watchOutletId > 0 } });
 
+  // Load stock for the selected outlet — only show items that have stock > 0
+  const { data: outletStock = [] } = useListStock(
+    { branchType: 'outlet' as any, branchId: watchOutletId },
+    { query: { enabled: !!watchOutletId && watchOutletId > 0 } }
+  );
+
+  // Map: itemId → available quantity at this outlet
+  const stockMap = new Map<number, number>(
+    outletStock.map(s => [s.itemId!, Number(s.quantity ?? 0)])
+  );
+
+  // Items that have stock > 0 at this outlet
+  const availableItems = items.filter(it => (stockMap.get(it.id) ?? 0) > 0);
+
   const getPrice = (itemId: number) => outletPrices.find(p => p.itemId === itemId)?.price ?? 0;
+  const getAvailableQty = (itemId: number) => stockMap.get(itemId) ?? 0;
 
   const calcTotal = () => fields.reduce((s, _, i) => {
     const itemId = form.watch(`lineItems.${i}.itemId`);
@@ -62,7 +79,6 @@ export default function Sales() {
   }, 0);
 
   const onSubmit = (data: FormValues) => {
-    // Enrich line items with price data from outletPrices
     const enrichedItems = data.lineItems.map(li => ({
       itemId: li.itemId,
       quantity: li.quantity,
@@ -175,7 +191,7 @@ export default function Sales() {
               <div className="grid grid-cols-2 gap-4">
                 <FormField control={form.control} name="outletId" render={({ field }) => (
                   <FormItem><FormLabel>Outlet <span className="text-destructive">*</span></FormLabel>
-                    <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
+                    <Select onValueChange={v => { field.onChange(Number(v)); form.setValue('lineItems', [{ itemId: 0, quantity: 1 }]); }} value={field.value ? String(field.value) : ''}>
                       <FormControl><SelectTrigger><SelectValue placeholder="Select outlet" /></SelectTrigger></FormControl>
                       <SelectContent>{outlets.map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}</SelectContent>
                     </Select><FormMessage /></FormItem>
@@ -210,12 +226,18 @@ export default function Sales() {
               <div>
                 {!watchOutletId || watchOutletId === 0 ? (
                   <div className="p-6 border border-dashed border-border rounded-lg text-center text-muted-foreground">
-                    Select an outlet above to load item prices
+                    Select an outlet above to load available stock
+                  </div>
+                ) : availableItems.length === 0 ? (
+                  <div className="p-6 border border-dashed border-amber-500/40 rounded-lg text-center text-amber-500 bg-amber-500/5 flex flex-col items-center gap-2">
+                    <PackageOpen className="w-8 h-8 opacity-60" />
+                    <p className="font-medium">No stock available at this outlet</p>
+                    <p className="text-xs text-muted-foreground">Transfer stock to this outlet before recording a sale</p>
                   </div>
                 ) : (
                   <>
                     <div className="flex justify-between items-center mb-3">
-                      <p className="font-semibold">Cart Items</p>
+                      <p className="font-semibold">Cart Items <span className="text-xs text-muted-foreground font-normal ml-1">({availableItems.length} items in stock)</span></p>
                       <Button type="button" variant="outline" size="sm" onClick={() => append({ itemId: 0, quantity: 1 })}><Plus className="w-3 h-3 mr-1" /> Add Item</Button>
                     </div>
                     <div className="space-y-2">
@@ -223,20 +245,36 @@ export default function Sales() {
                         const itemId = form.watch(`lineItems.${index}.itemId`);
                         const qty = form.watch(`lineItems.${index}.quantity`);
                         const price = getPrice(itemId);
+                        const availQty = getAvailableQty(itemId);
                         return (
                           <div key={field.id} className="grid grid-cols-12 gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border">
                             <div className="col-span-6">
                               <FormField control={form.control} name={`lineItems.${index}.itemId`} render={({ field: f }) => (
-                                <FormItem><FormLabel className="text-xs">Item</FormLabel>
+                                <FormItem>
+                                  <FormLabel className="text-xs">Item</FormLabel>
                                   <Select onValueChange={v => f.onChange(Number(v))} value={f.value ? String(f.value) : ''}>
                                     <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger></FormControl>
-                                    <SelectContent>{items.map(it => { const p = getPrice(it.id); return <SelectItem key={it.id} value={String(it.id)}>{it.name} (₹{p})</SelectItem>; })}</SelectContent>
-                                  </Select></FormItem>
+                                    <SelectContent>
+                                      {availableItems.map(it => {
+                                        const avail = stockMap.get(it.id) ?? 0;
+                                        const p = getPrice(it.id);
+                                        return (
+                                          <SelectItem key={it.id} value={String(it.id)}>
+                                            {it.name} — {avail} {it.unit} avail{p > 0 ? ` · ₹${p}` : ''}
+                                          </SelectItem>
+                                        );
+                                      })}
+                                    </SelectContent>
+                                  </Select>
+                                </FormItem>
                               )} />
                             </div>
                             <div className="col-span-2">
                               <FormField control={form.control} name={`lineItems.${index}.quantity`} render={({ field: f }) => (
-                                <FormItem><FormLabel className="text-xs">Qty</FormLabel><FormControl><Input type="number" min={1} className="h-8 text-xs" {...f} /></FormControl></FormItem>
+                                <FormItem>
+                                  <FormLabel className="text-xs">Qty {itemId > 0 && <span className="text-muted-foreground">(max {availQty})</span>}</FormLabel>
+                                  <FormControl><Input type="number" min={1} max={itemId > 0 ? availQty : undefined} className="h-8 text-xs" {...f} /></FormControl>
+                                </FormItem>
                               )} />
                             </div>
                             <div className="col-span-3 text-right pb-1">
@@ -261,7 +299,7 @@ export default function Sales() {
                 </div>
                 <div className="flex gap-2">
                   <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
-                  <Button type="submit" disabled={createMutation.isPending || !watchOutletId}>
+                  <Button type="submit" disabled={createMutation.isPending || !watchOutletId || availableItems.length === 0}>
                     {createMutation.isPending ? 'Processing…' : 'Complete Sale'}
                   </Button>
                 </div>

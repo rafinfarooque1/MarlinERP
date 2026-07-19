@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useListStockTransfers, useCreateStockTransfer, useListItems, useListWarehouses, getListStockTransfersQueryKey } from '@workspace/api-client-react';
+import { useListStockTransfers, useCreateStockTransfer, useListItems, useListWarehouses, useListStock, getListStockTransfersQueryKey } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,7 +12,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Truck, Download, Eye, Calendar, Trash2, Printer } from 'lucide-react';
+import { Plus, Search, Truck, Download, Eye, Calendar, Trash2, Printer, PackageOpen } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV, printHTML } from '@/lib/download';
@@ -38,6 +38,17 @@ export default function StockTransfers() {
   const [viewItem, setViewItem] = useState<any>(null);
   const queryClient = useQueryClient();
   const createMutation = useCreateStockTransfer();
+
+  // Always load production stock (source is always production unit branchId=1)
+  const { data: productionStock = [] } = useListStock({ branchType: 'production' as any, branchId: 1 });
+
+  // Map: itemId → available qty in production
+  const stockMap = new Map<number, number>(
+    productionStock.map(s => [s.itemId!, Number(s.quantity ?? 0)])
+  );
+
+  // Items that have production stock > 0
+  const availableItems = items.filter(it => (stockMap.get(it.id) ?? 0) > 0);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -151,33 +162,55 @@ export default function StockTransfers() {
               </div>
 
               <div>
-                <div className="flex justify-between items-center mb-3">
-                  <p className="font-semibold text-sm">Items to Transfer</p>
-                  <Button type="button" variant="outline" size="sm" onClick={() => append({ itemId: 0, quantity: 1 })}><Plus className="w-3 h-3 mr-1" /> Add SKU</Button>
-                </div>
-                <div className="space-y-2">
-                  {fields.map((field, i) => (
-                    <div key={field.id} className="grid grid-cols-11 gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border">
-                      <div className="col-span-7">
-                        <FormField control={form.control} name={`lineItems.${i}.itemId`} render={({ field: f }) => (
-                          <FormItem><FormLabel className="text-xs">Item</FormLabel>
-                            <Select onValueChange={v => f.onChange(Number(v))} value={f.value ? String(f.value) : ''}>
-                              <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select item" /></SelectTrigger></FormControl>
-                              <SelectContent>{items.map(it => <SelectItem key={it.id} value={String(it.id)}>{it.name}</SelectItem>)}</SelectContent>
-                            </Select></FormItem>
-                        )} />
-                      </div>
-                      <div className="col-span-3">
-                        <FormField control={form.control} name={`lineItems.${i}.quantity`} render={({ field: f }) => (
-                          <FormItem><FormLabel className="text-xs">Qty</FormLabel><FormControl><Input type="number" min={1} className="h-8 text-xs" {...f} /></FormControl></FormItem>
-                        )} />
-                      </div>
-                      <div className="col-span-1 pb-1 flex justify-end">
-                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(i)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
-                      </div>
+                {availableItems.length === 0 ? (
+                  <div className="p-6 border border-dashed border-amber-500/40 rounded-lg text-center text-amber-500 bg-amber-500/5 flex flex-col items-center gap-2">
+                    <PackageOpen className="w-8 h-8 opacity-60" />
+                    <p className="font-medium">No production stock available</p>
+                    <p className="text-xs text-muted-foreground">Record a production batch first to build stock</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex justify-between items-center mb-3">
+                      <p className="font-semibold text-sm">Items to Transfer <span className="text-xs text-muted-foreground font-normal ml-1">({availableItems.length} in stock)</span></p>
+                      <Button type="button" variant="outline" size="sm" onClick={() => append({ itemId: 0, quantity: 1 })}><Plus className="w-3 h-3 mr-1" /> Add SKU</Button>
                     </div>
-                  ))}
-                </div>
+                    <div className="space-y-2">
+                      {fields.map((field, i) => {
+                        const selItemId = form.watch(`lineItems.${i}.itemId`);
+                        const availQty = stockMap.get(selItemId) ?? 0;
+                        return (
+                          <div key={field.id} className="grid grid-cols-11 gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border">
+                            <div className="col-span-7">
+                              <FormField control={form.control} name={`lineItems.${i}.itemId`} render={({ field: f }) => (
+                                <FormItem><FormLabel className="text-xs">Item</FormLabel>
+                                  <Select onValueChange={v => f.onChange(Number(v))} value={f.value ? String(f.value) : ''}>
+                                    <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select item" /></SelectTrigger></FormControl>
+                                    <SelectContent>
+                                      {availableItems.map(it => {
+                                        const avail = stockMap.get(it.id) ?? 0;
+                                        return <SelectItem key={it.id} value={String(it.id)}>{it.name} — {avail} {it.unit} avail</SelectItem>;
+                                      })}
+                                    </SelectContent>
+                                  </Select></FormItem>
+                              )} />
+                            </div>
+                            <div className="col-span-3">
+                              <FormField control={form.control} name={`lineItems.${i}.quantity`} render={({ field: f }) => (
+                                <FormItem>
+                                  <FormLabel className="text-xs">Qty {selItemId > 0 && <span className="text-muted-foreground">(max {availQty})</span>}</FormLabel>
+                                  <FormControl><Input type="number" min={1} max={selItemId > 0 ? availQty : undefined} className="h-8 text-xs" {...f} /></FormControl>
+                                </FormItem>
+                              )} />
+                            </div>
+                            <div className="col-span-1 pb-1 flex justify-end">
+                              <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(i)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
               </div>
 
               <FormField control={form.control} name="notes" render={({ field }) => (
@@ -186,7 +219,9 @@ export default function StockTransfers() {
 
               <DialogFooter>
                 <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
-                <Button type="submit" disabled={createMutation.isPending}>{createMutation.isPending ? 'Dispatching…' : 'Dispatch Transfer'}</Button>
+                <Button type="submit" disabled={createMutation.isPending || availableItems.length === 0}>
+                  {createMutation.isPending ? 'Dispatching…' : 'Dispatch Transfer'}
+                </Button>
               </DialogFooter>
             </form>
           </Form>

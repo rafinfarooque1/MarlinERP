@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useListItems, useCreateItem, useUpdateItem, useDeleteItem, getListItemsQueryKey } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -7,15 +7,18 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Edit2, Trash2, Package, Download, Eye } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, Package, Download, Eye, Ruler } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
+import { useUnits } from '@/lib/useUnits';
+import { Link } from 'wouter';
 
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
@@ -28,6 +31,7 @@ type FormValues = z.infer<typeof schema>;
 
 export default function Items() {
   const { data: items = [], isLoading } = useListItems();
+  const { units } = useUnits();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -37,9 +41,9 @@ export default function Items() {
   const updateMutation = useUpdateItem();
   const deleteMutation = useDeleteItem();
 
-  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', hsnCode: '', taxRate: 5, unit: 'pkt', description: '' } });
+  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', hsnCode: '', taxRate: 5, unit: '', description: '' } });
 
-  const openAdd = () => { setEditingId(null); form.reset({ name: '', hsnCode: '', taxRate: 5, unit: 'pkt', description: '' }); setIsOpen(true); };
+  const openAdd = () => { setEditingId(null); form.reset({ name: '', hsnCode: '', taxRate: 5, unit: units[0] || '', description: '' }); setIsOpen(true); };
   const openEdit = (item: any) => {
     setEditingId(item.id);
     form.reset({ name: item.name, hsnCode: item.hsnCode, taxRate: Number(item.taxRate || 0), unit: item.unit, description: item.description || '' });
@@ -136,13 +140,27 @@ export default function Items() {
               )} />
               <div className="grid grid-cols-3 gap-4">
                 <FormField control={form.control} name="hsnCode" render={({ field }) => (
-                  <FormItem><FormLabel>HSN Code <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="20089200" {...field} /></FormControl><FormMessage /></FormItem>
+                  <FormItem><FormLabel>HSN Code <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="08119000" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="taxRate" render={({ field }) => (
                   <FormItem><FormLabel>Tax Rate %</FormLabel><FormControl><Input type="number" min={0} max={28} step={0.5} {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="unit" render={({ field }) => (
-                  <FormItem><FormLabel>Unit <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="pkt / kg" {...field} /></FormControl><FormMessage /></FormItem>
+                  <FormItem>
+                    <FormLabel className="flex items-center justify-between">
+                      Unit <span className="text-destructive">*</span>
+                      <Link href="/production/units" className="text-[10px] text-primary hover:underline flex items-center gap-0.5" onClick={() => setIsOpen(false)}>
+                        <Ruler className="w-3 h-3" /> Manage
+                      </Link>
+                    </FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl><SelectTrigger><SelectValue placeholder="Select unit" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {units.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
                 )} />
               </div>
               <FormField control={form.control} name="description" render={({ field }) => (

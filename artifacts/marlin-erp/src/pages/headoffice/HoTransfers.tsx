@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useListStockTransfers, useCreateStockTransfer, useListItems, useListWarehouses, useListOutlets, getListStockTransfersQueryKey } from '@workspace/api-client-react';
+import { useListStockTransfers, useCreateStockTransfer, useListItems, useListWarehouses, useListOutlets, useListStock, getListStockTransfersQueryKey } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,7 +12,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, ArrowRightLeft, Download, Eye, Trash2, Printer, Calendar } from 'lucide-react';
+import { Plus, Search, ArrowRightLeft, Download, Eye, Trash2, Printer, Calendar, PackageOpen } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV, printHTML } from '@/lib/download';
@@ -46,10 +46,25 @@ export default function HoTransfers() {
   });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
   const watchFromType = form.watch('fromType');
+  const watchFromId = form.watch('fromId');
   const watchToType = form.watch('toType');
 
   const fromOptions = watchFromType === 'warehouse' ? warehouses : outlets;
   const toOptions = watchToType === 'warehouse' ? warehouses : outlets;
+
+  // Load stock for the selected "from" location
+  const { data: fromStock = [] } = useListStock(
+    { branchType: watchFromType as any, branchId: watchFromId },
+    { query: { enabled: !!watchFromId && watchFromId > 0 } }
+  );
+
+  // Map: itemId → available qty at from-location
+  const stockMap = new Map<number, number>(
+    fromStock.map(s => [s.itemId!, Number(s.quantity ?? 0)])
+  );
+
+  // Only items with stock > 0 at the from-location
+  const availableItems = items.filter(it => (stockMap.get(it.id) ?? 0) > 0);
 
   const onSubmit = (data: FormValues) => {
     createMutation.mutate({ data: data as any }, {
@@ -58,7 +73,6 @@ export default function HoTransfers() {
     });
   };
 
-  // Filter to only W-W or W-O or O-W (not production transfers)
   const hoTransfers = (Array.isArray(transfers) ? transfers : []).filter((t: any) => t.fromType !== 'production');
   const filtered = hoTransfers.filter((t: any) => t.challanNumber?.toLowerCase().includes(search.toLowerCase()) || t.fromName?.toLowerCase().includes(search.toLowerCase()) || t.toName?.toLowerCase().includes(search.toLowerCase()));
 
@@ -66,6 +80,8 @@ export default function HoTransfers() {
     const rows = (t.lineItems || []).map((li: any, i: number) => `<tr><td>${i+1}</td><td>Item #${li.itemId}</td><td>${li.quantity}</td></tr>`).join('');
     printHTML(`<h2>Transfer Challan — ${t.challanNumber}</h2><p>Date: ${new Date(t.transferDate).toLocaleDateString('en-IN')}</p><p>From: ${t.fromName} → To: ${t.toName}</p><table><tr><th>#</th><th>Item</th><th>Qty</th></tr>${rows}</table>`, t.challanNumber);
   };
+
+  const sourceSelected = watchFromId > 0;
 
   return (
     <AppLayout>
@@ -137,10 +153,10 @@ export default function HoTransfers() {
                 <div className="space-y-3">
                   <p className="text-xs font-semibold uppercase text-muted-foreground tracking-wider">From</p>
                   <FormField control={form.control} name="fromType" render={({ field }) => (
-                    <FormItem><Select onValueChange={v => { field.onChange(v); form.setValue('fromId', 0); }} value={field.value}><FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl><SelectContent><SelectItem value="warehouse">Warehouse</SelectItem><SelectItem value="outlet">Outlet</SelectItem></SelectContent></Select></FormItem>
+                    <FormItem><Select onValueChange={v => { field.onChange(v); form.setValue('fromId', 0); form.setValue('lineItems', [{ itemId: 0, quantity: 1 }]); }} value={field.value}><FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl><SelectContent><SelectItem value="warehouse">Warehouse</SelectItem><SelectItem value="outlet">Outlet</SelectItem></SelectContent></Select></FormItem>
                   )} />
                   <FormField control={form.control} name="fromId" render={({ field }) => (
-                    <FormItem><Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}><FormControl><SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger></FormControl><SelectContent>{fromOptions.map((o: any) => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}</SelectContent></Select><FormMessage /></FormItem>
+                    <FormItem><Select onValueChange={v => { field.onChange(Number(v)); form.setValue('lineItems', [{ itemId: 0, quantity: 1 }]); }} value={field.value ? String(field.value) : ''}><FormControl><SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger></FormControl><SelectContent>{fromOptions.map((o: any) => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}</SelectContent></Select><FormMessage /></FormItem>
                   )} />
                 </div>
                 <div className="space-y-3">
@@ -153,41 +169,74 @@ export default function HoTransfers() {
                   )} />
                 </div>
               </div>
+
               <FormField control={form.control} name="transferDate" render={({ field }) => (
                 <FormItem className="max-w-xs"><FormLabel>Date</FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
               )} />
+
               <div>
-                <div className="flex justify-between items-center mb-3">
-                  <p className="font-semibold text-sm">Items</p>
-                  <Button type="button" variant="outline" size="sm" onClick={() => append({ itemId: 0, quantity: 1 })}><Plus className="w-3 h-3 mr-1" /> Add</Button>
-                </div>
-                <div className="space-y-2">
-                  {fields.map((field, i) => (
-                    <div key={field.id} className="grid grid-cols-11 gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border">
-                      <div className="col-span-7">
-                        <FormField control={form.control} name={`lineItems.${i}.itemId`} render={({ field: f }) => (
-                          <FormItem><FormLabel className="text-xs">Item</FormLabel>
-                            <Select onValueChange={v => f.onChange(Number(v))} value={f.value ? String(f.value) : ''}><FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger></FormControl><SelectContent>{items.map(it => <SelectItem key={it.id} value={String(it.id)}>{it.name}</SelectItem>)}</SelectContent></Select></FormItem>
-                        )} />
-                      </div>
-                      <div className="col-span-3">
-                        <FormField control={form.control} name={`lineItems.${i}.quantity`} render={({ field: f }) => (
-                          <FormItem><FormLabel className="text-xs">Qty</FormLabel><FormControl><Input type="number" min={1} className="h-8 text-xs" {...f} /></FormControl></FormItem>
-                        )} />
-                      </div>
-                      <div className="col-span-1 pb-1 flex justify-end">
-                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(i)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
-                      </div>
+                {!sourceSelected ? (
+                  <div className="p-5 border border-dashed border-border rounded-lg text-center text-muted-foreground text-sm">
+                    Select a source location above to see available stock
+                  </div>
+                ) : availableItems.length === 0 ? (
+                  <div className="p-5 border border-dashed border-amber-500/40 rounded-lg text-center text-amber-500 bg-amber-500/5 flex flex-col items-center gap-2">
+                    <PackageOpen className="w-7 h-7 opacity-60" />
+                    <p className="font-medium text-sm">No stock at this location</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex justify-between items-center mb-3">
+                      <p className="font-semibold text-sm">Items <span className="text-xs text-muted-foreground font-normal ml-1">({availableItems.length} in stock)</span></p>
+                      <Button type="button" variant="outline" size="sm" onClick={() => append({ itemId: 0, quantity: 1 })}><Plus className="w-3 h-3 mr-1" /> Add</Button>
                     </div>
-                  ))}
-                </div>
+                    <div className="space-y-2">
+                      {fields.map((field, i) => {
+                        const selItemId = form.watch(`lineItems.${i}.itemId`);
+                        const availQty = stockMap.get(selItemId) ?? 0;
+                        return (
+                          <div key={field.id} className="grid grid-cols-11 gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border">
+                            <div className="col-span-7">
+                              <FormField control={form.control} name={`lineItems.${i}.itemId`} render={({ field: f }) => (
+                                <FormItem><FormLabel className="text-xs">Item</FormLabel>
+                                  <Select onValueChange={v => f.onChange(Number(v))} value={f.value ? String(f.value) : ''}>
+                                    <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger></FormControl>
+                                    <SelectContent>
+                                      {availableItems.map(it => {
+                                        const avail = stockMap.get(it.id) ?? 0;
+                                        return <SelectItem key={it.id} value={String(it.id)}>{it.name} — {avail} {it.unit} avail</SelectItem>;
+                                      })}
+                                    </SelectContent>
+                                  </Select></FormItem>
+                              )} />
+                            </div>
+                            <div className="col-span-3">
+                              <FormField control={form.control} name={`lineItems.${i}.quantity`} render={({ field: f }) => (
+                                <FormItem>
+                                  <FormLabel className="text-xs">Qty {selItemId > 0 && <span className="text-muted-foreground">(max {availQty})</span>}</FormLabel>
+                                  <FormControl><Input type="number" min={1} max={selItemId > 0 ? availQty : undefined} className="h-8 text-xs" {...f} /></FormControl>
+                                </FormItem>
+                              )} />
+                            </div>
+                            <div className="col-span-1 pb-1 flex justify-end">
+                              <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(i)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
               </div>
+
               <FormField control={form.control} name="notes" render={({ field }) => (
                 <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
               )} />
               <DialogFooter>
                 <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
-                <Button type="submit" disabled={createMutation.isPending}>{createMutation.isPending ? 'Creating…' : 'Create Transfer'}</Button>
+                <Button type="submit" disabled={createMutation.isPending || !sourceSelected || availableItems.length === 0}>
+                  {createMutation.isPending ? 'Creating…' : 'Create Transfer'}
+                </Button>
               </DialogFooter>
             </form>
           </Form>

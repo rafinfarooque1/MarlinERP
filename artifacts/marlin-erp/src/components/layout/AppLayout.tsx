@@ -37,6 +37,7 @@ const navigation = [
     name: 'Production',
     icon: Factory,
     children: [
+      { name: 'Units', href: '/production/units' },
       { name: 'Materials', href: '/production/materials' },
       { name: 'Raw Materials', href: '/production/raw-materials' },
       { name: 'Items', href: '/production/items' },
