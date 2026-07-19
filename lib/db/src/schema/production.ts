@@ -16,3 +16,17 @@ export const productionsTable = pgTable("productions", {
 export const insertProductionSchema = createInsertSchema(productionsTable).omit({ id: true, createdAt: true });
 export type InsertProduction = z.infer<typeof insertProductionSchema>;
 export type Production = typeof productionsTable.$inferSelect;
+
+// ── Bill of Materials Templates ───────────────────────────────────────────────
+
+export const bomTemplatesTable = pgTable("bom_templates", {
+  id: serial("id").primaryKey(),
+  itemId: integer("item_id").notNull().references(() => itemsTable.id).unique(),
+  // lines: [{ materialType: 'material'|'raw_material', materialId: number, quantity: number }]
+  lines: jsonb("lines").notNull().default([]),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
+});
+
+export type BomTemplate = typeof bomTemplatesTable.$inferSelect;

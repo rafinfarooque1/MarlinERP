@@ -41,6 +41,7 @@ const navigation = [
       { name: 'Materials', href: '/production/materials' },
       { name: 'Raw Materials', href: '/production/raw-materials' },
       { name: 'Items', href: '/production/items' },
+      { name: 'BOM Templates', href: '/production/bom-templates' },
       { name: 'Purchases', href: '/production/purchase' },
       { name: 'Production', href: '/production/production' },
       { name: 'Stock Transfer', href: '/production/stock-transfer' },
