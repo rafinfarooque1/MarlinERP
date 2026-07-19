@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import {
-  useListEmployees, useCreateEmployee, useListHierarchies, useListWarehouses, useListOutlets,
+  useListEmployees, useCreateEmployee, useUpdateEmployee, useListHierarchies, useListWarehouses, useListOutlets,
   getListEmployeesQueryKey, useGetPayComponents, useSetPayComponents, getPayComponentsQueryKey,
   type PayComponent, type PayComponents,
 } from '@workspace/api-client-react';
@@ -16,7 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Users, Download, Eye, Settings2, Trash2, Check, X } from 'lucide-react';
+import { Plus, Search, Users, Download, Eye, Settings2, Trash2, UserX, UserCheck } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -24,7 +24,6 @@ import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { Separator } from '@/components/ui/separator';
 
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
@@ -39,8 +38,6 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
-// Allowances: only fixed or percent_of_basic (percent_of_gross not valid here —
-// gross is not known when allowances are computed; use it only in deductions).
 const ALLOWANCE_COMP_TYPES = [
   { value: 'fixed', label: 'Fixed ₹' },
   { value: 'percent_of_basic', label: '% of Basic' },
@@ -66,19 +63,18 @@ function PayStructureEditor({ employee }: { employee: any }) {
   const effectiveAllowances = allowances ?? pc?.allowances ?? [];
   const effectiveDeductions = deductions ?? pc?.deductions ?? [];
 
-  // Sync from server data when first loaded
   if (pc && allowances === null) setAllowances(pc.allowances);
   if (pc && deductions === null) setDeductions(pc.deductions);
   if (pc && workingDays === null) setWorkingDays(pc.workingDaysPerMonth);
 
   const handleSave = () => {
-    setMutation.mutate({ employeeId: employee.id, data: { workingDaysPerMonth: effectiveWD, allowances: effectiveAllowances, deductions: effectiveDeductions } }, {
-      onSuccess: () => {
-        toast.success('Pay structure saved');
-        queryClient.invalidateQueries({ queryKey: getPayComponentsQueryKey(employee.id) });
+    setMutation.mutate(
+      { employeeId: employee.id, data: { workingDaysPerMonth: effectiveWD, allowances: effectiveAllowances, deductions: effectiveDeductions } },
+      {
+        onSuccess: () => { toast.success('Pay structure saved'); queryClient.invalidateQueries({ queryKey: getPayComponentsQueryKey(employee.id) }); },
+        onError: (e: any) => toast.error(e?.message || 'Failed to save'),
       },
-      onError: (e: any) => toast.error(e?.message || 'Failed to save'),
-    });
+    );
   };
 
   const addComp = (kind: 'allowances' | 'deductions') => {
@@ -99,7 +95,6 @@ function PayStructureEditor({ employee }: { employee: any }) {
     else setDeductions(effectiveDeductions.filter((_, i) => i !== idx));
   };
 
-  // Compute preview
   const basicSalary = employee.salary;
   const perDay = basicSalary / effectiveWD;
   const grossWithAllowances = effectiveAllowances.reduce((sum, a) => {
@@ -121,17 +116,8 @@ function PayStructureEditor({ employee }: { employee: any }) {
       <div className="space-y-2">
         {list.map((comp, idx) => (
           <div key={idx} className="flex items-center gap-2 p-2 bg-muted/20 rounded-lg border border-border">
-            <Switch
-              checked={comp.enabled !== false}
-              onCheckedChange={v => updateComp(kind, idx, 'enabled', v)}
-              className="flex-shrink-0"
-            />
-            <Input
-              placeholder="Component name"
-              value={comp.name}
-              onChange={e => updateComp(kind, idx, 'name', e.target.value)}
-              className="h-7 text-xs flex-1"
-            />
+            <Switch checked={comp.enabled !== false} onCheckedChange={v => updateComp(kind, idx, 'enabled', v)} className="flex-shrink-0" />
+            <Input placeholder="Component name" value={comp.name} onChange={e => updateComp(kind, idx, 'name', e.target.value)} className="h-7 text-xs flex-1" />
             <Select value={comp.type} onValueChange={v => updateComp(kind, idx, 'type', v)}>
               <SelectTrigger className="h-7 w-36 text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -140,15 +126,8 @@ function PayStructureEditor({ employee }: { employee: any }) {
                 ))}
               </SelectContent>
             </Select>
-            <Input
-              type="number" min={0} step={0.01}
-              value={comp.value}
-              onChange={e => updateComp(kind, idx, 'value', Number(e.target.value))}
-              className={`h-7 w-20 text-xs text-right font-mono ${color}`}
-            />
-            <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive flex-shrink-0" onClick={() => removeComp(kind, idx)}>
-              <Trash2 className="w-3 h-3" />
-            </Button>
+            <Input type="number" min={0} step={0.01} value={comp.value} onChange={e => updateComp(kind, idx, 'value', Number(e.target.value))} className={`h-7 w-20 text-xs text-right font-mono ${color}`} />
+            <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive flex-shrink-0" onClick={() => removeComp(kind, idx)}><Trash2 className="w-3 h-3" /></Button>
           </div>
         ))}
         <Button type="button" variant="outline" size="sm" className="w-full h-7 text-xs border-dashed" onClick={() => addComp(kind)}>
@@ -162,11 +141,8 @@ function PayStructureEditor({ employee }: { employee: any }) {
     <div className="space-y-5 mt-2">
       <div className="flex items-center gap-3">
         <Label className="text-xs text-muted-foreground whitespace-nowrap">Working days/month</Label>
-        <Input type="number" min={1} max={31} value={effectiveWD}
-          onChange={e => setWorkingDays(Number(e.target.value))}
-          className="h-7 w-20 text-sm text-right" />
+        <Input type="number" min={1} max={31} value={effectiveWD} onChange={e => setWorkingDays(Number(e.target.value))} className="h-7 w-20 text-sm text-right" />
       </div>
-
       <Tabs defaultValue="allowances">
         <TabsList className="w-full">
           <TabsTrigger value="allowances" className="flex-1">Allowances ({effectiveAllowances.filter(a => a.enabled !== false).length} active)</TabsTrigger>
@@ -175,8 +151,6 @@ function PayStructureEditor({ employee }: { employee: any }) {
         <TabsContent value="allowances" className="mt-3"><CompList kind="allowances" /></TabsContent>
         <TabsContent value="deductions" className="mt-3"><CompList kind="deductions" /></TabsContent>
       </Tabs>
-
-      {/* Preview */}
       <div className="p-3 bg-muted/30 rounded-lg text-xs space-y-1 border border-border">
         <p className="text-muted-foreground font-medium uppercase tracking-wider mb-2">Monthly Preview (full attendance)</p>
         <div className="flex justify-between"><span>Basic</span><span className="font-mono">₹{basicSalary.toLocaleString('en-IN')}</span></div>
@@ -193,7 +167,6 @@ function PayStructureEditor({ employee }: { employee: any }) {
         <div className="flex justify-between font-bold border-t border-border pt-1 mt-1 text-sm text-primary"><span>Net Pay</span><span className="font-mono">₹{(grossWithAllowances - totalDeductions).toFixed(0)}</span></div>
         <p className="text-muted-foreground mt-1 pt-1 border-t border-border">Per day (LOP): ₹{perDay.toFixed(2)}</p>
       </div>
-
       <Button className="w-full" onClick={handleSave} disabled={setMutation.isPending}>
         {setMutation.isPending ? 'Saving…' : 'Save Pay Structure'}
       </Button>
@@ -203,17 +176,22 @@ function PayStructureEditor({ employee }: { employee: any }) {
 
 // ── Main Component ──────────────────────────────────────────────────────────
 
+type StatusFilter = 'all' | 'active' | 'inactive';
+
 export default function Employees() {
   const { data: employees = [], isLoading } = useListEmployees();
   const { data: hierarchies = [] } = useListHierarchies();
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
   const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
   const [payStructureEmp, setPayStructureEmp] = useState<any>(null);
+  const [confirmResign, setConfirmResign] = useState<any>(null);
   const queryClient = useQueryClient();
   const createMutation = useCreateEmployee();
+  const updateMutation = useUpdateEmployee();
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -228,7 +206,30 @@ export default function Employees() {
     });
   };
 
-  const filtered = employees.filter(e => e.name.toLowerCase().includes(search.toLowerCase()) || e.username.toLowerCase().includes(search.toLowerCase()));
+  const toggleActive = (emp: any, active: boolean) => {
+    updateMutation.mutate(
+      { id: emp.id, data: { isActive: active } },
+      {
+        onSuccess: () => {
+          toast.success(active ? `${emp.name} reactivated` : `${emp.name} marked as resigned`);
+          queryClient.invalidateQueries({ queryKey: getListEmployeesQueryKey() });
+          setConfirmResign(null);
+          // Close detail sheet if open for this employee
+          if (viewItem?.id === emp.id) setViewItem((prev: any) => ({ ...prev, isActive: active }));
+        },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+      },
+    );
+  };
+
+  const filtered = employees.filter(e => {
+    const matchSearch = e.name.toLowerCase().includes(search.toLowerCase()) || e.username.toLowerCase().includes(search.toLowerCase());
+    const matchStatus = statusFilter === 'all' ? true : statusFilter === 'active' ? e.isActive : !e.isActive;
+    return matchSearch && matchStatus;
+  });
+
+  const activeCount   = employees.filter(e => e.isActive).length;
+  const inactiveCount = employees.filter(e => !e.isActive).length;
 
   return (
     <AppLayout>
@@ -239,12 +240,27 @@ export default function Employees() {
             <p className="text-muted-foreground mt-1">Personnel, roles, branch assignments, and pay structures</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('employees.csv', filtered.map(e => ({ Name: e.name, Username: e.username, Role: e.hierarchyName, Branch: e.branchName, Type: e.branchType, Salary: e.salary, Status: e.isActive ? 'Active' : 'Inactive' })))}>
+            <Button variant="outline" size="sm" onClick={() => downloadCSV('employees.csv', filtered.map(e => ({ Name: e.name, Username: e.username, Role: e.hierarchyName, Branch: e.branchName, Type: e.branchType, Salary: e.salary, Status: e.isActive ? 'Active' : 'Resigned' })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
             <Button onClick={() => { form.reset({ name: '', username: '', email: '', phone: '', hierarchyId: 0, branchType: 'headoffice', branchId: 0, salary: 0, joinDate: new Date().toISOString().split('T')[0] }); setIsOpen(true); }}>
               <Plus className="w-4 h-4 mr-2" /> Add Employee
             </Button>
+          </div>
+        </div>
+
+        {/* Filters */}
+        <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+          <div className="flex items-center gap-1 p-1 bg-muted/30 rounded-lg border border-border">
+            {(['all', 'active', 'inactive'] as StatusFilter[]).map(s => (
+              <button
+                key={s}
+                onClick={() => setStatusFilter(s)}
+                className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${statusFilter === s ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                {s === 'all' ? `All (${employees.length})` : s === 'active' ? `Active (${activeCount})` : `Resigned (${inactiveCount})`}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -265,18 +281,22 @@ export default function Employees() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(4)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : filtered.length === 0 ? (
+              {isLoading ? (
+                [...Array(4)].map((_, i) => (
+                  <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                ))
+              ) : filtered.length === 0 ? (
                 <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
                   <Users className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No employees found</p>
                 </TableCell></TableRow>
               ) : filtered.map(emp => (
-                <TableRow key={emp.id} className="hover:bg-muted/10">
+                <TableRow key={emp.id} className={`hover:bg-muted/10 ${!emp.isActive ? 'opacity-60' : ''}`}>
                   <TableCell>
                     <div className="flex items-center gap-3">
                       <Avatar className="h-9 w-9">
-                        <AvatarFallback className="bg-primary/10 text-primary text-sm font-bold">{emp.name.charAt(0)}</AvatarFallback>
+                        <AvatarFallback className={`text-sm font-bold ${emp.isActive ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'}`}>
+                          {emp.name.charAt(0)}
+                        </AvatarFallback>
                       </Avatar>
                       <div>
                         <div className="font-semibold text-foreground">{emp.name}</div>
@@ -291,14 +311,25 @@ export default function Employees() {
                   </TableCell>
                   <TableCell className="font-mono text-sm">₹{Number(emp.salary || 0).toLocaleString('en-IN')}</TableCell>
                   <TableCell>
-                    <Badge variant={emp.isActive ? 'default' : 'secondary'} className={emp.isActive ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : ''}>
-                      {emp.isActive ? 'ACTIVE' : 'INACTIVE'}
-                    </Badge>
+                    {emp.isActive ? (
+                      <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">Active</Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-rose-400 border-rose-400/30 bg-rose-400/5">Resigned</Badge>
+                    )}
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(emp)} title="View"><Eye className="w-4 h-4" /></Button>
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setPayStructureEmp(emp)} title="Pay Structure"><Settings2 className="w-4 h-4" /></Button>
+                      {emp.isActive ? (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-rose-500" onClick={() => setConfirmResign(emp)} title="Mark as Resigned">
+                          <UserX className="w-4 h-4" />
+                        </Button>
+                      ) : (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-500" onClick={() => toggleActive(emp, true)} title="Reactivate" disabled={updateMutation.isPending}>
+                          <UserCheck className="w-4 h-4" />
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -307,6 +338,35 @@ export default function Employees() {
           </Table>
         </div>
       </div>
+
+      {/* Confirm Resignation Dialog */}
+      <Dialog open={!!confirmResign} onOpenChange={v => !v && setConfirmResign(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-rose-500">
+              <UserX className="w-5 h-5" /> Mark as Resigned
+            </DialogTitle>
+          </DialogHeader>
+          <div className="py-2 space-y-2">
+            <p className="text-sm text-muted-foreground">
+              Are you sure you want to mark <span className="font-semibold text-foreground">{confirmResign?.name}</span> as resigned?
+            </p>
+            <p className="text-xs text-muted-foreground">
+              The employee will be set to inactive and excluded from payroll generation. This can be reversed using the Reactivate button.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmResign(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => toggleActive(confirmResign, false)}
+              disabled={updateMutation.isPending}
+            >
+              {updateMutation.isPending ? 'Saving…' : 'Mark as Resigned'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Add Employee Dialog */}
       <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) form.reset(); }}>
@@ -392,19 +452,52 @@ export default function Employees() {
         <SheetContent>
           <SheetHeader>
             <SheetTitle className="flex items-center gap-3">
-              <Avatar className="h-10 w-10"><AvatarFallback className="bg-primary/10 text-primary font-bold">{viewItem?.name?.charAt(0)}</AvatarFallback></Avatar>
+              <Avatar className="h-10 w-10">
+                <AvatarFallback className={`font-bold ${viewItem?.isActive ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'}`}>
+                  {viewItem?.name?.charAt(0)}
+                </AvatarFallback>
+              </Avatar>
               {viewItem?.name}
             </SheetTitle>
             <SheetDescription>@{viewItem?.username} · {viewItem?.hierarchyName}</SheetDescription>
           </SheetHeader>
           {viewItem && (
             <div className="mt-6 space-y-4">
-              {[['Role', viewItem.hierarchyName], ['Location', `${viewItem.branchName} (${viewItem.branchType})`], ['Email', viewItem.email || '—'], ['Phone', viewItem.phone || '—'], ['Basic Salary', `₹${Number(viewItem.salary || 0).toLocaleString('en-IN')}/mo`], ['Join Date', viewItem.joinDate ? new Date(viewItem.joinDate).toLocaleDateString('en-IN') : '—'], ['Status', viewItem.isActive ? 'Active' : 'Inactive']].map(([k, v]) => (
+              {[
+                ['Role', viewItem.hierarchyName],
+                ['Location', `${viewItem.branchName} (${viewItem.branchType})`],
+                ['Email', viewItem.email || '—'],
+                ['Phone', viewItem.phone || '—'],
+                ['Basic Salary', `₹${Number(viewItem.salary || 0).toLocaleString('en-IN')}/mo`],
+                ['Join Date', viewItem.joinDate ? new Date(viewItem.joinDate).toLocaleDateString('en-IN') : '—'],
+              ].map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
                   <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                   <span className="font-medium">{v}</span>
                 </div>
               ))}
+
+              {/* Status row with toggle */}
+              <div className="flex flex-col gap-1 border-b border-border pb-3">
+                <span className="text-xs text-muted-foreground uppercase tracking-wider">Status</span>
+                <div className="flex items-center justify-between">
+                  {viewItem.isActive ? (
+                    <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">Active</Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-rose-400 border-rose-400/30 bg-rose-400/5">Resigned</Badge>
+                  )}
+                  {viewItem.isActive ? (
+                    <Button variant="outline" size="sm" className="h-7 text-xs text-rose-500 border-rose-400/30 hover:bg-rose-500/10" onClick={() => { setViewItem(null); setConfirmResign(viewItem); }}>
+                      <UserX className="w-3 h-3 mr-1" /> Mark Resigned
+                    </Button>
+                  ) : (
+                    <Button variant="outline" size="sm" className="h-7 text-xs text-emerald-500 border-emerald-500/30 hover:bg-emerald-500/10" onClick={() => toggleActive(viewItem, true)} disabled={updateMutation.isPending}>
+                      <UserCheck className="w-3 h-3 mr-1" /> Reactivate
+                    </Button>
+                  )}
+                </div>
+              </div>
+
               <Button variant="outline" className="w-full" onClick={() => { setViewItem(null); setPayStructureEmp(viewItem); }}>
                 <Settings2 className="w-4 h-4 mr-2" /> Configure Pay Structure
               </Button>
