@@ -12,11 +12,13 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Trash2, ShoppingCart, Download, Eye, Calendar } from 'lucide-react';
+import { Plus, Search, Trash2, ShoppingCart, Download, Eye, Calendar, FileDown, Printer } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { downloadCSV } from '@/lib/download';
+import { downloadCSV, printHTML } from '@/lib/download';
+import { downloadPurchaseOrderPDF } from '@/lib/pdfUtils';
 import { Badge } from '@/components/ui/badge';
+import { useGetCompanySettings } from '@workspace/api-client-react';
 
 const lineSchema = z.object({
   materialType: z.enum(['material', 'raw_material']),
@@ -39,11 +41,24 @@ export default function Purchases() {
   const { data: vendors = [] } = useListVendors();
   const { data: materials = [] } = useListMaterials();
   const { data: rawMaterials = [] } = useListRawMaterials();
+  const { data: companySettings } = useGetCompanySettings();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
   const queryClient = useQueryClient();
   const createMutation = useCreatePurchase();
+
+  // Build lookup maps for material names (used in PDF + view sheet)
+  const materialsMap = new Map<number, string>(materials.map((m: any) => [m.id, m.name]));
+  const rawMaterialsMap = new Map<number, string>(rawMaterials.map((m: any) => [m.id, m.name]));
+
+  const getMaterialName = (li: any) =>
+    li.materialType === 'raw_material'
+      ? (rawMaterialsMap.get(li.materialId) || `Raw Mat. #${li.materialId}`)
+      : (materialsMap.get(li.materialId) || `Material #${li.materialId}`);
+
+  const handleDownloadPO = (po: any) =>
+    downloadPurchaseOrderPDF(po, companySettings, materialsMap, rawMaterialsMap);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -122,7 +137,10 @@ export default function Purchases() {
                   <TableCell><Badge variant="secondary">{p.lineItems?.length || 0} items</Badge></TableCell>
                   <TableCell className="text-right font-mono font-bold text-emerald-500">₹{Number(p.totalAmount).toLocaleString('en-IN')}</TableCell>
                   <TableCell className="text-right">
-                    <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(p)}><Eye className="w-4 h-4" /></Button>
+                    <div className="flex justify-end gap-1">
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(p)} title="View"><Eye className="w-4 h-4" /></Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => handleDownloadPO(p)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -246,16 +264,21 @@ export default function Purchases() {
                     <div key={i} className="flex justify-between items-center p-3 bg-muted/20 rounded-lg text-sm">
                       <div>
                         <Badge variant="secondary" className="text-xs mr-2">{li.materialType === 'raw_material' ? 'Raw' : 'Pkg'}</Badge>
-                        <span className="font-medium">ID #{li.materialId}</span>
+                        <span className="font-medium">{getMaterialName(li)}</span>
                       </div>
                       <div className="text-right text-muted-foreground">
-                        {li.quantity} × ₹{li.unitCost} = <span className="text-foreground font-bold">₹{(li.quantity * li.unitCost).toLocaleString()}</span>
+                        {li.quantity} × ₹{Number(li.unitCost).toFixed(2)} = <span className="text-foreground font-bold">₹{(Number(li.quantity) * Number(li.unitCost)).toLocaleString('en-IN')}</span>
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
               {viewItem.notes && <div><span className="text-xs text-muted-foreground uppercase">Notes</span><p className="mt-1">{viewItem.notes}</p></div>}
+              <div className="flex gap-2 pt-2">
+                <Button className="flex-1" variant="outline" onClick={() => handleDownloadPO(viewItem)}>
+                  <FileDown className="w-4 h-4 mr-2" /> Download PO PDF
+                </Button>
+              </div>
             </div>
           )}
         </SheetContent>

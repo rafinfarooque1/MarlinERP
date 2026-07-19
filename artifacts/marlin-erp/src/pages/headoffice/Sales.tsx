@@ -17,8 +17,9 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import {
   Plus, Search, Trash2, CreditCard, Calendar, Receipt,
-  Download, Eye, Printer, PackageOpen,
+  Download, Eye, Printer, PackageOpen, FileDown,
 } from 'lucide-react';
+import { downloadInvoicePDF } from '@/lib/pdfUtils';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
@@ -280,8 +281,9 @@ export default function Sales() {
                   <TableCell className="text-right font-mono font-bold text-emerald-500">₹{Number(sale.totalAmount).toLocaleString('en-IN')}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(sale)}><Eye className="w-4 h-4" /></Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => handlePrintInvoice(sale)}><Printer className="w-4 h-4" /></Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(sale)} title="View"><Eye className="w-4 h-4" /></Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => handlePrintInvoice(sale)} title="Print"><Printer className="w-4 h-4" /></Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => downloadInvoicePDF(sale, companySettings)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -555,9 +557,14 @@ export default function Sales() {
                 </div>
               </div>
 
-              <Button className="w-full" variant="outline" onClick={() => handlePrintInvoice(viewItem)}>
-                <Printer className="w-4 h-4 mr-2" /> Print GST Invoice
-              </Button>
+              <div className="flex gap-2">
+                <Button className="flex-1" variant="outline" onClick={() => handlePrintInvoice(viewItem)}>
+                  <Printer className="w-4 h-4 mr-2" /> Print
+                </Button>
+                <Button className="flex-1" variant="outline" onClick={() => downloadInvoicePDF(viewItem, companySettings)}>
+                  <FileDown className="w-4 h-4 mr-2" /> Download PDF
+                </Button>
+              </div>
             </div>
           )}
         </SheetContent>

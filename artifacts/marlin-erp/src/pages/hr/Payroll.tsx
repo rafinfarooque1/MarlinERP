@@ -1,16 +1,16 @@
 import { useState } from 'react';
 import {
   useListEnrichedPayroll, useGeneratePayroll, getEnrichedPayrollQueryKey,
-  getListPayrollQueryKey,
+  getListPayrollQueryKey, useMarkPayrollPaid, useGetCompanySettings,
 } from '@workspace/api-client-react';
-import { useMarkPayrollPaid } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
-import { Search, DollarSign, Download, Eye, CheckCircle, Zap, RefreshCw, Printer } from 'lucide-react';
+import { Search, DollarSign, Download, Eye, CheckCircle, Zap, RefreshCw, Printer, FileDown } from 'lucide-react';
+import { downloadPayslipPDF } from '@/lib/pdfUtils';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV, printHTML } from '@/lib/download';
@@ -29,6 +29,7 @@ export default function Payroll() {
   const [generating, setGenerating] = useState(false);
 
   const { data: payroll = [], isLoading } = useListEnrichedPayroll({ year: Number(year), month: Number(month) });
+  const { data: companySettings } = useGetCompanySettings();
   const queryClient = useQueryClient();
   const markPaidMutation = useMarkPayrollPaid();
   const generateMutation = useGeneratePayroll();
@@ -237,8 +238,9 @@ export default function Payroll() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(p)}><Eye className="w-4 h-4" /></Button>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(p)} title="View"><Eye className="w-4 h-4" /></Button>
                         <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => handlePrintPayslip(p)} title="Print payslip"><Printer className="w-4 h-4" /></Button>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => downloadPayslipPDF(p, companySettings)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>
                         {!p.isPaid && (
                           <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-500" onClick={() => handleMarkPaid(p.id, p.employeeName || '')} title="Mark as Paid"><CheckCircle className="w-4 h-4" /></Button>
                         )}
@@ -342,12 +344,15 @@ export default function Payroll() {
                 </div>
               </div>
 
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 <Button variant="outline" className="flex-1" onClick={() => handlePrintPayslip(viewItem)}>
-                  <Printer className="w-4 h-4 mr-2" /> Print Payslip
+                  <Printer className="w-4 h-4 mr-2" /> Print
+                </Button>
+                <Button variant="outline" className="flex-1" onClick={() => downloadPayslipPDF(viewItem, companySettings)}>
+                  <FileDown className="w-4 h-4 mr-2" /> Download PDF
                 </Button>
                 {!viewItem.isPaid && (
-                  <Button className="flex-1" onClick={() => handleMarkPaid(viewItem.id, viewItem.employeeName || '')}>
+                  <Button className="w-full" onClick={() => handleMarkPaid(viewItem.id, viewItem.employeeName || '')}>
                     <CheckCircle className="w-4 h-4 mr-2" /> Mark Paid
                   </Button>
                 )}
