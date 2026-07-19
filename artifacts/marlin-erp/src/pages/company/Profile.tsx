@@ -1,15 +1,17 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { useGetCompanySettings, useUpdateCompanySettings } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Building2, Save, Loader2, Upload, X, ImageIcon } from 'lucide-react';
 import { toast } from 'sonner';
+import { INDIAN_STATES } from '@/lib/indianStates';
 
 const LOGO_KEY = 'marlin_company_logo';
 
@@ -27,6 +29,8 @@ const schema = z.object({
   bankName: z.string().optional(),
   bankAccount: z.string().optional(),
   ifscCode: z.string().optional(),
+  financialYear: z.string().optional(),
+  invoicePrefix: z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -37,27 +41,49 @@ export default function Profile() {
   const [logo, setLogo] = useState<string | null>(() => localStorage.getItem(LOGO_KEY));
   const fileRef = useRef<HTMLInputElement>(null);
 
+  const p = profile as any;
+
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    values: profile ? {
-      name: profile.name || '',
-      gstNumber: profile.gstNumber || '',
-      pan: profile.pan || '',
-      phone: profile.phone || '',
-      email: profile.email || '',
-      website: profile.website || '',
-      address: profile.address || '',
-      city: profile.city || '',
-      state: profile.state || '',
-      pincode: profile.pincode || '',
-      bankName: profile.bankName || '',
-      bankAccount: profile.bankAccount || '',
-      ifscCode: profile.ifscCode || '',
+    values: p ? {
+      name: p.companyName || p.name || '',
+      gstNumber: p.gstNumber || '',
+      pan: p.panNumber || p.pan || '',
+      phone: p.phone || '',
+      email: p.email || '',
+      website: p.website || '',
+      address: p.address || '',
+      city: p.city || '',
+      state: p.state || '',
+      pincode: p.pincode || '',
+      bankName: p.bankName || '',
+      bankAccount: p.bankAccount || '',
+      ifscCode: p.ifscCode || '',
+      financialYear: p.financialYear || '2025-26',
+      invoicePrefix: p.invoicePrefix || 'INV',
     } : undefined,
   });
 
   const onSubmit = (data: FormValues) => {
-    updateMutation.mutate({ data: data as any }, {
+    // Map form field names to DB column names
+    const payload = {
+      companyName: data.name,
+      gstNumber: data.gstNumber,
+      panNumber: data.pan,
+      phone: data.phone,
+      email: data.email || undefined,
+      website: data.website,
+      address: data.address,
+      city: data.city,
+      state: data.state,
+      pincode: data.pincode,
+      bankName: data.bankName,
+      bankAccount: data.bankAccount,
+      ifscCode: data.ifscCode,
+      financialYear: data.financialYear,
+      invoicePrefix: data.invoicePrefix || 'INV',
+    };
+    updateMutation.mutate({ data: payload as any }, {
       onSuccess: () => { toast.success('Company profile updated'); setSaved(true); setTimeout(() => setSaved(false), 2000); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed to save'),
     });
@@ -72,7 +98,6 @@ export default function Profile() {
       const b64 = reader.result as string;
       localStorage.setItem(LOGO_KEY, b64);
       setLogo(b64);
-      // Broadcast to AppLayout
       window.dispatchEvent(new CustomEvent('marlin_logo_changed', { detail: b64 }));
       toast.success('Logo saved — it now appears in the sidebar');
     };
@@ -92,13 +117,13 @@ export default function Profile() {
       <div className="space-y-6 max-w-3xl">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Building2 className="w-6 h-6 text-primary" /> Company Profile</h1>
-          <p className="text-muted-foreground mt-1">Legal information, contact details, and bank account for invoices</p>
+          <p className="text-muted-foreground mt-1">Legal information, contact details, and billing configuration</p>
         </div>
 
         {/* Logo Upload */}
         <div className="bg-card border border-border rounded-xl p-5 space-y-4">
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider border-b border-border pb-2">Company Logo</h3>
-          <p className="text-xs text-muted-foreground">Upload your logo — it will appear in the sidebar across the entire application. PNG or JPEG, max 2 MB.</p>
+          <p className="text-xs text-muted-foreground">Upload your logo — it will appear in the sidebar. PNG or JPEG, max 2 MB.</p>
           <div className="flex items-center gap-5">
             <div className="w-28 h-20 rounded-lg border-2 border-dashed border-border flex items-center justify-center bg-muted/20 overflow-hidden shrink-0">
               {logo ? (
@@ -137,7 +162,7 @@ export default function Profile() {
                     <FormItem className="col-span-2"><FormLabel>Company Name <span className="text-destructive">*</span></FormLabel><FormControl><Input {...field} className="text-base font-semibold" /></FormControl><FormMessage /></FormItem>
                   )} />
                   <FormField control={form.control} name="gstNumber" render={({ field }) => (
-                    <FormItem><FormLabel>GSTIN</FormLabel><FormControl><Input className="font-mono" {...field} /></FormControl></FormItem>
+                    <FormItem><FormLabel>GSTIN</FormLabel><FormControl><Input placeholder="e.g. 22AAAAA0000A1Z5" className="font-mono" {...field} /></FormControl></FormItem>
                   )} />
                   <FormField control={form.control} name="pan" render={({ field }) => (
                     <FormItem><FormLabel>PAN</FormLabel><FormControl><Input className="font-mono uppercase" {...field} /></FormControl></FormItem>
@@ -145,7 +170,7 @@ export default function Profile() {
                 </div>
               </Section>
 
-              <Section title="Contact Details">
+              <Section title="Contact &amp; Location">
                 <div className="grid grid-cols-2 gap-4">
                   <FormField control={form.control} name="phone" render={({ field }) => (
                     <FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
@@ -163,7 +188,15 @@ export default function Profile() {
                     <FormItem><FormLabel>City</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
                   )} />
                   <FormField control={form.control} name="state" render={({ field }) => (
-                    <FormItem><FormLabel>State</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                    <FormItem>
+                      <FormLabel>State <span className="text-xs text-muted-foreground">(used for GST)</span></FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value || ''}>
+                        <FormControl><SelectTrigger><SelectValue placeholder="Select state" /></SelectTrigger></FormControl>
+                        <SelectContent>
+                          {INDIAN_STATES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </FormItem>
                   )} />
                   <FormField control={form.control} name="pincode" render={({ field }) => (
                     <FormItem><FormLabel>PIN Code</FormLabel><FormControl><Input className="font-mono" {...field} /></FormControl></FormItem>
@@ -181,6 +214,24 @@ export default function Profile() {
                   )} />
                   <FormField control={form.control} name="bankAccount" render={({ field }) => (
                     <FormItem className="col-span-2"><FormLabel>Account Number</FormLabel><FormControl><Input className="font-mono" {...field} /></FormControl></FormItem>
+                  )} />
+                </div>
+              </Section>
+
+              <Section title="Invoice & Financial Settings">
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField control={form.control} name="invoicePrefix" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Invoice Prefix</FormLabel>
+                      <FormControl><Input placeholder="e.g. MAR" className="font-mono" {...field} /></FormControl>
+                      <p className="text-xs text-muted-foreground mt-1">Invoice numbers will be: {field.value || 'INV'}/2025-26/0001</p>
+                    </FormItem>
+                  )} />
+                  <FormField control={form.control} name="financialYear" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Financial Year</FormLabel>
+                      <FormControl><Input placeholder="e.g. 2025-26" className="font-mono" {...field} /></FormControl>
+                    </FormItem>
                   )} />
                 </div>
               </Section>

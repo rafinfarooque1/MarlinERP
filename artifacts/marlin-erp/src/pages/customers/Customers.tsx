@@ -15,6 +15,8 @@ import { Plus, Search, UserCheck, Download, Eye } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
+import { INDIAN_STATES } from '@/lib/indianStates';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
@@ -22,6 +24,7 @@ const schema = z.object({
   email: z.string().email().optional().or(z.literal('')),
   address: z.string().optional(),
   gstNumber: z.string().optional(),
+  state: z.string().optional(),
   notes: z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
@@ -34,10 +37,10 @@ export default function Customers() {
   const queryClient = useQueryClient();
   const createMutation = useCreateCustomer();
 
-  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', phone: '', email: '', address: '', gstNumber: '', notes: '' } });
+  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', phone: '', email: '', address: '', gstNumber: '', state: '', notes: '' } });
 
   const onSubmit = (data: FormValues) => {
-    createMutation.mutate({ data }, {
+    createMutation.mutate({ data: data as any }, {
       onSuccess: () => { toast.success('Customer added'); queryClient.invalidateQueries({ queryKey: getListCustomersQueryKey() }); setIsOpen(false); form.reset(); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
@@ -54,7 +57,7 @@ export default function Customers() {
             <p className="text-muted-foreground mt-1">Registered customer accounts</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('customers.csv', filtered.map(c => ({ Name: c.name, Phone: c.phone || '', Email: c.email || '', GST: c.gstNumber || '', Address: c.address || '' })))}>
+            <Button variant="outline" size="sm" onClick={() => downloadCSV('customers.csv', filtered.map(c => ({ Name: c.name, Phone: c.phone || '', Email: c.email || '', State: (c as any).state || '', GST: c.gstNumber || '', Address: c.address || '' })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
             <Button onClick={() => { form.reset(); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Customer</Button>
@@ -71,7 +74,7 @@ export default function Customers() {
               <TableRow className="bg-muted/10">
                 <TableHead>Name</TableHead>
                 <TableHead>Phone</TableHead>
-                <TableHead>Email</TableHead>
+                <TableHead>State</TableHead>
                 <TableHead>GST No.</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
@@ -87,7 +90,7 @@ export default function Customers() {
                 <TableRow key={c.id} className="hover:bg-muted/10">
                   <TableCell className="font-semibold">{c.name}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{c.phone || '—'}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{c.email || '—'}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{(c as any).state || '—'}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{c.gstNumber || '—'}</TableCell>
                   <TableCell className="text-right">
                     <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(c)}><Eye className="w-4 h-4" /></Button>
@@ -115,7 +118,17 @@ export default function Customers() {
                   <FormItem><FormLabel>Email</FormLabel><FormControl><Input type="email" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="gstNumber" render={({ field }) => (
-                  <FormItem><FormLabel>GST Number</FormLabel><FormControl><Input placeholder="GSTIN" className="font-mono" {...field} /></FormControl></FormItem>
+                  <FormItem><FormLabel>GST Number (GSTIN)</FormLabel><FormControl><Input placeholder="15-char GSTIN" className="font-mono" {...field} /></FormControl></FormItem>
+                )} />
+                <FormField control={form.control} name="state" render={({ field }) => (
+                  <FormItem><FormLabel>State</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value || ''}>
+                      <FormControl><SelectTrigger><SelectValue placeholder="Select state" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {INDIAN_STATES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </FormItem>
                 )} />
               </div>
               <FormField control={form.control} name="address" render={({ field }) => (
@@ -141,7 +154,7 @@ export default function Customers() {
           </SheetHeader>
           {viewItem && (
             <div className="mt-6 space-y-4">
-              {[['Phone', viewItem.phone || '—'], ['Email', viewItem.email || '—'], ['GST', viewItem.gstNumber || '—'], ['Address', viewItem.address || '—'], ['Notes', viewItem.notes || '—']].map(([k, v]) => (
+              {[['Phone', viewItem.phone || '—'], ['Email', viewItem.email || '—'], ['State', (viewItem as any).state || '—'], ['GSTIN', viewItem.gstNumber || '—'], ['Address', viewItem.address || '—'], ['Notes', viewItem.notes || '—']].map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
                   <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                   <span className="font-medium">{v}</span>

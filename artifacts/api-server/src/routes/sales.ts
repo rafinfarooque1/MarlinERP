@@ -1,11 +1,31 @@
 import { Router } from "express";
-import { db, salesTable, outletsTable, customersTable, stockEntriesTable, itemsTable, itemPricesTable } from "@workspace/db";
-import { eq, and, sum, count, sql } from "drizzle-orm";
+import { db, salesTable, outletsTable, customersTable, stockEntriesTable, itemsTable, itemPricesTable, companySettingsTable } from "@workspace/db";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import { CreateSaleBody, GetSaleParams, SetItemPriceBody, ListItemPricesQueryParams } from "@workspace/api-zod";
 
 const router = Router();
 
-// ── Item Prices ────────────────────────────────────────────────────────────
+// ── Tax computation helpers ───────────────────────────────────────────────────
+
+function computeInvoiceNumber(prefix: string, fy: string, seq: number): string {
+  return `${prefix}/${fy}/${String(seq).padStart(4, '0')}`;
+}
+
+function computeLineTax(
+  lineSubtotal: number,
+  taxRate: number,
+  isInterState: boolean,
+): { taxRate: number; taxType: string; cgst: number; sgst: number; igst: number; taxAmount: number } {
+  const taxAmount = Math.round(lineSubtotal * taxRate / 100 * 100) / 100;
+  if (isInterState) {
+    return { taxRate, taxType: 'igst', cgst: 0, sgst: 0, igst: taxAmount, taxAmount };
+  }
+  const half = Math.round(taxAmount / 2 * 100) / 100;
+  return { taxRate, taxType: 'cgst_sgst', cgst: half, sgst: half, igst: 0, taxAmount };
+}
+
+// ── Item Prices ───────────────────────────────────────────────────────────────
+
 router.get("/item-prices", async (req, res): Promise<void> => {
   const qp = ListItemPricesQueryParams.safeParse(req.query);
   let rows = await db.select().from(itemPricesTable);
@@ -29,7 +49,6 @@ router.post("/item-prices", async (req, res): Promise<void> => {
   const parsed = SetItemPriceBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
-  // Upsert: find existing or create new
   const [existing] = await db.select().from(itemPricesTable)
     .where(and(eq(itemPricesTable.itemId, parsed.data.itemId), eq(itemPricesTable.outletId, parsed.data.outletId)))
     .limit(1);
@@ -47,6 +66,7 @@ router.post("/item-prices", async (req, res): Promise<void> => {
 });
 
 // ── Sales ──────────────────────────────────────────────────────────────────
+
 router.get("/sales", async (req, res): Promise<void> => {
   const rows = await db.select().from(salesTable).orderBy(salesTable.id);
   const outlets = await db.select().from(outletsTable);
@@ -73,19 +93,77 @@ router.post("/sales", async (req, res): Promise<void> => {
   const parsed = CreateSaleBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
-  const lineItems = parsed.data.lineItems as Array<{ itemId: number; quantity: number; unitPrice: number; discount: number; taxAmount: number }>;
-  const subtotal = lineItems.reduce((s, li) => s + li.quantity * li.unitPrice, 0);
-  const taxTotal = lineItems.reduce((s, li) => s + (li.taxAmount ?? 0), 0);
-  const discountTotal = lineItems.reduce((s, li) => s + (li.discount ?? 0), 0);
-  const totalAmount = subtotal + taxTotal - discountTotal;
-  const invoiceNumber = `INV-${Date.now()}`;
+  const rawLineItems = parsed.data.lineItems as Array<{
+    itemId: number; quantity: number; unitPrice: number; discount: number; taxAmount: number;
+  }>;
+
+  // ── Fetch (or create) company settings for invoice numbering and GST state ─
+  let company = (await db.select().from(companySettingsTable).limit(1))[0];
+  if (!company) {
+    [company] = await db.insert(companySettingsTable).values({}).returning();
+  }
+  const companyState = (company.state ?? '').trim().toLowerCase();
+
+  // ── Atomically increment invoice sequence ─────────────────────────────────
+  const [updatedCompany] = await db
+    .update(companySettingsTable)
+    .set({ invoiceSequence: sql`${companySettingsTable.invoiceSequence} + 1` })
+    .where(eq(companySettingsTable.id, company.id))
+    .returning();
+
+  const seq = updatedCompany.invoiceSequence;
+  const fy = updatedCompany.financialYear || '2025-26';
+  const prefix = updatedCompany.invoicePrefix || 'INV';
+  const invoiceNumber = computeInvoiceNumber(prefix, fy, seq);
+
+  // ── Determine inter-state vs intra-state ──────────────────────────────────
+  let customerState = '';
+  if (parsed.data.customerId) {
+    const [cust] = await db.select().from(customersTable)
+      .where(eq(customersTable.id, parsed.data.customerId))
+      .limit(1);
+    customerState = (cust?.state ?? '').trim().toLowerCase();
+  }
+  const isInterState = !!(companyState && customerState && companyState !== customerState);
+
+  // ── Fetch item tax rates ──────────────────────────────────────────────────
+  const itemIds = [...new Set(rawLineItems.map(li => li.itemId))];
+  const itemsData = itemIds.length > 0
+    ? await db.select({ id: itemsTable.id, taxRate: itemsTable.taxRate, name: itemsTable.name, hsnCode: itemsTable.hsnCode })
+        .from(itemsTable)
+        .where(inArray(itemsTable.id, itemIds))
+    : [];
+  const itemTaxMap = new Map(itemsData.map(i => [i.id, { taxRate: Number(i.taxRate), name: i.name, hsnCode: i.hsnCode }]));
+
+  // ── Build enriched line items with GST ────────────────────────────────────
+  const lineItems = rawLineItems.map(li => {
+    const itemInfo = itemTaxMap.get(li.itemId);
+    const taxRate = itemInfo?.taxRate ?? 0;
+    const lineSubtotal = li.quantity * li.unitPrice - (li.discount ?? 0);
+    const taxInfo = computeLineTax(lineSubtotal, taxRate, isInterState);
+    return {
+      itemId: li.itemId,
+      itemName: itemInfo?.name ?? '',
+      hsnCode: itemInfo?.hsnCode ?? '',
+      quantity: li.quantity,
+      unitPrice: li.unitPrice,
+      discount: li.discount ?? 0,
+      lineSubtotal,
+      ...taxInfo,
+    };
+  });
+
+  const subtotal = lineItems.reduce((s, li) => s + li.lineSubtotal, 0);
+  const taxTotal = lineItems.reduce((s, li) => s + li.taxAmount, 0);
+  const discountTotal = lineItems.reduce((s, li) => s + li.discount, 0);
+  const totalAmount = subtotal + taxTotal;
 
   const [row] = await db.insert(salesTable).values({
     invoiceNumber,
     outletId: parsed.data.outletId,
     customerId: parsed.data.customerId ?? null,
     saleDate: parsed.data.saleDate,
-    lineItems: lineItems,
+    lineItems,
     subtotal: String(subtotal),
     taxTotal: String(taxTotal),
     discountTotal: String(discountTotal),
@@ -94,10 +172,14 @@ router.post("/sales", async (req, res): Promise<void> => {
     couponCode: parsed.data.couponCode ?? null,
   }).returning();
 
-  // Deduct from outlet stock
+  // ── Deduct outlet stock ───────────────────────────────────────────────────
   for (const li of lineItems) {
     const [existing] = await db.select().from(stockEntriesTable)
-      .where(and(eq(stockEntriesTable.itemId, li.itemId), eq(stockEntriesTable.branchType, "outlet"), eq(stockEntriesTable.branchId, parsed.data.outletId)))
+      .where(and(
+        eq(stockEntriesTable.itemId, li.itemId),
+        eq(stockEntriesTable.branchType, "outlet"),
+        eq(stockEntriesTable.branchId, parsed.data.outletId)
+      ))
       .limit(1);
     if (existing) {
       await db.update(stockEntriesTable)
@@ -106,7 +188,7 @@ router.post("/sales", async (req, res): Promise<void> => {
     }
   }
 
-  // Update customer total purchases if present
+  // ── Update customer total purchases ───────────────────────────────────────
   if (parsed.data.customerId) {
     await db.update(customersTable)
       .set({ totalPurchases: sql`${customersTable.totalPurchases}::numeric + ${totalAmount}` })
@@ -114,7 +196,9 @@ router.post("/sales", async (req, res): Promise<void> => {
   }
 
   const [outlet] = await db.select().from(outletsTable).where(eq(outletsTable.id, row.outletId)).limit(1);
-  const customerName = row.customerId ? (await db.select().from(customersTable).where(eq(customersTable.id, row.customerId)).limit(1))[0]?.name ?? null : null;
+  const customerName = row.customerId
+    ? (await db.select().from(customersTable).where(eq(customersTable.id, row.customerId)).limit(1))[0]?.name ?? null
+    : null;
 
   res.status(201).json({
     ...row,
@@ -163,7 +247,9 @@ router.get("/sales/:id", async (req, res): Promise<void> => {
   const [row] = await db.select().from(salesTable).where(eq(salesTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const [outlet] = await db.select().from(outletsTable).where(eq(outletsTable.id, row.outletId)).limit(1);
-  const customerName = row.customerId ? (await db.select().from(customersTable).where(eq(customersTable.id, row.customerId)).limit(1))[0]?.name ?? null : null;
+  const customerName = row.customerId
+    ? (await db.select().from(customersTable).where(eq(customersTable.id, row.customerId)).limit(1))[0]?.name ?? null
+    : null;
   res.json({
     ...row,
     outletName: outlet?.name ?? "",

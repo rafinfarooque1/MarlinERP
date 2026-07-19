@@ -2,12 +2,30 @@ import { Router } from "express";
 import { db, customersTable, vendorsTable, couponsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import {
-  CreateCustomerBody, UpdateCustomerBody, GetCustomerParams,
-  CreateVendorBody, UpdateVendorBody, GetVendorParams,
   CreateCouponBody, UpdateCouponBody, DeleteCouponParams,
 } from "@workspace/api-zod";
 
 const router = Router();
+
+// ── Field allowlists (bypass restrictive auto-generated schemas) ───────────
+// These include `state` and all fields present in the DB schema.
+
+const CUSTOMER_FIELDS = ['name', 'phone', 'email', 'address', 'gstNumber', 'state', 'notes'] as const;
+const VENDOR_FIELDS = ['name', 'phone', 'email', 'address', 'gstNumber', 'state', 'bankName', 'accountNumber'] as const;
+
+type StrRecord = Record<string, any>;
+
+function pickCustomer(body: StrRecord): StrRecord {
+  const r: StrRecord = {};
+  for (const k of CUSTOMER_FIELDS) { if (k in body) r[k] = body[k]; }
+  return r;
+}
+
+function pickVendor(body: StrRecord): StrRecord {
+  const r: StrRecord = {};
+  for (const k of VENDOR_FIELDS) { if (k in body) r[k] = body[k]; }
+  return r;
+}
 
 // ── Customers ─────────────────────────────────────────────────────────────
 router.get("/customers", async (_req, res): Promise<void> => {
@@ -16,9 +34,12 @@ router.get("/customers", async (_req, res): Promise<void> => {
 });
 
 router.post("/customers", async (req, res): Promise<void> => {
-  const parsed = CreateCustomerBody.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-  const [row] = await db.insert(customersTable).values(parsed.data).returning();
+  const data = pickCustomer(req.body);
+  if (!data.name || typeof data.name !== 'string') {
+    res.status(400).json({ error: "name is required" });
+    return;
+  }
+  const [row] = await db.insert(customersTable).values(data).returning();
   res.status(201).json({ ...row, totalPurchases: Number(row.totalPurchases) });
 });
 
@@ -33,9 +54,9 @@ router.get("/customers/:id", async (req, res): Promise<void> => {
 router.patch("/customers/:id", async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
-  const parsed = UpdateCustomerBody.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-  const [row] = await db.update(customersTable).set(parsed.data).where(eq(customersTable.id, id)).returning();
+  const data = pickCustomer(req.body);
+  if (Object.keys(data).length === 0) { res.status(400).json({ error: "No valid fields to update" }); return; }
+  const [row] = await db.update(customersTable).set(data).where(eq(customersTable.id, id)).returning();
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   res.json({ ...row, totalPurchases: Number(row.totalPurchases) });
 });
@@ -47,9 +68,12 @@ router.get("/vendors", async (_req, res): Promise<void> => {
 });
 
 router.post("/vendors", async (req, res): Promise<void> => {
-  const parsed = CreateVendorBody.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-  const [row] = await db.insert(vendorsTable).values(parsed.data).returning();
+  const data = pickVendor(req.body);
+  if (!data.name || typeof data.name !== 'string') {
+    res.status(400).json({ error: "name is required" });
+    return;
+  }
+  const [row] = await db.insert(vendorsTable).values(data).returning();
   res.status(201).json(row);
 });
 
@@ -64,9 +88,9 @@ router.get("/vendors/:id", async (req, res): Promise<void> => {
 router.patch("/vendors/:id", async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
-  const parsed = UpdateVendorBody.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-  const [row] = await db.update(vendorsTable).set(parsed.data).where(eq(vendorsTable.id, id)).returning();
+  const data = pickVendor(req.body);
+  if (Object.keys(data).length === 0) { res.status(400).json({ error: "No valid fields to update" }); return; }
+  const [row] = await db.update(vendorsTable).set(data).where(eq(vendorsTable.id, id)).returning();
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   res.json(row);
 });

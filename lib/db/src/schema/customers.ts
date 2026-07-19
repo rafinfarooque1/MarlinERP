@@ -9,6 +9,7 @@ export const customersTable = pgTable("customers", {
   email: text("email"),
   address: text("address"),
   gstNumber: text("gst_number"),
+  state: text("state"),
   totalPurchases: numeric("total_purchases", { precision: 12, scale: 2 }).notNull().default("0"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),

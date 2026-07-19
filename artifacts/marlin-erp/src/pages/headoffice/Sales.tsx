@@ -1,5 +1,9 @@
 import { useState } from 'react';
-import { useListSales, useCreateSale, useListOutlets, useListCustomers, useListItems, useListItemPrices, useListStock, getListSalesQueryKey, useListCoupons } from '@workspace/api-client-react';
+import {
+  useListSales, useCreateSale, useListOutlets, useListCustomers,
+  useListItems, useListItemPrices, useListStock, useGetCompanySettings,
+  getListSalesQueryKey, useListCoupons,
+} from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,17 +15,46 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Trash2, CreditCard, Calendar, Receipt, Download, Eye, Printer, PackageOpen } from 'lucide-react';
+import {
+  Plus, Search, Trash2, CreditCard, Calendar, Receipt,
+  Download, Eye, Printer, PackageOpen,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
 import { downloadCSV, printHTML } from '@/lib/download';
+import { Separator } from '@/components/ui/separator';
+
+// ── Types ──────────────────────────────────────────────────────────────────────
+
+interface GstBreakdown {
+  taxRate: number;
+  taxType: 'cgst_sgst' | 'igst';
+  lineSubtotal: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  taxAmount: number;
+}
+
+function computeLineGst(
+  qty: number, price: number, taxRate: number, isInterState: boolean
+): GstBreakdown {
+  const lineSubtotal = qty * price;
+  const rawTax = Math.round(lineSubtotal * taxRate / 100 * 100) / 100;
+  if (isInterState) {
+    return { taxRate, taxType: 'igst', lineSubtotal, cgst: 0, sgst: 0, igst: rawTax, taxAmount: rawTax };
+  }
+  const half = Math.round(rawTax / 2 * 100) / 100;
+  return { taxRate, taxType: 'cgst_sgst', lineSubtotal, cgst: half, sgst: half, igst: 0, taxAmount: rawTax };
+}
+
+// ── Form Schema ─────────────────────────────────────────────────────────────────
 
 const saleLineSchema = z.object({
   itemId: z.coerce.number().min(1, 'Item required'),
   quantity: z.coerce.number().min(1, 'Qty ≥ 1'),
 });
-
 const schema = z.object({
   outletId: z.coerce.number().min(1, 'Outlet required'),
   customerId: z.coerce.number().optional(),
@@ -32,51 +65,78 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
+const defaultFormValues: FormValues = {
+  outletId: 0,
+  saleDate: new Date().toISOString().split('T')[0],
+  paymentMode: 'cash',
+  couponCode: '',
+  lineItems: [{ itemId: 0, quantity: 1 }],
+};
+
+// ── Component ──────────────────────────────────────────────────────────────────
+
 export default function Sales() {
   const { data: outlets = [] } = useListOutlets();
   const [outletFilter, setOutletFilter] = useState<string>('all');
-  const { data: sales = [], isLoading } = useListSales(outletFilter !== 'all' ? { outletId: Number(outletFilter) } : undefined);
+  const { data: sales = [], isLoading } = useListSales(
+    outletFilter !== 'all' ? { outletId: Number(outletFilter) } : undefined
+  );
   const { data: customers = [] } = useListCustomers();
   const { data: items = [] } = useListItems();
-  const { data: coupons = [] } = useListCoupons();
+  const { data: companySettings } = useGetCompanySettings();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
   const queryClient = useQueryClient();
   const createMutation = useCreateSale();
 
-  const form = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: { outletId: 0, saleDate: new Date().toISOString().split('T')[0], paymentMode: 'cash', couponCode: '', lineItems: [{ itemId: 0, quantity: 1 }] },
-  });
+  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: defaultFormValues });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
   const watchOutletId = form.watch('outletId');
+  const watchCustomerId = form.watch('customerId');
 
-  // Load prices for the selected outlet
-  const { data: outletPrices = [] } = useListItemPrices({ outletId: watchOutletId }, { query: { enabled: !!watchOutletId && watchOutletId > 0 } });
-
-  // Load stock for the selected outlet — only show items that have stock > 0
+  const { data: outletPrices = [] } = useListItemPrices(
+    { outletId: watchOutletId },
+    { query: { enabled: !!watchOutletId && watchOutletId > 0 } }
+  );
   const { data: outletStock = [] } = useListStock(
     { branchType: 'outlet' as any, branchId: watchOutletId },
     { query: { enabled: !!watchOutletId && watchOutletId > 0 } }
   );
 
-  // Map: itemId → available quantity at this outlet
-  const stockMap = new Map<number, number>(
-    outletStock.map(s => [s.itemId!, Number(s.quantity ?? 0)])
-  );
-
-  // Items that have stock > 0 at this outlet
+  const stockMap = new Map<number, number>(outletStock.map(s => [s.itemId!, Number(s.quantity ?? 0)]));
   const availableItems = items.filter(it => (stockMap.get(it.id) ?? 0) > 0);
 
   const getPrice = (itemId: number) => outletPrices.find(p => p.itemId === itemId)?.price ?? 0;
   const getAvailableQty = (itemId: number) => stockMap.get(itemId) ?? 0;
+  const getItem = (itemId: number) => items.find(i => i.id === itemId);
 
-  const calcTotal = () => fields.reduce((s, _, i) => {
-    const itemId = form.watch(`lineItems.${i}.itemId`);
-    const qty = form.watch(`lineItems.${i}.quantity`);
-    return s + (getPrice(itemId) * qty);
-  }, 0);
+  // GST state determination
+  const companyState = ((companySettings as any)?.state ?? '').trim().toLowerCase();
+  const selectedCustomer = customers.find(c => c.id === watchCustomerId);
+  const customerState = ((selectedCustomer as any)?.state ?? '').trim().toLowerCase();
+  const isInterState = !!(companyState && customerState && companyState !== customerState);
+
+  // Compute aggregated GST totals for the cart
+  const computeCartTotals = () => {
+    let subtotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0, taxTotal = 0;
+    fields.forEach((_, i) => {
+      const itemId = form.watch(`lineItems.${i}.itemId`);
+      const qty = form.watch(`lineItems.${i}.quantity`);
+      const price = getPrice(itemId);
+      if (!itemId || !price) return;
+      const taxRate = Number((getItem(itemId) as any)?.taxRate ?? 0);
+      const gst = computeLineGst(qty, price, taxRate, isInterState);
+      subtotal += gst.lineSubtotal;
+      cgstTotal += gst.cgst;
+      sgstTotal += gst.sgst;
+      igstTotal += gst.igst;
+      taxTotal += gst.taxAmount;
+    });
+    return { subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, grandTotal: subtotal + taxTotal };
+  };
+
+  const totals = computeCartTotals();
 
   const onSubmit = (data: FormValues) => {
     const enrichedItems = data.lineItems.map(li => ({
@@ -84,25 +144,69 @@ export default function Sales() {
       quantity: li.quantity,
       unitPrice: Number(getPrice(li.itemId)),
       discount: 0,
-      taxAmount: 0,
+      taxAmount: 0, // backend recomputes authoritatively
     }));
     createMutation.mutate({ data: { ...data, lineItems: enrichedItems, customerId: data.customerId || undefined } as any }, {
       onSuccess: () => {
         toast.success('Sale recorded successfully');
         queryClient.invalidateQueries({ queryKey: getListSalesQueryKey() });
         setIsOpen(false);
-        form.reset({ outletId: 0, saleDate: new Date().toISOString().split('T')[0], paymentMode: 'cash', couponCode: '', lineItems: [{ itemId: 0, quantity: 1 }] });
+        form.reset(defaultFormValues);
       },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Could not record sale'),
     });
   };
 
   const handlePrintInvoice = (sale: any) => {
-    const rows = (sale.lineItems || []).map((li: any, i: number) => `<tr><td>${i+1}</td><td>Item #${li.itemId}</td><td>${li.quantity}</td><td>₹${li.unitPrice}</td><td>₹${li.quantity * li.unitPrice}</td></tr>`).join('');
-    printHTML(`<h2>Invoice — ${sale.invoiceNumber}</h2><p>Date: ${new Date(sale.saleDate).toLocaleDateString('en-IN')}&nbsp;&nbsp;|&nbsp;&nbsp;Outlet: ${sale.outletName}&nbsp;&nbsp;|&nbsp;&nbsp;Payment: ${sale.paymentMode?.toUpperCase()}</p><p>Customer: ${sale.customerName || 'Walk-in'}</p><table><tr><th>#</th><th>Item</th><th>Qty</th><th>Unit Price</th><th>Amount</th></tr>${rows}</table><p class="total">Total: ₹${Number(sale.totalAmount).toLocaleString('en-IN')}</p>`, sale.invoiceNumber);
+    const cs = companySettings as any;
+    const lineRows = (sale.lineItems || []).map((li: any, i: number) => {
+      const lineTotal = li.lineSubtotal ?? (li.quantity * li.unitPrice);
+      const cgst = li.cgst ?? 0;
+      const sgst = li.sgst ?? 0;
+      const igst = li.igst ?? 0;
+      return `<tr>
+        <td>${i + 1}</td>
+        <td>${li.itemName || `Item #${li.itemId}`}<br/><small style="color:#666">${li.hsnCode ? `HSN: ${li.hsnCode}` : ''}</small></td>
+        <td style="text-align:center">${li.taxRate ?? 0}%</td>
+        <td style="text-align:right">${li.quantity}</td>
+        <td style="text-align:right">₹${Number(li.unitPrice).toFixed(2)}</td>
+        <td style="text-align:right">₹${Number(lineTotal).toFixed(2)}</td>
+        <td style="text-align:right">${cgst > 0 ? `₹${cgst.toFixed(2)}` : '—'}</td>
+        <td style="text-align:right">${sgst > 0 ? `₹${sgst.toFixed(2)}` : '—'}</td>
+        <td style="text-align:right">${igst > 0 ? `₹${igst.toFixed(2)}` : '—'}</td>
+        <td style="text-align:right">₹${Number(li.taxAmount ?? 0).toFixed(2)}</td>
+        <td style="text-align:right"><strong>₹${(Number(lineTotal) + Number(li.taxAmount ?? 0)).toFixed(2)}</strong></td>
+      </tr>`;
+    }).join('');
+
+    printHTML(`
+      <style>table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:6px 8px;font-size:11px}th{background:#f5f5f5}.total{font-size:14px;font-weight:bold;text-align:right;margin-top:12px}.header{margin-bottom:12px}.meta{font-size:12px;color:#555}.gstin{font-size:11px;font-family:monospace;color:#333}</style>
+      <div class="header">
+        <h2 style="margin:0">${cs?.companyName || 'Tax Invoice'}</h2>
+        <p class="meta">${cs?.address || ''}${cs?.state ? ', ' + cs.state : ''}${cs?.pincode ? ' - ' + cs.pincode : ''}</p>
+        ${cs?.gstNumber ? `<p class="gstin">GSTIN: ${cs.gstNumber}</p>` : ''}
+      </div>
+      <hr/>
+      <table><tr><td><strong>Invoice:</strong> ${sale.invoiceNumber}</td><td><strong>Date:</strong> ${new Date(sale.saleDate).toLocaleDateString('en-IN')}</td></tr>
+      <tr><td><strong>Outlet:</strong> ${sale.outletName}</td><td><strong>Payment:</strong> ${sale.paymentMode?.toUpperCase()}</td></tr>
+      <tr><td colspan="2"><strong>Customer:</strong> ${sale.customerName || 'Walk-in'}${(sale as any).customerGstin ? ' | GSTIN: ' + (sale as any).customerGstin : ''}</td></tr>
+      </table><br/>
+      <table>
+        <tr><th>#</th><th>Item / HSN</th><th>GST%</th><th>Qty</th><th>Unit Price</th><th>Taxable</th><th>CGST</th><th>SGST</th><th>IGST</th><th>Tax</th><th>Total</th></tr>
+        ${lineRows}
+      </table>
+      <div class="total">Subtotal: ₹${Number(sale.subtotal ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+      ${sale.taxTotal > 0 ? `<div class="total" style="color:#555;font-size:12px">Tax: ₹${Number(sale.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>` : ''}
+      <div class="total" style="font-size:16px">Grand Total: ₹${Number(sale.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+    `, sale.invoiceNumber);
   };
 
-  const filtered = sales.filter(s => s.invoiceNumber?.toLowerCase().includes(search.toLowerCase()) || s.customerName?.toLowerCase().includes(search.toLowerCase()));
+  const filtered = sales.filter(s =>
+    s.invoiceNumber?.toLowerCase().includes(search.toLowerCase()) ||
+    s.customerName?.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const itemsMap = new Map(items.map(i => [i.id, i]));
 
   return (
     <AppLayout>
@@ -113,15 +217,20 @@ export default function Sales() {
             <p className="text-muted-foreground mt-1">Record and view retail transactions</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('sales.csv', filtered.map(s => ({ Invoice: s.invoiceNumber, Date: s.saleDate, Outlet: s.outletName, Customer: s.customerName || 'Walk-in', Payment: s.paymentMode, Total: s.totalAmount })))}>
+            <Button variant="outline" size="sm" onClick={() => downloadCSV('sales.csv', filtered.map(s => ({
+              Invoice: s.invoiceNumber, Date: s.saleDate, Outlet: s.outletName,
+              Customer: s.customerName || 'Walk-in', Payment: s.paymentMode,
+              Subtotal: s.subtotal, Tax: s.taxTotal, Total: s.totalAmount,
+            })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
-            <Button onClick={() => { form.reset({ outletId: 0, saleDate: new Date().toISOString().split('T')[0], paymentMode: 'cash', couponCode: '', lineItems: [{ itemId: 0, quantity: 1 }] }); setIsOpen(true); }}>
+            <Button onClick={() => { form.reset(defaultFormValues); setIsOpen(true); }}>
               <Plus className="w-4 h-4 mr-2" /> New Sale
             </Button>
           </div>
         </div>
 
+        {/* Sales Table */}
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex flex-wrap gap-3 bg-muted/20">
             <div className="flex items-center gap-2 flex-1 min-w-[180px]">
@@ -144,24 +253,30 @@ export default function Sales() {
                 <TableHead>Outlet</TableHead>
                 <TableHead>Customer</TableHead>
                 <TableHead>Payment</TableHead>
+                <TableHead className="text-right">Tax</TableHead>
                 <TableHead className="text-right">Total</TableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(4)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
+                <TableRow><TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
                   <Receipt className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No sales recorded yet</p>
                 </TableCell></TableRow>
               ) : filtered.map(sale => (
                 <TableRow key={sale.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-primary font-bold">{sale.invoiceNumber}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground"><div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(sale.saleDate).toLocaleDateString('en-IN')}</div></TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(sale.saleDate).toLocaleDateString('en-IN')}</div>
+                  </TableCell>
                   <TableCell className="text-sm">{sale.outletName}</TableCell>
                   <TableCell className="text-sm">{sale.customerName || 'Walk-in'}</TableCell>
                   <TableCell><Badge variant="outline" className="uppercase text-xs">{sale.paymentMode?.replace('_', ' ')}</Badge></TableCell>
+                  <TableCell className="text-right font-mono text-xs text-muted-foreground">
+                    {Number(sale.taxTotal) > 0 ? `₹${Number(sale.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'}
+                  </TableCell>
                   <TableCell className="text-right font-mono font-bold text-emerald-500">₹{Number(sale.totalAmount).toLocaleString('en-IN')}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
@@ -205,9 +320,20 @@ export default function Sales() {
                       <FormControl><SelectTrigger><SelectValue placeholder="Walk-in" /></SelectTrigger></FormControl>
                       <SelectContent>
                         <SelectItem value="0">Walk-in Customer</SelectItem>
-                        {customers.map(c => <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}
+                        {customers.map(c => (
+                          <SelectItem key={c.id} value={String(c.id)}>
+                            {c.name}{(c as any).state ? ` (${(c as any).state})` : ''}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
-                    </Select></FormItem>
+                    </Select>
+                    {watchCustomerId && isInterState && (
+                      <p className="text-xs text-amber-500 mt-1">Inter-state sale → IGST applies</p>
+                    )}
+                    {watchCustomerId && !isInterState && companyState && customerState && (
+                      <p className="text-xs text-emerald-600 mt-1">Intra-state sale → CGST + SGST apply</p>
+                    )}
+                  </FormItem>
                 )} />
                 <FormField control={form.control} name="paymentMode" render={({ field }) => (
                   <FormItem><FormLabel>Payment <span className="text-destructive">*</span></FormLabel>
@@ -223,11 +349,10 @@ export default function Sales() {
                 )} />
               </div>
 
+              {/* Line items */}
               <div>
                 {!watchOutletId || watchOutletId === 0 ? (
-                  <div className="p-6 border border-dashed border-border rounded-lg text-center text-muted-foreground">
-                    Select an outlet above to load available stock
-                  </div>
+                  <div className="p-6 border border-dashed border-border rounded-lg text-center text-muted-foreground">Select an outlet above to load available stock</div>
                 ) : availableItems.length === 0 ? (
                   <div className="p-6 border border-dashed border-amber-500/40 rounded-lg text-center text-amber-500 bg-amber-500/5 flex flex-col items-center gap-2">
                     <PackageOpen className="w-8 h-8 opacity-60" />
@@ -237,8 +362,10 @@ export default function Sales() {
                 ) : (
                   <>
                     <div className="flex justify-between items-center mb-3">
-                      <p className="font-semibold">Cart Items <span className="text-xs text-muted-foreground font-normal ml-1">({availableItems.length} items in stock)</span></p>
-                      <Button type="button" variant="outline" size="sm" onClick={() => append({ itemId: 0, quantity: 1 })}><Plus className="w-3 h-3 mr-1" /> Add Item</Button>
+                      <p className="font-semibold">Cart Items <span className="text-xs text-muted-foreground font-normal ml-1">({availableItems.length} in stock)</span></p>
+                      <Button type="button" variant="outline" size="sm" onClick={() => append({ itemId: 0, quantity: 1 })}>
+                        <Plus className="w-3 h-3 mr-1" /> Add Item
+                      </Button>
                     </div>
                     <div className="space-y-2">
                       {fields.map((field, index) => {
@@ -246,6 +373,10 @@ export default function Sales() {
                         const qty = form.watch(`lineItems.${index}.quantity`);
                         const price = getPrice(itemId);
                         const availQty = getAvailableQty(itemId);
+                        const taxRate = Number((getItem(itemId) as any)?.taxRate ?? 0);
+                        const gst = computeLineGst(qty, price, taxRate, isInterState);
+                        const lineTotal = gst.lineSubtotal + gst.taxAmount;
+
                         return (
                           <div key={field.id} className="grid grid-cols-12 gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border">
                             <div className="col-span-6">
@@ -258,9 +389,10 @@ export default function Sales() {
                                       {availableItems.map(it => {
                                         const avail = stockMap.get(it.id) ?? 0;
                                         const p = getPrice(it.id);
+                                        const r = Number((it as any).taxRate ?? 0);
                                         return (
                                           <SelectItem key={it.id} value={String(it.id)}>
-                                            {it.name} — {avail} {it.unit} avail{p > 0 ? ` · ₹${p}` : ''}
+                                            {it.name} — {avail} avail{p > 0 ? ` · ₹${p}` : ''}{r > 0 ? ` · ${r}% GST` : ''}
                                           </SelectItem>
                                         );
                                       })}
@@ -277,9 +409,20 @@ export default function Sales() {
                                 </FormItem>
                               )} />
                             </div>
-                            <div className="col-span-3 text-right pb-1">
-                              <p className="text-xs text-muted-foreground">Subtotal</p>
-                              <p className="font-mono font-bold text-primary">₹{(price * qty).toLocaleString('en-IN')}</p>
+                            <div className="col-span-3 text-right pb-1 space-y-0.5">
+                              {itemId > 0 && price > 0 ? (
+                                <>
+                                  <p className="text-xs text-muted-foreground">₹{gst.lineSubtotal.toLocaleString('en-IN')}</p>
+                                  {taxRate > 0 && (
+                                    <p className="text-xs text-amber-600">
+                                      +{isInterState ? 'IGST' : 'GST'} ₹{gst.taxAmount.toFixed(2)}
+                                    </p>
+                                  )}
+                                  <p className="font-mono font-bold text-primary text-sm">₹{lineTotal.toLocaleString('en-IN')}</p>
+                                </>
+                              ) : (
+                                <p className="text-muted-foreground text-xs">—</p>
+                              )}
                             </div>
                             <div className="col-span-1 pb-1 flex justify-end">
                               <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
@@ -292,12 +435,40 @@ export default function Sales() {
                 )}
               </div>
 
-              <DialogFooter className="flex-row justify-between items-center w-full pt-2 border-t border-border">
-                <div>
-                  <p className="text-xs text-muted-foreground">Total Amount</p>
-                  <p className="text-2xl font-bold font-mono text-primary">₹{calcTotal().toLocaleString('en-IN')}</p>
-                </div>
-                <div className="flex gap-2">
+              {/* Footer with GST breakdown */}
+              <DialogFooter className="flex-col gap-0 sm:flex-col w-full pt-2 border-t border-border">
+                {totals.subtotal > 0 && (
+                  <div className="w-full mb-3 p-3 bg-muted/20 rounded-lg text-sm space-y-1">
+                    <div className="flex justify-between text-muted-foreground">
+                      <span>Subtotal (taxable)</span>
+                      <span className="font-mono">₹{totals.subtotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    </div>
+                    {isInterState && totals.igstTotal > 0 && (
+                      <div className="flex justify-between text-amber-600">
+                        <span>IGST (inter-state)</span>
+                        <span className="font-mono">₹{totals.igstTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                      </div>
+                    )}
+                    {!isInterState && totals.cgstTotal > 0 && (
+                      <>
+                        <div className="flex justify-between text-muted-foreground">
+                          <span>CGST</span>
+                          <span className="font-mono">₹{totals.cgstTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                        <div className="flex justify-between text-muted-foreground">
+                          <span>SGST</span>
+                          <span className="font-mono">₹{totals.sgstTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      </>
+                    )}
+                    <Separator className="my-1" />
+                    <div className="flex justify-between font-bold text-base">
+                      <span>Grand Total</span>
+                      <span className="font-mono text-primary">₹{totals.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    </div>
+                  </div>
+                )}
+                <div className="flex gap-2 justify-end w-full">
                   <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
                   <Button type="submit" disabled={createMutation.isPending || !watchOutletId || availableItems.length === 0}>
                     {createMutation.isPending ? 'Processing…' : 'Complete Sale'}
@@ -311,7 +482,7 @@ export default function Sales() {
 
       {/* Invoice View Sheet */}
       <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
-        <SheetContent className="overflow-y-auto">
+        <SheetContent className="overflow-y-auto sm:max-w-lg">
           <SheetHeader>
             <SheetTitle className="flex items-center gap-2"><Receipt className="w-5 h-5 text-primary" />{viewItem?.invoiceNumber}</SheetTitle>
             <SheetDescription>{viewItem?.outletName} · {viewItem && new Date(viewItem.saleDate).toLocaleDateString('en-IN')}</SheetDescription>
@@ -319,23 +490,74 @@ export default function Sales() {
           {viewItem && (
             <div className="mt-6 space-y-5">
               <div className="grid grid-cols-2 gap-3">
-                {[['Customer', viewItem.customerName || 'Walk-in'], ['Payment', viewItem.paymentMode?.replace('_', ' ').toUpperCase()], ['Coupon', viewItem.couponCode || '—']].map(([k, v]) => (
-                  <div key={k} className="flex flex-col gap-1"><span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span><span className="font-semibold">{v}</span></div>
-                ))}
-              </div>
-              <div>
-                <p className="text-sm font-semibold mb-2">Items</p>
-                {(viewItem.lineItems || []).map((li: any, i: number) => (
-                  <div key={i} className="flex justify-between p-3 bg-muted/20 rounded text-sm mb-2">
-                    <span>Item #{li.itemId} × {li.quantity}</span>
-                    <span className="font-bold">₹{(li.quantity * li.unitPrice).toLocaleString()}</span>
+                {[
+                  ['Customer', viewItem.customerName || 'Walk-in'],
+                  ['Payment', viewItem.paymentMode?.replace('_', ' ').toUpperCase()],
+                  ['Coupon', viewItem.couponCode || '—'],
+                ].map(([k, v]) => (
+                  <div key={k} className="flex flex-col gap-1">
+                    <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
+                    <span className="font-semibold">{v}</span>
                   </div>
                 ))}
               </div>
-              <div className="flex justify-between text-xl font-bold border-t border-border pt-3">
-                <span>Total</span><span className="text-primary">₹{Number(viewItem.totalAmount).toLocaleString('en-IN')}</span>
+
+              {/* Line items */}
+              <div>
+                <p className="text-sm font-semibold mb-2">Items</p>
+                <div className="space-y-2">
+                  {(viewItem.lineItems || []).map((li: any, i: number) => {
+                    const itemInfo = itemsMap.get(li.itemId);
+                    const itemName = li.itemName || itemInfo?.name || `Item #${li.itemId}`;
+                    const hsnCode = li.hsnCode || (itemInfo as any)?.hsnCode || '';
+                    const lineSubtotal = li.lineSubtotal ?? (li.quantity * li.unitPrice);
+                    return (
+                      <div key={i} className="p-3 bg-muted/20 rounded-lg text-sm border border-border">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="font-medium">{itemName}</p>
+                            {hsnCode && <p className="text-xs text-muted-foreground">HSN: {hsnCode}</p>}
+                          </div>
+                          <Badge variant="secondary" className="text-xs">{li.taxRate ?? 0}% GST</Badge>
+                        </div>
+                        <div className="mt-2 flex justify-between text-xs text-muted-foreground">
+                          <span>{li.quantity} × ₹{Number(li.unitPrice).toFixed(2)}</span>
+                          <span>Taxable: ₹{Number(lineSubtotal).toFixed(2)}</span>
+                        </div>
+                        {(li.taxAmount ?? 0) > 0 && (
+                          <div className="mt-1 flex justify-between text-xs text-amber-600">
+                            <span>{li.taxType === 'igst' ? `IGST ${li.taxRate}%` : `CGST ${(li.taxRate ?? 0) / 2}% + SGST ${(li.taxRate ?? 0) / 2}%`}</span>
+                            <span>₹{Number(li.taxAmount).toFixed(2)}</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-              <Button className="w-full" variant="outline" onClick={() => handlePrintInvoice(viewItem)}><Printer className="w-4 h-4 mr-2" /> Print Invoice</Button>
+
+              {/* Totals */}
+              <div className="p-3 bg-muted/30 rounded-lg space-y-1.5 text-sm">
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Subtotal</span>
+                  <span className="font-mono">₹{Number(viewItem.subtotal ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                </div>
+                {Number(viewItem.taxTotal) > 0 && (
+                  <div className="flex justify-between text-amber-600">
+                    <span>Total Tax</span>
+                    <span className="font-mono">₹{Number(viewItem.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                <Separator />
+                <div className="flex justify-between font-bold text-base">
+                  <span>Grand Total</span>
+                  <span className="font-mono text-primary">₹{Number(viewItem.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                </div>
+              </div>
+
+              <Button className="w-full" variant="outline" onClick={() => handlePrintInvoice(viewItem)}>
+                <Printer className="w-4 h-4 mr-2" /> Print GST Invoice
+              </Button>
             </div>
           )}
         </SheetContent>

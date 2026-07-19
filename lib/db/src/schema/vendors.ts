@@ -9,6 +9,7 @@ export const vendorsTable = pgTable("vendors", {
   email: text("email"),
   address: text("address"),
   gstNumber: text("gst_number"),
+  state: text("state"),
   bankName: text("bank_name"),
   accountNumber: text("account_number"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

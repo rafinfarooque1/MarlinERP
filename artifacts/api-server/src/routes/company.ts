@@ -1,15 +1,30 @@
 import { Router } from "express";
 import { db, companySettingsTable, permissionsTable, hierarchiesTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { UpdateCompanySettingsBody, SetPermissionBody } from "@workspace/api-zod";
+import { SetPermissionBody } from "@workspace/api-zod";
 
 const router = Router();
+
+// Allowed fields for company settings update
+const ALLOWED_COMPANY_FIELDS = new Set([
+  'companyName', 'address', 'city', 'state', 'pincode',
+  'phone', 'email', 'website', 'gstNumber', 'panNumber',
+  'bankName', 'bankAccount', 'ifscCode', 'logoUrl',
+  'currency', 'financialYear', 'invoicePrefix',
+]);
+
+function pickCompanyFields(body: Record<string, any>) {
+  const result: Record<string, any> = {};
+  for (const key of ALLOWED_COMPANY_FIELDS) {
+    if (key in body) result[key] = body[key];
+  }
+  return result;
+}
 
 // ── Company Settings ──────────────────────────────────────────────────────
 router.get("/company/settings", async (_req, res): Promise<void> => {
   const rows = await db.select().from(companySettingsTable).limit(1);
   if (rows.length === 0) {
-    // Create default settings
     const [row] = await db.insert(companySettingsTable).values({}).returning();
     res.json(row);
     return;
@@ -18,15 +33,15 @@ router.get("/company/settings", async (_req, res): Promise<void> => {
 });
 
 router.patch("/company/settings", async (req, res): Promise<void> => {
-  const parsed = UpdateCompanySettingsBody.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+  const data = pickCompanyFields(req.body);
+  if (Object.keys(data).length === 0) { res.status(400).json({ error: "No valid fields to update" }); return; }
 
   const rows = await db.select().from(companySettingsTable).limit(1);
   let row;
   if (rows.length === 0) {
-    [row] = await db.insert(companySettingsTable).values(parsed.data).returning();
+    [row] = await db.insert(companySettingsTable).values(data).returning();
   } else {
-    [row] = await db.update(companySettingsTable).set(parsed.data).where(eq(companySettingsTable.id, rows[0].id)).returning();
+    [row] = await db.update(companySettingsTable).set(data).where(eq(companySettingsTable.id, rows[0].id)).returning();
   }
   res.json(row);
 });
@@ -46,7 +61,6 @@ router.post("/company/permissions", async (req, res): Promise<void> => {
   const parsed = SetPermissionBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
-  // Upsert
   const [existing] = await db.select().from(permissionsTable)
     .where(eq(permissionsTable.hierarchyId, parsed.data.hierarchyId))
     .limit(1);
