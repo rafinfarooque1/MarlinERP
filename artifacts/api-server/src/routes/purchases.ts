@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db, purchasesTable, vendorsTable, materialsTable, rawMaterialsTable } from "@workspace/db";
+import { db, purchasesTable, vendorsTable, materialsTable, rawMaterialsTable, itemsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { CreatePurchaseBody, GetPurchaseParams } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
@@ -83,6 +83,8 @@ router.post("/purchases", async (req, res): Promise<void> => {
       await db.update(materialsTable).set({ currentStock: sql`${materialsTable.currentStock}::numeric + ${li.quantity}` }).where(eq(materialsTable.id, li.materialId));
     } else if (li.materialType === "raw_material") {
       await db.update(rawMaterialsTable).set({ currentStock: sql`${rawMaterialsTable.currentStock}::numeric + ${li.quantity}` }).where(eq(rawMaterialsTable.id, li.materialId));
+    } else if (li.materialType === "item") {
+      await db.update(itemsTable).set({ productionStock: sql`${itemsTable.productionStock}::numeric + ${li.quantity}` }).where(eq(itemsTable.id, li.materialId));
     }
   }
 
@@ -141,6 +143,8 @@ router.delete("/purchases/:id", async (req, res): Promise<void> => {
       await db.update(materialsTable).set({ currentStock: sql`GREATEST(0, ${materialsTable.currentStock}::numeric - ${li.quantity})` }).where(eq(materialsTable.id, li.materialId));
     } else if (li.materialType === "raw_material") {
       await db.update(rawMaterialsTable).set({ currentStock: sql`GREATEST(0, ${rawMaterialsTable.currentStock}::numeric - ${li.quantity})` }).where(eq(rawMaterialsTable.id, li.materialId));
+    } else if (li.materialType === "item") {
+      await db.update(itemsTable).set({ productionStock: sql`GREATEST(0, ${itemsTable.productionStock}::numeric - ${li.quantity})` }).where(eq(itemsTable.id, li.materialId));
     }
   }
   await db.delete(purchasesTable).where(eq(purchasesTable.id, id));

@@ -43,6 +43,7 @@ const schema = z.object({
   unit: z.string().min(1, 'Unit required'),
   hsnCode: z.string().optional(),
   taxRate: z.coerce.number().min(0).max(28).optional(),
+  mrp: z.coerce.number().min(0).optional(),
   description: z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
@@ -67,7 +68,7 @@ export default function ItemMaster() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { itemType: 'raw_material', name: '', unit: '', hsnCode: '', taxRate: 5, description: '' },
+    defaultValues: { itemType: 'raw_material', name: '', unit: '', hsnCode: '', taxRate: 5, mrp: 0, description: '' },
   });
 
   const watchType = form.watch('itemType');
@@ -88,7 +89,7 @@ export default function ItemMaster() {
 
   const openAdd = (type?: ItemType) => {
     setEditTarget(null);
-    form.reset({ itemType: type || 'raw_material', name: '', unit: units[0] || '', hsnCode: '', taxRate: 5, description: '' });
+    form.reset({ itemType: type || 'raw_material', name: '', unit: units[0] || '', hsnCode: '', taxRate: 5, mrp: 0, description: '' });
     setIsOpen(true);
   };
 
@@ -99,7 +100,8 @@ export default function ItemMaster() {
       name: item.name,
       unit: item.unit,
       hsnCode: item.hsnCode || '',
-      taxRate: Number(item.taxRate || 5),
+      taxRate: Number(item.taxRate ?? 5),
+      mrp: Number(item.mrp ?? 0),
       description: item.description || '',
     });
     setIsOpen(true);
@@ -116,16 +118,16 @@ export default function ItemMaster() {
       },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     };
-    const baseData = { name: data.name, unit: data.unit, description: data.description };
-    const itemData = { ...baseData, hsnCode: data.hsnCode || '', taxRate: String(data.taxRate ?? 5) };
+    const sharedData = { name: data.name, unit: data.unit, description: data.description, hsnCode: data.hsnCode || '', taxRate: Number(data.taxRate ?? 5) };
+    const itemData = { ...sharedData, mrp: Number(data.mrp ?? 0) };
 
     if (editTarget) {
-      if (type === 'raw_material') updateRM.mutate({ id: editTarget.id, data: baseData as any }, opts);
-      else if (type === 'material') updateM.mutate({ id: editTarget.id, data: baseData as any }, opts);
+      if (type === 'raw_material') updateRM.mutate({ id: editTarget.id, data: sharedData as any }, opts);
+      else if (type === 'material') updateM.mutate({ id: editTarget.id, data: sharedData as any }, opts);
       else updateI.mutate({ id: editTarget.id, data: itemData as any }, opts);
     } else {
-      if (type === 'raw_material') createRM.mutate({ data: baseData as any }, opts);
-      else if (type === 'material') createM.mutate({ data: baseData as any }, opts);
+      if (type === 'raw_material') createRM.mutate({ data: sharedData as any }, opts);
+      else if (type === 'material') createM.mutate({ data: sharedData as any }, opts);
       else createI.mutate({ data: itemData as any }, opts);
     }
   };
@@ -155,7 +157,7 @@ export default function ItemMaster() {
           </div>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => downloadCSV('items.csv', filtered.map(i => ({
-              Type: TYPE_LABELS[i._type], Name: i.name, Unit: i.unit,
+              Type: (TYPE_LABELS as any)[i._type] ?? i._type, Name: i.name, Unit: i.unit,
               HSN: (i as any).hsnCode || '', 'Tax%': (i as any).taxRate || '',
               Stock: i.stock, Description: i.description || '',
             })))}>
@@ -218,7 +220,7 @@ export default function ItemMaster() {
               ) : filtered.map(item => (
                 <TableRow key={`${item._type}-${item.id}`} className="hover:bg-muted/10">
                   <TableCell>
-                    <Badge variant="outline" className={`text-xs capitalize ${TYPE_COLORS[item._type]}`}>
+                    <Badge variant="outline" className={`text-xs capitalize ${(TYPE_COLORS as any)[item._type] ?? ''}`}>
                       {item._type === 'raw_material' ? 'Raw' : item._type === 'material' ? 'Material' : 'Item'}
                     </Badge>
                   </TableCell>
@@ -282,26 +284,30 @@ export default function ItemMaster() {
                     <FormMessage />
                   </FormItem>
                 )} />
+                <FormField control={form.control} name="hsnCode" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>HSN Code</FormLabel>
+                    <FormControl><Input className="font-mono" placeholder="e.g. 09011111" {...field} /></FormControl>
+                  </FormItem>
+                )} />
+                <FormField control={form.control} name="taxRate" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>GST Rate %</FormLabel>
+                    <Select onValueChange={v => field.onChange(Number(v))} value={String(field.value ?? 5)}>
+                      <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {[0, 5, 12, 18, 28].map(r => <SelectItem key={r} value={String(r)}>{r}%</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </FormItem>
+                )} />
                 {watchType === 'item' && (
-                  <>
-                    <FormField control={form.control} name="hsnCode" render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>HSN Code</FormLabel>
-                        <FormControl><Input className="font-mono" placeholder="e.g. 09011111" {...field} /></FormControl>
-                      </FormItem>
-                    )} />
-                    <FormField control={form.control} name="taxRate" render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>GST Rate %</FormLabel>
-                        <Select onValueChange={v => field.onChange(Number(v))} value={String(field.value ?? 5)}>
-                          <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                          <SelectContent>
-                            {[0, 5, 12, 18, 28].map(r => <SelectItem key={r} value={String(r)}>{r}%</SelectItem>)}
-                          </SelectContent>
-                        </Select>
-                      </FormItem>
-                    )} />
-                  </>
+                  <FormField control={form.control} name="mrp" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>MRP (₹)</FormLabel>
+                      <FormControl><Input type="number" min={0} step="0.01" placeholder="0.00" {...field} /></FormControl>
+                    </FormItem>
+                  )} />
                 )}
               </div>
               <FormField control={form.control} name="description" render={({ field }) => (
@@ -332,6 +338,7 @@ export default function ItemMaster() {
                 {viewItem.hsnCode && <div className="flex justify-between py-2 border-b border-border"><span className="text-muted-foreground">HSN Code</span><span className="font-mono">{viewItem.hsnCode}</span></div>}
                 {viewItem.taxRate !== undefined && <div className="flex justify-between py-2 border-b border-border"><span className="text-muted-foreground">GST Rate</span><span>{Number(viewItem.taxRate)}%</span></div>}
                 <div className="flex justify-between py-2 border-b border-border"><span className="text-muted-foreground">Current Stock</span><span className="font-mono font-bold">{Number(viewItem.stock).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 3 })}</span></div>
+                {viewItem._type === 'item' && viewItem.mrp > 0 && <div className="flex justify-between py-2 border-b border-border"><span className="text-muted-foreground">MRP</span><span className="font-mono font-bold">₹{Number(viewItem.mrp).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>}
                 {viewItem.description && <div className="py-2"><p className="text-muted-foreground mb-1">Description</p><p>{viewItem.description}</p></div>}
               </div>
               <div className="flex gap-2 mt-6">

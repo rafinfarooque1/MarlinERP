@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import {
-  useListPurchases, useCreatePurchase, useListVendors, useListMaterials, useListRawMaterials,
+  useListPurchases, useCreatePurchase, useListVendors, useListMaterials, useListRawMaterials, useListItems,
   getListPurchasesQueryKey, useUpdatePurchase, useDeletePurchase,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -26,7 +26,7 @@ import { Separator } from '@/components/ui/separator';
 const GST_RATES = [0, 5, 12, 18, 28] as const;
 
 const lineSchema = z.object({
-  materialType: z.enum(['material', 'raw_material']),
+  materialType: z.enum(['material', 'raw_material', 'item']),
   materialId: z.coerce.number().min(1, 'Select item'),
   hsnCode: z.string().optional(),
   quantity: z.coerce.number().min(0.001, 'Qty > 0'),
@@ -74,6 +74,7 @@ export default function Purchases() {
   const { data: vendors = [] } = useListVendors();
   const { data: materials = [] } = useListMaterials();
   const { data: rawMaterials = [] } = useListRawMaterials();
+  const { data: finishedItems = [] } = useListItems();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
@@ -84,10 +85,11 @@ export default function Purchases() {
   const updateMutation = useUpdatePurchase();
   const deleteMutation = useDeletePurchase();
 
-  const getMaterialName = (li: any) =>
-    li.materialType === 'raw_material'
-      ? (rawMaterials.find((m: any) => m.id === li.materialId)?.name || `Item #${li.materialId}`)
-      : (materials.find((m: any) => m.id === li.materialId)?.name || `Item #${li.materialId}`);
+  const getMaterialName = (li: any) => {
+    if (li.materialType === 'raw_material') return rawMaterials.find((m: any) => m.id === li.materialId)?.name || `Item #${li.materialId}`;
+    if (li.materialType === 'item') return (finishedItems as any[]).find((m: any) => m.id === li.materialId)?.name || `Item #${li.materialId}`;
+    return materials.find((m: any) => m.id === li.materialId)?.name || `Item #${li.materialId}`;
+  };
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', lineItems: [defaultLine], notes: '' } });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
@@ -289,12 +291,13 @@ export default function Purchases() {
                             <SelectContent>
                               <SelectItem value="raw_material">Raw</SelectItem>
                               <SelectItem value="material">Material</SelectItem>
+                              <SelectItem value="item">Finished</SelectItem>
                             </SelectContent>
                           </Select>
                           <Select onValueChange={v => form.setValue(`lineItems.${index}.materialId`, Number(v))} value={form.watch(`lineItems.${index}.materialId`) ? String(form.watch(`lineItems.${index}.materialId`)) : ''}>
                             <SelectTrigger className="h-8 text-xs flex-1 min-w-0"><SelectValue placeholder="Select" /></SelectTrigger>
                             <SelectContent>
-                              {(form.watch(`lineItems.${index}.materialType`) === 'raw_material' ? rawMaterials : materials).map((m: any) => (
+                              {(form.watch(`lineItems.${index}.materialType`) === 'raw_material' ? rawMaterials : form.watch(`lineItems.${index}.materialType`) === 'item' ? finishedItems : materials).map((m: any) => (
                                 <SelectItem key={m.id} value={String(m.id)}>{m.name}</SelectItem>
                               ))}
                             </SelectContent>
