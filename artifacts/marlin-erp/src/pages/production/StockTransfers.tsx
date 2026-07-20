@@ -1,11 +1,15 @@
 import { useState } from 'react';
-import { useListStockTransfers, useCreateStockTransfer, useListItems, useListWarehouses, useListStock, getListStockTransfersQueryKey, useGetCompanySettings } from '@workspace/api-client-react';
+import {
+  useListStockTransfers, useCreateStockTransfer, useListItems,
+  useListWarehouses, useListStock, getListStockTransfersQueryKey, useGetCompanySettings,
+} from '@workspace/api-client-react';
+import { useApproveTransfer, useRejectTransfer } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -13,11 +17,15 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Truck, Download, Eye, Calendar, Trash2, Printer, PackageOpen, AlertTriangle } from 'lucide-react';
+import {
+  Plus, Search, Truck, Download, Eye, Calendar, Trash2, Printer,
+  PackageOpen, AlertTriangle, Clock, CheckCircle2, XCircle, PackageCheck,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV, printHTML, buildChallanHtml } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 const schema = z.object({
   toWarehouseId: z.coerce.number().min(1, 'Destination required'),
@@ -30,6 +38,174 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
+// ── Status badge ──────────────────────────────────────────────────────────────
+const STATUS_CONFIG: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
+  in_transit: { label: 'Pending Approval', color: 'text-amber-400 bg-amber-400/10 border-amber-400/30', icon: <Clock className="w-3 h-3" /> },
+  completed:  { label: 'Approved',         color: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30', icon: <CheckCircle2 className="w-3 h-3" /> },
+  rejected:   { label: 'Rejected',         color: 'text-red-400 bg-red-400/10 border-red-400/30', icon: <XCircle className="w-3 h-3" /> },
+};
+
+function StatusBadge({ status }: { status: string }) {
+  const cfg = STATUS_CONFIG[status] ?? { label: status, color: 'text-muted-foreground bg-muted/20 border-border', icon: null };
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-semibold ${cfg.color}`}>
+      {cfg.icon}{cfg.label}
+    </span>
+  );
+}
+
+// ── Approve dialog ────────────────────────────────────────────────────────────
+function ApproveDialog({
+  transfer, items, open, onClose,
+}: { transfer: any; items: any[]; open: boolean; onClose: () => void }) {
+  const approveMutation = useApproveTransfer();
+  const rejectMutation  = useRejectTransfer();
+  const qc = useQueryClient();
+  const iMap = new Map(items.map((i: any) => [i.id, i]));
+
+  const [received, setReceived] = useState<Record<number, number>>(() => {
+    const init: Record<number, number> = {};
+    (transfer?.lineItems ?? []).forEach((li: any) => { init[li.itemId] = li.quantity; });
+    return init;
+  });
+  const [rejectReason, setRejectReason] = useState('');
+  const [showRejectConfirm, setShowRejectConfirm] = useState(false);
+
+  if (!transfer) return null;
+
+  const handleApprove = () => {
+    const receivedLineItems = (transfer.lineItems ?? []).map((li: any) => ({
+      itemId: li.itemId,
+      quantity: received[li.itemId] ?? li.quantity,
+      costPrice: li.costPrice ?? 0,
+    }));
+    approveMutation.mutate(
+      { id: transfer.id, receivedLineItems, approvedBy: 'admin' },
+      {
+        onSuccess: () => {
+          toast.success('Transfer approved — stock credited to warehouse');
+          qc.invalidateQueries({ queryKey: getListStockTransfersQueryKey() });
+          onClose();
+        },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Approval failed'),
+      }
+    );
+  };
+
+  const handleReject = () => {
+    rejectMutation.mutate(
+      { id: transfer.id, rejectionReason: rejectReason },
+      {
+        onSuccess: () => {
+          toast.success('Transfer rejected — production stock restored');
+          qc.invalidateQueries({ queryKey: getListStockTransfersQueryKey() });
+          setShowRejectConfirm(false);
+          onClose();
+        },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Rejection failed'),
+      }
+    );
+  };
+
+  return (
+    <>
+      <Dialog open={open && !showRejectConfirm} onOpenChange={v => !v && onClose()}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <PackageCheck className="w-5 h-5 text-primary" /> Receive & Approve Transfer
+            </DialogTitle>
+            <DialogDescription>
+              Verify the physical stock received at the warehouse. Adjust quantities if anything is short, then approve.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid grid-cols-2 gap-3 p-4 bg-muted/20 rounded-lg border border-border text-sm">
+            <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Challan</p><p className="font-mono font-bold text-primary">{transfer.challanNumber}</p></div>
+            <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Date</p><p>{new Date(transfer.transferDate).toLocaleDateString('en-IN')}</p></div>
+            <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Dispatched From</p><p className="font-medium">Production Unit</p></div>
+            <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Receiving At</p><p className="font-medium">{transfer.toName}</p></div>
+          </div>
+
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <p className="font-semibold text-sm">Items to Receive</p>
+              <span className="text-xs text-muted-foreground">— enter actual quantity physically received</span>
+            </div>
+            <div className="space-y-2">
+              {(transfer.lineItems ?? []).map((li: any) => {
+                const item = iMap.get(li.itemId);
+                const recvQty = received[li.itemId] ?? li.quantity;
+                const isShort = recvQty < li.quantity;
+                return (
+                  <div key={li.itemId} className={`grid grid-cols-12 gap-3 items-center p-3 rounded-lg border ${isShort ? 'border-amber-500/40 bg-amber-500/5' : 'border-border bg-muted/20'}`}>
+                    <div className="col-span-5">
+                      <p className="font-medium text-sm">{item?.name ?? `Item #${li.itemId}`}</p>
+                      <p className="text-xs text-muted-foreground">{(item as any)?.hsnCode ? `HSN: ${(item as any).hsnCode}` : item?.unit ?? ''}</p>
+                    </div>
+                    <div className="col-span-3 text-center">
+                      <p className="text-xs text-muted-foreground mb-1">Dispatched</p>
+                      <p className="font-mono font-bold text-sm">{li.quantity}<span className="text-muted-foreground font-normal ml-1 text-xs">{item?.unit}</span></p>
+                    </div>
+                    <div className="col-span-4">
+                      <p className="text-xs text-muted-foreground mb-1">Received <span className="text-destructive">*</span></p>
+                      <Input
+                        type="number" min={0} max={li.quantity}
+                        value={recvQty}
+                        onChange={e => setReceived(r => ({ ...r, [li.itemId]: Number(e.target.value) }))}
+                        className={`h-8 text-sm font-mono ${isShort ? 'border-amber-500 focus-visible:ring-amber-500' : ''}`}
+                      />
+                      {isShort && <p className="text-[10px] text-amber-400 mt-1 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{li.quantity - recvQty} short</p>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {transfer.notes && (
+            <div className="p-3 bg-muted/20 rounded-lg border border-border text-sm">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Notes from Production</p>
+              <p>{transfer.notes}</p>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" type="button" onClick={onClose}>Cancel</Button>
+            <Button variant="destructive" type="button" onClick={() => setShowRejectConfirm(true)}>
+              <XCircle className="w-4 h-4 mr-2" /> Reject
+            </Button>
+            <Button type="button" onClick={handleApprove} disabled={approveMutation.isPending}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white">
+              <CheckCircle2 className="w-4 h-4 mr-2" />
+              {approveMutation.isPending ? 'Approving…' : 'Approve & Credit Stock'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showRejectConfirm} onOpenChange={v => !v && setShowRejectConfirm(false)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive"><XCircle className="w-5 h-5" />Reject Transfer</DialogTitle>
+            <DialogDescription>Stock will be returned to Production Unit. This cannot be undone.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <Textarea rows={3} placeholder="Reason for rejection (e.g. damaged goods, wrong items)…" value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowRejectConfirm(false)}>Back</Button>
+            <Button variant="destructive" onClick={handleReject} disabled={rejectMutation.isPending}>
+              {rejectMutation.isPending ? 'Rejecting…' : 'Confirm Rejection'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
 export default function StockTransfers() {
   const perm = usePermission('Stock Transfers');
   const { data: transfers = [], isLoading } = useListStockTransfers();
@@ -37,20 +213,15 @@ export default function StockTransfers() {
   const { data: warehouses = [] } = useListWarehouses();
   const { data: companySettings } = useGetCompanySettings();
   const [search, setSearch] = useState('');
+  const [tab, setTab] = useState<'all' | 'in_transit' | 'completed' | 'rejected'>('all');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
+  const [approveTarget, setApproveTarget] = useState<any>(null);
   const queryClient = useQueryClient();
   const createMutation = useCreateStockTransfer();
 
-  // Always load production stock (source is always production unit branchId=1)
   const { data: productionStock = [] } = useListStock({ branchType: 'production' as any, branchId: 1 });
-
-  // Map: itemId → available qty in production
-  const stockMap = new Map<number, number>(
-    productionStock.map(s => [s.itemId!, Number(s.quantity ?? 0)])
-  );
-
-  // Items that have production stock > 0
+  const stockMap = new Map<number, number>(productionStock.map(s => [s.itemId!, Number(s.quantity ?? 0)]));
   const availableItems = items.filter(it => (stockMap.get(it.id) ?? 0) > 0);
 
   const form = useForm<FormValues>({
@@ -61,7 +232,12 @@ export default function StockTransfers() {
 
   const onSubmit = (data: FormValues) => {
     createMutation.mutate({ data: { ...data, fromType: 'production', fromId: 1, toType: 'warehouse', toId: data.toWarehouseId } as any }, {
-      onSuccess: () => { toast.success('Stock transfer dispatched'); queryClient.invalidateQueries({ queryKey: getListStockTransfersQueryKey() }); setIsOpen(false); form.reset(); },
+      onSuccess: () => {
+        toast.success('Transfer dispatched — warehouse must approve to receive stock');
+        queryClient.invalidateQueries({ queryKey: getListStockTransfersQueryKey() });
+        setIsOpen(false);
+        form.reset();
+      },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
   };
@@ -76,8 +252,7 @@ export default function StockTransfers() {
       return { name: (item as any)?.name ?? `Item #${li.itemId}`, hsnCode: (item as any)?.hsnCode, quantity: li.quantity, unit: (item as any)?.unit };
     });
     printHTML(buildChallanHtml({
-      cs,
-      challanNo,
+      cs, challanNo,
       date: new Date(t.transferDate).toLocaleDateString('en-IN'),
       fromName: 'Production Unit', fromType: 'Production',
       toName: t.toName || 'Warehouse', toType: t.toType || 'Warehouse',
@@ -88,10 +263,14 @@ export default function StockTransfers() {
     }), challanNo);
   };
 
-  const filtered = (Array.isArray(transfers) ? transfers : []).filter((t: any) =>
+  // Only show production-sourced transfers on this page
+  const productionTransfers = (Array.isArray(transfers) ? transfers : []).filter((t: any) => t.fromType === 'production');
+  const searched = productionTransfers.filter((t: any) =>
     t.challanNumber?.toLowerCase().includes(search.toLowerCase()) ||
     t.toName?.toLowerCase().includes(search.toLowerCase())
   );
+  const filtered = tab === 'all' ? searched : searched.filter((t: any) => t.status === tab);
+  const pendingCount = productionTransfers.filter((t: any) => t.status === 'in_transit').length;
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -111,11 +290,11 @@ export default function StockTransfers() {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Truck className="w-6 h-6 text-primary" /> Stock Transfers</h1>
-            <p className="text-muted-foreground mt-1">Production → Warehouse dispatches</p>
+            <p className="text-muted-foreground mt-1">Production → Warehouse dispatches · Warehouse approval required</p>
           </div>
           <div className="flex gap-2">
             {perm.canDownload && (
-              <Button variant="outline" size="sm" onClick={() => downloadCSV('transfers.csv', filtered.map((t: any) => ({ DC: t.challanNumber, Date: t.transferDate, To: t.toName, Items: t.lineItems?.length || 0, Interstate: t.isInterstate ? 'Yes' : 'No' })))}>
+              <Button variant="outline" size="sm" onClick={() => downloadCSV('transfers.csv', filtered.map((t: any) => ({ DC: t.challanNumber, Date: t.transferDate, To: t.toName, Items: t.lineItems?.length || 0, Status: t.status, Interstate: t.isInterstate ? 'Yes' : 'No' })))}>
                 <Download className="w-4 h-4 mr-2" /> Export
               </Button>
             )}
@@ -127,19 +306,46 @@ export default function StockTransfers() {
           </div>
         </div>
 
-        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
-            <Search className="w-4 h-4 text-muted-foreground" />
-            <Input placeholder="Search challan or destination..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm" />
+        {/* Pending approvals banner */}
+        {pendingCount > 0 && (
+          <div className="flex items-center gap-3 p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-300">
+            <Clock className="w-5 h-5 shrink-0" />
+            <div className="flex-1">
+              <p className="font-semibold text-sm">{pendingCount} transfer{pendingCount > 1 ? 's' : ''} awaiting warehouse approval</p>
+              <p className="text-xs opacity-80">Stock is NOT yet in the warehouse — the receiving manager must verify physical stock and approve.</p>
+            </div>
+            <Button size="sm" variant="outline" className="border-amber-500/40 text-amber-300 hover:bg-amber-500/20" onClick={() => setTab('in_transit')}>
+              Review
+            </Button>
           </div>
+        )}
+
+        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-border flex flex-col sm:flex-row items-start sm:items-center gap-3 bg-muted/20">
+            <Tabs value={tab} onValueChange={v => setTab(v as any)}>
+              <TabsList className="h-8">
+                <TabsTrigger value="all" className="text-xs px-3">All</TabsTrigger>
+                <TabsTrigger value="in_transit" className="text-xs px-3">
+                  Pending {pendingCount > 0 && <span className="ml-1 px-1.5 py-0.5 rounded-full bg-amber-500 text-black text-[10px] font-bold">{pendingCount}</span>}
+                </TabsTrigger>
+                <TabsTrigger value="completed" className="text-xs px-3">Approved</TabsTrigger>
+                <TabsTrigger value="rejected" className="text-xs px-3">Rejected</TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <div className="flex items-center gap-2 flex-1 max-w-sm">
+              <Search className="w-4 h-4 text-muted-foreground shrink-0" />
+              <Input placeholder="Search challan or destination…" value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0" />
+            </div>
+          </div>
+
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
                 <TableHead>Challan #</TableHead>
                 <TableHead>Date</TableHead>
-                <TableHead>To</TableHead>
+                <TableHead>To Warehouse</TableHead>
                 <TableHead>Items</TableHead>
-                <TableHead>Type</TableHead>
+                <TableHead>Status</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -148,21 +354,27 @@ export default function StockTransfers() {
                 <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
                 <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
-                  <Truck className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No transfers yet</p>
+                  <Truck className="w-10 h-10 mx-auto mb-3 opacity-20" />
+                  <p>{tab === 'in_transit' ? 'No pending approvals' : 'No transfers found'}</p>
                 </TableCell></TableRow>
               ) : filtered.map((t: any) => (
-                <TableRow key={t.id} className="hover:bg-muted/10">
-                  <TableCell className="font-mono text-primary font-bold">{t.challanNumber || `DC-${String(t.id).padStart(4,'0')}`}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground"><div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(t.transferDate).toLocaleDateString('en-IN')}</div></TableCell>
+                <TableRow key={t.id} className={`hover:bg-muted/10 ${t.status === 'in_transit' ? 'border-l-2 border-l-amber-500' : ''}`}>
+                  <TableCell className="font-mono text-primary font-bold">{t.challanNumber || `DC-${String(t.id).padStart(4, '0')}`}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(t.transferDate).toLocaleDateString('en-IN')}</div>
+                  </TableCell>
                   <TableCell className="font-medium">{t.toName}</TableCell>
                   <TableCell><Badge variant="secondary">{t.lineItems?.length || 0} SKUs</Badge></TableCell>
-                  <TableCell>
-                    {t.isInterstate ? <Badge className="bg-amber-500/10 text-amber-500 border-amber-500/20">Interstate</Badge> : <Badge variant="outline">Intra-state</Badge>}
-                  </TableCell>
+                  <TableCell><StatusBadge status={t.status} /></TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(t)}><Eye className="w-4 h-4" /></Button>
                       {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => handlePrintChallan(t)} title="Print Challan"><Printer className="w-4 h-4" /></Button>}
+                      {t.status === 'in_transit' && (
+                        <Button size="sm" variant="outline" className="h-8 text-xs border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 px-2" onClick={() => setApproveTarget(t)}>
+                          <PackageCheck className="w-3 h-3 mr-1" /> Receive
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -172,9 +384,15 @@ export default function StockTransfers() {
         </div>
       </div>
 
+      {/* New Transfer dialog */}
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Create Stock Transfer</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Create Stock Transfer</DialogTitle>
+            <DialogDescription>
+              Stock will be deducted from Production immediately. The destination warehouse must approve before it enters their inventory.
+            </DialogDescription>
+          </DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
               <div className="grid grid-cols-2 gap-4">
@@ -243,7 +461,7 @@ export default function StockTransfers() {
               </div>
 
               <FormField control={form.control} name="notes" render={({ field }) => (
-                <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea placeholder="Optional..." rows={2} {...field} /></FormControl></FormItem>
+                <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea placeholder="Optional dispatch notes…" rows={2} {...field} /></FormControl></FormItem>
               )} />
 
               <DialogFooter>
@@ -257,33 +475,93 @@ export default function StockTransfers() {
         </DialogContent>
       </Dialog>
 
+      {/* Approve / Reject dialog */}
+      <ApproveDialog
+        transfer={approveTarget}
+        items={items as any[]}
+        open={!!approveTarget}
+        onClose={() => setApproveTarget(null)}
+      />
+
+      {/* View detail sheet */}
       <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
         <SheetContent className="overflow-y-auto">
           <SheetHeader>
-            <SheetTitle>{viewItem?.challanNumber || `DC-${viewItem && String(viewItem.id).padStart(4,'0')}`}</SheetTitle>
+            <SheetTitle>{viewItem?.challanNumber || `DC-${viewItem && String(viewItem.id).padStart(4, '0')}`}</SheetTitle>
             <SheetDescription>Delivery challan details</SheetDescription>
           </SheetHeader>
           {viewItem && (
-            <div className="mt-6 space-y-5">
+            <div className="mt-6 space-y-4 text-sm">
+              <div className="flex justify-center"><StatusBadge status={viewItem.status} /></div>
+
               <div className="grid grid-cols-2 gap-4">
                 {[['Date', new Date(viewItem.transferDate).toLocaleDateString('en-IN')], ['From', 'Production Unit'], ['To', viewItem.toName], ['Type', viewItem.isInterstate ? 'Interstate' : 'Intra-state']].map(([k, v]) => (
-                  <div key={String(k)} className="flex flex-col gap-1">
+                  <div key={String(k)} className="flex flex-col gap-1 border-b border-border pb-3">
                     <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                     <span className="font-semibold">{String(v)}</span>
                   </div>
                 ))}
               </div>
+
               <div>
-                <p className="text-sm font-semibold mb-2">Items</p>
+                <p className="text-sm font-semibold mb-2">Dispatched Items</p>
                 <div className="space-y-2">
-                  {(viewItem.lineItems || []).map((li: any, i: number) => (
-                    <div key={i} className="flex justify-between p-3 bg-muted/20 rounded-lg text-sm">
-                      <span>Item #{li.itemId}</span><span className="font-bold">{li.quantity} units</span>
-                    </div>
-                  ))}
+                  {(viewItem.lineItems || []).map((li: any, i: number) => {
+                    const item = iMap.get(li.itemId);
+                    return (
+                      <div key={i} className="flex justify-between p-3 bg-muted/20 rounded-lg text-sm border border-border">
+                        <span className="font-medium">{item?.name ?? `Item #${li.itemId}`}</span>
+                        <span className="font-bold font-mono">{li.quantity} {item?.unit ?? ''}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-              {perm.canDownload && <Button className="w-full" variant="outline" onClick={() => handlePrintChallan(viewItem)}><Printer className="w-4 h-4 mr-2" /> Print Challan</Button>}
+
+              {viewItem.status === 'completed' && viewItem.receivedLineItems?.length > 0 && (
+                <div>
+                  <p className="text-sm font-semibold mb-2 text-emerald-400">Actually Received</p>
+                  {viewItem.receivedLineItems.map((li: any, i: number) => {
+                    const item = iMap.get(li.itemId);
+                    const dispatched = viewItem.lineItems.find((d: any) => d.itemId === li.itemId)?.quantity ?? li.quantity;
+                    const isShort = li.quantity < dispatched;
+                    return (
+                      <div key={i} className={`flex justify-between p-3 rounded-lg text-sm mb-2 border ${isShort ? 'border-amber-500/40 bg-amber-500/5' : 'bg-muted/20 border-border'}`}>
+                        <span className="font-medium">{item?.name ?? `Item #${li.itemId}`}</span>
+                        <span className={`font-bold font-mono ${isShort ? 'text-amber-400' : ''}`}>{li.quantity} {item?.unit ?? ''}{isShort ? ` (${dispatched - li.quantity} short)` : ''}</span>
+                      </div>
+                    );
+                  })}
+                  {viewItem.approvedBy && <p className="text-xs text-muted-foreground mt-1">Approved by: {viewItem.approvedBy} · {viewItem.approvedAt ? new Date(viewItem.approvedAt).toLocaleString('en-IN') : ''}</p>}
+                </div>
+              )}
+
+              {viewItem.status === 'rejected' && viewItem.rejectionReason && (
+                <div className="p-3 bg-red-500/5 border border-red-500/30 rounded-lg">
+                  <p className="text-xs text-red-400 uppercase tracking-wider mb-1">Rejection Reason</p>
+                  <p>{viewItem.rejectionReason}</p>
+                </div>
+              )}
+
+              {viewItem.notes && (
+                <div className="border-b border-border pb-3">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Notes</p>
+                  <p>{viewItem.notes}</p>
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-2">
+                {perm.canDownload && (
+                  <Button className="flex-1" variant="outline" onClick={() => handlePrintChallan(viewItem)}>
+                    <Printer className="w-4 h-4 mr-2" /> Print Challan
+                  </Button>
+                )}
+                {viewItem.status === 'in_transit' && (
+                  <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => { setViewItem(null); setApproveTarget(viewItem); }}>
+                    <PackageCheck className="w-4 h-4 mr-2" /> Receive
+                  </Button>
+                )}
+              </div>
             </div>
           )}
         </SheetContent>

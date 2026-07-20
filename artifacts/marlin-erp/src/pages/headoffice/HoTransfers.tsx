@@ -264,7 +264,8 @@ export default function HoTransfers() {
 
   const iMap = new Map((items as any[]).map((i: any) => [i.id, i]));
 
-  const hoTransfers = (Array.isArray(transfers) ? transfers : []).filter((t: any) => t.fromType !== 'production');
+  // Show all transfers — admin can create transfers but ALL require receiver approval
+  const hoTransfers = (Array.isArray(transfers) ? transfers : []);
   const searched = hoTransfers.filter((t: any) =>
     t.challanNumber?.toLowerCase().includes(search.toLowerCase()) ||
     t.fromName?.toLowerCase().includes(search.toLowerCase()) ||
