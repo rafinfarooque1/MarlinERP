@@ -57,10 +57,9 @@ const navigation = [
     ],
   },
   {
-    name: 'Head Office',
+    name: 'Inventory',
     icon: Building2,
     children: [
-      { name: 'Sales', href: '/headoffice/sales' },
       { name: 'Stock', href: '/headoffice/stock' },
       { name: 'Transfers', href: '/headoffice/transfers' },
       { name: 'Warehouses', href: '/headoffice/warehouses' },
@@ -69,9 +68,10 @@ const navigation = [
     ],
   },
   {
-    name: 'Customers',
-    icon: UsersRound,
+    name: 'Sales',
+    icon: Calculator,
     children: [
+      { name: 'Orders', href: '/headoffice/sales' },
       { name: 'Customers', href: '/customers' },
       { name: 'Vendors', href: '/vendors' },
       { name: 'Coupons', href: '/coupons' },
@@ -90,7 +90,7 @@ const navigation = [
   },
   {
     name: 'Accounts',
-    icon: Calculator,
+    icon: UsersRound,
     children: [
       { name: 'Chart of Accounts', href: '/accounts/chart' },
       { name: 'Ledger', href: '/accounts/ledger' },
