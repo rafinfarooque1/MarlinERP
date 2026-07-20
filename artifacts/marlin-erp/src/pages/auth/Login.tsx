@@ -25,7 +25,7 @@ export default function Login() {
   // Already logged in? Redirect
   useEffect(() => {
     if (localStorage.getItem('marlin_auth_token')) {
-      setLocation('/');
+      setLocation('/company/profile');
     }
   }, []);
 
@@ -40,7 +40,7 @@ export default function Login() {
         // Persist token so every subsequent API call carries Authorization header
         localStorage.setItem('marlin_auth_token', response.token);
         localStorage.setItem('marlin_user', JSON.stringify(response.employee));
-        setLocation('/');
+        setLocation('/company/profile');
       },
       onError: (error: any) => {
         toast({
