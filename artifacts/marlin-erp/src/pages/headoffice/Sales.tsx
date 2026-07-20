@@ -4,6 +4,7 @@ import {
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
   getListSalesQueryKey, useListCoupons,
 } from '@workspace/api-client-react';
+import { usePermission } from '@/lib/usePermission';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,7 +18,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import {
   Plus, Search, Trash2, CreditCard, Calendar, Receipt,
-  Download, Eye, Printer, PackageOpen, FileDown,
+  Download, Eye, Printer, PackageOpen, FileDown, AlertTriangle,
 } from 'lucide-react';
 import { downloadInvoicePDF } from '@/lib/pdfUtils';
 import { toast } from 'sonner';
@@ -77,6 +78,7 @@ const defaultFormValues: FormValues = {
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export default function Sales() {
+  const perm = usePermission('Sales');
   const { data: outlets = [] } = useListOutlets();
   const [outletFilter, setOutletFilter] = useState<string>('all');
   const { data: sales = [], isLoading } = useListSales(
@@ -209,6 +211,18 @@ export default function Sales() {
 
   const itemsMap = new Map(items.map(i => [i.id, i]));
 
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center py-32 text-muted-foreground gap-3">
+          <AlertTriangle className="w-10 h-10 text-destructive/50" />
+          <p className="text-lg font-medium">Access Denied</p>
+          <p className="text-sm">You don't have permission to view Sales.</p>
+        </div>
+      </AppLayout>
+    );
+  }
+
   return (
     <AppLayout>
       <div className="space-y-6">
@@ -218,16 +232,20 @@ export default function Sales() {
             <p className="text-muted-foreground mt-1">Record and view retail transactions</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('sales.csv', filtered.map(s => ({
-              Invoice: s.invoiceNumber, Date: s.saleDate, Outlet: s.outletName,
-              Customer: s.customerName || 'Walk-in', Payment: s.paymentMode,
-              Subtotal: s.subtotal, Tax: s.taxTotal, Total: s.totalAmount,
-            })))}>
-              <Download className="w-4 h-4 mr-2" /> Export
-            </Button>
-            <Button onClick={() => { form.reset(defaultFormValues); setIsOpen(true); }}>
-              <Plus className="w-4 h-4 mr-2" /> New Sale
-            </Button>
+            {perm.canDownload && (
+              <Button variant="outline" size="sm" onClick={() => downloadCSV('sales.csv', filtered.map(s => ({
+                Invoice: s.invoiceNumber, Date: s.saleDate, Outlet: s.outletName,
+                Customer: s.customerName || 'Walk-in', Payment: s.paymentMode,
+                Subtotal: s.subtotal, Tax: s.taxTotal, Total: s.totalAmount,
+              })))}>
+                <Download className="w-4 h-4 mr-2" /> Export
+              </Button>
+            )}
+            {perm.canAdd && (
+              <Button onClick={() => { form.reset(defaultFormValues); setIsOpen(true); }}>
+                <Plus className="w-4 h-4 mr-2" /> New Sale
+              </Button>
+            )}
           </div>
         </div>
 
@@ -282,8 +300,8 @@ export default function Sales() {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(sale)} title="View"><Eye className="w-4 h-4" /></Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => handlePrintInvoice(sale)} title="Print"><Printer className="w-4 h-4" /></Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => downloadInvoicePDF(sale, companySettings)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>
+                      {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => handlePrintInvoice(sale)} title="Print"><Printer className="w-4 h-4" /></Button>}
+                      {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => downloadInvoicePDF(sale, companySettings)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -557,14 +575,16 @@ export default function Sales() {
                 </div>
               </div>
 
-              <div className="flex gap-2">
-                <Button className="flex-1" variant="outline" onClick={() => handlePrintInvoice(viewItem)}>
-                  <Printer className="w-4 h-4 mr-2" /> Print
-                </Button>
-                <Button className="flex-1" variant="outline" onClick={() => downloadInvoicePDF(viewItem, companySettings)}>
-                  <FileDown className="w-4 h-4 mr-2" /> Download PDF
-                </Button>
-              </div>
+              {perm.canDownload && (
+                <div className="flex gap-2">
+                  <Button className="flex-1" variant="outline" onClick={() => handlePrintInvoice(viewItem)}>
+                    <Printer className="w-4 h-4 mr-2" /> Print
+                  </Button>
+                  <Button className="flex-1" variant="outline" onClick={() => downloadInvoicePDF(viewItem, companySettings)}>
+                    <FileDown className="w-4 h-4 mr-2" /> Download PDF
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </SheetContent>

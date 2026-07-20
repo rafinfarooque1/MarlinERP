@@ -1,5 +1,14 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { pool } from "@workspace/db";
+
+// Run lightweight schema migrations before accepting connections
+async function runMigrations() {
+  await pool.query(`
+    ALTER TABLE item_prices ADD COLUMN IF NOT EXISTS valid_from text;
+    ALTER TABLE item_prices ADD COLUMN IF NOT EXISTS valid_to text;
+  `);
+}
 
 const rawPort = process.env["PORT"];
 
@@ -15,11 +24,18 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen(port, (err) => {
-  if (err) {
-    logger.error({ err }, "Error listening on port");
-    process.exit(1);
+(async () => {
+  try {
+    await runMigrations();
+  } catch (err) {
+    logger.warn({ err }, "Migration warning (non-fatal)");
   }
 
-  logger.info({ port }, "Server listening");
-});
+  app.listen(port, (err) => {
+    if (err) {
+      logger.error({ err }, "Error listening on port");
+      process.exit(1);
+    }
+    logger.info({ port }, "Server listening");
+  });
+})();

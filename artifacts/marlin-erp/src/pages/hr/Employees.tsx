@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import {
-  useListEmployees, useCreateEmployee, useUpdateEmployee, useListHierarchies, useListWarehouses, useListOutlets,
+  useListEmployees, useCreateEmployee, useUpdateEmployee, useDeleteEmployee, useListHierarchies, useListWarehouses, useListOutlets,
   getListEmployeesQueryKey, useGetPayComponents, useSetPayComponents, getPayComponentsQueryKey,
   type PayComponent, type PayComponents,
 } from '@workspace/api-client-react';
+import { usePermission } from '@/lib/usePermission';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,7 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Users, Download, Eye, Settings2, Trash2, UserX, UserCheck } from 'lucide-react';
+import { Plus, Search, Users, Download, Eye, Settings2, Trash2, UserX, UserCheck, Edit2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -37,6 +38,17 @@ const schema = z.object({
   joinDate: z.string().min(1, 'Join date required'),
 });
 type FormValues = z.infer<typeof schema>;
+
+const editSchema = z.object({
+  name: z.string().min(1, 'Name required'),
+  email: z.string().email().optional().or(z.literal('')),
+  phone: z.string().optional(),
+  hierarchyId: z.coerce.number().min(1, 'Role required'),
+  branchType: z.enum(['production', 'headoffice', 'warehouse', 'outlet']),
+  branchId: z.coerce.number().min(0),
+  salary: z.coerce.number().min(0),
+});
+type EditFormValues = z.infer<typeof editSchema>;
 
 const ALLOWANCE_COMP_TYPES = [
   { value: 'fixed', label: 'Fixed ₹' },
@@ -179,6 +191,7 @@ function PayStructureEditor({ employee }: { employee: any }) {
 type StatusFilter = 'all' | 'active' | 'inactive';
 
 export default function Employees() {
+  const perm = usePermission('Employees');
   const { data: employees = [], isLoading } = useListEmployees();
   const { data: hierarchies = [] } = useListHierarchies();
   const { data: warehouses = [] } = useListWarehouses();
@@ -186,18 +199,50 @@ export default function Employees() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
   const [isOpen, setIsOpen] = useState(false);
+  const [editItem, setEditItem] = useState<any>(null);
   const [viewItem, setViewItem] = useState<any>(null);
   const [payStructureEmp, setPayStructureEmp] = useState<any>(null);
   const [confirmResign, setConfirmResign] = useState<any>(null);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const queryClient = useQueryClient();
   const createMutation = useCreateEmployee();
   const updateMutation = useUpdateEmployee();
+  const deleteMutation = useDeleteEmployee();
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: { name: '', username: '', email: '', phone: '', hierarchyId: 0, branchType: 'headoffice', branchId: 0, salary: 0, joinDate: new Date().toISOString().split('T')[0] },
   });
   const watchBranchType = form.watch('branchType');
+
+  const editForm = useForm<EditFormValues>({
+    resolver: zodResolver(editSchema),
+    defaultValues: { name: '', email: '', phone: '', hierarchyId: 0, branchType: 'headoffice', branchId: 0, salary: 0 },
+  });
+  const watchEditBranchType = editForm.watch('branchType');
+
+  const openEdit = (emp: any) => {
+    setEditItem(emp);
+    editForm.reset({
+      name: emp.name, email: emp.email || '', phone: emp.phone || '',
+      hierarchyId: emp.hierarchyId, branchType: emp.branchType, branchId: emp.branchId, salary: Number(emp.salary),
+    });
+  };
+
+  const onEditSubmit = (data: EditFormValues) => {
+    updateMutation.mutate({ id: editItem.id, data: { ...data, email: data.email || undefined, phone: data.phone || undefined } as any }, {
+      onSuccess: () => { toast.success(`${data.name} updated`); queryClient.invalidateQueries({ queryKey: getListEmployeesQueryKey() }); setEditItem(null); },
+      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+    });
+  };
+
+  const handleDelete = () => {
+    if (!deleteTarget) return;
+    deleteMutation.mutate({ id: deleteTarget.id }, {
+      onSuccess: () => { toast.success(`${deleteTarget.name} deleted`); queryClient.invalidateQueries({ queryKey: getListEmployeesQueryKey() }); setDeleteTarget(null); },
+      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+    });
+  };
 
   const onSubmit = (data: FormValues) => {
     createMutation.mutate({ data }, {
@@ -231,6 +276,18 @@ export default function Employees() {
   const activeCount   = employees.filter(e => e.isActive).length;
   const inactiveCount = employees.filter(e => !e.isActive).length;
 
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center py-32 text-muted-foreground gap-3">
+          <AlertTriangle className="w-10 h-10 text-destructive/50" />
+          <p className="text-lg font-medium">Access Denied</p>
+          <p className="text-sm">You don't have permission to view Employees.</p>
+        </div>
+      </AppLayout>
+    );
+  }
+
   return (
     <AppLayout>
       <div className="space-y-6">
@@ -240,12 +297,16 @@ export default function Employees() {
             <p className="text-muted-foreground mt-1">Personnel, roles, branch assignments, and pay structures</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('employees.csv', filtered.map(e => ({ Name: e.name, Username: e.username, Role: e.hierarchyName, Branch: e.branchName, Type: e.branchType, Salary: e.salary, Status: e.isActive ? 'Active' : 'Resigned' })))}>
-              <Download className="w-4 h-4 mr-2" /> Export
-            </Button>
-            <Button onClick={() => { form.reset({ name: '', username: '', email: '', phone: '', hierarchyId: 0, branchType: 'headoffice', branchId: 0, salary: 0, joinDate: new Date().toISOString().split('T')[0] }); setIsOpen(true); }}>
-              <Plus className="w-4 h-4 mr-2" /> Add Employee
-            </Button>
+            {perm.canDownload && (
+              <Button variant="outline" size="sm" onClick={() => downloadCSV('employees.csv', filtered.map(e => ({ Name: e.name, Username: e.username, Role: e.hierarchyName, Branch: e.branchName, Type: e.branchType, Salary: e.salary, Status: e.isActive ? 'Active' : 'Resigned' })))}>
+                <Download className="w-4 h-4 mr-2" /> Export
+              </Button>
+            )}
+            {perm.canAdd && (
+              <Button onClick={() => { form.reset({ name: '', username: '', email: '', phone: '', hierarchyId: 0, branchType: 'headoffice', branchId: 0, salary: 0, joinDate: new Date().toISOString().split('T')[0] }); setIsOpen(true); }}>
+                <Plus className="w-4 h-4 mr-2" /> Add Employee
+              </Button>
+            )}
           </div>
         </div>
 
@@ -321,13 +382,21 @@ export default function Employees() {
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(emp)} title="View"><Eye className="w-4 h-4" /></Button>
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setPayStructureEmp(emp)} title="Pay Structure"><Settings2 className="w-4 h-4" /></Button>
-                      {emp.isActive ? (
+                      {perm.canEdit && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(emp)} title="Edit"><Edit2 className="w-4 h-4" /></Button>
+                      )}
+                      {perm.canEdit && (emp.isActive ? (
                         <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-rose-500" onClick={() => setConfirmResign(emp)} title="Mark as Resigned">
                           <UserX className="w-4 h-4" />
                         </Button>
                       ) : (
                         <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-500" onClick={() => toggleActive(emp, true)} title="Reactivate" disabled={updateMutation.isPending}>
                           <UserCheck className="w-4 h-4" />
+                        </Button>
+                      ))}
+                      {perm.canDelete && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => setDeleteTarget(emp)} title="Delete">
+                          <Trash2 className="w-4 h-4" />
                         </Button>
                       )}
                     </div>
@@ -363,6 +432,95 @@ export default function Employees() {
               disabled={updateMutation.isPending}
             >
               {updateMutation.isPending ? 'Saving…' : 'Mark as Resigned'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Employee Dialog */}
+      <Dialog open={!!editItem} onOpenChange={v => !v && setEditItem(null)}>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Edit Employee — {editItem?.name}</DialogTitle></DialogHeader>
+          <Form {...editForm}>
+            <form onSubmit={editForm.handleSubmit(onEditSubmit)} className="space-y-4 pt-2">
+              <div className="grid grid-cols-2 gap-4">
+                <FormField control={editForm.control} name="name" render={({ field }) => (
+                  <FormItem><FormLabel>Full Name <span className="text-destructive">*</span></FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
+                )} />
+                <FormField control={editForm.control} name="email" render={({ field }) => (
+                  <FormItem><FormLabel>Email</FormLabel><FormControl><Input type="email" {...field} /></FormControl><FormMessage /></FormItem>
+                )} />
+                <FormField control={editForm.control} name="phone" render={({ field }) => (
+                  <FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                )} />
+                <FormField control={editForm.control} name="salary" render={({ field }) => (
+                  <FormItem><FormLabel>Monthly Basic Salary ₹</FormLabel><FormControl><Input type="number" min={0} {...field} /></FormControl></FormItem>
+                )} />
+              </div>
+              <div className="border-t border-border pt-4 grid grid-cols-2 gap-4">
+                <FormField control={editForm.control} name="hierarchyId" render={({ field }) => (
+                  <FormItem><FormLabel>Role <span className="text-destructive">*</span></FormLabel>
+                    <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
+                      <FormControl><SelectTrigger><SelectValue placeholder="Select role" /></SelectTrigger></FormControl>
+                      <SelectContent>{hierarchies.map(h => <SelectItem key={h.id} value={String(h.id)}>{h.name}</SelectItem>)}</SelectContent>
+                    </Select><FormMessage /></FormItem>
+                )} />
+                <FormField control={editForm.control} name="branchType" render={({ field }) => (
+                  <FormItem><FormLabel>Location Type</FormLabel>
+                    <Select onValueChange={v => { field.onChange(v); editForm.setValue('branchId', 0); }} value={field.value}>
+                      <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        <SelectItem value="headoffice">Head Office</SelectItem>
+                        <SelectItem value="production">Production Unit</SelectItem>
+                        <SelectItem value="warehouse">Warehouse</SelectItem>
+                        <SelectItem value="outlet">Retail Outlet</SelectItem>
+                      </SelectContent>
+                    </Select></FormItem>
+                )} />
+                <FormField control={editForm.control} name="branchId" render={({ field }) => (
+                  <FormItem><FormLabel>Specific Location</FormLabel>
+                    {(watchEditBranchType === 'headoffice' || watchEditBranchType === 'production') ? (
+                      <Select value="0" onValueChange={() => field.onChange(0)}>
+                        <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
+                        <SelectContent><SelectItem value="0">Central Hub</SelectItem></SelectContent>
+                      </Select>
+                    ) : (
+                      <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
+                        <FormControl><SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger></FormControl>
+                        <SelectContent>
+                          {watchEditBranchType === 'warehouse' && warehouses.map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
+                          {watchEditBranchType === 'outlet' && outlets.map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    )}
+                    <FormMessage /></FormItem>
+                )} />
+              </div>
+              <DialogFooter>
+                <Button variant="outline" type="button" onClick={() => setEditItem(null)}>Cancel</Button>
+                <Button type="submit" disabled={updateMutation.isPending}>{updateMutation.isPending ? 'Saving…' : 'Save Changes'}</Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Employee Confirmation */}
+      <Dialog open={!!deleteTarget} onOpenChange={v => !v && setDeleteTarget(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive"><Trash2 className="w-5 h-5" /> Delete Employee</DialogTitle>
+          </DialogHeader>
+          <div className="py-2">
+            <p className="text-sm text-muted-foreground">
+              Are you sure you want to permanently delete <span className="font-semibold text-foreground">{deleteTarget?.name}</span>?
+            </p>
+            <p className="text-xs text-destructive mt-2 font-medium">This will remove all their records and cannot be undone. Consider marking as resigned instead.</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={deleteMutation.isPending}>
+              {deleteMutation.isPending ? 'Deleting…' : 'Delete Permanently'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -498,9 +656,16 @@ export default function Employees() {
                 </div>
               </div>
 
-              <Button variant="outline" className="w-full" onClick={() => { setViewItem(null); setPayStructureEmp(viewItem); }}>
-                <Settings2 className="w-4 h-4 mr-2" /> Configure Pay Structure
-              </Button>
+              <div className="flex gap-2 pt-2">
+                <Button variant="outline" className="flex-1" onClick={() => { setViewItem(null); setPayStructureEmp(viewItem); }}>
+                  <Settings2 className="w-4 h-4 mr-2" /> Pay Structure
+                </Button>
+                {perm.canEdit && (
+                  <Button variant="outline" className="flex-1" onClick={() => { setViewItem(null); openEdit(viewItem); }}>
+                    <Edit2 className="w-4 h-4 mr-2" /> Edit
+                  </Button>
+                )}
+              </div>
             </div>
           )}
         </SheetContent>

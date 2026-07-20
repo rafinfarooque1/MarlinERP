@@ -49,6 +49,8 @@ export const itemPricesTable = pgTable("item_prices", {
   itemId: integer("item_id").notNull().references(() => itemsTable.id),
   outletId: integer("outlet_id").notNull(),
   price: numeric("price", { precision: 10, scale: 2 }).notNull().default("0"),
+  validFrom: text("valid_from"), // optional YYYY-MM-DD
+  validTo: text("valid_to"),     // optional YYYY-MM-DD
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });
 

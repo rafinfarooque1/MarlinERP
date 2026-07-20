@@ -89,4 +89,65 @@ router.get("/productions/:id", async (req, res): Promise<void> => {
   res.json({ ...row, itemName: item?.name ?? "", producedQuantity: Number(row.producedQuantity), materialUsed: row.materialUsed ?? [] });
 });
 
+// ── Update (metadata only — date and notes) ───────────────────────────────────
+router.patch("/productions/:id", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const { productionDate, notes } = req.body as { productionDate?: string; notes?: string };
+  const updateData: Record<string, unknown> = {};
+  if (productionDate !== undefined) updateData.productionDate = productionDate;
+  if (notes !== undefined) updateData.notes = notes;
+  if (Object.keys(updateData).length === 0) { res.status(400).json({ error: "No fields to update" }); return; }
+
+  const [row] = await db.update(productionsTable).set(updateData).where(eq(productionsTable.id, id)).returning();
+  if (!row) { res.status(404).json({ error: "Not found" }); return; }
+  const [item] = await db.select().from(itemsTable).where(eq(itemsTable.id, row.itemId)).limit(1);
+  res.json({ ...row, itemName: item?.name ?? "", producedQuantity: Number(row.producedQuantity), materialUsed: row.materialUsed ?? [] });
+});
+
+// ── Delete (with full stock reversal) ────────────────────────────────────────
+router.delete("/productions/:id", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const [row] = await db.select().from(productionsTable).where(eq(productionsTable.id, id)).limit(1);
+  if (!row) { res.status(404).json({ error: "Not found" }); return; }
+
+  const materialUsed = (row.materialUsed ?? []) as Array<{ materialType: string; materialId: number; usedQuantity: number }>;
+  const qty = Number(row.producedQuantity);
+
+  // Reverse material deductions
+  for (const mat of materialUsed) {
+    if (mat.materialType === "material") {
+      await db.update(materialsTable)
+        .set({ currentStock: sql`GREATEST(0, ${materialsTable.currentStock}::numeric + ${mat.usedQuantity})` })
+        .where(eq(materialsTable.id, mat.materialId));
+    } else if (mat.materialType === "raw_material") {
+      await db.update(rawMaterialsTable)
+        .set({ currentStock: sql`GREATEST(0, ${rawMaterialsTable.currentStock}::numeric + ${mat.usedQuantity})` })
+        .where(eq(rawMaterialsTable.id, mat.materialId));
+    }
+  }
+
+  // Reverse production stock
+  await db.update(itemsTable)
+    .set({ productionStock: sql`GREATEST(0, ${itemsTable.productionStock}::numeric - ${qty})` })
+    .where(eq(itemsTable.id, row.itemId));
+
+  await db.update(stockEntriesTable)
+    .set({ quantity: sql`GREATEST(0, ${stockEntriesTable.quantity}::numeric - ${qty})` })
+    .where(and(
+      eq(stockEntriesTable.itemId, row.itemId),
+      eq(stockEntriesTable.branchType, "production"),
+      eq(stockEntriesTable.branchId, 1),
+    ));
+
+  await db.delete(productionsTable).where(eq(productionsTable.id, id));
+
+  logActivity({
+    action: "DELETE", module: "production", entityType: "production", entityId: id,
+    description: `Production batch B-${String(id).padStart(4, "0")} deleted (${qty} units reversed)`,
+    metadata: { before: { itemId: row.itemId, producedQuantity: qty } },
+  }).catch(() => {});
+
+  res.status(204).send();
+});
+
 export default router;

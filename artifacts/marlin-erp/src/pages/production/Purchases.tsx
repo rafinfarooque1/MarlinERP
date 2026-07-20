@@ -1,10 +1,13 @@
 import { useState } from 'react';
-import { useListPurchases, useCreatePurchase, useListVendors, useListMaterials, useListRawMaterials, getListPurchasesQueryKey } from '@workspace/api-client-react';
+import {
+  useListPurchases, useCreatePurchase, useListVendors, useListMaterials, useListRawMaterials,
+  getListPurchasesQueryKey, useUpdatePurchase, useDeletePurchase,
+} from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -12,13 +15,14 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Trash2, ShoppingCart, Download, Eye, Calendar, FileDown, Printer } from 'lucide-react';
+import { Plus, Search, Trash2, ShoppingCart, Download, Eye, Calendar, FileDown, Edit2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { downloadCSV, printHTML } from '@/lib/download';
+import { downloadCSV } from '@/lib/download';
 import { downloadPurchaseOrderPDF } from '@/lib/pdfUtils';
 import { Badge } from '@/components/ui/badge';
 import { useGetCompanySettings } from '@workspace/api-client-react';
+import { usePermission } from '@/lib/usePermission';
 
 const lineSchema = z.object({
   materialType: z.enum(['material', 'raw_material']),
@@ -36,7 +40,15 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
+const editSchema = z.object({
+  purchaseDate: z.string().min(1, 'Date required'),
+  invoiceNumber: z.string().optional(),
+  notes: z.string().optional(),
+});
+type EditFormValues = z.infer<typeof editSchema>;
+
 export default function Purchases() {
+  const perm = usePermission('Purchases');
   const { data: purchases = [], isLoading } = useListPurchases();
   const { data: vendors = [] } = useListVendors();
   const { data: materials = [] } = useListMaterials();
@@ -44,27 +56,33 @@ export default function Purchases() {
   const { data: companySettings } = useGetCompanySettings();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
+  const [editItem, setEditItem] = useState<any>(null);
   const [viewItem, setViewItem] = useState<any>(null);
+  const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const queryClient = useQueryClient();
   const createMutation = useCreatePurchase();
+  const updateMutation = useUpdatePurchase();
+  const deleteMutation = useDeletePurchase();
 
-  // Build lookup maps for material names (used in PDF + view sheet)
   const materialsMap = new Map<number, string>(materials.map((m: any) => [m.id, m.name]));
   const rawMaterialsMap = new Map<number, string>(rawMaterials.map((m: any) => [m.id, m.name]));
-
   const getMaterialName = (li: any) =>
     li.materialType === 'raw_material'
       ? (rawMaterialsMap.get(li.materialId) || `Raw Mat. #${li.materialId}`)
       : (materialsMap.get(li.materialId) || `Material #${li.materialId}`);
 
-  const handleDownloadPO = (po: any) =>
-    downloadPurchaseOrderPDF(po, companySettings, materialsMap, rawMaterialsMap);
+  const handleDownloadPO = (po: any) => downloadPurchaseOrderPDF(po, companySettings, materialsMap, rawMaterialsMap);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: { vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', lineItems: [{ materialType: 'raw_material', materialId: 0, quantity: 1, unitCost: 0 }], notes: '' },
   });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
+
+  const editForm = useForm<EditFormValues>({
+    resolver: zodResolver(editSchema),
+    defaultValues: { purchaseDate: '', invoiceNumber: '', notes: '' },
+  });
 
   const onSubmit = (data: FormValues) => {
     createMutation.mutate({ data: data as any }, {
@@ -73,16 +91,43 @@ export default function Purchases() {
     });
   };
 
+  const onEditSubmit = (data: EditFormValues) => {
+    updateMutation.mutate({ id: editItem.id, data }, {
+      onSuccess: () => { toast.success('Purchase order updated'); setEditItem(null); },
+      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+    });
+  };
+
+  const handleDelete = () => {
+    if (!deleteTarget) return;
+    deleteMutation.mutate(deleteTarget.id, {
+      onSuccess: () => { toast.success(`PO-${String(deleteTarget.id).padStart(4, '0')} deleted (stock reversed)`); setDeleteTarget(null); },
+      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Delete failed'),
+    });
+  };
+
   const filtered = purchases.filter(p =>
     p.vendorName?.toLowerCase().includes(search.toLowerCase()) ||
     p.invoiceNumber?.toLowerCase().includes(search.toLowerCase())
   );
 
-  const lineTotal = (fields: any[]) => fields.reduce((s, _, i) => {
+  const lineTotal = (fs: any[]) => fs.reduce((s, _, i) => {
     const q = form.watch(`lineItems.${i}.quantity`) || 0;
     const c = form.watch(`lineItems.${i}.unitCost`) || 0;
     return s + q * c;
   }, 0);
+
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center py-32 text-muted-foreground gap-3">
+          <AlertTriangle className="w-10 h-10 text-destructive/50" />
+          <p className="text-lg font-medium">Access Denied</p>
+          <p className="text-sm">You don't have permission to view Purchases.</p>
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout>
@@ -93,12 +138,16 @@ export default function Purchases() {
             <p className="text-muted-foreground mt-1">Incoming materials from vendors</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('purchases.csv', filtered.map(p => ({ 'PO#': `PO-${String(p.id).padStart(4,'0')}`, Date: p.purchaseDate, Vendor: p.vendorName, Invoice: p.invoiceNumber || '', Items: p.lineItems?.length || 0, Total: p.totalAmount })))}>
-              <Download className="w-4 h-4 mr-2" /> Export
-            </Button>
-            <Button onClick={() => { form.reset({ vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', lineItems: [{ materialType: 'raw_material', materialId: 0, quantity: 1, unitCost: 0 }], notes: '' }); setIsOpen(true); }}>
-              <Plus className="w-4 h-4 mr-2" /> New Purchase
-            </Button>
+            {perm.canDownload && (
+              <Button variant="outline" size="sm" onClick={() => downloadCSV('purchases.csv', filtered.map(p => ({ 'PO#': `PO-${String(p.id).padStart(4,'0')}`, Date: p.purchaseDate, Vendor: p.vendorName, Invoice: p.invoiceNumber || '', Items: p.lineItems?.length || 0, Total: p.totalAmount })))}>
+                <Download className="w-4 h-4 mr-2" /> Export
+              </Button>
+            )}
+            {perm.canAdd && (
+              <Button onClick={() => { form.reset({ vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', lineItems: [{ materialType: 'raw_material', materialId: 0, quantity: 1, unitCost: 0 }], notes: '' }); setIsOpen(true); }}>
+                <Plus className="w-4 h-4 mr-2" /> New Purchase
+              </Button>
+            )}
           </div>
         </div>
 
@@ -139,7 +188,20 @@ export default function Purchases() {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(p)} title="View"><Eye className="w-4 h-4" /></Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => handleDownloadPO(p)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>
+                      {perm.canDownload && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => handleDownloadPO(p)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>
+                      )}
+                      {perm.canEdit && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="Edit" onClick={() => {
+                          setEditItem(p);
+                          editForm.reset({ purchaseDate: p.purchaseDate, invoiceNumber: p.invoiceNumber || '', notes: p.notes || '' });
+                        }}><Edit2 className="w-4 h-4" /></Button>
+                      )}
+                      {perm.canDelete && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" title="Delete" onClick={() => setDeleteTarget(p)}>
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -174,9 +236,7 @@ export default function Purchases() {
               <div>
                 <div className="flex justify-between items-center mb-3">
                   <p className="font-semibold text-sm">Line Items</p>
-                  <Button type="button" variant="outline" size="sm" onClick={() => append({ materialType: 'raw_material', materialId: 0, quantity: 1, unitCost: 0 })}>
-                    <Plus className="w-3 h-3 mr-1" /> Add Item
-                  </Button>
+                  <Button type="button" variant="outline" size="sm" onClick={() => append({ materialType: 'raw_material', materialId: 0, quantity: 1, unitCost: 0 })}><Plus className="w-3 h-3 mr-1" /> Add Item</Button>
                 </div>
                 <div className="space-y-3">
                   {fields.map((field, i) => {
@@ -240,6 +300,52 @@ export default function Purchases() {
         </DialogContent>
       </Dialog>
 
+      {/* Edit Dialog */}
+      <Dialog open={!!editItem} onOpenChange={v => !v && setEditItem(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit PO-{editItem && String(editItem.id).padStart(4, '0')}</DialogTitle>
+            <DialogDescription>Update date, invoice number, or notes. Line items cannot be changed.</DialogDescription>
+          </DialogHeader>
+          <Form {...editForm}>
+            <form onSubmit={editForm.handleSubmit(onEditSubmit)} className="space-y-4 pt-2">
+              <FormField control={editForm.control} name="purchaseDate" render={({ field }) => (
+                <FormItem><FormLabel>Purchase Date</FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
+              )} />
+              <FormField control={editForm.control} name="invoiceNumber" render={({ field }) => (
+                <FormItem><FormLabel>Invoice Number</FormLabel><FormControl><Input placeholder="Optional" {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={editForm.control} name="notes" render={({ field }) => (
+                <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea placeholder="Optional notes..." rows={3} {...field} /></FormControl></FormItem>
+              )} />
+              <DialogFooter>
+                <Button variant="outline" type="button" onClick={() => setEditItem(null)}>Cancel</Button>
+                <Button type="submit" disabled={updateMutation.isPending}>{updateMutation.isPending ? 'Saving…' : 'Save Changes'}</Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation */}
+      <Dialog open={!!deleteTarget} onOpenChange={v => !v && setDeleteTarget(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive"><Trash2 className="w-5 h-5" /> Delete Purchase Order</DialogTitle>
+            <DialogDescription>
+              Delete PO-{deleteTarget && String(deleteTarget.id).padStart(4, '0')} from {deleteTarget?.vendorName}?
+              <br /><span className="text-destructive font-medium">Material stock will be reversed. This cannot be undone.</span>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={deleteMutation.isPending}>
+              {deleteMutation.isPending ? 'Deleting…' : 'Delete & Reverse Stock'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* View Sheet */}
       <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
         <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
@@ -275,9 +381,16 @@ export default function Purchases() {
               </div>
               {viewItem.notes && <div><span className="text-xs text-muted-foreground uppercase">Notes</span><p className="mt-1">{viewItem.notes}</p></div>}
               <div className="flex gap-2 pt-2">
-                <Button className="flex-1" variant="outline" onClick={() => handleDownloadPO(viewItem)}>
-                  <FileDown className="w-4 h-4 mr-2" /> Download PO PDF
-                </Button>
+                {perm.canDownload && (
+                  <Button className="flex-1" variant="outline" onClick={() => handleDownloadPO(viewItem)}>
+                    <FileDown className="w-4 h-4 mr-2" /> Download PO PDF
+                  </Button>
+                )}
+                {perm.canEdit && (
+                  <Button className="flex-1" variant="outline" onClick={() => { setViewItem(null); setEditItem(viewItem); editForm.reset({ purchaseDate: viewItem.purchaseDate, invoiceNumber: viewItem.invoiceNumber || '', notes: viewItem.notes || '' }); }}>
+                    <Edit2 className="w-4 h-4 mr-2" /> Edit
+                  </Button>
+                )}
               </div>
             </div>
           )}

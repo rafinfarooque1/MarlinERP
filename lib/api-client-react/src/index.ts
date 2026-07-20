@@ -6,3 +6,4 @@ export * from "./analytics";
 export * from "./bom";
 export * from "./payroll";
 export * from "./audit";
+export * from "./production";

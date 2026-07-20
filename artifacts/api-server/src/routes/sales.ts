@@ -54,11 +54,21 @@ router.post("/item-prices", async (req, res): Promise<void> => {
     .where(and(eq(itemPricesTable.itemId, parsed.data.itemId), eq(itemPricesTable.outletId, parsed.data.outletId)))
     .limit(1);
 
+  const body = req.body as { validFrom?: string; validTo?: string };
+  const extraFields: Record<string, unknown> = {};
+  if (body.validFrom !== undefined) extraFields.validFrom = body.validFrom || null;
+  if (body.validTo !== undefined) extraFields.validTo = body.validTo || null;
+
   let row;
   if (existing) {
-    [row] = await db.update(itemPricesTable).set({ price: String(parsed.data.price) }).where(eq(itemPricesTable.id, existing.id)).returning();
+    [row] = await db.update(itemPricesTable)
+      .set({ price: String(parsed.data.price), ...extraFields })
+      .where(eq(itemPricesTable.id, existing.id))
+      .returning();
   } else {
-    [row] = await db.insert(itemPricesTable).values({ itemId: parsed.data.itemId, outletId: parsed.data.outletId, price: String(parsed.data.price) }).returning();
+    [row] = await db.insert(itemPricesTable)
+      .values({ itemId: parsed.data.itemId, outletId: parsed.data.outletId, price: String(parsed.data.price), ...extraFields })
+      .returning();
   }
 
   const [item] = await db.select().from(itemsTable).where(eq(itemsTable.id, row.itemId)).limit(1);

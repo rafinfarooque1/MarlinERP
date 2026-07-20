@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useListStockTransfers, useCreateStockTransfer, useListItems, useListWarehouses, useListStock, getListStockTransfersQueryKey } from '@workspace/api-client-react';
+import { usePermission } from '@/lib/usePermission';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,7 +13,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Truck, Download, Eye, Calendar, Trash2, Printer, PackageOpen } from 'lucide-react';
+import { Plus, Search, Truck, Download, Eye, Calendar, Trash2, Printer, PackageOpen, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV, printHTML } from '@/lib/download';
@@ -30,6 +31,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function StockTransfers() {
+  const perm = usePermission('Stock Transfers');
   const { data: transfers = [], isLoading } = useListStockTransfers();
   const { data: items = [] } = useListItems();
   const { data: warehouses = [] } = useListWarehouses();
@@ -80,6 +82,18 @@ export default function StockTransfers() {
     t.toName?.toLowerCase().includes(search.toLowerCase())
   );
 
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center py-32 text-muted-foreground gap-3">
+          <AlertTriangle className="w-10 h-10 text-destructive/50" />
+          <p className="text-lg font-medium">Access Denied</p>
+          <p className="text-sm">You don't have permission to view Stock Transfers.</p>
+        </div>
+      </AppLayout>
+    );
+  }
+
   return (
     <AppLayout>
       <div className="space-y-6">
@@ -89,12 +103,16 @@ export default function StockTransfers() {
             <p className="text-muted-foreground mt-1">Production → Warehouse dispatches</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('transfers.csv', filtered.map((t: any) => ({ DC: t.challanNumber, Date: t.transferDate, To: t.toName, Items: t.lineItems?.length || 0, Interstate: t.isInterstate ? 'Yes' : 'No' })))}>
-              <Download className="w-4 h-4 mr-2" /> Export
-            </Button>
-            <Button onClick={() => { form.reset({ toWarehouseId: 0, transferDate: new Date().toISOString().split('T')[0], lineItems: [{ itemId: 0, quantity: 1 }], notes: '' }); setIsOpen(true); }}>
-              <Plus className="w-4 h-4 mr-2" /> New Transfer
-            </Button>
+            {perm.canDownload && (
+              <Button variant="outline" size="sm" onClick={() => downloadCSV('transfers.csv', filtered.map((t: any) => ({ DC: t.challanNumber, Date: t.transferDate, To: t.toName, Items: t.lineItems?.length || 0, Interstate: t.isInterstate ? 'Yes' : 'No' })))}>
+                <Download className="w-4 h-4 mr-2" /> Export
+              </Button>
+            )}
+            {perm.canAdd && (
+              <Button onClick={() => { form.reset({ toWarehouseId: 0, transferDate: new Date().toISOString().split('T')[0], lineItems: [{ itemId: 0, quantity: 1 }], notes: '' }); setIsOpen(true); }}>
+                <Plus className="w-4 h-4 mr-2" /> New Transfer
+              </Button>
+            )}
           </div>
         </div>
 
@@ -133,7 +151,7 @@ export default function StockTransfers() {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(t)}><Eye className="w-4 h-4" /></Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => handlePrintChallan(t)} title="Print Challan"><Printer className="w-4 h-4" /></Button>
+                      {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => handlePrintChallan(t)} title="Print Challan"><Printer className="w-4 h-4" /></Button>}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -254,7 +272,7 @@ export default function StockTransfers() {
                   ))}
                 </div>
               </div>
-              <Button className="w-full" variant="outline" onClick={() => handlePrintChallan(viewItem)}><Printer className="w-4 h-4 mr-2" /> Print Challan</Button>
+              {perm.canDownload && <Button className="w-full" variant="outline" onClick={() => handlePrintChallan(viewItem)}><Printer className="w-4 h-4 mr-2" /> Print Challan</Button>}
             </div>
           )}
         </SheetContent>
