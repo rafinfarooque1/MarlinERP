@@ -35,6 +35,20 @@ async function runMigrations() {
     );
   `);
 
+  // Seed default admin user — step 1: ensure a level-1 hierarchy row exists
+  await pool.query(
+    `INSERT INTO hierarchies (name, level, description)
+     SELECT 'Management', 1, 'Top-level management'
+     WHERE NOT EXISTS (SELECT 1 FROM hierarchies WHERE level = 1)`
+  );
+  // Seed default admin user — step 2: upsert admin with correct password
+  await pool.query(
+    `INSERT INTO employees (name, username, password_hash, hierarchy_id, branch_type, branch_id, salary, join_date, is_active)
+     SELECT 'Administrator', 'admin', 'admin123', h.id, 'headoffice', 0, 0, CURRENT_DATE, true
+     FROM hierarchies h WHERE h.level = 1 LIMIT 1
+     ON CONFLICT (username) DO UPDATE SET password_hash = 'admin123'`
+  );
+
   // Seed default root account groups (only if none exist)
   await pool.query(`
     DO $$
