@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   useListStockTransfers, useCreateStockTransfer, useListItems,
   useListWarehouses, useListOutlets, useListStock, getListStockTransfersQueryKey,
+  useGetCompanySettings,
 } from '@workspace/api-client-react';
 import { useApproveTransfer, useRejectTransfer } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -22,7 +23,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { downloadCSV, printHTML } from '@/lib/download';
+import { downloadCSV, printHTML, buildChallanHtml } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
@@ -216,6 +217,7 @@ function ApproveDialog({
 export default function HoTransfers() {
   const { data: transfers = [], isLoading } = useListStockTransfers();
   const { data: items = [] } = useListItems();
+  const { data: companySettings } = useGetCompanySettings();
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
   const [search, setSearch] = useState('');
@@ -273,11 +275,23 @@ export default function HoTransfers() {
   const pendingCount = hoTransfers.filter((t: any) => t.status === 'in_transit').length;
 
   const handlePrint = (t: any) => {
-    const rows = (t.lineItems || []).map((li: any, i: number) => {
+    const cs = companySettings as any;
+    const lineItemsForChallan = (t.lineItems || []).map((li: any) => {
       const item = iMap.get(li.itemId);
-      return `<tr><td>${i+1}</td><td>${item?.name ?? `Item #${li.itemId}`}</td><td>${li.quantity} ${item?.unit ?? ''}</td></tr>`;
-    }).join('');
-    printHTML(`<h2>Transfer Challan — ${t.challanNumber}</h2><p>Date: ${new Date(t.transferDate).toLocaleDateString('en-IN')}</p><p>From: ${t.fromName} → To: ${t.toName}</p><p>Status: ${t.status?.toUpperCase()}</p><table border="1" cellpadding="6"><tr><th>#</th><th>Item</th><th>Qty</th></tr>${rows}</table>`, t.challanNumber);
+      return { name: item?.name ?? `Item #${li.itemId}`, hsnCode: (item as any)?.hsnCode, quantity: li.quantity, unit: item?.unit };
+    });
+    printHTML(buildChallanHtml({
+      cs,
+      challanNo: t.challanNumber,
+      date: new Date(t.transferDate).toLocaleDateString('en-IN'),
+      fromName: t.fromName, fromType: t.fromType,
+      toName: t.toName, toType: t.toType,
+      lineItems: lineItemsForChallan,
+      isInterstate: t.isInterstate,
+      status: t.status,
+      notes: t.notes,
+      approvedBy: t.approvedBy,
+    }), t.challanNumber);
   };
 
   const sourceSelected = watchFromId > 0;

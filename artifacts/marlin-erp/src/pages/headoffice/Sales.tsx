@@ -24,7 +24,7 @@ import { downloadInvoicePDF } from '@/lib/pdfUtils';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
-import { downloadCSV, printHTML } from '@/lib/download';
+import { downloadCSV, printHTML, buildGstInvoiceHtml } from '@/lib/download';
 import { Separator } from '@/components/ui/separator';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -162,46 +162,7 @@ export default function Sales() {
 
   const handlePrintInvoice = (sale: any) => {
     const cs = companySettings as any;
-    const lineRows = (sale.lineItems || []).map((li: any, i: number) => {
-      const lineTotal = li.lineSubtotal ?? (li.quantity * li.unitPrice);
-      const cgst = li.cgst ?? 0;
-      const sgst = li.sgst ?? 0;
-      const igst = li.igst ?? 0;
-      return `<tr>
-        <td>${i + 1}</td>
-        <td>${li.itemName || `Item #${li.itemId}`}<br/><small style="color:#666">${li.hsnCode ? `HSN: ${li.hsnCode}` : ''}</small></td>
-        <td style="text-align:center">${li.taxRate ?? 0}%</td>
-        <td style="text-align:right">${li.quantity}</td>
-        <td style="text-align:right">₹${Number(li.unitPrice).toFixed(2)}</td>
-        <td style="text-align:right">₹${Number(lineTotal).toFixed(2)}</td>
-        <td style="text-align:right">${cgst > 0 ? `₹${cgst.toFixed(2)}` : '—'}</td>
-        <td style="text-align:right">${sgst > 0 ? `₹${sgst.toFixed(2)}` : '—'}</td>
-        <td style="text-align:right">${igst > 0 ? `₹${igst.toFixed(2)}` : '—'}</td>
-        <td style="text-align:right">₹${Number(li.taxAmount ?? 0).toFixed(2)}</td>
-        <td style="text-align:right"><strong>₹${(Number(lineTotal) + Number(li.taxAmount ?? 0)).toFixed(2)}</strong></td>
-      </tr>`;
-    }).join('');
-
-    printHTML(`
-      <style>table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:6px 8px;font-size:11px}th{background:#f5f5f5}.total{font-size:14px;font-weight:bold;text-align:right;margin-top:12px}.header{margin-bottom:12px}.meta{font-size:12px;color:#555}.gstin{font-size:11px;font-family:monospace;color:#333}</style>
-      <div class="header">
-        <h2 style="margin:0">${cs?.companyName || 'Tax Invoice'}</h2>
-        <p class="meta">${cs?.address || ''}${cs?.state ? ', ' + cs.state : ''}${cs?.pincode ? ' - ' + cs.pincode : ''}</p>
-        ${cs?.gstNumber ? `<p class="gstin">GSTIN: ${cs.gstNumber}</p>` : ''}
-      </div>
-      <hr/>
-      <table><tr><td><strong>Invoice:</strong> ${sale.invoiceNumber}</td><td><strong>Date:</strong> ${new Date(sale.saleDate).toLocaleDateString('en-IN')}</td></tr>
-      <tr><td><strong>Outlet:</strong> ${sale.outletName}</td><td><strong>Payment:</strong> ${sale.paymentMode?.toUpperCase()}</td></tr>
-      <tr><td colspan="2"><strong>Customer:</strong> ${sale.customerName || 'Walk-in'}${(sale as any).customerGstin ? ' | GSTIN: ' + (sale as any).customerGstin : ''}</td></tr>
-      </table><br/>
-      <table>
-        <tr><th>#</th><th>Item / HSN</th><th>GST%</th><th>Qty</th><th>Unit Price</th><th>Taxable</th><th>CGST</th><th>SGST</th><th>IGST</th><th>Tax</th><th>Total</th></tr>
-        ${lineRows}
-      </table>
-      <div class="total">Subtotal: ₹${Number(sale.subtotal ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
-      ${sale.taxTotal > 0 ? `<div class="total" style="color:#555;font-size:12px">Tax: ₹${Number(sale.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>` : ''}
-      <div class="total" style="font-size:16px">Grand Total: ₹${Number(sale.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
-    `, sale.invoiceNumber);
+    printHTML(buildGstInvoiceHtml({ cs, sale }), sale.invoiceNumber);
   };
 
   const filtered = sales.filter(s =>

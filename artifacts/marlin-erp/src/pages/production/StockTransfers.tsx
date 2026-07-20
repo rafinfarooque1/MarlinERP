@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useListStockTransfers, useCreateStockTransfer, useListItems, useListWarehouses, useListStock, getListStockTransfersQueryKey } from '@workspace/api-client-react';
+import { useListStockTransfers, useCreateStockTransfer, useListItems, useListWarehouses, useListStock, getListStockTransfersQueryKey, useGetCompanySettings } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -16,7 +16,7 @@ import * as z from 'zod';
 import { Plus, Search, Truck, Download, Eye, Calendar, Trash2, Printer, PackageOpen, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { downloadCSV, printHTML } from '@/lib/download';
+import { downloadCSV, printHTML, buildChallanHtml } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 
 const schema = z.object({
@@ -35,6 +35,7 @@ export default function StockTransfers() {
   const { data: transfers = [], isLoading } = useListStockTransfers();
   const { data: items = [] } = useListItems();
   const { data: warehouses = [] } = useListWarehouses();
+  const { data: companySettings } = useGetCompanySettings();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
@@ -65,16 +66,26 @@ export default function StockTransfers() {
     });
   };
 
+  const iMap = new Map((items as any[]).map(i => [i.id, i]));
+
   const handlePrintChallan = (t: any) => {
-    const rows = (t.lineItems || []).map((li: any, i: number) => `<tr><td>${i+1}</td><td>Item #${li.itemId}</td><td>${li.quantity}</td></tr>`).join('');
-    printHTML(`
-      <h2>Delivery Challan — DC-${String(t.id).padStart(4,'0')}</h2>
-      <p>Date: ${new Date(t.transferDate).toLocaleDateString('en-IN')}</p>
-      <p>From: Production Unit &nbsp;→&nbsp; To: ${t.toName || 'Warehouse'}</p>
-      <table><tr><th>#</th><th>Item</th><th>Qty</th></tr>${rows}</table>
-      <p class="total">Total Items: ${t.lineItems?.length || 0}</p>
-      ${t.isInterstate ? '<p><strong>⚠ Interstate Transfer</strong></p>' : ''}
-    `, `DC-${String(t.id).padStart(4,'0')}`);
+    const cs = companySettings as any;
+    const challanNo = t.challanNumber || `DC-${String(t.id).padStart(4, '0')}`;
+    const lineItemsForChallan = (t.lineItems || []).map((li: any) => {
+      const item = iMap.get(li.itemId);
+      return { name: (item as any)?.name ?? `Item #${li.itemId}`, hsnCode: (item as any)?.hsnCode, quantity: li.quantity, unit: (item as any)?.unit };
+    });
+    printHTML(buildChallanHtml({
+      cs,
+      challanNo,
+      date: new Date(t.transferDate).toLocaleDateString('en-IN'),
+      fromName: 'Production Unit', fromType: 'Production',
+      toName: t.toName || 'Warehouse', toType: t.toType || 'Warehouse',
+      lineItems: lineItemsForChallan,
+      isInterstate: t.isInterstate,
+      status: t.status,
+      notes: t.notes,
+    }), challanNo);
   };
 
   const filtered = (Array.isArray(transfers) ? transfers : []).filter((t: any) =>
