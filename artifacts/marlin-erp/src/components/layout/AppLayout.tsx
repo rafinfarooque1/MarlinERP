@@ -47,9 +47,7 @@ const navigation = [
     icon: Factory,
     children: [
       { name: 'Units', href: '/production/units' },
-      { name: 'Materials', href: '/production/materials' },
-      { name: 'Raw Materials', href: '/production/raw-materials' },
-      { name: 'Items', href: '/production/items' },
+      { name: 'Item Master', href: '/production/item-master' },
       { name: 'BOM Templates', href: '/production/bom-templates' },
       { name: 'Batches', href: '/production/production' },
       { name: 'Stock Transfers', href: '/production/stock-transfer' },
@@ -94,8 +92,8 @@ const navigation = [
     children: [
       { name: 'Chart of Accounts', href: '/accounts/chart' },
       { name: 'Ledger', href: '/accounts/ledger' },
-      { name: 'Cash & Bank', href: '/accounts/cash-bank' },
-      { name: 'Expenses', href: '/accounts/expenses' },
+      { name: 'Payments', href: '/accounts/payments' },
+      { name: 'Receipts', href: '/accounts/receipts' },
       { name: 'GST Summary', href: '/accounts/gst' },
     ],
   },

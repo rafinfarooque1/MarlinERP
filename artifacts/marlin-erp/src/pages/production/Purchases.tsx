@@ -15,20 +15,25 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Trash2, ShoppingCart, Download, Eye, Calendar, FileDown, Edit2, AlertTriangle } from 'lucide-react';
+import { Plus, Search, Trash2, ShoppingCart, Download, Eye, Calendar, FileDown, Edit2, AlertTriangle, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
-import { downloadPurchaseOrderPDF } from '@/lib/pdfUtils';
 import { Badge } from '@/components/ui/badge';
-import { useGetCompanySettings } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
+import { Separator } from '@/components/ui/separator';
+
+const GST_RATES = [0, 5, 12, 18, 28] as const;
 
 const lineSchema = z.object({
   materialType: z.enum(['material', 'raw_material']),
-  materialId: z.coerce.number().min(1, 'Select a material'),
-  quantity: z.coerce.number().min(0.01, 'Qty > 0'),
-  unitCost: z.coerce.number().min(0, 'Cost ≥ 0'),
+  materialId: z.coerce.number().min(1, 'Select item'),
+  hsnCode: z.string().optional(),
+  quantity: z.coerce.number().min(0.001, 'Qty > 0'),
+  unitCost: z.coerce.number().min(0, 'Rate ≥ 0'),
+  discount: z.coerce.number().min(0).max(100).default(0),
+  gstRate: z.coerce.number().default(0),
+  taxType: z.enum(['intra', 'inter']).default('intra'),
 });
 
 const schema = z.object({
@@ -41,11 +46,27 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 const editSchema = z.object({
-  purchaseDate: z.string().min(1, 'Date required'),
+  purchaseDate: z.string().min(1),
   invoiceNumber: z.string().optional(),
   notes: z.string().optional(),
 });
 type EditFormValues = z.infer<typeof editSchema>;
+
+const defaultLine = { materialType: 'raw_material' as const, materialId: 0, hsnCode: '', quantity: 1, unitCost: 0, discount: 0, gstRate: 5, taxType: 'intra' as const };
+
+function calcLine(q: number, rate: number, disc: number, gst: number, taxType: string) {
+  const lineSubtotal = q * rate;
+  const discountAmt = lineSubtotal * disc / 100;
+  const taxableValue = lineSubtotal - discountAmt;
+  const taxAmount = Math.round(taxableValue * gst / 100 * 100) / 100;
+  const intra = taxType === 'intra';
+  const cgst = intra ? Math.round(taxAmount / 2 * 100) / 100 : 0;
+  const sgst = intra ? Math.round(taxAmount / 2 * 100) / 100 : 0;
+  const igst = !intra ? taxAmount : 0;
+  return { lineSubtotal, discountAmt, taxableValue, taxAmount, cgst, sgst, igst, lineTotal: taxableValue + taxAmount };
+}
+
+function fmt(n: number) { return n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
 export default function Purchases() {
   const perm = usePermission('Purchases');
@@ -53,7 +74,6 @@ export default function Purchases() {
   const { data: vendors = [] } = useListVendors();
   const { data: materials = [] } = useListMaterials();
   const { data: rawMaterials = [] } = useListRawMaterials();
-  const { data: companySettings } = useGetCompanySettings();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
@@ -64,36 +84,49 @@ export default function Purchases() {
   const updateMutation = useUpdatePurchase();
   const deleteMutation = useDeletePurchase();
 
-  const materialsMap = new Map<number, string>(materials.map((m: any) => [m.id, m.name]));
-  const rawMaterialsMap = new Map<number, string>(rawMaterials.map((m: any) => [m.id, m.name]));
   const getMaterialName = (li: any) =>
     li.materialType === 'raw_material'
-      ? (rawMaterialsMap.get(li.materialId) || `Raw Mat. #${li.materialId}`)
-      : (materialsMap.get(li.materialId) || `Material #${li.materialId}`);
+      ? (rawMaterials.find((m: any) => m.id === li.materialId)?.name || `Item #${li.materialId}`)
+      : (materials.find((m: any) => m.id === li.materialId)?.name || `Item #${li.materialId}`);
 
-  const handleDownloadPO = (po: any) => downloadPurchaseOrderPDF(po, companySettings, materialsMap, rawMaterialsMap);
-
-  const form = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: { vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', lineItems: [{ materialType: 'raw_material', materialId: 0, quantity: 1, unitCost: 0 }], notes: '' },
-  });
+  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', lineItems: [defaultLine], notes: '' } });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
+  const watchLines = form.watch('lineItems');
 
-  const editForm = useForm<EditFormValues>({
-    resolver: zodResolver(editSchema),
-    defaultValues: { purchaseDate: '', invoiceNumber: '', notes: '' },
-  });
+  const editForm = useForm<EditFormValues>({ resolver: zodResolver(editSchema), defaultValues: { purchaseDate: '', invoiceNumber: '', notes: '' } });
+
+  // Bill summary
+  const billSummary = watchLines.reduce((acc, li) => {
+    const calc = calcLine(Number(li.quantity) || 0, Number(li.unitCost) || 0, Number(li.discount) || 0, Number(li.gstRate) || 0, li.taxType);
+    acc.subtotal += calc.lineSubtotal;
+    acc.discountTotal += calc.discountAmt;
+    acc.taxableTotal += calc.taxableValue;
+    acc.cgstTotal += calc.cgst;
+    acc.sgstTotal += calc.sgst;
+    acc.igstTotal += calc.igst;
+    acc.taxTotal += calc.taxAmount;
+    return acc;
+  }, { subtotal: 0, discountTotal: 0, taxableTotal: 0, cgstTotal: 0, sgstTotal: 0, igstTotal: 0, taxTotal: 0 });
+
+  const rawTotal = billSummary.taxableTotal + billSummary.taxTotal;
+  const roundOff = Math.round(rawTotal) - rawTotal;
+  const grandTotal = Math.round(rawTotal);
 
   const onSubmit = (data: FormValues) => {
     createMutation.mutate({ data: data as any }, {
-      onSuccess: () => { toast.success('Purchase order created'); queryClient.invalidateQueries({ queryKey: getListPurchasesQueryKey() }); setIsOpen(false); form.reset(); },
+      onSuccess: () => {
+        toast.success('Purchase bill created');
+        queryClient.invalidateQueries({ queryKey: getListPurchasesQueryKey() });
+        setIsOpen(false);
+        form.reset({ vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', lineItems: [defaultLine], notes: '' });
+      },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
   };
 
   const onEditSubmit = (data: EditFormValues) => {
     updateMutation.mutate({ id: editItem.id, data }, {
-      onSuccess: () => { toast.success('Purchase order updated'); setEditItem(null); },
+      onSuccess: () => { toast.success('Purchase bill updated'); setEditItem(null); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
   };
@@ -101,7 +134,7 @@ export default function Purchases() {
   const handleDelete = () => {
     if (!deleteTarget) return;
     deleteMutation.mutate(deleteTarget.id, {
-      onSuccess: () => { toast.success(`PO-${String(deleteTarget.id).padStart(4, '0')} deleted (stock reversed)`); setDeleteTarget(null); },
+      onSuccess: () => { toast.success(`Bill #${deleteTarget.id} deleted (stock reversed)`); setDeleteTarget(null); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Delete failed'),
     });
   };
@@ -110,12 +143,6 @@ export default function Purchases() {
     p.vendorName?.toLowerCase().includes(search.toLowerCase()) ||
     p.invoiceNumber?.toLowerCase().includes(search.toLowerCase())
   );
-
-  const lineTotal = (fs: any[]) => fs.reduce((s, _, i) => {
-    const q = form.watch(`lineItems.${i}.quantity`) || 0;
-    const c = form.watch(`lineItems.${i}.unitCost`) || 0;
-    return s + q * c;
-  }, 0);
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -134,18 +161,24 @@ export default function Purchases() {
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><ShoppingCart className="w-6 h-6 text-primary" /> Purchase Orders</h1>
-            <p className="text-muted-foreground mt-1">Incoming materials from vendors</p>
+            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><ShoppingCart className="w-6 h-6 text-primary" /> Purchase Bills</h1>
+            <p className="text-muted-foreground mt-1">Record purchases with GST, HSN code & discounts</p>
           </div>
           <div className="flex gap-2">
             {perm.canDownload && (
-              <Button variant="outline" size="sm" onClick={() => downloadCSV('purchases.csv', filtered.map(p => ({ 'PO#': `PO-${String(p.id).padStart(4,'0')}`, Date: p.purchaseDate, Vendor: p.vendorName, Invoice: p.invoiceNumber || '', Items: p.lineItems?.length || 0, Total: p.totalAmount })))}>
+              <Button variant="outline" size="sm" onClick={() => downloadCSV('purchases.csv', filtered.map(p => ({
+                'Bill #': p.id, Date: p.purchaseDate, Vendor: p.vendorName, Invoice: p.invoiceNumber || '',
+                Items: (p.lineItems as any[])?.length || 0,
+                'Taxable': Number((p as any).discountTotal ? Number(p.totalAmount) - Number((p as any).taxTotal || 0) : p.totalAmount),
+                'Tax': Number((p as any).taxTotal || 0),
+                'Total': Number(p.totalAmount),
+              })))}>
                 <Download className="w-4 h-4 mr-2" /> Export
               </Button>
             )}
             {perm.canAdd && (
-              <Button onClick={() => { form.reset({ vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', lineItems: [{ materialType: 'raw_material', materialId: 0, quantity: 1, unitCost: 0 }], notes: '' }); setIsOpen(true); }}>
-                <Plus className="w-4 h-4 mr-2" /> New Purchase
+              <Button onClick={() => { form.reset({ vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', lineItems: [defaultLine], notes: '' }); setIsOpen(true); }}>
+                <Plus className="w-4 h-4 mr-2" /> New Purchase Bill
               </Button>
             )}
           </div>
@@ -159,46 +192,46 @@ export default function Purchases() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>PO #</TableHead>
+                <TableHead>Bill #</TableHead>
                 <TableHead>Date</TableHead>
                 <TableHead>Vendor</TableHead>
-                <TableHead>Invoice</TableHead>
+                <TableHead>Invoice Ref</TableHead>
                 <TableHead>Items</TableHead>
+                <TableHead className="text-right">Tax</TableHead>
                 <TableHead className="text-right">Total</TableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
-                  <ShoppingCart className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No purchase orders yet</p>
+                <TableRow><TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
+                  <ShoppingCart className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No purchase bills yet</p>
                 </TableCell></TableRow>
               ) : filtered.map(p => (
                 <TableRow key={p.id} className="hover:bg-muted/10">
-                  <TableCell className="font-mono text-primary font-bold text-sm">PO-{String(p.id).padStart(4, '0')}</TableCell>
+                  <TableCell className="font-mono text-primary font-bold text-sm">#{String(p.id).padStart(4, '0')}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(p.purchaseDate).toLocaleDateString('en-IN')}</div>
                   </TableCell>
                   <TableCell className="font-medium">{p.vendorName}</TableCell>
                   <TableCell className="text-muted-foreground text-sm">{p.invoiceNumber || '—'}</TableCell>
-                  <TableCell><Badge variant="secondary">{p.lineItems?.length || 0} items</Badge></TableCell>
-                  <TableCell className="text-right font-mono font-bold text-emerald-500">₹{Number(p.totalAmount).toLocaleString('en-IN')}</TableCell>
+                  <TableCell><Badge variant="secondary">{(p.lineItems as any[])?.length || 0} items</Badge></TableCell>
+                  <TableCell className="text-right font-mono text-xs text-muted-foreground">
+                    {Number((p as any).taxTotal || 0) > 0 ? `₹${fmt(Number((p as any).taxTotal || 0))}` : '—'}
+                  </TableCell>
+                  <TableCell className="text-right font-mono font-bold text-primary">₹{fmt(Number(p.totalAmount))}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(p)} title="View"><Eye className="w-4 h-4" /></Button>
-                      {perm.canDownload && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => handleDownloadPO(p)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>
-                      )}
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(p)}><Eye className="w-4 h-4" /></Button>
                       {perm.canEdit && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="Edit" onClick={() => {
-                          setEditItem(p);
-                          editForm.reset({ purchaseDate: p.purchaseDate, invoiceNumber: p.invoiceNumber || '', notes: p.notes || '' });
-                        }}><Edit2 className="w-4 h-4" /></Button>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => { setEditItem(p); editForm.reset({ purchaseDate: p.purchaseDate, invoiceNumber: p.invoiceNumber || '', notes: (p as any).notes || '' }); }}>
+                          <Edit2 className="w-4 h-4" />
+                        </Button>
                       )}
                       {perm.canDelete && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" title="Delete" onClick={() => setDeleteTarget(p)}>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => setDeleteTarget(p)}>
                           <Trash2 className="w-4 h-4" />
                         </Button>
                       )}
@@ -211,112 +244,206 @@ export default function Purchases() {
         </div>
       </div>
 
-      {/* Create Dialog */}
-      <Dialog open={isOpen} onOpenChange={setIsOpen}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Create Purchase Order</DialogTitle></DialogHeader>
+      {/* ── New Purchase Bill Dialog ── */}
+      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) form.reset(); }}>
+        <DialogContent className="sm:max-w-5xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>New Purchase Bill</DialogTitle>
+            <DialogDescription>Enter purchase details with HSN, GST rate and discount per item</DialogDescription>
+          </DialogHeader>
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
-              <div className="grid grid-cols-2 gap-4">
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6 pt-2">
+              {/* Header */}
+              <div className="grid grid-cols-3 gap-4">
                 <FormField control={form.control} name="vendorId" render={({ field }) => (
                   <FormItem><FormLabel>Vendor <span className="text-destructive">*</span></FormLabel>
                     <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
                       <FormControl><SelectTrigger><SelectValue placeholder="Select vendor" /></SelectTrigger></FormControl>
-                      <SelectContent>{vendors.map(v => <SelectItem key={v.id} value={String(v.id)}>{v.name}</SelectItem>)}</SelectContent>
+                      <SelectContent>{vendors.map((v: any) => <SelectItem key={v.id} value={String(v.id)}>{v.name}</SelectItem>)}</SelectContent>
                     </Select><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="purchaseDate" render={({ field }) => (
                   <FormItem><FormLabel>Date <span className="text-destructive">*</span></FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="invoiceNumber" render={({ field }) => (
-                  <FormItem><FormLabel>Invoice Number</FormLabel><FormControl><Input placeholder="Optional" {...field} /></FormControl><FormMessage /></FormItem>
+                  <FormItem><FormLabel>Invoice Ref #</FormLabel><FormControl><Input placeholder="Vendor's invoice no." {...field} /></FormControl></FormItem>
                 )} />
               </div>
 
+              {/* Line Items */}
               <div>
-                <div className="flex justify-between items-center mb-3">
-                  <p className="font-semibold text-sm">Line Items</p>
-                  <Button type="button" variant="outline" size="sm" onClick={() => append({ materialType: 'raw_material', materialId: 0, quantity: 1, unitCost: 0 })}><Plus className="w-3 h-3 mr-1" /> Add Item</Button>
-                </div>
-                <div className="space-y-3">
-                  {fields.map((field, i) => {
-                    const matType = form.watch(`lineItems.${i}.materialType`);
-                    const options = matType === 'raw_material' ? rawMaterials : materials;
-                    const q = form.watch(`lineItems.${i}.quantity`) || 0;
-                    const c = form.watch(`lineItems.${i}.unitCost`) || 0;
+                <div className="text-sm font-medium mb-2">Line Items</div>
+                <div className="border border-border rounded-lg overflow-hidden">
+                  <div className="grid bg-muted/30 text-xs font-medium text-muted-foreground uppercase tracking-wide px-3 py-2" style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr 1fr auto' }}>
+                    <span>Item</span><span>HSN</span><span>Qty</span><span>Rate ₹</span><span>Disc %</span><span>GST %</span><span className="text-right">Total ₹</span><span />
+                  </div>
+                  {fields.map((field, index) => {
+                    const li = watchLines[index] || {};
+                    const calc = calcLine(Number(li.quantity) || 0, Number(li.unitCost) || 0, Number(li.discount) || 0, Number(li.gstRate) || 0, li.taxType || 'intra');
                     return (
-                      <div key={field.id} className="grid grid-cols-12 gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border">
-                        <div className="col-span-3">
-                          <FormField control={form.control} name={`lineItems.${i}.materialType`} render={({ field: f }) => (
-                            <FormItem><FormLabel className="text-xs">Type</FormLabel>
-                              <Select onValueChange={f.onChange} value={f.value}>
-                                <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger></FormControl>
-                                <SelectContent><SelectItem value="raw_material">Raw Material</SelectItem><SelectItem value="material">Packaging</SelectItem></SelectContent>
-                              </Select></FormItem>
-                          )} />
+                      <div key={field.id} className="grid items-center gap-2 px-3 py-2 border-t border-border" style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr 1fr auto' }}>
+                        {/* Item type + item selector combined */}
+                        <div className="flex gap-1">
+                          <Select onValueChange={v => form.setValue(`lineItems.${index}.materialType`, v as any)} value={form.watch(`lineItems.${index}.materialType`)}>
+                            <SelectTrigger className="w-[90px] text-xs h-8"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="raw_material">Raw</SelectItem>
+                              <SelectItem value="material">Material</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <Select onValueChange={v => form.setValue(`lineItems.${index}.materialId`, Number(v))} value={form.watch(`lineItems.${index}.materialId`) ? String(form.watch(`lineItems.${index}.materialId`)) : ''}>
+                            <SelectTrigger className="h-8 text-xs flex-1 min-w-0"><SelectValue placeholder="Select" /></SelectTrigger>
+                            <SelectContent>
+                              {(form.watch(`lineItems.${index}.materialType`) === 'raw_material' ? rawMaterials : materials).map((m: any) => (
+                                <SelectItem key={m.id} value={String(m.id)}>{m.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         </div>
-                        <div className="col-span-4">
-                          <FormField control={form.control} name={`lineItems.${i}.materialId`} render={({ field: f }) => (
-                            <FormItem><FormLabel className="text-xs">Item</FormLabel>
-                              <Select onValueChange={v => f.onChange(Number(v))} value={f.value ? String(f.value) : ''}>
-                                <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger></FormControl>
-                                <SelectContent>{options.map((o: any) => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}</SelectContent>
-                              </Select></FormItem>
-                          )} />
+                        <Input className="h-8 text-xs font-mono" placeholder="HSN" {...form.register(`lineItems.${index}.hsnCode`)} />
+                        <Input className="h-8 text-xs text-right" type="number" min={0} step="0.001" {...form.register(`lineItems.${index}.quantity`)} />
+                        <Input className="h-8 text-xs text-right" type="number" min={0} step="0.01" {...form.register(`lineItems.${index}.unitCost`)} />
+                        <Input className="h-8 text-xs text-right" type="number" min={0} max={100} step="0.1" placeholder="0" {...form.register(`lineItems.${index}.discount`)} />
+                        <div className="flex gap-1 items-center">
+                          <Select onValueChange={v => form.setValue(`lineItems.${index}.gstRate`, Number(v))} value={String(form.watch(`lineItems.${index}.gstRate`) ?? 5)}>
+                            <SelectTrigger className="h-8 text-xs w-[56px]"><SelectValue /></SelectTrigger>
+                            <SelectContent>{GST_RATES.map(r => <SelectItem key={r} value={String(r)}>{r}%</SelectItem>)}</SelectContent>
+                          </Select>
+                          <Select onValueChange={v => form.setValue(`lineItems.${index}.taxType`, v as any)} value={form.watch(`lineItems.${index}.taxType`) || 'intra'}>
+                            <SelectTrigger className="h-8 text-xs w-[52px]"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="intra">Intra</SelectItem>
+                              <SelectItem value="inter">Inter</SelectItem>
+                            </SelectContent>
+                          </Select>
                         </div>
-                        <div className="col-span-2">
-                          <FormField control={form.control} name={`lineItems.${i}.quantity`} render={({ field: f }) => (
-                            <FormItem><FormLabel className="text-xs">Qty</FormLabel><FormControl><Input type="number" step="0.01" className="h-8 text-xs" {...f} /></FormControl></FormItem>
-                          )} />
-                        </div>
-                        <div className="col-span-2">
-                          <FormField control={form.control} name={`lineItems.${i}.unitCost`} render={({ field: f }) => (
-                            <FormItem><FormLabel className="text-xs">Unit Cost ₹</FormLabel><FormControl><Input type="number" step="0.01" className="h-8 text-xs" {...f} /></FormControl></FormItem>
-                          )} />
-                        </div>
-                        <div className="col-span-1 flex flex-col items-end gap-1">
-                          <p className="text-[10px] text-muted-foreground">₹{(q * c).toFixed(0)}</p>
-                          <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(i)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
-                        </div>
+                        <div className="text-right text-sm font-mono font-medium">₹{fmt(calc.lineTotal)}</div>
+                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(index)} disabled={fields.length === 1}>
+                          <X className="w-3.5 h-3.5" />
+                        </Button>
                       </div>
                     );
                   })}
                 </div>
+                <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => append({ ...defaultLine })}>
+                  <Plus className="w-3.5 h-3.5 mr-1" /> Add Line
+                </Button>
               </div>
 
-              <FormField control={form.control} name="notes" render={({ field }) => (
-                <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea placeholder="Optional..." rows={2} {...field} /></FormControl></FormItem>
-              )} />
-
-              <DialogFooter className="flex items-center justify-between w-full">
-                <p className="text-sm font-bold text-primary">Total: ₹{lineTotal(fields).toLocaleString('en-IN')}</p>
-                <div className="flex gap-2">
-                  <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
-                  <Button type="submit" disabled={createMutation.isPending}>{createMutation.isPending ? 'Creating…' : 'Create PO'}</Button>
+              {/* Bill Summary */}
+              <div className="grid grid-cols-2 gap-6">
+                <FormField control={form.control} name="notes" render={({ field }) => (
+                  <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea rows={3} placeholder="Optional notes" {...field} /></FormControl></FormItem>
+                )} />
+                <div className="bg-muted/20 rounded-lg p-4 space-y-2 text-sm">
+                  <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="font-mono">₹{fmt(billSummary.subtotal)}</span></div>
+                  {billSummary.discountTotal > 0 && (
+                    <div className="flex justify-between"><span className="text-muted-foreground">(-) Discount</span><span className="font-mono text-red-500">-₹{fmt(billSummary.discountTotal)}</span></div>
+                  )}
+                  <div className="flex justify-between"><span className="text-muted-foreground">Taxable Amount</span><span className="font-mono">₹{fmt(billSummary.taxableTotal)}</span></div>
+                  <Separator />
+                  {billSummary.cgstTotal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">CGST</span><span className="font-mono">₹{fmt(billSummary.cgstTotal)}</span></div>}
+                  {billSummary.sgstTotal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">SGST</span><span className="font-mono">₹{fmt(billSummary.sgstTotal)}</span></div>}
+                  {billSummary.igstTotal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">IGST</span><span className="font-mono">₹{fmt(billSummary.igstTotal)}</span></div>}
+                  {Math.abs(roundOff) > 0.001 && <div className="flex justify-between"><span className="text-muted-foreground">Round Off</span><span className="font-mono">{roundOff > 0 ? '+' : ''}₹{fmt(Math.abs(roundOff))}</span></div>}
+                  <Separator />
+                  <div className="flex justify-between font-bold text-base pt-1"><span>Grand Total</span><span className="font-mono text-primary">₹{grandTotal.toLocaleString('en-IN')}</span></div>
                 </div>
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
+                <Button type="submit" disabled={createMutation.isPending}>{createMutation.isPending ? 'Saving…' : 'Save Purchase Bill'}</Button>
               </DialogFooter>
             </form>
           </Form>
         </DialogContent>
       </Dialog>
 
-      {/* Edit Dialog */}
+      {/* ── View Bill Sheet ── */}
+      <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
+        <SheetContent className="sm:max-w-2xl overflow-y-auto">
+          {viewItem && (
+            <>
+              <SheetHeader className="mb-4">
+                <SheetTitle className="text-primary">Purchase Bill #{String(viewItem.id).padStart(4, '0')}</SheetTitle>
+                <SheetDescription>
+                  {viewItem.vendorName} · {new Date(viewItem.purchaseDate).toLocaleDateString('en-IN')}
+                  {viewItem.invoiceNumber && ` · Ref: ${viewItem.invoiceNumber}`}
+                </SheetDescription>
+              </SheetHeader>
+
+              {/* Line items table */}
+              <div className="border border-border rounded-lg overflow-hidden mb-4">
+                <table className="w-full text-xs">
+                  <thead className="bg-muted/30">
+                    <tr>
+                      <th className="text-left px-3 py-2">Item</th>
+                      <th className="text-left px-2 py-2">HSN</th>
+                      <th className="text-right px-2 py-2">Qty</th>
+                      <th className="text-right px-2 py-2">Rate</th>
+                      <th className="text-right px-2 py-2">Disc%</th>
+                      <th className="text-right px-2 py-2">Taxable</th>
+                      <th className="text-right px-2 py-2">CGST</th>
+                      <th className="text-right px-2 py-2">SGST</th>
+                      <th className="text-right px-2 py-2">IGST</th>
+                      <th className="text-right px-3 py-2">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(viewItem.lineItems as any[])?.map((li: any, i: number) => (
+                      <tr key={i} className="border-t border-border hover:bg-muted/10">
+                        <td className="px-3 py-2 font-medium">{getMaterialName(li)}</td>
+                        <td className="px-2 py-2 font-mono text-muted-foreground">{li.hsnCode || '—'}</td>
+                        <td className="text-right px-2 py-2">{li.quantity}</td>
+                        <td className="text-right px-2 py-2 font-mono">₹{fmt(Number(li.unitCost))}</td>
+                        <td className="text-right px-2 py-2">{Number(li.discount || 0) > 0 ? `${li.discount}%` : '—'}</td>
+                        <td className="text-right px-2 py-2 font-mono">₹{fmt(Number(li.taxableValue || (li.quantity * li.unitCost)))}</td>
+                        <td className="text-right px-2 py-2 font-mono">{Number(li.cgst || 0) > 0 ? `₹${fmt(Number(li.cgst))}` : '—'}</td>
+                        <td className="text-right px-2 py-2 font-mono">{Number(li.sgst || 0) > 0 ? `₹${fmt(Number(li.sgst))}` : '—'}</td>
+                        <td className="text-right px-2 py-2 font-mono">{Number(li.igst || 0) > 0 ? `₹${fmt(Number(li.igst))}` : '—'}</td>
+                        <td className="text-right px-3 py-2 font-mono font-bold">₹{fmt(Number(li.lineTotal || li.quantity * li.unitCost))}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Summary */}
+              <div className="bg-muted/20 rounded-lg p-4 space-y-2 text-sm mb-4">
+                {Number(viewItem.discountTotal || 0) > 0 && (
+                  <div className="flex justify-between"><span className="text-muted-foreground">(-) Discount</span><span className="font-mono text-red-500">-₹{fmt(Number(viewItem.discountTotal))}</span></div>
+                )}
+                {Number(viewItem.taxTotal || 0) > 0 && (
+                  <div className="flex justify-between"><span className="text-muted-foreground">Tax</span><span className="font-mono">₹{fmt(Number(viewItem.taxTotal))}</span></div>
+                )}
+                {Math.abs(Number(viewItem.roundOff || 0)) > 0.001 && (
+                  <div className="flex justify-between"><span className="text-muted-foreground">Round Off</span><span className="font-mono">₹{fmt(Number(viewItem.roundOff))}</span></div>
+                )}
+                <Separator />
+                <div className="flex justify-between font-bold text-base"><span>Grand Total</span><span className="font-mono text-primary">₹{fmt(Number(viewItem.totalAmount))}</span></div>
+              </div>
+
+              {viewItem.notes && <p className="text-sm text-muted-foreground italic mb-4">{viewItem.notes}</p>}
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
+
+      {/* ── Edit Dialog ── */}
       <Dialog open={!!editItem} onOpenChange={v => !v && setEditItem(null)}>
         <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Edit PO-{editItem && String(editItem.id).padStart(4, '0')}</DialogTitle>
-            <DialogDescription>Update date, invoice number, or notes. Line items cannot be changed.</DialogDescription>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>Edit Purchase Bill #{editItem?.id}</DialogTitle></DialogHeader>
           <Form {...editForm}>
             <form onSubmit={editForm.handleSubmit(onEditSubmit)} className="space-y-4 pt-2">
               <FormField control={editForm.control} name="purchaseDate" render={({ field }) => (
-                <FormItem><FormLabel>Purchase Date</FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
+                <FormItem><FormLabel>Date</FormLabel><FormControl><Input type="date" {...field} /></FormControl></FormItem>
               )} />
               <FormField control={editForm.control} name="invoiceNumber" render={({ field }) => (
-                <FormItem><FormLabel>Invoice Number</FormLabel><FormControl><Input placeholder="Optional" {...field} /></FormControl></FormItem>
+                <FormItem><FormLabel>Invoice Ref</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
               <FormField control={editForm.control} name="notes" render={({ field }) => (
-                <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea placeholder="Optional notes..." rows={3} {...field} /></FormControl></FormItem>
+                <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
               )} />
               <DialogFooter>
                 <Button variant="outline" type="button" onClick={() => setEditItem(null)}>Cancel</Button>
@@ -327,16 +454,14 @@ export default function Purchases() {
         </DialogContent>
       </Dialog>
 
-      {/* Delete Confirmation */}
+      {/* ── Delete Confirm ── */}
       <Dialog open={!!deleteTarget} onOpenChange={v => !v && setDeleteTarget(null)}>
         <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-destructive"><Trash2 className="w-5 h-5" /> Delete Purchase Order</DialogTitle>
-            <DialogDescription>
-              Delete PO-{deleteTarget && String(deleteTarget.id).padStart(4, '0')} from {deleteTarget?.vendorName}?
-              <br /><span className="text-destructive font-medium">Material stock will be reversed. This cannot be undone.</span>
-            </DialogDescription>
-          </DialogHeader>
+          <DialogHeader><DialogTitle className="text-destructive flex items-center gap-2"><Trash2 className="w-5 h-5" />Delete Purchase Bill</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground py-2">
+            Delete bill <span className="font-semibold text-foreground">#{deleteTarget?.id}</span> from <span className="font-semibold">{deleteTarget?.vendorName}</span>?
+            <br /><span className="text-destructive text-xs font-medium mt-1 block">Stock additions from this bill will be reversed.</span>
+          </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
             <Button variant="destructive" onClick={handleDelete} disabled={deleteMutation.isPending}>
@@ -345,57 +470,6 @@ export default function Purchases() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* View Sheet */}
-      <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
-        <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
-          <SheetHeader>
-            <SheetTitle>PO-{viewItem && String(viewItem.id).padStart(4, '0')}</SheetTitle>
-            <SheetDescription>Purchase order details</SheetDescription>
-          </SheetHeader>
-          {viewItem && (
-            <div className="mt-6 space-y-5">
-              <div className="grid grid-cols-2 gap-4">
-                {[['Vendor', viewItem.vendorName], ['Date', new Date(viewItem.purchaseDate).toLocaleDateString('en-IN')], ['Invoice', viewItem.invoiceNumber || '—'], ['Total', `₹${Number(viewItem.totalAmount).toLocaleString('en-IN')}`]].map(([k, v]) => (
-                  <div key={k} className="flex flex-col gap-1">
-                    <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
-                    <span className="font-semibold">{v}</span>
-                  </div>
-                ))}
-              </div>
-              <div>
-                <p className="text-sm font-semibold mb-2">Line Items</p>
-                <div className="space-y-2">
-                  {(viewItem.lineItems || []).map((li: any, i: number) => (
-                    <div key={i} className="flex justify-between items-center p-3 bg-muted/20 rounded-lg text-sm">
-                      <div>
-                        <Badge variant="secondary" className="text-xs mr-2">{li.materialType === 'raw_material' ? 'Raw' : 'Pkg'}</Badge>
-                        <span className="font-medium">{getMaterialName(li)}</span>
-                      </div>
-                      <div className="text-right text-muted-foreground">
-                        {li.quantity} × ₹{Number(li.unitCost).toFixed(2)} = <span className="text-foreground font-bold">₹{(Number(li.quantity) * Number(li.unitCost)).toLocaleString('en-IN')}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              {viewItem.notes && <div><span className="text-xs text-muted-foreground uppercase">Notes</span><p className="mt-1">{viewItem.notes}</p></div>}
-              <div className="flex gap-2 pt-2">
-                {perm.canDownload && (
-                  <Button className="flex-1" variant="outline" onClick={() => handleDownloadPO(viewItem)}>
-                    <FileDown className="w-4 h-4 mr-2" /> Download PO PDF
-                  </Button>
-                )}
-                {perm.canEdit && (
-                  <Button className="flex-1" variant="outline" onClick={() => { setViewItem(null); setEditItem(viewItem); editForm.reset({ purchaseDate: viewItem.purchaseDate, invoiceNumber: viewItem.invoiceNumber || '', notes: viewItem.notes || '' }); }}>
-                    <Edit2 className="w-4 h-4 mr-2" /> Edit
-                  </Button>
-                )}
-              </div>
-            </div>
-          )}
-        </SheetContent>
-      </Sheet>
     </AppLayout>
   );
 }

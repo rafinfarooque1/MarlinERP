@@ -1,42 +1,71 @@
 ---
-name: Marlin ERP Architecture
-description: Key decisions, structure, and gotchas for the Marlin Frozen Fruits ERP system
+name: Marlin ERP architecture
+description: Full stack ERP for Marlin Frozen Fruits — api-server + marlin-erp + shared libs
 ---
 
+## Login
+- username: admin, password: admin123
+
 ## Stack
-- `artifacts/api-server` — Express + Drizzle ORM, esbuild bundled, port from `PORT` env
-- `artifacts/marlin-erp` — React + Vite frontend, dark futuristic theme (electric blue/cyan on deep dark)
-- `lib/db` — Drizzle schema, Postgres; push with `pnpm --filter @workspace/db run push`
-- `lib/api-spec/openapi.yaml` — Source of truth for all endpoints (~60+)
-- `lib/api-client-react/src/generated/api.ts` — Generated React Query hooks (do NOT hand-edit)
-- `lib/api-zod/src/generated/api.ts` — Generated Zod schemas (do NOT hand-edit)
+- api-server: Express + Drizzle ORM + PostgreSQL (via pool from @workspace/db)
+- marlin-erp: React + Vite + Wouter routing + React Query
+- lib/api-client-react: generated hooks + custom hooks (production.ts, bom.ts, vouchers.ts)
+- lib/api-zod: generated Zod schemas for API validation
 
-## Auth
-- Simple base64 token: `Buffer.from("id:username").toString("base64")`
-- Default admin login: username=`admin`, password=`admin123`
-- Default staff password: `default123`
-- No bcrypt in demo — passwords stored plain in `password_hash` column
+## Custom API hooks pattern
+- New hooks go in lib/api-client-react/src/<name>.ts + export from index.ts
+- Must run `pnpm tsc` in lib/api-client-react after adding files
+- Use `customFetch` from './custom-fetch' — same pattern as bom.ts / production.ts
 
-## Zod Schema Naming (Orval codegen)
-`CreateXBody`, `UpdateXBody`, `GetXParams`, `UpdateXParams`, `DeleteXParams`, `ListXResponse`, `GetXResponse`, `CreateXResponse`, `ListXQueryParams`
-Exception: cash-bank accounts → `CreateCashBankAccountBody` (not `CreateCashBankBody`)
+## DB migrations
+- All startup migrations are in artifacts/api-server/src/index.ts::runMigrations()
+- Non-fatal (warnings only), use ALTER TABLE IF NOT EXISTS pattern
+- Raw pool.query for new tables not in Drizzle schema
+- New tables added: payments, receipts (both reference account_ledgers)
+- Purchases table got: tax_total, discount_total, round_off columns
+- account_ledgers table got: code column
 
-## DB Schema Files
-All in `lib/db/src/schema/` — company, branches, vendors, customers, inventory, purchases, production, transfers, sales, hr, accounts, coupons, permissions, activity
+## Default CoA seed data
+- 7 root groups seeded on startup: Capital Account, Sales Account, Purchase Account, Expenses, Cash & Bank, Trade Receivables, Trade Payables
+- Uses DO $$ IF NOT EXISTS ... $$ pattern to avoid duplicates
 
-## Numeric Fields
-Drizzle returns PG `numeric` columns as strings. Always convert: `Number(row.amount)` before returning in API responses.
+## Purchase Bill (as of latest)
+- lineItems JSONB now rich: hsnCode, gstRate, taxType (intra/inter), discount, discountAmt, taxableValue, cgst, sgst, igst, taxAmount, lineTotal
+- Total columns: tax_total, discount_total, round_off on purchases table
+- Route handles raw req.body.lineItems (bypasses Zod strip) for full JSONB storage
+- GST rates: 0/5/12/18/28%; intra = CGST+SGST split, inter = IGST
 
-## Inter-state Transfer
-Stock transfers between warehouses in different states auto-set `is_interstate = true`. Determined by comparing `warehousesTable.state` on both ends.
+## Chart of Accounts
+- Tree structure returned by GET /api/accounts/chart (nested children)
+- GET /api/accounts/chart/flat for dropdowns (flat list)
+- useListAccountsFlat() hook in vouchers.ts for dropdowns
 
-**Why:** GST compliance requires separate sale+purchase ledger entries for interstate movements.
+## Payment & Receipt vouchers
+- Tables: payments (paidFromLedgerId, paidToLedgerId), receipts (receivedFromLedgerId, receivedInLedgerId)
+- Routes: GET/POST/DELETE /api/accounts/payments and /api/accounts/receipts
+- Hooks: useListPayments, useCreatePayment, useDeletePayment, useListReceipts, useCreateReceipt, useDeleteReceipt in lib/api-client-react/src/vouchers.ts
 
-## Seeded Demo Data
-- 3 warehouses (Karnataka, Tamil Nadu, Maharashtra)
-- 4 outlets (2 in KA, 2 in TN)
-- 5 employees across all branch types
-- 5 items, stock entries for warehouse/outlet/production
-- 4 hierarchies (Director→Manager→Supervisor→Staff)
-- 3 vendors, 3 customers, 3 coupons
-- Chart of accounts, cash/bank accounts
+## Ledger statement aggregation
+- GET /api/accounts/ledger-statement?accountId=N&fromDate=&toDate=
+- Aggregates from: payments, receipts, expenses, sales (if income type), purchases (if expense type with 'purchase' in name)
+- Returns both `entries` and `transactions` keys (backward compat)
+
+## Navigation (current)
+- Production: Units, Item Master, BOM Templates, Batches, Stock Transfers, Purchases
+- Accounts: Chart of Accounts, Ledger, Payments, Receipts, GST Summary
+- Old: Cash & Bank and Expenses removed from sidebar (routes kept for backward compat)
+
+## Item Master page (/production/item-master)
+- Unified view of raw_materials + materials + items tables
+- Type badge per row; filter by type; unified create/edit with type selector
+- Items (finished_good type) get extra HSN code + tax rate fields
+- Old /production/materials, /production/raw-materials, /production/items routes still exist (BOM/Production pages reference them)
+
+## Permissions
+- usePermission hook at src/lib/usePermission.ts
+- Module name must match sidebar group name exactly (e.g. 'Accounts', 'Purchases', 'Production')
+- Level-1 hierarchy = full access always
+
+## Item prices
+- valid_from/valid_to added as text columns via startup migration
+- ItemPrice type from generated code lacks these; use (ip as any).validFrom casts

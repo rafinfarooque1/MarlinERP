@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useGetLedgerStatement, useListChartOfAccounts } from '@workspace/api-client-react';
+import { useGetLedgerStatement, useListAccountsFlat } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,7 +10,7 @@ import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 
 export default function Ledger() {
-  const { data: accounts = [] } = useListChartOfAccounts();
+  const { data: accounts = [] } = useListAccountsFlat();
   const [accountId, setAccountId] = useState<string>('');
   const now = new Date();
   const [fromDate, setFromDate] = useState(`${now.getFullYear()}-01-01`);
@@ -21,7 +21,7 @@ export default function Ledger() {
     { query: { enabled: !!accountId } }
   );
 
-  const entries = statement?.entries || [];
+  const entries = (statement as any)?.entries || (statement as any)?.transactions || [];
 
   return (
     <AppLayout>
@@ -40,7 +40,7 @@ export default function Ledger() {
         <div className="flex flex-wrap gap-3">
           <Select value={accountId} onValueChange={setAccountId}>
             <SelectTrigger className="w-60"><SelectValue placeholder="Select account" /></SelectTrigger>
-            <SelectContent>{accounts.map(a => <SelectItem key={a.id} value={String(a.id)}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
+            <SelectContent>{(accounts as any[]).map((a: any) => <SelectItem key={a.id} value={String(a.id)}>{a.code ? `[${a.code}] ` : ''}{a.name}</SelectItem>)}</SelectContent>
           </Select>
           <div className="flex items-center gap-2">
             <Calendar className="w-4 h-4 text-muted-foreground" />

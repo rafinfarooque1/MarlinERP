@@ -2,27 +2,72 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { pool } from "@workspace/db";
 
-// Run lightweight schema migrations before accepting connections
 async function runMigrations() {
+  // Existing migrations
   await pool.query(`
     ALTER TABLE item_prices ADD COLUMN IF NOT EXISTS valid_from text;
     ALTER TABLE item_prices ADD COLUMN IF NOT EXISTS valid_to text;
+    ALTER TABLE account_ledgers ADD COLUMN IF NOT EXISTS code text;
+    ALTER TABLE purchases ADD COLUMN IF NOT EXISTS tax_total numeric(12,2) DEFAULT 0;
+    ALTER TABLE purchases ADD COLUMN IF NOT EXISTS discount_total numeric(12,2) DEFAULT 0;
+    ALTER TABLE purchases ADD COLUMN IF NOT EXISTS round_off numeric(12,2) DEFAULT 0;
+
+    CREATE TABLE IF NOT EXISTS payments (
+      id serial PRIMARY KEY,
+      voucher_number text,
+      payment_date text NOT NULL,
+      paid_from_ledger_id integer NOT NULL,
+      paid_to_ledger_id integer NOT NULL,
+      amount numeric(12,2) NOT NULL DEFAULT 0,
+      narration text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS receipts (
+      id serial PRIMARY KEY,
+      voucher_number text,
+      receipt_date text NOT NULL,
+      received_from_ledger_id integer NOT NULL,
+      received_in_ledger_id integer NOT NULL,
+      amount numeric(12,2) NOT NULL DEFAULT 0,
+      narration text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+  `);
+
+  // Seed default root account groups (only if none exist)
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM account_ledgers WHERE name = 'Capital Account' AND parent_id IS NULL) THEN
+        INSERT INTO account_ledgers (name, type, code, description) VALUES ('Capital Account', 'equity', 'CAP', 'Owner capital and investments');
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM account_ledgers WHERE name = 'Sales Account' AND parent_id IS NULL) THEN
+        INSERT INTO account_ledgers (name, type, code, description) VALUES ('Sales Account', 'income', 'SAL', 'Revenue from sales');
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM account_ledgers WHERE name = 'Purchase Account' AND parent_id IS NULL) THEN
+        INSERT INTO account_ledgers (name, type, code, description) VALUES ('Purchase Account', 'expense', 'PUR', 'Cost of goods purchased');
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM account_ledgers WHERE name = 'Expenses' AND parent_id IS NULL) THEN
+        INSERT INTO account_ledgers (name, type, code, description) VALUES ('Expenses', 'expense', 'EXP', 'Business operating expenses');
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM account_ledgers WHERE name = 'Cash & Bank' AND parent_id IS NULL) THEN
+        INSERT INTO account_ledgers (name, type, code, description) VALUES ('Cash & Bank', 'asset', 'CASH', 'Cash and bank balances');
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM account_ledgers WHERE name = 'Trade Receivables' AND parent_id IS NULL) THEN
+        INSERT INTO account_ledgers (name, type, code, description) VALUES ('Trade Receivables', 'asset', 'REC', 'Customer receivables');
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM account_ledgers WHERE name = 'Trade Payables' AND parent_id IS NULL) THEN
+        INSERT INTO account_ledgers (name, type, code, description) VALUES ('Trade Payables', 'liability', 'PAY', 'Vendor payables');
+      END IF;
+    END $$;
   `);
 }
 
 const rawPort = process.env["PORT"];
-
-if (!rawPort) {
-  throw new Error(
-    "PORT environment variable is required but was not provided.",
-  );
-}
-
+if (!rawPort) throw new Error("PORT environment variable is required but was not provided.");
 const port = Number(rawPort);
-
-if (Number.isNaN(port) || port <= 0) {
-  throw new Error(`Invalid PORT value: "${rawPort}"`);
-}
+if (Number.isNaN(port) || port <= 0) throw new Error(`Invalid PORT value: "${rawPort}"`);
 
 (async () => {
   try {
@@ -32,10 +77,7 @@ if (Number.isNaN(port) || port <= 0) {
   }
 
   app.listen(port, (err) => {
-    if (err) {
-      logger.error({ err }, "Error listening on port");
-      process.exit(1);
-    }
+    if (err) { logger.error({ err }, "Error listening on port"); process.exit(1); }
     logger.info({ port }, "Server listening");
   });
 })();

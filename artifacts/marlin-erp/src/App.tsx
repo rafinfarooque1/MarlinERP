@@ -38,6 +38,9 @@ import Ledger from './pages/accounts/Ledger';
 import CashBank from './pages/accounts/CashBank';
 import Expenses from './pages/accounts/Expenses';
 import GstSummary from './pages/accounts/GstSummary';
+import Payment from './pages/accounts/Payment';
+import ReceiptPage from './pages/accounts/Receipt';
+import ItemMaster from './pages/production/ItemMaster';
 
 import CompanySettings from './pages/company/Settings';
 import Permissions from './pages/company/Permissions';
@@ -113,7 +116,11 @@ function Router() {
       <Route path="/accounts/ledger"><AuthGuard><Ledger /></AuthGuard></Route>
       <Route path="/accounts/cash-bank"><AuthGuard><CashBank /></AuthGuard></Route>
       <Route path="/accounts/expenses"><AuthGuard><Expenses /></AuthGuard></Route>
+      <Route path="/accounts/payments"><AuthGuard><Payment /></AuthGuard></Route>
+      <Route path="/accounts/receipts"><AuthGuard><ReceiptPage /></AuthGuard></Route>
       <Route path="/accounts/gst"><AuthGuard><GstSummary /></AuthGuard></Route>
+
+      <Route path="/production/item-master"><AuthGuard><ItemMaster /></AuthGuard></Route>
 
       <Route path="/company/settings"><AuthGuard><CompanySettings /></AuthGuard></Route>
       <Route path="/company/permissions"><AuthGuard><Permissions /></AuthGuard></Route>
