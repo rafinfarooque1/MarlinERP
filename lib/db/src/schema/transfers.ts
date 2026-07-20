@@ -12,7 +12,7 @@ export const stockTransfersTable = pgTable("stock_transfers", {
   transferDate: date("transfer_date", { mode: "string" }).notNull(),
   lineItems: jsonb("line_items").notNull().default([]),
   isInterstate: boolean("is_interstate").notNull().default(false),
-  status: text("status").notNull().default("completed"), // pending, completed, cancelled
+  status: text("status").notNull().default("in_transit"), // in_transit, completed, rejected
   notes: text("notes"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

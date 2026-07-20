@@ -102,18 +102,23 @@ router.post("/stock/transfers", async (req, res): Promise<void> => {
     if (from && to && from.state !== to.state) isInterstate = true;
   }
 
-  const [row] = await db.insert(stockTransfersTable).values({
-    challanNumber,
-    fromType: parsed.data.fromType,
-    fromId: parsed.data.fromId,
-    toType: parsed.data.toType,
-    toId: parsed.data.toId,
-    transferDate: parsed.data.transferDate,
-    lineItems: lineItems,
-    isInterstate,
-    status: "in_transit",   // ← starts as in_transit, not completed
-    notes: parsed.data.notes ?? null,
-  }).returning();
+  // Use pool.query directly so status: 'in_transit' is never overridden by the Drizzle schema default
+  const insertResult = await pool.query(
+    `INSERT INTO stock_transfers
+       (challan_number, from_type, from_id, to_type, to_id, transfer_date, line_items, is_interstate, status, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'in_transit',$9)
+     RETURNING id, challan_number, from_type, from_id, to_type, to_id, transfer_date, line_items, is_interstate, status, notes, created_at`,
+    [
+      challanNumber,
+      parsed.data.fromType, parsed.data.fromId,
+      parsed.data.toType,   parsed.data.toId,
+      parsed.data.transferDate,
+      JSON.stringify(lineItems),
+      isInterstate,
+      parsed.data.notes ?? null,
+    ]
+  );
+  const row = insertResult.rows[0];
 
   // Deduct from source immediately (goods have left the location)
   for (const li of lineItems) {
@@ -132,16 +137,27 @@ router.post("/stock/transfers", async (req, res): Promise<void> => {
   }
   // NOTE: destination stock is NOT updated here — only on approval
 
-  const fromName = await getBranchName(row.fromType, row.fromId);
-  const toName   = await getBranchName(row.toType,   row.toId);
+  const fromName = await getBranchName(row.from_type, row.from_id);
+  const toName   = await getBranchName(row.to_type,   row.to_id);
 
   logActivity({
     action: "CREATE", module: "transfers", entityType: "stock_transfer", entityId: row.id,
     description: `Transfer dispatched ${challanNumber}: ${fromName} → ${toName} (${lineItems.length} line${lineItems.length !== 1 ? 's' : ''}) — awaiting receiver approval`,
-    metadata: { after: { challanNumber, fromType: row.fromType, fromId: row.fromId, fromName, toType: row.toType, toId: row.toId, toName, lineCount: lineItems.length, isInterstate } },
+    metadata: { after: { challanNumber, fromType: row.from_type, fromId: row.from_id, fromName, toType: row.to_type, toId: row.to_id, toName, lineCount: lineItems.length, isInterstate } },
   }).catch(() => {});
 
-  res.status(201).json({ ...row, fromName, toName, lineItems: row.lineItems ?? [], status: "in_transit" });
+  res.status(201).json({
+    id: row.id,
+    challanNumber: row.challan_number,
+    fromType: row.from_type, fromId: row.from_id, fromName,
+    toType: row.to_type, toId: row.to_id, toName,
+    transferDate: row.transfer_date,
+    lineItems: row.line_items ?? [],
+    isInterstate: row.is_interstate,
+    status: row.status,   // will be 'in_transit'
+    notes: row.notes,
+    createdAt: row.created_at,
+  });
 });
 
 // Approve a transfer — receiver verifies physical stock and enters actual received quantities
