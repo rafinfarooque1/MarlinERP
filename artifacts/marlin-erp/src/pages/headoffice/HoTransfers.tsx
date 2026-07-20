@@ -1,10 +1,14 @@
 import { useState } from 'react';
-import { useListStockTransfers, useCreateStockTransfer, useListItems, useListWarehouses, useListOutlets, useListStock, getListStockTransfersQueryKey } from '@workspace/api-client-react';
+import {
+  useListStockTransfers, useCreateStockTransfer, useListItems,
+  useListWarehouses, useListOutlets, useListStock, getListStockTransfersQueryKey,
+} from '@workspace/api-client-react';
+import { useApproveTransfer, useRejectTransfer } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -12,12 +16,17 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, ArrowRightLeft, Download, Eye, Trash2, Printer, Calendar, PackageOpen } from 'lucide-react';
+import {
+  Plus, Search, ArrowRightLeft, Download, Eye, Trash2, Printer, Calendar,
+  PackageOpen, CheckCircle2, XCircle, Clock, AlertTriangle, PackageCheck,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV, printHTML } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
+// ── New Transfer form schema ──────────────────────────────────────────────────
 const schema = z.object({
   fromType: z.enum(['warehouse', 'outlet']),
   fromId: z.coerce.number().min(1, 'From location required'),
@@ -29,20 +38,197 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
+// ── Status config ─────────────────────────────────────────────────────────────
+const STATUS_CONFIG: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
+  in_transit: { label: 'In Transit', color: 'text-amber-400 bg-amber-400/10 border-amber-400/30', icon: <Clock className="w-3 h-3" /> },
+  completed:  { label: 'Approved',   color: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30', icon: <CheckCircle2 className="w-3 h-3" /> },
+  rejected:   { label: 'Rejected',   color: 'text-red-400 bg-red-400/10 border-red-400/30', icon: <XCircle className="w-3 h-3" /> },
+};
+
+function StatusBadge({ status }: { status: string }) {
+  const cfg = STATUS_CONFIG[status] ?? { label: status, color: 'text-muted-foreground bg-muted/20 border-border', icon: null };
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-semibold ${cfg.color}`}>
+      {cfg.icon}{cfg.label}
+    </span>
+  );
+}
+
+// ── Approve dialog ────────────────────────────────────────────────────────────
+function ApproveDialog({
+  transfer, items, open, onClose,
+}: { transfer: any; items: any[]; open: boolean; onClose: () => void }) {
+  const approveMutation = useApproveTransfer();
+  const rejectMutation  = useRejectTransfer();
+  const qc = useQueryClient();
+
+  const iMap = new Map(items.map((i: any) => [i.id, i]));
+  // Local state: editable received quantities per line
+  const [received, setReceived] = useState<Record<number, number>>(() => {
+    const init: Record<number, number> = {};
+    (transfer?.lineItems ?? []).forEach((li: any) => { init[li.itemId] = li.quantity; });
+    return init;
+  });
+  const [rejectReason, setRejectReason] = useState('');
+  const [showRejectConfirm, setShowRejectConfirm] = useState(false);
+
+  if (!transfer) return null;
+
+  const handleApprove = () => {
+    const receivedLineItems = (transfer.lineItems ?? []).map((li: any) => ({
+      itemId: li.itemId,
+      quantity: received[li.itemId] ?? li.quantity,
+      costPrice: li.costPrice ?? 0,
+    }));
+    approveMutation.mutate(
+      { id: transfer.id, receivedLineItems, approvedBy: 'admin' },
+      {
+        onSuccess: () => {
+          toast.success('Transfer approved — stock credited to destination');
+          qc.invalidateQueries({ queryKey: getListStockTransfersQueryKey() });
+          onClose();
+        },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Approval failed'),
+      }
+    );
+  };
+
+  const handleReject = () => {
+    rejectMutation.mutate(
+      { id: transfer.id, rejectionReason: rejectReason },
+      {
+        onSuccess: () => {
+          toast.success('Transfer rejected — source stock restored');
+          qc.invalidateQueries({ queryKey: getListStockTransfersQueryKey() });
+          setShowRejectConfirm(false);
+          onClose();
+        },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Rejection failed'),
+      }
+    );
+  };
+
+  return (
+    <>
+      <Dialog open={open && !showRejectConfirm} onOpenChange={v => !v && onClose()}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <PackageCheck className="w-5 h-5 text-primary" />
+              Receive & Approve Transfer
+            </DialogTitle>
+            <DialogDescription>
+              Verify the physical stock received. Adjust quantities if any items are short-shipped, then approve.
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Transfer summary */}
+          <div className="grid grid-cols-2 gap-3 p-4 bg-muted/20 rounded-lg border border-border text-sm">
+            <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Challan</p><p className="font-mono font-bold text-primary">{transfer.challanNumber}</p></div>
+            <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Date</p><p>{new Date(transfer.transferDate).toLocaleDateString('en-IN')}</p></div>
+            <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Dispatched From</p><p className="font-medium">{transfer.fromName}<span className="text-muted-foreground capitalize ml-1">({transfer.fromType})</span></p></div>
+            <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Receiving At</p><p className="font-medium">{transfer.toName}<span className="text-muted-foreground capitalize ml-1">({transfer.toType})</span></p></div>
+            {transfer.isInterstate && <div className="col-span-2"><Badge variant="outline" className="text-amber-400 border-amber-400/40 text-xs">Interstate Transfer</Badge></div>}
+          </div>
+
+          {/* Line items — editable received qty */}
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <p className="font-semibold text-sm">Items to Receive</p>
+              <span className="text-xs text-muted-foreground">— enter actual quantity physically received</span>
+            </div>
+            <div className="space-y-2">
+              {(transfer.lineItems ?? []).map((li: any) => {
+                const item = iMap.get(li.itemId);
+                const recvQty = received[li.itemId] ?? li.quantity;
+                const isShort = recvQty < li.quantity;
+                return (
+                  <div key={li.itemId} className={`grid grid-cols-12 gap-3 items-center p-3 rounded-lg border ${isShort ? 'border-amber-500/40 bg-amber-500/5' : 'border-border bg-muted/20'}`}>
+                    <div className="col-span-5">
+                      <p className="font-medium text-sm">{item?.name ?? `Item #${li.itemId}`}</p>
+                      <p className="text-xs text-muted-foreground">{item?.hsnCode ? `HSN: ${item.hsnCode}` : item?.unit ?? ''}</p>
+                    </div>
+                    <div className="col-span-3 text-center">
+                      <p className="text-xs text-muted-foreground mb-1">Dispatched</p>
+                      <p className="font-mono font-bold text-sm">{li.quantity}<span className="text-muted-foreground font-normal ml-1 text-xs">{item?.unit}</span></p>
+                    </div>
+                    <div className="col-span-4">
+                      <p className="text-xs text-muted-foreground mb-1">Received <span className="text-destructive">*</span></p>
+                      <Input
+                        type="number" min={0} max={li.quantity}
+                        value={recvQty}
+                        onChange={e => setReceived(r => ({ ...r, [li.itemId]: Number(e.target.value) }))}
+                        className={`h-8 text-sm font-mono ${isShort ? 'border-amber-500 focus-visible:ring-amber-500' : ''}`}
+                      />
+                      {isShort && <p className="text-[10px] text-amber-400 mt-1 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{li.quantity - recvQty} short</p>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {transfer.notes && (
+            <div className="p-3 bg-muted/20 rounded-lg border border-border text-sm">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Notes from sender</p>
+              <p>{transfer.notes}</p>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" type="button" onClick={onClose}>Cancel</Button>
+            <Button variant="destructive" type="button" onClick={() => setShowRejectConfirm(true)}>
+              <XCircle className="w-4 h-4 mr-2" /> Reject Transfer
+            </Button>
+            <Button type="button" onClick={handleApprove} disabled={approveMutation.isPending}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white">
+              <CheckCircle2 className="w-4 h-4 mr-2" />
+              {approveMutation.isPending ? 'Approving…' : 'Approve & Credit Stock'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reject confirmation */}
+      <Dialog open={showRejectConfirm} onOpenChange={v => !v && setShowRejectConfirm(false)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive"><XCircle className="w-5 h-5" />Reject Transfer</DialogTitle>
+            <DialogDescription>This will reverse the stock deduction from {transfer.fromName}. The goods will be treated as returned.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-muted-foreground">Provide a reason for rejection (optional):</p>
+            <Textarea rows={3} placeholder="e.g. Items damaged in transit, wrong items received…" value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowRejectConfirm(false)}>Back</Button>
+            <Button variant="destructive" onClick={handleReject} disabled={rejectMutation.isPending}>
+              {rejectMutation.isPending ? 'Rejecting…' : 'Confirm Rejection'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
 export default function HoTransfers() {
   const { data: transfers = [], isLoading } = useListStockTransfers();
   const { data: items = [] } = useListItems();
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
   const [search, setSearch] = useState('');
+  const [tab, setTab] = useState<'all' | 'in_transit' | 'completed' | 'rejected'>('all');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
+  const [approveTarget, setApproveTarget] = useState<any>(null);
   const queryClient = useQueryClient();
   const createMutation = useCreateStockTransfer();
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { fromType: 'warehouse', fromId: 0, toType: 'warehouse', toId: 0, transferDate: new Date().toISOString().split('T')[0], lineItems: [{ itemId: 0, quantity: 1 }], notes: '' },
+    defaultValues: { fromType: 'warehouse', fromId: 0, toType: 'outlet', toId: 0, transferDate: new Date().toISOString().split('T')[0], lineItems: [{ itemId: 0, quantity: 1 }], notes: '' },
   });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
   const watchFromType = form.watch('fromType');
@@ -52,33 +238,46 @@ export default function HoTransfers() {
   const fromOptions = watchFromType === 'warehouse' ? warehouses : outlets;
   const toOptions = watchToType === 'warehouse' ? warehouses : outlets;
 
-  // Load stock for the selected "from" location
   const { data: fromStock = [] } = useListStock(
     { branchType: watchFromType as any, branchId: watchFromId },
     { query: { enabled: !!watchFromId && watchFromId > 0 } }
   );
 
-  // Map: itemId → available qty at from-location
   const stockMap = new Map<number, number>(
     fromStock.map(s => [s.itemId!, Number(s.quantity ?? 0)])
   );
-
-  // Only items with stock > 0 at the from-location
   const availableItems = items.filter(it => (stockMap.get(it.id) ?? 0) > 0);
 
   const onSubmit = (data: FormValues) => {
     createMutation.mutate({ data: data as any }, {
-      onSuccess: () => { toast.success('Transfer created'); queryClient.invalidateQueries({ queryKey: getListStockTransfersQueryKey() }); setIsOpen(false); form.reset(); },
+      onSuccess: () => {
+        toast.success('Transfer dispatched — awaiting receiver approval');
+        queryClient.invalidateQueries({ queryKey: getListStockTransfersQueryKey() });
+        setIsOpen(false);
+        form.reset();
+      },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
   };
 
+  const iMap = new Map((items as any[]).map((i: any) => [i.id, i]));
+
   const hoTransfers = (Array.isArray(transfers) ? transfers : []).filter((t: any) => t.fromType !== 'production');
-  const filtered = hoTransfers.filter((t: any) => t.challanNumber?.toLowerCase().includes(search.toLowerCase()) || t.fromName?.toLowerCase().includes(search.toLowerCase()) || t.toName?.toLowerCase().includes(search.toLowerCase()));
+  const searched = hoTransfers.filter((t: any) =>
+    t.challanNumber?.toLowerCase().includes(search.toLowerCase()) ||
+    t.fromName?.toLowerCase().includes(search.toLowerCase()) ||
+    t.toName?.toLowerCase().includes(search.toLowerCase())
+  );
+  const filtered = tab === 'all' ? searched : searched.filter((t: any) => t.status === tab);
+
+  const pendingCount = hoTransfers.filter((t: any) => t.status === 'in_transit').length;
 
   const handlePrint = (t: any) => {
-    const rows = (t.lineItems || []).map((li: any, i: number) => `<tr><td>${i+1}</td><td>Item #${li.itemId}</td><td>${li.quantity}</td></tr>`).join('');
-    printHTML(`<h2>Transfer Challan — ${t.challanNumber}</h2><p>Date: ${new Date(t.transferDate).toLocaleDateString('en-IN')}</p><p>From: ${t.fromName} → To: ${t.toName}</p><table><tr><th>#</th><th>Item</th><th>Qty</th></tr>${rows}</table>`, t.challanNumber);
+    const rows = (t.lineItems || []).map((li: any, i: number) => {
+      const item = iMap.get(li.itemId);
+      return `<tr><td>${i+1}</td><td>${item?.name ?? `Item #${li.itemId}`}</td><td>${li.quantity} ${item?.unit ?? ''}</td></tr>`;
+    }).join('');
+    printHTML(`<h2>Transfer Challan — ${t.challanNumber}</h2><p>Date: ${new Date(t.transferDate).toLocaleDateString('en-IN')}</p><p>From: ${t.fromName} → To: ${t.toName}</p><p>Status: ${t.status?.toUpperCase()}</p><table border="1" cellpadding="6"><tr><th>#</th><th>Item</th><th>Qty</th></tr>${rows}</table>`, t.challanNumber);
   };
 
   const sourceSelected = watchFromId > 0;
@@ -88,11 +287,13 @@ export default function HoTransfers() {
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><ArrowRightLeft className="w-6 h-6 text-primary" /> Internal Transfers</h1>
+            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+              <ArrowRightLeft className="w-6 h-6 text-primary" /> Internal Transfers
+            </h1>
             <p className="text-muted-foreground mt-1">Warehouse ↔ Outlet stock movements</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('transfers.csv', filtered.map((t: any) => ({ DC: t.challanNumber, Date: t.transferDate, From: t.fromName, To: t.toName, Items: t.lineItems?.length })))}>
+            <Button variant="outline" size="sm" onClick={() => downloadCSV('transfers.csv', filtered.map((t: any) => ({ DC: t.challanNumber, Date: t.transferDate, From: t.fromName, To: t.toName, Items: t.lineItems?.length, Status: t.status })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
             <Button onClick={() => { form.reset({ fromType: 'warehouse', fromId: 0, toType: 'outlet', toId: 0, transferDate: new Date().toISOString().split('T')[0], lineItems: [{ itemId: 0, quantity: 1 }], notes: '' }); setIsOpen(true); }}>
@@ -101,11 +302,39 @@ export default function HoTransfers() {
           </div>
         </div>
 
-        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
-            <Search className="w-4 h-4 text-muted-foreground" />
-            <Input placeholder="Search challan or location..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm" />
+        {/* Pending approvals banner */}
+        {pendingCount > 0 && (
+          <div className="flex items-center gap-3 p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-300">
+            <Clock className="w-5 h-5 shrink-0" />
+            <div className="flex-1">
+              <p className="font-semibold text-sm">{pendingCount} transfer{pendingCount > 1 ? 's' : ''} awaiting approval</p>
+              <p className="text-xs opacity-80">Receiving locations must verify physical stock and approve before it enters their inventory.</p>
+            </div>
+            <Button size="sm" variant="outline" className="border-amber-500/40 text-amber-300 hover:bg-amber-500/20" onClick={() => setTab('in_transit')}>
+              Review
+            </Button>
           </div>
+        )}
+
+        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+          {/* Tabs + Search */}
+          <div className="p-4 border-b border-border flex flex-col sm:flex-row items-start sm:items-center gap-3 bg-muted/20">
+            <Tabs value={tab} onValueChange={v => setTab(v as any)}>
+              <TabsList className="h-8">
+                <TabsTrigger value="all" className="text-xs px-3">All</TabsTrigger>
+                <TabsTrigger value="in_transit" className="text-xs px-3">
+                  In Transit {pendingCount > 0 && <span className="ml-1 px-1.5 py-0.5 rounded-full bg-amber-500 text-black text-[10px] font-bold">{pendingCount}</span>}
+                </TabsTrigger>
+                <TabsTrigger value="completed" className="text-xs px-3">Approved</TabsTrigger>
+                <TabsTrigger value="rejected" className="text-xs px-3">Rejected</TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <div className="flex items-center gap-2 flex-1 max-w-sm">
+              <Search className="w-4 h-4 text-muted-foreground shrink-0" />
+              <Input placeholder="Search challan or location…" value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0" />
+            </div>
+          </div>
+
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -114,27 +343,43 @@ export default function HoTransfers() {
                 <TableHead>From</TableHead>
                 <TableHead>To</TableHead>
                 <TableHead>Items</TableHead>
+                <TableHead>Status</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
-                  <ArrowRightLeft className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No internal transfers</p>
+                <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
+                  <ArrowRightLeft className="w-10 h-10 mx-auto mb-3 opacity-20" />
+                  <p>{tab === 'in_transit' ? 'No pending approvals' : 'No transfers found'}</p>
                 </TableCell></TableRow>
               ) : filtered.map((t: any) => (
-                <TableRow key={t.id} className="hover:bg-muted/10">
+                <TableRow key={t.id} className={`hover:bg-muted/10 ${t.status === 'in_transit' ? 'border-l-2 border-l-amber-500' : ''}`}>
                   <TableCell className="font-mono text-primary font-bold text-sm">{t.challanNumber}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground"><div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(t.transferDate).toLocaleDateString('en-IN')}</div></TableCell>
-                  <TableCell><div className="text-sm font-medium">{t.fromName}</div><Badge variant="outline" className="text-[10px] capitalize">{t.fromType}</Badge></TableCell>
-                  <TableCell><div className="text-sm font-medium">{t.toName}</div><Badge variant="outline" className="text-[10px] capitalize">{t.toType}</Badge></TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(t.transferDate).toLocaleDateString('en-IN')}</div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="text-sm font-medium">{t.fromName}</div>
+                    <Badge variant="outline" className="text-[10px] capitalize">{t.fromType}</Badge>
+                  </TableCell>
+                  <TableCell>
+                    <div className="text-sm font-medium">{t.toName}</div>
+                    <Badge variant="outline" className="text-[10px] capitalize">{t.toType}</Badge>
+                  </TableCell>
                   <TableCell><Badge variant="secondary">{t.lineItems?.length || 0} SKUs</Badge></TableCell>
+                  <TableCell><StatusBadge status={t.status} /></TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(t)}><Eye className="w-4 h-4" /></Button>
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => handlePrint(t)}><Printer className="w-4 h-4" /></Button>
+                      {t.status === 'in_transit' && (
+                        <Button size="sm" variant="outline" className="h-8 text-xs border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 px-2" onClick={() => setApproveTarget(t)}>
+                          <PackageCheck className="w-3 h-3 mr-1" /> Receive
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -144,9 +389,13 @@ export default function HoTransfers() {
         </div>
       </div>
 
+      {/* New Transfer dialog */}
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Create Internal Transfer</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Create Internal Transfer</DialogTitle>
+            <DialogDescription>Stock will be deducted from the source immediately. The receiving location must approve to credit their inventory.</DialogDescription>
+          </DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
               <div className="grid grid-cols-2 gap-4 p-4 bg-muted/20 rounded-lg border border-border">
@@ -230,12 +479,12 @@ export default function HoTransfers() {
               </div>
 
               <FormField control={form.control} name="notes" render={({ field }) => (
-                <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
+                <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea rows={2} placeholder="Optional dispatch notes…" {...field} /></FormControl></FormItem>
               )} />
               <DialogFooter>
                 <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
                 <Button type="submit" disabled={createMutation.isPending || !sourceSelected || availableItems.length === 0}>
-                  {createMutation.isPending ? 'Creating…' : 'Create Transfer'}
+                  {createMutation.isPending ? 'Creating…' : 'Dispatch Transfer'}
                 </Button>
               </DialogFooter>
             </form>
@@ -243,23 +492,92 @@ export default function HoTransfers() {
         </DialogContent>
       </Dialog>
 
+      {/* Approve / Reject dialog */}
+      <ApproveDialog
+        transfer={approveTarget}
+        items={items as any[]}
+        open={!!approveTarget}
+        onClose={() => setApproveTarget(null)}
+      />
+
+      {/* View detail Sheet */}
       <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
         <SheetContent className="overflow-y-auto">
-          <SheetHeader><SheetTitle>{viewItem?.challanNumber}</SheetTitle><SheetDescription>Transfer details</SheetDescription></SheetHeader>
+          <SheetHeader>
+            <SheetTitle>{viewItem?.challanNumber}</SheetTitle>
+            <SheetDescription>Transfer details</SheetDescription>
+          </SheetHeader>
           {viewItem && (
-            <div className="mt-6 space-y-4">
-              {[['Date', new Date(viewItem.transferDate).toLocaleDateString('en-IN')], ['From', `${viewItem.fromName} (${viewItem.fromType})`], ['To', `${viewItem.toName} (${viewItem.toType})`], ['Interstate', viewItem.isInterstate ? 'Yes' : 'No']].map(([k, v]) => (
+            <div className="mt-6 space-y-4 text-sm">
+              <div className="flex justify-center"><StatusBadge status={viewItem.status} /></div>
+
+              {[
+                ['Date', new Date(viewItem.transferDate).toLocaleDateString('en-IN')],
+                ['From', `${viewItem.fromName} (${viewItem.fromType})`],
+                ['To', `${viewItem.toName} (${viewItem.toType})`],
+                ['Interstate', viewItem.isInterstate ? 'Yes' : 'No'],
+              ].map(([k, v]) => (
                 <div key={String(k)} className="flex flex-col gap-1 border-b border-border pb-3">
                   <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                   <span className="font-medium">{String(v)}</span>
                 </div>
               ))}
-              <div><p className="text-sm font-semibold mb-2">Items</p>
-                {(viewItem.lineItems || []).map((li: any, i: number) => (
-                  <div key={i} className="flex justify-between p-3 bg-muted/20 rounded text-sm mb-2"><span>Item #{li.itemId}</span><span className="font-bold">{li.quantity} units</span></div>
-                ))}
+
+              <div>
+                <p className="text-sm font-semibold mb-2">Dispatched Items</p>
+                {(viewItem.lineItems || []).map((li: any, i: number) => {
+                  const item = iMap.get(li.itemId);
+                  return (
+                    <div key={i} className="flex justify-between p-3 bg-muted/20 rounded text-sm mb-2 border border-border">
+                      <span className="font-medium">{item?.name ?? `Item #${li.itemId}`}</span>
+                      <span className="font-bold font-mono">{li.quantity} {item?.unit ?? ''}</span>
+                    </div>
+                  );
+                })}
               </div>
-              <Button className="w-full" variant="outline" onClick={() => handlePrint(viewItem)}><Printer className="w-4 h-4 mr-2" /> Print</Button>
+
+              {viewItem.status === 'completed' && viewItem.receivedLineItems?.length > 0 && (
+                <div>
+                  <p className="text-sm font-semibold mb-2 text-emerald-400">Actually Received</p>
+                  {viewItem.receivedLineItems.map((li: any, i: number) => {
+                    const item = iMap.get(li.itemId);
+                    const dispatched = viewItem.lineItems.find((d: any) => d.itemId === li.itemId)?.quantity ?? li.quantity;
+                    const isShort = li.quantity < dispatched;
+                    return (
+                      <div key={i} className={`flex justify-between p-3 rounded text-sm mb-2 border ${isShort ? 'border-amber-500/40 bg-amber-500/5' : 'bg-muted/20 border-border'}`}>
+                        <span className="font-medium">{item?.name ?? `Item #${li.itemId}`}</span>
+                        <span className={`font-bold font-mono ${isShort ? 'text-amber-400' : ''}`}>{li.quantity} {item?.unit ?? ''}{isShort ? ` (${dispatched - li.quantity} short)` : ''}</span>
+                      </div>
+                    );
+                  })}
+                  {viewItem.approvedBy && <p className="text-xs text-muted-foreground">Approved by: {viewItem.approvedBy} · {viewItem.approvedAt ? new Date(viewItem.approvedAt).toLocaleString('en-IN') : ''}</p>}
+                </div>
+              )}
+
+              {viewItem.status === 'rejected' && viewItem.rejectionReason && (
+                <div className="p-3 bg-red-500/5 border border-red-500/30 rounded-lg">
+                  <p className="text-xs text-red-400 uppercase tracking-wider mb-1">Rejection Reason</p>
+                  <p>{viewItem.rejectionReason}</p>
+                </div>
+              )}
+
+              {viewItem.notes && (
+                <div className="flex flex-col gap-1 border-b border-border pb-3">
+                  <span className="text-xs text-muted-foreground uppercase tracking-wider">Notes</span>
+                  <span>{viewItem.notes}</span>
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-2">
+                <Button className="flex-1" variant="outline" onClick={() => handlePrint(viewItem)}>
+                  <Printer className="w-4 h-4 mr-2" /> Print
+                </Button>
+                {viewItem.status === 'in_transit' && (
+                  <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => { setViewItem(null); setApproveTarget(viewItem); }}>
+                    <PackageCheck className="w-4 h-4 mr-2" /> Receive
+                  </Button>
+                )}
+              </div>
             </div>
           )}
         </SheetContent>

@@ -8,3 +8,4 @@ export * from "./payroll";
 export * from "./audit";
 export * from "./production";
 export * from "./vouchers";
+export * from "./transfers";

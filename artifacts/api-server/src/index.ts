@@ -16,6 +16,11 @@ async function runMigrations() {
     ALTER TABLE raw_materials ADD COLUMN IF NOT EXISTS hsn_code text NOT NULL DEFAULT '';
     ALTER TABLE raw_materials ADD COLUMN IF NOT EXISTS tax_rate numeric(5,2) NOT NULL DEFAULT 0;
     ALTER TABLE items ADD COLUMN IF NOT EXISTS mrp numeric(10,2) NOT NULL DEFAULT 0;
+    ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS approved_by text;
+    ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS approved_at timestamptz;
+    ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS received_line_items jsonb DEFAULT '[]'::jsonb;
+    ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS rejection_reason text;
+    UPDATE stock_transfers SET status = 'completed' WHERE status = 'completed';
 
     CREATE TABLE IF NOT EXISTS payments (
       id serial PRIMARY KEY,

@@ -3,6 +3,7 @@ import { db, stockEntriesTable, stockTransfersTable, itemsTable, warehousesTable
 import { eq, and, sql } from "drizzle-orm";
 import { CreateStockTransferBody, GetStockTransferParams, ListStockQueryParams } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
+import { pool } from "@workspace/db";
 
 const router = Router();
 
@@ -56,12 +57,32 @@ router.get("/stock", async (req, res): Promise<void> => {
 });
 
 router.get("/stock/transfers", async (_req, res): Promise<void> => {
-  const rows = await db.select().from(stockTransfersTable).orderBy(stockTransfersTable.id);
-  const enriched = await Promise.all(rows.map(async (r) => ({
-    ...r,
-    fromName: await getBranchName(r.fromType, r.fromId),
-    toName: await getBranchName(r.toType, r.toId),
-    lineItems: r.lineItems ?? [],
+  const result = await pool.query(`
+    SELECT id, challan_number, from_type, from_id, to_type, to_id, transfer_date,
+           line_items, is_interstate, status, notes, created_at,
+           approved_by, approved_at, received_line_items, rejection_reason
+    FROM stock_transfers ORDER BY id DESC
+  `);
+  const rows = result.rows;
+  const enriched = await Promise.all(rows.map(async (r: any) => ({
+    id: r.id,
+    challanNumber: r.challan_number,
+    fromType: r.from_type,
+    fromId: r.from_id,
+    toType: r.to_type,
+    toId: r.to_id,
+    transferDate: r.transfer_date,
+    lineItems: r.line_items ?? [],
+    isInterstate: r.is_interstate,
+    status: r.status,
+    notes: r.notes,
+    createdAt: r.created_at,
+    approvedBy: r.approved_by,
+    approvedAt: r.approved_at,
+    receivedLineItems: r.received_line_items ?? [],
+    rejectionReason: r.rejection_reason,
+    fromName: await getBranchName(r.from_type, r.from_id),
+    toName: await getBranchName(r.to_type, r.to_id),
   })));
   res.json(enriched);
 });
@@ -90,13 +111,12 @@ router.post("/stock/transfers", async (req, res): Promise<void> => {
     transferDate: parsed.data.transferDate,
     lineItems: lineItems,
     isInterstate,
-    status: "completed",
+    status: "in_transit",   // ← starts as in_transit, not completed
     notes: parsed.data.notes ?? null,
   }).returning();
 
-  // Update stock entries (deduct from source, add to destination)
+  // Deduct from source immediately (goods have left the location)
   for (const li of lineItems) {
-    // Deduct from source
     const [srcExisting] = await db.select().from(stockEntriesTable)
       .where(and(
         eq(stockEntriesTable.itemId, li.itemId),
@@ -109,11 +129,42 @@ router.post("/stock/transfers", async (req, res): Promise<void> => {
         .set({ quantity: sql`${stockEntriesTable.quantity}::numeric - ${li.quantity}` })
         .where(eq(stockEntriesTable.id, srcExisting.id));
     }
+  }
+  // NOTE: destination stock is NOT updated here — only on approval
 
-    // Add to destination
-    const destType = parsed.data.toType === "headoffice" ? "warehouse" : parsed.data.toType;
-    const destId = parsed.data.toType === "headoffice" ? 0 : parsed.data.toId;
+  const fromName = await getBranchName(row.fromType, row.fromId);
+  const toName   = await getBranchName(row.toType,   row.toId);
 
+  logActivity({
+    action: "CREATE", module: "transfers", entityType: "stock_transfer", entityId: row.id,
+    description: `Transfer dispatched ${challanNumber}: ${fromName} → ${toName} (${lineItems.length} line${lineItems.length !== 1 ? 's' : ''}) — awaiting receiver approval`,
+    metadata: { after: { challanNumber, fromType: row.fromType, fromId: row.fromId, fromName, toType: row.toType, toId: row.toId, toName, lineCount: lineItems.length, isInterstate } },
+  }).catch(() => {});
+
+  res.status(201).json({ ...row, fromName, toName, lineItems: row.lineItems ?? [], status: "in_transit" });
+});
+
+// Approve a transfer — receiver verifies physical stock and enters actual received quantities
+router.patch("/stock/transfers/:id/approve", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const { receivedLineItems, approvedBy } = req.body as { receivedLineItems: Array<{ itemId: number; quantity: number; costPrice?: number }>; approvedBy?: string };
+
+  const result = await pool.query(
+    `SELECT id, from_type, from_id, to_type, to_id, status, line_items, challan_number FROM stock_transfers WHERE id = $1 LIMIT 1`,
+    [id]
+  );
+  const row = result.rows[0];
+  if (!row) { res.status(404).json({ error: "Transfer not found" }); return; }
+  if (row.status !== "in_transit") { res.status(400).json({ error: `Cannot approve a transfer with status "${row.status}"` }); return; }
+
+  const linesToCredit = receivedLineItems ?? (row.line_items as any[]);
+
+  const destType = row.to_type === "headoffice" ? "warehouse" : row.to_type;
+  const destId   = row.to_type === "headoffice" ? 0 : row.to_id;
+
+  // Credit destination with received quantities
+  for (const li of linesToCredit) {
+    if (!li.quantity || li.quantity <= 0) continue;
     const [dstExisting] = await db.select().from(stockEntriesTable)
       .where(and(
         eq(stockEntriesTable.itemId, li.itemId),
@@ -136,28 +187,108 @@ router.post("/stock/transfers", async (req, res): Promise<void> => {
     }
   }
 
-  const fromName = await getBranchName(row.fromType, row.fromId);
-  const toName   = await getBranchName(row.toType,   row.toId);
+  await pool.query(
+    `UPDATE stock_transfers SET status = 'completed', approved_by = $1, approved_at = now(), received_line_items = $2 WHERE id = $3`,
+    [approvedBy || 'admin', JSON.stringify(linesToCredit), id]
+  );
+
+  const fromName = await getBranchName(row.from_type, row.from_id);
+  const toName   = await getBranchName(row.to_type, row.to_id);
 
   logActivity({
-    action: "CREATE", module: "transfers", entityType: "stock_transfer", entityId: row.id,
-    description: `Stock transfer ${challanNumber}: ${fromName} → ${toName} (${lineItems.length} line${lineItems.length !== 1 ? 's' : ''})`,
-    metadata: { after: { challanNumber, fromType: row.fromType, fromId: row.fromId, fromName, toType: row.toType, toId: row.toId, toName, lineCount: lineItems.length, isInterstate } },
+    action: "UPDATE", module: "transfers", entityType: "stock_transfer", entityId: id,
+    description: `Transfer ${row.challan_number} approved by ${approvedBy || 'admin'}: stock credited to ${toName}`,
+    metadata: { after: { status: "completed", receivedLineItems: linesToCredit } },
   }).catch(() => {});
 
-  res.status(201).json({ ...row, fromName, toName, lineItems: row.lineItems ?? [] });
+  res.json({ success: true, id, status: "completed", fromName, toName });
+});
+
+// Reject a transfer — reverses the source deduction
+router.patch("/stock/transfers/:id/reject", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const { rejectionReason } = req.body as { rejectionReason?: string };
+
+  const result = await pool.query(
+    `SELECT id, from_type, from_id, to_type, to_id, status, line_items, challan_number FROM stock_transfers WHERE id = $1 LIMIT 1`,
+    [id]
+  );
+  const row = result.rows[0];
+  if (!row) { res.status(404).json({ error: "Transfer not found" }); return; }
+  if (row.status !== "in_transit") { res.status(400).json({ error: `Cannot reject a transfer with status "${row.status}"` }); return; }
+
+  const lineItems = row.line_items as Array<{ itemId: number; quantity: number }>;
+
+  // Reverse source deduction (goods returned)
+  for (const li of lineItems) {
+    const [srcExisting] = await db.select().from(stockEntriesTable)
+      .where(and(
+        eq(stockEntriesTable.itemId, li.itemId),
+        eq(stockEntriesTable.branchType, row.from_type),
+        eq(stockEntriesTable.branchId, row.from_id)
+      )).limit(1);
+
+    if (srcExisting) {
+      await db.update(stockEntriesTable)
+        .set({ quantity: sql`${stockEntriesTable.quantity}::numeric + ${li.quantity}` })
+        .where(eq(stockEntriesTable.id, srcExisting.id));
+    } else {
+      await db.insert(stockEntriesTable).values({
+        itemId: li.itemId,
+        branchType: row.from_type,
+        branchId: row.from_id,
+        quantity: String(li.quantity),
+        costPrice: "0",
+      });
+    }
+  }
+
+  await pool.query(
+    `UPDATE stock_transfers SET status = 'rejected', rejection_reason = $1 WHERE id = $2`,
+    [rejectionReason || null, id]
+  );
+
+  const fromName = await getBranchName(row.from_type, row.from_id);
+  logActivity({
+    action: "UPDATE", module: "transfers", entityType: "stock_transfer", entityId: id,
+    description: `Transfer ${row.challan_number} rejected — stock reversed to ${fromName}`,
+    metadata: { after: { status: "rejected", rejectionReason } },
+  }).catch(() => {});
+
+  res.json({ success: true, id, status: "rejected" });
 });
 
 router.get("/stock/transfers/:id", async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
-  const [row] = await db.select().from(stockTransfersTable).where(eq(stockTransfersTable.id, id)).limit(1);
-  if (!row) { res.status(404).json({ error: "Not found" }); return; }
+  const result = await pool.query(
+    `SELECT id, challan_number, from_type, from_id, to_type, to_id, transfer_date,
+            line_items, is_interstate, status, notes, created_at,
+            approved_by, approved_at, received_line_items, rejection_reason
+     FROM stock_transfers WHERE id = $1 LIMIT 1`,
+    [id]
+  );
+  const r = result.rows[0];
+  if (!r) { res.status(404).json({ error: "Not found" }); return; }
   res.json({
-    ...row,
-    fromName: await getBranchName(row.fromType, row.fromId),
-    toName: await getBranchName(row.toType, row.toId),
-    lineItems: row.lineItems ?? [],
+    id: r.id,
+    challanNumber: r.challan_number,
+    fromType: r.from_type,
+    fromId: r.from_id,
+    toType: r.to_type,
+    toId: r.to_id,
+    transferDate: r.transfer_date,
+    lineItems: r.line_items ?? [],
+    isInterstate: r.is_interstate,
+    status: r.status,
+    notes: r.notes,
+    createdAt: r.created_at,
+    approvedBy: r.approved_by,
+    approvedAt: r.approved_at,
+    receivedLineItems: r.received_line_items ?? [],
+    rejectionReason: r.rejection_reason,
+    fromName: await getBranchName(r.from_type, r.from_id),
+    toName: await getBranchName(r.to_type, r.to_id),
   });
 });
 
