@@ -93,6 +93,18 @@ async function runMigrations() {
     ALTER TABLE account_ledgers ADD COLUMN IF NOT EXISTS is_system_group boolean NOT NULL DEFAULT false;
   `);
 
+  // ── One-time: clean up old user-created ledgers, create standard ones ──────
+  const { rows: stdCheck } = await pool.query(
+    `SELECT 1 FROM account_ledgers WHERE code = 'STD-SALES' LIMIT 1`
+  );
+  if (stdCheck.length === 0) {
+    // Remove transaction rows that reference user-created ledgers (safe: system groups have no such refs)
+    await pool.query(`DELETE FROM expenses WHERE ledger_account_id IN (SELECT id FROM account_ledgers WHERE NOT is_system_group)`);
+    await pool.query(`DELETE FROM payments WHERE paid_from_ledger_id IN (SELECT id FROM account_ledgers WHERE NOT is_system_group) OR paid_to_ledger_id IN (SELECT id FROM account_ledgers WHERE NOT is_system_group)`);
+    await pool.query(`DELETE FROM receipts WHERE received_from_ledger_id IN (SELECT id FROM account_ledgers WHERE NOT is_system_group) OR received_in_ledger_id IN (SELECT id FROM account_ledgers WHERE NOT is_system_group)`);
+    await pool.query(`DELETE FROM account_ledgers WHERE NOT is_system_group`);
+  }
+
   // Seed Tally-standard system group heads — parameterised INSERT to avoid dollar-quoting
   const sysGroups: [string, string, string, string, string][] = [
     ['Capital Account',     'equity',    'SYS-CAP',    'balance_sheet', 'Owner capital and reserves'],
@@ -114,6 +126,25 @@ async function runMigrations() {
        WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $3)`,
       [name, type, code, section, description],
     );
+  }
+
+  // Create standard ledgers under system groups (idempotent)
+  const stdLedgers: [string, string, string, string, string, string][] = [
+    ['Sales',     'income',  'STD-SALES', 'profit_loss',   'SYS-SAL',  'Auto-linked to all sales invoices'],
+    ['Purchases', 'expense', 'STD-PUR',   'profit_loss',   'SYS-PUR',  'Auto-linked to all purchase orders'],
+  ];
+  for (const [name, type, code, section, parentCode, desc] of stdLedgers) {
+    const { rows: [parent] } = await pool.query(
+      `SELECT id FROM account_ledgers WHERE code = $1`, [parentCode]
+    );
+    if (parent) {
+      await pool.query(
+        `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_system_group, description)
+         SELECT $1, $2, $3, $4, $5, false, $6
+         WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $3)`,
+        [name, type, code, section, parent.id, desc],
+      );
+    }
   }
 }
 

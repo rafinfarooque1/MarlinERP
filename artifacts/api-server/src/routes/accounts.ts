@@ -435,7 +435,7 @@ router.get("/accounts/financial-statements", async (req, res): Promise<void> => 
   };
 
   // ── Auto-computed amounts ───────────────────────────────────────────────
-  // Sales total (filtered by outlet if provided)
+  // Sales total + tax collected (filtered by outlet if provided)
   const sp: any[] = [];
   const salesConds: string[] = [];
   if (fromDate) { sp.push(fromDate); salesConds.push(`sale_date >= ${sp.length}`); }
@@ -443,9 +443,12 @@ router.get("/accounts/financial-statements", async (req, res): Promise<void> => 
   if (outletId) { sp.push(Number(outletId)); salesConds.push(`outlet_id = ${sp.length}`); }
   const salesWhere = salesConds.length ? `WHERE ${salesConds.join(' AND ')}` : '';
   const { rows: salesRows } = await pool.query(
-    `SELECT COALESCE(SUM(total_amount::numeric), 0) AS total FROM sales ${salesWhere}`, sp
+    `SELECT COALESCE(SUM(total_amount::numeric), 0) AS total,
+            COALESCE(SUM(tax_total::numeric), 0) AS tax_total
+     FROM sales ${salesWhere}`, sp
   );
-  const salesTotal = Number(salesRows[0]?.total ?? 0);
+  const salesTotal    = Number(salesRows[0]?.total     ?? 0);
+  const salesTaxTotal = Number(salesRows[0]?.tax_total ?? 0); // → Duty & Tax (Current Liab)
 
   // Purchases total
   const pup: any[] = [];
@@ -454,33 +457,43 @@ router.get("/accounts/financial-statements", async (req, res): Promise<void> => 
   );
   const purchasesTotal = Number(purRows[0]?.total ?? 0);
 
-  // Closing stock = finished goods value (production_stock × mrp)
-  const { rows: csRows } = await pool.query(
-    `SELECT COALESCE(SUM(production_stock::numeric * mrp::numeric), 0) AS total FROM items WHERE production_stock > 0`
+  // Item-wise stock (closing = current finished goods; opening = 0 without historical records)
+  const { rows: stockRows } = await pool.query(
+    `SELECT id, name, unit, production_stock::float AS stock, mrp::float
+     FROM items WHERE production_stock > 0 ORDER BY name`
   );
-  const closingStock = Number(csRows[0]?.total ?? 0);
-  const openingStock = 0; // requires separate opening balance; set to 0
+  const stockItems = stockRows.map((r: any) => ({
+    id: Number(r.id), name: r.name, unit: r.unit || 'unit',
+    stock: Number(r.stock), mrp: Number(r.mrp),
+    total: Math.round(Number(r.stock) * Number(r.mrp) * 100) / 100,
+  }));
+  const closingStock = stockItems.reduce((s: number, i: any) => s + i.total, 0);
+  const openingStock = 0; // set to 0 until opening-balance journal entry is supported
 
   // ── P&L ────────────────────────────────────────────────────────────────
-  const directExp    = buildGroup('SYS-DIREXP');
-  const indirectExp  = buildGroup('SYS-INDEXP');
-  const directInc    = buildGroup('SYS-DIRINC');
-  const indirectInc  = buildGroup('SYS-INDINC');
+  const directExp   = buildGroup('SYS-DIREXP');
+  const indirectExp = buildGroup('SYS-INDEXP');
+  const directInc   = buildGroup('SYS-DIRINC');
+  const indirectInc = buildGroup('SYS-INDINC');
 
   const totalExpenses = openingStock + purchasesTotal + directExp.total + indirectExp.total;
   const totalIncomes  = salesTotal + closingStock + directInc.total + indirectInc.total;
   const netProfit     = totalIncomes - totalExpenses;
 
   // ── Balance Sheet ───────────────────────────────────────────────────────
-  const capitalGroup  = buildGroup('SYS-CAP');
-  const loansGroup    = buildGroup('SYS-LOAN');
-  const curlGroup     = buildGroup('SYS-CURL');
-  const fixedGroup    = buildGroup('SYS-FIXD');
-  const curaGroup     = buildGroup('SYS-CURA');
+  const capitalGroup = buildGroup('SYS-CAP');
+  const loansGroup   = buildGroup('SYS-LOAN');
+  const curlBase     = buildGroup('SYS-CURL');
+  const fixedGroup   = buildGroup('SYS-FIXD');
+  const curaGroup    = buildGroup('SYS-CURA');
 
-  const liabBase   = capitalGroup.total + loansGroup.total + curlGroup.total;
-  const pandlFwd   = Math.round(netProfit * 100) / 100;
+  // Current Liabilities = ledger balances + Duty & Tax auto (from sales GST)
+  const dutyAndTax = Math.round(salesTaxTotal * 100) / 100;
+  const curlGroup  = { ...curlBase, dutyAndTax, total: Math.round((curlBase.total + dutyAndTax) * 100) / 100 };
+
+  const pandlFwd    = Math.round(netProfit * 100) / 100;
   const assetsTotal = fixedGroup.total + curaGroup.total;
+  const liabBase    = capitalGroup.total + loansGroup.total + curlGroup.total;
   const liabTotal   = liabBase + (pandlFwd > 0 ? pandlFwd : 0);
   const difference  = Math.round((assetsTotal - liabTotal - (pandlFwd < 0 ? Math.abs(pandlFwd) : 0)) * 100) / 100;
 
@@ -492,12 +505,15 @@ router.get("/accounts/financial-statements", async (req, res): Promise<void> => 
     filters: { warehouses, outlets },
     profitAndLoss: {
       expenses: {
-        openingStock, purchases: purchasesTotal,
+        openingStock, openingStockItems: stockItems,
+        purchases: purchasesTotal,
         directExpenses: directExp, indirectExpenses: indirectExp,
         total: Math.round(totalExpenses * 100) / 100,
       },
       incomes: {
-        sales: salesTotal, closingStock,
+        sales: salesTotal,
+        closingStock: Math.round(closingStock * 100) / 100,
+        closingStockItems: stockItems,
         directIncomes: directInc, indirectIncomes: indirectInc,
         total: Math.round(totalIncomes * 100) / 100,
       },
@@ -508,7 +524,7 @@ router.get("/accounts/financial-statements", async (req, res): Promise<void> => 
         capitalAccount: capitalGroup, loans: loansGroup, currentLiabilities: curlGroup,
         pandlCarryForward: pandlFwd,
         difference: Math.abs(difference) > 0.01 ? difference : 0,
-        total: Math.round((liabTotal + (pandlFwd < 0 ? Math.abs(pandlFwd) : 0) + Math.abs(difference > 0 ? difference : 0)) * 100) / 100,
+        total: Math.round((liabTotal + (pandlFwd < 0 ? Math.abs(pandlFwd) : 0) + (difference > 0 ? difference : 0)) * 100) / 100,
       },
       assets: {
         fixedAssets: fixedGroup, currentAssets: curaGroup,
