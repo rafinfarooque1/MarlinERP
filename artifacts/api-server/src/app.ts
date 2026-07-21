@@ -3,6 +3,7 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { requireAuth } from "./middleware/auth";
 
 const app: Express = express();
 
@@ -28,6 +29,14 @@ app.use(
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Global authentication guard — all /api routes require a valid Bearer token
+// except the health check and the login endpoint itself.
+app.use("/api", (req, res, next) => {
+  if (req.path === "/health") { next(); return; }
+  if (req.path === "/auth/login" && req.method === "POST") { next(); return; }
+  requireAuth(req, res, next);
+});
 
 app.use("/api", router);
 

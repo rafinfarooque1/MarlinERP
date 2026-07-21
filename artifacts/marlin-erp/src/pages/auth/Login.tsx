@@ -40,7 +40,11 @@ export default function Login() {
         // Persist token so every subsequent API call carries Authorization header
         localStorage.setItem('marlin_auth_token', response.token);
         localStorage.setItem('marlin_user', JSON.stringify(response.employee));
-        setLocation('/company/profile');
+        if ((response.employee as any).mustChangePassword) {
+          setLocation('/change-password');
+        } else {
+          setLocation('/company/profile');
+        }
       },
       onError: (error: any) => {
         toast({

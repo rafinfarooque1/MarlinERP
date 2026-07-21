@@ -1,8 +1,10 @@
 import { Router } from "express";
 import {
-  db, hierarchiesTable, employeesTable, payrollTable, attendanceTable,
+  db, pool, hierarchiesTable, employeesTable, payrollTable, attendanceTable,
   leavesTable, warehousesTable, outletsTable, payComponentsTable,
 } from "@workspace/db";
+import { PasswordService } from '../lib/password';
+import { DEFAULT_INITIAL_PASSWORD } from '../lib/passwordPolicy';
 import { eq, and, gte, lte, sql } from "drizzle-orm";
 import { logActivity } from "../lib/audit";
 import {
@@ -177,7 +179,7 @@ router.get("/hr/employees", async (_req, res): Promise<void> => {
     hierarchyId: e.hierarchyId, hierarchyName: hMap.get(e.hierarchyId) ?? "",
     branchType: e.branchType, branchId: e.branchId,
     branchName: await getBranchName(e.branchType, e.branchId),
-    salary: Number(e.salary), joinDate: e.joinDate, photoUrl: e.photoUrl ?? null, isActive: e.isActive,
+    salary: Number(e.salary), joinDate: e.joinDate, photoUrl: e.photoUrl ?? null, isActive: e.isActive, mustChangePassword: e.mustChangePassword ?? false,
   })));
   res.json(enriched);
 });
@@ -188,7 +190,8 @@ router.post("/hr/employees", async (req, res): Promise<void> => {
   const [row] = await db.insert(employeesTable).values({
     ...parsed.data,
     salary: String(parsed.data.salary),
-    passwordHash: "default123",
+    passwordHash: await PasswordService.hash(DEFAULT_INITIAL_PASSWORD),
+    mustChangePassword: true,
   }).returning();
   const [h] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, row.hierarchyId)).limit(1);
 
@@ -199,9 +202,12 @@ router.post("/hr/employees", async (req, res): Promise<void> => {
   }).catch(() => {});
 
   res.status(201).json({
-    ...row, hierarchyName: h?.name ?? "",
+    id: row.id, name: row.name, username: row.username, email: row.email ?? null, phone: row.phone ?? null,
+    hierarchyId: row.hierarchyId, hierarchyName: h?.name ?? "",
+    branchType: row.branchType, branchId: row.branchId,
     branchName: await getBranchName(row.branchType, row.branchId),
-    salary: Number(row.salary),
+    salary: Number(row.salary), joinDate: row.joinDate, photoUrl: row.photoUrl ?? null,
+    isActive: row.isActive, mustChangePassword: row.mustChangePassword ?? true,
   });
 });
 
@@ -245,7 +251,7 @@ router.patch("/hr/employees/:id", async (req, res): Promise<void> => {
     hierarchyId: row.hierarchyId, hierarchyName: h?.name ?? "",
     branchType: row.branchType, branchId: row.branchId,
     branchName: await getBranchName(row.branchType, row.branchId),
-    salary: Number(row.salary), joinDate: row.joinDate, photoUrl: row.photoUrl ?? null, isActive: row.isActive,
+    salary: Number(row.salary), joinDate: row.joinDate, photoUrl: row.photoUrl ?? null, isActive: row.isActive, mustChangePassword: row.mustChangePassword ?? false,
   });
 });
 
@@ -597,6 +603,27 @@ router.post("/hr/leaves/:id/approve", async (req, res): Promise<void> => {
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, row.employeeId)).limit(1);
   res.json({ ...row, employeeName: emp?.name ?? "", approverName: null });
+});
+
+// ── Password Reset (admin action) ─────────────────────────────────────────────
+router.post("/hr/employees/:id/reset-password", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, id)).limit(1);
+  if (!emp) { res.status(404).json({ error: "Employee not found" }); return; }
+
+  const newHash = await PasswordService.hash(DEFAULT_INITIAL_PASSWORD);
+  await pool.query(
+    `UPDATE employees SET password_hash = $1, must_change_password = true WHERE id = $2`,
+    [newHash, id],
+  );
+
+  logActivity({
+    action: "UPDATE", module: "hr", entityType: "employee", entityId: id,
+    description: `PASSWORD_RESET for employee ${emp.name}`,
+    user: (req as any).employee?.username ?? "admin",
+  }).catch(() => {});
+
+  res.json({ success: true, message: "Password has been reset. The employee must change it on next login." });
 });
 
 export default router;

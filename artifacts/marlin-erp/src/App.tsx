@@ -52,9 +52,16 @@ const queryClient = new QueryClient({
   },
 });
 
-function AuthGuard({ children }: { children: React.ReactNode }) {
+function AuthGuard({ children, allowMustChange = false }: { children: React.ReactNode; allowMustChange?: boolean }) {
   const token = localStorage.getItem('marlin_auth_token');
   if (!token) return <Redirect to="/login" />;
+  // Enforce forced password-change before allowing access to any other page
+  if (!allowMustChange) {
+    try {
+      const user = JSON.parse(localStorage.getItem('marlin_user') ?? '{}');
+      if (user.mustChangePassword) return <Redirect to="/change-password" />;
+    } catch { /* ignore */ }
+  }
   return <>{children}</>;
 }
 
@@ -82,7 +89,7 @@ function Router() {
         <AuthGuard><Dashboard /></AuthGuard>
       </Route>
       <Route path="/change-password">
-        <AuthGuard><ChangePassword /></AuthGuard>
+        <AuthGuard allowMustChange><ChangePassword /></AuthGuard>
       </Route>
 
       <Route path="/production/units"><AuthGuard><Units /></AuthGuard></Route>

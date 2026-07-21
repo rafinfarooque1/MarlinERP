@@ -24,6 +24,7 @@ export const employeesTable = pgTable("employees", {
   joinDate: date("join_date", { mode: "string" }).notNull(),
   photoUrl: text("photo_url"),
   isActive: boolean("is_active").notNull().default(true),
+  mustChangePassword: boolean("must_change_password").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

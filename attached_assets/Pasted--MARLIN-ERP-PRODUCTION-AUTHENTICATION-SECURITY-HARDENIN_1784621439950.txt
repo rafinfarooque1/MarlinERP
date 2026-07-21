@@ -1,0 +1,847 @@
+# MARLIN ERP – PRODUCTION AUTHENTICATION & SECURITY HARDENING
+# EXTERNAL NEON PRODUCTION DATABASE
+# PRE-GO-LIVE SECURITY TASK
+
+Act as a Senior Backend Security Engineer and Enterprise Application Architect.
+
+This ERP is being prepared for long-term production use.
+
+CURRENT ARCHITECTURE:
+
+- Replit is currently used only as the development environment.
+- GitHub Private Repository is the permanent source-code repository.
+- Future production hosting will be completely independent of Replit.
+- An independent Neon PostgreSQL production database has already been created.
+- Its connection string is securely stored as:
+
+PRODUCTION_DATABASE_URL
+
+- The Neon production schema has already been created.
+- Do NOT recreate or reset the production database.
+- Do NOT modify the current Replit Development Database unless technically required for compatible code changes.
+- Do NOT switch the currently running development ERP to PRODUCTION_DATABASE_URL.
+
+============================================================
+PRIMARY OBJECTIVE
+============================================================
+
+Implement production-grade authentication and password security throughout the entire Marlin ERP.
+
+The initial production administrator credentials should be:
+
+Username:
+
+admin
+
+Initial Password:
+
+marlin1458
+
+CRITICAL:
+
+The password "marlin1458" must NEVER be stored as plaintext in the database.
+
+It must be securely hashed before storage.
+
+Never:
+
+- print the password in logs
+- expose it through an API
+- store it in source code
+- commit it to GitHub
+- return password hashes to frontend APIs
+- expose it in debugging information
+
+============================================================
+1. FIRST AUDIT ALL AUTHENTICATION CODE
+============================================================
+
+Before modifying anything, inspect the complete authentication architecture.
+
+Search the entire repository for:
+
+login
+
+logout
+
+password
+
+password_hash
+
+password reset
+
+password change
+
+employee creation
+
+user creation
+
+admin creation
+
+seed scripts
+
+authentication middleware
+
+session handling
+
+cookie handling
+
+JWT if used
+
+authorization middleware
+
+permissions
+
+hierarchy permissions
+
+API routes accepting passwords
+
+Database seed logic.
+
+Do not fix only one login endpoint.
+
+Identify EVERY location where passwords can:
+
+be created
+
+stored
+
+updated
+
+reset
+
+compared
+
+returned
+
+logged
+
+or exposed.
+
+============================================================
+2. PASSWORD HASHING
+============================================================
+
+Implement secure password hashing.
+
+Preferred:
+
+Argon2id
+
+If Argon2 introduces deployment/compatibility issues in the existing Node.js environment, use:
+
+bcrypt
+
+or
+
+bcryptjs
+
+with an appropriate secure work factor.
+
+Use one consistent password-hashing service/helper throughout the ERP.
+
+Example architecture:
+
+PasswordService
+
+hashPassword()
+
+verifyPassword()
+
+needsRehash()
+
+Do not duplicate password logic across multiple routes.
+
+============================================================
+3. INITIAL ADMIN ACCOUNT
+============================================================
+
+The production administrator must be:
+
+Username:
+
+admin
+
+Initial password:
+
+marlin1458
+
+Before storing the password:
+
+Hash it securely.
+
+Database should contain only something similar to:
+
+$argon2id$...
+
+or
+
+$2b$...
+
+depending on the selected hashing algorithm.
+
+The database must NEVER contain:
+
+marlin1458
+
+as the stored password value.
+
+============================================================
+4. FIX EXISTING PRODUCTION ADMIN
+============================================================
+
+The previous production seed created:
+
+admin / admin123
+
+and the previous audit reported that this may have been stored as plaintext.
+
+Safely correct this.
+
+Update ONLY the intended production admin credential.
+
+Replace the existing plaintext credential with a secure hash corresponding to the new initial password.
+
+Initial password:
+
+marlin1458
+
+Do NOT create duplicate admin accounts.
+
+Do NOT delete the existing admin employee/user unnecessarily.
+
+Preserve:
+
+employee ID
+
+hierarchy
+
+permissions
+
+relationships
+
+audit references
+
+and all unrelated data.
+
+============================================================
+5. FORCE PASSWORD CHANGE ON FIRST LOGIN
+============================================================
+
+Implement a secure first-login password-change workflow if the current schema/application architecture supports it safely.
+
+Recommended field:
+
+must_change_password
+
+or equivalent.
+
+For the initial admin:
+
+must_change_password = true
+
+Flow:
+
+admin
+↓
+Login using initial password
+↓
+Authentication successful
+↓
+System detects must_change_password
+↓
+Redirect to Change Password
+↓
+Enter current password
+↓
+Enter new password
+↓
+Confirm new password
+↓
+Securely hash new password
+↓
+Update database
+↓
+must_change_password = false
+↓
+Continue to ERP
+
+Do not allow normal ERP access until the required password change is completed.
+
+If implementing this requires a database migration, create a proper controlled migration.
+
+Do NOT use destructive schema changes.
+
+============================================================
+6. EMPLOYEE INITIAL PASSWORD SYSTEM
+============================================================
+
+The ERP will eventually have 100+ employees.
+
+When an employee/user account is created:
+
+Never store the initial password as plaintext.
+
+If the business currently uses a common initial password:
+
+marlin1458
+
+it may be used only as an INITIAL credential.
+
+Immediately hash it before database storage.
+
+Recommended behavior:
+
+New Employee Created
+↓
+Login account created
+↓
+Initial password securely hashed
+↓
+must_change_password = true
+↓
+Employee logs in
+↓
+Forced password change
+↓
+Employee creates private password
+↓
+New password securely hashed
+
+Do not expose existing employee passwords to administrators.
+
+Administrators should be able to RESET a password, not retrieve it.
+
+============================================================
+7. PASSWORD RESET
+============================================================
+
+Implement safe admin password reset behavior.
+
+Admin action:
+
+Reset Password
+
+should:
+
+Generate/set a temporary initial password according to current business policy.
+
+Hash it immediately.
+
+Set:
+
+must_change_password = true
+
+Do not show:
+
+existing password
+
+password hash
+
+previous passwords.
+
+Never implement:
+
+"View Password"
+
+or
+
+"Show Existing Password".
+
+============================================================
+8. CHANGE PASSWORD
+============================================================
+
+Create/verify secure password-change logic.
+
+Require:
+
+Current password
+
+New password
+
+Confirm new password
+
+Verify current password using the password verification function.
+
+Validate new password.
+
+Hash before saving.
+
+Invalidate existing sessions if appropriate.
+
+Create an audit event:
+
+PASSWORD_CHANGED
+
+Never record the actual password in audit logs.
+
+============================================================
+9. PASSWORD POLICY
+============================================================
+
+Implement configurable password policy where practical.
+
+Recommended minimum:
+
+8+ characters initially for compatibility.
+
+Support:
+
+uppercase
+
+lowercase
+
+number
+
+special character
+
+minimum length
+
+The Company/Security settings architecture may later control these requirements.
+
+Do not hardcode policy across multiple files.
+
+Use centralized validation.
+
+============================================================
+10. LOGIN SECURITY
+============================================================
+
+Audit and secure login.
+
+Ensure:
+
+Generic login errors.
+
+Use:
+
+"Invalid username or password"
+
+Do NOT reveal:
+
+"Username exists"
+
+"Wrong password"
+
+"Employee not found"
+
+in ways that enable account enumeration.
+
+Add reasonable protection against brute-force login attempts.
+
+Possible controls:
+
+rate limiting
+
+temporary lockout
+
+failed login counter
+
+audit logging.
+
+Do not accidentally permanently lock legitimate users.
+
+============================================================
+11. SESSION SECURITY
+============================================================
+
+Audit current session configuration.
+
+SESSION_SECRET must come only from environment variables.
+
+Never hardcode SESSION_SECRET.
+
+Production cookies should use appropriate settings:
+
+HttpOnly
+
+Secure in HTTPS production
+
+SameSite appropriate to deployment architecture
+
+Reasonable expiration
+
+Session regeneration after login where applicable.
+
+Protect against session fixation.
+
+============================================================
+12. API SECURITY
+============================================================
+
+Verify password fields are NEVER returned from:
+
+Employee APIs
+
+User APIs
+
+Profile APIs
+
+Admin APIs
+
+Reports
+
+Exports
+
+Logs.
+
+Even hashed passwords should not be sent to the frontend.
+
+Use explicit response DTOs/serialization rather than blindly returning entire database rows containing password_hash.
+
+============================================================
+13. AUTHORIZATION
+============================================================
+
+Authentication and authorization are different.
+
+After login:
+
+Ensure every protected API verifies authorization.
+
+Do not rely only on hidden frontend buttons.
+
+Backend must enforce permissions for:
+
+View
+
+Create/Add
+
+Edit
+
+Delete
+
+Approve
+
+Download
+
+Export
+
+and any other configured permission.
+
+Preserve the existing hierarchy-based permission architecture.
+
+============================================================
+14. PRODUCTION DATABASE SAFETY
+============================================================
+
+The independent Neon production database is referenced by:
+
+PRODUCTION_DATABASE_URL
+
+Rules:
+
+Do NOT print this variable.
+
+Do NOT expose its value.
+
+Do NOT commit it.
+
+Do NOT replace development DATABASE_URL.
+
+Do NOT delete production tables.
+
+Do NOT reset production.
+
+Do NOT copy development/demo transactions into production.
+
+Only perform the minimum safe database operation required to secure the production admin credential and authentication schema.
+
+Before any destructive operation:
+
+STOP AND ASK FOR APPROVAL.
+
+============================================================
+15. DATABASE MIGRATIONS
+============================================================
+
+Do NOT rely on uncontrolled:
+
+drizzle-kit push --force
+
+for future production deployments.
+
+Prepare the project toward proper versioned database migrations.
+
+Production schema changes should follow:
+
+Migration file
+↓
+Code review
+↓
+Database backup/checkpoint
+↓
+Staging migration
+↓
+Verification
+↓
+Production migration
+
+Do not automatically push schema changes on every deployment.
+
+If this authentication change requires a schema update, create a versioned, non-destructive migration.
+
+============================================================
+16. AUDIT LOGGING
+============================================================
+
+Record security-relevant events without sensitive information.
+
+Examples:
+
+LOGIN_SUCCESS
+
+LOGIN_FAILED
+
+LOGOUT
+
+PASSWORD_CHANGED
+
+PASSWORD_RESET
+
+ACCOUNT_LOCKED
+
+ACCOUNT_UNLOCKED
+
+EMPLOYEE_ACCOUNT_CREATED
+
+PERMISSION_CHANGED
+
+Record:
+
+user/employee ID
+
+timestamp
+
+IP if available
+
+action
+
+result
+
+context.
+
+NEVER record:
+
+password
+
+password hash
+
+SESSION_SECRET
+
+database credentials
+
+API secrets.
+
+============================================================
+17. SECRET MANAGEMENT
+============================================================
+
+Verify:
+
+.env
+
+.env.*
+
+credentials
+
+private keys
+
+database URLs
+
+SESSION_SECRET
+
+API keys
+
+are excluded from Git.
+
+Keep:
+
+.env.example
+
+with placeholders only.
+
+Example:
+
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/DATABASE
+
+SESSION_SECRET=CHANGE_ME
+
+PORT=3000
+
+Never put real credentials into .env.example.
+
+============================================================
+18. PORTABILITY
+============================================================
+
+The final ERP must be capable of running completely without Replit.
+
+Target:
+
+GitHub
+↓
+Independent Cloud/Server
+↓
+Node.js ERP Backend
+↓
+Independent Neon PostgreSQL
+↓
+Independent File/Object Storage
+↓
+Independent Backups
+
+Replit must NOT be required for:
+
+authentication
+
+database
+
+sessions
+
+build
+
+runtime
+
+file storage
+
+production deployment.
+
+Do not perform the final deployment yet.
+
+============================================================
+19. DO NOT BREAK EXISTING ERP
+============================================================
+
+Do not change:
+
+Production business logic
+
+Inventory logic
+
+Stock transfers
+
+GST logic
+
+Accounts
+
+Sales
+
+HR
+
+Payroll
+
+UI/UX
+
+unless technically required for authentication integration.
+
+Do not remove working features.
+
+============================================================
+20. TESTING REQUIRED
+============================================================
+
+After implementation, test:
+
+Admin login with the configured initial credential.
+
+Verify incorrect password fails.
+
+Verify password stored in DB is hashed.
+
+Verify plaintext password does not exist in password storage.
+
+Verify forced password change.
+
+Verify changed password login.
+
+Verify old password no longer works.
+
+Verify new employee password creation hashes correctly.
+
+Verify admin password reset.
+
+Verify password reset forces password change.
+
+Verify employee/profile API never exposes password_hash.
+
+Verify logout.
+
+Verify session security.
+
+Verify permissions still work.
+
+Verify production database connectivity.
+
+Do not expose actual credentials in test logs.
+
+============================================================
+21. FINAL SECURITY REPORT
+============================================================
+
+After completing the work, provide a detailed report:
+
+1. Files changed.
+
+2. Authentication flows inspected.
+
+3. Hashing algorithm selected and why.
+
+4. Confirmation that plaintext password storage has been removed.
+
+5. Confirmation that production admin password is stored only as a hash.
+
+6. Confirmation that the initial admin username remains:
+
+admin
+
+7. Confirmation that first-login password change is implemented or explain why not.
+
+8. Employee password creation behavior.
+
+9. Password reset behavior.
+
+10. Session security configuration.
+
+11. Login brute-force protection.
+
+12. API password-field exposure audit.
+
+13. Authorization audit findings.
+
+14. Database migrations created.
+
+15. Production database operations performed.
+
+16. Confirmation that Replit Development Database was not overwritten.
+
+17. Confirmation that PRODUCTION_DATABASE_URL was never exposed or committed.
+
+18. Remaining security risks before go-live.
+
+19. Recommended next steps.
+
+============================================================
+CRITICAL FINAL RULE
+============================================================
+
+Do not deploy the ERP live yet.
+
+Do not delete Replit yet.
+
+Do not migrate real business data yet.
+
+Do not perform destructive database operations.
+
+The objective of this task is:
+
+SECURE AUTHENTICATION
++
+SECURE PASSWORD STORAGE
++
+PROTECT THE PRODUCTION DATABASE
++
+KEEP THE ERP PORTABLE FOR FUTURE INDEPENDENT HOSTING.
+
+Proceed carefully and preserve the existing working ERP.

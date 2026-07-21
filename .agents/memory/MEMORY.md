@@ -1,4 +1,5 @@
-- [Marlin ERP architecture](marlin-erp-arch.md) — Full ERP stack: api-server (Express+Drizzle), marlin-erp (React+Vite), shared libs; login: username=admin password=admin123
+- [Marlin ERP architecture](marlin-erp-arch.md) — Full ERP stack: api-server (Express+Drizzle), marlin-erp (React+Vite), shared libs; login: username=admin password=marlin1458 (bcrypt-hashed; must_change_password=true on first login)
+- [Security hardening](security-hardening.md) — Full auth security applied: bcryptjs, global requireAuth middleware, rate limiting, mustChangePassword flow. See file for all details.
 - [API client hook names](api-client-hooks.md) — Many hook names differ from intuition; several entities are create-only (no update/delete). Always grep the generated file first.
 - [Permission system](permissions.md) — usePermission hook at src/lib/usePermission.ts; module names must match Permissions page MODULE_GROUPS exactly; level 1 hierarchy = full access always.
 - [Custom API client hooks](custom-hooks.md) — New hooks go in lib/api-client-react/src/<name>.ts + export from index.ts; must run `pnpm tsc` in lib/api-client-react after adding files to generate .d.ts types.

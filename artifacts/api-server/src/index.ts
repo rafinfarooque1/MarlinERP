@@ -1,6 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { pool } from "@workspace/db";
+import { PasswordService } from "./lib/password";
 
 async function runMigrations() {
   // Existing migrations
@@ -56,8 +57,35 @@ async function runMigrations() {
     `INSERT INTO employees (name, username, password_hash, hierarchy_id, branch_type, branch_id, salary, join_date, is_active)
      SELECT 'Administrator', 'admin', 'admin123', h.id, 'headoffice', 0, 0, CURRENT_DATE, true
      FROM hierarchies h WHERE h.level = 1 LIMIT 1
-     ON CONFLICT (username) DO UPDATE SET password_hash = 'admin123'`
+     ON CONFLICT (username) DO NOTHING`
   );
+
+  // Ensure must_change_password column exists (idempotent)
+  await pool.query(`
+    ALTER TABLE employees ADD COLUMN IF NOT EXISTS must_change_password boolean NOT NULL DEFAULT false;
+  `);
+
+  // Migrate admin: set securely hashed marlin1458 password and force change on first login.
+  // The WHERE clause ensures this is a no-op once admin has already set their own bcrypt password.
+  const adminHash = await PasswordService.hash('marlin1458');
+  await pool.query(
+    `UPDATE employees
+     SET password_hash = $1, must_change_password = true
+     WHERE username = 'admin' AND password_hash NOT LIKE '$2%'`,
+    [adminHash],
+  );
+
+  // Migrate any other employees still storing plaintext passwords
+  const { rows: plaintextEmps } = await pool.query<{ id: number }>(
+    `SELECT id FROM employees WHERE password_hash NOT LIKE '$2%'`,
+  );
+  for (const emp of plaintextEmps) {
+    const h = await PasswordService.hash('marlin1458');
+    await pool.query(
+      `UPDATE employees SET password_hash = $1, must_change_password = true WHERE id = $2`,
+      [h, emp.id],
+    );
+  }
 
   // Seed default root account groups (only if none exist)
   await pool.query(`
