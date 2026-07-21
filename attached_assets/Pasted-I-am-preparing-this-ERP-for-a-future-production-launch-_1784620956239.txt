@@ -1,0 +1,70 @@
+I am preparing this ERP for a future production launch outside Replit.
+
+IMPORTANT ARCHITECTURE:
+- Replit is being used only for development right now.
+- GitHub is my permanent source-code repository and backup.
+- After development is complete, I plan to deploy the ERP on an independent cloud/server and eventually stop using Replit completely.
+- I have created a separate external Neon PostgreSQL database specifically for future production.
+- Its connection string is securely stored in Replit Secrets as:
+  PRODUCTION_DATABASE_URL
+- Never print, expose, log, hardcode, or commit this secret or its credentials.
+
+Your task:
+
+1. FIRST inspect the entire existing project and database architecture before changing anything.
+   Identify:
+   - current DATABASE_URL usage
+   - Drizzle ORM configuration
+   - all database schemas/tables
+   - migration/schema initialization mechanism
+   - any Replit-specific database or runtime dependencies
+   - environment-variable dependencies related to deployment
+
+2. DO NOT delete, overwrite, reset, or modify my existing Replit Development Database or Replit Production Database.
+
+3. DO NOT replace the existing DATABASE_URL used by the current development environment.
+
+4. Treat PRODUCTION_DATABASE_URL as a completely separate future production database.
+
+5. Prepare the external Neon production database so that it can eventually run the complete ERP independently of Replit.
+
+6. Create/apply the complete required database schema to the external Neon production database using the project's existing schema definitions/migration system.
+
+7. Do NOT automatically copy development/test/demo data into the production database.
+   Production should start clean unless certain essential system/master records are strictly required for the ERP to function.
+   If seed/master data is required, explain exactly what is required before inserting it.
+
+8. Do NOT drop existing databases, tables, or data without explicit approval.
+
+9. Make the application architecture portable so that later it can be deployed from GitHub to an independent production hosting provider and connect directly to Neon without requiring Replit.
+
+10. Do not introduce unnecessary Replit-specific dependencies into the production architecture.
+
+11. Keep secrets/environment configuration separate from source code.
+    No database passwords, connection strings, API keys, SESSION_SECRET values, or other credentials may be committed to GitHub.
+
+12. Ensure .gitignore and repository security are appropriate so .env files, credentials, generated files, node_modules, caches, and local secrets are not committed.
+
+13. Do not change business logic, UI, ERP functionality, or existing features unless technically required for database portability.
+
+14. Before performing any destructive or irreversible operation, STOP and ask for my approval.
+
+15. After completing safe non-destructive work, give me a detailed report containing:
+    - what you inspected
+    - what files you changed
+    - what database operations you performed
+    - which tables/schema were created in Neon
+    - whether PRODUCTION_DATABASE_URL connectivity was successfully tested
+    - whether any Replit-specific production dependencies remain
+    - whether the GitHub codebase will be portable to another hosting provider
+    - any migration or deployment steps still required
+    - any security concerns you found
+
+IMPORTANT:
+Do not switch the currently running development ERP to PRODUCTION_DATABASE_URL.
+
+The goal right now is to PREPARE and VERIFY the independent Neon production database and make the codebase production-portable.
+
+Do not deploy the ERP live yet.
+
+Proceed carefully and preserve the current working application.
