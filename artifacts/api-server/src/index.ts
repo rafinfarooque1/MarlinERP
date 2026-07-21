@@ -91,6 +91,7 @@ async function runMigrations() {
   await pool.query(`
     ALTER TABLE account_ledgers ADD COLUMN IF NOT EXISTS section text;
     ALTER TABLE account_ledgers ADD COLUMN IF NOT EXISTS is_system_group boolean NOT NULL DEFAULT false;
+    ALTER TABLE account_ledgers ADD COLUMN IF NOT EXISTS bank_details jsonb;
   `);
 
   // ── One-time: clean up old user-created ledgers, create standard ones ──────

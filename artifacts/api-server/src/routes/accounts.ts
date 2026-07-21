@@ -53,7 +53,29 @@ router.get("/accounts/chart/flat", async (_req, res): Promise<void> => {
     code: r.code ?? null,
     section: r.section ?? null,
     isSystemGroup: r.is_system_group ?? false,
+    bankDetails: r.bank_details ?? null,
     balance: 0,
+  })));
+});
+
+// Cash/Bank ledgers only — for Received In / Paid From dropdowns
+router.get("/accounts/cash-bank-ledgers", async (_req, res): Promise<void> => {
+  const { rows } = await pool.query(`SELECT * FROM account_ledgers ORDER BY id`);
+  const bankRoot = rows.find((r: any) => r.code === 'STD-BANK');
+  const cashRoot = rows.find((r: any) => r.code === 'STD-CASH');
+  const ids = new Set<number>();
+  if (bankRoot) ids.add(bankRoot.id);
+  if (cashRoot) ids.add(cashRoot.id);
+  // Multi-level descendant walk (up to 4 levels)
+  for (let i = 0; i < 4; i++) {
+    for (const r of rows) {
+      if (r.parent_id && ids.has(r.parent_id)) ids.add(r.id);
+    }
+  }
+  res.json(rows.filter((r: any) => ids.has(r.id)).map((r: any) => ({
+    id: r.id, name: r.name, type: r.type,
+    parentId: r.parent_id ?? null, code: r.code ?? null,
+    bankDetails: r.bank_details ?? null,
   })));
 });
 
@@ -61,15 +83,19 @@ router.post("/accounts/chart", async (req, res): Promise<void> => {
   const parsed = CreateAccountLedgerBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const code = (req.body as any).code ?? null;
+  const bankDetails = (req.body as any).bankDetails ?? null;
   const [row] = await db.insert(accountLedgersTable).values({ ...parsed.data, ...(code ? {} : {}) }).returning();
-  // Set code via raw query if provided
-  if (code) {
-    await pool.query(`UPDATE account_ledgers SET code = $1 WHERE id = $2`, [code, row.id]);
+  // Set code and bank_details via raw query if provided
+  if (code || bankDetails) {
+    await pool.query(
+      `UPDATE account_ledgers SET code = COALESCE($1, code), bank_details = COALESCE($2, bank_details) WHERE id = $3`,
+      [code, bankDetails ? JSON.stringify(bankDetails) : null, row.id]
+    );
   }
   const parentName = parsed.data.parentId
     ? (await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, parsed.data.parentId!)).limit(1))[0]?.name ?? null
     : null;
-  res.status(201).json({ ...row, code, parentName, children: [], balance: 0 });
+  res.status(201).json({ ...row, code, bankDetails, parentName, children: [], balance: 0 });
 });
 
 router.patch("/accounts/chart/:id", async (req, res): Promise<void> => {

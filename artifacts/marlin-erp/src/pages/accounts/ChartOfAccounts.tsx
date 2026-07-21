@@ -5,7 +5,9 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, Plus, ChevronDown, ChevronRight, Package } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Building2, CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, Plus, ChevronDown, ChevronRight, Package } from 'lucide-react';
 import { toast } from 'sonner';
 
 /* ── types ──────────────────────────────────────────────────────────────────── */
@@ -93,10 +95,80 @@ function InlineAdd({ parentId, parentType, depth = 1, onCreated, hint }: {
   );
 }
 
+/* ── bank ledger dialog ──────────────────────────────────────────────────────── */
+function BankLedgerDialog({ parentId, parentType, onCreated, onClose }: {
+  parentId: number; parentType: ALType; onCreated: () => void; onClose: () => void;
+}) {
+  const [name, setName]         = useState('');
+  const [bankName, setBankName] = useState('');
+  const [accNo, setAccNo]       = useState('');
+  const [ifsc, setIfsc]         = useState('');
+  const [branch, setBranch]     = useState('');
+  const create = useCreateAccountLedger();
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    create.mutate(
+      { data: { name: name.trim(), type: parentType, parentId, bankDetails: { bankName, accountNumber: accNo, ifscCode: ifsc.toUpperCase(), branch } } as any },
+      {
+        onSuccess: () => { toast.success('Bank account added'); onCreated(); onClose(); },
+        onError: (err: any) => toast.error(err?.data?.error || err.message || 'Failed'),
+      }
+    );
+  };
+
+  return (
+    <Dialog open onOpenChange={v => { if (!v) onClose(); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Building2 className="w-4 h-4 text-primary" /> Add Bank Account
+          </DialogTitle>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-3 pt-1">
+          <div>
+            <label className="text-xs font-medium text-foreground">Account Name / Branch Label <span className="text-destructive">*</span></label>
+            <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. HDFC Current A/C" className="mt-1" autoFocus />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-foreground">Bank Name</label>
+              <Input value={bankName} onChange={e => setBankName(e.target.value)} placeholder="HDFC Bank" className="mt-1" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-foreground">Account Number</label>
+              <Input value={accNo} onChange={e => setAccNo(e.target.value)} placeholder="50100XXXXXXXX" className="mt-1" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-foreground">IFSC Code</label>
+              <Input value={ifsc} onChange={e => setIfsc(e.target.value.toUpperCase())} placeholder="HDFC0001234" className="mt-1 font-mono" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-foreground">Branch</label>
+              <Input value={branch} onChange={e => setBranch(e.target.value)} placeholder="Anna Nagar" className="mt-1" />
+            </div>
+          </div>
+          <DialogFooter className="pt-2">
+            <Button variant="outline" type="button" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={create.isPending || !name.trim()}>
+              {create.isPending ? 'Saving…' : 'Add Bank Account'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /* ── ledger line (recursive) ─────────────────────────────────────────────────── */
-function LedgerLine({ node, depth, onCreated }: { node: LedgerNode; depth: number; onCreated: () => void }) {
+function LedgerLine({ node, depth, onCreated, onBankAdd }: {
+  node: LedgerNode; depth: number; onCreated: () => void;
+  onBankAdd?: (parentId: number, parentType: ALType) => void;
+}) {
   const pl = `${8 + depth * 16}px`;
   const balance = Math.abs(node.balance);
+  const isBank = node.code === 'STD-BANK';
 
   return (
     <div>
@@ -113,22 +185,34 @@ function LedgerLine({ node, depth, onCreated }: { node: LedgerNode; depth: numbe
 
       {/* Sub-ledgers */}
       {node.children.map(c => (
-        <LedgerLine key={c.id} node={c} depth={depth + 1} onCreated={onCreated} />
+        <LedgerLine key={c.id} node={c} depth={depth + 1} onCreated={onCreated} onBankAdd={onBankAdd} />
       ))}
 
-      {/* Inline add for sub-ledger (only at depth 1) */}
+      {/* Add sub-ledger button (only at depth 1) */}
       {depth === 1 && (
-        <InlineAdd parentId={node.id} parentType={node.type as ALType} depth={2} onCreated={onCreated} />
+        isBank && onBankAdd
+          ? (
+            <button
+              onClick={() => onBankAdd(node.id, node.type as ALType)}
+              style={{ paddingLeft: `${8 + 2 * 16}px` }}
+              className="flex items-center gap-1.5 py-2 w-full text-xs text-primary/60 hover:text-primary active:text-primary transition-colors font-medium"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Add bank account
+            </button>
+          )
+          : <InlineAdd parentId={node.id} parentType={node.type as ALType} depth={2} onCreated={onCreated} />
       )}
     </div>
   );
 }
 
 /* ── group block ────────────────────────────────────────────────────────────── */
-function GroupBlock({ group, onCreated, extraRows }: {
+function GroupBlock({ group, onCreated, extraRows, onBankAdd }: {
   group: GroupSummary;
   onCreated: () => void;
   extraRows?: React.ReactNode;
+  onBankAdd?: (parentId: number, parentType: ALType) => void;
 }) {
   if (!group.id) return null;
   const hasChildren = group.children.length > 0 || !!extraRows;
@@ -145,7 +229,7 @@ function GroupBlock({ group, onCreated, extraRows }: {
 
       {/* Ledgers under group */}
       {group.children.map(ledger => (
-        <LedgerLine key={ledger.id} node={ledger} depth={1} onCreated={onCreated} />
+        <LedgerLine key={ledger.id} node={ledger} depth={1} onCreated={onCreated} onBankAdd={onBankAdd} />
       ))}
 
       {/* Extra auto rows (e.g. Duty & Tax) */}
@@ -255,7 +339,11 @@ export default function ChartOfAccounts() {
   const [customFrom, setFrom]     = useState('');
   const [customTo, setTo]         = useState('');
   const [outletId, setOutletId]   = useState('all');
+  const [bankParent, setBankParent] = useState<{ id: number; type: ALType } | null>(null);
   const queryClient               = useQueryClient();
+
+  const onBankAdd = (parentId: number, parentType: ALType) =>
+    setBankParent({ id: parentId, type: parentType });
 
   const { fromDate, toDate } = useMemo(
     () => computeDateRange(period, customFrom, customTo),
@@ -417,8 +505,8 @@ export default function ChartOfAccounts() {
                 >
                   {bs && (
                     <>
-                      <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} />
-                      <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} />
+                      <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} onBankAdd={onBankAdd} />
+                      <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} onBankAdd={onBankAdd} />
                     </>
                   )}
                 </Panel>
@@ -508,6 +596,16 @@ export default function ChartOfAccounts() {
           </Tabs>
         )}
       </div>
+
+      {/* ── Bank details dialog ── */}
+      {bankParent && (
+        <BankLedgerDialog
+          parentId={bankParent.id}
+          parentType={bankParent.type}
+          onCreated={() => { queryClient.invalidateQueries({ queryKey: qKey }); }}
+          onClose={() => setBankParent(null)}
+        />
+      )}
     </AppLayout>
   );
 }

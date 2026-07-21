@@ -5,6 +5,7 @@ import { customFetch } from './custom-fetch';
 export const getPaymentsQueryKey = () => ['/api/accounts/payments'] as const;
 export const getReceiptsQueryKey = () => ['/api/accounts/receipts'] as const;
 export const getAccountsFlatQueryKey = () => ['/api/accounts/chart/flat'] as const;
+export const getCashBankLedgersQueryKey = () => ['/api/accounts/cash-bank-ledgers'] as const;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export interface Payment {
@@ -31,13 +32,23 @@ export interface Receipt {
   narration?: string;
 }
 
+export interface BankDetails {
+  bankName?: string;
+  accountNumber?: string;
+  ifscCode?: string;
+  branch?: string;
+  accountHolder?: string;
+}
+
 export interface AccountFlat {
   id: number;
   name: string;
   type: string;
-  code?: string;
+  code?: string | null;
   parentId?: number | null;
   description?: string | null;
+  isSystemGroup?: boolean;
+  bankDetails?: BankDetails | null;
 }
 
 // ── Payments ──────────────────────────────────────────────────────────────────
@@ -103,5 +114,13 @@ export function useListAccountsFlat() {
   return useQuery({
     queryKey: getAccountsFlatQueryKey(),
     queryFn: ({ signal }) => customFetch<AccountFlat[]>('/api/accounts/chart/flat', { signal }),
+  });
+}
+
+// ── Cash/Bank ledgers only (for Received In / Paid From dropdowns) ────────────
+export function useCashBankLedgersFlat() {
+  return useQuery({
+    queryKey: getCashBankLedgersQueryKey(),
+    queryFn: ({ signal }) => customFetch<AccountFlat[]>('/api/accounts/cash-bank-ledgers', { signal }),
   });
 }

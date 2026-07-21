@@ -1,21 +1,21 @@
 import { useState } from 'react';
-import { useListReceipts, useCreateReceipt, useDeleteReceipt, useListAccountsFlat } from '@workspace/api-client-react';
+import { useListReceipts, useCreateReceipt, useDeleteReceipt, useListAccountsFlat, useCashBankLedgersFlat } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useForm } from 'react-hook-form';
+import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Plus, ArrowDownRight, Download, Trash2, Search, Calendar, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
+import { Form, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Textarea } from '@/components/ui/textarea';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
+import { AccountCombobox } from '@/components/ui/account-combobox';
 
 const schema = z.object({
   receiptDate: z.string().min(1, 'Date required'),
@@ -29,12 +29,18 @@ type FormValues = z.infer<typeof schema>;
 export default function ReceiptPage() {
   const perm = usePermission('Accounts');
   const { data: receipts = [], isLoading } = useListReceipts();
-  const { data: accounts = [] } = useListAccountsFlat();
+  const { data: allAccounts = [] } = useListAccountsFlat();
+  const { data: cashBankAccounts = [] } = useCashBankLedgersFlat();
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const createMutation = useCreateReceipt();
   const deleteMutation = useDeleteReceipt();
+
+  // "Received From" — all non-system-group ledgers
+  const fromOptions = (allAccounts as any[]).filter(a => !a.isSystemGroup);
+  // "Received In" — only Bank / Cash and their sub-ledgers
+  const inOptions = cashBankAccounts as any[];
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -96,7 +102,10 @@ export default function ReceiptPage() {
               </Button>
             )}
             {perm.canAdd && (
-              <Button onClick={() => { form.reset({ receiptDate: new Date().toISOString().split('T')[0], receivedFromLedgerId: 0, receivedInLedgerId: 0, amount: 0, narration: '' }); setIsOpen(true); }}>
+              <Button onClick={() => {
+                form.reset({ receiptDate: new Date().toISOString().split('T')[0], receivedFromLedgerId: 0, receivedInLedgerId: 0, amount: 0, narration: '' });
+                setIsOpen(true);
+              }}>
                 <Plus className="w-4 h-4 mr-2" /> New Receipt
               </Button>
             )}
@@ -158,55 +167,76 @@ export default function ReceiptPage() {
         </div>
       </div>
 
+      {/* ── New Receipt Dialog ── */}
       <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) form.reset(); }}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader><DialogTitle>New Receipt Voucher</DialogTitle></DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
-              <div className="grid grid-cols-2 gap-4">
-                <FormField control={form.control} name="receiptDate" render={({ field }) => (
-                  <FormItem className="col-span-2"><FormLabel>Date <span className="text-destructive">*</span></FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
-                )} />
-                <FormField control={form.control} name="receivedFromLedgerId" render={({ field }) => (
-                  <FormItem className="col-span-2">
-                    <FormLabel>Received From <span className="text-destructive">*</span></FormLabel>
-                    <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select account" /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        {(accounts as any[]).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-                <FormField control={form.control} name="receivedInLedgerId" render={({ field }) => (
-                  <FormItem className="col-span-2">
-                    <FormLabel>Received In (Cash / Bank) <span className="text-destructive">*</span></FormLabel>
-                    <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select account" /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        {(accounts as any[]).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-                <FormField control={form.control} name="amount" render={({ field }) => (
-                  <FormItem><FormLabel>Amount ₹ <span className="text-destructive">*</span></FormLabel><FormControl><Input type="number" min={0} step="0.01" {...field} /></FormControl><FormMessage /></FormItem>
-                )} />
-                <FormField control={form.control} name="narration" render={({ field }) => (
-                  <FormItem className="col-span-2"><FormLabel>Narration</FormLabel><FormControl><Textarea rows={2} placeholder="Brief description of the receipt" {...field} /></FormControl></FormItem>
-                )} />
-              </div>
+
+              {/* Date */}
+              <FormField control={form.control} name="receiptDate" render={({ field }) => (
+                <FormItem><FormLabel>Date <span className="text-destructive">*</span></FormLabel>
+                  <Input type="date" {...field} />
+                  <FormMessage />
+                </FormItem>
+              )} />
+
+              {/* Received From — searchable, all non-system ledgers */}
+              <Controller control={form.control} name="receivedFromLedgerId" render={({ field, fieldState }) => (
+                <FormItem>
+                  <FormLabel>Received From <span className="text-destructive">*</span></FormLabel>
+                  <AccountCombobox
+                    options={fromOptions}
+                    value={field.value}
+                    onChange={field.onChange}
+                    placeholder="Select account"
+                  />
+                  {fieldState.error && <p className="text-sm text-destructive">{fieldState.error.message}</p>}
+                </FormItem>
+              )} />
+
+              {/* Received In — searchable, Bank/Cash only */}
+              <Controller control={form.control} name="receivedInLedgerId" render={({ field, fieldState }) => (
+                <FormItem>
+                  <FormLabel>Received In (Cash / Bank) <span className="text-destructive">*</span></FormLabel>
+                  <AccountCombobox
+                    options={inOptions}
+                    value={field.value}
+                    onChange={field.onChange}
+                    placeholder="Select Bank or Cash account"
+                  />
+                  {fieldState.error && <p className="text-sm text-destructive">{fieldState.error.message}</p>}
+                </FormItem>
+              )} />
+
+              {/* Amount */}
+              <FormField control={form.control} name="amount" render={({ field }) => (
+                <FormItem><FormLabel>Amount ₹ <span className="text-destructive">*</span></FormLabel>
+                  <Input type="number" min={0} step="0.01" {...field} />
+                  <FormMessage />
+                </FormItem>
+              )} />
+
+              {/* Narration */}
+              <FormField control={form.control} name="narration" render={({ field }) => (
+                <FormItem><FormLabel>Narration</FormLabel>
+                  <Textarea rows={2} placeholder="Brief description of the receipt" {...field} />
+                </FormItem>
+              )} />
+
               <DialogFooter>
                 <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
-                <Button type="submit" disabled={createMutation.isPending}>{createMutation.isPending ? 'Recording…' : 'Record Receipt'}</Button>
+                <Button type="submit" disabled={createMutation.isPending}>
+                  {createMutation.isPending ? 'Recording…' : 'Record Receipt'}
+                </Button>
               </DialogFooter>
             </form>
           </Form>
         </DialogContent>
       </Dialog>
 
+      {/* ── Delete Confirmation ── */}
       <Dialog open={!!deleteTarget} onOpenChange={v => !v && setDeleteTarget(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader><DialogTitle className="text-destructive flex items-center gap-2"><Trash2 className="w-5 h-5" />Delete Receipt</DialogTitle></DialogHeader>
