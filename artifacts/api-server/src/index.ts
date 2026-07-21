@@ -87,33 +87,34 @@ async function runMigrations() {
     );
   }
 
-  // Seed default root account groups (only if none exist)
+  // Add Tally-style COA columns
   await pool.query(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (SELECT 1 FROM account_ledgers WHERE name = 'Capital Account' AND parent_id IS NULL) THEN
-        INSERT INTO account_ledgers (name, type, code, description) VALUES ('Capital Account', 'equity', 'CAP', 'Owner capital and investments');
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM account_ledgers WHERE name = 'Sales Account' AND parent_id IS NULL) THEN
-        INSERT INTO account_ledgers (name, type, code, description) VALUES ('Sales Account', 'income', 'SAL', 'Revenue from sales');
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM account_ledgers WHERE name = 'Purchase Account' AND parent_id IS NULL) THEN
-        INSERT INTO account_ledgers (name, type, code, description) VALUES ('Purchase Account', 'expense', 'PUR', 'Cost of goods purchased');
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM account_ledgers WHERE name = 'Expenses' AND parent_id IS NULL) THEN
-        INSERT INTO account_ledgers (name, type, code, description) VALUES ('Expenses', 'expense', 'EXP', 'Business operating expenses');
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM account_ledgers WHERE name = 'Cash & Bank' AND parent_id IS NULL) THEN
-        INSERT INTO account_ledgers (name, type, code, description) VALUES ('Cash & Bank', 'asset', 'CASH', 'Cash and bank balances');
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM account_ledgers WHERE name = 'Trade Receivables' AND parent_id IS NULL) THEN
-        INSERT INTO account_ledgers (name, type, code, description) VALUES ('Trade Receivables', 'asset', 'REC', 'Customer receivables');
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM account_ledgers WHERE name = 'Trade Payables' AND parent_id IS NULL) THEN
-        INSERT INTO account_ledgers (name, type, code, description) VALUES ('Trade Payables', 'liability', 'PAY', 'Vendor payables');
-      END IF;
-    END $$;
+    ALTER TABLE account_ledgers ADD COLUMN IF NOT EXISTS section text;
+    ALTER TABLE account_ledgers ADD COLUMN IF NOT EXISTS is_system_group boolean NOT NULL DEFAULT false;
   `);
+
+  // Seed Tally-standard system group heads — parameterised INSERT to avoid dollar-quoting
+  const sysGroups: [string, string, string, string, string][] = [
+    ['Capital Account',     'equity',    'SYS-CAP',    'balance_sheet', 'Owner capital and reserves'],
+    ['Loans (Liability)',   'liability', 'SYS-LOAN',   'balance_sheet', 'Long-term loans and borrowings'],
+    ['Current Liabilities', 'liability', 'SYS-CURL',   'balance_sheet', 'Short-term obligations due within a year'],
+    ['Fixed Assets',        'asset',     'SYS-FIXD',   'balance_sheet', 'Long-term tangible and intangible assets'],
+    ['Current Assets',      'asset',     'SYS-CURA',   'balance_sheet', 'Short-term assets convertible within a year'],
+    ['Purchase Accounts',   'expense',   'SYS-PUR',    'profit_loss',   'Cost of goods purchased for resale or production'],
+    ['Direct Expenses',     'expense',   'SYS-DIREXP', 'profit_loss',   'Expenses directly related to production'],
+    ['Indirect Expenses',   'expense',   'SYS-INDEXP', 'profit_loss',   'Administrative and overhead expenses'],
+    ['Sales Accounts',      'income',    'SYS-SAL',    'profit_loss',   'Revenue from sale of goods and services'],
+    ['Direct Incomes',      'income',    'SYS-DIRINC', 'profit_loss',   'Income directly from core operations'],
+    ['Indirect Incomes',    'income',    'SYS-INDINC', 'profit_loss',   'Other miscellaneous income'],
+  ];
+  for (const [name, type, code, section, description] of sysGroups) {
+    await pool.query(
+      `INSERT INTO account_ledgers (name, type, code, section, is_system_group, description)
+       SELECT $1, $2, $3, $4, true, $5
+       WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $3)`,
+      [name, type, code, section, description],
+    );
+  }
 }
 
 const rawPort = process.env["PORT"];

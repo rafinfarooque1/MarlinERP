@@ -11,16 +11,29 @@ const router = Router();
 
 // ── Chart of Accounts (tree) ───────────────────────────────────────────────
 router.get("/accounts/chart", async (_req, res): Promise<void> => {
-  const rows = await db.select().from(accountLedgersTable).orderBy(accountLedgersTable.id);
+  const result = await pool.query(`SELECT * FROM account_ledgers ORDER BY id`);
+  const rows = result.rows;
 
   // Build tree in memory
   const map = new Map<number, any>();
-  rows.forEach(r => map.set(r.id, { ...r, code: (r as any).code ?? null, children: [], balance: 0 }));
+  rows.forEach((r: any) => map.set(r.id, {
+    id: r.id,
+    name: r.name,
+    type: r.type,
+    parentId: r.parent_id ?? null,
+    description: r.description ?? null,
+    code: r.code ?? null,
+    section: r.section ?? null,
+    isSystemGroup: r.is_system_group ?? false,
+    createdAt: r.created_at,
+    children: [],
+    balance: 0,
+  }));
   const roots: any[] = [];
-  rows.forEach(r => {
+  rows.forEach((r: any) => {
     const node = map.get(r.id)!;
-    if (r.parentId && map.has(r.parentId)) {
-      map.get(r.parentId)!.children.push(node);
+    if (r.parent_id && map.has(r.parent_id)) {
+      map.get(r.parent_id)!.children.push(node);
     } else {
       roots.push(node);
     }
@@ -30,8 +43,18 @@ router.get("/accounts/chart", async (_req, res): Promise<void> => {
 
 // Also expose flat list for dropdowns
 router.get("/accounts/chart/flat", async (_req, res): Promise<void> => {
-  const rows = await db.select().from(accountLedgersTable).orderBy(accountLedgersTable.id);
-  res.json(rows.map(r => ({ ...r, code: (r as any).code ?? null, balance: 0 })));
+  const result = await pool.query(`SELECT * FROM account_ledgers ORDER BY id`);
+  res.json(result.rows.map((r: any) => ({
+    id: r.id,
+    name: r.name,
+    type: r.type,
+    parentId: r.parent_id ?? null,
+    description: r.description ?? null,
+    code: r.code ?? null,
+    section: r.section ?? null,
+    isSystemGroup: r.is_system_group ?? false,
+    balance: 0,
+  })));
 });
 
 router.post("/accounts/chart", async (req, res): Promise<void> => {
@@ -63,6 +86,10 @@ router.patch("/accounts/chart/:id", async (req, res): Promise<void> => {
 
 router.delete("/accounts/chart/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
+  // Protect system group heads
+  const { rows: [row] } = await pool.query(`SELECT is_system_group FROM account_ledgers WHERE id = $1`, [id]);
+  if (!row) { res.status(404).json({ error: "Not found" }); return; }
+  if (row.is_system_group) { res.status(400).json({ error: "System group heads cannot be deleted." }); return; }
   // Check for children
   const children = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.parentId, id));
   if (children.length > 0) { res.status(400).json({ error: "Cannot delete account with sub-accounts. Delete sub-accounts first." }); return; }
