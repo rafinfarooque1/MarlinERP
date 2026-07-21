@@ -48,7 +48,6 @@ const navigation = [
     children: [
       { name: 'Units', href: '/production/units' },
       { name: 'Item Master', href: '/production/item-master' },
-      { name: 'BOM Templates', href: '/production/bom-templates' },
       { name: 'Batches', href: '/production/production' },
       { name: 'Stock Transfers', href: '/production/stock-transfer' },
       { name: 'Purchases', href: '/production/purchase' },

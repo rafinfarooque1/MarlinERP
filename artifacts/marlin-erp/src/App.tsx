@@ -8,7 +8,6 @@ import ChangePassword from './pages/auth/ChangePassword';
 import Dashboard from './pages/dashboard/Dashboard';
 
 import Units from './pages/production/Units';
-import BomTemplates from './pages/production/BomTemplates';
 import Materials from './pages/production/Materials';
 import RawMaterials from './pages/production/RawMaterials';
 import Items from './pages/production/Items';
@@ -87,7 +86,6 @@ function Router() {
       </Route>
 
       <Route path="/production/units"><AuthGuard><Units /></AuthGuard></Route>
-      <Route path="/production/bom-templates"><AuthGuard><BomTemplates /></AuthGuard></Route>
       <Route path="/production/materials"><AuthGuard><Materials /></AuthGuard></Route>
       <Route path="/production/raw-materials"><AuthGuard><RawMaterials /></AuthGuard></Route>
       <Route path="/production/items"><AuthGuard><Items /></AuthGuard></Route>

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   useListProductions, useCreateProduction, useListItems, useListRawMaterials,
-  useListMaterials, getListProductionsQueryKey, fetchBomTemplateByItem,
+  useListMaterials, getListProductionsQueryKey,
   useUpdateProduction, useDeleteProduction,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -16,12 +16,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Factory, Download, Eye, Calendar, Trash2, ClipboardList, Edit2, AlertTriangle } from 'lucide-react';
+import { Plus, Search, Factory, Download, Eye, Calendar, Trash2, Edit2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { usePermission } from '@/lib/usePermission';
 import { Label } from '@/components/ui/label';
 
@@ -64,7 +63,6 @@ export default function ProductionList() {
   const [editItem, setEditItem] = useState<any>(null);
   const [viewItem, setViewItem] = useState<any>(null);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
-  const [loadingBom, setLoadingBom] = useState(false);
   const queryClient = useQueryClient();
   const createMutation = useCreateProduction();
   const updateMutation = useUpdateProduction();
@@ -110,19 +108,6 @@ export default function ProductionList() {
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Delete failed'),
     });
   };
-
-  async function handleItemChange(itemId: number, fieldOnChange: (v: number) => void) {
-    fieldOnChange(itemId);
-    if (!itemId) return;
-    setLoadingBom(true);
-    try {
-      const bom = await fetchBomTemplateByItem(itemId);
-      if (bom && bom.lines.length > 0) {
-        replace(bom.lines.map(l => ({ materialType: l.materialType, materialId: l.materialId, usedQuantity: l.quantity })));
-        toast.info(`${bom.lines.length} material${bom.lines.length > 1 ? 's' : ''} auto-filled from BOM template`, { duration: 4000 });
-      }
-    } finally { setLoadingBom(false); }
-  }
 
   const filtered = productions.filter(p => p.itemName?.toLowerCase().includes(search.toLowerCase()));
   const matName = (type: string, id: number) => {
@@ -233,7 +218,7 @@ export default function ProductionList() {
                 <FormField control={form.control} name="itemId" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Finished Item <span className="text-destructive">*</span></FormLabel>
-                    <Select onValueChange={v => handleItemChange(Number(v), field.onChange)} value={field.value ? String(field.value) : ''}>
+                    <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
                       <FormControl><SelectTrigger><SelectValue placeholder="Select item" /></SelectTrigger></FormControl>
                       <SelectContent>{items.map(i => <SelectItem key={i.id} value={String(i.id)}>{i.name}</SelectItem>)}</SelectContent>
                     </Select><FormMessage />
@@ -249,30 +234,8 @@ export default function ProductionList() {
 
               <div>
                 <div className="flex justify-between items-center mb-3">
-                  <div className="flex items-center gap-2">
-                    <p className="font-semibold text-sm">Materials Consumed</p>
-                    {loadingBom && <span className="text-xs text-muted-foreground animate-pulse">Loading BOM…</span>}
-                  </div>
-                  <div className="flex gap-2">
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-primary" onClick={async () => {
-                          const itemId = form.getValues('itemId');
-                          if (!itemId) { toast.error('Select an item first'); return; }
-                          setLoadingBom(true);
-                          try {
-                            const bom = await fetchBomTemplateByItem(itemId);
-                            if (bom && bom.lines.length > 0) {
-                              replace(bom.lines.map(l => ({ materialType: l.materialType, materialId: l.materialId, usedQuantity: l.quantity })));
-                              toast.success('Materials reloaded from BOM template');
-                            } else { toast.info('No BOM template found for this item'); }
-                          } finally { setLoadingBom(false); }
-                        }}><ClipboardList className="w-4 h-4" /></Button>
-                      </TooltipTrigger>
-                      <TooltipContent>Reload from BOM template</TooltipContent>
-                    </Tooltip>
-                    <Button type="button" variant="outline" size="sm" onClick={() => append(defaultLine)}><Plus className="w-3 h-3 mr-1" /> Add</Button>
-                  </div>
+                  <p className="font-semibold text-sm">Materials Consumed</p>
+                  <Button type="button" variant="outline" size="sm" onClick={() => append(defaultLine)}><Plus className="w-3 h-3 mr-1" /> Add</Button>
                 </div>
                 <div className="space-y-2">
                   {fields.map((field, i) => {
