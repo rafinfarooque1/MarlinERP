@@ -1,292 +1,386 @@
-import { useState } from 'react';
-import {
-  useListChartOfAccounts, useCreateAccountLedger, getListChartOfAccountsQueryKey,
-} from '@workspace/api-client-react';
+import { useState, useMemo, useRef, useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useCreateAccountLedger, customFetch } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
-import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import * as z from 'zod';
 import {
-  Plus, BookOpen, ChevronRight, ChevronDown, Trash2, Shield,
-  Landmark, TrendingDown, TrendingUp, BarChart3,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import {
+  BookOpen, Plus, Landmark, BarChart3, TrendingDown, TrendingUp,
+  CalendarDays, Store,
 } from 'lucide-react';
+type AccountLedgerInputType = 'asset' | 'liability' | 'income' | 'expense' | 'equity';
 import { toast } from 'sonner';
-import { useQueryClient, useMutation } from '@tanstack/react-query';
-import { customFetch } from '@workspace/api-client-react';
 
-/* ── types ─────────────────────────────────────────────────────────────────── */
-interface AccountNode {
-  id: number;
-  name: string;
-  type: string;
-  parentId: number | null;
-  code: string | null;
-  section: string | null;       // 'balance_sheet' | 'profit_loss' | null
-  isSystemGroup: boolean;
-  description: string | null;
-  children: AccountNode[];
+/* ── types ──────────────────────────────────────────────────────────────────── */
+interface LedgerNode {
+  id: number; name: string; type: string;
+  parentId: number | null; code: string | null;
+  balance: number; children: LedgerNode[];
+}
+interface GroupSummary {
+  id: number | null; name: string; code: string | null; type?: string;
+  total: number; children: LedgerNode[];
+}
+interface FinancialStatements {
+  filters: {
+    warehouses: { id: number; name: string }[];
+    outlets:    { id: number; name: string }[];
+  };
+  profitAndLoss: {
+    expenses: {
+      openingStock: number; purchases: number;
+      directExpenses: GroupSummary; indirectExpenses: GroupSummary;
+      total: number;
+    };
+    incomes: {
+      sales: number; closingStock: number;
+      directIncomes: GroupSummary; indirectIncomes: GroupSummary;
+      total: number;
+    };
+    netProfit: number;
+  };
+  balanceSheet: {
+    liabilities: {
+      capitalAccount: GroupSummary; loans: GroupSummary; currentLiabilities: GroupSummary;
+      pandlCarryForward: number; difference: number; total: number;
+    };
+    assets: {
+      fixedAssets: GroupSummary; currentAssets: GroupSummary; total: number;
+    };
+  };
 }
 
-/* ── form schema ────────────────────────────────────────────────────────────── */
-const schema = z.object({
-  name: z.string().min(1, 'Name is required'),
-  code: z.string().optional(),
-  description: z.string().optional(),
-});
-type FormValues = z.infer<typeof schema>;
+/* ── helpers ────────────────────────────────────────────────────────────────── */
+const fmt = (n: number) =>
+  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(n);
 
-/* ── sub-ledger tree node ────────────────────────────────────────────────────── */
-function LedgerNode({
-  node,
-  depth,
-  onAdd,
-  onDelete,
+function computeDateRange(period: string, customFrom: string, customTo: string) {
+  const today = new Date();
+  const iso = (d: Date) => d.toISOString().split('T')[0];
+  if (period === 'month') {
+    const from = new Date(today.getFullYear(), today.getMonth(), 1);
+    return { fromDate: iso(from), toDate: iso(today) };
+  }
+  if (period === 'quarter') {
+    const q = Math.floor(today.getMonth() / 3);
+    const from = new Date(today.getFullYear(), q * 3, 1);
+    return { fromDate: iso(from), toDate: iso(today) };
+  }
+  if (period === 'year') {
+    return { fromDate: `${today.getFullYear()}-04-01`, toDate: iso(today) }; // Indian FY
+  }
+  if (period === 'custom') {
+    return { fromDate: customFrom || undefined, toDate: customTo || undefined };
+  }
+  return { fromDate: undefined, toDate: undefined };
+}
+
+/* ── inline add ─────────────────────────────────────────────────────────────── */
+function InlineAdd({
+  parentId, parentType, depth, onCreated,
 }: {
-  node: AccountNode;
-  depth: number;          // 1 = ledger, 2 = sub-ledger
-  onAdd: (parent: AccountNode) => void;
-  onDelete: (node: AccountNode) => void;
+  parentId: number; parentType: string; depth: number; onCreated: () => void;
 }) {
-  const [open, setOpen] = useState(true);
-  const hasChildren = node.children.length > 0;
-  const canAddChild = depth < 2; // max depth: group → ledger → sub-ledger
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+  const createMutation = useCreateAccountLedger();
+
+  useEffect(() => { if (editing) inputRef.current?.focus(); }, [editing]);
+
+  const submit = () => {
+    const trimmed = name.trim();
+    if (!trimmed) { setEditing(false); setName(''); return; }
+    createMutation.mutate(
+      { data: { name: trimmed, type: parentType as AccountLedgerInputType, parentId } },
+      {
+        onSuccess: () => { toast.success('Ledger created'); setEditing(false); setName(''); onCreated(); },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+      },
+    );
+  };
+
+  const indent = `${depth * 20}px`;
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1.5 py-1" style={{ paddingLeft: indent }}>
+        <Plus className="w-3 h-3 text-primary shrink-0" />
+        <input
+          ref={inputRef}
+          value={name}
+          onChange={e => setName(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') { e.preventDefault(); submit(); }
+            if (e.key === 'Escape') { setEditing(false); setName(''); }
+          }}
+          onBlur={submit}
+          placeholder="Ledger name…"
+          className="flex-1 text-xs bg-transparent border-b border-primary/50 outline-none text-foreground placeholder:text-muted-foreground/50 pb-0.5"
+          disabled={createMutation.isPending}
+        />
+        {createMutation.isPending && <span className="text-[10px] text-muted-foreground">Saving…</span>}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setEditing(true)}
+      className="flex items-center gap-1 text-[11px] text-muted-foreground/40 hover:text-primary transition-colors py-0.5 w-full"
+      style={{ paddingLeft: indent }}
+    >
+      <Plus className="w-3 h-3" />
+      <span>add ledger</span>
+    </button>
+  );
+}
+
+/* ── ledger tree row ─────────────────────────────────────────────────────────── */
+function LedgerRow({
+  node, depth, onCreated,
+}: {
+  node: LedgerNode; depth: number; onCreated: () => void;
+}) {
+  const canAddChild = depth < 2;
+  const absBalance = Math.abs(node.balance);
 
   return (
     <div>
       <div
-        className="flex items-center gap-1.5 py-1.5 px-2 rounded hover:bg-muted/10 group transition-colors"
+        className="flex items-center gap-1.5 py-1 px-2 hover:bg-muted/5 group rounded transition-colors"
         style={{ paddingLeft: `${8 + depth * 20}px` }}
       >
-        <button
-          onClick={() => setOpen(o => !o)}
-          className="w-4 h-4 flex items-center justify-center shrink-0 text-muted-foreground"
-        >
-          {hasChildren
-            ? (open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />)
-            : <span className="w-2 h-2 rounded-full bg-muted-foreground/20 block mx-auto" />
-          }
-        </button>
-
-        <span className={`flex-1 text-sm ${depth === 1 ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
+        <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/25 shrink-0" />
+        <span className={`flex-1 text-xs ${depth === 1 ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
           {node.name}
         </span>
-
-        {node.code && (
-          <span className="text-[10px] font-mono text-muted-foreground/50 hidden group-hover:inline">{node.code}</span>
+        {absBalance > 0 && (
+          <span className="text-[11px] font-mono text-muted-foreground tabular-nums">{fmt(absBalance)}</span>
         )}
-
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          {canAddChild && (
-            <Button
-              variant="ghost" size="icon"
-              className="h-5 w-5 text-primary hover:text-primary hover:bg-primary/10"
-              onClick={() => onAdd(node)}
-              title={`Add sub-ledger under ${node.name}`}
-            >
-              <Plus className="w-3 h-3" />
-            </Button>
-          )}
-          <Button
-            variant="ghost" size="icon"
-            className="h-5 w-5 text-destructive hover:text-destructive hover:bg-destructive/10"
-            onClick={() => onDelete(node)}
-            title="Delete"
-          >
-            <Trash2 className="w-3 h-3" />
-          </Button>
-        </div>
       </div>
 
-      {open && hasChildren && (
-        <div>
-          {node.children.map(child => (
-            <LedgerNode key={child.id} node={child} depth={depth + 1} onAdd={onAdd} onDelete={onDelete} />
-          ))}
-        </div>
+      {/* Children */}
+      {node.children.length > 0 && node.children.map(child => (
+        <LedgerRow key={child.id} node={child} depth={depth + 1} onCreated={onCreated} />
+      ))}
+
+      {/* Inline add for sub-ledger */}
+      {canAddChild && (
+        <InlineAdd parentId={node.id} parentType={node.type} depth={depth + 1} onCreated={onCreated} />
       )}
     </div>
   );
 }
 
-/* ── system group card ──────────────────────────────────────────────────────── */
-function GroupCard({
-  node,
-  accentClass,
-  onAddLedger,
-  onDelete,
+/* ── system group card ───────────────────────────────────────────────────────── */
+function GroupSection({
+  group, accentClass, onCreated,
 }: {
-  node: AccountNode;
-  accentClass: string;
-  onAddLedger: (parent: AccountNode) => void;
-  onDelete: (node: AccountNode) => void;
+  group: GroupSummary; accentClass: string; onCreated: () => void;
 }) {
   const [open, setOpen] = useState(true);
+  if (!group.id) return null;
 
   return (
-    <div className="rounded-lg border border-border overflow-hidden mb-3">
-      {/* Group header */}
-      <div
-        className={`flex items-center gap-2 px-3 py-2.5 cursor-pointer select-none ${accentClass}`}
+    <div className="mb-1">
+      <button
         onClick={() => setOpen(o => !o)}
+        className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-colors ${accentClass}`}
       >
-        <span className="w-4 h-4 flex items-center justify-center shrink-0 text-inherit">
-          {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-        </span>
-        <Shield className="w-3.5 h-3.5 opacity-60 shrink-0" />
-        <span className="flex-1 text-sm font-semibold tracking-wide">{node.name}</span>
-        <span className="text-[10px] opacity-50 font-mono">{node.code}</span>
-        <Button
-          variant="ghost" size="sm"
-          className="h-6 px-2 text-xs opacity-80 hover:opacity-100 ml-2"
-          onClick={e => { e.stopPropagation(); onAddLedger(node); }}
-        >
-          <Plus className="w-3 h-3 mr-1" /> Add Ledger
-        </Button>
-      </div>
+        <span className="flex-1 text-xs font-semibold tracking-wide">{group.name}</span>
+        {group.total > 0 && (
+          <span className="text-xs font-mono tabular-nums opacity-80">{fmt(group.total)}</span>
+        )}
+        <span className="text-[10px] opacity-40">{open ? '▲' : '▼'}</span>
+      </button>
 
-      {/* Ledgers */}
       {open && (
-        <div className="bg-card">
-          {node.children.length === 0 ? (
-            <div className="text-xs text-muted-foreground/50 px-8 py-2.5 italic">No ledgers yet</div>
-          ) : (
-            <div className="py-1">
-              {node.children.map(ledger => (
-                <LedgerNode key={ledger.id} node={ledger} depth={1} onAdd={onAddLedger} onDelete={onDelete} />
-              ))}
-            </div>
-          )}
+        <div className="pl-1 mt-0.5">
+          {group.children.map(child => (
+            <LedgerRow key={child.id} node={child} depth={1} onCreated={onCreated} />
+          ))}
+          <InlineAdd parentId={group.id!} parentType={(group.type ?? group.children[0]?.type ?? 'expense') as AccountLedgerInputType} depth={1} onCreated={onCreated} />
         </div>
       )}
     </div>
   );
 }
 
-/* ── main page ──────────────────────────────────────────────────────────────── */
-export default function ChartOfAccounts() {
-  const { data: rawTree = [], isLoading } = useListChartOfAccounts();
-  const tree = rawTree as unknown as AccountNode[];
-
-  const [isOpen, setIsOpen] = useState(false);
-  const [parentCtx, setParentCtx] = useState<AccountNode | null>(null);
-  const queryClient = useQueryClient();
-  const createMutation = useCreateAccountLedger();
-
-  const deleteMutation = useMutation({
-    mutationFn: (id: number) =>
-      customFetch(`/accounts/chart/${id}`, { method: 'DELETE' }),
-    onSuccess: () => {
-      toast.success('Account deleted');
-      queryClient.invalidateQueries({ queryKey: getListChartOfAccountsQueryKey() });
-    },
-    onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed to delete'),
-  });
-
-  const form = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: { name: '', code: '', description: '' },
-  });
-
-  /* Walk up tree to find root type */
-  const resolveRootType = (node: AccountNode): string => {
-    if (!node.parentId) return node.type;
-    const findById = (nodes: AccountNode[], id: number): AccountNode | undefined => {
-      for (const n of nodes) {
-        if (n.id === id) return n;
-        const found = findById(n.children, id);
-        if (found) return found;
-      }
-    };
-    const parent = findById(tree, node.parentId);
-    return parent ? resolveRootType(parent) : node.type;
-  };
-
-  const openAdd = (parent: AccountNode) => {
-    setParentCtx(parent);
-    form.reset({ name: '', code: '', description: '' });
-    setIsOpen(true);
-  };
-
-  const onSubmit = (data: FormValues) => {
-    if (!parentCtx) return;
-    const payload: any = {
-      name: data.name,
-      type: resolveRootType(parentCtx),
-      description: data.description || undefined,
-      parentId: parentCtx.id,
-    };
-    if (data.code) payload.code = data.code;
-    createMutation.mutate({ data: payload }, {
-      onSuccess: () => {
-        toast.success('Account created');
-        queryClient.invalidateQueries({ queryKey: getListChartOfAccountsQueryKey() });
-        setIsOpen(false);
-      },
-      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
-    });
-  };
-
-  const handleDelete = (node: AccountNode) => {
-    if (!confirm(`Delete "${node.name}"? This cannot be undone.`)) return;
-    deleteMutation.mutate(node.id);
-  };
-
-  /* ── split tree ──────────────────────────────────────────────────────────── */
-  const systemGroups = tree.filter(n => n.isSystemGroup);
-  const otherRoots   = tree.filter(n => !n.isSystemGroup && n.parentId === null);
-
-  const bsLiabilities = systemGroups.filter(n => n.section === 'balance_sheet' && (n.type === 'equity' || n.type === 'liability'));
-  const bsAssets      = systemGroups.filter(n => n.section === 'balance_sheet' && n.type === 'asset');
-  const plExpenses    = systemGroups.filter(n => n.section === 'profit_loss' && n.type === 'expense');
-  const plIncomes     = systemGroups.filter(n => n.section === 'profit_loss' && n.type === 'income');
-
-  /* ── accent colours per group ─────────────────────────────────────────────── */
-  const groupAccent = (code: string | null): string => {
-    switch (code) {
-      case 'SYS-CAP':    return 'bg-violet-500/10 text-violet-400 border-b border-violet-500/20';
-      case 'SYS-LOAN':   return 'bg-red-500/10 text-red-400 border-b border-red-500/20';
-      case 'SYS-CURL':   return 'bg-orange-500/10 text-orange-400 border-b border-orange-500/20';
-      case 'SYS-FIXD':   return 'bg-emerald-500/10 text-emerald-400 border-b border-emerald-500/20';
-      case 'SYS-CURA':   return 'bg-teal-500/10 text-teal-400 border-b border-teal-500/20';
-      case 'SYS-PUR':    return 'bg-red-500/10 text-red-400 border-b border-red-500/20';
-      case 'SYS-DIREXP': return 'bg-orange-500/10 text-orange-400 border-b border-orange-500/20';
-      case 'SYS-INDEXP': return 'bg-amber-500/10 text-amber-400 border-b border-amber-500/20';
-      case 'SYS-SAL':    return 'bg-emerald-500/10 text-emerald-400 border-b border-emerald-500/20';
-      case 'SYS-DIRINC': return 'bg-teal-500/10 text-teal-400 border-b border-teal-500/20';
-      case 'SYS-INDINC': return 'bg-blue-500/10 text-blue-400 border-b border-blue-500/20';
-      default:           return 'bg-muted/30 text-foreground border-b border-border';
-    }
-  };
-
-  /* ── section header ────────────────────────────────────────────────────────── */
-  const SideHeader = ({ label, icon: Icon, className }: { label: string; icon: React.ElementType; className: string }) => (
-    <div className={`flex items-center gap-2 px-4 py-2 border-b border-border text-xs font-semibold uppercase tracking-widest ${className}`}>
-      <Icon className="w-3.5 h-3.5" />
-      {label}
+/* ── auto row (read-only computed line) ─────────────────────────────────────── */
+function AutoRow({ label, amount, className = '' }: { label: string; amount: number; className?: string }) {
+  return (
+    <div className={`flex items-center gap-2 px-3 py-1.5 ${className}`}>
+      <span className="flex-1 text-xs text-muted-foreground italic">{label}</span>
+      <span className="text-xs font-mono tabular-nums text-muted-foreground">{fmt(amount)}</span>
     </div>
   );
+}
+
+/* ── section panel ───────────────────────────────────────────────────────────── */
+function SectionPanel({
+  title, icon: Icon, total, totalLabel, borderClass, headerClass, children,
+}: {
+  title: string; icon: React.ElementType; total: number; totalLabel?: string;
+  borderClass: string; headerClass: string; children: React.ReactNode;
+}) {
+  return (
+    <div className={`bg-card border ${borderClass} rounded-xl overflow-hidden shadow-sm flex flex-col`}>
+      <div className={`flex items-center gap-2 px-4 py-3 ${headerClass}`}>
+        <Icon className="w-4 h-4 shrink-0" />
+        <span className="flex-1 text-sm font-bold uppercase tracking-widest">{title}</span>
+        <span className="text-sm font-mono font-bold tabular-nums">{fmt(total)}</span>
+        {totalLabel && <span className="text-[10px] opacity-60 ml-1">{totalLabel}</span>}
+      </div>
+      <div className="flex-1 overflow-auto p-3 space-y-0.5">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* ── filter bar ─────────────────────────────────────────────────────────────── */
+const PERIODS = [
+  { value: 'all', label: 'All' },
+  { value: 'month', label: 'This Month' },
+  { value: 'quarter', label: 'Quarter' },
+  { value: 'year', label: 'This Year' },
+  { value: 'custom', label: 'Custom' },
+];
+
+/* ── divider row ─────────────────────────────────────────────────────────────── */
+function DividerRow() {
+  return <div className="border-t border-border/40 my-2" />;
+}
+
+/* ── special carry-forward row ───────────────────────────────────────────────── */
+function PnLRow({ amount }: { amount: number }) {
+  const isProfit = amount >= 0;
+  return (
+    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold
+      ${isProfit ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
+      <span className="flex-1">P&amp;L {isProfit ? '(Profit)' : '(Loss)'}</span>
+      <span className="font-mono tabular-nums">{fmt(Math.abs(amount))}</span>
+    </div>
+  );
+}
+
+function DifferenceRow({ amount }: { amount: number }) {
+  if (Math.abs(amount) < 0.01) return null;
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold bg-amber-500/10 text-amber-400">
+      <span className="flex-1">Difference</span>
+      <span className="font-mono tabular-nums">{fmt(Math.abs(amount))}</span>
+    </div>
+  );
+}
+
+/* ── main component ─────────────────────────────────────────────────────────── */
+export default function ChartOfAccounts() {
+  const [period, setPeriod] = useState('all');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  const [outletId, setOutletId] = useState<string>('all');
+  const queryClient = useQueryClient();
+
+  const { fromDate, toDate } = useMemo(
+    () => computeDateRange(period, customFrom, customTo),
+    [period, customFrom, customTo],
+  );
+
+  const queryKey = useMemo(
+    () => ['financial-statements', fromDate, toDate, outletId],
+    [fromDate, toDate, outletId],
+  );
+
+  const { data: fs, isLoading, refetch } = useQuery<FinancialStatements>({
+    queryKey,
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (fromDate) params.set('fromDate', fromDate);
+      if (toDate)   params.set('toDate', toDate);
+      if (outletId && outletId !== 'all') params.set('outletId', outletId);
+      const qs = params.toString();
+      return customFetch(`/accounts/financial-statements${qs ? `?${qs}` : ''}`, { method: 'GET' });
+    },
+    staleTime: 30_000,
+  });
+
+  const onCreated = () => queryClient.invalidateQueries({ queryKey });
+
+  const plExpenses = fs?.profitAndLoss?.expenses;
+  const plIncomes  = fs?.profitAndLoss?.incomes;
+  const pl         = fs?.profitAndLoss;
+  const bs         = fs?.balanceSheet;
+  const outlets    = fs?.filters?.outlets ?? [];
 
   return (
     <AppLayout>
-      <div className="space-y-6">
-        {/* Page title */}
+      <div className="space-y-5">
+        {/* Header */}
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
             <BookOpen className="w-6 h-6 text-primary" /> Chart of Accounts
           </h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            Tally-style account heads · Create ledgers and sub-ledgers under each group
+            Tally-style Balance Sheet &amp; Profit &amp; Loss · All figures auto-computed from transactions
           </p>
         </div>
 
+        {/* Filter bar */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Period */}
+          <div className="flex items-center gap-1 bg-muted/20 rounded-lg p-1">
+            <CalendarDays className="w-3.5 h-3.5 text-muted-foreground ml-1" />
+            {PERIODS.map(p => (
+              <button
+                key={p.value}
+                onClick={() => setPeriod(p.value)}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors
+                  ${period === p.value ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Custom date range */}
+          {period === 'custom' && (
+            <div className="flex items-center gap-1.5">
+              <Input type="date" value={customFrom} onChange={e => setCustomFrom(e.target.value)}
+                className="h-8 text-xs w-36" />
+              <span className="text-muted-foreground text-xs">to</span>
+              <Input type="date" value={customTo} onChange={e => setCustomTo(e.target.value)}
+                className="h-8 text-xs w-36" />
+            </div>
+          )}
+
+          {/* Outlet filter */}
+          {outlets.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <Store className="w-3.5 h-3.5 text-muted-foreground" />
+              <Select value={outletId} onValueChange={setOutletId}>
+                <SelectTrigger className="h-8 text-xs w-36">
+                  <SelectValue placeholder="All Outlets" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Outlets</SelectItem>
+                  {outlets.map(o => (
+                    <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+        </div>
+
+        {/* Tabs */}
         {isLoading ? (
-          <div className="p-12 text-center text-muted-foreground">Loading accounts…</div>
+          <div className="p-12 text-center text-muted-foreground text-sm animate-pulse">Computing financial statements…</div>
         ) : (
           <Tabs defaultValue="balance_sheet" className="space-y-4">
             <TabsList className="grid w-full max-w-xs grid-cols-2">
@@ -298,153 +392,119 @@ export default function ChartOfAccounts() {
               </TabsTrigger>
             </TabsList>
 
-            {/* ── Balance Sheet Tab ───────────────────────────────────────────── */}
+            {/* ── Balance Sheet ───────────────────────────────────────────── */}
             <TabsContent value="balance_sheet" className="mt-0">
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                {/* Liabilities column */}
-                <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
-                  <SideHeader label="Liabilities" icon={TrendingDown} className="text-red-400 bg-red-500/5" />
-                  <div className="p-3">
-                    {bsLiabilities.length === 0 ? (
-                      <p className="text-sm text-muted-foreground text-center py-6">No liability groups found</p>
-                    ) : bsLiabilities.map(g => (
-                      <GroupCard key={g.id} node={g} accentClass={groupAccent(g.code)} onAddLedger={openAdd} onDelete={handleDelete} />
-                    ))}
-                  </div>
-                </div>
 
-                {/* Assets column */}
-                <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
-                  <SideHeader label="Assets" icon={TrendingUp} className="text-emerald-400 bg-emerald-500/5" />
-                  <div className="p-3">
-                    {bsAssets.length === 0 ? (
-                      <p className="text-sm text-muted-foreground text-center py-6">No asset groups found</p>
-                    ) : bsAssets.map(g => (
-                      <GroupCard key={g.id} node={g} accentClass={groupAccent(g.code)} onAddLedger={openAdd} onDelete={handleDelete} />
-                    ))}
-                  </div>
-                </div>
+                {/* Liabilities */}
+                <SectionPanel
+                  title="Liabilities"
+                  icon={TrendingDown}
+                  total={bs?.liabilities.total ?? 0}
+                  borderClass="border-red-500/20"
+                  headerClass="bg-red-500/10 text-red-400 border-b border-red-500/15"
+                >
+                  {bs && (
+                    <>
+                      <GroupSection group={bs.liabilities.capitalAccount} onCreated={onCreated}
+                        accentClass="bg-violet-500/10 text-violet-300 hover:bg-violet-500/15" />
+                      <GroupSection group={bs.liabilities.loans} onCreated={onCreated}
+                        accentClass="bg-red-500/10 text-red-300 hover:bg-red-500/15" />
+                      <GroupSection group={bs.liabilities.currentLiabilities} onCreated={onCreated}
+                        accentClass="bg-orange-500/10 text-orange-300 hover:bg-orange-500/15" />
+                      <DividerRow />
+                      <PnLRow amount={bs.liabilities.pandlCarryForward} />
+                      <DifferenceRow amount={bs.liabilities.difference} />
+                    </>
+                  )}
+                </SectionPanel>
+
+                {/* Assets */}
+                <SectionPanel
+                  title="Assets"
+                  icon={TrendingUp}
+                  total={bs?.assets.total ?? 0}
+                  borderClass="border-emerald-500/20"
+                  headerClass="bg-emerald-500/10 text-emerald-400 border-b border-emerald-500/15"
+                >
+                  {bs && (
+                    <>
+                      <GroupSection group={bs.assets.fixedAssets} onCreated={onCreated}
+                        accentClass="bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/15" />
+                      <GroupSection group={bs.assets.currentAssets} onCreated={onCreated}
+                        accentClass="bg-teal-500/10 text-teal-300 hover:bg-teal-500/15" />
+                    </>
+                  )}
+                </SectionPanel>
               </div>
-
-              {/* Legacy / other root accounts */}
-              {otherRoots.filter(n => n.type === 'asset' || n.type === 'liability' || n.type === 'equity').length > 0 && (
-                <div className="mt-4 bg-muted/5 border border-dashed border-border rounded-xl p-4">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Other / Unclassified Accounts</p>
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-                    {otherRoots
-                      .filter(n => n.type === 'asset' || n.type === 'liability' || n.type === 'equity')
-                      .map(g => (
-                        <GroupCard key={g.id} node={g} accentClass="bg-muted/20 text-muted-foreground border-b border-border" onAddLedger={openAdd} onDelete={handleDelete} />
-                      ))}
-                  </div>
-                </div>
-              )}
             </TabsContent>
 
-            {/* ── P&L Tab ────────────────────────────────────────────────────── */}
+            {/* ── Profit & Loss ───────────────────────────────────────────── */}
             <TabsContent value="profit_loss" className="mt-0">
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                {/* Expenses / Debit column */}
-                <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
-                  <SideHeader label="Expenses (Debit)" icon={TrendingDown} className="text-red-400 bg-red-500/5" />
-                  <div className="p-3">
-                    {plExpenses.length === 0 ? (
-                      <p className="text-sm text-muted-foreground text-center py-6">No expense groups found</p>
-                    ) : plExpenses.map(g => (
-                      <GroupCard key={g.id} node={g} accentClass={groupAccent(g.code)} onAddLedger={openAdd} onDelete={handleDelete} />
-                    ))}
-                  </div>
-                </div>
-
-                {/* Incomes / Credit column */}
-                <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
-                  <SideHeader label="Incomes (Credit)" icon={TrendingUp} className="text-emerald-400 bg-emerald-500/5" />
-                  <div className="p-3">
-                    {plIncomes.length === 0 ? (
-                      <p className="text-sm text-muted-foreground text-center py-6">No income groups found</p>
-                    ) : plIncomes.map(g => (
-                      <GroupCard key={g.id} node={g} accentClass={groupAccent(g.code)} onAddLedger={openAdd} onDelete={handleDelete} />
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Legacy / other root accounts for P&L */}
-              {otherRoots.filter(n => n.type === 'income' || n.type === 'expense').length > 0 && (
-                <div className="mt-4 bg-muted/5 border border-dashed border-border rounded-xl p-4">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Other / Unclassified Accounts</p>
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-                    {otherRoots
-                      .filter(n => n.type === 'income' || n.type === 'expense')
-                      .map(g => (
-                        <GroupCard key={g.id} node={g} accentClass="bg-muted/20 text-muted-foreground border-b border-border" onAddLedger={openAdd} onDelete={handleDelete} />
-                      ))}
-                  </div>
+              {/* Net P&L summary banner */}
+              {pl && (
+                <div className={`flex items-center gap-3 px-4 py-3 rounded-xl mb-4 text-sm font-semibold
+                  ${pl.netProfit >= 0 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
+                  {pl.netProfit >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                  <span>{pl.netProfit >= 0 ? 'Net Profit' : 'Net Loss'}</span>
+                  <span className="font-mono text-base ml-auto">{fmt(Math.abs(pl.netProfit))}</span>
                 </div>
               )}
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+                {/* Expenses / Debit */}
+                <SectionPanel
+                  title="Expense"
+                  icon={TrendingDown}
+                  total={plExpenses?.total ?? 0}
+                  totalLabel="(Debit)"
+                  borderClass="border-red-500/20"
+                  headerClass="bg-red-500/10 text-red-400 border-b border-red-500/15"
+                >
+                  {plExpenses && (
+                    <>
+                      <AutoRow label="Opening Stock" amount={plExpenses.openingStock} />
+                      <AutoRow label="Purchase Account (auto)" amount={plExpenses.purchases}
+                        className="border-l-2 border-orange-500/30 ml-2" />
+                      <DividerRow />
+                      <GroupSection group={plExpenses.directExpenses} onCreated={onCreated}
+                        accentClass="bg-orange-500/10 text-orange-300 hover:bg-orange-500/15" />
+                      <GroupSection group={plExpenses.indirectExpenses} onCreated={onCreated}
+                        accentClass="bg-amber-500/10 text-amber-300 hover:bg-amber-500/15" />
+                    </>
+                  )}
+                </SectionPanel>
+
+                {/* Incomes / Credit */}
+                <SectionPanel
+                  title="Income"
+                  icon={TrendingUp}
+                  total={plIncomes?.total ?? 0}
+                  totalLabel="(Credit)"
+                  borderClass="border-emerald-500/20"
+                  headerClass="bg-emerald-500/10 text-emerald-400 border-b border-emerald-500/15"
+                >
+                  {plIncomes && (
+                    <>
+                      <AutoRow label="Sales Account (auto)" amount={plIncomes.sales}
+                        className="border-l-2 border-emerald-500/30 ml-2" />
+                      <DividerRow />
+                      <GroupSection group={plIncomes.directIncomes} onCreated={onCreated}
+                        accentClass="bg-teal-500/10 text-teal-300 hover:bg-teal-500/15" />
+                      <AutoRow label="Closing Stock (auto)" amount={plIncomes.closingStock}
+                        className="border-l-2 border-blue-500/30 ml-2" />
+                      <DividerRow />
+                      <GroupSection group={plIncomes.indirectIncomes} onCreated={onCreated}
+                        accentClass="bg-blue-500/10 text-blue-300 hover:bg-blue-500/15" />
+                    </>
+                  )}
+                </SectionPanel>
+              </div>
             </TabsContent>
           </Tabs>
         )}
       </div>
-
-      {/* ── Create Ledger / Sub-Ledger Dialog ────────────────────────────────── */}
-      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) setParentCtx(null); }}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>
-              {parentCtx?.isSystemGroup
-                ? `Add Ledger under "${parentCtx?.name}"`
-                : `Add Sub-Ledger under "${parentCtx?.name}"`}
-            </DialogTitle>
-          </DialogHeader>
-
-          {parentCtx && (
-            <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-muted/20 text-xs text-muted-foreground mb-1">
-              <Shield className="w-3 h-3 shrink-0" />
-              <span>
-                Type <strong className="capitalize text-foreground">{resolveRootType(parentCtx)}</strong> is inherited from the parent group
-              </span>
-            </div>
-          )}
-
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-1">
-              <FormField control={form.control} name="name" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Name <span className="text-destructive">*</span></FormLabel>
-                  <FormControl>
-                    <Input placeholder={parentCtx?.isSystemGroup ? 'e.g. Cash in Hand' : 'e.g. Petty Cash'} {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )} />
-
-              <FormField control={form.control} name="code" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Code <span className="text-muted-foreground text-xs">(optional)</span></FormLabel>
-                  <FormControl>
-                    <Input className="font-mono" placeholder="e.g. CASH-01" {...field} />
-                  </FormControl>
-                </FormItem>
-              )} />
-
-              <FormField control={form.control} name="description" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Description <span className="text-muted-foreground text-xs">(optional)</span></FormLabel>
-                  <FormControl><Textarea rows={2} placeholder="Short description…" {...field} /></FormControl>
-                </FormItem>
-              )} />
-
-              <DialogFooter>
-                <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
-                <Button type="submit" disabled={createMutation.isPending}>
-                  {createMutation.isPending ? 'Creating…' : 'Create'}
-                </Button>
-              </DialogFooter>
-            </form>
-          </Form>
-        </DialogContent>
-      </Dialog>
     </AppLayout>
   );
 }

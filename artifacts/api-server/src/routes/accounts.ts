@@ -334,6 +334,190 @@ router.post("/expenses", async (req, res): Promise<void> => {
   res.status(201).json({ ...row, ledgerAccountName: ledger?.name ?? "", paymentAccountName: cashBank?.name ?? "", amount: Number(row.amount) });
 });
 
+// ── Financial Statements (Balance Sheet + P&L) ────────────────────────────
+router.get("/accounts/financial-statements", async (req, res): Promise<void> => {
+  const { fromDate, toDate, outletId } = req.query as {
+    fromDate?: string; toDate?: string; outletId?: string;
+  };
+
+  // Load all ledgers
+  const { rows: allLedgers } = await pool.query(`SELECT * FROM account_ledgers ORDER BY id`);
+
+  // Build id→node map with children
+  const ledgerMap = new Map<number, any>();
+  for (const r of allLedgers) {
+    ledgerMap.set(r.id, {
+      id: r.id, name: r.name, type: r.type,
+      parentId: r.parent_id ?? null, code: r.code ?? null,
+      section: r.section ?? null, isSystemGroup: r.is_system_group ?? false,
+      children: [], balance: 0,
+    });
+  }
+  for (const r of allLedgers) {
+    if (r.parent_id && ledgerMap.has(r.parent_id)) {
+      ledgerMap.get(r.parent_id).children.push(ledgerMap.get(r.id));
+    }
+  }
+
+  // Helpers to build parameterised date conditions
+  const makeDateConds = (dateCol: string, params: any[]): string => {
+    const conds: string[] = [];
+    if (fromDate) { params.push(fromDate); conds.push(`${dateCol} >= ${params.length}`); }
+    if (toDate)   { params.push(toDate);   conds.push(`${dateCol} <= ${params.length}`); }
+    return conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+  };
+
+  // ── Ledger balance computation ──────────────────────────────────────────
+  const balanceMap = new Map<number, number>();
+  const add = (id: number, v: number) => balanceMap.set(id, (balanceMap.get(id) ?? 0) + v);
+
+  // Expenses → debit to ledger_account_id
+  const ep: any[] = [];
+  const { rows: expRows } = await pool.query(
+    `SELECT ledger_account_id, COALESCE(SUM(amount::numeric), 0) AS total
+     FROM expenses ${makeDateConds('expense_date', ep)}
+     GROUP BY ledger_account_id`, ep
+  );
+  for (const r of expRows) add(Number(r.ledger_account_id), Number(r.total));
+
+  // Payments
+  const pp: any[] = [];
+  const { rows: pmtRows } = await pool.query(
+    `SELECT paid_to_ledger_id, paid_from_ledger_id, amount::numeric AS amount
+     FROM payments ${makeDateConds('payment_date', pp)}`, pp
+  );
+  for (const r of pmtRows) {
+    const amt = Number(r.amount);
+    add(Number(r.paid_to_ledger_id), amt);
+    add(Number(r.paid_from_ledger_id), -amt);
+  }
+
+  // Receipts
+  const rp: any[] = [];
+  const { rows: recRows } = await pool.query(
+    `SELECT received_in_ledger_id, received_from_ledger_id, amount::numeric AS amount
+     FROM receipts ${makeDateConds('receipt_date', rp)}`, rp
+  );
+  for (const r of recRows) {
+    const amt = Number(r.amount);
+    add(Number(r.received_in_ledger_id), amt);
+    add(Number(r.received_from_ledger_id), -amt);
+  }
+
+  // Apply balances
+  for (const [id, bal] of balanceMap) {
+    const node = ledgerMap.get(id);
+    if (node) node.balance = bal;
+  }
+
+  // Recursively sum children (for group totals)
+  const sumNode = (node: any): number => {
+    const childSum = node.children.reduce((s: number, c: any) => s + sumNode(c), 0);
+    return node.isSystemGroup ? childSum : node.balance + childSum;
+  };
+
+  const serializeNode = (node: any): any => ({
+    id: node.id, name: node.name, type: node.type,
+    parentId: node.parentId, code: node.code,
+    balance: Math.round(node.balance * 100) / 100,
+    children: node.children.map(serializeNode),
+  });
+
+  const buildGroup = (code: string) => {
+    const r = allLedgers.find((l: any) => l.code === code);
+    const node = r ? ledgerMap.get(r.id) : null;
+    if (!node) return { id: null, name: code, code, total: 0, children: [] };
+    return {
+      id: node.id, name: node.name, code: node.code, type: node.type,
+      total: Math.round(Math.abs(sumNode(node)) * 100) / 100,
+      children: node.children.map(serializeNode),
+    };
+  };
+
+  // ── Auto-computed amounts ───────────────────────────────────────────────
+  // Sales total (filtered by outlet if provided)
+  const sp: any[] = [];
+  const salesConds: string[] = [];
+  if (fromDate) { sp.push(fromDate); salesConds.push(`sale_date >= ${sp.length}`); }
+  if (toDate)   { sp.push(toDate);   salesConds.push(`sale_date <= ${sp.length}`); }
+  if (outletId) { sp.push(Number(outletId)); salesConds.push(`outlet_id = ${sp.length}`); }
+  const salesWhere = salesConds.length ? `WHERE ${salesConds.join(' AND ')}` : '';
+  const { rows: salesRows } = await pool.query(
+    `SELECT COALESCE(SUM(total_amount::numeric), 0) AS total FROM sales ${salesWhere}`, sp
+  );
+  const salesTotal = Number(salesRows[0]?.total ?? 0);
+
+  // Purchases total
+  const pup: any[] = [];
+  const { rows: purRows } = await pool.query(
+    `SELECT COALESCE(SUM(total_amount::numeric), 0) AS total FROM purchases ${makeDateConds('purchase_date', pup)}`, pup
+  );
+  const purchasesTotal = Number(purRows[0]?.total ?? 0);
+
+  // Closing stock = finished goods value (production_stock × mrp)
+  const { rows: csRows } = await pool.query(
+    `SELECT COALESCE(SUM(production_stock::numeric * mrp::numeric), 0) AS total FROM items WHERE production_stock > 0`
+  );
+  const closingStock = Number(csRows[0]?.total ?? 0);
+  const openingStock = 0; // requires separate opening balance; set to 0
+
+  // ── P&L ────────────────────────────────────────────────────────────────
+  const directExp    = buildGroup('SYS-DIREXP');
+  const indirectExp  = buildGroup('SYS-INDEXP');
+  const directInc    = buildGroup('SYS-DIRINC');
+  const indirectInc  = buildGroup('SYS-INDINC');
+
+  const totalExpenses = openingStock + purchasesTotal + directExp.total + indirectExp.total;
+  const totalIncomes  = salesTotal + closingStock + directInc.total + indirectInc.total;
+  const netProfit     = totalIncomes - totalExpenses;
+
+  // ── Balance Sheet ───────────────────────────────────────────────────────
+  const capitalGroup  = buildGroup('SYS-CAP');
+  const loansGroup    = buildGroup('SYS-LOAN');
+  const curlGroup     = buildGroup('SYS-CURL');
+  const fixedGroup    = buildGroup('SYS-FIXD');
+  const curaGroup     = buildGroup('SYS-CURA');
+
+  const liabBase   = capitalGroup.total + loansGroup.total + curlGroup.total;
+  const pandlFwd   = Math.round(netProfit * 100) / 100;
+  const assetsTotal = fixedGroup.total + curaGroup.total;
+  const liabTotal   = liabBase + (pandlFwd > 0 ? pandlFwd : 0);
+  const difference  = Math.round((assetsTotal - liabTotal - (pandlFwd < 0 ? Math.abs(pandlFwd) : 0)) * 100) / 100;
+
+  // Filters
+  const { rows: warehouses } = await pool.query(`SELECT id, name FROM warehouses ORDER BY id`);
+  const { rows: outlets }    = await pool.query(`SELECT id, name FROM outlets ORDER BY id`);
+
+  res.json({
+    filters: { warehouses, outlets },
+    profitAndLoss: {
+      expenses: {
+        openingStock, purchases: purchasesTotal,
+        directExpenses: directExp, indirectExpenses: indirectExp,
+        total: Math.round(totalExpenses * 100) / 100,
+      },
+      incomes: {
+        sales: salesTotal, closingStock,
+        directIncomes: directInc, indirectIncomes: indirectInc,
+        total: Math.round(totalIncomes * 100) / 100,
+      },
+      netProfit: Math.round(netProfit * 100) / 100,
+    },
+    balanceSheet: {
+      liabilities: {
+        capitalAccount: capitalGroup, loans: loansGroup, currentLiabilities: curlGroup,
+        pandlCarryForward: pandlFwd,
+        difference: Math.abs(difference) > 0.01 ? difference : 0,
+        total: Math.round((liabTotal + (pandlFwd < 0 ? Math.abs(pandlFwd) : 0) + Math.abs(difference > 0 ? difference : 0)) * 100) / 100,
+      },
+      assets: {
+        fixedAssets: fixedGroup, currentAssets: curaGroup,
+        total: Math.round(assetsTotal * 100) / 100,
+      },
+    },
+  });
+});
+
 // ── GST Summary ───────────────────────────────────────────────────────────
 router.get("/gst/summary", async (req, res): Promise<void> => {
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
