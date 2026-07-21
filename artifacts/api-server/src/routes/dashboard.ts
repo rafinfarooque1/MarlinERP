@@ -1,31 +1,58 @@
 import { Router } from "express";
-import { db, itemsTable, salesTable, stockEntriesTable, employeesTable, stockTransfersTable, attendanceTable, leavesTable, productionsTable } from "@workspace/db";
+import { db, itemsTable, salesTable, stockEntriesTable, employeesTable, stockTransfersTable, attendanceTable, leavesTable, productionsTable, expensesTable, cashBankAccountsTable } from "@workspace/db";
 import { count, sum, eq, sql } from "drizzle-orm";
 
 const router = Router();
 
 router.get("/dashboard/summary", async (req, res): Promise<void> => {
-  const [itemsCount] = await db.select({ count: count() }).from(itemsTable);
-  const [salesSum] = await db.select({ total: sum(salesTable.totalAmount) }).from(salesTable);
-  const [stockSum] = await db.select({ total: sql<number>`sum(${stockEntriesTable.quantity}::numeric * ${stockEntriesTable.costPrice}::numeric)` }).from(stockEntriesTable);
-  const [activeEmps] = await db.select({ count: count() }).from(employeesTable).where(eq(employeesTable.isActive, true));
-  const [pendingTransfers] = await db.select({ count: count() }).from(stockTransfersTable).where(eq(stockTransfersTable.status, "pending"));
-
   const today = new Date().toISOString().split("T")[0];
-  const [todayAtt] = await db.select({ count: count() }).from(attendanceTable).where(eq(attendanceTable.date, today));
-  const [pendingLeaves] = await db.select({ count: count() }).from(leavesTable).where(eq(leavesTable.status, "pending"));
 
-  const [lowStock] = await db.select({ count: count() }).from(stockEntriesTable).where(sql`${stockEntriesTable.quantity}::numeric < 10`);
+  const [
+    [itemsCount],
+    [salesSum],
+    [stockSum],
+    [activeEmps],
+    [pendingTransfers],
+    [todayAtt],
+    [pendingLeaves],
+    [lowStock],
+    [expenseSum],
+    batchRows,
+    bankRows,
+    cashRows,
+  ] = await Promise.all([
+    db.select({ count: count() }).from(itemsTable),
+    db.select({ total: sum(salesTable.totalAmount) }).from(salesTable),
+    db.select({ total: sql<number>`sum(${stockEntriesTable.quantity}::numeric * ${stockEntriesTable.costPrice}::numeric)` }).from(stockEntriesTable),
+    db.select({ count: count() }).from(employeesTable).where(eq(employeesTable.isActive, true)),
+    db.select({ count: count() }).from(stockTransfersTable).where(eq(stockTransfersTable.status, "pending")),
+    db.select({ count: count() }).from(attendanceTable).where(eq(attendanceTable.date, today)),
+    db.select({ count: count() }).from(leavesTable).where(eq(leavesTable.status, "pending")),
+    db.select({ count: count() }).from(stockEntriesTable).where(sql`${stockEntriesTable.quantity}::numeric < 10`),
+    db.select({ total: sum(expensesTable.amount) }).from(expensesTable),
+    db.execute(sql`SELECT COUNT(*)::int AS batch_count, COALESCE(SUM(produced_quantity::numeric), 0)::float AS total_qty FROM productions`),
+    db.execute(sql`SELECT COALESCE(SUM(balance::numeric), 0)::float AS total FROM cash_bank_accounts WHERE account_type = 'bank'`),
+    db.execute(sql`SELECT COALESCE(SUM(balance::numeric), 0)::float AS total FROM cash_bank_accounts WHERE account_type = 'cash'`),
+  ]);
+
+  const batchRow = (batchRows.rows[0] ?? {}) as any;
+  const bankRow  = (bankRows.rows[0]  ?? {}) as any;
+  const cashRow  = (cashRows.rows[0]  ?? {}) as any;
 
   res.json({
-    totalItemsProduced: itemsCount.count,
-    totalSalesAmount: Number(salesSum.total ?? 0),
-    totalStockValue: Number(stockSum.total ?? 0),
-    activeEmployees: activeEmps.count,
-    pendingTransfers: pendingTransfers.count,
-    todayAttendance: todayAtt.count,
-    pendingLeaves: pendingLeaves.count,
-    lowStockCount: lowStock.count,
+    totalItemsProduced:   itemsCount.count,
+    totalSalesAmount:     Number(salesSum.total ?? 0),
+    totalStockValue:      Number(stockSum.total ?? 0),
+    activeEmployees:      activeEmps.count,
+    pendingTransfers:     pendingTransfers.count,
+    todayAttendance:      todayAtt.count,
+    pendingLeaves:        pendingLeaves.count,
+    lowStockCount:        lowStock.count,
+    totalExpense:         Number(expenseSum.total ?? 0),
+    totalBatchesCreated:  Number(batchRow.batch_count ?? 0),
+    totalBatchQuantity:   Number(batchRow.total_qty ?? 0),
+    bankBalance:          Number(bankRow.total ?? 0),
+    cashBalance:          Number(cashRow.total ?? 0),
   });
 });
 

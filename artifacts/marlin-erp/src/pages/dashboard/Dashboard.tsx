@@ -17,7 +17,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import {
   Activity, AlertTriangle, Box, CreditCard, Users,
   ArrowUpRight, ArrowDownRight, Package, ArrowRightLeft,
-  Clock, Building2, Factory, User,
+  Clock, Building2, Factory, User, TrendingDown, Layers,
+  Landmark, Wallet,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -135,6 +136,38 @@ export default function Dashboard() {
             icon={<ArrowRightLeft className="w-4 h-4 text-muted-foreground" />}
             sub={`${summary?.pendingLeaves ?? 0} leave requests`}
             trendUp={(summary?.pendingTransfers ?? 0) === 0}
+            loading={loadingSummary}
+          />
+          <KpiCard
+            title="Total Expense"
+            value={summary?.totalExpense ? `₹${summary.totalExpense.toLocaleString('en-IN')}` : '₹0'}
+            icon={<TrendingDown className="w-4 h-4 text-muted-foreground" />}
+            sub="All recorded expenses"
+            trendUp={false}
+            loading={loadingSummary}
+          />
+          <KpiCard
+            title="Total Batches Created"
+            value={summary?.totalBatchesCreated?.toLocaleString('en-IN') ?? '0'}
+            icon={<Layers className="w-4 h-4 text-muted-foreground" />}
+            sub={`${(summary?.totalBatchQuantity ?? 0).toLocaleString('en-IN')} units produced`}
+            trendUp={true}
+            loading={loadingSummary}
+          />
+          <KpiCard
+            title="Bank Balance"
+            value={summary?.bankBalance !== undefined ? `₹${summary.bankBalance.toLocaleString('en-IN')}` : '₹0'}
+            icon={<Landmark className="w-4 h-4 text-muted-foreground" />}
+            sub="Sum of all bank accounts"
+            trendUp={(summary?.bankBalance ?? 0) >= 0}
+            loading={loadingSummary}
+          />
+          <KpiCard
+            title="Cash Balance"
+            value={summary?.cashBalance !== undefined ? `₹${summary.cashBalance.toLocaleString('en-IN')}` : '₹0'}
+            icon={<Wallet className="w-4 h-4 text-muted-foreground" />}
+            sub="Sum of all cash accounts"
+            trendUp={(summary?.cashBalance ?? 0) >= 0}
             loading={loadingSummary}
           />
         </div>

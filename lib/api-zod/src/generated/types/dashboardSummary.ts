@@ -15,4 +15,9 @@ export interface DashboardSummary {
   todayAttendance?: number;
   pendingLeaves?: number;
   lowStockCount?: number;
+  totalExpense?: number;
+  totalBatchesCreated?: number;
+  totalBatchQuantity?: number;
+  bankBalance?: number;
+  cashBalance?: number;
 }
