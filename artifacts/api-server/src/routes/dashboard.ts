@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db, itemsTable, salesTable, stockEntriesTable, employeesTable, stockTransfersTable, attendanceTable, leavesTable, productionsTable, expensesTable, cashBankAccountsTable } from "@workspace/db";
+import { db, pool, itemsTable, salesTable, stockEntriesTable, employeesTable, stockTransfersTable, attendanceTable, leavesTable, productionsTable, expensesTable } from "@workspace/db";
 import { count, sum, eq, sql } from "drizzle-orm";
 
 const router = Router();
@@ -7,6 +7,56 @@ const router = Router();
 router.get("/dashboard/summary", async (req, res): Promise<void> => {
   const today = new Date().toISOString().split("T")[0];
 
+  // ── COA ledger-based bank & cash balances ─────────────────────────────
+  // Build a lightweight ledger tree to find STD-BANK / STD-CASH subtrees
+  const { rows: allLedgers } = await pool.query(
+    `SELECT id, parent_id, code FROM account_ledgers`
+  );
+  const childrenOf = new Map<number, number[]>();
+  const codeToId   = new Map<string, number>();
+  for (const r of allLedgers) {
+    const id = Number(r.id);
+    if (r.code) codeToId.set(r.code as string, id);
+    if (!childrenOf.has(id)) childrenOf.set(id, []);
+    if (r.parent_id) {
+      const pid = Number(r.parent_id);
+      if (!childrenOf.has(pid)) childrenOf.set(pid, []);
+      childrenOf.get(pid)!.push(id);
+    }
+  }
+  const subtreeIds = (code: string): number[] => {
+    const root = codeToId.get(code);
+    if (!root) return [];
+    const ids: number[] = [];
+    const visit = (id: number) => { ids.push(id); (childrenOf.get(id) ?? []).forEach(visit); };
+    visit(root);
+    return ids;
+  };
+
+  // Net balance for a set of ledger IDs: sum all payment/receipt movements
+  const { rows: txnRows } = await pool.query(`
+    SELECT ledger_id, COALESCE(SUM(net), 0)::float AS balance
+    FROM (
+      SELECT paid_to_ledger_id      AS ledger_id,  amount::numeric AS net FROM payments
+      UNION ALL
+      SELECT paid_from_ledger_id    AS ledger_id, -amount::numeric AS net FROM payments
+      UNION ALL
+      SELECT received_in_ledger_id  AS ledger_id,  amount::numeric AS net FROM receipts
+      UNION ALL
+      SELECT received_from_ledger_id AS ledger_id, -amount::numeric AS net FROM receipts
+    ) t
+    GROUP BY ledger_id
+  `);
+  const txnBalMap = new Map<number, number>();
+  for (const r of txnRows) txnBalMap.set(Number(r.ledger_id), Number(r.balance));
+
+  const sumSubtree = (ids: number[]) =>
+    Math.round(ids.reduce((s, id) => s + (txnBalMap.get(id) ?? 0), 0) * 100) / 100;
+
+  const bankBalance = sumSubtree(subtreeIds('STD-BANK'));
+  const cashBalance = sumSubtree(subtreeIds('STD-CASH'));
+
+  // ── Other metrics ─────────────────────────────────────────────────────
   const [
     [itemsCount],
     [salesSum],
@@ -18,8 +68,6 @@ router.get("/dashboard/summary", async (req, res): Promise<void> => {
     [lowStock],
     [expenseSum],
     batchRows,
-    bankRows,
-    cashRows,
   ] = await Promise.all([
     db.select({ count: count() }).from(itemsTable),
     db.select({ total: sum(salesTable.totalAmount) }).from(salesTable),
@@ -31,13 +79,9 @@ router.get("/dashboard/summary", async (req, res): Promise<void> => {
     db.select({ count: count() }).from(stockEntriesTable).where(sql`${stockEntriesTable.quantity}::numeric < 10`),
     db.select({ total: sum(expensesTable.amount) }).from(expensesTable),
     db.execute(sql`SELECT COUNT(*)::int AS batch_count, COALESCE(SUM(produced_quantity::numeric), 0)::float AS total_qty FROM productions`),
-    db.execute(sql`SELECT COALESCE(SUM(balance::numeric), 0)::float AS total FROM cash_bank_accounts WHERE account_type = 'bank'`),
-    db.execute(sql`SELECT COALESCE(SUM(balance::numeric), 0)::float AS total FROM cash_bank_accounts WHERE account_type = 'cash'`),
   ]);
 
   const batchRow = (batchRows.rows[0] ?? {}) as any;
-  const bankRow  = (bankRows.rows[0]  ?? {}) as any;
-  const cashRow  = (cashRows.rows[0]  ?? {}) as any;
 
   res.json({
     totalItemsProduced:   itemsCount.count,
@@ -51,8 +95,8 @@ router.get("/dashboard/summary", async (req, res): Promise<void> => {
     totalExpense:         Number(expenseSum.total ?? 0),
     totalBatchesCreated:  Number(batchRow.batch_count ?? 0),
     totalBatchQuantity:   Number(batchRow.total_qty ?? 0),
-    bankBalance:          Number(bankRow.total ?? 0),
-    cashBalance:          Number(cashRow.total ?? 0),
+    bankBalance,
+    cashBalance,
   });
 });
 

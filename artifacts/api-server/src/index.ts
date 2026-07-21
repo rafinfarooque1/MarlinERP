@@ -132,6 +132,8 @@ async function runMigrations() {
   const stdLedgers: [string, string, string, string, string, string][] = [
     ['Sales',     'income',  'STD-SALES', 'profit_loss',   'SYS-SAL',  'Auto-linked to all sales invoices'],
     ['Purchases', 'expense', 'STD-PUR',   'profit_loss',   'SYS-PUR',  'Auto-linked to all purchase orders'],
+    ['Bank',      'asset',   'STD-BANK',  'balance_sheet', 'SYS-CURA', 'Bank accounts — add sub-ledgers for each bank account'],
+    ['Cash',      'asset',   'STD-CASH',  'balance_sheet', 'SYS-CURA', 'Cash in hand — add sub-ledgers for each cash point'],
   ];
   for (const [name, type, code, section, parentCode, desc] of stdLedgers) {
     const { rows: [parent] } = await pool.query(
