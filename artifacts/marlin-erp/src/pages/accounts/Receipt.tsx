@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { useForm, Controller } from 'react-hook-form';
+import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Plus, ArrowDownRight, Download, Trash2, Search, Calendar, AlertTriangle } from 'lucide-react';
@@ -183,7 +183,7 @@ export default function ReceiptPage() {
               )} />
 
               {/* Received From — searchable, all non-system ledgers */}
-              <Controller control={form.control} name="receivedFromLedgerId" render={({ field, fieldState }) => (
+              <FormField control={form.control} name="receivedFromLedgerId" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Received From <span className="text-destructive">*</span></FormLabel>
                   <AccountCombobox
@@ -192,12 +192,12 @@ export default function ReceiptPage() {
                     onChange={field.onChange}
                     placeholder="Select account"
                   />
-                  {fieldState.error && <p className="text-sm text-destructive">{fieldState.error.message}</p>}
+                  <FormMessage />
                 </FormItem>
               )} />
 
               {/* Received In — searchable, Bank/Cash only */}
-              <Controller control={form.control} name="receivedInLedgerId" render={({ field, fieldState }) => (
+              <FormField control={form.control} name="receivedInLedgerId" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Received In (Cash / Bank) <span className="text-destructive">*</span></FormLabel>
                   <AccountCombobox
@@ -206,7 +206,7 @@ export default function ReceiptPage() {
                     onChange={field.onChange}
                     placeholder="Select Bank or Cash account"
                   />
-                  {fieldState.error && <p className="text-sm text-destructive">{fieldState.error.message}</p>}
+                  <FormMessage />
                 </FormItem>
               )} />
 
