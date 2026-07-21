@@ -42,8 +42,8 @@ function computeDateRange(period: string, from: string, to: string) {
 }
 
 /* ── inline add ─────────────────────────────────────────────────────────────── */
-function InlineAdd({ parentId, parentType, depth = 1, onCreated }: {
-  parentId: number; parentType: ALType; depth?: number; onCreated: () => void;
+function InlineAdd({ parentId, parentType, depth = 1, onCreated, hint }: {
+  parentId: number; parentType: ALType; depth?: number; onCreated: () => void; hint?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState('');
@@ -65,15 +65,15 @@ function InlineAdd({ parentId, parentType, depth = 1, onCreated }: {
 
   if (editing) {
     return (
-      <div className="flex items-center gap-2 py-1.5" style={{ paddingLeft: pl }}>
-        <Plus className="w-3 h-3 text-primary shrink-0" />
+      <div className="flex items-center gap-2 py-2" style={{ paddingLeft: pl }}>
+        <Plus className="w-3.5 h-3.5 text-primary shrink-0" />
         <input
           ref={ref} value={name}
           onChange={e => setName(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') { setEditing(false); setName(''); } }}
           onBlur={submit}
-          placeholder={depth === 1 ? 'Ledger name…' : 'Sub-ledger name…'}
-          className="flex-1 text-xs bg-transparent border-b border-primary/60 outline-none pb-0.5 text-foreground placeholder:text-muted-foreground/40"
+          placeholder={hint ?? (depth === 1 ? 'Ledger name…' : 'Sub-ledger name…')}
+          className="flex-1 text-sm bg-transparent border-b-2 border-primary outline-none pb-0.5 text-foreground placeholder:text-muted-foreground/40"
           disabled={create.isPending}
         />
         {create.isPending && <span className="text-[10px] text-muted-foreground">Saving…</span>}
@@ -85,10 +85,10 @@ function InlineAdd({ parentId, parentType, depth = 1, onCreated }: {
     <button
       onClick={() => setEditing(true)}
       style={{ paddingLeft: pl }}
-      className="flex items-center gap-1.5 py-1 w-full text-[11px] text-muted-foreground/35 hover:text-primary transition-colors"
+      className="flex items-center gap-1.5 py-2 w-full text-xs text-primary/60 hover:text-primary active:text-primary transition-colors font-medium"
     >
-      <Plus className="w-3 h-3" />
-      {depth === 1 ? 'add ledger' : 'add sub-ledger'}
+      <Plus className="w-3.5 h-3.5" />
+      {hint ?? (depth === 1 ? 'Add ledger' : 'Add sub-ledger')}
     </button>
   );
 }
@@ -131,14 +131,15 @@ function GroupBlock({ group, onCreated, extraRows }: {
   extraRows?: React.ReactNode;
 }) {
   if (!group.id) return null;
+  const hasChildren = group.children.length > 0 || !!extraRows;
 
   return (
-    <div className="mb-1">
+    <div className="mb-3">
       {/* Group label row */}
-      <div className="flex items-center gap-2 py-2 px-2">
-        <span className="flex-1 text-xs font-semibold text-foreground/80">{group.name}</span>
+      <div className="flex items-center gap-2 py-2 px-3 bg-muted/10 rounded-md mx-2">
+        <span className="flex-1 text-xs font-bold text-foreground/70 uppercase tracking-wide">{group.name}</span>
         {group.total > 0 && (
-          <span className="text-xs font-mono tabular-nums text-foreground/70 pr-1">{fmt(group.total)}</span>
+          <span className="text-xs font-mono font-semibold tabular-nums text-foreground/60">{fmt(group.total)}</span>
         )}
       </div>
 
@@ -150,8 +151,15 @@ function GroupBlock({ group, onCreated, extraRows }: {
       {/* Extra auto rows (e.g. Duty & Tax) */}
       {extraRows}
 
+      {/* Empty state hint */}
+      {!hasChildren && (
+        <p className="pl-6 py-1 text-[11px] text-muted-foreground/40 italic">No ledgers yet</p>
+      )}
+
       {/* Inline add ledger */}
       <InlineAdd parentId={group.id!} parentType={(group.type ?? 'expense') as ALType} depth={1} onCreated={onCreated} />
+
+      <div className="border-b border-border/20 mx-2 mt-1" />
     </div>
   );
 }
@@ -256,7 +264,7 @@ export default function ChartOfAccounts() {
 
   const qKey = useMemo(() => ['fin-stmt', fromDate, toDate, outletId], [fromDate, toDate, outletId]);
 
-  const { data: fs, isLoading } = useQuery<FinancialStatements>({
+  const { data: fs, isLoading, isError, error } = useQuery<FinancialStatements>({
     queryKey: qKey,
     queryFn: () => {
       const p = new URLSearchParams();
@@ -264,7 +272,7 @@ export default function ChartOfAccounts() {
       if (toDate)   p.set('toDate', toDate);
       if (outletId && outletId !== 'all') p.set('outletId', outletId);
       const qs = p.toString();
-      return customFetch(`/accounts/financial-statements${qs ? `?${qs}` : ''}`, { method: 'GET' });
+      return customFetch(`/api/accounts/financial-statements${qs ? `?${qs}` : ''}`, { method: 'GET' });
     },
     staleTime: 30_000,
   });
@@ -327,6 +335,11 @@ export default function ChartOfAccounts() {
         {/* ── Tabs ── */}
         {isLoading ? (
           <div className="py-16 text-center text-muted-foreground text-sm animate-pulse">Computing financial statements…</div>
+        ) : isError ? (
+          <div className="py-10 text-center space-y-2">
+            <p className="text-red-400 text-sm font-medium">Failed to load financial statements</p>
+            <p className="text-muted-foreground text-xs">{(error as any)?.message ?? 'Unknown error'}</p>
+          </div>
         ) : (
           <Tabs defaultValue="balance_sheet">
             <TabsList className="grid w-full max-w-xs grid-cols-2">
@@ -362,14 +375,12 @@ export default function ChartOfAccounts() {
                         group={bs.liabilities.currentLiabilities}
                         onCreated={onCreated}
                         extraRows={
-                          (bs.liabilities.currentLiabilities.dutyAndTax ?? 0) > 0 ? (
-                            <AutoRow
-                              label="Duty & Tax"
-                              amount={bs.liabilities.currentLiabilities.dutyAndTax!}
-                              sub="auto · GST from sales"
-                              depth={1}
-                            />
-                          ) : null
+                          <AutoRow
+                            label="Duty & Tax"
+                            amount={bs.liabilities.currentLiabilities.dutyAndTax ?? 0}
+                            sub="auto · GST collected on sales"
+                            depth={1}
+                          />
                         }
                       />
 
