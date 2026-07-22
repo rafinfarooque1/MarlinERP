@@ -60,8 +60,9 @@ function computeLineGst(
 // ── Form Schema ─────────────────────────────────────────────────────────────────
 
 const saleLineSchema = z.object({
-  itemId: z.coerce.number().min(1, 'Item required'),
-  quantity: z.coerce.number().min(1, 'Qty ≥ 1'),
+  itemId:    z.coerce.number().min(1, 'Item required'),
+  quantity:  z.coerce.number().min(1, 'Qty ≥ 1'),
+  unitPrice: z.coerce.number().min(0, 'Price required'),
 });
 const schema = z.object({
   outletId: z.coerce.number().min(1, 'Outlet required'),
@@ -90,7 +91,7 @@ const defaultFormValues: FormValues = {
   saleDate: new Date().toISOString().split('T')[0],
   paymentMode: 'cash',
   couponCode: '',
-  lineItems: [{ itemId: 0, quantity: 1 }],
+  lineItems: [{ itemId: 0, quantity: 1, unitPrice: 0 }],
 };
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -150,32 +151,34 @@ export default function Sales() {
   const customerState = ((selectedCustomer as any)?.state ?? '').trim().toLowerCase();
   const isInterState = !!(companyState && customerState && companyState !== customerState);
 
-  // Compute aggregated GST totals for the cart
+  // Compute aggregated GST totals for the cart (uses form's unitPrice — always accurate)
   const computeCartTotals = () => {
     let subtotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0, taxTotal = 0;
     fields.forEach((_, i) => {
-      const itemId = form.watch(`lineItems.${i}.itemId`);
-      const qty = form.watch(`lineItems.${i}.quantity`);
-      const price = getPrice(itemId);
-      if (!itemId || !price) return;
-      const taxRate = Number((getItem(itemId) as any)?.taxRate ?? 0);
-      const gst = computeLineGst(qty, price, taxRate, isInterState);
-      subtotal += gst.lineSubtotal;
+      const itemId   = form.watch(`lineItems.${i}.itemId`);
+      const qty      = form.watch(`lineItems.${i}.quantity`);
+      const price    = Number(form.watch(`lineItems.${i}.unitPrice`) ?? 0);
+      if (!itemId || price <= 0) return;
+      const taxRate  = Number((getItem(itemId) as any)?.taxRate ?? 0);
+      const gst      = computeLineGst(qty, price, taxRate, isInterState);
+      subtotal  += gst.lineSubtotal;
       cgstTotal += gst.cgst;
       sgstTotal += gst.sgst;
       igstTotal += gst.igst;
-      taxTotal += gst.taxAmount;
+      taxTotal  += gst.taxAmount;
     });
     return { subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, grandTotal: subtotal + taxTotal };
   };
 
   const totals = computeCartTotals();
+  // True when at least one item is selected (even price = 0 shows breakdown)
+  const hasItems = fields.some((_, i) => (form.watch(`lineItems.${i}.itemId`) ?? 0) > 0);
 
   const onSubmit = (data: FormValues) => {
     const enrichedItems = data.lineItems.map(li => ({
       itemId: li.itemId,
       quantity: li.quantity,
-      unitPrice: Number(getPrice(li.itemId)),
+      unitPrice: Number(li.unitPrice),
       discount: 0,
       taxAmount: 0, // backend recomputes authoritatively
     }));
@@ -411,63 +414,88 @@ export default function Sales() {
                     </div>
                     <div className="space-y-2">
                       {fields.map((field, index) => {
-                        const itemId = form.watch(`lineItems.${index}.itemId`);
-                        const qty = form.watch(`lineItems.${index}.quantity`);
-                        const price = getPrice(itemId);
+                        const itemId   = form.watch(`lineItems.${index}.itemId`);
+                        const qty      = form.watch(`lineItems.${index}.quantity`);
+                        const unitPrice = Number(form.watch(`lineItems.${index}.unitPrice`) ?? 0);
                         const availQty = getAvailableQty(itemId);
-                        const taxRate = Number((getItem(itemId) as any)?.taxRate ?? 0);
-                        const gst = computeLineGst(qty, price, taxRate, isInterState);
+                        const taxRate  = Number((getItem(itemId) as any)?.taxRate ?? 0);
+                        const gst      = computeLineGst(qty, unitPrice, taxRate, isInterState);
                         const lineTotal = gst.lineSubtotal + gst.taxAmount;
 
                         return (
-                          <div key={field.id} className="grid grid-cols-12 gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border">
-                            <div className="col-span-6">
-                              <FormField control={form.control} name={`lineItems.${index}.itemId`} render={({ field: f }) => (
-                                <FormItem>
-                                  <FormLabel className="text-xs">Item</FormLabel>
-                                  <Select onValueChange={v => f.onChange(Number(v))} value={f.value ? String(f.value) : ''}>
-                                    <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger></FormControl>
-                                    <SelectContent>
-                                      {availableItems.map(it => {
-                                        const avail = stockMap.get(it.id) ?? 0;
-                                        const p = getPrice(it.id);
-                                        const r = Number((it as any).taxRate ?? 0);
-                                        return (
-                                          <SelectItem key={it.id} value={String(it.id)}>
-                                            {it.name} — {avail} avail{p > 0 ? ` · ₹${p}` : ''}{r > 0 ? ` · ${r}% GST` : ''}
-                                          </SelectItem>
-                                        );
-                                      })}
-                                    </SelectContent>
-                                  </Select>
-                                </FormItem>
-                              )} />
-                            </div>
-                            <div className="col-span-2">
-                              <FormField control={form.control} name={`lineItems.${index}.quantity`} render={({ field: f }) => (
-                                <FormItem>
-                                  <FormLabel className="text-xs">Qty {itemId > 0 && <span className="text-muted-foreground">(max {availQty})</span>}</FormLabel>
-                                  <FormControl><Input type="number" min={1} max={itemId > 0 ? availQty : undefined} className="h-8 text-xs" {...f} /></FormControl>
-                                </FormItem>
-                              )} />
-                            </div>
-                            <div className="col-span-3 text-right pb-1 space-y-0.5">
-                              {itemId > 0 && price > 0 ? (
-                                <>
-                                  <p className="text-xs text-muted-foreground">₹{gst.lineSubtotal.toLocaleString('en-IN')}</p>
-                                  {taxRate > 0 && (
-                                    <p className="text-xs text-amber-600">
-                                      +{isInterState ? 'IGST' : 'GST'} ₹{gst.taxAmount.toFixed(2)}
-                                    </p>
-                                  )}
-                                  <p className="font-mono font-bold text-primary text-sm">₹{lineTotal.toLocaleString('en-IN')}</p>
-                                </>
-                              ) : (
-                                <p className="text-muted-foreground text-xs">—</p>
-                              )}
-                            </div>
-                            <div className="col-span-1 pb-1 flex justify-end">
-                              <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
+                          <div key={field.id} className="p-3 bg-muted/20 rounded-lg border border-border space-y-2">
+                            {/* Row 1: Item selector */}
+                            <FormField control={form.control} name={`lineItems.${index}.itemId`} render={({ field: f }) => (
+                              <FormItem>
+                                <FormLabel className="text-xs">Item</FormLabel>
+                                <Select
+                                  onValueChange={v => {
+                                    const id = Number(v);
+                                    f.onChange(id);
+                                    // Auto-fill unit price from outlet price list
+                                    const p = getPrice(id);
+                                    form.setValue(`lineItems.${index}.unitPrice`, p);
+                                  }}
+                                  value={f.value ? String(f.value) : ''}
+                                >
+                                  <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select item" /></SelectTrigger></FormControl>
+                                  <SelectContent>
+                                    {availableItems.map(it => {
+                                      const avail = stockMap.get(it.id) ?? 0;
+                                      const p = getPrice(it.id);
+                                      const r = Number((it as any).taxRate ?? 0);
+                                      return (
+                                        <SelectItem key={it.id} value={String(it.id)}>
+                                          {it.name} — {avail} avail{p > 0 ? ` · ₹${p}` : ''}{r > 0 ? ` · ${r}% GST` : ''}
+                                        </SelectItem>
+                                      );
+                                    })}
+                                  </SelectContent>
+                                </Select>
+                              </FormItem>
+                            )} />
+
+                            {/* Row 2: Qty + Unit Price + Line total */}
+                            <div className="grid grid-cols-12 gap-2 items-end">
+                              <div className="col-span-3">
+                                <FormField control={form.control} name={`lineItems.${index}.quantity`} render={({ field: f }) => (
+                                  <FormItem>
+                                    <FormLabel className="text-xs">Qty {itemId > 0 && <span className="text-muted-foreground">(max {availQty})</span>}</FormLabel>
+                                    <FormControl><Input type="number" min={1} max={itemId > 0 ? availQty : undefined} className="h-8 text-xs" {...f} /></FormControl>
+                                  </FormItem>
+                                )} />
+                              </div>
+                              <div className="col-span-4">
+                                <FormField control={form.control} name={`lineItems.${index}.unitPrice`} render={({ field: f }) => (
+                                  <FormItem>
+                                    <FormLabel className="text-xs">Unit Price (₹)</FormLabel>
+                                    <FormControl><Input type="number" min={0} step="0.01" placeholder="0.00" className="h-8 text-xs font-mono" {...f} /></FormControl>
+                                  </FormItem>
+                                )} />
+                              </div>
+                              <div className="col-span-4 text-right pb-1 space-y-0.5">
+                                {itemId > 0 ? (
+                                  unitPrice > 0 ? (
+                                    <>
+                                      <p className="text-xs text-muted-foreground">Subtotal ₹{gst.lineSubtotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                                      {taxRate > 0 && (
+                                        <p className="text-xs text-amber-500 font-medium">
+                                          {isInterState ? 'IGST' : `CGST+SGST`} ({taxRate}%) = ₹{gst.taxAmount.toFixed(2)}
+                                        </p>
+                                      )}
+                                      {taxRate === 0 && <p className="text-xs text-muted-foreground/50">No GST</p>}
+                                      <p className="font-mono font-bold text-primary text-sm">₹{lineTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                                    </>
+                                  ) : (
+                                    <p className="text-xs text-amber-400 italic">Enter price →</p>
+                                  )
+                                ) : (
+                                  <p className="text-muted-foreground text-xs">—</p>
+                                )}
+                              </div>
+                              <div className="col-span-1 pb-1 flex justify-end">
+                                <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
+                              </div>
                             </div>
                           </div>
                         );
@@ -477,42 +505,73 @@ export default function Sales() {
                 )}
               </div>
 
-              {/* Footer with GST breakdown */}
+              {/* ── Tax Summary + Footer ── */}
               <DialogFooter className="flex-col gap-0 sm:flex-col w-full pt-2 border-t border-border">
-                {totals.subtotal > 0 && (
-                  <div className="w-full mb-3 p-3 bg-muted/20 rounded-lg text-sm space-y-1">
-                    <div className="flex justify-between text-muted-foreground">
-                      <span>Subtotal (taxable)</span>
-                      <span className="font-mono">₹{totals.subtotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                {hasItems && (
+                  <div className="w-full mb-3 rounded-lg border border-border overflow-hidden text-sm">
+                    {/* Header */}
+                    <div className="px-3 py-1.5 bg-muted/30 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                      Invoice Summary
                     </div>
-                    {isInterState && totals.igstTotal > 0 && (
-                      <div className="flex justify-between text-amber-600">
-                        <span>IGST (inter-state)</span>
-                        <span className="font-mono">₹{totals.igstTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    <div className="px-3 py-2 space-y-1.5">
+                      {/* Subtotal */}
+                      <div className="flex justify-between text-muted-foreground">
+                        <span>Taxable Amount</span>
+                        <span className="font-mono">₹{totals.subtotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                       </div>
-                    )}
-                    {!isInterState && totals.cgstTotal > 0 && (
-                      <>
-                        <div className="flex justify-between text-muted-foreground">
-                          <span>CGST</span>
-                          <span className="font-mono">₹{totals.cgstTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                        </div>
-                        <div className="flex justify-between text-muted-foreground">
-                          <span>SGST</span>
-                          <span className="font-mono">₹{totals.sgstTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                        </div>
-                      </>
-                    )}
-                    <Separator className="my-1" />
-                    <div className="flex justify-between font-bold text-base">
-                      <span>Grand Total</span>
-                      <span className="font-mono text-primary">₹{totals.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+
+                      {/* GST lines */}
+                      {totals.taxTotal > 0 && (
+                        <>
+                          {isInterState ? (
+                            <div className="flex justify-between">
+                              <span className="flex items-center gap-1.5 text-amber-500">
+                                IGST (inter-state)
+                                <span className="text-[10px] text-muted-foreground/60 font-normal">→ Duty &amp; Tax</span>
+                              </span>
+                              <span className="font-mono text-amber-500">₹{totals.igstTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex justify-between text-muted-foreground">
+                                <span className="flex items-center gap-1.5">
+                                  CGST
+                                  <span className="text-[10px] text-muted-foreground/60 font-normal">→ Duty &amp; Tax</span>
+                                </span>
+                                <span className="font-mono">₹{totals.cgstTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                              </div>
+                              <div className="flex justify-between text-muted-foreground">
+                                <span className="flex items-center gap-1.5">
+                                  SGST
+                                  <span className="text-[10px] text-muted-foreground/60 font-normal">→ Duty &amp; Tax</span>
+                                </span>
+                                <span className="font-mono">₹{totals.sgstTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                              </div>
+                            </>
+                          )}
+                          {/* Total tax callout */}
+                          <div className="flex justify-between text-xs py-1 px-2 rounded bg-amber-500/8 text-amber-600 border border-amber-500/15">
+                            <span className="font-medium">Total Output GST (to Duty &amp; Tax)</span>
+                            <span className="font-mono font-semibold">₹{totals.taxTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                          </div>
+                        </>
+                      )}
+
+                      {totals.taxTotal === 0 && totals.subtotal > 0 && (
+                        <p className="text-xs text-muted-foreground/50 italic">No GST applicable on selected items</p>
+                      )}
+
+                      <Separator className="my-1" />
+                      <div className="flex justify-between font-bold text-base">
+                        <span>Grand Total</span>
+                        <span className="font-mono text-primary">₹{totals.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                      </div>
                     </div>
                   </div>
                 )}
                 <div className="flex gap-2 justify-end w-full">
                   <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
-                  <Button type="submit" disabled={createMutation.isPending || !watchOutletId || availableItems.length === 0}>
+                  <Button type="submit" disabled={createMutation.isPending || !watchOutletId || availableItems.length === 0 || totals.grandTotal === 0}>
                     {createMutation.isPending ? 'Processing…' : 'Complete Sale'}
                   </Button>
                 </div>
