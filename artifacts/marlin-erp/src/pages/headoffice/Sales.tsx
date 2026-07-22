@@ -120,6 +120,7 @@ export default function Sales() {
   const { data: items = [] } = useListItems();
   const { data: companySettings } = useGetCompanySettings();
   const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'unpaid' | 'partially_paid' | 'paid'>('all');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
   const [viewQrUrl, setViewQrUrl] = useState<string | null>(null);
@@ -419,10 +420,19 @@ export default function Sales() {
     }
   };
 
-  const filtered = sales.filter(s =>
-    s.invoiceNumber?.toLowerCase().includes(search.toLowerCase()) ||
-    s.customerName?.toLowerCase().includes(search.toLowerCase())
-  );
+  const statusCounts = {
+    all: sales.length,
+    unpaid: sales.filter(s => ((s as any).paymentStatus ?? 'paid') === 'unpaid').length,
+    partially_paid: sales.filter(s => ((s as any).paymentStatus ?? 'paid') === 'partially_paid').length,
+    paid: sales.filter(s => ((s as any).paymentStatus ?? 'paid') === 'paid').length,
+  };
+
+  const filtered = sales
+    .filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter)
+    .filter(s =>
+      s.invoiceNumber?.toLowerCase().includes(search.toLowerCase()) ||
+      s.customerName?.toLowerCase().includes(search.toLowerCase())
+    );
 
   const itemsMap = new Map(items.map(i => [i.id, i]));
 
@@ -478,6 +488,28 @@ export default function Sales() {
                 {outlets.map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
               </SelectContent>
             </Select>
+          </div>
+          {/* Payment status filter pills */}
+          <div className="px-4 py-2 border-b border-border flex flex-wrap gap-2">
+            {([
+              { key: 'all', label: 'All' },
+              { key: 'unpaid', label: 'Unpaid' },
+              { key: 'partially_paid', label: 'Partial' },
+              { key: 'paid', label: 'Paid' },
+            ] as const).map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setStatusFilter(key)}
+                className={cn(
+                  'px-3 py-1 rounded-full text-xs font-medium border transition-colors',
+                  statusFilter === key
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'bg-transparent text-muted-foreground border-border hover:border-primary/50 hover:text-foreground'
+                )}
+              >
+                {label} ({statusCounts[key]})
+              </button>
+            ))}
           </div>
           <Table>
             <TableHeader>

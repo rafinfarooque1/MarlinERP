@@ -69,7 +69,6 @@ const navigation = [
     icon: Calculator,
     children: [
       { name: 'Orders', href: '/headoffice/sales' },
-      { name: 'Payments', href: '/headoffice/payments' },
       { name: 'Customers', href: '/customers' },
       { name: 'Vendors', href: '/vendors' },
       { name: 'Coupons', href: '/coupons' },

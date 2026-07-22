@@ -21,7 +21,6 @@ import Stock from './pages/headoffice/Stock';
 import HoTransfers from './pages/headoffice/HoTransfers';
 import ItemPrices from './pages/headoffice/ItemPrices';
 import Sales from './pages/headoffice/Sales';
-import Payments from './pages/headoffice/Payments';
 
 import Hierarchy from './pages/hr/Hierarchy';
 import Employees from './pages/hr/Employees';
@@ -109,7 +108,6 @@ function Router() {
       <Route path="/headoffice/transfers"><AuthGuard><HoTransfers /></AuthGuard></Route>
       <Route path="/headoffice/item-price"><AuthGuard><ItemPrices /></AuthGuard></Route>
       <Route path="/headoffice/sales"><AuthGuard><Sales /></AuthGuard></Route>
-      <Route path="/headoffice/payments"><AuthGuard><Payments /></AuthGuard></Route>
 
       <Route path="/hr/hierarchy"><AuthGuard><Hierarchy /></AuthGuard></Route>
       <Route path="/hr/employees"><AuthGuard><Employees /></AuthGuard></Route>
