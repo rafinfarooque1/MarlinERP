@@ -1,0 +1,852 @@
+Implement a major update to the Marlin ERP Sales, Payment Collection, Cash Deposit, Reconciliation, and Accounting Ledger workflow.
+
+IMPORTANT:
+Before changing code, inspect the existing architecture, database schema, sales/POS flow, invoice flow, account_ledgers structure, journal/accounting logic, branch/outlet structure, payment fields, PDF/WhatsApp invoice functionality, and existing APIs.
+
+Preserve all existing working functionality.
+
+Do not create duplicate accounting systems or duplicate ledger concepts. Extend the existing architecture cleanly.
+
+All database migrations must be idempotent and safe for existing data.
+
+==================================================
+1. CORE BUSINESS FLOW
+==================================================
+
+Change the sales/payment lifecycle to:
+
+SALE
+→ GENERATE INVOICE
+→ COLLECT / RECORD PAYMENT
+→ depending on payment method:
+   CASH → Branch Cash Ledger
+   UPI/Card/Bank Transfer/Other electronic methods → Reconciliation
+→ RECONCILE / DEPOSIT
+→ Bank Ledger
+
+Generating an invoice and receiving payment MUST be separate actions.
+
+An invoice must not automatically be considered paid merely because it was generated.
+
+==================================================
+2. INVOICE GENERATION FIRST
+==================================================
+
+In Sales / POS:
+
+Step 1:
+Create/finalize the sale and generate the invoice.
+
+After successful invoice generation:
+
+- Generate the permanent invoice number.
+- Lock/finalize invoice financial totals as appropriate.
+- Show the invoice details in the existing right-side invoice panel.
+- Keep:
+  - Preview PDF
+  - Download PDF
+  - WhatsApp sharing
+
+The invoice side panel should then display a clearly separated:
+
+"Collect Payment"
+
+section.
+
+Payment collection happens AFTER invoice generation.
+
+==================================================
+3. PAYMENT STATUS
+==================================================
+
+Introduce/standardize invoice payment statuses such as:
+
+UNPAID
+PARTIALLY_PAID
+PAID
+
+If the existing architecture supports partial payments, preserve and correctly integrate them.
+
+Track:
+
+invoice_total
+amount_paid
+balance_due
+
+Do not mark the invoice PAID until recorded payments equal the required invoice amount.
+
+Do not confuse:
+
+Invoice payment status
+
+with:
+
+Payment reconciliation status.
+
+These are different concepts.
+
+Example:
+
+A ₹1,000 invoice paid by UPI can be:
+
+Invoice status = PAID
+Payment reconciliation status = PENDING
+
+because the customer has paid, but the merchant settlement has not yet reached the bank ledger.
+
+==================================================
+4. COLLECT PAYMENT PANEL
+==================================================
+
+After invoice generation, show payment methods such as:
+
+- Cash
+- UPI
+- Card
+- Bank Transfer
+- Other configured methods
+
+The UI should display:
+
+Invoice number
+Grand total
+Already paid
+Amount being collected
+Balance due
+Payment method
+Reference/transaction number where applicable
+Payment date/time
+Notes where appropriate
+
+After payment is recorded, show payment details/status in the invoice side panel.
+
+Prevent duplicate submissions caused by double-clicks/retries.
+
+==================================================
+5. UPI QR CODE FLOW
+==================================================
+
+Do NOT show the UPI QR code before the invoice is generated.
+
+Correct flow:
+
+Generate Invoice
+→ Invoice exists with final amount/invoice number
+→ User selects UPI
+→ Show QR/payment details
+→ Customer pays
+→ Record/confirm payment
+→ Payment enters reconciliation
+
+The QR code should use the UPI configuration of the relevant outlet/branch.
+
+If UPI is not configured, show the existing warning clearly and provide a logical path to configure it.
+
+Do not automatically mark a UPI payment successful merely because a QR code was displayed.
+
+Unless a real payment gateway/webhook confirms payment, require the authorized user to record/confirm receipt.
+
+==================================================
+6. CASH PAYMENT ACCOUNTING
+==================================================
+
+For CASH payments:
+
+The collected amount should immediately go to the CASH ledger belonging to the relevant branch/outlet.
+
+Accounting concept:
+
+Dr Branch/Outlet Cash
+Cr Sales / Receivable clearing as required by the existing accounting architecture
+
+Do not create duplicate sales revenue if revenue was already recognized when the invoice was posted.
+
+Use the existing double-entry accounting design correctly.
+
+Cash must be tracked separately by branch/outlet.
+
+Example hierarchy:
+
+Assets
+  → Current Assets
+      → Cash
+          → Indiranagar Outlet Cash
+          → Koramangala Outlet Cash
+
+Use the existing ledger hierarchy/model rather than hardcoding a parallel structure.
+
+Cash payment should NOT enter electronic payment reconciliation.
+
+==================================================
+7. ELECTRONIC PAYMENT RECONCILIATION
+==================================================
+
+Payments received through:
+
+UPI
+Card
+Bank Transfer
+Other settlement-based electronic methods
+
+must NOT immediately increase the final Bank ledger.
+
+Instead, create reconciliation/payment-clearing entries.
+
+Conceptually:
+
+Customer pays ₹1,000 via UPI.
+
+Payment becomes:
+
+Payment status = RECEIVED
+Reconciliation status = PENDING
+
+Accounting should use an appropriate clearing account, for example:
+
+Dr Payment Settlement / Reconciliation Clearing ₹1,000
+Cr Receivable / appropriate invoice clearing account ₹1,000
+
+Do NOT debit the final bank ledger yet.
+
+The exact journal entry must respect the existing accounting architecture and avoid double-posting revenue.
+
+==================================================
+8. NEW RECONCILIATION SECTION
+==================================================
+
+Add a new main section:
+
+RECONCILIATION
+
+This should handle:
+
+- UPI settlements
+- Card settlements
+- Bank-transfer clearing where applicable
+- Other electronic settlement methods
+- Cash deposits awaiting bank reconciliation
+
+Provide tabs/filters such as:
+
+Pending
+Reconciled
+All
+
+Useful filters:
+
+Date range
+Branch/outlet
+Payment method
+Settlement provider
+Status
+Bank account
+Reference
+Invoice/customer search
+
+==================================================
+9. RECONCILIATION LIST
+==================================================
+
+Each pending reconciliation item should show relevant information:
+
+Payment date
+Invoice number / source reference
+Branch/outlet
+Customer where applicable
+Payment method
+Transaction/reference ID
+Gross amount
+Reconciliation status
+
+Allow MULTI-SELECT.
+
+This is critical because multiple customer payments may settle into the bank as ONE combined settlement.
+
+Example:
+
+UPI payment A = ₹500
+UPI payment B = ₹1,000
+UPI payment C = ₹750
+
+Selected gross total:
+
+₹2,250
+
+Processor/bank charge:
+
+₹25
+
+Actual bank settlement:
+
+₹2,225
+
+The user must be able to select all three transactions and reconcile them as ONE settlement.
+
+==================================================
+10. RECONCILIATION ACTION
+==================================================
+
+After selecting one or multiple pending items, provide:
+
+"Reconcile"
+
+Open a reconciliation dialog.
+
+Fields:
+
+Selected transactions
+Number of transactions
+Gross selected amount
+Charges / deductions
+Net settlement amount
+Settlement date
+Bank account
+Settlement/reference number
+Notes
+
+Formula:
+
+NET SETTLEMENT =
+GROSS SELECTED AMOUNT
+- CHARGES
+
+Display this calculation clearly.
+
+Require selection of the destination Bank Account.
+
+==================================================
+11. BANK ACCOUNT LEDGERS
+==================================================
+
+Bank accounts must come from accounting ledgers created under:
+
+Assets
+→ Current Assets
+→ Bank
+
+or the equivalent existing ledger hierarchy.
+
+Example:
+
+Current Assets
+  → Bank
+      → HDFC Current Account
+      → ICICI Current Account
+      → SBI Current Account
+
+Do not hardcode bank names.
+
+The reconciliation bank dropdown must dynamically load valid active bank account ledgers.
+
+When reconciliation is completed, the net settlement amount goes into the selected bank ledger.
+
+==================================================
+12. RECONCILIATION ACCOUNTING
+==================================================
+
+For electronic settlements:
+
+Example:
+
+Gross transactions = ₹2,250
+Charges = ₹25
+Net bank settlement = ₹2,225
+
+Post accounting conceptually as:
+
+Dr Selected Bank Account      ₹2,225
+Dr Bank/Processor Charges        ₹25
+Cr Reconciliation/Clearing    ₹2,250
+
+The journal must remain balanced.
+
+Use the existing account/journal system.
+
+If a suitable bank/processor charge expense ledger does not exist, integrate one cleanly into the existing chart-of-accounts architecture rather than hardcoding arbitrary ledger IDs.
+
+Store the reconciliation batch ID/reference on all related accounting entries.
+
+After successful posting:
+
+- selected items become RECONCILED
+- they cannot be reconciled again
+- bank ledger reflects only the NET amount
+- charges are separately traceable
+- reconciliation batch is auditable
+
+==================================================
+13. RECONCILIATION BATCHES
+==================================================
+
+Implement a proper reconciliation batch concept.
+
+A batch should contain:
+
+id
+batch/reference number
+branch/company as appropriate
+settlement date
+gross amount
+charges
+net amount
+destination bank ledger
+external settlement reference
+notes
+created_by
+created_at
+status
+
+And linked reconciliation/payment items.
+
+One batch can contain multiple source transactions.
+
+Provide a reconciliation batch detail screen showing:
+
+Selected transactions
+Invoices/source records
+Gross amount
+Charges
+Net settlement
+Bank account
+Accounting/journal reference
+Who reconciled it
+When it was reconciled
+
+==================================================
+14. CASH IN OUTLET SECTION
+==================================================
+
+Add a new section for:
+
+CASH IN OUTLET
+
+Purpose:
+
+Show physical cash currently held at each branch/outlet and allow staff to record cash being deposited into a bank.
+
+This screen should show:
+
+Branch/outlet
+Cash ledger
+Available cash balance
+Deposit amount
+Deposit date
+Deposit reference/slip number
+Destination bank account
+Notes
+Status
+
+Do NOT move cash directly to the bank ledger merely when a deposit is initiated.
+
+Correct flow:
+
+Cash Sale
+→ Branch Cash Ledger
+→ Cash Deposit Initiated
+→ Pending Reconciliation
+→ Reconciled
+→ Bank Ledger
+
+==================================================
+15. CASH DEPOSIT ACCOUNTING FLOW
+==================================================
+
+When cash is physically deposited:
+
+Create a cash-deposit/reconciliation record.
+
+The amount must no longer be treated as freely available physical outlet cash once the deposit is recorded.
+
+Use a Cash Deposit / Cash-in-Transit clearing mechanism if appropriate to the existing accounting architecture.
+
+Conceptually:
+
+At deposit initiation:
+
+Dr Cash Deposit / Cash-in-Transit Clearing
+Cr Branch Cash
+
+Then create a pending reconciliation item.
+
+When bank credit is confirmed/reconciled:
+
+Dr Selected Bank Account
+Cr Cash Deposit / Cash-in-Transit Clearing
+
+This prevents double counting cash as both:
+
+cash physically in outlet
+
+and
+
+cash pending deposit.
+
+For cash deposits, bank charges/deductions should also be supported if required:
+
+Gross deposit
+- charges/deductions
+= net bank credit
+
+All entries must remain balanced.
+
+==================================================
+16. CASH IN OUTLET CONTROLS
+==================================================
+
+The system must prevent depositing more than the available branch cash balance.
+
+Cash deposits must be branch-specific.
+
+Store:
+
+deposit reference
+deposit date
+amount
+branch
+source cash ledger
+destination/intended bank where applicable
+created_by
+timestamps
+status
+
+Statuses could include:
+
+PENDING_RECONCILIATION
+RECONCILED
+CANCELLED
+
+Do not allow a reconciled deposit to be edited destructively.
+
+Use reversal/correction workflows where accounting entries have already been posted.
+
+==================================================
+17. AUDITABILITY AND SAFETY
+==================================================
+
+Financial records must be auditable.
+
+For payment, reconciliation, and cash-deposit records store:
+
+created_by
+created_at
+updated_at where appropriate
+reconciled_by
+reconciled_at
+branch/outlet
+references
+linked invoice/payment/journal IDs
+
+Prevent:
+
+- duplicate payment posting
+- duplicate reconciliation
+- reconciling already reconciled items
+- depositing more cash than available
+- negative reconciliation amounts
+- charges greater than gross amount
+- mismatched totals
+- cross-company ledger selection
+- invalid bank ledger selection
+- accidental duplicate journal posting
+
+Use database transactions for all financial posting operations.
+
+If any part of a reconciliation posting fails:
+
+ROLL BACK THE ENTIRE OPERATION.
+
+Never leave accounting and operational records partially updated.
+
+==================================================
+18. PERMISSIONS
+==================================================
+
+Integrate with the existing permissions/RBAC system.
+
+Add appropriate permissions such as:
+
+View Payments
+Collect Payments
+View Reconciliation
+Create Reconciliation
+Complete Reconciliation
+View Cash in Outlet
+Create Cash Deposit
+View Reconciliation History
+
+Do not allow ordinary unauthorized users to modify completed financial records.
+
+Respect branch/company access restrictions.
+
+==================================================
+19. REPORTING AND TRACEABILITY
+==================================================
+
+Ensure every financial amount can be traced end-to-end.
+
+Example UPI:
+
+Invoice
+→ Payment
+→ Pending Reconciliation Item
+→ Reconciliation Batch
+→ Charges
+→ Bank Ledger Entry
+→ Journal Entry
+
+Example Cash:
+
+Invoice
+→ Cash Payment
+→ Branch Cash Ledger
+→ Cash Deposit
+→ Pending Reconciliation
+→ Reconciliation Batch
+→ Bank Ledger Entry
+→ Journal Entry
+
+From an invoice/payment, users should be able to see its reconciliation status/reference.
+
+From a reconciliation batch, users should be able to see all source payments/deposits.
+
+==================================================
+20. UI/UX REQUIREMENTS
+==================================================
+
+Keep the existing Marlin ERP visual design.
+
+Update the current Sales invoice side drawer rather than replacing it unnecessarily.
+
+Desired invoice drawer flow:
+
+INVOICE DETAILS
+
+Items
+Subtotal
+Tax
+Grand Total
+
+↓
+
+PAYMENT
+
+Status: Unpaid / Partially Paid / Paid
+
+[ Collect Payment ]
+
+If UPI selected:
+
+QR Code
+UPI ID
+Amount
+Payment instructions/reference
+
+After payment:
+
+Paid via: UPI/Cash/Card/etc.
+Amount received
+Transaction reference
+Payment status
+Reconciliation status where applicable
+
+Electronic example:
+
+Payment: Received
+Reconciliation: Pending
+
+Cash example:
+
+Payment: Received
+Posted to: Indiranagar Outlet Cash
+
+==================================================
+21. DATABASE / BACKEND DESIGN
+==================================================
+
+First inspect existing tables before designing migrations.
+
+Reuse existing payment/accounting tables where appropriate.
+
+Introduce new tables only where needed, potentially including concepts such as:
+
+payments
+reconciliation_items
+reconciliation_batches
+reconciliation_batch_items
+cash_deposits
+
+These names are suggestions, not mandatory.
+
+Use foreign keys and indexes appropriately.
+
+Use NUMERIC/DECIMAL for monetary values.
+
+Never use floating-point arithmetic for accounting amounts.
+
+Preserve historical data.
+
+Migrations must be idempotent.
+
+==================================================
+22. CRITICAL ACCOUNTING RULE
+==================================================
+
+Do not duplicate revenue.
+
+Invoice generation, payment collection, reconciliation, and bank settlement are different financial events.
+
+The implementation must understand the existing accounting posting logic before adding journals.
+
+A payment moving through:
+
+Receivable
+→ Cash/Clearing
+→ Bank
+
+must not create Sales Revenue multiple times.
+
+Every journal entry must satisfy:
+
+TOTAL DEBITS = TOTAL CREDITS
+
+==================================================
+23. REQUIRED IMPLEMENTATION APPROACH
+==================================================
+
+Do this in phases.
+
+PHASE 1:
+Inspect existing code/database and produce an implementation plan.
+
+Identify:
+
+- current invoice creation flow
+- current payment flow
+- current account_ledgers hierarchy
+- existing journal/accounting posting mechanism
+- branch/outlet relationship
+- existing UPI configuration
+- existing permissions
+- relevant database tables/API endpoints/UI components
+
+Before coding, explicitly state which existing files/tables will be modified.
+
+PHASE 2:
+Implement database migrations and backend domain logic.
+
+PHASE 3:
+Implement invoice → collect payment workflow.
+
+PHASE 4:
+Implement reconciliation section and batch reconciliation.
+
+PHASE 5:
+Implement Cash in Outlet and cash deposit workflow.
+
+PHASE 6:
+Integrate accounting journals/ledgers.
+
+PHASE 7:
+Add permissions, validations, audit trail, and transaction safety.
+
+PHASE 8:
+Test the complete workflows.
+
+==================================================
+24. REQUIRED TEST SCENARIOS
+==================================================
+
+Test at minimum:
+
+Scenario A — Cash Sale
+
+Invoice ₹1,000
+→ collect ₹1,000 cash
+→ invoice PAID
+→ ₹1,000 appears in correct branch cash ledger
+→ no reconciliation item for ordinary cash collection
+
+Scenario B — UPI Sale
+
+Invoice ₹1,000
+→ display QR
+→ record successful ₹1,000 UPI payment
+→ invoice PAID
+→ reconciliation PENDING
+→ bank ledger unchanged
+
+Scenario C — Multiple UPI Settlement
+
+UPI payments:
+₹500
+₹1,000
+₹750
+
+Select all.
+
+Gross = ₹2,250
+Charge = ₹25
+Net = ₹2,225
+
+Reconcile to HDFC Bank.
+
+Expected:
+
+HDFC Bank +₹2,225
+Bank Charges +₹25 expense
+Clearing -₹2,250
+
+All three transactions = RECONCILED.
+
+Scenario D — Cash Deposit
+
+Branch Cash balance = ₹10,000
+
+Deposit ₹8,000.
+
+After initiating deposit:
+
+Physical available branch cash reduced by ₹8,000.
+₹8,000 becomes pending cash-deposit reconciliation.
+
+After bank confirms/reconciliation:
+
+Selected Bank +₹8,000
+Cash-in-transit clearing -₹8,000
+
+Scenario E — Safety
+
+Attempt:
+- duplicate reconciliation
+- deposit greater than cash balance
+- negative charges
+- charges greater than gross
+- invalid bank ledger
+- double-click payment submission
+
+All must be rejected safely without duplicate journal entries.
+
+==================================================
+25. FINAL REQUIREMENT
+==================================================
+
+Do not merely build UI mockups.
+
+Implement the complete end-to-end functionality:
+
+Database
+Backend APIs
+Accounting integration
+Frontend
+Permissions
+Validation
+Audit trail
+Reconciliation
+Cash deposits
+Ledger posting
+
+Run typecheck/build/tests after implementation.
+
+Fix all errors introduced by the changes.
+
+Do not remove or break existing Sales, PDF, WhatsApp, GST, inventory, accounting, branch, or customer functionality.
