@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useListCustomers, useCreateCustomer, getListCustomersQueryKey, useGetCustomerLedger } from '@workspace/api-client-react';
+import { useListCustomers, useCreateCustomer, useUpdateCustomer, getListCustomersQueryKey, useGetCustomerLedger } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,7 +13,7 @@ import { Separator } from '@/components/ui/separator';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, UserCheck, Download, Eye, BookOpen } from 'lucide-react';
+import { Plus, Search, UserCheck, Download, Eye, BookOpen, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -117,18 +117,35 @@ export default function Customers() {
   const { data: customers = [], isLoading } = useListCustomers();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
+  const [editItem, setEditItem] = useState<any>(null);
   const [viewItem, setViewItem] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'details' | 'ledger'>('details');
   const queryClient = useQueryClient();
   const createMutation = useCreateCustomer();
+  const updateMutation = useUpdateCustomer();
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', phone: '', email: '', address: '', gstNumber: '', state: '', notes: '' } });
 
+  const openEdit = (c: any) => {
+    setEditItem(c);
+    form.reset({ name: c.name, phone: c.phone ?? '', email: c.email ?? '', address: c.address ?? '', gstNumber: c.gstNumber ?? '', state: (c as any).state ?? '', notes: c.notes ?? '' });
+    setIsOpen(true);
+  };
+
+  const closeDialog = () => { setIsOpen(false); setEditItem(null); form.reset(); };
+
   const onSubmit = (data: FormValues) => {
-    createMutation.mutate({ data: data as any }, {
-      onSuccess: () => { toast.success('Customer added'); queryClient.invalidateQueries({ queryKey: getListCustomersQueryKey() }); setIsOpen(false); form.reset(); },
-      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
-    });
+    if (editItem) {
+      updateMutation.mutate({ id: editItem.id, data: data as any }, {
+        onSuccess: () => { toast.success('Customer updated'); queryClient.invalidateQueries({ queryKey: getListCustomersQueryKey() }); closeDialog(); },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+      });
+    } else {
+      createMutation.mutate({ data: data as any }, {
+        onSuccess: () => { toast.success('Customer added'); queryClient.invalidateQueries({ queryKey: getListCustomersQueryKey() }); closeDialog(); },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+      });
+    }
   };
 
   const filtered = customers.filter(c =>
@@ -185,7 +202,8 @@ export default function Customers() {
                   <TableCell className="text-right font-mono text-sm font-semibold text-primary">
                     ₹{Number((c as any).outstandingBalance ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="text-right flex items-center justify-end gap-1">
+                    <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(c)}><Pencil className="w-4 h-4" /></Button>
                     <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => { setViewItem(c); setActiveTab('details'); }}><Eye className="w-4 h-4" /></Button>
                   </TableCell>
                 </TableRow>
@@ -196,9 +214,9 @@ export default function Customers() {
       </div>
 
       {/* Add Customer Dialog */}
-      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) form.reset(); }}>
+      <Dialog open={isOpen} onOpenChange={v => { if (!v) closeDialog(); }}>
         <DialogContent className="sm:max-w-lg">
-          <DialogHeader><DialogTitle>Add Customer</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editItem ? 'Edit Customer' : 'Add Customer'}</DialogTitle></DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
               <FormField control={form.control} name="name" render={({ field }) => (
@@ -230,8 +248,10 @@ export default function Customers() {
                 <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
               )} />
               <DialogFooter>
-                <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
-                <Button type="submit" disabled={createMutation.isPending}>{createMutation.isPending ? 'Saving…' : 'Save'}</Button>
+                <Button variant="outline" type="button" onClick={closeDialog}>Cancel</Button>
+                <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
+                  {createMutation.isPending || updateMutation.isPending ? 'Saving…' : editItem ? 'Save Changes' : 'Save'}
+                </Button>
               </DialogFooter>
             </form>
           </Form>

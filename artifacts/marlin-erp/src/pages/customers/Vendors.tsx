@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useListVendors, useCreateVendor, getListVendorsQueryKey, useGetVendorLedger } from '@workspace/api-client-react';
+import { useListVendors, useCreateVendor, useUpdateVendor, getListVendorsQueryKey, useGetVendorLedger } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,7 +12,7 @@ import { Separator } from '@/components/ui/separator';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Truck, Download, Eye, BookOpen } from 'lucide-react';
+import { Plus, Search, Truck, Download, Eye, BookOpen, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -157,18 +157,35 @@ export default function Vendors() {
   const { data: vendors = [], isLoading } = useListVendors();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
+  const [editItem, setEditItem] = useState<any>(null);
   const [viewItem, setViewItem] = useState<any>(null);
   const queryClient = useQueryClient();
   // activeTab lives in VendorSheet, not here
   const createMutation = useCreateVendor();
+  const updateMutation = useUpdateVendor();
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', phone: '', email: '', address: '', gstNumber: '', state: '', bankDetails: '' } });
 
+  const openEdit = (v: any) => {
+    setEditItem(v);
+    form.reset({ name: v.name, phone: v.phone ?? '', email: v.email ?? '', address: v.address ?? '', gstNumber: v.gstNumber ?? '', state: (v as any).state ?? '', bankDetails: v.bankDetails ?? '' });
+    setIsOpen(true);
+  };
+
+  const closeDialog = () => { setIsOpen(false); setEditItem(null); form.reset(); };
+
   const onSubmit = (data: FormValues) => {
-    createMutation.mutate({ data: data as any }, {
-      onSuccess: () => { toast.success('Vendor added'); queryClient.invalidateQueries({ queryKey: getListVendorsQueryKey() }); setIsOpen(false); form.reset(); },
-      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
-    });
+    if (editItem) {
+      updateMutation.mutate({ id: editItem.id, data: data as any }, {
+        onSuccess: () => { toast.success('Vendor updated'); queryClient.invalidateQueries({ queryKey: getListVendorsQueryKey() }); closeDialog(); },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+      });
+    } else {
+      createMutation.mutate({ data: data as any }, {
+        onSuccess: () => { toast.success('Vendor added'); queryClient.invalidateQueries({ queryKey: getListVendorsQueryKey() }); closeDialog(); },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+      });
+    }
   };
 
   const filtered = vendors.filter(v =>
@@ -224,7 +241,8 @@ export default function Vendors() {
                   <TableCell className="text-right font-mono text-sm font-semibold text-amber-600">
                     ₹{Number((v as any).totalPurchased ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="text-right flex items-center justify-end gap-1">
+                    <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(v)}><Pencil className="w-4 h-4" /></Button>
                     <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(v)}><Eye className="w-4 h-4" /></Button>
                   </TableCell>
                 </TableRow>
@@ -235,9 +253,9 @@ export default function Vendors() {
       </div>
 
       {/* Add Vendor Dialog */}
-      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) form.reset(); }}>
+      <Dialog open={isOpen} onOpenChange={v => { if (!v) closeDialog(); }}>
         <DialogContent className="sm:max-w-lg">
-          <DialogHeader><DialogTitle>Add Vendor</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editItem ? 'Edit Vendor' : 'Add Vendor'}</DialogTitle></DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
               <FormField control={form.control} name="name" render={({ field }) => (
@@ -269,8 +287,10 @@ export default function Vendors() {
                 <FormItem><FormLabel>Bank Details</FormLabel><FormControl><Textarea rows={2} placeholder="Bank name, account no., IFSC…" {...field} /></FormControl></FormItem>
               )} />
               <DialogFooter>
-                <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
-                <Button type="submit" disabled={createMutation.isPending}>{createMutation.isPending ? 'Saving…' : 'Save'}</Button>
+                <Button variant="outline" type="button" onClick={closeDialog}>Cancel</Button>
+                <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
+                  {createMutation.isPending || updateMutation.isPending ? 'Saving…' : editItem ? 'Save Changes' : 'Save'}
+                </Button>
               </DialogFooter>
             </form>
           </Form>
