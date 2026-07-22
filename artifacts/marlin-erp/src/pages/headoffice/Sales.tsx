@@ -126,6 +126,13 @@ export default function Sales() {
   const [viewItem, setViewItem] = useState<any>(null);
   const [viewQrUrl, setViewQrUrl] = useState<string | null>(null);
 
+  // Payment collection state — declared before the QR useEffect that reads paymentAmount
+  const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [paymentRef, setPaymentRef] = useState('');
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
+  const [showPaymentForm, setShowPaymentForm] = useState(false);
+
   // Generate UPI QR data URL whenever the invoice view opens or the collection amount changes.
   // The QR amount uses balance due (outstanding amount), not the full invoice total —
   // so partial payers are prompted for exactly what they owe.
@@ -148,13 +155,6 @@ export default function Sales() {
   const queryClient = useQueryClient();
   const createMutation = useCreateSale();
   const createCustomerMutation = useCreateCustomer();
-
-  // Payment collection state
-  const [paymentMethod, setPaymentMethod] = useState('cash');
-  const [paymentAmount, setPaymentAmount] = useState('');
-  const [paymentRef, setPaymentRef] = useState('');
-  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
-  const [showPaymentForm, setShowPaymentForm] = useState(false);
 
   const { data: viewItemPayments = [], isLoading: paymentsLoading } = useGetSalePayments(viewItem?.id ?? 0, { enabled: !!viewItem });
   const createPaymentMutation = useCreateSalePayment();
