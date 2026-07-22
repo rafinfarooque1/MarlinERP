@@ -1,0 +1,292 @@
+Implement a Dynamic UPI QR Code feature for Sales Invoices in the existing ERP.
+
+IMPORTANT:
+Do not redesign, rebuild, rename, or modify any existing modules, workflows, invoice calculations, accounting logic, permissions, or UI unnecessarily.
+
+Only add the functionality described below.
+
+FEATURE: WAREHOUSE / OUTLET UPI ID + DYNAMIC SALES INVOICE QR
+
+1. ADD UPI ID TO WAREHOUSE AND OUTLET PROFILE
+
+In the existing Warehouse and Outlet creation/edit forms, add a new field:
+
+UPI ID
+
+Example:
+accounts@bank
+company@upi
+
+Requirements:
+- UPI ID should be stored separately for each Warehouse and each Outlet.
+- Add the field to both:
+  - Create Warehouse
+  - Edit Warehouse
+  - Create Outlet
+  - Edit Outlet
+- Existing warehouses/outlets must continue working even if no UPI ID has been entered.
+- Do not hardcode one company-wide UPI ID.
+
+Each Warehouse or Outlet can have its own UPI ID.
+
+Example:
+
+Bangalore Warehouse
+UPI ID: bangalore@bank
+
+Chennai Warehouse
+UPI ID: chennai@bank
+
+Kochi Outlet
+UPI ID: kochi@bank
+
+
+2. SALES INVOICE MUST IDENTIFY THE BILLING BRANCH
+
+When a Sales Invoice is generated, identify which Warehouse or Outlet is issuing/billing that invoice.
+
+Use the UPI ID saved in THAT Warehouse or Outlet profile.
+
+Example:
+
+If Sales Invoice SI-001 is generated/billed from:
+
+Kochi Outlet
+UPI ID = kochi@bank
+
+Then the QR code on SI-001 must use:
+kochi@bank
+
+If another invoice is generated from:
+
+Bangalore Warehouse
+UPI ID = bangalore@bank
+
+Then that invoice QR must use:
+bangalore@bank
+
+Never use the UPI ID of another warehouse/outlet.
+
+
+3. GENERATE DYNAMIC UPI QR BASED ON INVOICE AMOUNT
+
+Automatically generate a unique UPI payment QR for every Sales Invoice.
+
+The QR must dynamically use:
+
+- UPI ID of the Warehouse/Outlet issuing the invoice
+- Final Grand Total / Amount Payable of that Sales Invoice
+- Payee/branch name where appropriate
+- Sales Invoice Number as payment reference/note
+
+Example:
+
+Invoice Number: SI-2026-00125
+Billing Outlet: Kochi Outlet
+UPI ID: kochi@bank
+Final Amount Payable: ₹25,750
+
+Generate the UPI payment QR using the invoice's actual final payable amount.
+
+The QR/payment URI should follow the appropriate UPI payment format, conceptually:
+
+upi://pay?pa={UPI_ID}&pn={PAYEE_NAME}&am={FINAL_AMOUNT}&cu=INR&tn={INVOICE_NUMBER}
+
+All values must be properly URL encoded.
+
+Do not hardcode the amount.
+
+Every invoice must generate the QR dynamically from its own final payable amount.
+
+
+4. ADD QR CODE TO SALES INVOICE
+
+Display the generated QR code in:
+
+- Sales Invoice View
+- Sales Invoice Print
+- Sales Invoice PDF/Download
+
+Add a clean payment section such as:
+
+SCAN TO PAY
+
+[QR CODE]
+
+Amount: ₹25,750
+UPI ID: kochi@bank
+Invoice: SI-2026-00125
+
+The QR should be clearly visible and properly sized for scanning from both:
+- Printed invoice
+- PDF invoice
+- Screen/mobile
+
+
+5. QR AMOUNT MUST ALWAYS MATCH FINAL PAYABLE AMOUNT
+
+The QR amount must come from the FINAL GRAND TOTAL / AMOUNT PAYABLE after all calculations, including where applicable:
+
+Subtotal
+Discount
+Tax/GST
+Round-off
+Other charges
+Credit adjustments
+
+Do not calculate a separate QR amount.
+
+Use exactly the same final payable amount shown on the Sales Invoice.
+
+Example:
+
+Subtotal = ₹25,000
+GST = ₹4,500
+Discount = ₹1,000
+Final Grand Total = ₹28,500
+
+QR amount must be:
+₹28,500
+
+
+6. INVOICE EDIT / REGENERATION
+
+If an invoice is still editable and its Grand Total changes:
+
+Example:
+Old total = ₹25,750
+New total = ₹27,500
+
+The QR must automatically regenerate/update to:
+
+₹27,500
+
+There must never be a mismatch between:
+- Invoice Grand Total
+and
+- QR payment amount.
+
+
+7. UPI ID VALIDATION
+
+Validate the UPI ID entered in Warehouse/Outlet profile.
+
+- Trim unnecessary spaces.
+- Do not allow obviously invalid/empty malformed values when a UPI ID is being saved.
+- Store the UPI ID safely in the database.
+
+Do not expose sensitive internal banking information unnecessarily.
+
+
+8. IF UPI ID IS NOT CONFIGURED
+
+If the billing Warehouse/Outlet does not have a UPI ID configured:
+
+- Do not generate a broken QR.
+- Do not use another branch's UPI ID.
+- Do not silently fall back to a random/default UPI ID.
+
+Show an admin/user warning:
+
+"UPI ID is not configured for this Warehouse/Outlet. Please update the branch profile to enable QR payment."
+
+The Sales Invoice itself should still be creatable unless the existing business rules say otherwise.
+
+The invoice PDF should simply omit the QR payment section if no valid UPI ID is available.
+
+
+9. IMPORTANT ACCOUNTING RULE
+
+This implementation is currently ONLY for generating a UPI payment QR.
+
+Scanning the QR does NOT mean payment was successfully completed.
+
+DO NOT:
+- Automatically mark the Sales Invoice as Paid when QR is generated.
+- Automatically mark it Paid when QR is viewed/scanned.
+- Automatically create a receipt.
+- Automatically create bank/ledger entries based only on QR generation or scanning.
+
+Payment status must continue following the ERP's existing payment/receipt workflow.
+
+Automatic payment confirmation can be implemented later through a proper bank/payment gateway API and webhook integration.
+
+
+10. DATA RELATIONSHIP
+
+Maintain the correct relationship:
+
+Company
+   ↓
+Warehouse / Outlet
+   ↓
+UPI ID
+   ↓
+Sales Invoice generated/billed by that Warehouse/Outlet
+   ↓
+Final Invoice Amount
+   ↓
+Dynamic UPI QR
+
+The Sales Invoice must always resolve the UPI ID from its actual billing Warehouse/Outlet.
+
+
+11. SECURITY AND DATA INTEGRITY
+
+- Never allow one warehouse/outlet invoice to accidentally use another branch's UPI ID.
+- Resolve the UPI ID on the backend using the authenticated invoice/branch relationship.
+- Do not trust a UPI ID sent directly from the frontend when generating the final invoice QR.
+- Prevent frontend manipulation of UPI ID or invoice amount.
+- The backend must use the stored invoice Grand Total and stored Warehouse/Outlet UPI ID.
+- Preserve existing tenant/company isolation if the ERP is multi-company.
+
+
+12. IMPLEMENTATION REQUIREMENT
+
+First inspect the existing codebase and identify:
+
+- Warehouse model/schema
+- Outlet model/schema
+- Warehouse creation/edit forms
+- Outlet creation/edit forms
+- Sales Invoice model
+- Sales Invoice creation logic
+- Invoice branch/warehouse/outlet relationship
+- Sales Invoice view
+- Existing PDF/print generation system
+
+Then implement this feature using the existing architecture and coding patterns.
+
+Do not create duplicate Warehouse, Outlet, or Sales Invoice systems.
+
+Do not break existing data.
+
+If database schema changes are required, create a safe migration.
+
+Test at minimum:
+
+TEST 1:
+Warehouse A UPI = warehouseA@bank
+Invoice = ₹10,000
+QR must use warehouseA@bank and ₹10,000.
+
+TEST 2:
+Outlet B UPI = outletB@bank
+Invoice = ₹15,500
+QR must use outletB@bank and ₹15,500.
+
+TEST 3:
+Edit invoice from ₹15,500 to ₹16,000.
+QR must update to ₹16,000.
+
+TEST 4:
+Outlet without UPI ID.
+Invoice should still work but QR should not be generated, and the user should receive a clear warning.
+
+TEST 5:
+Verify the QR can be scanned from the generated PDF and opens a compatible UPI payment application with the correct UPI ID, amount, and invoice reference.
+
+CRITICAL:
+Only implement the Warehouse/Outlet UPI ID and Sales Invoice dynamic QR feature described above.
+
+Do not modify unrelated ERP functionality.

@@ -235,37 +235,21 @@ export default function Sales() {
   };
 
   // ── WhatsApp invoice share ─────────────────────────────────────────────────
-  const handleWhatsApp = async (sale: any) => {
+  // Strategy: download PDF to device, then open wa.me/<phone> directly so
+  // WhatsApp opens straight into the customer's chat — no contact picker shown.
+  // If the customer has no saved phone the button is hidden, so we always have intl here.
+  const handleWhatsApp = (sale: any) => {
     const phone = (sale.customerPhone ?? '').replace(/\D/g, '');
     if (!phone) return;
     const intl = phone.startsWith('91') && phone.length === 12 ? phone : `91${phone}`;
 
-    const cs = companySettings as any;
+    const cs      = companySettings as any;
     const company = cs?.name ?? 'Marlin Frozen Fruits';
-    const fileName = `Invoice-${sale.invoiceNumber || sale.id}.pdf`;
 
-    // ── Attempt 1: Web Share API with PDF file (mobile Chrome/Safari) ──────────
-    if (typeof navigator !== 'undefined' && 'share' in navigator && 'canShare' in navigator) {
-      try {
-        const blob = generateInvoicePDFBlob(sale, companySettings);
-        const file = new File([blob], fileName, { type: 'application/pdf' });
-        if ((navigator as any).canShare({ files: [file] })) {
-          await (navigator as any).share({
-            title: `Invoice ${sale.invoiceNumber}`,
-            text: `Your invoice from ${company} — ${sale.invoiceNumber}`,
-            files: [file],
-          });
-          return; // done — native share sheet handled it
-        }
-      } catch (err: any) {
-        if (err?.name === 'AbortError') return; // user cancelled — don't fallback
-        // Other error → fall through to desktop fallback
-      }
-    }
-
-    // ── Fallback: download PDF + open WhatsApp text link (desktop) ────────────
+    // 1. Download the invoice PDF to the device
     downloadInvoicePDF(sale, companySettings);
 
+    // 2. Build the pre-filled WhatsApp message
     const date  = new Date(sale.saleDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
     const lines = (sale.lineItems ?? []).map((li: any) => {
       const name  = li.itemName || `Item #${li.itemId}`;
@@ -273,28 +257,29 @@ export default function Sales() {
       return `  • ${name} × ${li.quantity} = ₹${total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
     }).join('\n');
     const taxLine = Number(sale.taxTotal) > 0
-      ? `\nGST (incl.): ₹${Number(sale.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+      ? `\nGST (incl. in MRP): ₹${Number(sale.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
       : '';
 
     const message = [
       `🧾 *Invoice from ${company}*`,
       `Invoice No: *${sale.invoiceNumber}*`,
       `Date: ${date}`,
-      `Customer: ${sale.customerName ?? 'Walk-in'}`,
       ``,
       `*Items:*`,
       lines,
       ``,
       `Total: ₹${Number(sale.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}${taxLine}`,
-      `Payment: ${sale.paymentMode?.replace('_', ' ').toUpperCase() ?? ''}`,
+      `Payment: ${(sale.paymentMode ?? '').replace('_', ' ').toUpperCase()}`,
       ``,
-      `📎 Invoice PDF has been downloaded to your device.`,
+      `📎 Please find your invoice PDF in the attachment.`,
       `Thank you for your purchase! 🙏`,
     ].join('\n');
 
+    // 3. Open WhatsApp directly in the customer's chat (wa.me/<phone> pre-selects the contact)
+    //    Small delay lets the PDF download kick off before the tab switch.
     setTimeout(() => {
       window.open(`https://wa.me/${intl}?text=${encodeURIComponent(message)}`, '_blank', 'noopener');
-    }, 500); // slight delay so the download starts first
+    }, 400);
   };
 
   const filtered = sales.filter(s =>
