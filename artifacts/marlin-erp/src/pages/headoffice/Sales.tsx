@@ -4,6 +4,7 @@ import {
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
   getListSalesQueryKey, getListCustomersQueryKey, useListCoupons,
   customFetch,
+  useGetSalePayments, useCreateSalePayment,
 } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -24,7 +25,7 @@ import { INDIAN_STATES } from '@/lib/indianStates';
 import {
   Plus, Search, Trash2, CreditCard, Calendar, Receipt,
   Download, Eye, PackageOpen, FileDown, AlertTriangle,
-  UserPlus, Check, ChevronsUpDown,
+  UserPlus, Check, ChevronsUpDown, Banknote, IndianRupee,
 } from 'lucide-react';
 
 // ── WhatsApp brand icon (inline SVG) ──────────────────────────────────────────
@@ -125,21 +126,59 @@ export default function Sales() {
   const [viewItem, setViewItem] = useState<any>(null);
   const [viewQrUrl, setViewQrUrl] = useState<string | null>(null);
 
-  // Generate UPI QR data URL whenever the invoice view opens
+  // Generate UPI QR data URL whenever the invoice view opens or the collection amount changes.
+  // The QR amount uses balance due (outstanding amount), not the full invoice total —
+  // so partial payers are prompted for exactly what they owe.
   useEffect(() => {
     if (!viewItem || !(viewItem as any).outletUpiId) { setViewQrUrl(null); return; }
     const upiId  = (viewItem as any).outletUpiId as string;
-    const amount = Number(viewItem.totalAmount).toFixed(2);
+    // Use balance due for outstanding invoices; fall back to totalAmount for fully new sales
+    const balanceDue = Number((viewItem as any).balanceDue ?? viewItem.totalAmount);
+    const collectionAmount = paymentAmount && Number(paymentAmount) > 0
+      ? Number(paymentAmount)
+      : balanceDue;
+    const amount = Math.max(0, collectionAmount).toFixed(2);
     const upiUri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(viewItem.outletName || '')}&am=${amount}&cu=INR&tn=${encodeURIComponent(viewItem.invoiceNumber || '')}`;
     let cancelled = false;
     (import('qrcode') as Promise<any>).then(QR => {
       QR.toDataURL(upiUri, { width: 200, margin: 2 }).then((url: string) => { if (!cancelled) setViewQrUrl(url); });
     }).catch(() => { if (!cancelled) setViewQrUrl(null); });
     return () => { cancelled = true; };
-  }, [viewItem]);
+  }, [viewItem, paymentAmount]);
   const queryClient = useQueryClient();
   const createMutation = useCreateSale();
   const createCustomerMutation = useCreateCustomer();
+
+  // Payment collection state
+  const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [paymentRef, setPaymentRef] = useState('');
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
+  const [showPaymentForm, setShowPaymentForm] = useState(false);
+
+  const { data: viewItemPayments = [], isLoading: paymentsLoading } = useGetSalePayments(viewItem?.id ?? 0, { enabled: !!viewItem });
+  const createPaymentMutation = useCreateSalePayment();
+
+  const handleCollectPayment = async () => {
+    if (!viewItem) return;
+    const amount = Number(paymentAmount);
+    if (!amount || amount <= 0) { toast.error('Enter a valid amount'); return; }
+    try {
+      const result = await createPaymentMutation.mutateAsync({
+        saleId: viewItem.id,
+        data: { method: paymentMethod, amount, referenceNumber: paymentRef || undefined, paymentDate },
+      });
+      toast.success(`Payment of ₹${amount.toLocaleString('en-IN')} collected (${paymentMethod})`);
+      // Update viewItem state with new payment status
+      setViewItem((prev: any) => prev ? { ...prev, paymentStatus: result.newPaymentStatus, amountPaid: result.newAmountPaid, balanceDue: Math.max(0, prev.totalAmount - result.newAmountPaid) } : null);
+      queryClient.invalidateQueries({ queryKey: getListSalesQueryKey() });
+      setPaymentAmount('');
+      setPaymentRef('');
+      setShowPaymentForm(false);
+    } catch (e: any) {
+      toast.error(e?.data?.error || e?.message || 'Failed to collect payment');
+    }
+  };
 
   // Customer combobox + quick-create state
   const [customerOpen, setCustomerOpen] = useState(false);
@@ -431,11 +470,26 @@ export default function Sales() {
                   </TableCell>
                   <TableCell className="text-sm">{sale.outletName}</TableCell>
                   <TableCell className="text-sm">{sale.customerName || 'Walk-in'}</TableCell>
-                  <TableCell><Badge variant="outline" className="uppercase text-xs">{sale.paymentMode?.replace('_', ' ')}</Badge></TableCell>
+                  <TableCell>
+                    <div className="flex flex-col gap-1">
+                      <Badge variant="outline" className="uppercase text-xs w-fit">{sale.paymentMode?.replace('_', ' ')}</Badge>
+                      {(() => {
+                        const ps = (sale as any).paymentStatus ?? 'paid';
+                        if (ps === 'paid') return <Badge className="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20 w-fit">Paid</Badge>;
+                        if (ps === 'partially_paid') return <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20 w-fit">Partial</Badge>;
+                        return <Badge className="text-[10px] bg-red-500/10 text-red-600 border-red-500/20 w-fit">Unpaid</Badge>;
+                      })()}
+                    </div>
+                  </TableCell>
                   <TableCell className="text-right font-mono text-xs text-muted-foreground">
                     {Number(sale.taxTotal) > 0 ? `₹${Number(sale.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'}
                   </TableCell>
-                  <TableCell className="text-right font-mono font-bold text-emerald-500">₹{Number(sale.totalAmount).toLocaleString('en-IN')}</TableCell>
+                  <TableCell className="text-right">
+                    <p className="font-mono font-bold text-emerald-500">₹{Number(sale.totalAmount).toLocaleString('en-IN')}</p>
+                    {((sale as any).paymentStatus === 'partially_paid' || (sale as any).paymentStatus === 'unpaid') && (
+                      <p className="text-[10px] text-red-500 font-mono">Due: ₹{Number((sale as any).balanceDue ?? 0).toLocaleString('en-IN')}</p>
+                    )}
+                  </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(sale)} title="View"><Eye className="w-4 h-4" /></Button>
@@ -918,8 +972,120 @@ export default function Sales() {
                 </div>
               </div>
 
+              {/* ── Payment Status ─────────────────────────────────────────── */}
+              <div className={`p-3 rounded-lg border text-sm ${
+                ((viewItem as any).paymentStatus === 'paid')
+                  ? 'bg-emerald-500/5 border-emerald-500/20'
+                  : ((viewItem as any).paymentStatus === 'partially_paid')
+                  ? 'bg-amber-500/5 border-amber-500/20'
+                  : 'bg-red-500/5 border-red-500/20'
+              }`}>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-semibold flex items-center gap-1.5">
+                    <Banknote className="w-4 h-4" /> Payment
+                  </span>
+                  {(() => {
+                    const ps = (viewItem as any).paymentStatus ?? 'paid';
+                    if (ps === 'paid') return <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Fully Paid</Badge>;
+                    if (ps === 'partially_paid') return <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/20">Partially Paid</Badge>;
+                    return <Badge className="bg-red-500/10 text-red-600 border-red-500/20">Unpaid</Badge>;
+                  })()}
+                </div>
+                <div className="space-y-1 text-xs text-muted-foreground">
+                  <div className="flex justify-between">
+                    <span>Total</span>
+                    <span className="font-mono font-semibold text-foreground">₹{Number(viewItem.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Paid</span>
+                    <span className="font-mono text-emerald-600">₹{Number((viewItem as any).amountPaid ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                  {(Number((viewItem as any).balanceDue ?? 0) > 0) && (
+                    <div className="flex justify-between font-semibold text-red-600">
+                      <span>Balance Due</span>
+                      <span className="font-mono">₹{Number((viewItem as any).balanceDue ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Payment history */}
+                {viewItemPayments.length > 0 && (
+                  <div className="mt-3 space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Payment History</p>
+                    {viewItemPayments.map((p: any) => (
+                      <div key={p.id} className="flex justify-between items-center text-xs bg-background/60 rounded px-2 py-1">
+                        <div>
+                          <span className="capitalize">{p.method.replace('_', ' ')}</span>
+                          {p.referenceNumber && <span className="font-mono ml-1.5 text-muted-foreground text-[10px]">#{p.referenceNumber}</span>}
+                          <span className="ml-1.5 text-muted-foreground">{p.paymentDate}</span>
+                        </div>
+                        <span className="font-mono font-semibold">₹{Number(p.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Collect payment button / form */}
+                {(viewItem as any).paymentStatus !== 'paid' && perm.canAdd && (
+                  <div className="mt-3">
+                    {!showPaymentForm ? (
+                      <Button size="sm" className="w-full h-8" onClick={() => {
+                        setPaymentAmount(String(Number((viewItem as any).balanceDue ?? 0)));
+                        setShowPaymentForm(true);
+                      }}>
+                        <IndianRupee className="w-3.5 h-3.5 mr-1" /> Collect Payment
+                      </Button>
+                    ) : (
+                      <div className="space-y-2 bg-background/60 rounded-lg p-3">
+                        <p className="text-xs font-semibold text-foreground">Collect Payment</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <p className="text-[10px] text-muted-foreground mb-1">Method</p>
+                            <Select value={paymentMethod} onValueChange={setPaymentMethod}>
+                              <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="cash">Cash</SelectItem>
+                                <SelectItem value="upi">UPI</SelectItem>
+                                <SelectItem value="card">Card</SelectItem>
+                                <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
+                                <SelectItem value="other">Other</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <p className="text-[10px] text-muted-foreground mb-1">Amount (₹)</p>
+                            <Input type="number" min={0.01} step={0.01} value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} className="h-7 text-xs font-mono" />
+                          </div>
+                        </div>
+                        {paymentMethod !== 'cash' && (
+                          <div>
+                            <p className="text-[10px] text-muted-foreground mb-1">Reference / UTR</p>
+                            <Input value={paymentRef} onChange={e => setPaymentRef(e.target.value)} className="h-7 text-xs font-mono" placeholder="Optional reference number" />
+                          </div>
+                        )}
+                        <div>
+                          <p className="text-[10px] text-muted-foreground mb-1">Date</p>
+                          <Input type="date" value={paymentDate} onChange={e => setPaymentDate(e.target.value)} className="h-7 text-xs" />
+                        </div>
+                        {paymentMethod !== 'cash' && (
+                          <div className="text-[10px] text-amber-600 bg-amber-500/5 rounded px-2 py-1">
+                            Electronic payments appear in Reconciliation until matched to a bank settlement.
+                          </div>
+                        )}
+                        <div className="flex gap-2">
+                          <Button size="sm" className="flex-1 h-7 text-xs" onClick={handleCollectPayment} disabled={createPaymentMutation.isPending}>
+                            {createPaymentMutation.isPending ? 'Processing…' : 'Confirm'}
+                          </Button>
+                          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShowPaymentForm(false)}>Cancel</Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* ── UPI QR Payment section ──────────────────────────────────── */}
-              {(viewItem as any).outletUpiId ? (
+              {(viewItem as any).outletUpiId && paymentMethod === 'upi' && showPaymentForm ? (
                 <div className="border border-teal-500/30 rounded-xl bg-teal-500/5 p-4 text-center">
                   <p className="text-xs font-bold text-teal-600 uppercase tracking-widest mb-3">⊡ Scan to Pay (UPI)</p>
                   {viewQrUrl ? (
@@ -930,15 +1096,15 @@ export default function Sales() {
                     </div>
                   )}
                   <p className="text-xs text-muted-foreground mt-2 font-mono">{(viewItem as any).outletUpiId}</p>
-                  <p className="text-base font-bold mt-0.5">₹{Number(viewItem.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                  <p className="text-base font-bold mt-0.5">₹{Number((viewItem as any).balanceDue ?? viewItem.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
                   <p className="text-xs text-muted-foreground">{viewItem.invoiceNumber}</p>
                 </div>
-              ) : (
+              ) : !(viewItem as any).outletUpiId ? (
                 <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-400">
                   <p className="font-semibold">UPI payment QR not available</p>
                   <p className="mt-0.5 opacity-80">No UPI ID configured for <strong>{viewItem.outletName}</strong>. Update the outlet profile to enable QR payments on invoices.</p>
                 </div>
-              )}
+              ) : null}
 
               <div className="flex flex-col gap-2">
                 {/* WhatsApp — only when customer has a phone number */}

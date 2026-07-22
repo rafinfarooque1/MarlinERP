@@ -69,6 +69,7 @@ const navigation = [
     icon: Calculator,
     children: [
       { name: 'Orders', href: '/headoffice/sales' },
+      { name: 'Payments', href: '/headoffice/payments' },
       { name: 'Customers', href: '/customers' },
       { name: 'Vendors', href: '/vendors' },
       { name: 'Coupons', href: '/coupons' },
@@ -94,6 +95,8 @@ const navigation = [
       { name: 'Payments', href: '/accounts/payments' },
       { name: 'Receipts', href: '/accounts/receipts' },
       { name: 'GST Summary', href: '/accounts/gst' },
+      { name: 'Reconciliation', href: '/accounts/reconciliation' },
+      { name: 'Cash in Outlet', href: '/accounts/cash-in-outlet' },
     ],
   },
   {

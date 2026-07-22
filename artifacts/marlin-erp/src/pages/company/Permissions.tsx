@@ -19,7 +19,7 @@ const MODULE_GROUPS = [
   },
   {
     title: 'Sales',
-    modules: ['Sales', 'Customers', 'Vendors', 'Coupons'],
+    modules: ['Sales', 'Customers', 'Vendors', 'Coupons', 'Payments'],
   },
   {
     title: 'HR',
@@ -27,7 +27,7 @@ const MODULE_GROUPS = [
   },
   {
     title: 'Accounts',
-    modules: ['Chart of Accounts', 'Ledger', 'Cash & Bank', 'Expenses', 'GST Summary'],
+    modules: ['Chart of Accounts', 'Ledger', 'Cash & Bank', 'Expenses', 'GST Summary', 'Reconciliation', 'Cash in Outlet'],
   },
   {
     title: 'Company',

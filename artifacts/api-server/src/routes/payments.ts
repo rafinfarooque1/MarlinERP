@@ -1,0 +1,251 @@
+import { Router } from "express";
+import { pool } from "@workspace/db";
+import { logActivity } from "../lib/audit";
+
+const router = Router();
+
+// ── Helper: compute payment status from total and paid amounts ────────────────
+function computePaymentStatus(totalAmount: number, amountPaid: number): string {
+  if (amountPaid <= 0) return "unpaid";
+  if (amountPaid >= totalAmount) return "paid";
+  return "partially_paid";
+}
+
+// ── Helper: get-or-assert outlet cash ledger (created at startup) ─────────────
+async function getOutletCashLedgerId(outletId: number): Promise<number | null> {
+  const code = `OUTLET-CASH-${outletId}`;
+  const { rows } = await pool.query(
+    `SELECT id FROM account_ledgers WHERE code = $1`,
+    [code]
+  );
+  return rows[0]?.id ?? null;
+}
+
+// ── GET /sales/:id/payments ────────────────────────────────────────────────────
+router.get("/sales/:id/payments", async (req, res): Promise<void> => {
+  const saleId = parseInt(req.params.id, 10);
+  if (!Number.isFinite(saleId)) { res.status(400).json({ error: "Invalid sale id" }); return; }
+
+  const { rows: payments } = await pool.query(
+    `SELECT sp.*,
+            rb.batch_reference,
+            rb.settlement_date AS reconciled_on
+     FROM sale_payments sp
+     LEFT JOIN reconciliation_batch_items rbi ON rbi.sale_payment_id = sp.id
+     LEFT JOIN reconciliation_batches rb ON rb.id = rbi.batch_id
+     WHERE sp.sale_id = $1
+     ORDER BY sp.created_at ASC`,
+    [saleId]
+  );
+
+  res.json(payments.map((p: any) => ({
+    id: p.id,
+    saleId: p.sale_id,
+    paymentDate: p.payment_date,
+    method: p.method,
+    amount: Number(p.amount),
+    referenceNumber: p.reference_number,
+    notes: p.notes,
+    reconciliationStatus: p.reconciliation_status,
+    clearingReceiptId: p.clearing_receipt_id,
+    outletId: p.outlet_id,
+    createdBy: p.created_by,
+    createdAt: p.created_at,
+    batchReference: p.batch_reference ?? null,
+    reconciledOn: p.reconciled_on ?? null,
+  })));
+});
+
+// ── POST /sales/:id/payments ───────────────────────────────────────────────────
+router.post("/sales/:id/payments", async (req, res): Promise<void> => {
+  const saleId = parseInt(req.params.id, 10);
+  if (!Number.isFinite(saleId)) { res.status(400).json({ error: "Invalid sale id" }); return; }
+
+  const { method, amount, referenceNumber, notes, paymentDate } = req.body as {
+    method: string;
+    amount: number;
+    referenceNumber?: string;
+    notes?: string;
+    paymentDate?: string;
+  };
+
+  // Basic validation
+  if (!method) { res.status(400).json({ error: "method is required" }); return; }
+  const parsedAmount = Number(amount);
+  if (!parsedAmount || parsedAmount <= 0) { res.status(400).json({ error: "amount must be positive" }); return; }
+
+  const validMethods = ["cash", "upi", "card", "bank_transfer", "other"];
+  if (!validMethods.includes(method)) {
+    res.status(400).json({ error: `method must be one of: ${validMethods.join(", ")}` }); return;
+  }
+
+  const isElectronic = method !== "cash";
+  if (isElectronic && !referenceNumber?.trim()) {
+    // Allow electronic without reference — it's useful but not mandatory
+  }
+
+  const pDate = paymentDate || new Date().toISOString().split("T")[0];
+  const createdBy = (req as any).user?.username ?? "system";
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // 1. Lock and fetch sale
+    const { rows: [sale] } = await client.query(
+      `SELECT id, outlet_id, total_amount::numeric AS total_amount,
+              amount_paid::numeric AS amount_paid, payment_status
+       FROM sales WHERE id = $1 FOR UPDATE`,
+      [saleId]
+    );
+    if (!sale) { await client.query("ROLLBACK"); res.status(404).json({ error: "Sale not found" }); return; }
+
+    const totalAmount = Number(sale.total_amount);
+    const currentPaid = Number(sale.amount_paid);
+    const balanceDue  = totalAmount - currentPaid;
+
+    if (parsedAmount > balanceDue + 0.001) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: `Amount (₹${parsedAmount}) exceeds balance due (₹${balanceDue.toFixed(2)})` });
+      return;
+    }
+
+    // 2. Duplicate-submission guard: same sale+method+amount within 10 seconds
+    const { rows: dupes } = await client.query(
+      `SELECT id FROM sale_payments
+       WHERE sale_id = $1 AND method = $2 AND amount = $3
+         AND created_at > now() - interval '10 seconds'`,
+      [saleId, method, parsedAmount]
+    );
+    if (dupes.length > 0) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: "Duplicate payment submission detected. Please wait a moment and try again." });
+      return;
+    }
+
+    // 3. Get voucher number helpers
+    const nextVoucher = async (prefix: string, table: string): Promise<string> => {
+      const { rows } = await client.query(`SELECT COUNT(*) FROM ${table}`);
+      const n = Number(rows[0].count) + 1;
+      return `${prefix}-${String(n).padStart(4, "0")}`;
+    };
+
+    let clearingReceiptId: number | null = null;
+    let reconciliationStatus: string | null = null;
+
+    if (!isElectronic) {
+      // ── CASH PAYMENT ────────────────────────────────────────────────────
+      // Get outlet cash ledger
+      const outletCashCode = `OUTLET-CASH-${sale.outlet_id}`;
+      const { rows: [cashLedger] } = await client.query(
+        `SELECT id FROM account_ledgers WHERE code = $1`,
+        [outletCashCode]
+      );
+      if (!cashLedger) {
+        await client.query("ROLLBACK");
+        res.status(500).json({ error: "Cash ledger not found for this outlet. Contact administrator." });
+        return;
+      }
+
+      // Get STD-SALES ledger for the "received from" counterpart
+      const { rows: [salesLedger] } = await client.query(
+        `SELECT id FROM account_ledgers WHERE code = 'STD-SALES'`
+      );
+      if (!salesLedger) {
+        await client.query("ROLLBACK");
+        res.status(500).json({ error: "Sales ledger not configured." });
+        return;
+      }
+
+      const voucherNum = await nextVoucher("REC", "receipts");
+      const { rows: [receipt] } = await client.query(
+        `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        [voucherNum, pDate, salesLedger.id, cashLedger.id, parsedAmount,
+          `Cash payment for invoice ${(await client.query(`SELECT invoice_number FROM sales WHERE id=$1`,[saleId])).rows[0]?.invoice_number ?? saleId}`]
+      );
+      clearingReceiptId = receipt.id;
+      reconciliationStatus = null; // cash — no reconciliation needed
+
+    } else {
+      // ── ELECTRONIC PAYMENT ──────────────────────────────────────────────
+      // Get STD-ELEC-CLR ledger
+      const { rows: [clearingLedger] } = await client.query(
+        `SELECT id FROM account_ledgers WHERE code = 'STD-ELEC-CLR'`
+      );
+      if (!clearingLedger) {
+        await client.query("ROLLBACK");
+        res.status(500).json({ error: "Electronic payment clearing ledger not configured." });
+        return;
+      }
+
+      const { rows: [salesLedger] } = await client.query(
+        `SELECT id FROM account_ledgers WHERE code = 'STD-SALES'`
+      );
+      if (!salesLedger) {
+        await client.query("ROLLBACK");
+        res.status(500).json({ error: "Sales ledger not configured." });
+        return;
+      }
+
+      const voucherNum = await nextVoucher("REC", "receipts");
+      const { rows: [invRow] } = await client.query(`SELECT invoice_number FROM sales WHERE id=$1`, [saleId]);
+      const { rows: [receipt] } = await client.query(
+        `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        [voucherNum, pDate, salesLedger.id, clearingLedger.id, parsedAmount,
+          `${method.toUpperCase()} payment for invoice ${invRow?.invoice_number ?? saleId}${referenceNumber ? ` — Ref: ${referenceNumber}` : ""}`]
+      );
+      clearingReceiptId = receipt.id;
+      reconciliationStatus = "pending";
+    }
+
+    // 4. Insert sale_payment record
+    const { rows: [salePayment] } = await client.query(
+      `INSERT INTO sale_payments (sale_id, payment_date, method, amount, reference_number, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      [saleId, pDate, method, parsedAmount, referenceNumber ?? null, notes ?? null,
+        reconciliationStatus, clearingReceiptId, sale.outlet_id, createdBy]
+    );
+
+    // 5. Update sales.amount_paid and sales.payment_status
+    const newAmountPaid = currentPaid + parsedAmount;
+    const newStatus = computePaymentStatus(totalAmount, newAmountPaid);
+    await client.query(
+      `UPDATE sales SET amount_paid = $1, payment_status = $2 WHERE id = $3`,
+      [newAmountPaid, newStatus, saleId]
+    );
+
+    await client.query("COMMIT");
+
+    logActivity({
+      action: "CREATE", module: "payments", entityType: "sale_payment", entityId: salePayment.id,
+      description: `Payment of ₹${parsedAmount} via ${method} for sale #${saleId}`,
+      metadata: { after: { saleId, method, amount: parsedAmount, reconciliationStatus } },
+    }).catch(() => {});
+
+    res.status(201).json({
+      id: salePayment.id,
+      saleId: salePayment.sale_id,
+      paymentDate: salePayment.payment_date,
+      method: salePayment.method,
+      amount: Number(salePayment.amount),
+      referenceNumber: salePayment.reference_number,
+      notes: salePayment.notes,
+      reconciliationStatus: salePayment.reconciliation_status,
+      outletId: salePayment.outlet_id,
+      createdBy: salePayment.created_by,
+      createdAt: salePayment.created_at,
+      newPaymentStatus: newStatus,
+      newAmountPaid,
+    });
+  } catch (err: any) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Payment posting error:", err);
+    res.status(500).json({ error: err.message ?? "Failed to record payment" });
+  } finally {
+    client.release();
+  }
+});
+
+export default router;

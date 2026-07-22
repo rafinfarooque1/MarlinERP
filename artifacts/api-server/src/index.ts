@@ -155,6 +155,126 @@ async function runMigrations() {
       );
     }
   }
+
+  // ── Migration log table (one-time migrations that must not re-run on restart) ─
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS migration_log (
+      name text PRIMARY KEY,
+      applied_at timestamptz NOT NULL DEFAULT now()
+    );
+  `);
+
+  // ── Payment & Reconciliation schema ──────────────────────────────────────
+  await pool.query(`
+    ALTER TABLE sales ADD COLUMN IF NOT EXISTS payment_status text NOT NULL DEFAULT 'unpaid';
+    ALTER TABLE sales ADD COLUMN IF NOT EXISTS amount_paid numeric(12,2) NOT NULL DEFAULT 0;
+
+    CREATE TABLE IF NOT EXISTS sale_payments (
+      id serial PRIMARY KEY,
+      sale_id integer NOT NULL,
+      payment_date text NOT NULL,
+      method text NOT NULL,
+      amount numeric(12,2) NOT NULL DEFAULT 0,
+      reference_number text,
+      notes text,
+      reconciliation_status text,
+      clearing_receipt_id integer,
+      outlet_id integer NOT NULL,
+      created_by text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_sale_payments_sale_id ON sale_payments(sale_id);
+    CREATE INDEX IF NOT EXISTS idx_sale_payments_rec_status ON sale_payments(reconciliation_status);
+
+    CREATE TABLE IF NOT EXISTS reconciliation_batches (
+      id serial PRIMARY KEY,
+      batch_reference text NOT NULL,
+      settlement_date text NOT NULL,
+      gross_amount numeric(12,2) NOT NULL DEFAULT 0,
+      charges numeric(12,2) NOT NULL DEFAULT 0,
+      net_amount numeric(12,2) NOT NULL DEFAULT 0,
+      destination_bank_ledger_id integer NOT NULL,
+      external_reference text,
+      notes text,
+      created_by text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      status text NOT NULL DEFAULT 'active'
+    );
+
+    CREATE TABLE IF NOT EXISTS reconciliation_batch_items (
+      id serial PRIMARY KEY,
+      batch_id integer NOT NULL,
+      sale_payment_id integer NOT NULL,
+      amount numeric(12,2) NOT NULL DEFAULT 0,
+      UNIQUE(sale_payment_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS cash_deposits (
+      id serial PRIMARY KEY,
+      outlet_id integer NOT NULL,
+      source_cash_ledger_id integer NOT NULL,
+      amount numeric(12,2) NOT NULL DEFAULT 0,
+      deposit_date text NOT NULL,
+      deposit_reference text,
+      destination_bank_ledger_id integer,
+      notes text,
+      created_by text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      status text NOT NULL DEFAULT 'pending_reconciliation',
+      transit_payment_id integer,
+      bank_receipt_id integer
+    );
+  `);
+
+  // One-time backfill: mark all PRE-EXISTING sales (those created before the payment
+  // tracking columns existed) as fully paid. Tracked in migration_log so it never
+  // re-runs on subsequent boots and cannot overwrite legitimate payment state.
+  const { rows: [backfillApplied] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'sales_payment_backfill_v1'`
+  );
+  if (!backfillApplied) {
+    await pool.query(`
+      UPDATE sales SET payment_status = 'paid', amount_paid = total_amount
+      WHERE payment_status = 'unpaid' AND total_amount > 0
+    `);
+    await pool.query(
+      `INSERT INTO migration_log (name) VALUES ('sales_payment_backfill_v1')`
+    );
+    console.log('[migration] sales_payment_backfill_v1 applied');
+  }
+
+  // ── Clearing / transit / charges ledgers ────────────────────────────────
+  const clearingLedgers: [string, string, string, string, string, string][] = [
+    ['Electronic Payment Clearing', 'asset',   'STD-ELEC-CLR', 'balance_sheet', 'SYS-CURA',   'Clearing for UPI/Card/Bank Transfer payments awaiting bank reconciliation'],
+    ['Cash in Transit',             'asset',   'STD-CIT',      'balance_sheet', 'SYS-CURA',   'Cash physically deposited at bank but not yet confirmed'],
+    ['Bank & Processor Charges',    'expense', 'STD-PROC-CHG', 'profit_loss',   'SYS-INDEXP', 'Bank and payment processor charges deducted from settlements'],
+  ];
+  for (const [name, type, code, section, parentCode, desc] of clearingLedgers) {
+    const { rows: [parent] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1`, [parentCode]);
+    if (parent) {
+      await pool.query(
+        `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_system_group, description)
+         SELECT $1, $2, $3, $4, $5, false, $6
+         WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $3)`,
+        [name, type, code, section, parent.id, desc],
+      );
+    }
+  }
+
+  // ── Per-outlet cash ledgers (provision at startup, idempotent) ──────────
+  const { rows: allOutlets } = await pool.query(`SELECT id, name FROM outlets ORDER BY id`);
+  const { rows: [cashRootRow] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = 'STD-CASH'`);
+  if (cashRootRow) {
+    for (const outlet of allOutlets) {
+      const outletCashCode = `OUTLET-CASH-${outlet.id}`;
+      await pool.query(
+        `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_system_group, description)
+         SELECT $1, 'asset', $2, 'balance_sheet', $3, false, $4
+         WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $2)`,
+        [`${outlet.name} Cash`, outletCashCode, cashRootRow.id, `Cash held at ${outlet.name} outlet`],
+      );
+    }
+  }
 }
 
 const rawPort = process.env["PORT"];

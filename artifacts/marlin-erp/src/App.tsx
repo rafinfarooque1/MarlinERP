@@ -21,6 +21,7 @@ import Stock from './pages/headoffice/Stock';
 import HoTransfers from './pages/headoffice/HoTransfers';
 import ItemPrices from './pages/headoffice/ItemPrices';
 import Sales from './pages/headoffice/Sales';
+import Payments from './pages/headoffice/Payments';
 
 import Hierarchy from './pages/hr/Hierarchy';
 import Employees from './pages/hr/Employees';
@@ -45,6 +46,8 @@ import CompanySettings from './pages/company/Settings';
 import Permissions from './pages/company/Permissions';
 import Profile from './pages/company/Profile';
 import AuditLog from './pages/company/AuditLog';
+import Reconciliation from './pages/finance/Reconciliation';
+import CashInOutlet from './pages/finance/CashInOutlet';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -106,6 +109,7 @@ function Router() {
       <Route path="/headoffice/transfers"><AuthGuard><HoTransfers /></AuthGuard></Route>
       <Route path="/headoffice/item-price"><AuthGuard><ItemPrices /></AuthGuard></Route>
       <Route path="/headoffice/sales"><AuthGuard><Sales /></AuthGuard></Route>
+      <Route path="/headoffice/payments"><AuthGuard><Payments /></AuthGuard></Route>
 
       <Route path="/hr/hierarchy"><AuthGuard><Hierarchy /></AuthGuard></Route>
       <Route path="/hr/employees"><AuthGuard><Employees /></AuthGuard></Route>
@@ -131,6 +135,9 @@ function Router() {
       <Route path="/company/permissions"><AuthGuard><Permissions /></AuthGuard></Route>
       <Route path="/company/profile"><AuthGuard><Profile /></AuthGuard></Route>
       <Route path="/company/audit"><AuthGuard><AuditLog /></AuthGuard></Route>
+
+      <Route path="/accounts/reconciliation"><AuthGuard><Reconciliation /></AuthGuard></Route>
+      <Route path="/accounts/cash-in-outlet"><AuthGuard><CashInOutlet /></AuthGuard></Route>
 
       <Route component={NotFound} />
     </Switch>

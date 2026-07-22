@@ -84,29 +84,42 @@ router.post("/item-prices", async (req, res): Promise<void> => {
 // ── Sales ──────────────────────────────────────────────────────────────────
 
 router.get("/sales", async (req, res): Promise<void> => {
-  const rows = await db.select().from(salesTable).orderBy(salesTable.id);
+  const { pool: pgPool } = await import("@workspace/db");
+  const { rows: rawRows } = await pgPool.query(`SELECT * FROM sales ORDER BY id`);
   const outlets = await db.select().from(outletsTable);
   const customers = await db.select().from(customersTable);
   const oMap = new Map(outlets.map((o) => [o.id, { name: o.name, upiId: (o as any).upiId ?? "" }]));
   const cMap = new Map(customers.map((c) => [c.id, { name: c.name, phone: c.phone ?? null }]));
 
   const outletIdFilter = req.query.outletId ? Number(req.query.outletId) : null;
-  const filtered = outletIdFilter ? rows.filter((r) => r.outletId === outletIdFilter) : rows;
+  const filtered = outletIdFilter ? rawRows.filter((r: any) => r.outlet_id === outletIdFilter) : rawRows;
 
-  res.json(filtered.map((r) => {
-    const cust = r.customerId ? cMap.get(r.customerId) : null;
-    const outlet = oMap.get(r.outletId);
+  res.json(filtered.map((r: any) => {
+    const cust = r.customer_id ? cMap.get(r.customer_id) : null;
+    const outlet = oMap.get(r.outlet_id);
+    const totalAmount = Number(r.total_amount);
+    const amountPaid  = Number(r.amount_paid ?? 0);
     return {
-      ...r,
+      id: r.id,
+      invoiceNumber: r.invoice_number,
+      outletId: r.outlet_id,
+      customerId: r.customer_id,
+      saleDate: r.sale_date,
+      lineItems: r.line_items ?? [],
+      subtotal: Number(r.subtotal),
+      taxTotal: Number(r.tax_total),
+      discountTotal: Number(r.discount_total),
+      totalAmount,
+      paymentMode: r.payment_mode,
+      couponCode: r.coupon_code,
+      createdAt: r.created_at,
+      paymentStatus: r.payment_status ?? "paid",
+      amountPaid,
+      balanceDue: Math.max(0, totalAmount - amountPaid),
       outletName: outlet?.name ?? "",
       outletUpiId: outlet?.upiId ?? "",
       customerName: cust?.name ?? null,
       customerPhone: cust?.phone ?? null,
-      subtotal: Number(r.subtotal),
-      taxTotal: Number(r.taxTotal),
-      discountTotal: Number(r.discountTotal),
-      totalAmount: Number(r.totalAmount),
-      lineItems: r.lineItems ?? [],
     };
   }));
 });
@@ -179,7 +192,7 @@ router.post("/sales", async (req, res): Promise<void> => {
 
   const subtotal = lineItems.reduce((s, li) => s + li.lineSubtotal, 0);
   const taxTotal = lineItems.reduce((s, li) => s + li.taxAmount, 0);
-  const discountTotal = parsed.data.discountTotal ?? lineItems.reduce((s, li) => s + li.discount, 0);
+  const discountTotal = (parsed.data as any).discountTotal ?? lineItems.reduce((s, li) => s + li.discount, 0);
   const totalAmount = subtotal + taxTotal - discountTotal;
 
   const [row] = await db.insert(salesTable).values({
@@ -289,22 +302,35 @@ router.post("/sales/:id/share-token", async (req, res): Promise<void> => {
 router.get("/sales/:id", async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
-  const [row] = await db.select().from(salesTable).where(eq(salesTable.id, id)).limit(1);
+  const { pool: pgPool } = await import("@workspace/db");
+  const { rows: [row] } = await pgPool.query(`SELECT * FROM sales WHERE id = $1`, [id]);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
-  const [outlet] = await db.select().from(outletsTable).where(eq(outletsTable.id, row.outletId)).limit(1);
-  const customerName = row.customerId
-    ? (await db.select().from(customersTable).where(eq(customersTable.id, row.customerId)).limit(1))[0]?.name ?? null
+  const [outlet] = await db.select().from(outletsTable).where(eq(outletsTable.id, row.outlet_id)).limit(1);
+  const customerName = row.customer_id
+    ? (await db.select().from(customersTable).where(eq(customersTable.id, row.customer_id)).limit(1))[0]?.name ?? null
     : null;
+  const totalAmount = Number(row.total_amount);
+  const amountPaid  = Number(row.amount_paid ?? 0);
   res.json({
-    ...row,
+    id: row.id,
+    invoiceNumber: row.invoice_number,
+    outletId: row.outlet_id,
+    customerId: row.customer_id,
+    saleDate: row.sale_date,
+    lineItems: row.line_items ?? [],
+    subtotal: Number(row.subtotal),
+    taxTotal: Number(row.tax_total),
+    discountTotal: Number(row.discount_total),
+    totalAmount,
+    paymentMode: row.payment_mode,
+    couponCode: row.coupon_code,
+    createdAt: row.created_at,
+    paymentStatus: row.payment_status ?? "paid",
+    amountPaid,
+    balanceDue: Math.max(0, totalAmount - amountPaid),
     outletName: outlet?.name ?? "",
     outletUpiId: (outlet as any)?.upiId ?? "",
     customerName,
-    subtotal: Number(row.subtotal),
-    taxTotal: Number(row.taxTotal),
-    discountTotal: Number(row.discountTotal),
-    totalAmount: Number(row.totalAmount),
-    lineItems: row.lineItems ?? [],
   });
 });
 
