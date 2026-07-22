@@ -165,7 +165,7 @@ export default function Customers() {
                 <TableHead>Phone</TableHead>
                 <TableHead>State</TableHead>
                 <TableHead>GST No.</TableHead>
-                <TableHead className="text-right">Total Purchases</TableHead>
+                <TableHead className="text-right">Balance</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -183,7 +183,7 @@ export default function Customers() {
                   <TableCell className="text-sm text-muted-foreground">{(c as any).state || '—'}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{c.gstNumber || '—'}</TableCell>
                   <TableCell className="text-right font-mono text-sm font-semibold text-primary">
-                    ₹{Number(c.totalPurchases ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    ₹{Number((c as any).outstandingBalance ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </TableCell>
                   <TableCell className="text-right">
                     <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => { setViewItem(c); setActiveTab('details'); }}><Eye className="w-4 h-4" /></Button>
@@ -263,9 +263,9 @@ export default function Customers() {
               {/* Balance highlight */}
               <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 flex items-center justify-between">
                 <div>
-                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Purchases</p>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Outstanding Balance</p>
                   <p className="text-2xl font-bold font-mono text-primary mt-0.5">
-                    ₹{Number(viewItem.totalPurchases ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    ₹{Number((viewItem as any).outstandingBalance ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </p>
                 </div>
                 <button onClick={() => setActiveTab('ledger')} className="text-xs text-primary underline">View ledger →</button>

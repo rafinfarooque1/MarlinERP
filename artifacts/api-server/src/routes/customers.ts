@@ -30,8 +30,21 @@ function pickVendor(body: StrRecord): StrRecord {
 
 // ── Customers ─────────────────────────────────────────────────────────────
 router.get("/customers", async (_req, res): Promise<void> => {
-  const rows = await db.select().from(customersTable).orderBy(customersTable.id);
-  res.json(rows.map((r) => ({ ...r, totalPurchases: Number(r.totalPurchases) })));
+  const { rows } = await pool.query<any>(`
+    SELECT
+      c.*,
+      COALESCE(SUM(s.total_amount), 0)  AS "totalPurchases",
+      COALESCE(SUM(s.total_amount - s.amount_paid), 0) AS "outstandingBalance"
+    FROM customers c
+    LEFT JOIN sales s ON s.customer_id = c.id
+    GROUP BY c.id
+    ORDER BY c.id
+  `);
+  res.json(rows.map((r: any) => ({
+    ...r,
+    totalPurchases:      Number(r.totalPurchases),
+    outstandingBalance:  Number(r.outstandingBalance),
+  })));
 });
 
 router.post("/customers", async (req, res): Promise<void> => {
