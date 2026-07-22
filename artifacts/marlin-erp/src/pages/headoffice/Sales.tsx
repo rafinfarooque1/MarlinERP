@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   useListSales, useCreateSale, useListOutlets, useListCustomers, useCreateCustomer,
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
@@ -35,7 +35,7 @@ function WhatsAppIcon({ className }: { className?: string }) {
   );
 }
 import { cn } from '@/lib/utils';
-import { downloadInvoicePDF } from '@/lib/pdfUtils';
+import { downloadInvoicePDF, generateInvoicePDFBlob } from '@/lib/pdfUtils';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
@@ -47,23 +47,28 @@ import { Separator } from '@/components/ui/separator';
 interface GstBreakdown {
   taxRate: number;
   taxType: 'cgst_sgst' | 'igst';
-  lineSubtotal: number;
+  lineGross: number;    // MRP × qty (GST-inclusive total for this line)
+  lineSubtotal: number; // taxable amount (ex-GST, = lineGross / (1 + rate/100))
   cgst: number;
   sgst: number;
   igst: number;
   taxAmount: number;
 }
 
+// GST is INCLUSIVE in MRP. Back-calculate taxable from gross.
 function computeLineGst(
   qty: number, price: number, taxRate: number, isInterState: boolean
 ): GstBreakdown {
-  const lineSubtotal = qty * price;
-  const rawTax = Math.round(lineSubtotal * taxRate / 100 * 100) / 100;
+  const lineGross = qty * price; // MRP × qty (inclusive)
+  const lineSubtotal = taxRate > 0
+    ? Math.round(lineGross / (1 + taxRate / 100) * 100) / 100
+    : lineGross; // taxable (ex-GST)
+  const rawTax = Math.round((lineGross - lineSubtotal) * 100) / 100;
   if (isInterState) {
-    return { taxRate, taxType: 'igst', lineSubtotal, cgst: 0, sgst: 0, igst: rawTax, taxAmount: rawTax };
+    return { taxRate, taxType: 'igst', lineGross, lineSubtotal, cgst: 0, sgst: 0, igst: rawTax, taxAmount: rawTax };
   }
   const half = Math.round(rawTax / 2 * 100) / 100;
-  return { taxRate, taxType: 'cgst_sgst', lineSubtotal, cgst: half, sgst: half, igst: 0, taxAmount: rawTax };
+  return { taxRate, taxType: 'cgst_sgst', lineGross, lineSubtotal, cgst: half, sgst: half, igst: 0, taxAmount: rawTax };
 }
 
 // ── Form Schema ─────────────────────────────────────────────────────────────────
@@ -161,27 +166,47 @@ export default function Sales() {
   const customerState = ((selectedCustomer as any)?.state ?? '').trim().toLowerCase();
   const isInterState = !!(companyState && customerState && companyState !== customerState);
 
-  // Compute aggregated GST totals for the cart (uses form's unitPrice — always accurate)
+  // Coupon validation
+  const { data: coupons = [] } = useListCoupons();
+  const watchCouponCode = (form.watch('couponCode') ?? '').trim().toUpperCase();
+  const appliedCoupon = useMemo(() => {
+    if (!watchCouponCode) return null;
+    const c = (coupons as any[]).find(
+      (c: any) => (c.code ?? '').toUpperCase() === watchCouponCode && c.isActive
+    );
+    if (!c) return null;
+    if (c.expiryDate && new Date(c.expiryDate) < new Date()) return null;
+    return c;
+  }, [coupons, watchCouponCode]);
+
+  // Compute aggregated GST totals for the cart (inclusive GST — MRP already includes tax)
   const computeCartTotals = () => {
-    let subtotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0, taxTotal = 0;
+    let grossTotal = 0, subtotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0, taxTotal = 0;
     fields.forEach((_, i) => {
-      const itemId   = form.watch(`lineItems.${i}.itemId`);
-      const qty      = form.watch(`lineItems.${i}.quantity`);
-      const price    = Number(form.watch(`lineItems.${i}.unitPrice`) ?? 0);
+      const itemId = form.watch(`lineItems.${i}.itemId`);
+      const qty    = form.watch(`lineItems.${i}.quantity`);
+      const price  = Number(form.watch(`lineItems.${i}.unitPrice`) ?? 0);
       if (!itemId || price <= 0) return;
-      const taxRate  = Number((getItem(itemId) as any)?.taxRate ?? 0);
-      const gst      = computeLineGst(qty, price, taxRate, isInterState);
-      subtotal  += gst.lineSubtotal;
-      cgstTotal += gst.cgst;
-      sgstTotal += gst.sgst;
-      igstTotal += gst.igst;
-      taxTotal  += gst.taxAmount;
+      const taxRate = Number((getItem(itemId) as any)?.taxRate ?? 0);
+      const gst     = computeLineGst(qty, price, taxRate, isInterState);
+      grossTotal += gst.lineGross;
+      subtotal   += gst.lineSubtotal;
+      cgstTotal  += gst.cgst;
+      sgstTotal  += gst.sgst;
+      igstTotal  += gst.igst;
+      taxTotal   += gst.taxAmount;
     });
-    return { subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, grandTotal: subtotal + taxTotal };
+    const grandTotal = grossTotal; // MRP × qty totals — inclusive
+    const discountAmount = appliedCoupon
+      ? appliedCoupon.discountType === 'percentage'
+        ? Math.round(grandTotal * Number(appliedCoupon.discountValue) / 100 * 100) / 100
+        : Math.min(Number(appliedCoupon.discountValue), grandTotal)
+      : 0;
+    return { grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, grandTotal, discountAmount, finalAmount: grandTotal - discountAmount };
   };
 
   const totals = computeCartTotals();
-  // True when at least one item is selected (even price = 0 shows breakdown)
+  // True when at least one item is selected
   const hasItems = fields.some((_, i) => (form.watch(`lineItems.${i}.itemId`) ?? 0) > 0);
 
   const onSubmit = (data: FormValues) => {
@@ -192,7 +217,8 @@ export default function Sales() {
       discount: 0,
       taxAmount: 0, // backend recomputes authoritatively
     }));
-    createMutation.mutate({ data: { ...data, lineItems: enrichedItems, customerId: data.customerId || undefined } as any }, {
+    const { discountAmount } = computeCartTotals();
+    createMutation.mutate({ data: { ...data, lineItems: enrichedItems, customerId: data.customerId || undefined, discountTotal: discountAmount } as any }, {
       onSuccess: () => {
         toast.success('Sale recorded successfully');
         queryClient.invalidateQueries({ queryKey: getListSalesQueryKey() });
@@ -209,23 +235,45 @@ export default function Sales() {
   };
 
   // ── WhatsApp invoice share ─────────────────────────────────────────────────
-  const handleWhatsApp = (sale: any) => {
-    const phone = (sale.customerPhone ?? '').replace(/\D/g, ''); // strip non-digits
+  const handleWhatsApp = async (sale: any) => {
+    const phone = (sale.customerPhone ?? '').replace(/\D/g, '');
     if (!phone) return;
-    // Normalise to international format: prepend 91 if not already there
     const intl = phone.startsWith('91') && phone.length === 12 ? phone : `91${phone}`;
 
     const cs = companySettings as any;
     const company = cs?.name ?? 'Marlin Frozen Fruits';
-    const date    = new Date(sale.saleDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-    const lines   = (sale.lineItems ?? []).map((li: any) => {
-      const name  = li.itemName || `Item #${li.itemId}`;
-      const total = (Number(li.lineSubtotal ?? 0) + Number(li.taxAmount ?? 0)).toFixed(2);
-      return `  • ${name} × ${li.quantity} = ₹${total}`;
-    }).join('\n');
+    const fileName = `Invoice-${sale.invoiceNumber || sale.id}.pdf`;
 
+    // ── Attempt 1: Web Share API with PDF file (mobile Chrome/Safari) ──────────
+    if (typeof navigator !== 'undefined' && 'share' in navigator && 'canShare' in navigator) {
+      try {
+        const blob = generateInvoicePDFBlob(sale, companySettings);
+        const file = new File([blob], fileName, { type: 'application/pdf' });
+        if ((navigator as any).canShare({ files: [file] })) {
+          await (navigator as any).share({
+            title: `Invoice ${sale.invoiceNumber}`,
+            text: `Your invoice from ${company} — ${sale.invoiceNumber}`,
+            files: [file],
+          });
+          return; // done — native share sheet handled it
+        }
+      } catch (err: any) {
+        if (err?.name === 'AbortError') return; // user cancelled — don't fallback
+        // Other error → fall through to desktop fallback
+      }
+    }
+
+    // ── Fallback: download PDF + open WhatsApp text link (desktop) ────────────
+    downloadInvoicePDF(sale, companySettings);
+
+    const date  = new Date(sale.saleDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const lines = (sale.lineItems ?? []).map((li: any) => {
+      const name  = li.itemName || `Item #${li.itemId}`;
+      const total = Number(li.unitPrice ?? 0) * Number(li.quantity ?? 1);
+      return `  • ${name} × ${li.quantity} = ₹${total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+    }).join('\n');
     const taxLine = Number(sale.taxTotal) > 0
-      ? `\nGST: ₹${Number(sale.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+      ? `\nGST (incl.): ₹${Number(sale.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
       : '';
 
     const message = [
@@ -237,14 +285,16 @@ export default function Sales() {
       `*Items:*`,
       lines,
       ``,
-      `Subtotal: ₹${Number(sale.subtotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}${taxLine}`,
-      `*Grand Total: ₹${Number(sale.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}*`,
-      ``,
+      `Total: ₹${Number(sale.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}${taxLine}`,
       `Payment: ${sale.paymentMode?.replace('_', ' ').toUpperCase() ?? ''}`,
+      ``,
+      `📎 Invoice PDF has been downloaded to your device.`,
       `Thank you for your purchase! 🙏`,
     ].join('\n');
 
-    window.open(`https://wa.me/${intl}?text=${encodeURIComponent(message)}`, '_blank', 'noopener');
+    setTimeout(() => {
+      window.open(`https://wa.me/${intl}?text=${encodeURIComponent(message)}`, '_blank', 'noopener');
+    }, 500); // slight delay so the download starts first
   };
 
   const filtered = sales.filter(s =>
@@ -374,7 +424,7 @@ export default function Sales() {
               <div className="grid grid-cols-2 gap-4">
                 <FormField control={form.control} name="outletId" render={({ field }) => (
                   <FormItem><FormLabel>Outlet <span className="text-destructive">*</span></FormLabel>
-                    <Select onValueChange={v => { field.onChange(Number(v)); form.setValue('lineItems', [{ itemId: 0, quantity: 1 }]); }} value={field.value ? String(field.value) : ''}>
+                    <Select onValueChange={v => { field.onChange(Number(v)); form.setValue('lineItems', [{ itemId: 0, quantity: 1, unitPrice: 0 }]); }} value={field.value ? String(field.value) : ''}>
                       <FormControl><SelectTrigger><SelectValue placeholder="Select outlet" /></SelectTrigger></FormControl>
                       <SelectContent>{outlets.map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}</SelectContent>
                     </Select><FormMessage /></FormItem>
@@ -448,6 +498,39 @@ export default function Sales() {
                 )} />
               </div>
 
+              {/* Coupon code */}
+              <div className="flex gap-2 items-end">
+                <FormField control={form.control} name="couponCode" render={({ field }) => (
+                  <FormItem className="flex-1">
+                    <FormLabel className="text-sm">Coupon Code <span className="text-xs text-muted-foreground font-normal">(optional)</span></FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder="e.g. SUMMER10"
+                        className="uppercase font-mono tracking-wider"
+                        {...field}
+                        onChange={e => field.onChange(e.target.value.toUpperCase())}
+                      />
+                    </FormControl>
+                  </FormItem>
+                )} />
+                <div className="pb-1">
+                  {watchCouponCode && appliedCoupon && (
+                    <div className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 text-sm font-medium">
+                      <Check className="w-4 h-4" />
+                      {appliedCoupon.discountType === 'percentage'
+                        ? `${appliedCoupon.discountValue}% off`
+                        : `₹${Number(appliedCoupon.discountValue).toLocaleString('en-IN')} off`}
+                    </div>
+                  )}
+                  {watchCouponCode && !appliedCoupon && (
+                    <div className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-destructive/10 border border-destructive/20 text-destructive text-sm">
+                      <AlertTriangle className="w-3.5 h-3.5" />
+                      Invalid / expired
+                    </div>
+                  )}
+                </div>
+              </div>
+
               {/* Line items */}
               <div>
                 {!watchOutletId || watchOutletId === 0 ? (
@@ -474,7 +557,7 @@ export default function Sales() {
                         const availQty = getAvailableQty(itemId);
                         const taxRate  = Number((getItem(itemId) as any)?.taxRate ?? 0);
                         const gst      = computeLineGst(qty, unitPrice, taxRate, isInterState);
-                        const lineTotal = gst.lineSubtotal + gst.taxAmount;
+                        const lineTotal = gst.lineGross; // MRP × qty (inclusive of GST)
 
                         return (
                           <div key={field.id} className="p-3 bg-muted/20 rounded-lg border border-border space-y-2">
@@ -626,16 +709,29 @@ export default function Sales() {
                       )}
 
                       <Separator className="my-1" />
+
+                      {/* Coupon discount line */}
+                      {totals.discountAmount > 0 && appliedCoupon && (
+                        <div className="flex justify-between text-emerald-600 font-medium">
+                          <span className="flex items-center gap-1">
+                            <Check className="w-3.5 h-3.5" />
+                            Coupon <span className="font-mono text-xs ml-1">{watchCouponCode}</span>
+                            {appliedCoupon.discountType === 'percentage' && <span className="text-xs text-muted-foreground ml-1">({appliedCoupon.discountValue}%)</span>}
+                          </span>
+                          <span className="font-mono">−₹{totals.discountAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      )}
+
                       <div className="flex justify-between font-bold text-base">
-                        <span>Grand Total</span>
-                        <span className="font-mono text-primary">₹{totals.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        <span>{totals.discountAmount > 0 ? 'Amount Payable' : 'Grand Total'}</span>
+                        <span className="font-mono text-primary">₹{totals.finalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                       </div>
                     </div>
                   </div>
                 )}
                 <div className="flex gap-2 justify-end w-full">
                   <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
-                  <Button type="submit" disabled={createMutation.isPending || !watchOutletId || availableItems.length === 0 || totals.grandTotal === 0}>
+                  <Button type="submit" disabled={createMutation.isPending || !watchOutletId || availableItems.length === 0 || totals.finalAmount === 0}>
                     {createMutation.isPending ? 'Processing…' : 'Complete Sale'}
                   </Button>
                 </div>

@@ -12,17 +12,21 @@ function computeInvoiceNumber(prefix: string, fy: string, seq: number): string {
   return `${prefix}/${fy}/${String(seq).padStart(4, '0')}`;
 }
 
+// GST is INCLUSIVE in MRP. taxable = gross / (1 + rate/100), tax = gross - taxable.
 function computeLineTax(
-  lineSubtotal: number,
+  grossAmount: number,   // MRP × qty (GST-inclusive)
   taxRate: number,
   isInterState: boolean,
-): { taxRate: number; taxType: string; cgst: number; sgst: number; igst: number; taxAmount: number } {
-  const taxAmount = Math.round(lineSubtotal * taxRate / 100 * 100) / 100;
+): { taxRate: number; taxType: string; cgst: number; sgst: number; igst: number; taxAmount: number; taxableAmount: number } {
+  const taxableAmount = taxRate > 0
+    ? Math.round(grossAmount / (1 + taxRate / 100) * 100) / 100
+    : grossAmount;
+  const taxAmount = Math.round((grossAmount - taxableAmount) * 100) / 100;
   if (isInterState) {
-    return { taxRate, taxType: 'igst', cgst: 0, sgst: 0, igst: taxAmount, taxAmount };
+    return { taxRate, taxType: 'igst', cgst: 0, sgst: 0, igst: taxAmount, taxAmount, taxableAmount };
   }
   const half = Math.round(taxAmount / 2 * 100) / 100;
-  return { taxRate, taxType: 'cgst_sgst', cgst: half, sgst: half, igst: 0, taxAmount };
+  return { taxRate, taxType: 'cgst_sgst', cgst: half, sgst: half, igst: 0, taxAmount, taxableAmount };
 }
 
 // ── Item Prices ───────────────────────────────────────────────────────────────
@@ -154,8 +158,9 @@ router.post("/sales", async (req, res): Promise<void> => {
   const lineItems = rawLineItems.map(li => {
     const itemInfo = itemTaxMap.get(li.itemId);
     const taxRate = itemInfo?.taxRate ?? 0;
-    const lineSubtotal = li.quantity * li.unitPrice - (li.discount ?? 0);
-    const taxInfo = computeLineTax(lineSubtotal, taxRate, isInterState);
+    // MRP is GST-inclusive: gross = qty × unitPrice, taxable = back-calculated
+    const grossAmount = li.quantity * li.unitPrice - (li.discount ?? 0);
+    const taxInfo = computeLineTax(grossAmount, taxRate, isInterState);
     return {
       itemId: li.itemId,
       itemName: itemInfo?.name ?? '',
@@ -163,15 +168,15 @@ router.post("/sales", async (req, res): Promise<void> => {
       quantity: li.quantity,
       unitPrice: li.unitPrice,
       discount: li.discount ?? 0,
-      lineSubtotal,
+      lineSubtotal: taxInfo.taxableAmount, // taxable (ex-GST) stored as lineSubtotal
       ...taxInfo,
     };
   });
 
   const subtotal = lineItems.reduce((s, li) => s + li.lineSubtotal, 0);
   const taxTotal = lineItems.reduce((s, li) => s + li.taxAmount, 0);
-  const discountTotal = lineItems.reduce((s, li) => s + li.discount, 0);
-  const totalAmount = subtotal + taxTotal;
+  const discountTotal = parsed.data.discountTotal ?? lineItems.reduce((s, li) => s + li.discount, 0);
+  const totalAmount = subtotal + taxTotal - discountTotal;
 
   const [row] = await db.insert(salesTable).values({
     invoiceNumber,

@@ -159,7 +159,7 @@ function drawFooter(doc: jsPDF, note: string) {
 
 // ── Tax Invoice ───────────────────────────────────────────────────────────────
 
-export function downloadInvoicePDF(sale: any, companySettings: any) {
+function buildInvoicePDFDoc(sale: any, companySettings: any): jsPDF {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const cs = companySettings as any;
   let y = drawHeader(doc, cs, 'TAX INVOICE');
@@ -308,7 +308,17 @@ export function downloadInvoicePDF(sale: any, companySettings: any) {
   }
 
   drawFooter(doc, 'This is a computer-generated invoice and does not require a physical signature.');
-  doc.save(`Invoice-${esc(sale.invoiceNumber || String(sale.id))}.pdf`);
+  return doc;
+}
+
+export function downloadInvoicePDF(sale: any, companySettings: any) {
+  buildInvoicePDFDoc(sale, companySettings)
+    .save(`Invoice-${esc(sale.invoiceNumber || String(sale.id))}.pdf`);
+}
+
+/** Returns a Blob of the invoice PDF without downloading (used for WhatsApp file share). */
+export function generateInvoicePDFBlob(sale: any, companySettings: any): Blob {
+  return buildInvoicePDFDoc(sale, companySettings).output('blob') as Blob;
 }
 
 // ── Payslip ───────────────────────────────────────────────────────────────────
