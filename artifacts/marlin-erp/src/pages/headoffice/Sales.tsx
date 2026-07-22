@@ -83,7 +83,6 @@ const schema = z.object({
   outletId: z.coerce.number().min(1, 'Outlet required'),
   customerId: z.coerce.number().optional(),
   saleDate: z.string().min(1, 'Date required'),
-  paymentMode: z.string().min(1, 'Payment mode required'),
   couponCode: z.string().optional(),
   lineItems: z.array(saleLineSchema).min(1, 'Add at least one item'),
 });
@@ -104,7 +103,6 @@ type CustForm = z.infer<typeof custSchema>;
 const defaultFormValues: FormValues = {
   outletId: 0,
   saleDate: new Date().toISOString().split('T')[0],
-  paymentMode: 'cash',
   couponCode: '',
   lineItems: [{ itemId: 0, quantity: 1, unitPrice: 0 }],
 };
@@ -166,7 +164,6 @@ export default function Sales() {
       outletId: sale.outletId,
       customerId: sale.customerId ?? undefined,
       saleDate: sale.saleDate,
-      paymentMode: sale.paymentMode ?? 'cash',
       couponCode: sale.couponCode ?? '',
       lineItems: (sale.lineItems ?? []).map((li: any) => ({
         itemId: li.itemId,
@@ -489,7 +486,7 @@ export default function Sales() {
                 <TableHead>Date</TableHead>
                 <TableHead>Outlet</TableHead>
                 <TableHead>Customer</TableHead>
-                <TableHead>Payment</TableHead>
+                <TableHead>Status</TableHead>
                 <TableHead className="text-right">Tax</TableHead>
                 <TableHead className="text-right">Total</TableHead>
                 <TableHead />
@@ -511,15 +508,12 @@ export default function Sales() {
                   <TableCell className="text-sm">{sale.outletName}</TableCell>
                   <TableCell className="text-sm">{sale.customerName || 'Walk-in'}</TableCell>
                   <TableCell>
-                    <div className="flex flex-col gap-1">
-                      <Badge variant="outline" className="uppercase text-xs w-fit">{sale.paymentMode?.replace('_', ' ')}</Badge>
-                      {(() => {
-                        const ps = (sale as any).paymentStatus ?? 'paid';
-                        if (ps === 'paid') return <Badge className="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20 w-fit">Paid</Badge>;
-                        if (ps === 'partially_paid') return <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20 w-fit">Partial</Badge>;
-                        return <Badge className="text-[10px] bg-red-500/10 text-red-600 border-red-500/20 w-fit">Unpaid</Badge>;
-                      })()}
-                    </div>
+                    {(() => {
+                      const ps = (sale as any).paymentStatus ?? 'paid';
+                      if (ps === 'paid') return <Badge className="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Paid</Badge>;
+                      if (ps === 'partially_paid') return <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">Partial</Badge>;
+                      return <Badge className="text-[10px] bg-red-500/10 text-red-600 border-red-500/20">Unpaid</Badge>;
+                    })()}
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs text-muted-foreground">
                     {Number(sale.taxTotal) > 0 ? `₹${Number(sale.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'}
@@ -624,18 +618,6 @@ export default function Sales() {
                     </FormItem>
                   );
                 }} />
-                <FormField control={form.control} name="paymentMode" render={({ field }) => (
-                  <FormItem><FormLabel>Payment <span className="text-destructive">*</span></FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        <SelectItem value="cash">Cash</SelectItem>
-                        <SelectItem value="card">Card</SelectItem>
-                        <SelectItem value="upi">UPI / QR</SelectItem>
-                        <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
-                      </SelectContent>
-                    </Select><FormMessage /></FormItem>
-                )} />
               </div>
 
               {/* Coupon code */}
@@ -961,7 +943,6 @@ export default function Sales() {
               <div className="grid grid-cols-2 gap-3">
                 {[
                   ['Customer', viewItem.customerName || 'Walk-in'],
-                  ['Payment', viewItem.paymentMode?.replace('_', ' ').toUpperCase()],
                   ['Coupon', viewItem.couponCode || '—'],
                 ].map(([k, v]) => (
                   <div key={k} className="flex flex-col gap-1">

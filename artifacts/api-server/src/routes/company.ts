@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db, companySettingsTable, permissionsTable, hierarchiesTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { pool } from "@workspace/db";
 import { SetPermissionBody } from "@workspace/api-zod";
 
 const router = Router();
@@ -74,6 +75,46 @@ router.post("/company/permissions", async (req, res): Promise<void> => {
 
   const [h] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, row.hierarchyId)).limit(1);
   res.json({ ...row, hierarchyName: h?.name ?? "" });
+});
+
+// ── Reset all company data (dangerous — wipes all transactional records) ──────
+router.post("/company/reset", async (_req, res): Promise<void> => {
+  const TRUNCATE_TABLES = [
+    'sale_payments',
+    'reconciliation_batch_items',
+    'reconciliation_batches',
+    'cash_deposits',
+    'sales',
+    'purchases',
+    'stock_entries',
+    'customers',
+    'coupons',
+    'productions',
+    'payroll',
+    'attendance',
+    'leaves',
+    'expenses',
+    'activity_log',
+    'migration_log',
+  ];
+
+  // Truncate all transactional tables in one shot (RESTART IDENTITY cascades sequences)
+  for (const table of TRUNCATE_TABLES) {
+    try {
+      await pool.query(`TRUNCATE TABLE ${table} RESTART IDENTITY CASCADE`);
+    } catch {
+      // table may not exist yet — skip silently
+    }
+  }
+
+  // Reset invoice sequence on company_settings
+  try {
+    await pool.query(`UPDATE company_settings SET invoice_sequence = 0`);
+  } catch {
+    // ignore
+  }
+
+  res.json({ ok: true, message: 'All company data has been reset successfully.' });
 });
 
 export default router;

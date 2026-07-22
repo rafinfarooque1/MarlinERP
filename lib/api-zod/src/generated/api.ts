@@ -886,7 +886,7 @@ export const CreateSaleBody = zod.object({
   "discount": zod.number().optional(),
   "taxAmount": zod.number().optional()
 })),
-  "paymentMode": zod.string(),
+  "paymentMode": zod.string().optional(),
   "couponCode": zod.string().optional()
 })
 

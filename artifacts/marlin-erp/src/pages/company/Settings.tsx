@@ -4,7 +4,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe } from 'lucide-react';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Trash2, TriangleAlert } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface SettingGroup {
@@ -80,6 +84,8 @@ function getInitial() {
 export default function Settings() {
   const [values, setValues] = useState<Record<string, any>>(getInitial);
   const [saving, setSaving] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   const set = (key: string, val: any) => setValues(prev => ({ ...prev, [key]: val }));
 
@@ -89,6 +95,21 @@ export default function Settings() {
     localStorage.setItem('marlin_settings', JSON.stringify(values));
     setSaving(false);
     toast.success('Settings saved');
+  };
+
+  const handleReset = async () => {
+    setResetting(true);
+    try {
+      const res = await fetch('/api/company/reset', { method: 'POST', credentials: 'include' });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Reset failed');
+      toast.success('All company data has been cleared. You can now start fresh.');
+      setShowResetConfirm(false);
+    } catch (e: any) {
+      toast.error(e.message || 'Reset failed. Please try again.');
+    } finally {
+      setResetting(false);
+    }
   };
 
   return (
@@ -138,7 +159,71 @@ export default function Settings() {
             {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> Save Settings</>}
           </Button>
         </div>
+
+        {/* ── Danger Zone ──────────────────────────────────────────────────── */}
+        <div className="border border-destructive/40 rounded-xl overflow-hidden">
+          <div className="p-4 border-b border-destructive/30 bg-destructive/5 flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-destructive/10 flex items-center justify-center">
+              <TriangleAlert className="w-4 h-4 text-destructive" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-destructive">Danger Zone</h3>
+              <p className="text-xs text-muted-foreground">Irreversible actions — proceed with caution</p>
+            </div>
+          </div>
+          <div className="p-5 flex items-center justify-between gap-6">
+            <div>
+              <p className="text-sm font-medium">Reset All Company Data</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Permanently deletes all sales, purchases, customers, stock entries, production batches, payroll, and attendance records.
+                Company profile, outlets, items, and employee accounts are kept.
+              </p>
+            </div>
+            <Button
+              variant="destructive"
+              size="sm"
+              className="shrink-0 gap-1.5"
+              onClick={() => setShowResetConfirm(true)}
+            >
+              <Trash2 className="w-4 h-4" /> Reset Data
+            </Button>
+          </div>
+        </div>
       </div>
+
+      {/* Reset confirmation dialog */}
+      <AlertDialog open={showResetConfirm} onOpenChange={setShowResetConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-destructive">
+              <TriangleAlert className="w-5 h-5" /> Reset all company data?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <span className="block">This will permanently delete:</span>
+              <ul className="list-disc list-inside text-sm space-y-0.5 ml-1">
+                <li>All sales and invoice history</li>
+                <li>All purchase orders</li>
+                <li>All customers</li>
+                <li>All stock entries (quantities reset to zero)</li>
+                <li>All production batches</li>
+                <li>All payroll, attendance, and leave records</li>
+                <li>Invoice sequence counter (restarts from 0001)</li>
+              </ul>
+              <span className="block mt-2 font-medium text-foreground">This action cannot be undone.</span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={resetting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={handleReset}
+              disabled={resetting}
+            >
+              {resetting ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Resetting…</> : 'Yes, reset everything'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppLayout>
   );
 }

@@ -205,7 +205,7 @@ router.post("/sales", async (req, res): Promise<void> => {
     taxTotal: String(taxTotal),
     discountTotal: String(discountTotal),
     totalAmount: String(totalAmount),
-    paymentMode: parsed.data.paymentMode,
+    paymentMode: parsed.data.paymentMode ?? 'cash',
     couponCode: parsed.data.couponCode ?? null,
   }).returning();
 
@@ -339,7 +339,7 @@ router.put("/sales/:id", async (req, res): Promise<void> => {
       taxTotal: String(taxTotal),
       discountTotal: String(discountTotal),
       totalAmount: String(totalAmount),
-      paymentMode: parsed.data.paymentMode,
+      paymentMode: parsed.data.paymentMode ?? 'cash',
       couponCode: parsed.data.couponCode ?? null,
     })
     .where(eq(salesTable.id, id))
