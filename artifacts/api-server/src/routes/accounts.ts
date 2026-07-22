@@ -290,6 +290,22 @@ router.get("/accounts/ledger-statement", async (req, res): Promise<void> => {
     })));
   }
 
+  // Duty & Tax ledger (STD-DTX): show GST collected on each sale as a credit
+  const accountCode = (account as any).code ?? null;
+  if (accountCode === 'STD-DTX') {
+    const allSales = await db.select().from(salesTable);
+    for (const s of allSales) {
+      const tax = Number(s.taxTotal ?? 0);
+      if (tax > 0) {
+        entries.push({
+          date: s.saleDate,
+          description: `GST on ${s.invoiceNumber || 'Sale #' + s.id}`,
+          debit: 0, credit: tax, entryType: 'sale_gst',
+        });
+      }
+    }
+  }
+
   // Purchase-type expense accounts: include purchases
   if (account.type === 'expense' && account.name.toLowerCase().includes('purchase')) {
     const allPurchases = await db.select().from(purchasesTable);
@@ -436,6 +452,10 @@ router.get("/accounts/financial-statements", async (req, res): Promise<void> => 
     if (node) node.balance = bal;
   }
 
+  // ── STD-DTX (Duty & Tax) balance = GST collected on sales (date-filtered) ──
+  // This is computed below after salesTaxTotal is known; placeholder set here
+  // so the ledgerMap node exists when buildGroup walks the tree.
+
   // Recursively sum children (for group totals)
   const sumNode = (node: any): number => {
     const childSum = node.children.reduce((s: number, c: any) => s + sumNode(c), 0);
@@ -476,6 +496,13 @@ router.get("/accounts/financial-statements", async (req, res): Promise<void> => 
   const salesTotal    = Number(salesRows[0]?.total     ?? 0);
   const salesTaxTotal = Number(salesRows[0]?.tax_total ?? 0); // → Duty & Tax (Current Liab)
 
+  // ── Set STD-DTX balance from sales tax so it appears in COA tree ──────────
+  const dtxLedgerRow = allLedgers.find((l: any) => l.code === 'STD-DTX');
+  if (dtxLedgerRow) {
+    const dtxNode = ledgerMap.get(dtxLedgerRow.id);
+    if (dtxNode) dtxNode.balance = salesTaxTotal;
+  }
+
   // Purchases total
   const pup: any[] = [];
   const { rows: purRows } = await pool.query(
@@ -513,9 +540,10 @@ router.get("/accounts/financial-statements", async (req, res): Promise<void> => 
   const fixedGroup   = buildGroup('SYS-FIXD');
   const curaGroup    = buildGroup('SYS-CURA');
 
-  // Current Liabilities = ledger balances + Duty & Tax auto (from sales GST)
+  // Current Liabilities — STD-DTX balance already set from salesTaxTotal above;
+  // curlBase.total now includes it automatically via buildGroup → sumNode.
   const dutyAndTax = Math.round(salesTaxTotal * 100) / 100;
-  const curlGroup  = { ...curlBase, dutyAndTax, total: Math.round((curlBase.total + dutyAndTax) * 100) / 100 };
+  const curlGroup  = { ...curlBase, dutyAndTax }; // total already correct
 
   const pandlFwd    = Math.round(netProfit * 100) / 100;
   const assetsTotal = fixedGroup.total + curaGroup.total;

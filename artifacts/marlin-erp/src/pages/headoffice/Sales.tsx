@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import {
-  useListSales, useCreateSale, useListOutlets, useListCustomers,
+  useListSales, useCreateSale, useListOutlets, useListCustomers, useCreateCustomer,
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
-  getListSalesQueryKey, useListCoupons,
+  getListSalesQueryKey, getListCustomersQueryKey, useListCoupons,
 } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -13,13 +13,17 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '@/components/ui/command';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import {
   Plus, Search, Trash2, CreditCard, Calendar, Receipt,
   Download, Eye, Printer, PackageOpen, FileDown, AlertTriangle,
+  UserPlus, Check, ChevronsUpDown,
 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { downloadInvoicePDF } from '@/lib/pdfUtils';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
@@ -92,6 +96,17 @@ export default function Sales() {
   const [viewItem, setViewItem] = useState<any>(null);
   const queryClient = useQueryClient();
   const createMutation = useCreateSale();
+  const createCustomerMutation = useCreateCustomer();
+
+  // Customer combobox + quick-create state
+  const [customerOpen, setCustomerOpen] = useState(false);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [showNewCustomer, setShowNewCustomer] = useState(false);
+  const [newCustName, setNewCustName] = useState('');
+  const [newCustPhone, setNewCustPhone] = useState('');
+  const [newCustState, setNewCustState] = useState('');
+  const [newCustEmail, setNewCustEmail] = useState('');
+  const [newCustSaving, setNewCustSaving] = useState(false);
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: defaultFormValues });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
@@ -295,27 +310,58 @@ export default function Sales() {
                 <FormField control={form.control} name="saleDate" render={({ field }) => (
                   <FormItem><FormLabel>Date <span className="text-destructive">*</span></FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
-                <FormField control={form.control} name="customerId" render={({ field }) => (
-                  <FormItem><FormLabel>Customer</FormLabel>
-                    <Select onValueChange={v => field.onChange(v === '0' ? undefined : Number(v))} value={field.value ? String(field.value) : '0'}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Walk-in" /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        <SelectItem value="0">Walk-in Customer</SelectItem>
-                        {customers.map(c => (
-                          <SelectItem key={c.id} value={String(c.id)}>
-                            {c.name}{(c as any).state ? ` (${(c as any).state})` : ''}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {watchCustomerId && isInterState && (
-                      <p className="text-xs text-amber-500 mt-1">Inter-state sale → IGST applies</p>
-                    )}
-                    {watchCustomerId && !isInterState && companyState && customerState && (
-                      <p className="text-xs text-emerald-600 mt-1">Intra-state sale → CGST + SGST apply</p>
-                    )}
-                  </FormItem>
-                )} />
+                <FormField control={form.control} name="customerId" render={({ field }) => {
+                  const filteredCustomers = customers.filter(c =>
+                    c.name.toLowerCase().includes(customerSearch.toLowerCase()) ||
+                    ((c as any).phone ?? '').includes(customerSearch)
+                  );
+                  const selected = customers.find(c => c.id === field.value);
+                  return (
+                    <FormItem>
+                      <div className="flex items-center justify-between">
+                        <FormLabel>Customer</FormLabel>
+                        <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs text-primary gap-1"
+                          onClick={() => { setShowNewCustomer(true); setNewCustName(''); setNewCustPhone(''); setNewCustState(''); setNewCustEmail(''); }}>
+                          <UserPlus className="w-3 h-3" /> New
+                        </Button>
+                      </div>
+                      <Popover open={customerOpen} onOpenChange={v => { setCustomerOpen(v); if (!v) setCustomerSearch(''); }}>
+                        <PopoverTrigger asChild>
+                          <Button type="button" variant="outline" role="combobox"
+                            className={cn('w-full justify-between font-normal h-10 px-3', !selected && 'text-muted-foreground')}>
+                            <span className="truncate">{selected ? `${selected.name}${(selected as any).state ? ` (${(selected as any).state})` : ''}` : 'Walk-in Customer'}</span>
+                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent align="start" className="p-0" style={{ width: 'var(--radix-popover-trigger-width)', minWidth: '240px' }}>
+                          <Command shouldFilter={false}>
+                            <CommandInput placeholder="Search customer…" value={customerSearch} onValueChange={setCustomerSearch} />
+                            <CommandEmpty>No customers found. <button type="button" className="text-primary underline ml-1" onClick={() => { setCustomerOpen(false); setShowNewCustomer(true); setNewCustName(customerSearch); setCustomerSearch(''); }}>Create "{customerSearch}"?</button></CommandEmpty>
+                            <CommandGroup className="max-h-52 overflow-auto">
+                              <CommandItem value="0" onSelect={() => { field.onChange(undefined); setCustomerOpen(false); setCustomerSearch(''); }}>
+                                <Check className={cn('mr-2 h-4 w-4 shrink-0', !field.value ? 'opacity-100' : 'opacity-0')} />
+                                Walk-in Customer
+                              </CommandItem>
+                              {filteredCustomers.map(c => (
+                                <CommandItem key={c.id} value={String(c.id)} onSelect={() => { field.onChange(c.id); setCustomerOpen(false); setCustomerSearch(''); }}>
+                                  <Check className={cn('mr-2 h-4 w-4 shrink-0', field.value === c.id ? 'opacity-100' : 'opacity-0')} />
+                                  {c.name}{(c as any).state ? ` (${(c as any).state})` : ''}
+                                  {(c as any).phone ? <span className="ml-2 text-xs text-muted-foreground">{(c as any).phone}</span> : null}
+                                </CommandItem>
+                              ))}
+                            </CommandGroup>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
+                      {watchCustomerId && isInterState && (
+                        <p className="text-xs text-amber-500 mt-1">Inter-state sale → IGST applies</p>
+                      )}
+                      {watchCustomerId && !isInterState && companyState && customerState && (
+                        <p className="text-xs text-emerald-600 mt-1">Intra-state sale → CGST + SGST apply</p>
+                      )}
+                    </FormItem>
+                  );
+                }} />
                 <FormField control={form.control} name="paymentMode" render={({ field }) => (
                   <FormItem><FormLabel>Payment <span className="text-destructive">*</span></FormLabel>
                     <Select onValueChange={field.onChange} value={field.value}>
@@ -458,6 +504,58 @@ export default function Sales() {
               </DialogFooter>
             </form>
           </Form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Quick Create Customer Dialog ── */}
+      <Dialog open={showNewCustomer} onOpenChange={v => !v && setShowNewCustomer(false)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle className="flex items-center gap-2"><UserPlus className="w-4 h-4" /> New Customer</DialogTitle></DialogHeader>
+          <div className="space-y-3 pt-1">
+            <div>
+              <label className="text-sm font-medium mb-1 block">Name <span className="text-destructive">*</span></label>
+              <Input value={newCustName} onChange={e => setNewCustName(e.target.value)} placeholder="Customer name" />
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1 block">State <span className="text-xs text-muted-foreground font-normal">(for GST — e.g. Karnataka)</span></label>
+              <Input value={newCustState} onChange={e => setNewCustState(e.target.value)} placeholder="e.g. Karnataka" />
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1 block">Phone</label>
+              <Input value={newCustPhone} onChange={e => setNewCustPhone(e.target.value)} placeholder="10-digit mobile" />
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1 block">Email</label>
+              <Input value={newCustEmail} onChange={e => setNewCustEmail(e.target.value)} placeholder="optional" type="email" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowNewCustomer(false)}>Cancel</Button>
+            <Button
+              disabled={!newCustName.trim() || newCustSaving}
+              onClick={() => {
+                setNewCustSaving(true);
+                createCustomerMutation.mutate(
+                  { data: { name: newCustName.trim(), phone: newCustPhone || undefined, state: newCustState || undefined, email: newCustEmail || undefined } as any },
+                  {
+                    onSuccess: (created: any) => {
+                      queryClient.invalidateQueries({ queryKey: getListCustomersQueryKey() });
+                      form.setValue('customerId', created.id);
+                      toast.success(`Customer "${created.name}" created`);
+                      setShowNewCustomer(false);
+                      setNewCustSaving(false);
+                    },
+                    onError: (e: any) => {
+                      toast.error(e?.data?.error || 'Could not create customer');
+                      setNewCustSaving(false);
+                    },
+                  }
+                );
+              }}
+            >
+              {newCustSaving ? 'Saving…' : 'Create'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
