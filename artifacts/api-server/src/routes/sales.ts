@@ -83,21 +83,25 @@ router.get("/sales", async (req, res): Promise<void> => {
   const outlets = await db.select().from(outletsTable);
   const customers = await db.select().from(customersTable);
   const oMap = new Map(outlets.map((o) => [o.id, o.name]));
-  const cMap = new Map(customers.map((c) => [c.id, c.name]));
+  const cMap = new Map(customers.map((c) => [c.id, { name: c.name, phone: c.phone ?? null }]));
 
   const outletIdFilter = req.query.outletId ? Number(req.query.outletId) : null;
   const filtered = outletIdFilter ? rows.filter((r) => r.outletId === outletIdFilter) : rows;
 
-  res.json(filtered.map((r) => ({
-    ...r,
-    outletName: oMap.get(r.outletId) ?? "",
-    customerName: r.customerId ? cMap.get(r.customerId) ?? null : null,
-    subtotal: Number(r.subtotal),
-    taxTotal: Number(r.taxTotal),
-    discountTotal: Number(r.discountTotal),
-    totalAmount: Number(r.totalAmount),
-    lineItems: r.lineItems ?? [],
-  })));
+  res.json(filtered.map((r) => {
+    const cust = r.customerId ? cMap.get(r.customerId) : null;
+    return {
+      ...r,
+      outletName: oMap.get(r.outletId) ?? "",
+      customerName: cust?.name ?? null,
+      customerPhone: cust?.phone ?? null,
+      subtotal: Number(r.subtotal),
+      taxTotal: Number(r.taxTotal),
+      discountTotal: Number(r.discountTotal),
+      totalAmount: Number(r.totalAmount),
+      lineItems: r.lineItems ?? [],
+    };
+  }));
 });
 
 router.post("/sales", async (req, res): Promise<void> => {
