@@ -38,12 +38,13 @@ const TYPE_COLORS: Record<ItemType, string> = {
 };
 
 const schema = z.object({
-  itemType: z.enum(['raw_material', 'material', 'item']),
-  name: z.string().min(1, 'Name required'),
-  unit: z.string().min(1, 'Unit required'),
-  hsnCode: z.string().optional(),
-  taxRate: z.coerce.number().min(0).max(28).optional(),
-  mrp: z.coerce.number().min(0).optional(),
+  itemType:    z.enum(['raw_material', 'material', 'item']),
+  name:        z.string().min(1, 'Name required'),
+  unit:        z.string().min(1, 'Unit required'),
+  hsnCode:     z.string().optional(),
+  taxRate:     z.coerce.number().min(0).max(28).optional(),
+  mrp:         z.coerce.number().min(0).optional(),
+  cost:        z.coerce.number().min(0).optional(),
   description: z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
@@ -68,7 +69,7 @@ export default function ItemMaster() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { itemType: 'raw_material', name: '', unit: '', hsnCode: '', taxRate: 5, mrp: 0, description: '' },
+    defaultValues: { itemType: 'raw_material', name: '', unit: '', hsnCode: '', taxRate: 5, mrp: 0, cost: 0, description: '' },
   });
 
   const watchType = form.watch('itemType');
@@ -89,7 +90,7 @@ export default function ItemMaster() {
 
   const openAdd = (type?: ItemType) => {
     setEditTarget(null);
-    form.reset({ itemType: type || 'raw_material', name: '', unit: units[0] || '', hsnCode: '', taxRate: 5, mrp: 0, description: '' });
+    form.reset({ itemType: type || 'raw_material', name: '', unit: units[0] || '', hsnCode: '', taxRate: 5, mrp: 0, cost: 0, description: '' });
     setIsOpen(true);
   };
 
@@ -102,6 +103,7 @@ export default function ItemMaster() {
       hsnCode: item.hsnCode || '',
       taxRate: Number(item.taxRate ?? 5),
       mrp: Number(item.mrp ?? 0),
+      cost: Number(item.cost ?? 0),
       description: item.description || '',
     });
     setIsOpen(true);
@@ -118,7 +120,7 @@ export default function ItemMaster() {
       },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     };
-    const sharedData = { name: data.name, unit: data.unit, description: data.description, hsnCode: data.hsnCode || '', taxRate: Number(data.taxRate ?? 5) };
+    const sharedData = { name: data.name, unit: data.unit, description: data.description, hsnCode: data.hsnCode || '', taxRate: Number(data.taxRate ?? 5), cost: Number(data.cost ?? 0) };
     const itemData = { ...sharedData, mrp: Number(data.mrp ?? 0) };
 
     if (editTarget) {
@@ -206,15 +208,17 @@ export default function ItemMaster() {
                 <TableHead>Unit</TableHead>
                 <TableHead>HSN</TableHead>
                 <TableHead>Tax</TableHead>
+                <TableHead className="text-right">Cost (₹)</TableHead>
+                <TableHead className="text-right">MRP (₹)</TableHead>
                 <TableHead className="text-right">Stock</TableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(5)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
+                <TableRow><TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
                   <Layers className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No items found</p>
                 </TableCell></TableRow>
               ) : filtered.map(item => (
@@ -228,6 +232,14 @@ export default function ItemMaster() {
                   <TableCell className="text-muted-foreground text-sm">{item.unit}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{(item as any).hsnCode || '—'}</TableCell>
                   <TableCell className="text-sm">{(item as any).taxRate ? `${Number((item as any).taxRate)}%` : '—'}</TableCell>
+                  <TableCell className="text-right font-mono text-sm">
+                    {Number((item as any).cost) > 0 ? `₹${Number((item as any).cost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-sm">
+                    {item._type === 'item' && Number((item as any).mrp) > 0
+                      ? `₹${Number((item as any).mrp).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+                      : '—'}
+                  </TableCell>
                   <TableCell className="text-right font-mono font-bold">{Number(item.stock).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 3 })}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
@@ -301,11 +313,25 @@ export default function ItemMaster() {
                     </Select>
                   </FormItem>
                 )} />
+                {/* Cost field — all item types */}
+                <FormField control={form.control} name="cost" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      Cost / Rate (₹)
+                      {watchType !== 'item' && <span className="ml-1 text-[10px] font-normal text-muted-foreground">(default; updates from purchases)</span>}
+                    </FormLabel>
+                    <FormControl><Input type="number" min={0} step="0.01" placeholder="0.00" className="font-mono" {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                {/* MRP — finished items only */}
                 {watchType === 'item' && (
                   <FormField control={form.control} name="mrp" render={({ field }) => (
                     <FormItem>
-                      <FormLabel>MRP (₹)</FormLabel>
-                      <FormControl><Input type="number" min={0} step="0.01" placeholder="0.00" {...field} /></FormControl>
+                      <FormLabel>MRP — Sale Price (₹) <span className="text-[10px] font-normal text-amber-500">auto-fills in sales</span></FormLabel>
+                      <FormControl><Input type="number" min={0} step="0.01" placeholder="0.00" className="font-mono" {...field} /></FormControl>
+                      <FormMessage />
                     </FormItem>
                   )} />
                 )}
@@ -338,7 +364,20 @@ export default function ItemMaster() {
                 {viewItem.hsnCode && <div className="flex justify-between py-2 border-b border-border"><span className="text-muted-foreground">HSN Code</span><span className="font-mono">{viewItem.hsnCode}</span></div>}
                 {viewItem.taxRate !== undefined && <div className="flex justify-between py-2 border-b border-border"><span className="text-muted-foreground">GST Rate</span><span>{Number(viewItem.taxRate)}%</span></div>}
                 <div className="flex justify-between py-2 border-b border-border"><span className="text-muted-foreground">Current Stock</span><span className="font-mono font-bold">{Number(viewItem.stock).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 3 })}</span></div>
-                {viewItem._type === 'item' && viewItem.mrp > 0 && <div className="flex justify-between py-2 border-b border-border"><span className="text-muted-foreground">MRP</span><span className="font-mono font-bold">₹{Number(viewItem.mrp).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>}
+                {Number(viewItem.cost) > 0 && (
+                  <div className="flex justify-between py-2 border-b border-border">
+                    <span className="text-muted-foreground">Cost / Rate</span>
+                    <span className="font-mono font-bold">₹{Number(viewItem.cost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                {viewItem._type === 'item' && (
+                  <div className="flex justify-between py-2 border-b border-border">
+                    <span className="text-muted-foreground">MRP (Sale Price)</span>
+                    <span className={`font-mono font-bold ${Number(viewItem.mrp) > 0 ? 'text-primary' : 'text-muted-foreground'}`}>
+                      {Number(viewItem.mrp) > 0 ? `₹${Number(viewItem.mrp).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : 'Not set'}
+                    </span>
+                  </div>
+                )}
                 {viewItem.description && <div className="py-2"><p className="text-muted-foreground mb-1">Description</p><p>{viewItem.description}</p></div>}
               </div>
               <div className="flex gap-2 mt-6">

@@ -150,7 +150,8 @@ export default function Sales() {
   const stockMap = new Map<number, number>(outletStock.map(s => [s.itemId!, Number(s.quantity ?? 0)]));
   const availableItems = items.filter(it => (stockMap.get(it.id) ?? 0) > 0);
 
-  const getPrice = (itemId: number) => outletPrices.find(p => p.itemId === itemId)?.price ?? 0;
+  // Price comes from item MRP (set in Item Master) — not outlet-specific
+  const getPrice = (itemId: number) => Number((items.find(i => i.id === itemId) as any)?.mrp ?? 0);
   const getAvailableQty = (itemId: number) => stockMap.get(itemId) ?? 0;
   const getItem = (itemId: number) => items.find(i => i.id === itemId);
 
@@ -485,9 +486,8 @@ export default function Sales() {
                                   onValueChange={v => {
                                     const id = Number(v);
                                     f.onChange(id);
-                                    // Auto-fill unit price from outlet price list
-                                    const p = getPrice(id);
-                                    form.setValue(`lineItems.${index}.unitPrice`, p);
+                                    // Auto-fill from Item Master MRP — read-only in sale
+                                    form.setValue(`lineItems.${index}.unitPrice`, getPrice(id));
                                   }}
                                   value={f.value ? String(f.value) : ''}
                                 >
@@ -495,11 +495,13 @@ export default function Sales() {
                                   <SelectContent>
                                     {availableItems.map(it => {
                                       const avail = stockMap.get(it.id) ?? 0;
-                                      const p = getPrice(it.id);
-                                      const r = Number((it as any).taxRate ?? 0);
+                                      const mrp   = getPrice(it.id);
+                                      const r     = Number((it as any).taxRate ?? 0);
                                       return (
                                         <SelectItem key={it.id} value={String(it.id)}>
-                                          {it.name} — {avail} avail{p > 0 ? ` · ₹${p}` : ''}{r > 0 ? ` · ${r}% GST` : ''}
+                                          {it.name} — {avail} avail
+                                          {mrp > 0 ? ` · MRP ₹${mrp}` : ' · MRP not set'}
+                                          {r > 0 ? ` · ${r}% GST` : ''}
                                         </SelectItem>
                                       );
                                     })}
@@ -508,9 +510,9 @@ export default function Sales() {
                               </FormItem>
                             )} />
 
-                            {/* Row 2: Qty + Unit Price + Line total */}
+                            {/* Row 2: Qty + MRP display (read-only) + Line total */}
                             <div className="grid grid-cols-12 gap-2 items-end">
-                              <div className="col-span-3">
+                              <div className="col-span-4">
                                 <FormField control={form.control} name={`lineItems.${index}.quantity`} render={({ field: f }) => (
                                   <FormItem>
                                     <FormLabel className="text-xs">Qty {itemId > 0 && <span className="text-muted-foreground">(max {availQty})</span>}</FormLabel>
@@ -518,35 +520,44 @@ export default function Sales() {
                                   </FormItem>
                                 )} />
                               </div>
+
+                              {/* MRP — read-only, set in Item Master */}
                               <div className="col-span-4">
-                                <FormField control={form.control} name={`lineItems.${index}.unitPrice`} render={({ field: f }) => (
-                                  <FormItem>
-                                    <FormLabel className="text-xs">Unit Price (₹)</FormLabel>
-                                    <FormControl><Input type="number" min={0} step="0.01" placeholder="0.00" className="h-8 text-xs font-mono" {...f} /></FormControl>
-                                  </FormItem>
-                                )} />
+                                <p className="text-xs font-medium mb-1.5 text-foreground/80">
+                                  MRP (₹) <span className="text-[10px] text-muted-foreground font-normal">from Item Master</span>
+                                </p>
+                                <div className={`h-8 flex items-center px-3 rounded-md border text-xs font-mono select-none cursor-default ${
+                                  unitPrice > 0
+                                    ? 'border-border bg-muted/40 text-foreground'
+                                    : 'border-amber-500/40 bg-amber-500/5 text-amber-500 text-[10px]'
+                                }`}>
+                                  {unitPrice > 0
+                                    ? `₹${unitPrice.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+                                    : 'Set MRP in Item Master'}
+                                </div>
                               </div>
-                              <div className="col-span-4 text-right pb-1 space-y-0.5">
+
+                              <div className="col-span-3 text-right pb-0.5 space-y-0.5">
                                 {itemId > 0 ? (
                                   unitPrice > 0 ? (
                                     <>
                                       <p className="text-xs text-muted-foreground">Subtotal ₹{gst.lineSubtotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
                                       {taxRate > 0 && (
                                         <p className="text-xs text-amber-500 font-medium">
-                                          {isInterState ? 'IGST' : `CGST+SGST`} ({taxRate}%) = ₹{gst.taxAmount.toFixed(2)}
+                                          {isInterState ? 'IGST' : 'CGST+SGST'} ({taxRate}%) = ₹{gst.taxAmount.toFixed(2)}
                                         </p>
                                       )}
                                       {taxRate === 0 && <p className="text-xs text-muted-foreground/50">No GST</p>}
                                       <p className="font-mono font-bold text-primary text-sm">₹{lineTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
                                     </>
                                   ) : (
-                                    <p className="text-xs text-amber-400 italic">Enter price →</p>
+                                    <p className="text-xs text-amber-400 italic">No MRP</p>
                                   )
                                 ) : (
                                   <p className="text-muted-foreground text-xs">—</p>
                                 )}
                               </div>
-                              <div className="col-span-1 pb-1 flex justify-end">
+                              <div className="col-span-1 pb-0.5 flex justify-end">
                                 <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
                               </div>
                             </div>
