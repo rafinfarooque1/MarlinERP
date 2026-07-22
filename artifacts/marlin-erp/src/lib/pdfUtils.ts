@@ -167,7 +167,7 @@ function buildUpiUri(upiId: string, payeeName: string, amount: number, ref: stri
 // ── Tax Invoice ───────────────────────────────────────────────────────────────
 
 async function buildInvoicePDFDoc(sale: any, companySettings: any): Promise<jsPDF> {
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
   const cs = companySettings as any;
 
   // Pre-generate UPI QR data URL if the outlet has a UPI ID configured
@@ -390,7 +390,7 @@ export async function generateInvoicePDFBlob(sale: any, companySettings: any): P
 // ── Payslip ───────────────────────────────────────────────────────────────────
 
 export function downloadPayslipPDF(p: any, companySettings?: any) {
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
   const MONTH_NAMES = ['January','February','March','April','May','June',
     'July','August','September','October','November','December'];
   const monthLabel = `${MONTH_NAMES[(p.month || 1) - 1]} ${p.year}`;
@@ -534,7 +534,7 @@ export function downloadPurchaseOrderPDF(
   materialsMap: Map<number, string>,
   rawMaterialsMap: Map<number, string>,
 ) {
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
   const cs = companySettings as any;
   let y = drawHeader(doc, cs, 'PURCHASE ORDER');
 
