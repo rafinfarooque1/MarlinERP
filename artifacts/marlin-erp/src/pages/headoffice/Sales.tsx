@@ -4,7 +4,7 @@ import {
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
   getListSalesQueryKey, getListCustomersQueryKey, useListCoupons,
   customFetch,
-  useGetSalePayments, useCreateSalePayment,
+  useGetSalePayments, useCreateSalePayment, useUpdateSale,
 } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -25,7 +25,7 @@ import { INDIAN_STATES } from '@/lib/indianStates';
 import {
   Plus, Search, Trash2, CreditCard, Calendar, Receipt,
   Download, Eye, PackageOpen, FileDown, AlertTriangle,
-  UserPlus, Check, ChevronsUpDown, Banknote, IndianRupee,
+  UserPlus, Check, ChevronsUpDown, Banknote, IndianRupee, Pencil,
 } from 'lucide-react';
 
 // ── WhatsApp brand icon (inline SVG) ──────────────────────────────────────────
@@ -154,7 +154,28 @@ export default function Sales() {
   }, [viewItem, paymentAmount]);
   const queryClient = useQueryClient();
   const createMutation = useCreateSale();
+  const updateMutation = useUpdateSale();
   const createCustomerMutation = useCreateCustomer();
+
+  // editItem holds the sale being edited; null means "create" mode
+  const [editItem, setEditItem] = useState<any>(null);
+
+  const openEdit = (sale: any) => {
+    setEditItem(sale);
+    form.reset({
+      outletId: sale.outletId,
+      customerId: sale.customerId ?? undefined,
+      saleDate: sale.saleDate,
+      paymentMode: sale.paymentMode ?? 'cash',
+      couponCode: sale.couponCode ?? '',
+      lineItems: (sale.lineItems ?? []).map((li: any) => ({
+        itemId: li.itemId,
+        quantity: li.quantity,
+        unitPrice: li.unitPrice,
+      })),
+    });
+    setIsOpen(true);
+  };
 
   const { data: viewItemPayments = [], isLoading: paymentsLoading } = useGetSalePayments(viewItem?.id ?? 0, { enabled: !!viewItem });
   const createPaymentMutation = useCreateSalePayment();
@@ -271,15 +292,34 @@ export default function Sales() {
       taxAmount: 0, // backend recomputes authoritatively
     }));
     const { discountAmount } = computeCartTotals();
-    createMutation.mutate({ data: { ...data, lineItems: enrichedItems, customerId: data.customerId || undefined, discountTotal: discountAmount } as any }, {
-      onSuccess: () => {
-        toast.success('Sale recorded successfully');
-        queryClient.invalidateQueries({ queryKey: getListSalesQueryKey() });
-        setIsOpen(false);
-        form.reset(defaultFormValues);
-      },
-      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Could not record sale'),
-    });
+    const payload = { ...data, lineItems: enrichedItems, customerId: data.customerId || undefined, discountTotal: discountAmount } as any;
+
+    if (editItem) {
+      // Edit mode — PUT to existing sale
+      updateMutation.mutate({ saleId: editItem.id, data: payload }, {
+        onSuccess: (updated: any) => {
+          toast.success('Sale updated successfully');
+          queryClient.invalidateQueries({ queryKey: getListSalesQueryKey() });
+          // Refresh view sheet if the edited sale is currently open
+          if (viewItem?.id === editItem.id) setViewItem({ ...viewItem, ...updated });
+          setIsOpen(false);
+          setEditItem(null);
+          form.reset(defaultFormValues);
+        },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Could not update sale'),
+      });
+    } else {
+      // Create mode — POST new sale
+      createMutation.mutate({ data: payload }, {
+        onSuccess: () => {
+          toast.success('Sale recorded successfully');
+          queryClient.invalidateQueries({ queryKey: getListSalesQueryKey() });
+          setIsOpen(false);
+          form.reset(defaultFormValues);
+        },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Could not record sale'),
+      });
+    }
   };
 
   // ── Invoice PDF (canonical server-side renderer) ───────────────────────────
@@ -493,6 +533,7 @@ export default function Sales() {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(sale)} title="View"><Eye className="w-4 h-4" /></Button>
+                      {perm.canEdit && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500" onClick={() => openEdit(sale)} title="Edit sale"><Pencil className="w-4 h-4" /></Button>}
                       {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => void handleDownloadPDF(sale)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>}
                       {(sale as any).customerPhone && (
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-[#25D366] hover:text-[#128C7E] hover:bg-[#25D366]/10" onClick={() => void handleWhatsApp(sale)} title={`Send invoice to ${(sale as any).customerPhone} via WhatsApp`}>
@@ -515,9 +556,9 @@ export default function Sales() {
       </div>
 
       {/* Sale Dialog */}
-      <Dialog open={isOpen} onOpenChange={setIsOpen}>
+      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditItem(null); form.reset(defaultFormValues); } }}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Record Sale</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editItem ? `Edit Sale — ${editItem.invoiceNumber}` : 'Record Sale'}</DialogTitle></DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
               <div className="grid grid-cols-2 gap-4">
@@ -829,9 +870,11 @@ export default function Sales() {
                   </div>
                 )}
                 <div className="flex gap-2 justify-end w-full">
-                  <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
-                  <Button type="submit" disabled={createMutation.isPending || !watchOutletId || availableItems.length === 0 || totals.finalAmount === 0}>
-                    {createMutation.isPending ? 'Processing…' : 'Complete Sale'}
+                  <Button variant="outline" type="button" onClick={() => { setIsOpen(false); setEditItem(null); form.reset(defaultFormValues); }}>Cancel</Button>
+                  <Button type="submit" disabled={(editItem ? updateMutation.isPending : createMutation.isPending) || !watchOutletId || availableItems.length === 0 || totals.finalAmount === 0}>
+                    {editItem
+                      ? (updateMutation.isPending ? 'Saving…' : 'Save Changes')
+                      : (createMutation.isPending ? 'Processing…' : 'Complete Sale')}
                   </Button>
                 </div>
               </DialogFooter>
@@ -901,8 +944,17 @@ export default function Sales() {
       <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
         <SheetContent className="overflow-y-auto sm:max-w-lg">
           <SheetHeader>
-            <SheetTitle className="flex items-center gap-2"><Receipt className="w-5 h-5 text-primary" />{viewItem?.invoiceNumber}</SheetTitle>
-            <SheetDescription>{viewItem?.outletName} · {viewItem && new Date(viewItem.saleDate).toLocaleDateString('en-IN')}</SheetDescription>
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <SheetTitle className="flex items-center gap-2"><Receipt className="w-5 h-5 text-primary" />{viewItem?.invoiceNumber}</SheetTitle>
+                <SheetDescription>{viewItem?.outletName} · {viewItem && new Date(viewItem.saleDate).toLocaleDateString('en-IN')}</SheetDescription>
+              </div>
+              {perm.canEdit && viewItem && (
+                <Button variant="outline" size="sm" className="shrink-0 gap-1.5" onClick={() => { setViewItem(null); openEdit(viewItem); }}>
+                  <Pencil className="w-3.5 h-3.5" /> Edit
+                </Button>
+              )}
+            </div>
           </SheetHeader>
           {viewItem && (
             <div className="mt-6 space-y-5">

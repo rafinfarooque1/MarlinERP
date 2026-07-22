@@ -256,6 +256,145 @@ router.post("/sales", async (req, res): Promise<void> => {
   });
 });
 
+// ── Edit Sale ─────────────────────────────────────────────────────────────────
+router.put("/sales/:id", async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid sale id" }); return; }
+
+  const [existing] = await db.select().from(salesTable).where(eq(salesTable.id, id)).limit(1);
+  if (!existing) { res.status(404).json({ error: "Sale not found" }); return; }
+
+  const parsed = CreateSaleBody.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  const rawLineItems = parsed.data.lineItems as Array<{
+    itemId: number; quantity: number; unitPrice: number; discount: number; taxAmount: number;
+  }>;
+
+  // Determine inter-state
+  let company = (await db.select().from(companySettingsTable).limit(1))[0];
+  if (!company) { [company] = await db.insert(companySettingsTable).values({}).returning(); }
+  const companyState = (company.state ?? '').trim().toLowerCase();
+
+  let customerState = '';
+  if (parsed.data.customerId) {
+    const [cust] = await db.select().from(customersTable).where(eq(customersTable.id, parsed.data.customerId)).limit(1);
+    customerState = (cust?.state ?? '').trim().toLowerCase();
+  }
+  const isInterState = !!(companyState && customerState && companyState !== customerState);
+
+  // Fetch item tax rates
+  const itemIds = [...new Set(rawLineItems.map(li => li.itemId))];
+  const itemsData = itemIds.length > 0
+    ? await db.select({ id: itemsTable.id, taxRate: itemsTable.taxRate, name: itemsTable.name, hsnCode: itemsTable.hsnCode, unit: itemsTable.unit })
+        .from(itemsTable).where(inArray(itemsTable.id, itemIds))
+    : [];
+  const itemTaxMap = new Map(itemsData.map(i => [i.id, { taxRate: Number(i.taxRate), name: i.name, hsnCode: i.hsnCode, unit: i.unit }]));
+
+  // Build enriched line items
+  const lineItems = rawLineItems.map(li => {
+    const itemInfo = itemTaxMap.get(li.itemId);
+    const taxRate = itemInfo?.taxRate ?? 0;
+    const grossAmount = li.quantity * li.unitPrice - (li.discount ?? 0);
+    const taxInfo = computeLineTax(grossAmount, taxRate, isInterState);
+    return {
+      itemId: li.itemId,
+      itemName: itemInfo?.name ?? '',
+      hsnCode: itemInfo?.hsnCode ?? '',
+      unit: itemInfo?.unit ?? '',
+      quantity: li.quantity,
+      unitPrice: li.unitPrice,
+      discount: li.discount ?? 0,
+      lineSubtotal: taxInfo.taxableAmount,
+      ...taxInfo,
+    };
+  });
+
+  const subtotal = lineItems.reduce((s, li) => s + li.lineSubtotal, 0);
+  const taxTotal = lineItems.reduce((s, li) => s + li.taxAmount, 0);
+  const discountTotal = (parsed.data as any).discountTotal ?? lineItems.reduce((s, li) => s + li.discount, 0);
+  const totalAmount = subtotal + taxTotal - discountTotal;
+
+  // Reverse old stock deductions (restore what the old sale consumed)
+  const oldLineItems = (existing.lineItems ?? []) as Array<{ itemId: number; quantity: number }>;
+  for (const li of oldLineItems) {
+    const [se] = await db.select().from(stockEntriesTable)
+      .where(and(eq(stockEntriesTable.itemId, li.itemId), eq(stockEntriesTable.branchType, "outlet"), eq(stockEntriesTable.branchId, existing.outletId)))
+      .limit(1);
+    if (se) {
+      await db.update(stockEntriesTable)
+        .set({ quantity: sql`${stockEntriesTable.quantity}::numeric + ${li.quantity}` })
+        .where(eq(stockEntriesTable.id, se.id));
+    }
+  }
+
+  // Update the sale row (keep invoice number and payment state)
+  const [updated] = await db.update(salesTable)
+    .set({
+      outletId: parsed.data.outletId,
+      customerId: parsed.data.customerId ?? null,
+      saleDate: parsed.data.saleDate,
+      lineItems,
+      subtotal: String(subtotal),
+      taxTotal: String(taxTotal),
+      discountTotal: String(discountTotal),
+      totalAmount: String(totalAmount),
+      paymentMode: parsed.data.paymentMode,
+      couponCode: parsed.data.couponCode ?? null,
+    })
+    .where(eq(salesTable.id, id))
+    .returning();
+
+  // Apply new stock deductions
+  for (const li of lineItems) {
+    const [se] = await db.select().from(stockEntriesTable)
+      .where(and(eq(stockEntriesTable.itemId, li.itemId), eq(stockEntriesTable.branchType, "outlet"), eq(stockEntriesTable.branchId, parsed.data.outletId)))
+      .limit(1);
+    if (se) {
+      await db.update(stockEntriesTable)
+        .set({ quantity: sql`${stockEntriesTable.quantity}::numeric - ${li.quantity}` })
+        .where(eq(stockEntriesTable.id, se.id));
+    }
+  }
+
+  // Adjust customer total purchases
+  const oldTotal = Number(existing.totalAmount);
+  const oldCustomerId = existing.customerId;
+  if (oldCustomerId) {
+    await db.update(customersTable)
+      .set({ totalPurchases: sql`${customersTable.totalPurchases}::numeric - ${oldTotal}` })
+      .where(eq(customersTable.id, oldCustomerId));
+  }
+  if (parsed.data.customerId) {
+    await db.update(customersTable)
+      .set({ totalPurchases: sql`${customersTable.totalPurchases}::numeric + ${totalAmount}` })
+      .where(eq(customersTable.id, parsed.data.customerId));
+  }
+
+  const [outlet] = await db.select().from(outletsTable).where(eq(outletsTable.id, updated.outletId)).limit(1);
+  const customerName = updated.customerId
+    ? (await db.select().from(customersTable).where(eq(customersTable.id, updated.customerId)).limit(1))[0]?.name ?? null
+    : null;
+
+  logActivity({
+    action: "UPDATE", module: "sales", entityType: "sale", entityId: id,
+    description: `Sale ${existing.invoiceNumber} updated — ₹${totalAmount.toFixed(2)}`,
+    metadata: { before: { totalAmount: oldTotal }, after: { totalAmount } },
+  }).catch(() => {});
+
+  res.json({
+    ...updated,
+    outletName: outlet?.name ?? "",
+    outletUpiId: (outlet as any)?.upiId ?? "",
+    customerName,
+    subtotal: Number(updated.subtotal),
+    taxTotal: Number(updated.taxTotal),
+    discountTotal: Number(updated.discountTotal),
+    totalAmount: Number(updated.totalAmount),
+    lineItems: updated.lineItems ?? [],
+  });
+});
+
 router.get("/sales/summary", async (_req, res): Promise<void> => {
   const rows = await db.select().from(salesTable);
   const outlets = await db.select().from(outletsTable);

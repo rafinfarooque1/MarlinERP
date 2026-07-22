@@ -1,6 +1,14 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "./custom-fetch";
 
+// ── Update Sale ────────────────────────────────────────────────────────────────
+export function useUpdateSale() {
+  return useMutation({
+    mutationFn: ({ saleId, data }: { saleId: number; data: any }) =>
+      customFetch<any>(`/api/sales/${saleId}`, { method: "PUT", body: JSON.stringify(data) }),
+  });
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface SalePayment {
