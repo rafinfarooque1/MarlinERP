@@ -15,9 +15,11 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '@/components/ui/command';
+import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
+import { INDIAN_STATES } from '@/lib/indianStates';
 import {
   Plus, Search, Trash2, CreditCard, Calendar, Receipt,
   Download, Eye, Printer, PackageOpen, FileDown, AlertTriangle,
@@ -71,6 +73,18 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
+// ── Customer quick-create schema (mirrors Customers page) ─────────────────────
+const custSchema = z.object({
+  name:      z.string().min(1, 'Name is required'),
+  phone:     z.string().optional(),
+  email:     z.string().email().optional().or(z.literal('')),
+  gstNumber: z.string().optional(),
+  state:     z.string().optional(),
+  address:   z.string().optional(),
+  notes:     z.string().optional(),
+});
+type CustForm = z.infer<typeof custSchema>;
+
 const defaultFormValues: FormValues = {
   outletId: 0,
   saleDate: new Date().toISOString().split('T')[0],
@@ -102,11 +116,12 @@ export default function Sales() {
   const [customerOpen, setCustomerOpen] = useState(false);
   const [customerSearch, setCustomerSearch] = useState('');
   const [showNewCustomer, setShowNewCustomer] = useState(false);
-  const [newCustName, setNewCustName] = useState('');
-  const [newCustPhone, setNewCustPhone] = useState('');
-  const [newCustState, setNewCustState] = useState('');
-  const [newCustEmail, setNewCustEmail] = useState('');
-  const [newCustSaving, setNewCustSaving] = useState(false);
+
+  // Quick-create customer form (schema defined at module level)
+  const custForm = useForm<CustForm>({
+    resolver: zodResolver(custSchema),
+    defaultValues: { name: '', phone: '', email: '', gstNumber: '', state: '', address: '', notes: '' },
+  });
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: defaultFormValues });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
@@ -321,7 +336,7 @@ export default function Sales() {
                       <div className="flex items-center justify-between">
                         <FormLabel>Customer</FormLabel>
                         <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs text-primary gap-1"
-                          onClick={() => { setShowNewCustomer(true); setNewCustName(''); setNewCustPhone(''); setNewCustState(''); setNewCustEmail(''); }}>
+                          onClick={() => { custForm.reset(); setShowNewCustomer(true); }}>
                           <UserPlus className="w-3 h-3" /> New
                         </Button>
                       </div>
@@ -336,7 +351,7 @@ export default function Sales() {
                         <PopoverContent align="start" className="p-0" style={{ width: 'var(--radix-popover-trigger-width)', minWidth: '240px' }}>
                           <Command shouldFilter={false}>
                             <CommandInput placeholder="Search customer…" value={customerSearch} onValueChange={setCustomerSearch} />
-                            <CommandEmpty>No customers found. <button type="button" className="text-primary underline ml-1" onClick={() => { setCustomerOpen(false); setShowNewCustomer(true); setNewCustName(customerSearch); setCustomerSearch(''); }}>Create "{customerSearch}"?</button></CommandEmpty>
+                            <CommandEmpty>No customers found. <button type="button" className="text-primary underline ml-1" onClick={() => { setCustomerOpen(false); custForm.reset(); custForm.setValue('name', customerSearch); setCustomerSearch(''); setShowNewCustomer(true); }}>Create "{customerSearch}"?</button></CommandEmpty>
                             <CommandGroup className="max-h-52 overflow-auto">
                               <CommandItem value="0" onSelect={() => { field.onChange(undefined); setCustomerOpen(false); setCustomerSearch(''); }}>
                                 <Check className={cn('mr-2 h-4 w-4 shrink-0', !field.value ? 'opacity-100' : 'opacity-0')} />
@@ -507,55 +522,60 @@ export default function Sales() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Quick Create Customer Dialog ── */}
-      <Dialog open={showNewCustomer} onOpenChange={v => !v && setShowNewCustomer(false)}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader><DialogTitle className="flex items-center gap-2"><UserPlus className="w-4 h-4" /> New Customer</DialogTitle></DialogHeader>
-          <div className="space-y-3 pt-1">
-            <div>
-              <label className="text-sm font-medium mb-1 block">Name <span className="text-destructive">*</span></label>
-              <Input value={newCustName} onChange={e => setNewCustName(e.target.value)} placeholder="Customer name" />
-            </div>
-            <div>
-              <label className="text-sm font-medium mb-1 block">State <span className="text-xs text-muted-foreground font-normal">(for GST — e.g. Karnataka)</span></label>
-              <Input value={newCustState} onChange={e => setNewCustState(e.target.value)} placeholder="e.g. Karnataka" />
-            </div>
-            <div>
-              <label className="text-sm font-medium mb-1 block">Phone</label>
-              <Input value={newCustPhone} onChange={e => setNewCustPhone(e.target.value)} placeholder="10-digit mobile" />
-            </div>
-            <div>
-              <label className="text-sm font-medium mb-1 block">Email</label>
-              <Input value={newCustEmail} onChange={e => setNewCustEmail(e.target.value)} placeholder="optional" type="email" />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowNewCustomer(false)}>Cancel</Button>
-            <Button
-              disabled={!newCustName.trim() || newCustSaving}
-              onClick={() => {
-                setNewCustSaving(true);
-                createCustomerMutation.mutate(
-                  { data: { name: newCustName.trim(), phone: newCustPhone || undefined, state: newCustState || undefined, email: newCustEmail || undefined } as any },
-                  {
-                    onSuccess: (created: any) => {
-                      queryClient.invalidateQueries({ queryKey: getListCustomersQueryKey() });
-                      form.setValue('customerId', created.id);
-                      toast.success(`Customer "${created.name}" created`);
-                      setShowNewCustomer(false);
-                      setNewCustSaving(false);
-                    },
-                    onError: (e: any) => {
-                      toast.error(e?.data?.error || 'Could not create customer');
-                      setNewCustSaving(false);
-                    },
-                  }
-                );
-              }}
-            >
-              {newCustSaving ? 'Saving…' : 'Create'}
-            </Button>
-          </DialogFooter>
+      {/* ── Quick Create Customer Dialog (full form, mirrors Customers page) ── */}
+      <Dialog open={showNewCustomer} onOpenChange={v => { setShowNewCustomer(v); if (!v) custForm.reset(); }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader><DialogTitle>Add Customer</DialogTitle></DialogHeader>
+          <Form {...custForm}>
+            <form onSubmit={custForm.handleSubmit((data: any) => {
+              createCustomerMutation.mutate(
+                { data: { name: data.name, phone: data.phone || undefined, email: data.email || undefined, gstNumber: data.gstNumber || undefined, state: data.state || undefined, address: data.address || undefined, notes: data.notes || undefined } as any },
+                {
+                  onSuccess: (created: any) => {
+                    queryClient.invalidateQueries({ queryKey: getListCustomersQueryKey() });
+                    form.setValue('customerId', created.id);
+                    toast.success(`Customer "${created.name}" created`);
+                    setShowNewCustomer(false);
+                    custForm.reset();
+                  },
+                  onError: (e: any) => toast.error(e?.data?.error || 'Could not create customer'),
+                }
+              );
+            })} className="space-y-4 pt-2">
+              <FormField control={custForm.control} name="name" render={({ field }) => (
+                <FormItem><FormLabel>Name <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="Full name / company name" {...field} /></FormControl><FormMessage /></FormItem>
+              )} />
+              <div className="grid grid-cols-2 gap-4">
+                <FormField control={custForm.control} name="phone" render={({ field }) => (
+                  <FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                )} />
+                <FormField control={custForm.control} name="email" render={({ field }) => (
+                  <FormItem><FormLabel>Email</FormLabel><FormControl><Input type="email" {...field} /></FormControl><FormMessage /></FormItem>
+                )} />
+                <FormField control={custForm.control} name="gstNumber" render={({ field }) => (
+                  <FormItem><FormLabel>GST Number (GSTIN)</FormLabel><FormControl><Input placeholder="15-char GSTIN" className="font-mono" {...field} /></FormControl></FormItem>
+                )} />
+                <FormField control={custForm.control} name="state" render={({ field }) => (
+                  <FormItem><FormLabel>State</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value || ''}>
+                      <FormControl><SelectTrigger><SelectValue placeholder="Select state" /></SelectTrigger></FormControl>
+                      <SelectContent>{INDIAN_STATES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </FormItem>
+                )} />
+              </div>
+              <FormField control={custForm.control} name="address" render={({ field }) => (
+                <FormItem><FormLabel>Address</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={custForm.control} name="notes" render={({ field }) => (
+                <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
+              )} />
+              <DialogFooter>
+                <Button variant="outline" type="button" onClick={() => { setShowNewCustomer(false); custForm.reset(); }}>Cancel</Button>
+                <Button type="submit" disabled={createCustomerMutation.isPending}>{createCustomerMutation.isPending ? 'Saving…' : 'Save'}</Button>
+              </DialogFooter>
+            </form>
+          </Form>
         </DialogContent>
       </Dialog>
 
