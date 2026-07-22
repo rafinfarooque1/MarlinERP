@@ -379,7 +379,22 @@ async function buildInvoicePDFDoc(sale: any, companySettings: any): Promise<jsPD
 
 export async function downloadInvoicePDF(sale: any, companySettings: any) {
   const doc = await buildInvoicePDFDoc(sale, companySettings);
-  doc.save(`Invoice-${esc(sale.invoiceNumber || String(sale.id))}.pdf`);
+  // Open in a new browser tab via blob URL so the PDF never touches the
+  // Windows file system directly — avoids antivirus false-positive triggers
+  // on jsPDF-generated content. The user can print/save from the browser's
+  // own PDF viewer, which produces a clean OS-level file.
+  const blob = doc.output('blob') as Blob;
+  const blobUrl = URL.createObjectURL(blob);
+  const newTab = window.open(blobUrl, '_blank', 'noopener');
+  if (newTab) {
+    // Revoke the blob URL after the new tab has had time to load the PDF
+    newTab.addEventListener('load', () => URL.revokeObjectURL(blobUrl));
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
+  } else {
+    // Pop-up was blocked — fall back to direct save
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    doc.save(`Invoice-${esc(sale.invoiceNumber || String(sale.id))}.pdf`);
+  }
 }
 
 /** Returns a Blob of the invoice PDF without downloading (used for WhatsApp file share). */
