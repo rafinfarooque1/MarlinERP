@@ -102,6 +102,14 @@ router.patch("/accounts/chart/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const parsed = UpdateAccountLedgerBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  // Block rename of system ledgers (those with a code)
+  if (parsed.data.name !== undefined) {
+    const { rows: [ledger] } = await pool.query(`SELECT code FROM account_ledgers WHERE id = $1`, [id]);
+    if (!ledger) { res.status(404).json({ error: "Not found" }); return; }
+    if (ledger.code) { res.status(400).json({ error: "System ledger name cannot be changed." }); return; }
+  }
+
   const [row] = await db.update(accountLedgersTable).set(parsed.data).where(eq(accountLedgersTable.id, id)).returning();
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   if ((req.body as any).code !== undefined) {
@@ -112,13 +120,26 @@ router.patch("/accounts/chart/:id", async (req, res): Promise<void> => {
 
 router.delete("/accounts/chart/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
-  // Protect system group heads
-  const { rows: [row] } = await pool.query(`SELECT is_system_group FROM account_ledgers WHERE id = $1`, [id]);
+  const { rows: [row] } = await pool.query(`SELECT is_system_group, code FROM account_ledgers WHERE id = $1`, [id]);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
-  if (row.is_system_group) { res.status(400).json({ error: "System group heads cannot be deleted." }); return; }
+  // Protect system group heads and system ledgers (those with a code)
+  if (row.is_system_group) { res.status(400).json({ error: "System group accounts cannot be deleted." }); return; }
+  if (row.code) { res.status(400).json({ error: "System ledger cannot be deleted." }); return; }
   // Check for children
   const children = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.parentId, id));
   if (children.length > 0) { res.status(400).json({ error: "Cannot delete account with sub-accounts. Delete sub-accounts first." }); return; }
+  // Check for entries in payments and receipts
+  const { rows: payRows } = await pool.query(
+    `SELECT COUNT(*) FROM payments WHERE paid_from_ledger_id = $1 OR paid_to_ledger_id = $1`, [id]
+  );
+  const { rows: recRows } = await pool.query(
+    `SELECT COUNT(*) FROM receipts WHERE received_from_ledger_id = $1 OR received_in_ledger_id = $1`, [id]
+  );
+  const entryCount = Number(payRows[0].count) + Number(recRows[0].count);
+  if (entryCount > 0) {
+    res.status(400).json({ error: `Cannot delete: this ledger has ${entryCount} voucher entr${entryCount === 1 ? 'y' : 'ies'}. Remove those entries first.` });
+    return;
+  }
   await db.delete(accountLedgersTable).where(eq(accountLedgersTable.id, id));
   res.status(204).send();
 });
@@ -404,8 +425,8 @@ router.get("/accounts/financial-statements", async (req, res): Promise<void> => 
   // Helpers to build parameterised date conditions
   const makeDateConds = (dateCol: string, params: any[]): string => {
     const conds: string[] = [];
-    if (fromDate) { params.push(fromDate); conds.push(`${dateCol} >= ${params.length}`); }
-    if (toDate)   { params.push(toDate);   conds.push(`${dateCol} <= ${params.length}`); }
+    if (fromDate) { params.push(fromDate); conds.push(`${dateCol} >= $${params.length}`); }
+    if (toDate)   { params.push(toDate);   conds.push(`${dateCol} <= $${params.length}`); }
     return conds.length ? `WHERE ${conds.join(' AND ')}` : '';
   };
 

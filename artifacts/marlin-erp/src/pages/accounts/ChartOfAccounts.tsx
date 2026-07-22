@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Building2, CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, Plus, ChevronDown, ChevronRight, Package } from 'lucide-react';
+import { Building2, CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, Plus, ChevronDown, ChevronRight, Package, Lock, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 /* ── types ──────────────────────────────────────────────────────────────────── */
@@ -162,30 +162,83 @@ function BankLedgerDialog({ parentId, parentType, onCreated, onClose }: {
 }
 
 /* ── ledger line (recursive) ─────────────────────────────────────────────────── */
-function LedgerLine({ node, depth, onCreated, onBankAdd }: {
+function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename }: {
   node: LedgerNode; depth: number; onCreated: () => void;
   onBankAdd?: (parentId: number, parentType: ALType) => void;
+  onDelete?: (id: number, name: string) => void;
+  onRename?: (id: number, newName: string) => void;
 }) {
   const pl = `${8 + depth * 16}px`;
   const balance = Math.abs(node.balance);
   const isBank = node.code === 'STD-BANK';
+  const isSystem = node.code != null; // any STD-* ledger
+  const [renaming, setRenaming] = useState(false);
+  const [renameVal, setRenameVal] = useState('');
+
+  const startRename = () => {
+    if (isSystem) return;
+    setRenameVal(node.name);
+    setRenaming(true);
+  };
+
+  const submitRename = () => {
+    const t = renameVal.trim();
+    setRenaming(false);
+    if (!t || t === node.name) return;
+    onRename?.(node.id, t);
+  };
 
   return (
     <div>
       {/* Row */}
-      <div className="flex items-center gap-2 py-1.5 group" style={{ paddingLeft: pl }}>
+      <div className="flex items-center gap-1.5 py-1.5 pr-2 group" style={{ paddingLeft: pl }}>
         <span className="w-1 h-1 rounded-full bg-muted-foreground/25 shrink-0" />
-        <span className={`flex-1 text-xs ${depth === 1 ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
-          {node.name}
-        </span>
+
+        {renaming ? (
+          <input
+            autoFocus
+            value={renameVal}
+            onChange={e => setRenameVal(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') submitRename(); if (e.key === 'Escape') setRenaming(false); }}
+            onBlur={submitRename}
+            className="flex-1 text-xs bg-transparent border-b-2 border-primary outline-none pb-0.5 text-foreground"
+          />
+        ) : (
+          <span
+            className={`flex-1 text-xs select-none ${depth === 1 ? 'text-foreground font-medium' : 'text-muted-foreground'} ${!isSystem ? 'cursor-text' : 'cursor-default'}`}
+            onDoubleClick={startRename}
+            title={isSystem ? 'System ledger — name is locked' : 'Double-click to rename'}
+          >
+            {node.name}
+          </span>
+        )}
+
+        {/* System badge — shows on hover */}
+        {isSystem && (
+          <span className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded bg-muted text-muted-foreground/50 font-medium uppercase tracking-wide shrink-0">
+            <Lock className="w-2.5 h-2.5" /> system
+          </span>
+        )}
+
         {balance > 0 && (
-          <span className="text-[11px] font-mono tabular-nums text-muted-foreground pr-3">{fmt(balance)}</span>
+          <span className="text-[11px] font-mono tabular-nums text-muted-foreground shrink-0">{fmt(balance)}</span>
+        )}
+
+        {/* Delete — only for non-system ledgers, visible on hover */}
+        {!isSystem && (
+          <button
+            onClick={() => onDelete?.(node.id, node.name)}
+            className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:text-red-400 text-muted-foreground/30 shrink-0"
+            title="Delete ledger"
+          >
+            <Trash2 className="w-3 h-3" />
+          </button>
         )}
       </div>
 
       {/* Sub-ledgers */}
       {node.children.map(c => (
-        <LedgerLine key={c.id} node={c} depth={depth + 1} onCreated={onCreated} onBankAdd={onBankAdd} />
+        <LedgerLine key={c.id} node={c} depth={depth + 1} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} />
       ))}
 
       {/* Add sub-ledger button (only at depth 1) */}
@@ -208,14 +261,15 @@ function LedgerLine({ node, depth, onCreated, onBankAdd }: {
 }
 
 /* ── group block ────────────────────────────────────────────────────────────── */
-function GroupBlock({ group, onCreated, extraRows, onBankAdd }: {
+function GroupBlock({ group, onCreated, onBankAdd, onDelete, onRename }: {
   group: GroupSummary;
   onCreated: () => void;
-  extraRows?: React.ReactNode;
   onBankAdd?: (parentId: number, parentType: ALType) => void;
+  onDelete?: (id: number, name: string) => void;
+  onRename?: (id: number, newName: string) => void;
 }) {
   if (!group.id) return null;
-  const hasChildren = group.children.length > 0 || !!extraRows;
+  const hasChildren = group.children.length > 0;
 
   return (
     <div className="mb-3">
@@ -229,11 +283,8 @@ function GroupBlock({ group, onCreated, extraRows, onBankAdd }: {
 
       {/* Ledgers under group */}
       {group.children.map(ledger => (
-        <LedgerLine key={ledger.id} node={ledger} depth={1} onCreated={onCreated} onBankAdd={onBankAdd} />
+        <LedgerLine key={ledger.id} node={ledger} depth={1} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} />
       ))}
-
-      {/* Extra auto rows (e.g. Duty & Tax) */}
-      {extraRows}
 
       {/* Empty state hint */}
       {!hasChildren && (
@@ -345,6 +396,27 @@ export default function ChartOfAccounts() {
   const onBankAdd = (parentId: number, parentType: ALType) =>
     setBankParent({ id: parentId, type: parentType });
 
+  const onRename = async (id: number, newName: string) => {
+    try {
+      await customFetch(`/api/accounts/chart/${id}`, { method: 'PATCH', body: JSON.stringify({ name: newName }) });
+      toast.success('Ledger renamed');
+      queryClient.invalidateQueries({ queryKey: qKey });
+    } catch (e: any) {
+      toast.error(e?.data?.error || e?.message || 'Could not rename ledger');
+    }
+  };
+
+  const onDelete = async (id: number, name: string) => {
+    if (!window.confirm(`Delete ledger "${name}"? This cannot be undone.`)) return;
+    try {
+      await customFetch(`/api/accounts/chart/${id}`, { method: 'DELETE' });
+      toast.success(`Ledger "${name}" deleted`);
+      queryClient.invalidateQueries({ queryKey: qKey });
+    } catch (e: any) {
+      toast.error(e?.data?.error || e?.message || 'Could not delete ledger');
+    }
+  };
+
   const { fromDate, toDate } = useMemo(
     () => computeDateRange(period, customFrom, customTo),
     [period, customFrom, customTo],
@@ -453,24 +525,13 @@ export default function ChartOfAccounts() {
                   {bs && (
                     <>
                       {/* Capital Account */}
-                      <GroupBlock group={bs.liabilities.capitalAccount} onCreated={onCreated} />
+                      <GroupBlock group={bs.liabilities.capitalAccount} onCreated={onCreated} onDelete={onDelete} onRename={onRename} />
 
                       {/* Loans */}
-                      <GroupBlock group={bs.liabilities.loans} onCreated={onCreated} />
+                      <GroupBlock group={bs.liabilities.loans} onCreated={onCreated} onDelete={onDelete} onRename={onRename} />
 
-                      {/* Current Liabilities */}
-                      <GroupBlock
-                        group={bs.liabilities.currentLiabilities}
-                        onCreated={onCreated}
-                        extraRows={
-                          <AutoRow
-                            label="Duty & Tax"
-                            amount={bs.liabilities.currentLiabilities.dutyAndTax ?? 0}
-                            sub="auto · GST collected on sales"
-                            depth={1}
-                          />
-                        }
-                      />
+                      {/* Current Liabilities — STD-DTX (Duty & Tax) is already a child ledger with correct balance */}
+                      <GroupBlock group={bs.liabilities.currentLiabilities} onCreated={onCreated} onDelete={onDelete} onRename={onRename} />
 
                       <Divider />
 
@@ -505,8 +566,8 @@ export default function ChartOfAccounts() {
                 >
                   {bs && (
                     <>
-                      <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} onBankAdd={onBankAdd} />
-                      <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} onBankAdd={onBankAdd} />
+                      <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} />
+                      <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} />
                     </>
                   )}
                 </Panel>
@@ -552,10 +613,10 @@ export default function ChartOfAccounts() {
                       <Divider />
 
                       {/* Direct Expenses */}
-                      <GroupBlock group={exp.directExpenses} onCreated={onCreated} />
+                      <GroupBlock group={exp.directExpenses} onCreated={onCreated} onDelete={onDelete} onRename={onRename} />
 
                       {/* Indirect Expenses */}
-                      <GroupBlock group={exp.indirectExpenses} onCreated={onCreated} />
+                      <GroupBlock group={exp.indirectExpenses} onCreated={onCreated} onDelete={onDelete} onRename={onRename} />
                     </>
                   )}
                 </Panel>
@@ -575,7 +636,7 @@ export default function ChartOfAccounts() {
                       <Divider />
 
                       {/* Direct Incomes */}
-                      <GroupBlock group={inc.directIncomes} onCreated={onCreated} />
+                      <GroupBlock group={inc.directIncomes} onCreated={onCreated} onDelete={onDelete} onRename={onRename} />
 
                       {/* Closing Stock */}
                       <StockBlock
@@ -587,7 +648,7 @@ export default function ChartOfAccounts() {
                       <Divider />
 
                       {/* Indirect Incomes */}
-                      <GroupBlock group={inc.indirectIncomes} onCreated={onCreated} />
+                      <GroupBlock group={inc.indirectIncomes} onCreated={onCreated} onDelete={onDelete} onRename={onRename} />
                     </>
                   )}
                 </Panel>
