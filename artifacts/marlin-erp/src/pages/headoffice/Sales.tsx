@@ -245,56 +245,71 @@ export default function Sales() {
 
   // ── WhatsApp invoice share ─────────────────────────────────────────────────
   // Flow:
-  //   Mobile / Web Share API with file support → native share sheet with PDF + text
-  //     (user picks WhatsApp → PDF is attached automatically)
-  //   Desktop / no file-share support → open PDF in new browser tab
-  //     (avoids AV false-positives) + open wa.me/<phone> with pre-filled text
+  //   1. Generate the invoice PDF → open it in a new browser tab (user can
+  //      download/print from there; avoids AV false-positives on direct save).
+  //   2. Build a wa.me deep-link targeting the customer's exact phone number
+  //      with the invoice message pre-filled.
+  //   3. Open the wa.me link (500 ms after the PDF tab) — WhatsApp opens
+  //      directly to that customer's chat with the message ready to send.
+  //
+  // NOTE: wa.me deep-links target a specific number; no Share Sheet appears.
+  //   Local PDF files cannot be pre-attached via wa.me (browser limitation).
+  //   The message instructs the user to switch to the PDF tab to attach it.
+  //   If true automated document delivery is required in future, the WhatsApp
+  //   Business API (cloud.whatsapp.com) can send documents server-side.
   const handleWhatsApp = async (sale: any) => {
-    const phone = (sale.customerPhone ?? '').replace(/\D/g, '');
-    if (!phone) {
+    const raw = (sale.customerPhone ?? '').replace(/\D/g, '');
+    if (!raw) {
       toast.error('WhatsApp number is not available for this customer. Please update Customer Details.');
       return;
     }
-    // Normalise to Indian international format (91XXXXXXXXXX)
-    const intl = phone.startsWith('91') && phone.length === 12 ? phone : `91${phone}`;
+
+    // Normalise to Indian international format without leading + (91XXXXXXXXXX)
+    let intl = raw;
+    if (raw.startsWith('91') && raw.length === 12) {
+      intl = raw;                        // already 91XXXXXXXXXX
+    } else if (raw.startsWith('0') && raw.length === 11) {
+      intl = `91${raw.slice(1)}`;        // 0XXXXXXXXXX → 91XXXXXXXXXX
+    } else {
+      intl = `91${raw}`;                 // bare 10-digit → 91XXXXXXXXXX
+    }
 
     const cs      = companySettings as any;
     const company = cs?.companyName ?? cs?.name ?? 'Marlin Frozen Fruits';
-    const fileName = `Invoice-${sale.invoiceNumber || sale.id}.pdf`;
-    const date     = new Date(sale.saleDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-    const total    = Number(sale.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 });
-    const taxLine  = Number(sale.taxTotal) > 0
-      ? `\nGST (incl. in MRP): ₹${Number(sale.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+    const date    = new Date(sale.saleDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const total   = Number(sale.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+    const taxLine = Number(sale.taxTotal) > 0
+      ? `\nGST (incl. in amount): ₹${Number(sale.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
       : '';
 
-    // Build the invoice message (same content for all platforms)
     const lines = (sale.lineItems ?? []).map((li: any) => {
-      const name  = li.itemName || `Item #${li.itemId}`;
-      const total = Number(li.unitPrice ?? 0) * Number(li.quantity ?? 1);
-      return `  • ${name} × ${li.quantity} = ₹${total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+      const name     = li.itemName || `Item #${li.itemId}`;
+      const lineAmt  = Number(li.unitPrice ?? 0) * Number(li.quantity ?? 1);
+      return `  • ${name} × ${li.quantity} = ₹${lineAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
     }).join('\n');
 
     const message = [
       `Dear ${sale.customerName || 'Customer'},`,
       ``,
-      `Please find attached Invoice *${sale.invoiceNumber}*.`,
+      `Please find your invoice details below.`,
       ``,
-      `Invoice Date: ${date}`,
-      `Outlet: ${sale.outletName || ''}`,
+      `*Invoice No:* ${sale.invoiceNumber}`,
+      `*Invoice Date:* ${date}`,
+      `*Outlet:* ${sale.outletName || ''}`,
       ``,
       `*Items:*`,
       lines,
       ``,
-      `Amount: ₹${total}${taxLine}`,
-      `Payment: ${(sale.paymentMode ?? '').replace('_', ' ').toUpperCase()}`,
+      `*Amount: ₹${total}*${taxLine}`,
+      `*Payment:* ${(sale.paymentMode ?? '').replace('_', ' ').toUpperCase()}`,
       ``,
-      `📎 Invoice PDF is attached/shared with this message.`,
+      `📎 The invoice PDF has been opened in a separate tab — please download it and attach here before sending.`,
+      ``,
       `Thank you for your purchase! 🙏`,
-      ``,
       `— ${company}`,
     ].join('\n');
 
-    // Generate the same PDF used by "Download PDF" and "Print"
+    // Step 1 — Generate PDF and open it in a new tab
     let pdfBlob: Blob;
     try {
       pdfBlob = await generateInvoicePDFBlob(sale, companySettings);
@@ -302,33 +317,7 @@ export default function Sales() {
       toast.error('Unable to generate invoice PDF. Please try again.');
       return;
     }
-    const pdfFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
 
-    // ── Path 1: Mobile / supported browser — Web Share API with PDF file ──────
-    // This opens the native share sheet; user picks WhatsApp → PDF is attached.
-    if (
-      typeof navigator !== 'undefined' &&
-      typeof (navigator as any).share === 'function' &&
-      typeof (navigator as any).canShare === 'function' &&
-      (navigator as any).canShare({ files: [pdfFile] })
-    ) {
-      try {
-        await (navigator as any).share({
-          title: `Invoice ${sale.invoiceNumber}`,
-          text: message,
-          files: [pdfFile],
-        });
-        return; // native share sheet handled everything
-      } catch (err: any) {
-        if (err?.name === 'AbortError') return; // user dismissed — no fallback needed
-        // Other error → fall through to desktop fallback
-      }
-    }
-
-    // ── Path 2: Desktop fallback ───────────────────────────────────────────────
-    // Open the PDF in a new browser tab (same as Download PDF — avoids AV scan).
-    // Then open the customer's WhatsApp chat with the pre-filled message.
-    // The user downloads the PDF from the browser tab and attaches it in WhatsApp.
     const blobUrl = URL.createObjectURL(pdfBlob);
     const pdfTab  = window.open(blobUrl, '_blank', 'noopener');
     if (pdfTab) {
@@ -338,14 +327,13 @@ export default function Sales() {
       setTimeout(() => URL.revokeObjectURL(blobUrl), 5_000);
     }
 
-    const desktopMessage = message.replace(
-      '📎 Invoice PDF is attached/shared with this message.',
-      '📎 Invoice PDF has been opened in a new tab — please download and attach it in WhatsApp.',
-    );
-
-    // Small delay so the PDF tab opens first
+    // Step 2 — Open the customer's WhatsApp chat directly with the message
     setTimeout(() => {
-      window.open(`https://wa.me/${intl}?text=${encodeURIComponent(desktopMessage)}`, '_blank', 'noopener');
+      window.open(
+        `https://wa.me/${intl}?text=${encodeURIComponent(message)}`,
+        '_blank',
+        'noopener',
+      );
     }, 500);
   };
 
