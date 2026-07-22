@@ -1,17 +1,18 @@
 import { useState } from 'react';
-import { useListVendors, useCreateVendor, getListVendorsQueryKey } from '@workspace/api-client-react';
+import { useListVendors, useCreateVendor, getListVendorsQueryKey, useGetVendorLedger } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Textarea } from '@/components/ui/textarea';
+import { Separator } from '@/components/ui/separator';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Truck, Download, Eye } from 'lucide-react';
+import { Plus, Search, Truck, Download, Eye, BookOpen } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -29,12 +30,136 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
+function VendorLedger({ vendorId }: { vendorId: number }) {
+  const { data, isLoading } = useGetVendorLedger(vendorId);
+  const entries = data?.entries ?? [];
+
+  if (isLoading) return (
+    <div className="space-y-2 mt-4">
+      {[...Array(4)].map((_, i) => <div key={i} className="h-8 bg-muted/30 rounded animate-pulse" />)}
+    </div>
+  );
+
+  return (
+    <div className="mt-4 space-y-4">
+      {/* Summary */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="bg-muted/20 rounded-lg p-3">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Total Purchased</p>
+          <p className="font-bold font-mono text-sm text-foreground mt-0.5">
+            ₹{Number(data?.totalPurchased ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+          </p>
+        </div>
+        <div className="bg-muted/20 rounded-lg p-3">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Outstanding Payable</p>
+          <p className={`font-bold font-mono text-sm mt-0.5 ${(data?.balance ?? 0) > 0 ? 'text-amber-500' : 'text-emerald-500'}`}>
+            ₹{Number(data?.balance ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+          </p>
+        </div>
+      </div>
+
+      {entries.length === 0 ? (
+        <div className="text-center py-10 text-muted-foreground">
+          <BookOpen className="w-8 h-8 mx-auto mb-2 opacity-20" />
+          <p className="text-sm">No purchases from this vendor yet</p>
+        </div>
+      ) : (
+        <div className="rounded-lg border border-border overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/10">
+                <TableHead className="text-xs">Date</TableHead>
+                <TableHead className="text-xs">Reference</TableHead>
+                <TableHead className="text-right text-xs">Amount</TableHead>
+                <TableHead className="text-right text-xs">Running Total</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {[...entries].reverse().map((e, i) => (
+                <TableRow key={i} className="hover:bg-muted/10">
+                  <TableCell className="text-xs text-muted-foreground">
+                    {new Date(e.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                  </TableCell>
+                  <TableCell className="text-xs font-mono">{e.description}</TableCell>
+                  <TableCell className="text-right text-xs font-mono text-amber-600">
+                    ₹{Number(e.credit).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </TableCell>
+                  <TableCell className="text-right text-xs font-mono font-bold">
+                    ₹{Number(e.balance).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VendorSheet({ vendor, onClose }: { vendor: any; onClose: () => void }) {
+  const [activeTab, setActiveTab] = useState<'details' | 'ledger'>('details');
+  const { data: ledger } = useGetVendorLedger(vendor.id);
+
+  return (
+    <Sheet open onOpenChange={v => !v && onClose()}>
+      <SheetContent className="sm:max-w-2xl overflow-y-auto">
+        <SheetHeader className="pb-4">
+          <SheetTitle className="flex items-center gap-2">
+            <Truck className="w-5 h-5 text-primary" />
+            {vendor.name}
+          </SheetTitle>
+          <div className="flex gap-1 mt-3">
+            <button
+              onClick={() => setActiveTab('details')}
+              className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${activeTab === 'details' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'}`}
+            >Details</button>
+            <button
+              onClick={() => setActiveTab('ledger')}
+              className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors flex items-center gap-1.5 ${activeTab === 'ledger' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'}`}
+            ><BookOpen className="w-3.5 h-3.5" />Ledger</button>
+          </div>
+        </SheetHeader>
+
+        {activeTab === 'details' && (
+          <div className="space-y-4">
+            <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4 flex items-center justify-between">
+              <div>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Purchased</p>
+                <p className="text-2xl font-bold font-mono text-amber-600 mt-0.5">
+                  ₹{Number(ledger?.totalPurchased ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                </p>
+              </div>
+              <button onClick={() => setActiveTab('ledger')} className="text-xs text-primary underline">View ledger →</button>
+            </div>
+            <Separator />
+            {[['Phone', vendor.phone || '—'], ['Email', vendor.email || '—'], ['State', (vendor as any).state || '—'], ['GSTIN', vendor.gstNumber || '—'], ['Address', vendor.address || '—'], ['Bank Details', vendor.bankDetails || '—']].map(([k, v]) => (
+              <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
+                <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
+                <span className="font-medium">{v}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {activeTab === 'ledger' && (
+          <div>
+            <p className="text-xs text-muted-foreground mb-1">Account: <span className="font-mono">VEND-{vendor.id}</span> · Current Liability — Sundry Creditors</p>
+            <VendorLedger vendorId={vendor.id} />
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 export default function Vendors() {
   const { data: vendors = [], isLoading } = useListVendors();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
   const queryClient = useQueryClient();
+  // activeTab lives in VendorSheet, not here
   const createMutation = useCreateVendor();
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', phone: '', email: '', address: '', gstNumber: '', state: '', bankDetails: '' } });
@@ -46,7 +171,10 @@ export default function Vendors() {
     });
   };
 
-  const filtered = vendors.filter(v => v.name.toLowerCase().includes(search.toLowerCase()) || v.phone?.includes(search));
+  const filtered = vendors.filter(v =>
+    v.name.toLowerCase().includes(search.toLowerCase()) ||
+    v.phone?.includes(search)
+  );
 
   return (
     <AppLayout>
@@ -76,14 +204,15 @@ export default function Vendors() {
                 <TableHead>Phone</TableHead>
                 <TableHead>State</TableHead>
                 <TableHead>GST No.</TableHead>
+                <TableHead className="text-right">Total Purchased</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={5} className="text-center py-16 text-muted-foreground">
+                <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
                   <Truck className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No vendors yet</p>
                 </TableCell></TableRow>
               ) : filtered.map(v => (
@@ -92,6 +221,9 @@ export default function Vendors() {
                   <TableCell className="text-sm text-muted-foreground">{v.phone || '—'}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{(v as any).state || '—'}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{v.gstNumber || '—'}</TableCell>
+                  <TableCell className="text-right font-mono text-sm font-semibold text-amber-600">
+                    ₹{Number((v as any).totalPurchased ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </TableCell>
                   <TableCell className="text-right">
                     <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(v)}><Eye className="w-4 h-4" /></Button>
                   </TableCell>
@@ -102,6 +234,7 @@ export default function Vendors() {
         </div>
       </div>
 
+      {/* Add Vendor Dialog */}
       <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) form.reset(); }}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader><DialogTitle>Add Vendor</DialogTitle></DialogHeader>
@@ -124,9 +257,7 @@ export default function Vendors() {
                   <FormItem><FormLabel>State</FormLabel>
                     <Select onValueChange={field.onChange} value={field.value || ''}>
                       <FormControl><SelectTrigger><SelectValue placeholder="Select state" /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        {INDIAN_STATES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                      </SelectContent>
+                      <SelectContent>{INDIAN_STATES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
                     </Select>
                   </FormItem>
                 )} />
@@ -146,24 +277,7 @@ export default function Vendors() {
         </DialogContent>
       </Dialog>
 
-      <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle className="flex items-center gap-2"><Truck className="w-5 h-5 text-primary" />{viewItem?.name}</SheetTitle>
-            <SheetDescription>Vendor / supplier details</SheetDescription>
-          </SheetHeader>
-          {viewItem && (
-            <div className="mt-6 space-y-4">
-              {[['Phone', viewItem.phone || '—'], ['Email', viewItem.email || '—'], ['State', (viewItem as any).state || '—'], ['GSTIN', viewItem.gstNumber || '—'], ['Address', viewItem.address || '—'], ['Bank Details', viewItem.bankDetails || '—']].map(([k, v]) => (
-                <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
-                  <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
-                  <span className="font-medium">{v}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </SheetContent>
-      </Sheet>
+      {viewItem && <VendorSheet vendor={viewItem} onClose={() => setViewItem(null)} />}
     </AppLayout>
   );
 }

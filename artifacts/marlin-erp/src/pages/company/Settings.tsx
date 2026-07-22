@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Trash2, TriangleAlert } from 'lucide-react';
 import { toast } from 'sonner';
+import { customFetch } from '@workspace/api-client-react';
 
 interface SettingGroup {
   icon: React.ElementType;
@@ -100,13 +101,11 @@ export default function Settings() {
   const handleReset = async () => {
     setResetting(true);
     try {
-      const res = await fetch('/api/company/reset', { method: 'POST', credentials: 'include' });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Reset failed');
+      await customFetch('/api/company/reset', { method: 'POST' });
       toast.success('All company data has been cleared. You can now start fresh.');
       setShowResetConfirm(false);
     } catch (e: any) {
-      toast.error(e.message || 'Reset failed. Please try again.');
+      toast.error(e?.data?.error || e.message || 'Reset failed. Please try again.');
     } finally {
       setResetting(false);
     }
@@ -198,18 +197,20 @@ export default function Settings() {
             <AlertDialogTitle className="flex items-center gap-2 text-destructive">
               <TriangleAlert className="w-5 h-5" /> Reset all company data?
             </AlertDialogTitle>
-            <AlertDialogDescription className="space-y-2">
-              <span className="block">This will permanently delete:</span>
-              <ul className="list-disc list-inside text-sm space-y-0.5 ml-1">
-                <li>All sales and invoice history</li>
-                <li>All purchase orders</li>
-                <li>All customers</li>
-                <li>All stock entries (quantities reset to zero)</li>
-                <li>All production batches</li>
-                <li>All payroll, attendance, and leave records</li>
-                <li>Invoice sequence counter (restarts from 0001)</li>
-              </ul>
-              <span className="block mt-2 font-medium text-foreground">This action cannot be undone.</span>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <span className="block">This will permanently delete:</span>
+                <ul className="list-disc list-inside space-y-0.5 ml-1">
+                  <li>All sales and invoice history</li>
+                  <li>All purchase orders</li>
+                  <li>All customers</li>
+                  <li>All stock entries (quantities reset to zero)</li>
+                  <li>All production batches</li>
+                  <li>All payroll, attendance, and leave records</li>
+                  <li>Invoice sequence counter (restarts from 0001)</li>
+                </ul>
+                <span className="block mt-2 font-medium text-foreground">This action cannot be undone.</span>
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

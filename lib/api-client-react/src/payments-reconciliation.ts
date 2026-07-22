@@ -1,6 +1,40 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "./custom-fetch";
 
+// ── Customer / Vendor Ledger ───────────────────────────────────────────────────
+export interface LedgerEntry {
+  date: string;
+  description: string;
+  entryType: string;
+  debit: number;
+  credit: number;
+  balance: number;
+  paymentStatus?: string;
+}
+export interface PartyLedger {
+  balance: number;
+  totalBilled?: number;
+  totalPaid?: number;
+  totalPurchased?: number;
+  entries: LedgerEntry[];
+}
+
+export function useGetCustomerLedger(customerId: number | undefined) {
+  return useQuery<PartyLedger>({
+    queryKey: ['customer-ledger', customerId],
+    queryFn: () => customFetch<PartyLedger>(`/api/customers/${customerId}/ledger`),
+    enabled: !!customerId,
+  });
+}
+
+export function useGetVendorLedger(vendorId: number | undefined) {
+  return useQuery<PartyLedger>({
+    queryKey: ['vendor-ledger', vendorId],
+    queryFn: () => customFetch<PartyLedger>(`/api/vendors/${vendorId}/ledger`),
+    enabled: !!vendorId,
+  });
+}
+
 // ── Update Sale ────────────────────────────────────────────────────────────────
 export function useUpdateSale() {
   return useMutation({
