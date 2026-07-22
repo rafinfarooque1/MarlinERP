@@ -24,6 +24,7 @@ const schema = z.object({
   address: z.string().optional(),
   contactPerson: z.string().optional(),
   phone: z.string().optional(),
+  upiId: z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -38,10 +39,10 @@ export default function Warehouses() {
   const updateMutation = useUpdateWarehouse();
   const deleteMutation = useDeleteWarehouse();
 
-  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', state: '', gstNumber: '', address: '', contactPerson: '', phone: '' } });
+  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', state: '', gstNumber: '', address: '', contactPerson: '', phone: '', upiId: '' } });
 
-  const openAdd = () => { setEditingId(null); form.reset({ name: '', state: '', gstNumber: '', address: '', contactPerson: '', phone: '' }); setIsOpen(true); };
-  const openEdit = (w: any) => { setEditingId(w.id); form.reset({ name: w.name, state: w.state, gstNumber: w.gstNumber || '', address: w.address || '', contactPerson: w.contactPerson || '', phone: w.phone || '' }); setIsOpen(true); };
+  const openAdd = () => { setEditingId(null); form.reset({ name: '', state: '', gstNumber: '', address: '', contactPerson: '', phone: '', upiId: '' }); setIsOpen(true); };
+  const openEdit = (w: any) => { setEditingId(w.id); form.reset({ name: w.name, state: w.state, gstNumber: w.gstNumber || '', address: w.address || '', contactPerson: w.contactPerson || '', phone: w.phone || '', upiId: (w as any).upiId || '' }); setIsOpen(true); };
 
   const onSubmit = (data: FormValues) => {
     const opts = {
@@ -148,6 +149,9 @@ export default function Warehouses() {
               <FormField control={form.control} name="address" render={({ field }) => (
                 <FormItem><FormLabel>Address</FormLabel><FormControl><Textarea placeholder="Full address..." rows={2} {...field} /></FormControl></FormItem>
               )} />
+              <FormField control={form.control} name="upiId" render={({ field }) => (
+                <FormItem><FormLabel>UPI ID <span className="text-xs text-muted-foreground font-normal">(for invoice QR payment)</span></FormLabel><FormControl><Input placeholder="e.g. warehouse@bank" className="font-mono" {...field} /></FormControl><FormMessage /></FormItem>
+              )} />
               <DialogFooter>
                 <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
                 <Button type="submit" disabled={isPending}>{isPending ? 'Saving…' : 'Save'}</Button>
@@ -165,7 +169,7 @@ export default function Warehouses() {
           </SheetHeader>
           {viewItem && (
             <div className="mt-6 space-y-4">
-              {[['State', viewItem.state], ['GST Number', viewItem.gstNumber || '—'], ['Contact Person', viewItem.contactPerson || '—'], ['Phone', viewItem.phone || '—'], ['Address', viewItem.address || '—']].map(([k, v]) => (
+              {[['State', viewItem.state], ['GST Number', viewItem.gstNumber || '—'], ['UPI ID', (viewItem as any).upiId || '—'], ['Contact Person', viewItem.contactPerson || '—'], ['Phone', viewItem.phone || '—'], ['Address', viewItem.address || '—']].map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
                   <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                   <span className="font-medium">{v}</span>

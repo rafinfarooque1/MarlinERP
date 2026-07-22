@@ -86,7 +86,7 @@ router.get("/sales", async (req, res): Promise<void> => {
   const rows = await db.select().from(salesTable).orderBy(salesTable.id);
   const outlets = await db.select().from(outletsTable);
   const customers = await db.select().from(customersTable);
-  const oMap = new Map(outlets.map((o) => [o.id, o.name]));
+  const oMap = new Map(outlets.map((o) => [o.id, { name: o.name, upiId: (o as any).upiId ?? "" }]));
   const cMap = new Map(customers.map((c) => [c.id, { name: c.name, phone: c.phone ?? null }]));
 
   const outletIdFilter = req.query.outletId ? Number(req.query.outletId) : null;
@@ -94,9 +94,11 @@ router.get("/sales", async (req, res): Promise<void> => {
 
   res.json(filtered.map((r) => {
     const cust = r.customerId ? cMap.get(r.customerId) : null;
+    const outlet = oMap.get(r.outletId);
     return {
       ...r,
-      outletName: oMap.get(r.outletId) ?? "",
+      outletName: outlet?.name ?? "",
+      outletUpiId: outlet?.upiId ?? "",
       customerName: cust?.name ?? null,
       customerPhone: cust?.phone ?? null,
       subtotal: Number(r.subtotal),
@@ -229,6 +231,7 @@ router.post("/sales", async (req, res): Promise<void> => {
   res.status(201).json({
     ...row,
     outletName: outlet?.name ?? "",
+    outletUpiId: (outlet as any)?.upiId ?? "",
     customerName,
     subtotal: Number(row.subtotal),
     taxTotal: Number(row.taxTotal),
@@ -279,6 +282,7 @@ router.get("/sales/:id", async (req, res): Promise<void> => {
   res.json({
     ...row,
     outletName: outlet?.name ?? "",
+    outletUpiId: (outlet as any)?.upiId ?? "",
     customerName,
     subtotal: Number(row.subtotal),
     taxTotal: Number(row.taxTotal),

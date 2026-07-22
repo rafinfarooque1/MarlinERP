@@ -644,7 +644,8 @@ export const CreateWarehouseBody = zod.object({
   "gstNumber": zod.string(),
   "address": zod.string().optional(),
   "contactPerson": zod.string().optional(),
-  "phone": zod.string().optional()
+  "phone": zod.string().optional(),
+  "upiId": zod.string().optional()
 })
 
 export const CreateWarehouseResponse = zod.object({
@@ -687,7 +688,8 @@ export const UpdateWarehouseBody = zod.object({
   "gstNumber": zod.string().optional(),
   "address": zod.string().optional(),
   "contactPerson": zod.string().optional(),
-  "phone": zod.string().optional()
+  "phone": zod.string().optional(),
+  "upiId": zod.string().optional()
 })
 
 export const UpdateWarehouseResponse = zod.object({
@@ -734,7 +736,8 @@ export const CreateOutletBody = zod.object({
   "warehouseId": zod.number(),
   "address": zod.string().optional(),
   "contactPerson": zod.string().optional(),
-  "phone": zod.string().optional()
+  "phone": zod.string().optional(),
+  "upiId": zod.string().optional()
 })
 
 export const CreateOutletResponse = zod.object({
@@ -774,7 +777,8 @@ export const UpdateOutletBody = zod.object({
   "warehouseId": zod.number().optional(),
   "address": zod.string().optional(),
   "contactPerson": zod.string().optional(),
-  "phone": zod.string().optional()
+  "phone": zod.string().optional(),
+  "upiId": zod.string().optional()
 })
 
 export const UpdateOutletResponse = zod.object({

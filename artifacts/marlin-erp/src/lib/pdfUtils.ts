@@ -157,11 +157,30 @@ function drawFooter(doc: jsPDF, note: string) {
   doc.text(note, PAGE_W / 2, PAGE_H - 9, { align: 'center' });
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function buildUpiUri(upiId: string, payeeName: string, amount: number, ref: string): string {
+  const params = new URLSearchParams({ pa: upiId, pn: payeeName, am: amount.toFixed(2), cu: 'INR', tn: ref });
+  return `upi://pay?${params.toString()}`;
+}
+
 // ── Tax Invoice ───────────────────────────────────────────────────────────────
 
-function buildInvoicePDFDoc(sale: any, companySettings: any): jsPDF {
+async function buildInvoicePDFDoc(sale: any, companySettings: any): Promise<jsPDF> {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const cs = companySettings as any;
+
+  // Pre-generate UPI QR data URL if the outlet has a UPI ID configured
+  let qrDataUrl: string | undefined;
+  const outletUpiId: string = (sale as any).outletUpiId || '';
+  if (outletUpiId) {
+    try {
+      const upiUri = buildUpiUri(outletUpiId, sale.outletName || '', Number(sale.totalAmount), sale.invoiceNumber || '');
+      const QR = (await import('qrcode')) as any;
+      qrDataUrl = await QR.toDataURL(upiUri, { width: 200, margin: 2, color: { dark: '#000000', light: '#FFFFFF' } });
+    } catch { /* QR unavailable — omit silently */ }
+  }
+
   let y = drawHeader(doc, cs, 'TAX INVOICE');
 
   // ── Invoice meta box ──
@@ -307,18 +326,65 @@ function buildInvoicePDFDoc(sale: any, companySettings: any): jsPDF {
     if (cs.ifscCode)    { doc.text(`IFSC: ${esc(cs.ifscCode)}`, MARGIN, by); }
   }
 
+  // ── UPI QR Code (right column, below totals) ──────────────────────────────
+  if (qrDataUrl && outletUpiId) {
+    const qrSize   = 32;
+    const boxPad   = 3;
+    const boxW     = totBoxW;
+    const boxH     = qrSize + 22;
+    const boxX     = totBoxX;
+    const boxY     = y;
+    const centerX  = boxX + boxW / 2;
+
+    // Box background
+    setFill(doc, LIGHT);
+    setDraw(doc, [200, 200, 200]);
+    doc.setLineWidth(0.2);
+    doc.rect(boxX, boxY, boxW, boxH, 'FD');
+
+    // "SCAN TO PAY" header
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7);
+    setColor(doc, TEAL);
+    doc.text('SCAN TO PAY (UPI)', centerX, boxY + 4.5, { align: 'center' });
+
+    // QR image
+    const qrX = centerX - qrSize / 2;
+    const qrY = boxY + boxPad + 4;
+    doc.addImage(qrDataUrl, 'PNG', qrX, qrY, qrSize, qrSize);
+
+    // Info below QR
+    let iy = qrY + qrSize + 3.5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    setColor(doc, MUTED);
+    doc.text(`UPI: ${outletUpiId}`, centerX, iy, { align: 'center' });
+    iy += 4;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    setColor(doc, DARK);
+    doc.text(`₹${Number(sale.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`, centerX, iy, { align: 'center' });
+    iy += 3.5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6);
+    setColor(doc, MUTED);
+    doc.text(esc(sale.invoiceNumber), centerX, iy, { align: 'center' });
+
+    y += boxH + 5;
+  }
+
   drawFooter(doc, 'This is a computer-generated invoice and does not require a physical signature.');
   return doc;
 }
 
-export function downloadInvoicePDF(sale: any, companySettings: any) {
-  buildInvoicePDFDoc(sale, companySettings)
-    .save(`Invoice-${esc(sale.invoiceNumber || String(sale.id))}.pdf`);
+export async function downloadInvoicePDF(sale: any, companySettings: any) {
+  const doc = await buildInvoicePDFDoc(sale, companySettings);
+  doc.save(`Invoice-${esc(sale.invoiceNumber || String(sale.id))}.pdf`);
 }
 
 /** Returns a Blob of the invoice PDF without downloading (used for WhatsApp file share). */
-export function generateInvoicePDFBlob(sale: any, companySettings: any): Blob {
-  return buildInvoicePDFDoc(sale, companySettings).output('blob') as Blob;
+export async function generateInvoicePDFBlob(sale: any, companySettings: any): Promise<Blob> {
+  return (await buildInvoicePDFDoc(sale, companySettings)).output('blob') as Blob;
 }
 
 // ── Payslip ───────────────────────────────────────────────────────────────────

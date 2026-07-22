@@ -69,8 +69,9 @@ export function buildGstInvoiceHtml(opts: {
   cs: any;          // company settings
   sale: any;        // sale record with lineItems
   invoiceType?: string;
+  qrDataUrl?: string; // optional UPI QR code data URL
 }): string {
-  const { cs, sale } = opts;
+  const { cs, sale, qrDataUrl } = opts;
   const invoiceType = sale.customerGstin ? 'GST INVOICE B2B' : 'GST INVOICE B2C';
   const dateStr = new Date(sale.saleDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit' });
 
@@ -225,13 +226,21 @@ export function buildGstInvoiceHtml(opts: {
     <tr><td colspan="2" style="padding:0;border-top:1px solid #555">
       <table class="no-border">
         <tr>
-          <td style="width:55%;vertical-align:top;border-right:1px solid #ccc;padding:8px">
+          <td style="width:${qrDataUrl ? '38%' : '55%'};vertical-align:top;border-right:1px solid #ccc;padding:8px">
             <div class="bold small" style="margin-bottom:4px">Bank Details :-</div>
             ${cs?.bankName ? `<div>Bank Name: ${cs.bankName}</div>` : ''}
             ${cs?.bankAccount ? `<div>A/C No &nbsp;&nbsp;: ${cs.bankAccount}</div>` : ''}
             ${cs?.ifscCode ? `<div>IFSC &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: ${cs.ifscCode}</div>` : ''}
           </td>
-          <td style="width:45%;padding:8px;text-align:right">
+          ${qrDataUrl ? `
+          <td style="width:24%;vertical-align:top;border-right:1px solid #ccc;padding:6px;text-align:center">
+            <div class="bold small" style="color:#0d9488;margin-bottom:4px;font-size:8px;letter-spacing:0.5px">SCAN TO PAY (UPI)</div>
+            <img src="${qrDataUrl}" style="width:100px;height:100px;display:block;margin:0 auto" alt="UPI QR" />
+            <div style="font-size:8px;color:#666;margin-top:3px;word-break:break-all">${(sale as any).outletUpiId || ''}</div>
+            <div style="font-size:10px;font-weight:bold;margin-top:2px">₹${Number(sale.totalAmount).toFixed(2)}</div>
+            <div style="font-size:7px;color:#999">${sale.invoiceNumber || ''}</div>
+          </td>` : ''}
+          <td style="width:${qrDataUrl ? '38%' : '45%'};padding:8px;text-align:right">
             <div class="bold" style="margin-bottom:4px">${cs?.companyName || ''}</div>
             <div style="margin-top:40px" class="label">Authorised Signatory</div>
           </td>

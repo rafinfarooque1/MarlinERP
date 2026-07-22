@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   useListSales, useCreateSale, useListOutlets, useListCustomers, useCreateCustomer,
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
@@ -123,6 +123,20 @@ export default function Sales() {
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
+  const [viewQrUrl, setViewQrUrl] = useState<string | null>(null);
+
+  // Generate UPI QR data URL whenever the invoice view opens
+  useEffect(() => {
+    if (!viewItem || !(viewItem as any).outletUpiId) { setViewQrUrl(null); return; }
+    const upiId  = (viewItem as any).outletUpiId as string;
+    const amount = Number(viewItem.totalAmount).toFixed(2);
+    const upiUri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(viewItem.outletName || '')}&am=${amount}&cu=INR&tn=${encodeURIComponent(viewItem.invoiceNumber || '')}`;
+    let cancelled = false;
+    (import('qrcode') as Promise<any>).then(QR => {
+      QR.toDataURL(upiUri, { width: 200, margin: 2 }).then((url: string) => { if (!cancelled) setViewQrUrl(url); });
+    }).catch(() => { if (!cancelled) setViewQrUrl(null); });
+    return () => { cancelled = true; };
+  }, [viewItem]);
   const queryClient = useQueryClient();
   const createMutation = useCreateSale();
   const createCustomerMutation = useCreateCustomer();
@@ -229,9 +243,19 @@ export default function Sales() {
     });
   };
 
-  const handlePrintInvoice = (sale: any) => {
+  const handlePrintInvoice = async (sale: any) => {
     const cs = companySettings as any;
-    printHTML(buildGstInvoiceHtml({ cs, sale }), sale.invoiceNumber);
+    let qrDataUrl: string | undefined;
+    const upiId = (sale as any).outletUpiId as string | undefined;
+    if (upiId) {
+      try {
+        const amount = Number(sale.totalAmount).toFixed(2);
+        const upiUri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(sale.outletName || '')}&am=${amount}&cu=INR&tn=${encodeURIComponent(sale.invoiceNumber || '')}`;
+        const QR = (await import('qrcode')) as any;
+        qrDataUrl = await QR.toDataURL(upiUri, { width: 200, margin: 2 });
+      } catch { /* omit QR */ }
+    }
+    printHTML(buildGstInvoiceHtml({ cs, sale, qrDataUrl }), sale.invoiceNumber);
   };
 
   // ── WhatsApp invoice share ─────────────────────────────────────────────────
@@ -247,7 +271,7 @@ export default function Sales() {
     const company = cs?.name ?? 'Marlin Frozen Fruits';
 
     // 1. Download the invoice PDF to the device
-    downloadInvoicePDF(sale, companySettings);
+    void downloadInvoicePDF(sale, companySettings);
 
     // 2. Build the pre-filled WhatsApp message
     const date  = new Date(sale.saleDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -378,8 +402,8 @@ export default function Sales() {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(sale)} title="View"><Eye className="w-4 h-4" /></Button>
-                      {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => handlePrintInvoice(sale)} title="Print"><Printer className="w-4 h-4" /></Button>}
-                      {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => downloadInvoicePDF(sale, companySettings)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>}
+                      {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => void handlePrintInvoice(sale)} title="Print"><Printer className="w-4 h-4" /></Button>}
+                      {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => void downloadInvoicePDF(sale, companySettings)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>}
                       {(sale as any).customerPhone && (
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-[#25D366] hover:text-[#128C7E] hover:bg-[#25D366]/10" onClick={() => handleWhatsApp(sale)} title={`Send invoice to ${(sale as any).customerPhone} via WhatsApp`}>
                           <WhatsAppIcon className="w-4 h-4" />
@@ -858,6 +882,28 @@ export default function Sales() {
                 </div>
               </div>
 
+              {/* ── UPI QR Payment section ──────────────────────────────────── */}
+              {(viewItem as any).outletUpiId ? (
+                <div className="border border-teal-500/30 rounded-xl bg-teal-500/5 p-4 text-center">
+                  <p className="text-xs font-bold text-teal-600 uppercase tracking-widest mb-3">⊡ Scan to Pay (UPI)</p>
+                  {viewQrUrl ? (
+                    <img src={viewQrUrl} alt="UPI QR Code" className="w-44 h-44 mx-auto rounded-lg border border-border shadow-sm" />
+                  ) : (
+                    <div className="w-44 h-44 mx-auto rounded-lg border border-border bg-muted/30 flex items-center justify-center">
+                      <p className="text-xs text-muted-foreground">Generating QR…</p>
+                    </div>
+                  )}
+                  <p className="text-xs text-muted-foreground mt-2 font-mono">{(viewItem as any).outletUpiId}</p>
+                  <p className="text-base font-bold mt-0.5">₹{Number(viewItem.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                  <p className="text-xs text-muted-foreground">{viewItem.invoiceNumber}</p>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-400">
+                  <p className="font-semibold">UPI payment QR not available</p>
+                  <p className="mt-0.5 opacity-80">No UPI ID configured for <strong>{viewItem.outletName}</strong>. Update the outlet profile to enable QR payments on invoices.</p>
+                </div>
+              )}
+
               <div className="flex flex-col gap-2">
                 {/* WhatsApp — only when customer has a phone number */}
                 {(viewItem as any)?.customerPhone && (
@@ -872,10 +918,10 @@ export default function Sales() {
                 )}
                 {perm.canDownload && (
                   <div className="flex gap-2">
-                    <Button className="flex-1" variant="outline" onClick={() => handlePrintInvoice(viewItem)}>
+                    <Button className="flex-1" variant="outline" onClick={() => void handlePrintInvoice(viewItem)}>
                       <Printer className="w-4 h-4 mr-2" /> Print
                     </Button>
-                    <Button className="flex-1" variant="outline" onClick={() => downloadInvoicePDF(viewItem, companySettings)}>
+                    <Button className="flex-1" variant="outline" onClick={() => void downloadInvoicePDF(viewItem, companySettings)}>
                       <FileDown className="w-4 h-4 mr-2" /> Download PDF
                     </Button>
                   </div>

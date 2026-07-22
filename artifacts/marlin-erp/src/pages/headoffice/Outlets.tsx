@@ -23,6 +23,7 @@ const schema = z.object({
   address: z.string().optional(),
   contactPerson: z.string().optional(),
   phone: z.string().optional(),
+  upiId: z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -38,10 +39,10 @@ export default function Outlets() {
   const updateMutation = useUpdateOutlet();
   const deleteMutation = useDeleteOutlet();
 
-  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', warehouseId: 0, address: '', contactPerson: '', phone: '' } });
+  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', warehouseId: 0, address: '', contactPerson: '', phone: '', upiId: '' } });
 
-  const openAdd = () => { setEditingId(null); form.reset({ name: '', warehouseId: 0, address: '', contactPerson: '', phone: '' }); setIsOpen(true); };
-  const openEdit = (o: any) => { setEditingId(o.id); form.reset({ name: o.name, warehouseId: o.warehouseId, address: o.address || '', contactPerson: o.contactPerson || '', phone: o.phone || '' }); setIsOpen(true); };
+  const openAdd = () => { setEditingId(null); form.reset({ name: '', warehouseId: 0, address: '', contactPerson: '', phone: '', upiId: '' }); setIsOpen(true); };
+  const openEdit = (o: any) => { setEditingId(o.id); form.reset({ name: o.name, warehouseId: o.warehouseId, address: o.address || '', contactPerson: o.contactPerson || '', phone: o.phone || '', upiId: (o as any).upiId || '' }); setIsOpen(true); };
 
   const onSubmit = (data: FormValues) => {
     const opts = {
@@ -147,6 +148,9 @@ export default function Outlets() {
               <FormField control={form.control} name="address" render={({ field }) => (
                 <FormItem><FormLabel>Address</FormLabel><FormControl><Textarea placeholder="Full address..." rows={2} {...field} /></FormControl></FormItem>
               )} />
+              <FormField control={form.control} name="upiId" render={({ field }) => (
+                <FormItem><FormLabel>UPI ID <span className="text-xs text-muted-foreground font-normal">(for invoice QR payment)</span></FormLabel><FormControl><Input placeholder="e.g. outlet@bank" className="font-mono" {...field} /></FormControl><FormMessage /></FormItem>
+              )} />
               <DialogFooter>
                 <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
                 <Button type="submit" disabled={isPending}>{isPending ? 'Saving…' : 'Save'}</Button>
@@ -164,7 +168,7 @@ export default function Outlets() {
           </SheetHeader>
           {viewItem && (
             <div className="mt-6 space-y-4">
-              {[['Parent Warehouse', viewItem.warehouseName], ['Contact', viewItem.contactPerson || '—'], ['Phone', viewItem.phone || '—'], ['Address', viewItem.address || '—']].map(([k, v]) => (
+              {[['Parent Warehouse', viewItem.warehouseName], ['UPI ID', (viewItem as any).upiId || '—'], ['Contact', viewItem.contactPerson || '—'], ['Phone', viewItem.phone || '—'], ['Address', viewItem.address || '—']].map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
                   <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                   <span className="font-medium">{v}</span>

@@ -10,6 +10,7 @@ export const warehousesTable = pgTable("warehouses", {
   address: text("address"),
   contactPerson: text("contact_person"),
   phone: text("phone"),
+  upiId: text("upi_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });
@@ -21,6 +22,7 @@ export const outletsTable = pgTable("outlets", {
   address: text("address"),
   contactPerson: text("contact_person"),
   phone: text("phone"),
+  upiId: text("upi_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });
