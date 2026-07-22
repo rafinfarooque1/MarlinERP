@@ -3,6 +3,7 @@ import {
   useListSales, useCreateSale, useListOutlets, useListCustomers, useCreateCustomer,
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
   getListSalesQueryKey, getListCustomersQueryKey, useListCoupons,
+  customFetch,
 } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -35,7 +36,6 @@ function WhatsAppIcon({ className }: { className?: string }) {
   );
 }
 import { cn } from '@/lib/utils';
-import { downloadInvoicePDF, generateInvoicePDFBlob } from '@/lib/pdfUtils';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
@@ -243,20 +243,55 @@ export default function Sales() {
     });
   };
 
+  // ── Invoice PDF (canonical server-side renderer) ───────────────────────────
+  // ONE renderer lives on the API server (services/invoicePdf.ts). Every
+  // channel — preview, download, WhatsApp — uses the same endpoint via a
+  // signed, time-limited share token:
+  //   POST /api/sales/:id/share-token              → { token }   (authenticated)
+  //   GET  /api/public/invoices/:token.pdf[?download=1]          (public, signed)
+  // The PDF is served over HTTPS with proper application/pdf headers and a
+  // sanitized ASCII filename, which keeps antivirus software happy (blob:
+  // URLs with no HTTP provenance were what triggered false positives before).
+  const requestInvoicePdfUrl = async (saleId: number, download: boolean): Promise<string> => {
+    const { token } = await customFetch<{ token: string; expiresAt: string }>(
+      `/api/sales/${saleId}/share-token`,
+      { method: 'POST' },
+    );
+    return `${window.location.origin}/api/public/invoices/${token}.pdf${download ? '?download=1' : ''}`;
+  };
+
+  // Download: navigate to the attachment URL — the browser saves exactly one
+  // file (Content-Disposition: attachment) and the page stays where it is.
+  const handleDownloadPDF = async (sale: any) => {
+    try {
+      window.location.assign(await requestInvoicePdfUrl(sale.id, true));
+    } catch {
+      toast.error('Unable to prepare the invoice PDF. Please try again.');
+    }
+  };
+
+  // Preview: open the tab synchronously (inside the click gesture) so popup
+  // blockers allow it, then point it at the inline PDF once the URL is ready.
+  const handlePreviewPDF = async (sale: any) => {
+    const tab = window.open('', '_blank');
+    try {
+      const url = await requestInvoicePdfUrl(sale.id, false);
+      if (tab) tab.location.replace(url);
+      else window.open(url, '_blank');
+    } catch {
+      tab?.close();
+      toast.error('Unable to open the invoice PDF. Please try again.');
+    }
+  };
+
   // ── WhatsApp invoice share ─────────────────────────────────────────────────
-  // Flow:
-  //   1. Generate the invoice PDF → open it in a new browser tab (user can
-  //      download/print from there; avoids AV false-positives on direct save).
-  //   2. Build a wa.me deep-link targeting the customer's exact phone number
-  //      with the invoice message pre-filled.
-  //   3. Open the wa.me link (500 ms after the PDF tab) — WhatsApp opens
-  //      directly to that customer's chat with the message ready to send.
+  // Opens wa.me directly to the customer's chat with a short message holding a
+  // secure HTTPS link to the invoice PDF — the customer taps the link to
+  // view/download it. No attachments, no extra tabs, nothing to re-upload.
   //
-  // NOTE: wa.me deep-links target a specific number; no Share Sheet appears.
-  //   Local PDF files cannot be pre-attached via wa.me (browser limitation).
-  //   The message instructs the user to switch to the PDF tab to attach it.
-  //   If true automated document delivery is required in future, the WhatsApp
-  //   Business API (cloud.whatsapp.com) can send documents server-side.
+  // Popup-safety: the tab is opened synchronously inside the click gesture and
+  // redirected once the link is ready. (The previous setTimeout-based
+  // window.open lost the user gesture → popup blocked → "nothing happened".)
   const handleWhatsApp = async (sale: any) => {
     const raw = (sale.customerPhone ?? '').replace(/\D/g, '');
     if (!raw) {
@@ -274,67 +309,38 @@ export default function Sales() {
       intl = `91${raw}`;                 // bare 10-digit → 91XXXXXXXXXX
     }
 
-    const cs      = companySettings as any;
-    const company = cs?.companyName ?? cs?.name ?? 'Marlin Frozen Fruits';
-    const date    = new Date(sale.saleDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-    const total   = Number(sale.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 });
-    const taxLine = Number(sale.taxTotal) > 0
-      ? `\nGST (incl. in amount): ₹${Number(sale.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
-      : '';
+    const waTab = window.open('', '_blank'); // sync open — popup-blocker safe
 
-    const lines = (sale.lineItems ?? []).map((li: any) => {
-      const name     = li.itemName || `Item #${li.itemId}`;
-      const lineAmt  = Number(li.unitPrice ?? 0) * Number(li.quantity ?? 1);
-      return `  • ${name} × ${li.quantity} = ₹${lineAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-    }).join('\n');
-
-    const message = [
-      `Dear ${sale.customerName || 'Customer'},`,
-      ``,
-      `Please find your invoice details below.`,
-      ``,
-      `*Invoice No:* ${sale.invoiceNumber}`,
-      `*Invoice Date:* ${date}`,
-      `*Outlet:* ${sale.outletName || ''}`,
-      ``,
-      `*Items:*`,
-      lines,
-      ``,
-      `*Amount: ₹${total}*${taxLine}`,
-      `*Payment:* ${(sale.paymentMode ?? '').replace('_', ' ').toUpperCase()}`,
-      ``,
-      `📎 The invoice PDF has been opened in a separate tab — please download it and attach here before sending.`,
-      ``,
-      `Thank you for your purchase! 🙏`,
-      `— ${company}`,
-    ].join('\n');
-
-    // Step 1 — Generate PDF and open it in a new tab
-    let pdfBlob: Blob;
     try {
-      pdfBlob = await generateInvoicePDFBlob(sale, companySettings);
+      const pdfUrl = await requestInvoicePdfUrl(sale.id, false);
+
+      const cs      = companySettings as any;
+      const company = cs?.companyName ?? cs?.name ?? 'Marlin Frozen Fruits';
+      const date    = new Date(sale.saleDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+      const total   = Number(sale.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+
+      const message = [
+        `Dear ${sale.customerName || 'Customer'},`,
+        ``,
+        `Thank you for your purchase! 🙏`,
+        ``,
+        `*Invoice No:* ${sale.invoiceNumber}`,
+        `*Date:* ${date}`,
+        `*Amount:* ₹${total}`,
+        ``,
+        `View / download your invoice PDF here:`,
+        pdfUrl,
+        ``,
+        `— ${sale.outletName || company}`,
+      ].join('\n');
+
+      const waUrl = `https://wa.me/${intl}?text=${encodeURIComponent(message)}`;
+      if (waTab) waTab.location.replace(waUrl);
+      else window.open(waUrl, '_blank');   // fallback if the tab was blocked
     } catch {
-      toast.error('Unable to generate invoice PDF. Please try again.');
-      return;
+      waTab?.close();
+      toast.error('Unable to prepare the WhatsApp share. Please try again.');
     }
-
-    const blobUrl = URL.createObjectURL(pdfBlob);
-    const pdfTab  = window.open(blobUrl, '_blank', 'noopener');
-    if (pdfTab) {
-      pdfTab.addEventListener('load', () => URL.revokeObjectURL(blobUrl));
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
-    } else {
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 5_000);
-    }
-
-    // Step 2 — Open the customer's WhatsApp chat directly with the message
-    setTimeout(() => {
-      window.open(
-        `https://wa.me/${intl}?text=${encodeURIComponent(message)}`,
-        '_blank',
-        'noopener',
-      );
-    }, 500);
   };
 
   const filtered = sales.filter(s =>
@@ -433,7 +439,7 @@ export default function Sales() {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(sale)} title="View"><Eye className="w-4 h-4" /></Button>
-                      {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => void downloadInvoicePDF(sale, companySettings)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>}
+                      {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => void handleDownloadPDF(sale)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>}
                       {(sale as any).customerPhone && (
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-[#25D366] hover:text-[#128C7E] hover:bg-[#25D366]/10" onClick={() => void handleWhatsApp(sale)} title={`Send invoice to ${(sale as any).customerPhone} via WhatsApp`}>
                           <WhatsAppIcon className="w-4 h-4" />
@@ -947,9 +953,14 @@ export default function Sales() {
                   </Button>
                 )}
                 {perm.canDownload && (
-                  <Button className="w-full" variant="outline" onClick={() => void downloadInvoicePDF(viewItem, companySettings)}>
-                    <FileDown className="w-4 h-4 mr-2" /> Download / Print PDF
-                  </Button>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button variant="outline" onClick={() => void handlePreviewPDF(viewItem)}>
+                      <Eye className="w-4 h-4 mr-2" /> Preview PDF
+                    </Button>
+                    <Button variant="outline" onClick={() => void handleDownloadPDF(viewItem)}>
+                      <FileDown className="w-4 h-4 mr-2" /> Download PDF
+                    </Button>
+                  </div>
                 )}
               </div>
             </div>

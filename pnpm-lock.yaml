@@ -191,12 +191,18 @@ importers:
       express:
         specifier: ^5.2.1
         version: 5.2.1
+      jspdf:
+        specifier: ^4.2.1
+        version: 4.2.1
       pino:
         specifier: ^9.14.0
         version: 9.14.0
       pino-http:
         specifier: ^10.5.0
         version: 10.5.0
+      qrcode:
+        specifier: ^1.5.4
+        version: 1.5.4
     devDependencies:
       '@types/bcryptjs':
         specifier: ^3.0.0
@@ -213,6 +219,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 25.9.5
+      '@types/qrcode':
+        specifier: ^1.5.6
+        version: 1.5.6
       esbuild:
         specifier: 0.27.3
         version: 0.27.3

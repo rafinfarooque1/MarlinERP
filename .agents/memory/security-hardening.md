@@ -28,6 +28,11 @@ description: What was done, decisions made, and constraints to maintain for auth
 
 **How to apply:** Never add a new migration that sets password_hash to a plaintext value. Always use PasswordService.hash() before any INSERT/UPDATE to the password_hash column.
 
-**Why:** The global requireAuth middleware in app.ts exempts only `/health` and `POST /auth/login`. Adding new public endpoints requires adding explicit exemptions there.
+**Why:** The global requireAuth middleware in app.ts exempts only `/health`, `POST /auth/login`, and `GET /public/invoices/*` (HMAC-tokenized invoice PDFs — see invoice-pdf-links.md). Adding new public endpoints requires adding explicit exemptions there.
+
+## Known remaining gaps (flagged to user, not fixed)
+
+- Bearer session tokens are UNSIGNED base64 of `id:...` — requireAuth only parses the employee id, so tokens are forgeable. Fixing = sign with HMAC at login + verify in requireAuth; invalidates all sessions once.
+- No server-side permission scoping: any authenticated employee can call any /api route (permissions enforced client-side only via usePermission). Share-token minting intentionally matches this flat model — don't "fix" one route in isolation.
 
 **Why:** Running Neon migration scripts requires NODE_PATH=lib/db/node_modules:artifacts/api-server/node_modules because pg is in lib/db and bcryptjs is in api-server. Use a .cjs file (not .mjs) for standalone migration scripts.

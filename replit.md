@@ -26,7 +26,7 @@ _Populate as you build — short repo map plus pointers to the source-of-truth f
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Sales invoice PDFs render server-side only (`artifacts/api-server/src/services/invoicePdf.ts`) and are served via HMAC-tokenized public links (`GET /api/public/invoices/:token.pdf`, 30-day expiry) so customers can open them without logging in. Do not reintroduce client-side invoice PDF generation (blob downloads trip antivirus scanners).
 
 ## Product
 

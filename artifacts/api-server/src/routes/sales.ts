@@ -3,6 +3,7 @@ import { db, salesTable, outletsTable, customersTable, stockEntriesTable, itemsT
 import { eq, and, inArray, sql } from "drizzle-orm";
 import { CreateSaleBody, GetSaleParams, SetItemPriceBody, ListItemPricesQueryParams } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
+import { createInvoiceShareToken } from "../lib/shareToken";
 
 const router = Router();
 
@@ -150,11 +151,11 @@ router.post("/sales", async (req, res): Promise<void> => {
   // ── Fetch item tax rates ──────────────────────────────────────────────────
   const itemIds = [...new Set(rawLineItems.map(li => li.itemId))];
   const itemsData = itemIds.length > 0
-    ? await db.select({ id: itemsTable.id, taxRate: itemsTable.taxRate, name: itemsTable.name, hsnCode: itemsTable.hsnCode })
+    ? await db.select({ id: itemsTable.id, taxRate: itemsTable.taxRate, name: itemsTable.name, hsnCode: itemsTable.hsnCode, unit: itemsTable.unit })
         .from(itemsTable)
         .where(inArray(itemsTable.id, itemIds))
     : [];
-  const itemTaxMap = new Map(itemsData.map(i => [i.id, { taxRate: Number(i.taxRate), name: i.name, hsnCode: i.hsnCode }]));
+  const itemTaxMap = new Map(itemsData.map(i => [i.id, { taxRate: Number(i.taxRate), name: i.name, hsnCode: i.hsnCode, unit: i.unit }]));
 
   // ── Build enriched line items with GST ────────────────────────────────────
   const lineItems = rawLineItems.map(li => {
@@ -167,6 +168,7 @@ router.post("/sales", async (req, res): Promise<void> => {
       itemId: li.itemId,
       itemName: itemInfo?.name ?? '',
       hsnCode: itemInfo?.hsnCode ?? '',
+      unit: itemInfo?.unit ?? '',
       quantity: li.quantity,
       unitPrice: li.unitPrice,
       discount: li.discount ?? 0,
@@ -268,6 +270,20 @@ router.get("/sales/summary", async (_req, res): Promise<void> => {
       invoiceCount: d.invoiceCount,
     })),
   });
+});
+
+// Create a time-limited signed share token for the invoice PDF.
+// The backend verifies the sale exists (and thereby the customer linkage)
+// before issuing a token — the frontend never passes phone numbers or IDs
+// that could be tampered with into the PDF pipeline.
+router.post("/sales/:id/share-token", async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(raw, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid sale id" }); return; }
+  const [row] = await db.select({ id: salesTable.id }).from(salesTable).where(eq(salesTable.id, id)).limit(1);
+  if (!row) { res.status(404).json({ error: "Not found" }); return; }
+  const { token, expiresAt } = createInvoiceShareToken(id);
+  res.json({ token, expiresAt });
 });
 
 router.get("/sales/:id", async (req, res): Promise<void> => {

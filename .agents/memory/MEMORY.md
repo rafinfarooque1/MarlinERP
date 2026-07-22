@@ -4,3 +4,4 @@
 - [Permission system](permissions.md) — usePermission hook at src/lib/usePermission.ts; module names must match Permissions page MODULE_GROUPS exactly; level 1 hierarchy = full access always.
 - [Custom API client hooks](custom-hooks.md) — New hooks go in lib/api-client-react/src/<name>.ts + export from index.ts; must run `pnpm tsc` in lib/api-client-react after adding files to generate .d.ts types.
 - [Item prices date range](item-prices-dates.md) — valid_from/valid_to added as text columns via startup migration in api-server/src/index.ts; ItemPrice type from generated code lacks these fields, use (ip as any).validFrom casts.
+- [Invoice PDFs & share links](invoice-pdf-links.md) — ONE server-side renderer + HMAC public links; open popups synchronously in the click gesture; blob-URL PDFs trigger AV false positives.

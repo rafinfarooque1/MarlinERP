@@ -13,6 +13,7 @@ import customersRouter from "./customers";
 import accountsRouter from "./accounts";
 import companyRouter from "./company";
 import auditRouter from "./audit";
+import publicInvoicesRouter from "./publicInvoices";
 const router: IRouter = Router();
 
 router.use(healthRouter);
@@ -29,5 +30,6 @@ router.use(customersRouter);
 router.use(accountsRouter);
 router.use(companyRouter);
 router.use(auditRouter);
+router.use(publicInvoicesRouter);
 
 export default router;

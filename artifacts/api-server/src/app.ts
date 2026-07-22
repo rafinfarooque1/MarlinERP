@@ -31,10 +31,12 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Global authentication guard — all /api routes require a valid Bearer token
-// except the health check and the login endpoint itself.
+// except the health check, the login endpoint, and tokenized public invoice
+// links (secured by their own HMAC-signed, time-limited tokens).
 app.use("/api", (req, res, next) => {
   if (req.path === "/health") { next(); return; }
   if (req.path === "/auth/login" && req.method === "POST") { next(); return; }
+  if (req.method === "GET" && req.path.startsWith("/public/invoices/")) { next(); return; }
   requireAuth(req, res, next);
 });
 

@@ -4,7 +4,11 @@ description: Full stack ERP for Marlin Frozen Fruits — api-server + marlin-erp
 ---
 
 ## Login
-- username: admin, password: admin123
+- username: admin, password: marlin1458 (bcrypt; see security-hardening.md)
+
+## Dev workflow quirk
+- api-server dev workflow runs `pnpm run build && pnpm run start` (esbuild bundle) — NO watch/HMR; must restart the workflow to pick up backend changes
+- Workspace lib dist types go stale (project references resolve to dist/, runtime uses src/): if tsc reports a schema column "missing" that exists in src, run `pnpm exec tsc -b lib/db` (same idea as api-client-react)
 
 ## Stack
 - api-server: Express + Drizzle ORM + PostgreSQL (via pool from @workspace/db)

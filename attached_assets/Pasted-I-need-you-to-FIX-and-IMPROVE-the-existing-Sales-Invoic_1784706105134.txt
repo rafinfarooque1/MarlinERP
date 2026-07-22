@@ -1,0 +1,999 @@
+I need you to FIX and IMPROVE the existing Sales Invoice system.
+
+DO NOT create a second invoice system.
+DO NOT create duplicate PDF routes.
+DO NOT create duplicate WhatsApp buttons.
+
+Inspect the existing implementation first and modify the current functionality.
+
+There are 3 tasks:
+
+A. Redesign the existing Sales Invoice into a professional standard invoice.
+B. Fix the PDF download that is being detected/blocked as a virus or malicious file.
+C. Fix the existing "Share via WhatsApp" button, which currently opens the PDF in a new browser window/tab and then does nothing.
+
+==========================================================
+TASK A — MAKE SALES INVOICE STANDARD AND PROFESSIONAL
+==========================================================
+
+The current invoice works but the layout needs to look like a professional GST tax invoice used by an established business.
+
+Keep all existing invoice data, calculations, GST logic, QR functionality, branch logic, customer logic, and accounting logic.
+
+Only improve the invoice presentation/layout.
+
+The invoice should be optimized for:
+
+A4 portrait
+Print
+PDF
+Email
+WhatsApp document sharing
+
+----------------------------------------------------------
+1. PROFESSIONAL HEADER
+----------------------------------------------------------
+
+Create a clean professional header.
+
+Top center or appropriately aligned:
+
+COMPANY / WAREHOUSE / OUTLET NAME
+
+Below:
+
+Full Address
+GSTIN
+Phone
+Email
+
+Then clearly display:
+
+TAX INVOICE
+
+Use professional font sizes and spacing.
+
+Do not make the company name excessively large.
+
+Do not leave unnecessary blank space.
+
+----------------------------------------------------------
+2. INVOICE INFORMATION SECTION
+----------------------------------------------------------
+
+Create a clean two-column invoice information table.
+
+LEFT:
+
+GST Number / GSTIN
+Invoice Number
+Invoice Date
+Tax Payable on Reverse Charge
+
+RIGHT:
+
+Transportation Mode
+Vehicle Number
+Date & Time of Supply
+Place of Supply
+
+Keep the layout compact and properly aligned.
+
+----------------------------------------------------------
+3. CUSTOMER DETAILS
+----------------------------------------------------------
+
+Create two equal professional sections:
+
+Details of Receiver (Billed To)
+
+and
+
+Details of Consignee (Shipped To)
+
+Show:
+
+Name
+Address
+State
+Mobile Number
+GSTIN
+
+where available.
+
+Do not show unnecessary empty rows if information is unavailable.
+
+----------------------------------------------------------
+4. ITEM TABLE
+----------------------------------------------------------
+
+Create a clean professional GST item table.
+
+Columns:
+
+Sl No
+Description of Goods
+HSN Code
+Qty
+Unit
+Unit Price
+Taxable Value
+CGST %
+CGST Amount
+SGST %
+SGST Amount
+IGST %
+IGST Amount
+Total
+
+Keep the table readable on A4.
+
+Use proper column widths.
+
+Description should have more width.
+
+Numeric values should be right aligned.
+
+Amounts should use consistent decimal formatting.
+
+Example:
+
+₹472.50
+
+not inconsistent formats.
+
+The totals row should be visually clear.
+
+----------------------------------------------------------
+5. TOTAL / INVOICE VALUE
+----------------------------------------------------------
+
+Create a professional totals section.
+
+Clearly show:
+
+Taxable Value
+CGST
+SGST
+IGST
+Round Off
+Grand Total
+
+The most prominent value should be:
+
+GRAND TOTAL: ₹XXX.XX
+
+Also show:
+
+Invoice Value in Words
+
+Example:
+
+Rupees Four Hundred Seventy Two and Fifty Paise Only
+
+Keep this generated dynamically from the actual invoice amount.
+
+----------------------------------------------------------
+6. UPI QR PAYMENT SECTION
+----------------------------------------------------------
+
+IMPORTANT:
+
+The UPI QR is currently visible and working in the invoice.
+
+DO NOT REMOVE IT AGAIN DURING THE INVOICE REDESIGN.
+
+The QR must remain dynamically generated using:
+
+Billing Warehouse/Outlet UPI ID
++
+Final Sales Invoice Grand Total
++
+Invoice Number/reference
+
+Create a clean section:
+
+PAYMENT DETAILS
+
+SCAN TO PAY (UPI)
+
+[QR CODE]
+
+UPI ID: xxxxx@upi
+Amount: ₹472.50
+Ref: TST/2025-26/0004
+
+Do not make the QR excessively large.
+
+But make it large enough to scan reliably from:
+
+Printed A4 invoice
+PDF displayed on another phone
+Desktop monitor
+
+Recommended rendered QR size approximately:
+
+120–150 px equivalent depending on PDF generation method.
+
+IMPORTANT:
+
+QR must appear in:
+
+Invoice View
+Print Invoice
+Downloaded PDF
+WhatsApp-shared PDF
+
+Use the SAME invoice rendering/data source wherever possible.
+
+----------------------------------------------------------
+7. BANK DETAILS
+----------------------------------------------------------
+
+Create a proper Bank Details section.
+
+Show configured information such as:
+
+Bank Name
+Account Name
+Account Number
+IFSC
+Branch
+
+Only show available information.
+
+Do not display a large empty Bank Details box.
+
+----------------------------------------------------------
+8. SIGNATURE
+----------------------------------------------------------
+
+Bottom right:
+
+For {Company / Warehouse / Outlet Name}
+
+Authorised Signatory
+
+If an authorised signature image exists in settings, display it appropriately.
+
+Otherwise keep the text area clean.
+
+----------------------------------------------------------
+9. FOOTER
+----------------------------------------------------------
+
+Use a professional footer such as:
+
+"This is a computer-generated invoice."
+
+Do not add unnecessary decorative elements.
+
+==========================================================
+TASK B — FIX "VIRUS DETECTED" PDF DOWNLOAD
+==========================================================
+
+CRITICAL BUG:
+
+When Sales Invoice PDF is downloaded, browser/McAfee repeatedly shows:
+
+"Virus detected"
+
+and
+
+"We just stopped a threat.
+A malicious file was automatically blocked either before or after download."
+
+Multiple invoice PDFs are being flagged.
+
+DO NOT simply:
+
+- rename the PDF
+- change .pdf extension
+- suppress the browser warning
+- tell the browser to ignore antivirus
+- disable antivirus
+- bypass security software
+
+Find the actual technical reason.
+
+----------------------------------------------------------
+1. AUDIT THE CURRENT PDF GENERATION
+----------------------------------------------------------
+
+Inspect exactly how invoice PDFs are generated.
+
+Identify whether the current system uses:
+
+html2pdf
+jsPDF
+PDFKit
+Puppeteer
+Playwright
+browser print
+base64 conversion
+Blob
+custom binary generation
+or another library.
+
+Inspect the complete PDF pipeline:
+
+Invoice Data
+→ HTML/rendering
+→ PDF generation
+→ Binary/Buffer
+→ HTTP response
+→ Browser download
+
+Check whether malformed PDF output is being generated.
+
+----------------------------------------------------------
+2. VALID PDF REQUIREMENTS
+----------------------------------------------------------
+
+The generated file must be a standards-compliant PDF.
+
+The HTTP response must use:
+
+Content-Type: application/pdf
+
+and a safe Content-Disposition such as:
+
+Content-Disposition: attachment; filename="Invoice-TST-2025-26-0004.pdf"
+
+Sanitize invoice numbers before using them in filenames.
+
+For example:
+
+Invoice number:
+TST/2025-26/0004
+
+Filename:
+
+Invoice-TST-2025-26-0004.pdf
+
+Do not put slash characters directly into filenames.
+
+----------------------------------------------------------
+3. DO NOT GENERATE FAKE PDF FILES
+----------------------------------------------------------
+
+Make sure the system is NOT:
+
+- saving HTML with a .pdf extension
+- returning JSON as .pdf
+- returning an error page as .pdf
+- corrupting binary data through UTF-8/string conversion
+- incorrectly decoding base64
+- appending HTML/JavaScript to PDF bytes
+- generating malformed Blob data
+
+The downloaded file must begin with a valid PDF signature:
+
+%PDF-
+
+and end correctly according to the PDF specification.
+
+----------------------------------------------------------
+4. CHECK FOR UNSAFE CONTENT
+----------------------------------------------------------
+
+Inspect whether the generated PDF accidentally contains:
+
+JavaScript actions
+embedded executable files
+Launch actions
+malformed attachments
+suspicious embedded objects
+unsafe external actions
+
+A normal invoice PDF should not contain executable JavaScript.
+
+Remove any unnecessary active PDF content.
+
+QR code should be embedded as a normal:
+
+PNG
+JPEG
+SVG converted safely
+
+or other safe supported image format.
+
+Do not embed executable QR-related code inside the PDF.
+
+----------------------------------------------------------
+5. QR DATA URI / BASE64 CHECK
+----------------------------------------------------------
+
+Since QR functionality was recently added, specifically inspect whether QR generation is causing malformed PDF output.
+
+Check:
+
+QR Data URL
+Base64 conversion
+Image embedding
+PDF serialization
+
+Make sure:
+
+data:image/png;base64,...
+
+is correctly converted before PDF embedding.
+
+Do not accidentally insert the entire data URI string as malformed binary.
+
+Test PDF generation:
+
+WITH QR
+and
+WITHOUT QR
+
+Determine whether the QR implementation is related to the antivirus detection.
+
+Do not remove QR as the final solution.
+
+Fix the implementation correctly.
+
+----------------------------------------------------------
+6. REMOVE DUPLICATE DOWNLOAD BEHAVIOR
+----------------------------------------------------------
+
+The screenshot shows many duplicate invoice downloads such as:
+
+Invoice-INV-1784400997347 (5).pdf
+
+Investigate whether one button click is triggering PDF generation/download multiple times.
+
+Check for:
+
+duplicate onClick handlers
+React useEffect triggering download
+double event propagation
+form submit + button click
+multiple API calls
+window.open + download simultaneously
+
+One click on:
+
+Download PDF
+
+must generate/download exactly:
+
+ONE PDF.
+
+----------------------------------------------------------
+7. TEST THE ACTUAL PDF
+----------------------------------------------------------
+
+After fixing, test:
+
+Download Invoice PDF
+
+Verify:
+
+- exactly one file downloads
+- PDF opens normally
+- PDF is not blank
+- invoice is complete
+- QR appears
+- QR scans correctly
+- no malformed file
+- correct application/pdf MIME type
+- correct filename
+- no duplicate download
+- no executable/active content intentionally embedded
+
+IMPORTANT:
+
+If the PDF is technically valid and antivirus still flags it, inspect the HTTP download route, domain/reputation issue, response headers, service worker, browser extension interaction, and any injected content.
+
+Do not automatically assume McAfee is a false positive without investigating.
+
+==========================================================
+TASK C — FIX SHARE VIA WHATSAPP COMPLETELY
+==========================================================
+
+CURRENT BUG:
+
+The existing:
+
+"Share via WhatsApp"
+
+button is not working correctly.
+
+Currently:
+
+Click Share via WhatsApp
+→ PDF opens in a new browser tab/window
+→ Nothing else happens
+
+THIS IS WRONG.
+
+Opening the PDF in a new tab is NOT WhatsApp sharing.
+
+Remove this broken behavior.
+
+----------------------------------------------------------
+REQUIRED FLOW
+----------------------------------------------------------
+
+The desired workflow is:
+
+Sales Invoice
+→ Click "Share via WhatsApp"
+→ System identifies customer automatically
+→ Gets customer's saved WhatsApp number
+→ Prepares the CURRENT invoice PDF
+→ Initiates WhatsApp sharing to that customer
+→ Customer receives invoice PDF
+
+Invoice text details are OPTIONAL.
+
+The PDF is the main requirement.
+
+DO NOT ask the ERP user to manually type the customer's number.
+
+DO NOT open only the PDF and stop.
+
+----------------------------------------------------------
+1. GET CUSTOMER WHATSAPP AUTOMATICALLY
+----------------------------------------------------------
+
+Resolve:
+
+Sales Invoice
+→ Customer ID
+→ Customer Master
+→ WhatsApp Number
+
+Example:
+
+Invoice:
+TST/2025-26/0004
+
+Customer:
+Faisal
+
+Saved WhatsApp:
+8089430780
+
+System should automatically normalize it to the correct international WhatsApp format.
+
+For India, if appropriate:
+
+8089430780
+
+→
+
+918089430780
+
+If already stored:
+
++918089430780
+
+do not add +91 again.
+
+If already:
+
+918089430780
+
+do not add another 91.
+
+Use a proper reusable phone-number normalization function.
+
+----------------------------------------------------------
+2. IMPORTANT — DO NOT USE window.open(PDF_URL)
+----------------------------------------------------------
+
+The WhatsApp button must NOT simply do:
+
+window.open(pdfUrl)
+
+This is apparently what is happening now.
+
+Opening:
+
+/api/invoices/.../pdf
+
+in a new tab is NOT sharing.
+
+Remove this behavior from the dedicated WhatsApp button.
+
+----------------------------------------------------------
+3. DO NOT CONFUSE PDF PREVIEW WITH WHATSAPP SHARE
+----------------------------------------------------------
+
+Keep these as separate functions:
+
+View PDF
+→ Opens invoice PDF preview.
+
+Download PDF
+→ Downloads invoice PDF.
+
+Share via WhatsApp
+→ Initiates WhatsApp-specific sharing.
+
+Do not reuse:
+
+View PDF
+
+as the WhatsApp implementation.
+
+----------------------------------------------------------
+4. WHATSAPP TECHNICAL LIMITATION
+----------------------------------------------------------
+
+Implement this honestly according to official WhatsApp capabilities.
+
+A normal:
+
+wa.me/{number}
+
+link can directly open a specific customer's WhatsApp chat and prefill TEXT.
+
+However, a normal wa.me link CANNOT pre-attach a local PDF document automatically.
+
+Therefore:
+
+DO NOT implement fake logic that opens the PDF first and expects WhatsApp to automatically attach it.
+
+DO NOT claim that window.open(pdfUrl) shares the PDF.
+
+DO NOT use unreliable browser hacks.
+
+----------------------------------------------------------
+5. IMPLEMENT BEST AVAILABLE METHOD
+----------------------------------------------------------
+
+Use this priority:
+
+OPTION A — IF OFFICIAL WHATSAPP BUSINESS API IS CONFIGURED
+
+If the ERP already has or can support official WhatsApp Business Platform / Cloud API integration:
+
+Use the official document-message workflow.
+
+Flow:
+
+Click Share via WhatsApp
+→ Backend gets customer's WhatsApp number
+→ Backend generates/retrieves current invoice PDF
+→ Upload/send invoice PDF through official WhatsApp API
+→ Send to exact customer's WhatsApp number
+
+Text/caption is optional.
+
+Suggested caption if used:
+
+Invoice {InvoiceNumber}
+Amount: ₹{GrandTotal}
+
+The customer should receive the actual PDF document.
+
+If API credentials are NOT configured:
+
+DO NOT invent credentials.
+
+Clearly identify what is required:
+
+WhatsApp Business Account
+Meta App
+Phone Number ID
+Access Token
+approved configuration/template if required
+
+Do not break existing functionality.
+
+OPTION B — IF NO WHATSAPP BUSINESS API EXISTS
+
+Implement a technically valid fallback.
+
+Create a secure invoice PDF URL accessible to the customer.
+
+Then:
+
+Click "Share via WhatsApp"
+→ Get customer's saved WhatsApp number
+→ Generate secure invoice PDF URL
+→ Directly open THAT customer's WhatsApp chat
+→ Prefill a short message containing the secure invoice PDF link
+
+Example:
+
+Invoice TST/2025-26/0004
+₹472.50
+
+View/Download Invoice PDF:
+{SECURE_PDF_URL}
+
+This should directly open:
+
+wa.me/{CUSTOMER_NUMBER}?text={ENCODED_MESSAGE}
+
+The ERP user should NOT need to search/select the customer again.
+
+The customer can click the secure link and open/download the PDF.
+
+IMPORTANT:
+
+Do not expose:
+
+localhost URLs
+Replit internal URLs
+filesystem paths
+/mnt/data paths
+temporary browser Blob URLs
+
+The PDF URL must be accessible to the customer over HTTPS.
+
+Use secure signed/tokenized invoice links if possible.
+
+----------------------------------------------------------
+6. IF I REQUIRE ACTUAL PDF ATTACHMENT
+----------------------------------------------------------
+
+If the requirement is:
+
+Click Share via WhatsApp
+→ actual PDF document goes directly to customer's WhatsApp
+
+then implement this through the official WhatsApp Business API rather than browser hacks.
+
+DO NOT route through the browser's generic Share Sheet unless explicitly requested.
+
+DO NOT require:
+
+Select Share
+→ Select WhatsApp
+→ Search Customer
+
+because the ERP already knows the customer number.
+
+----------------------------------------------------------
+7. OPTIONAL BILL TEXT
+----------------------------------------------------------
+
+Bill text is NOT mandatory.
+
+Priority:
+
+1. Customer receives/accesses correct invoice PDF.
+2. Correct customer's WhatsApp is used automatically.
+3. Invoice text/caption is optional.
+
+If text is included, keep it short:
+
+Dear {CustomerName},
+
+Invoice: {InvoiceNumber}
+Amount: ₹{GrandTotal}
+
+Invoice PDF:
+{SecurePDFLink}
+
+Thank you,
+{Warehouse/Outlet/CompanyName}
+
+----------------------------------------------------------
+8. CURRENT INVOICE ONLY
+----------------------------------------------------------
+
+Always use the latest saved invoice.
+
+If:
+
+Old amount = ₹400
+Edited amount = ₹472.50
+
+WhatsApp must use the latest:
+
+₹472.50
+
+and latest PDF.
+
+Do not share stale cached PDFs.
+
+----------------------------------------------------------
+9. NO DUPLICATE PDF GENERATION
+----------------------------------------------------------
+
+Create/reuse ONE canonical backend PDF generation service.
+
+Conceptually:
+
+generateSalesInvoicePdf(invoiceId)
+
+Use the same service for:
+
+View PDF
+Download PDF
+WhatsApp document/link
+
+Do not maintain 3 different invoice templates.
+
+This prevents:
+
+QR missing in one version
+different invoice formatting
+different totals
+stale PDFs
+
+There should be ONE canonical invoice PDF output.
+
+==========================================================
+ARCHITECTURE REQUIREMENT
+==========================================================
+
+Refactor if necessary so the architecture becomes:
+
+                 Sales Invoice Data
+                        ↓
+             Canonical Invoice Renderer
+                        ↓
+                PDF Generation Service
+                  ↙       ↓       ↘
+             Preview   Download   WhatsApp
+
+All three outputs must use the SAME invoice template.
+
+This is extremely important.
+
+Currently, after invoice format changes, some features such as QR or sharing may be using old/different invoice logic.
+
+Eliminate duplicate invoice rendering implementations.
+
+==========================================================
+DO NOT BREAK EXISTING ERP
+==========================================================
+
+Do not modify unrelated:
+
+Stock
+Purchases
+Sales calculations
+GST accounting logic
+Ledger
+Payment collection
+Warehouse transfers
+Outlet transfers
+Customer master
+Permissions
+Invoice numbering
+
+Only modify what is necessary for:
+
+Professional Sales Invoice
+UPI QR persistence
+Safe PDF generation/download
+WhatsApp invoice sharing
+
+==========================================================
+BEFORE CODING — AUDIT FIRST
+==========================================================
+
+Before making changes, inspect and report internally:
+
+1. Which component renders the Sales Invoice?
+2. Which function generates PDF?
+3. Which endpoint serves/downloads PDF?
+4. Which function generates the UPI QR?
+5. Is QR embedded in the canonical invoice or only one UI component?
+6. What does the current WhatsApp button execute?
+7. Why does WhatsApp button open PDF in a new tab?
+8. Is navigator.share() being used?
+9. Is window.open(pdfUrl) being used?
+10. Are multiple PDF generators/templates present?
+11. Why are duplicate PDFs downloading?
+12. Is the PDF valid application/pdf binary?
+13. Are PDF response headers correct?
+
+Then implement the fixes.
+
+==========================================================
+FINAL ACCEPTANCE TESTS
+==========================================================
+
+TEST 1 — INVOICE DESIGN
+
+Open Sales Invoice.
+
+Expected:
+
+Professional A4 GST invoice.
+Clean alignment.
+No excessive empty space.
+QR clearly visible.
+Grand Total prominent.
+Professional payment/bank/signature section.
+
+TEST 2 — PDF DOWNLOAD
+
+Click Download PDF once.
+
+Expected:
+
+Exactly ONE PDF downloads.
+
+No duplicate files.
+
+PDF opens normally.
+
+No intentionally unsafe active content.
+
+QR visible.
+
+TEST 3 — QR
+
+Scan downloaded PDF QR.
+
+Expected:
+
+Correct UPI ID.
+Correct ₹ amount.
+Correct invoice reference.
+
+TEST 4 — WHATSAPP
+
+Invoice customer:
+Faisal
+
+Saved WhatsApp:
+8089430780
+
+Click:
+
+Share via WhatsApp
+
+Expected:
+
+DO NOT simply open PDF in a new tab.
+
+System must use Faisal's saved WhatsApp number automatically.
+
+If WhatsApp Business API is configured:
+Send/share actual invoice PDF to Faisal through the supported API flow.
+
+If WhatsApp Business API is NOT configured:
+Directly open Faisal's WhatsApp chat with a secure link to the exact invoice PDF.
+
+Do not ask user to select Faisal again.
+
+TEST 5 — BRANCH SECURITY
+
+Invoice from:
+Koramangala Outlet
+
+Ensure:
+
+Correct outlet invoice
+Correct UPI
+Correct customer
+Correct WhatsApp
+Correct PDF
+
+Never mix another outlet's data.
+
+==========================================================
+MOST IMPORTANT
+==========================================================
+
+Fix root causes, not symptoms.
+
+1. Make invoice professional.
+2. Keep UPI QR visible in ALL invoice outputs.
+3. Fix malformed/suspicious PDF download issue properly.
+4. One click must download only one PDF.
+5. Fix Share via WhatsApp — opening PDF in a new tab is NOT sharing.
+6. Automatically use customer's saved WhatsApp number.
+7. Actual direct PDF sending should use official WhatsApp Business API if available.
+8. Without API, directly open customer's WhatsApp with a secure PDF link.
+9. Use ONE canonical invoice renderer/PDF generator for Preview, Download, and WhatsApp.
+10. Do not disturb unrelated ERP functionality.
+
+After implementation, provide a concise summary of:
+- files/components changed
+- root cause of PDF antivirus detection, if identified
+- root cause of broken WhatsApp behavior
+- exact WhatsApp sharing method implemented
+- whether WhatsApp Business API credentials are required for actual direct PDF attachment
+- tests performed and results
