@@ -22,7 +22,7 @@ import * as z from 'zod';
 import { INDIAN_STATES } from '@/lib/indianStates';
 import {
   Plus, Search, Trash2, CreditCard, Calendar, Receipt,
-  Download, Eye, Printer, PackageOpen, FileDown, AlertTriangle,
+  Download, Eye, PackageOpen, FileDown, AlertTriangle,
   UserPlus, Check, ChevronsUpDown,
 } from 'lucide-react';
 
@@ -39,7 +39,7 @@ import { downloadInvoicePDF, generateInvoicePDFBlob } from '@/lib/pdfUtils';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
-import { downloadCSV, printHTML, buildGstInvoiceHtml } from '@/lib/download';
+import { downloadCSV } from '@/lib/download';
 import { Separator } from '@/components/ui/separator';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -241,21 +241,6 @@ export default function Sales() {
       },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Could not record sale'),
     });
-  };
-
-  const handlePrintInvoice = async (sale: any) => {
-    const cs = companySettings as any;
-    let qrDataUrl: string | undefined;
-    const upiId = (sale as any).outletUpiId as string | undefined;
-    if (upiId) {
-      try {
-        const amount = Number(sale.totalAmount).toFixed(2);
-        const upiUri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(sale.outletName || '')}&am=${amount}&cu=INR&tn=${encodeURIComponent(sale.invoiceNumber || '')}`;
-        const QR = (await import('qrcode')) as any;
-        qrDataUrl = await QR.toDataURL(upiUri, { width: 200, margin: 2 });
-      } catch { /* omit QR */ }
-    }
-    printHTML(buildGstInvoiceHtml({ cs, sale, qrDataUrl }), sale.invoiceNumber);
   };
 
   // ── WhatsApp invoice share ─────────────────────────────────────────────────
@@ -460,7 +445,6 @@ export default function Sales() {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(sale)} title="View"><Eye className="w-4 h-4" /></Button>
-                      {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => void handlePrintInvoice(sale)} title="Print"><Printer className="w-4 h-4" /></Button>}
                       {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => void downloadInvoicePDF(sale, companySettings)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>}
                       {(sale as any).customerPhone && (
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-[#25D366] hover:text-[#128C7E] hover:bg-[#25D366]/10" onClick={() => void handleWhatsApp(sale)} title={`Send invoice to ${(sale as any).customerPhone} via WhatsApp`}>
@@ -975,14 +959,9 @@ export default function Sales() {
                   </Button>
                 )}
                 {perm.canDownload && (
-                  <div className="flex gap-2">
-                    <Button className="flex-1" variant="outline" onClick={() => void handlePrintInvoice(viewItem)}>
-                      <Printer className="w-4 h-4 mr-2" /> Print
-                    </Button>
-                    <Button className="flex-1" variant="outline" onClick={() => void downloadInvoicePDF(viewItem, companySettings)}>
-                      <FileDown className="w-4 h-4 mr-2" /> Download PDF
-                    </Button>
-                  </div>
+                  <Button className="w-full" variant="outline" onClick={() => void downloadInvoicePDF(viewItem, companySettings)}>
+                    <FileDown className="w-4 h-4 mr-2" /> Download / Print PDF
+                  </Button>
                 )}
               </div>
             </div>
