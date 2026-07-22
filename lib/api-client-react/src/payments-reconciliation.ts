@@ -35,6 +35,33 @@ export function useGetVendorLedger(vendorId: number | undefined) {
   });
 }
 
+export interface CashBankLedger {
+  id: number;
+  name: string;
+  code: string | null;
+  parentId: number | null;
+  type: string;
+}
+
+export function useGetCashBankLedgers() {
+  return useQuery<CashBankLedger[]>({
+    queryKey: ['cash-bank-ledgers-list'],
+    queryFn: () => customFetch('/api/accounts/cash-bank-ledgers'),
+  });
+}
+
+export function useRecordVendorPayment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ vendorId, data }: { vendorId: number; data: { date: string; amount: number; cashBankLedgerId: number; narration?: string } }) =>
+      customFetch<any>(`/api/vendors/${vendorId}/payment`, { method: 'POST', body: JSON.stringify(data) }),
+    onSuccess: (_: any, vars) => {
+      qc.invalidateQueries({ queryKey: ['vendor-ledger', vars.vendorId] });
+      qc.invalidateQueries({ queryKey: ['vendors'] });
+    },
+  });
+}
+
 // ── Update Sale ────────────────────────────────────────────────────────────────
 export function useUpdateSale() {
   return useMutation({

@@ -91,8 +91,36 @@ router.patch("/customers/:id", async (req, res): Promise<void> => {
 
 // ── Vendors ────────────────────────────────────────────────────────────────
 router.get("/vendors", async (_req, res): Promise<void> => {
-  const rows = await db.select().from(vendorsTable).orderBy(vendorsTable.id);
-  res.json(rows);
+  const { rows } = await pool.query<any>(`
+    SELECT
+      v.*,
+      COALESCE(SUM(p.total_amount), 0) AS "totalPurchased",
+      COALESCE((
+        SELECT SUM(pay.amount)
+        FROM payments pay
+        JOIN account_ledgers al ON al.id = pay.paid_to_ledger_id
+        WHERE al.code = 'VEND-' || v.id::text
+      ), 0) AS "totalPaid",
+      GREATEST(0,
+        COALESCE(SUM(p.total_amount), 0) -
+        COALESCE((
+          SELECT SUM(pay.amount)
+          FROM payments pay
+          JOIN account_ledgers al ON al.id = pay.paid_to_ledger_id
+          WHERE al.code = 'VEND-' || v.id::text
+        ), 0)
+      ) AS "outstandingBalance"
+    FROM vendors v
+    LEFT JOIN purchases p ON p.vendor_id = v.id
+    GROUP BY v.id
+    ORDER BY v.id
+  `);
+  res.json(rows.map((r: any) => ({
+    ...r,
+    totalPurchased:     Number(r.totalPurchased),
+    totalPaid:          Number(r.totalPaid),
+    outstandingBalance: Number(r.outstandingBalance),
+  })));
 });
 
 router.post("/vendors", async (req, res): Promise<void> => {
@@ -176,37 +204,84 @@ router.get("/customers/:id/ledger", async (req, res): Promise<void> => {
   res.json({ balance: totalBilled - totalPaid, totalBilled, totalPaid, entries });
 });
 
-// ── Vendor ledger (purchase history as Dr/Cr statement) ───────────────────
+// ── Vendor ledger (purchases + payments as Dr/Cr statement) ───────────────
 router.get("/vendors/:id/ledger", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
-  const { rows } = await pool.query<any>(
-    `SELECT
-       p.id,
-       p.invoice_number,
-       p.purchase_date,
-       p.total_amount
-     FROM purchases p
-     WHERE p.vendor_id = $1
-     ORDER BY p.purchase_date ASC, p.id ASC`,
+
+  const { rows: purchaseRows } = await pool.query<any>(
+    `SELECT p.id, p.invoice_number, p.purchase_date AS date, p.total_amount AS amount
+     FROM purchases p WHERE p.vendor_id = $1`,
     [id],
   );
+  const { rows: paymentRows } = await pool.query<any>(
+    `SELECT pay.id, pay.voucher_number, pay.payment_date AS date, pay.amount,
+            fl.name AS paid_from_name
+     FROM payments pay
+     JOIN account_ledgers al ON al.id = pay.paid_to_ledger_id
+     JOIN account_ledgers fl ON fl.id = pay.paid_from_ledger_id
+     WHERE al.code = $1`,
+    [`VEND-${id}`],
+  );
+
+  // Merge and sort by date
+  const combined = [
+    ...purchaseRows.map((r: any) => ({
+      date: r.date, sortKey: r.date + '-P' + r.id,
+      entryType: 'purchase' as const,
+      description: r.invoice_number ? `Purchase — Ref: ${r.invoice_number}` : `Purchase #${r.id}`,
+      debit: 0, credit: Number(r.amount),
+    })),
+    ...paymentRows.map((r: any) => ({
+      date: r.date, sortKey: r.date + '-V' + r.id,
+      entryType: 'payment' as const,
+      description: `Payment via ${r.paid_from_name} (${r.voucher_number})`,
+      debit: Number(r.amount), credit: 0,
+    })),
+  ].sort((a, b) => a.sortKey.localeCompare(b.sortKey));
 
   let running = 0;
-  const entries = rows.map((r: any) => {
-    const credit = Number(r.total_amount);
-    running += credit;
-    return {
-      date: r.purchase_date,
-      description: r.invoice_number ? `Ref: ${r.invoice_number}` : `Purchase #${r.id}`,
-      entryType: 'purchase',
-      debit: 0,
-      credit,
-      balance: running,
-    };
+  const entries = combined.map(e => {
+    running += e.credit - e.debit;
+    return { ...e, balance: running };
   });
 
-  const totalPurchased = rows.reduce((s: number, r: any) => s + Number(r.total_amount), 0);
-  res.json({ balance: totalPurchased, totalPurchased, entries });
+  const totalPurchased = purchaseRows.reduce((s: number, r: any) => s + Number(r.amount), 0);
+  const totalPaid      = paymentRows.reduce((s: number, r: any) => s + Number(r.amount), 0);
+  res.json({ balance: Math.max(0, totalPurchased - totalPaid), totalPurchased, totalPaid, entries });
+});
+
+// ── Record vendor payment ─────────────────────────────────────────────────
+router.post("/vendors/:id/payment", async (req, res): Promise<void> => {
+  const vendorId = parseInt(req.params.id, 10);
+  const { date, amount, cashBankLedgerId, narration } = req.body as {
+    date: string; amount: number; cashBankLedgerId: number; narration?: string;
+  };
+  if (!date || !amount || !cashBankLedgerId) {
+    res.status(400).json({ error: "date, amount and cashBankLedgerId are required" }); return;
+  }
+
+  // Find the VEND-{id} ledger account
+  const { rows: [vendorLedger] } = await pool.query(
+    `SELECT id FROM account_ledgers WHERE code = $1`, [`VEND-${vendorId}`],
+  );
+  if (!vendorLedger) {
+    res.status(400).json({ error: `Ledger account VEND-${vendorId} not found. Please re-save the vendor to create it.` }); return;
+  }
+
+  // Auto-number the payment voucher
+  const { rows: [cnt] } = await pool.query(`SELECT COUNT(*) FROM payments`);
+  const voucherNumber = `PAY-${String(Number(cnt.count) + 1).padStart(4, '0')}`;
+
+  const { rows: [row] } = await pool.query<any>(
+    `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+    [voucherNumber, date, cashBankLedgerId, vendorLedger.id, amount, narration ?? `Payment to vendor #${vendorId}`],
+  );
+
+  res.status(201).json({
+    id: row.id, voucherNumber: row.voucher_number, paymentDate: row.payment_date,
+    amount: Number(row.amount), narration: row.narration,
+  });
 });
 
 // ── Coupons ────────────────────────────────────────────────────────────────
