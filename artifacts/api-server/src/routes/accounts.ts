@@ -505,9 +505,9 @@ router.get("/accounts/financial-statements", async (req, res): Promise<void> => 
   // Sales total + tax collected (filtered by outlet if provided)
   const sp: any[] = [];
   const salesConds: string[] = [];
-  if (fromDate) { sp.push(fromDate); salesConds.push(`sale_date >= ${sp.length}`); }
-  if (toDate)   { sp.push(toDate);   salesConds.push(`sale_date <= ${sp.length}`); }
-  if (outletId) { sp.push(Number(outletId)); salesConds.push(`outlet_id = ${sp.length}`); }
+  if (fromDate) { sp.push(fromDate); salesConds.push(`sale_date >= $${sp.length}`); }
+  if (toDate)   { sp.push(toDate);   salesConds.push(`sale_date <= $${sp.length}`); }
+  if (outletId) { sp.push(Number(outletId)); salesConds.push(`outlet_id = $${sp.length}`); }
   const salesWhere = salesConds.length ? `WHERE ${salesConds.join(' AND ')}` : '';
   const { rows: salesRows } = await pool.query(
     `SELECT COALESCE(SUM(total_amount::numeric), 0) AS total,
@@ -606,6 +606,128 @@ router.get("/accounts/financial-statements", async (req, res): Promise<void> => 
         total: Math.round(assetsTotal * 100) / 100,
       },
     },
+  });
+});
+
+// ── Ledger Statement ──────────────────────────────────────────────────────
+router.get("/accounts/ledger/:id/statement", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
+
+  const { rows: [ledger] } = await pool.query(
+    `SELECT id, name, type, code FROM account_ledgers WHERE id = $1`, [id]
+  );
+  if (!ledger) { res.status(404).json({ error: "Ledger not found" }); return; }
+
+  // Build date-range helpers
+  const dateClause = (col: string, params: any[]) => {
+    const conds: string[] = [];
+    if (fromDate) { params.push(fromDate); conds.push(`${col} >= $${params.length}`); }
+    if (toDate)   { params.push(toDate);   conds.push(`${col} <= $${params.length}`); }
+    return conds.length ? ` AND ${conds.join(' AND ')}` : '';
+  };
+
+  // Payments where this ledger is the source (credit — money leaves)
+  const pFromParams: any[] = [id];
+  const { rows: payFromRows } = await pool.query(
+    `SELECT p.id, p.payment_date AS date, p.amount, p.voucher_number, p.narration,
+            pt.name AS other_name
+     FROM payments p
+     LEFT JOIN account_ledgers pt ON pt.id = p.paid_to_ledger_id
+     WHERE p.paid_from_ledger_id = $1${dateClause('p.payment_date', pFromParams)}
+     ORDER BY p.payment_date, p.id`, pFromParams
+  );
+
+  // Payments where this ledger is the destination (debit — money arrives)
+  const pToParams: any[] = [id];
+  const { rows: payToRows } = await pool.query(
+    `SELECT p.id, p.payment_date AS date, p.amount, p.voucher_number, p.narration,
+            pf.name AS other_name
+     FROM payments p
+     LEFT JOIN account_ledgers pf ON pf.id = p.paid_from_ledger_id
+     WHERE p.paid_to_ledger_id = $1${dateClause('p.payment_date', pToParams)}
+     ORDER BY p.payment_date, p.id`, pToParams
+  );
+
+  // Receipts where this ledger is the source (credit)
+  const rFromParams: any[] = [id];
+  const { rows: recFromRows } = await pool.query(
+    `SELECT r.id, r.receipt_date AS date, r.amount, r.voucher_number, r.narration,
+            ri.name AS other_name
+     FROM receipts r
+     LEFT JOIN account_ledgers ri ON ri.id = r.received_in_ledger_id
+     WHERE r.received_from_ledger_id = $1${dateClause('r.receipt_date', rFromParams)}
+     ORDER BY r.receipt_date, r.id`, rFromParams
+  ).catch(() => ({ rows: [] }));
+
+  // Receipts where this ledger is the destination (debit)
+  const rToParams: any[] = [id];
+  const { rows: recToRows } = await pool.query(
+    `SELECT r.id, r.receipt_date AS date, r.amount, r.voucher_number, r.narration,
+            rf.name AS other_name
+     FROM receipts r
+     LEFT JOIN account_ledgers rf ON rf.id = r.received_from_ledger_id
+     WHERE r.received_in_ledger_id = $1${dateClause('r.receipt_date', rToParams)}
+     ORDER BY r.receipt_date, r.id`, rToParams
+  ).catch(() => ({ rows: [] }));
+
+  // Expenses charged to this ledger (debit)
+  const expParams: any[] = [id];
+  const { rows: expRows } = await pool.query(
+    `SELECT e.id, e.expense_date AS date, e.amount, e.description, e.category
+     FROM expenses e
+     WHERE e.ledger_account_id = $1${dateClause('e.expense_date', expParams)}
+     ORDER BY e.expense_date, e.id`, expParams
+  ).catch(() => ({ rows: [] }));
+
+  // Merge all entries
+  const combined: { sortKey: string; date: string; description: string; reference: string; entryType: string; debit: number; credit: number }[] = [];
+
+  for (const r of payFromRows) combined.push({
+    sortKey: `${r.date}P-${String(r.id).padStart(8,'0')}`,
+    date: r.date, reference: r.voucher_number,
+    description: r.narration || `Payment to ${r.other_name}`,
+    entryType: 'payment', debit: 0, credit: Number(r.amount),
+  });
+  for (const r of payToRows) combined.push({
+    sortKey: `${r.date}P+${String(r.id).padStart(8,'0')}`,
+    date: r.date, reference: r.voucher_number,
+    description: r.narration || `Payment from ${r.other_name}`,
+    entryType: 'payment', debit: Number(r.amount), credit: 0,
+  });
+  for (const r of recFromRows) combined.push({
+    sortKey: `${r.date}R-${String(r.id).padStart(8,'0')}`,
+    date: r.date, reference: r.voucher_number,
+    description: r.narration || `Receipt to ${r.other_name}`,
+    entryType: 'receipt', debit: 0, credit: Number(r.amount),
+  });
+  for (const r of recToRows) combined.push({
+    sortKey: `${r.date}R+${String(r.id).padStart(8,'0')}`,
+    date: r.date, reference: r.voucher_number,
+    description: r.narration || `Receipt from ${r.other_name}`,
+    entryType: 'receipt', debit: Number(r.amount), credit: 0,
+  });
+  for (const r of expRows) combined.push({
+    sortKey: `${r.date}E+${String(r.id).padStart(8,'0')}`,
+    date: r.date, reference: `EXP-${r.id}`,
+    description: r.description || r.category || 'Expense',
+    entryType: 'expense', debit: Number(r.amount), credit: 0,
+  });
+
+  combined.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+
+  let balance = 0;
+  const entries = combined.map(({ sortKey: _sk, ...e }) => {
+    balance += e.debit - e.credit;
+    return { ...e, balance };
+  });
+
+  const totalDebit  = entries.reduce((s, e) => s + e.debit,  0);
+  const totalCredit = entries.reduce((s, e) => s + e.credit, 0);
+
+  res.json({
+    ledger: { id: ledger.id, name: ledger.name, type: ledger.type, code: ledger.code },
+    entries, totalDebit, totalCredit, closingBalance: balance,
   });
 });
 

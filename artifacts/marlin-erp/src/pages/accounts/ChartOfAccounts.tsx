@@ -6,8 +6,10 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
-import { Building2, CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, Plus, ChevronDown, ChevronRight, Package, Lock, Trash2 } from 'lucide-react';
+import { Building2, CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, Plus, ChevronDown, ChevronRight, Package, Lock, Trash2, ScrollText, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
 import { toast } from 'sonner';
 
 /* ── types ──────────────────────────────────────────────────────────────────── */
@@ -161,12 +163,128 @@ function BankLedgerDialog({ parentId, parentType, onCreated, onClose }: {
   );
 }
 
+/* ── ledger statement sheet ──────────────────────────────────────────────────── */
+function LedgerStatementSheet({ ledgerNode, fromDate, toDate, onClose }: {
+  ledgerNode: LedgerNode; fromDate?: string; toDate?: string; onClose: () => void;
+}) {
+  const qs = new URLSearchParams();
+  if (fromDate) qs.set('fromDate', fromDate);
+  if (toDate)   qs.set('toDate', toDate);
+  const q = qs.toString();
+
+  const { data, isLoading } = useQuery<any>({
+    queryKey: ['ledger-statement', ledgerNode.id, fromDate, toDate],
+    queryFn: () => customFetch(`/api/accounts/ledger/${ledgerNode.id}/statement${q ? `?${q}` : ''}`),
+    staleTime: 30_000,
+  });
+
+  const fmtAmt = (n: number) => n === 0 ? '—' : `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+  const fmtDate = (d: string) => new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+
+  return (
+    <Sheet open onOpenChange={v => !v && onClose()}>
+      <SheetContent className="sm:max-w-2xl overflow-y-auto">
+        <SheetHeader className="pb-4">
+          <SheetTitle className="flex items-center gap-2">
+            <ScrollText className="w-4 h-4 text-primary" />
+            {ledgerNode.name}
+            {ledgerNode.code && <span className="text-xs font-mono text-muted-foreground">({ledgerNode.code})</span>}
+          </SheetTitle>
+          <p className="text-xs text-muted-foreground">
+            Ledger Statement {fromDate || toDate ? `· ${fromDate ?? '…'} to ${toDate ?? '…'}` : '· All dates'}
+          </p>
+        </SheetHeader>
+
+        {isLoading ? (
+          <div className="space-y-2 mt-4">{[...Array(5)].map((_, i) => (
+            <div key={i} className="h-8 bg-muted/30 rounded animate-pulse" />
+          ))}</div>
+        ) : !data || data.entries.length === 0 ? (
+          <div className="text-center py-16 text-muted-foreground">
+            <ScrollText className="w-8 h-8 mx-auto mb-2 opacity-20" />
+            <p className="text-sm">No entries for this ledger yet</p>
+          </div>
+        ) : (
+          <div className="space-y-4 mt-2">
+            {/* Summary cards */}
+            <div className="grid grid-cols-3 gap-2">
+              <div className="bg-muted/20 rounded-lg p-3">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Total Debit</p>
+                <p className="font-bold font-mono text-sm text-foreground mt-0.5">
+                  ₹{Number(data.totalDebit).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                </p>
+              </div>
+              <div className="bg-muted/20 rounded-lg p-3">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Total Credit</p>
+                <p className="font-bold font-mono text-sm text-foreground mt-0.5">
+                  ₹{Number(data.totalCredit).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                </p>
+              </div>
+              <div className="bg-muted/20 rounded-lg p-3">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Closing Balance</p>
+                <p className={`font-bold font-mono text-sm mt-0.5 ${data.closingBalance >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                  ₹{Math.abs(Number(data.closingBalance)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  <span className="text-[10px] ml-0.5">{data.closingBalance >= 0 ? 'Dr' : 'Cr'}</span>
+                </p>
+              </div>
+            </div>
+
+            {/* Statement table */}
+            <div className="rounded-lg border border-border overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/10">
+                    <TableHead className="text-xs">Date</TableHead>
+                    <TableHead className="text-xs">Description</TableHead>
+                    <TableHead className="text-xs">Ref</TableHead>
+                    <TableHead className="text-right text-xs">Debit</TableHead>
+                    <TableHead className="text-right text-xs">Credit</TableHead>
+                    <TableHead className="text-right text-xs">Balance</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.entries.map((e: any, i: number) => (
+                    <TableRow key={i} className="hover:bg-muted/10">
+                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{fmtDate(e.date)}</TableCell>
+                      <TableCell className="text-xs max-w-[180px]">
+                        <span className="flex items-center gap-1">
+                          {e.debit > 0
+                            ? <ArrowDownLeft className="w-3 h-3 text-primary/50 shrink-0" />
+                            : <ArrowUpRight className="w-3 h-3 text-muted-foreground/50 shrink-0" />}
+                          <span className="truncate">{e.description}</span>
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-xs font-mono text-muted-foreground">{e.reference}</TableCell>
+                      <TableCell className="text-right text-xs font-mono">
+                        {e.debit > 0 ? <span className="text-primary font-medium">{fmtAmt(e.debit)}</span> : <span className="text-muted-foreground/40">—</span>}
+                      </TableCell>
+                      <TableCell className="text-right text-xs font-mono">
+                        {e.credit > 0 ? <span className="text-muted-foreground">{fmtAmt(e.credit)}</span> : <span className="text-muted-foreground/40">—</span>}
+                      </TableCell>
+                      <TableCell className="text-right text-xs font-mono font-semibold">
+                        <span className={e.balance >= 0 ? 'text-foreground' : 'text-red-500'}>
+                          {fmtAmt(Math.abs(e.balance))}<span className="text-[9px] ml-0.5 text-muted-foreground">{e.balance >= 0 ? 'Dr' : 'Cr'}</span>
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 /* ── ledger line (recursive) ─────────────────────────────────────────────────── */
-function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename }: {
+function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename, onViewStatement }: {
   node: LedgerNode; depth: number; onCreated: () => void;
   onBankAdd?: (parentId: number, parentType: ALType) => void;
   onDelete?: (id: number, name: string) => void;
   onRename?: (id: number, newName: string) => void;
+  onViewStatement?: (node: LedgerNode) => void;
 }) {
   const pl = `${8 + depth * 16}px`;
   const balance = Math.abs(node.balance);
@@ -224,6 +342,17 @@ function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename }: {
           <span className="text-[11px] font-mono tabular-nums text-muted-foreground shrink-0">{fmt(balance)}</span>
         )}
 
+        {/* Statement — only on leaf nodes (no children), visible on hover */}
+        {node.children.length === 0 && (
+          <button
+            onClick={() => onViewStatement?.(node)}
+            className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:text-primary text-muted-foreground/30 shrink-0"
+            title="View ledger statement"
+          >
+            <ScrollText className="w-3 h-3" />
+          </button>
+        )}
+
         {/* Delete — only for non-system ledgers, visible on hover */}
         {!isSystem && (
           <button
@@ -238,7 +367,7 @@ function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename }: {
 
       {/* Sub-ledgers */}
       {node.children.map(c => (
-        <LedgerLine key={c.id} node={c} depth={depth + 1} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} />
+        <LedgerLine key={c.id} node={c} depth={depth + 1} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
       ))}
 
       {/* Add sub-ledger button (only at depth 1) */}
@@ -261,12 +390,13 @@ function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename }: {
 }
 
 /* ── group block ────────────────────────────────────────────────────────────── */
-function GroupBlock({ group, onCreated, onBankAdd, onDelete, onRename }: {
+function GroupBlock({ group, onCreated, onBankAdd, onDelete, onRename, onViewStatement }: {
   group: GroupSummary;
   onCreated: () => void;
   onBankAdd?: (parentId: number, parentType: ALType) => void;
   onDelete?: (id: number, name: string) => void;
   onRename?: (id: number, newName: string) => void;
+  onViewStatement?: (node: LedgerNode) => void;
 }) {
   if (!group.id) return null;
   const hasChildren = group.children.length > 0;
@@ -283,7 +413,7 @@ function GroupBlock({ group, onCreated, onBankAdd, onDelete, onRename }: {
 
       {/* Ledgers under group */}
       {group.children.map(ledger => (
-        <LedgerLine key={ledger.id} node={ledger} depth={1} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} />
+        <LedgerLine key={ledger.id} node={ledger} depth={1} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
       ))}
 
       {/* Empty state hint */}
@@ -390,8 +520,11 @@ export default function ChartOfAccounts() {
   const [customFrom, setFrom]     = useState('');
   const [customTo, setTo]         = useState('');
   const [outletId, setOutletId]   = useState('all');
-  const [bankParent, setBankParent] = useState<{ id: number; type: ALType } | null>(null);
+  const [bankParent, setBankParent]     = useState<{ id: number; type: ALType } | null>(null);
+  const [selectedLedger, setSelectedLedger] = useState<LedgerNode | null>(null);
   const queryClient               = useQueryClient();
+
+  const onViewStatement = (node: LedgerNode) => setSelectedLedger(node);
 
   const onBankAdd = (parentId: number, parentType: ALType) =>
     setBankParent({ id: parentId, type: parentType });
@@ -525,13 +658,13 @@ export default function ChartOfAccounts() {
                   {bs && (
                     <>
                       {/* Capital Account */}
-                      <GroupBlock group={bs.liabilities.capitalAccount} onCreated={onCreated} onDelete={onDelete} onRename={onRename} />
+                      <GroupBlock group={bs.liabilities.capitalAccount} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
 
                       {/* Loans */}
-                      <GroupBlock group={bs.liabilities.loans} onCreated={onCreated} onDelete={onDelete} onRename={onRename} />
+                      <GroupBlock group={bs.liabilities.loans} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
 
                       {/* Current Liabilities — STD-DTX (Duty & Tax) is already a child ledger with correct balance */}
-                      <GroupBlock group={bs.liabilities.currentLiabilities} onCreated={onCreated} onDelete={onDelete} onRename={onRename} />
+                      <GroupBlock group={bs.liabilities.currentLiabilities} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
 
                       <Divider />
 
@@ -566,8 +699,8 @@ export default function ChartOfAccounts() {
                 >
                   {bs && (
                     <>
-                      <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} />
-                      <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} />
+                      <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
+                      <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
                     </>
                   )}
                 </Panel>
@@ -613,10 +746,10 @@ export default function ChartOfAccounts() {
                       <Divider />
 
                       {/* Direct Expenses */}
-                      <GroupBlock group={exp.directExpenses} onCreated={onCreated} onDelete={onDelete} onRename={onRename} />
+                      <GroupBlock group={exp.directExpenses} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
 
                       {/* Indirect Expenses */}
-                      <GroupBlock group={exp.indirectExpenses} onCreated={onCreated} onDelete={onDelete} onRename={onRename} />
+                      <GroupBlock group={exp.indirectExpenses} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
                     </>
                   )}
                 </Panel>
@@ -636,7 +769,7 @@ export default function ChartOfAccounts() {
                       <Divider />
 
                       {/* Direct Incomes */}
-                      <GroupBlock group={inc.directIncomes} onCreated={onCreated} onDelete={onDelete} onRename={onRename} />
+                      <GroupBlock group={inc.directIncomes} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
 
                       {/* Closing Stock */}
                       <StockBlock
@@ -648,7 +781,7 @@ export default function ChartOfAccounts() {
                       <Divider />
 
                       {/* Indirect Incomes */}
-                      <GroupBlock group={inc.indirectIncomes} onCreated={onCreated} onDelete={onDelete} onRename={onRename} />
+                      <GroupBlock group={inc.indirectIncomes} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
                     </>
                   )}
                 </Panel>
@@ -665,6 +798,15 @@ export default function ChartOfAccounts() {
           parentType={bankParent.type}
           onCreated={() => { queryClient.invalidateQueries({ queryKey: qKey }); }}
           onClose={() => setBankParent(null)}
+        />
+      )}
+
+      {selectedLedger && (
+        <LedgerStatementSheet
+          ledgerNode={selectedLedger}
+          fromDate={fromDate}
+          toDate={toDate}
+          onClose={() => setSelectedLedger(null)}
         />
       )}
     </AppLayout>
