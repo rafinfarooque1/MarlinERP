@@ -245,6 +245,43 @@ async function runMigrations() {
     console.log('[migration] sales_payment_backfill_v1 applied');
   }
 
+  // ── Backfill CUST-{id} / VEND-{id} ledgers for pre-existing records ──────
+  const { rows: [cvBackfill] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'cust_vend_ledger_backfill_v1'`
+  );
+  if (!cvBackfill) {
+    const { rows: [debtors] }   = await pool.query(`SELECT id FROM account_ledgers WHERE code = 'SYS-DEBTORS' LIMIT 1`);
+    const { rows: [creditors] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = 'SYS-CREDITORS' LIMIT 1`);
+    if (debtors && creditors) {
+      const { rows: custs } = await pool.query(
+        `SELECT c.id, c.name FROM customers c
+         WHERE NOT EXISTS (SELECT 1 FROM account_ledgers al WHERE al.code = 'CUST-' || c.id::text)`
+      );
+      for (const c of custs) {
+        await pool.query(
+          `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_system_group, description)
+           SELECT $1, 'asset', $2, 'balance_sheet', $3, false, $4
+           WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $2)`,
+          [c.name, `CUST-${c.id}`, debtors.id, `Customer ledger — ${c.name}`]
+        );
+      }
+      const { rows: vends } = await pool.query(
+        `SELECT v.id, v.name FROM vendors v
+         WHERE NOT EXISTS (SELECT 1 FROM account_ledgers al WHERE al.code = 'VEND-' || v.id::text)`
+      );
+      for (const v of vends) {
+        await pool.query(
+          `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_system_group, description)
+           SELECT $1, 'liability', $2, 'balance_sheet', $3, false, $4
+           WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $2)`,
+          [v.name, `VEND-${v.id}`, creditors.id, `Vendor ledger — ${v.name}`]
+        );
+      }
+      await pool.query(`INSERT INTO migration_log (name) VALUES ('cust_vend_ledger_backfill_v1')`);
+      console.log(`[migration] cust_vend_ledger_backfill_v1: seeded ${custs.length} customer + ${vends.length} vendor ledgers`);
+    }
+  }
+
   // ── Clearing / transit / charges ledgers ────────────────────────────────
   const clearingLedgers: [string, string, string, string, string, string][] = [
     ['Electronic Payment Clearing', 'asset',   'STD-ELEC-CLR', 'balance_sheet', 'SYS-CURA',   'Clearing for UPI/Card/Bank Transfer payments awaiting bank reconciliation'],
