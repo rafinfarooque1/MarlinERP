@@ -3,6 +3,7 @@ import { db, companySettingsTable, permissionsTable, hierarchiesTable } from "@w
 import { eq } from "drizzle-orm";
 import { pool } from "@workspace/db";
 import { SetPermissionBody } from "@workspace/api-zod";
+import { PasswordService } from "../lib/password";
 
 const router = Router();
 
@@ -80,20 +81,42 @@ router.post("/company/permissions", async (req, res): Promise<void> => {
 // ── Reset all company data (dangerous — wipes all transactional records) ──────
 router.post("/company/reset", async (_req, res): Promise<void> => {
   const TRUNCATE_TABLES = [
+    // Payments & reconciliation (most dependent — clear first)
     'sale_payments',
     'reconciliation_batch_items',
     'reconciliation_batches',
     'cash_deposits',
+    'payments',
+    'receipts',
+    // Core transactional
     'sales',
     'purchases',
     'stock_entries',
-    'customers',
-    'coupons',
+    'stock_transfers',
     'productions',
+    'expenses',
+    // Customer & vendor transactional
+    'customers',
+    'vendors',
+    'coupons',
+    // HR transactional
     'payroll',
     'attendance',
     'leaves',
-    'expenses',
+    // Dependent master data (before their parents)
+    'item_prices',
+    'bom_templates',
+    // Item & inventory master
+    'items',
+    'raw_materials',
+    'materials',
+    // Org & location master
+    'warehouses',
+    'outlets',
+    'employees',
+    'hierarchies',
+    'pay_components',
+    // Logs
     'activity_log',
     'migration_log',
   ];
@@ -110,8 +133,27 @@ router.post("/company/reset", async (_req, res): Promise<void> => {
   // Reset invoice sequence on company_settings
   try {
     await pool.query(`UPDATE company_settings SET invoice_sequence = 0`);
-  } catch {
-    // ignore
+  } catch { /* ignore */ }
+
+  // ── Reseed baseline auth so login works immediately after reset ───────────
+  // Step 1: ensure a level-1 (full-access) hierarchy exists
+  const { rows: [hierRow] } = await pool.query(`
+    INSERT INTO hierarchies (name, level, description)
+    VALUES ('Management', 1, 'Full access — seeded by system reset')
+    ON CONFLICT DO NOTHING
+    RETURNING id
+  `);
+  const hierResult = hierRow ?? (await pool.query(`SELECT id FROM hierarchies WHERE level = 1 LIMIT 1`)).rows[0];
+
+  // Step 2: reseed admin employee with fresh bcrypt password
+  if (hierResult) {
+    const adminHash = await PasswordService.hash('marlin1458');
+    await pool.query(`
+      INSERT INTO employees (name, username, password_hash, hierarchy_id, branch_type, branch_id, salary, join_date, is_active, must_change_password)
+      VALUES ('Administrator', 'admin', $1, $2, 'headoffice', 0, 0, CURRENT_DATE, true, true)
+      ON CONFLICT (username) DO UPDATE
+        SET password_hash = $1, hierarchy_id = $2, is_active = true, must_change_password = true
+    `, [adminHash, hierResult.id]);
   }
 
   res.json({ ok: true, message: 'All company data has been reset successfully.' });
