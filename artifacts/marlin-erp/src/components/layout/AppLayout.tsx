@@ -29,6 +29,7 @@ import {
   Package,
   ArrowLeftRight,
   MapPin,
+  Receipt,
 } from 'lucide-react';
 import { useLocationContext } from '@/lib/locationContext';
 import { useTheme } from '@/lib/theme';
@@ -231,6 +232,7 @@ const salesNavItems = [
   { name: 'Point of Sale', icon: ShoppingCart, href: '/sales/pos' },
   { name: 'Stock', icon: Package, href: '/sales/stock' },
   { name: 'Transfers', icon: ArrowLeftRight, href: '/sales/transfers' },
+  { name: 'Expenses', icon: Receipt, href: '/sales/expenses' },
 ];
 
 export function AppLayout({ children }: { children: React.ReactNode }) {

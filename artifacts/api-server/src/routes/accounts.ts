@@ -397,6 +397,135 @@ router.post("/expenses", async (req, res): Promise<void> => {
   res.status(201).json({ ...row, ledgerAccountName: ledger?.name ?? "", paymentAccountName: cashBank?.name ?? "", amount: Number(row.amount) });
 });
 
+// ── Location-scoped Expenses (Sales segment) ───────────────────────────────
+
+/** Walk CoA tree to collect all descendant IDs of the given root node codes. */
+async function getDescendantLedgerIds(rootCodes: string[]): Promise<number[]> {
+  const { rows } = await pool.query(`SELECT id, parent_id, code, is_system_group FROM account_ledgers ORDER BY id`);
+  const rootIds = new Set<number>(
+    rows.filter((r: any) => rootCodes.includes(r.code)).map((r: any) => r.id)
+  );
+  for (let i = 0; i < 8; i++) {
+    for (const r of rows) {
+      if (r.parent_id && rootIds.has(r.parent_id)) rootIds.add(r.id);
+    }
+  }
+  return rows
+    .filter((r: any) => rootIds.has(r.id) && !r.is_system_group)
+    .map((r: any) => r.id);
+}
+
+/** Resolve the cash_ledger_id for a given warehouse or outlet. */
+async function resolveLocationCashLedger(locationType: string, locationId: number): Promise<number | null> {
+  if (locationType === 'warehouse') {
+    const { rows } = await pool.query(`SELECT cash_ledger_id FROM warehouses WHERE id = $1`, [locationId]);
+    return rows[0]?.cash_ledger_id ?? null;
+  } else if (locationType === 'outlet') {
+    const { rows } = await pool.query(`SELECT cash_ledger_id FROM outlets WHERE id = $1`, [locationId]);
+    return rows[0]?.cash_ledger_id ?? null;
+  }
+  return null;
+}
+
+// Returns only Direct Expense + Indirect Expense leaf ledgers for the dropdown
+router.get("/accounts/expense-ledgers", async (_req, res): Promise<void> => {
+  const ids = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
+  if (ids.length === 0) { res.json([]); return; }
+  const { rows } = await pool.query(
+    `SELECT id, name, type, code, parent_id FROM account_ledgers WHERE id = ANY($1) ORDER BY name`,
+    [ids]
+  );
+  res.json(rows.map((r: any) => ({ id: r.id, name: r.name, type: r.type, code: r.code ?? null, parentId: r.parent_id ?? null })));
+});
+
+// List expenses for a specific location (payments where paid_from = location's cash ledger
+// AND paid_to belongs to Direct/Indirect Expense ledger subtree)
+router.get("/accounts/location-expenses", async (req, res): Promise<void> => {
+  const { locationType, locationId } = req.query as { locationType?: string; locationId?: string };
+  if (!locationType || !locationId) {
+    res.status(400).json({ error: "locationType and locationId are required" }); return;
+  }
+  const cashLedgerId = await resolveLocationCashLedger(locationType, Number(locationId));
+  if (!cashLedgerId) {
+    res.status(404).json({ error: "Location has no Cash ledger assigned. Provision it under Accounts → Warehouses/Outlets." }); return;
+  }
+  // Fetch cash ledger name regardless of whether any expenses or expense ledgers exist.
+  // Always return the wrapper shape so the frontend can gate UI on cashLedgerName.
+  const { rows: clRows } = await pool.query(`SELECT name FROM account_ledgers WHERE id = $1`, [cashLedgerId]);
+  const cashLedgerName = clRows[0]?.name ?? '';
+
+  // Only include payments to expense-category ledgers (Direct + Indirect Expense subtree)
+  const expenseLedgerIds = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
+  if (expenseLedgerIds.length === 0) {
+    // No expense categories configured yet — return wrapper with correct metadata and empty list
+    res.json({ cashLedgerId, cashLedgerName, expenses: [] }); return;
+  }
+
+  const { rows } = await pool.query(`
+    SELECT p.id, p.voucher_number, p.payment_date, p.paid_from_ledger_id, p.paid_to_ledger_id, p.amount, p.narration, p.created_at,
+           pf.name AS paid_from_name, pt.name AS paid_to_name
+    FROM payments p
+    LEFT JOIN account_ledgers pf ON p.paid_from_ledger_id = pf.id
+    LEFT JOIN account_ledgers pt ON p.paid_to_ledger_id = pt.id
+    WHERE p.paid_from_ledger_id = $1
+      AND p.paid_to_ledger_id = ANY($2)
+    ORDER BY p.id DESC
+  `, [cashLedgerId, expenseLedgerIds]);
+  // Return wrapper object so cashLedgerName is always available even when no expenses exist
+  res.json({
+    cashLedgerId,
+    cashLedgerName,
+    expenses: rows.map((r: any) => ({
+      id: r.id,
+      voucherNumber: r.voucher_number,
+      expenseDate: r.payment_date,
+      expenseLedgerId: r.paid_to_ledger_id,
+      expenseLedgerName: r.paid_to_name ?? '',
+      cashLedgerId: r.paid_from_ledger_id,
+      cashLedgerName: r.paid_from_name ?? '',
+      amount: Number(r.amount),
+      description: r.narration,
+      createdAt: r.created_at,
+    })),
+  });
+});
+
+// Create a location-scoped expense (Dr expenseLedger, Cr location cashLedger via payments)
+router.post("/accounts/location-expenses", async (req, res): Promise<void> => {
+  const { locationType, locationId, expenseLedgerId, amount, expenseDate, description, reference } = req.body as {
+    locationType: string; locationId: number; expenseLedgerId: number;
+    amount: number; expenseDate: string; description: string; reference?: string;
+  };
+  if (!locationType || !locationId || !expenseLedgerId || !amount || !expenseDate || !description) {
+    res.status(400).json({ error: "locationType, locationId, expenseLedgerId, amount, expenseDate and description are required" }); return;
+  }
+  // Server-side validation: expenseLedgerId must be within Direct/Indirect Expense subtree
+  const allowedExpenseIds = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
+  if (!allowedExpenseIds.includes(Number(expenseLedgerId))) {
+    res.status(400).json({ error: "expenseLedgerId must be a Direct or Indirect Expense ledger account." }); return;
+  }
+  const cashLedgerId = await resolveLocationCashLedger(locationType, Number(locationId));
+  if (!cashLedgerId) {
+    res.status(400).json({ error: "This location has no Cash ledger. Provision ledgers under Accounts → Warehouses/Outlets first." }); return;
+  }
+  const narration = reference ? `${description} [Ref: ${reference}]` : description;
+  const countRes = await pool.query(`SELECT COUNT(*) FROM payments`);
+  const voucherNumber = `PAY-${String(Number(countRes.rows[0].count) + 1).padStart(4, '0')}`;
+  const { rows: [r] } = await pool.query(
+    `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+    [voucherNumber, expenseDate, cashLedgerId, Number(expenseLedgerId), Number(amount), narration]
+  );
+  const { rows: [pf] } = await pool.query(`SELECT name FROM account_ledgers WHERE id = $1`, [cashLedgerId]);
+  const { rows: [pt] } = await pool.query(`SELECT name FROM account_ledgers WHERE id = $1`, [expenseLedgerId]);
+  res.status(201).json({
+    id: r.id, voucherNumber: r.voucher_number, expenseDate: r.payment_date,
+    expenseLedgerId: r.paid_to_ledger_id, expenseLedgerName: pt?.name ?? '',
+    cashLedgerId: r.paid_from_ledger_id, cashLedgerName: pf?.name ?? '',
+    amount: Number(r.amount), description: r.narration, createdAt: r.created_at,
+  });
+});
+
 // ── Financial Statements (Balance Sheet + P&L) ────────────────────────────
 router.get("/accounts/financial-statements", async (req, res): Promise<void> => {
   const { fromDate, toDate, outletId } = req.query as {
