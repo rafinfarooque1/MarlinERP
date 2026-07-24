@@ -103,6 +103,8 @@ router.post("/company/reset", async (_req, res): Promise<void> => {
     'payroll',
     'attendance',
     'leaves',
+    // Permissions (before hierarchies)
+    'permissions',
     // Dependent master data (before their parents)
     'item_prices',
     'bom_templates',
@@ -130,17 +132,29 @@ router.post("/company/reset", async (_req, res): Promise<void> => {
     }
   }
 
+  // ── Purge dynamic account ledgers (warehouse, outlet, customer, vendor) ────
+  // System ledger groups (SYS-*, STD-*) are kept so the chart of accounts
+  // skeleton stays intact. Only per-entity codes are removed.
+  try {
+    await pool.query(`
+      DELETE FROM account_ledgers
+      WHERE code ~ '^(WH-CASH|WH-SAL|WH-PUR|OUTLET-CASH|OUTLET-SAL|CUST-|VEND-)'
+         OR (is_system_group = false AND code NOT LIKE 'SYS-%' AND code NOT LIKE 'STD-%'
+             AND parent_id IS NOT NULL
+             AND id NOT IN (SELECT DISTINCT parent_id FROM account_ledgers WHERE parent_id IS NOT NULL))
+    `);
+  } catch { /* ignore if table doesn't exist */ }
+
   // Reset invoice sequence on company_settings
   try {
     await pool.query(`UPDATE company_settings SET invoice_sequence = 0`);
   } catch { /* ignore */ }
 
   // ── Reseed baseline auth so login works immediately after reset ───────────
-  // Step 1: ensure a level-1 (full-access) hierarchy exists
+  // Step 1: fresh level-1 hierarchy (all others were wiped above)
   const { rows: [hierRow] } = await pool.query(`
     INSERT INTO hierarchies (name, level, description)
     VALUES ('Management', 1, 'Full access — seeded by system reset')
-    ON CONFLICT DO NOTHING
     RETURNING id
   `);
   const hierResult = hierRow ?? (await pool.query(`SELECT id FROM hierarchies WHERE level = 1 LIMIT 1`)).rows[0];
