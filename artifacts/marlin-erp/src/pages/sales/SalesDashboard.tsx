@@ -8,7 +8,7 @@ import { useQuery } from '@tanstack/react-query';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useLocationContext } from '@/lib/locationContext';
 import {
-  useListSales, useListStockTransfers, customFetch,
+  useListSales, useListStockTransfers, useListOutlets, customFetch,
 } from '@workspace/api-client-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -134,6 +134,8 @@ export default function SalesDashboard() {
   const [open, setOpen] = useState<Section>(null);
 
   const isAll = locationType === 'all';
+  // Warehouse mode: a specific warehouse is selected (not 'all') — show this warehouse + its child outlets
+  const isWarehouseMode = locationType === 'warehouse' && !!locationId && !isAll;
 
   useEffect(() => {
     if (!locationType) navigate('/sales');
@@ -143,8 +145,19 @@ export default function SalesDashboard() {
 
   const { data: allSales = [], isLoading: salesLoading } = useListSales();
   const { data: allTransfers = [], isLoading: transfersLoading } = useListStockTransfers();
+  const { data: allOutlets = [] } = useListOutlets();
 
-  // Single-location expenses
+  // Child outlets of the selected warehouse (empty set when not in warehouse mode)
+  const childOutletIds = new Set(
+    isWarehouseMode
+      ? (allOutlets as any[]).filter(o => Number(o.warehouseId) === locationId).map(o => o.id)
+      : []
+  );
+  const childOutlets = isWarehouseMode
+    ? (allOutlets as any[]).filter(o => Number(o.warehouseId) === locationId)
+    : [];
+
+  // Single-location expenses (warehouse's own cash ledger)
   const { data: expenseData, isLoading: expensesLoadingSingle } = useQuery<{
     cashLedgerId: number; cashLedgerName: string; expenses: any[];
   }>({
@@ -153,33 +166,54 @@ export default function SalesDashboard() {
     enabled: !isAll && !!locationType && !!locationId,
   });
 
-  // All-locations expenses
+  // All-locations expenses — used in 'all' mode AND warehouse mode (to include child outlets)
   const { data: allLocExpenses = [], isLoading: expensesLoadingAll } = useQuery<any[]>({
     queryKey: ['location-expenses-all'],
     queryFn: () => customFetch('/api/accounts/location-expenses/all'),
-    enabled: isAll,
+    enabled: isAll || isWarehouseMode,
   });
 
-  const expensesLoading = isAll ? expensesLoadingAll : expensesLoadingSingle;
+  const expensesLoading = (isAll || isWarehouseMode) ? expensesLoadingAll : expensesLoadingSingle;
 
   // ── Filter helpers ────────────────────────────────────────────────────────
 
-  const daySales = (allSales as any[]).filter(s =>
-    (isAll || (s.locationType === locationType && Number(s.locationId) === locationId)) &&
-    toDateStr(s.saleDate) === selectedDate
-  );
+  const daySales = (allSales as any[]).filter(s => {
+    if (toDateStr(s.saleDate) !== selectedDate) return false;
+    if (isAll) return true;
+    // Own sales
+    if (s.locationType === locationType && Number(s.locationId) === locationId) return true;
+    // Warehouse mode: also include child outlet sales
+    if (isWarehouseMode && s.locationType === 'outlet' && childOutletIds.has(Number(s.locationId))) return true;
+    return false;
+  });
 
   const dayTransfers = (allTransfers as any[]).filter(t => {
-    const inScope = isAll ||
+    if (toDateStr(t.transferDate) !== selectedDate) return false;
+    if (isAll) return true;
+    const directMatch =
       (t.fromType === locationType && Number(t.fromId) === locationId) ||
       (t.toType   === locationType && Number(t.toId)   === locationId);
-    return inScope && toDateStr(t.transferDate) === selectedDate;
+    if (directMatch) return true;
+    // Warehouse mode: also include child outlet transfers
+    if (isWarehouseMode) {
+      if ((t.fromType === 'outlet' && childOutletIds.has(Number(t.fromId))) ||
+          (t.toType   === 'outlet' && childOutletIds.has(Number(t.toId)))) return true;
+    }
+    return false;
   });
 
   const singleExpenses: any[] = expenseData?.expenses ?? [];
   const dayExpenses = isAll
     ? allLocExpenses.filter(e => toDateStr(e.expenseDate) === selectedDate)
-    : singleExpenses.filter(e => toDateStr(e.expenseDate) === selectedDate);
+    : isWarehouseMode
+      ? allLocExpenses.filter(e => {
+          if (toDateStr(e.expenseDate) !== selectedDate) return false;
+          // Include warehouse's own expenses + child outlet expenses
+          if (e.locationType === 'warehouse' && Number(e.locationId) === locationId) return true;
+          if (e.locationType === 'outlet' && childOutletIds.has(Number(e.locationId))) return true;
+          return false;
+        })
+      : singleExpenses.filter(e => toDateStr(e.expenseDate) === selectedDate);
 
   // ── Totals ────────────────────────────────────────────────────────────────
 
@@ -190,7 +224,7 @@ export default function SalesDashboard() {
 
   const toggle = (s: Section) => setOpen(prev => prev === s ? null : s);
 
-  // ── All-mode: group by location ───────────────────────────────────────────
+  // ── All-mode / Warehouse-mode: group by location ──────────────────────────
 
   function groupByLocation<T extends { locationType?: string; locationId?: number; locationName?: string }>(items: T[]) {
     const map = new Map<string, { type: string; name: string; items: T[] }>();
@@ -206,12 +240,13 @@ export default function SalesDashboard() {
     });
   }
 
-  const salesByLocation     = isAll ? groupByLocation(daySales.map(s => ({ ...s, locationType: s.locationType, locationId: Number(s.locationId), locationName: s.locationName ?? s.outletName ?? s.warehouseName ?? '' }))) : [];
-  const transfersByLocation = isAll ? groupByLocation(dayTransfers.map(t => {
-    // A transfer involves two locations; we attribute it to the "from" location
+  const useGrouped = isAll || isWarehouseMode;
+
+  const salesByLocation     = useGrouped ? groupByLocation(daySales.map(s => ({ ...s, locationType: s.locationType, locationId: Number(s.locationId), locationName: s.locationName ?? s.outletName ?? s.warehouseName ?? '' }))) : [];
+  const transfersByLocation = useGrouped ? groupByLocation(dayTransfers.map(t => {
     return { ...t, locationType: t.fromType, locationId: Number(t.fromId), locationName: t.fromName ?? '' };
   })) : [];
-  const expensesByLocation  = isAll ? groupByLocation(dayExpenses) : [];
+  const expensesByLocation  = useGrouped ? groupByLocation(dayExpenses) : [];
 
   const LocationIcon = isAll ? Layers : (locationType === 'warehouse' ? Warehouse : Store);
 
@@ -289,14 +324,17 @@ export default function SalesDashboard() {
                 <ShoppingCart className="w-10 h-10 mx-auto opacity-20" />
                 <p className="font-medium">No sales on this date</p>
               </div>
-            ) : isAll ? (
-              /* All-locations: grouped by location */
+            ) : useGrouped ? (
+              /* All-locations or Warehouse+outlets: grouped by location */
               <div>
                 {/* Grand total bar */}
                 <div className="flex flex-wrap gap-4 px-4 py-3 bg-blue-500/5 text-sm border-b border-border">
                   <span className="text-muted-foreground">Total billed: <strong className="text-foreground">{fmt(salesTotal)}</strong></span>
                   <span className="text-muted-foreground">Collected: <strong className="text-emerald-600">{fmt(salesPaid)}</strong></span>
                   <span className="text-muted-foreground">Balance due: <strong className="text-rose-600">{fmt(salesTotal - salesPaid)}</strong></span>
+                  {isWarehouseMode && childOutlets.length > 0 && (
+                    <span className="text-muted-foreground text-xs">Includes {childOutlets.length} outlet{childOutlets.length !== 1 ? 's' : ''}</span>
+                  )}
                 </div>
                 {salesByLocation.map(loc => {
                   const locTotal = loc.items.reduce((s, x) => s + Number(x.totalAmount ?? 0), 0);
@@ -391,7 +429,7 @@ export default function SalesDashboard() {
                     <span><strong>{inTransit}</strong> transfer{inTransit > 1 ? 's' : ''} awaiting approval</span>
                   </div>
                 )}
-                {isAll ? (
+                {useGrouped ? (
                   /* grouped by source location */
                   transfersByLocation.map(loc => (
                     <LocationSection key={`${loc.type}-${loc.items[0]?.fromId}`} type={loc.type} name={`${loc.name} — ${loc.items.length} transfer${loc.items.length !== 1 ? 's' : ''}`}>
@@ -460,11 +498,11 @@ export default function SalesDashboard() {
                 <Receipt className="w-10 h-10 mx-auto opacity-20" />
                 <p className="font-medium">No expenses on this date</p>
               </div>
-            ) : isAll ? (
+            ) : useGrouped ? (
               <div>
                 <div className="flex gap-4 px-4 py-3 bg-rose-500/5 border-b border-border text-sm">
                   <span className="text-muted-foreground">Total spent: <strong className="text-rose-600">{fmt(expenseTotal)}</strong></span>
-                  <span className="text-muted-foreground">{dayExpenses.length} expense{dayExpenses.length !== 1 ? 's' : ''} across all locations</span>
+                  <span className="text-muted-foreground">{dayExpenses.length} expense{dayExpenses.length !== 1 ? 's' : ''}{isAll ? ' across all locations' : ''}</span>
                 </div>
                 {expensesByLocation.map(loc => {
                   const locTotal = loc.items.reduce((s, x) => s + Number(x.amount ?? 0), 0);
@@ -533,7 +571,8 @@ export default function SalesDashboard() {
             <p className="font-semibold">
               {(allSales as any[]).filter((s: any) =>
                 isAll ||
-                (s.locationType === locationType && Number(s.locationId) === locationId)
+                (s.locationType === locationType && Number(s.locationId) === locationId) ||
+                (isWarehouseMode && s.locationType === 'outlet' && childOutletIds.has(Number(s.locationId)))
               ).length} orders
             </p>
           </div>
@@ -543,14 +582,20 @@ export default function SalesDashboard() {
               {(allTransfers as any[]).filter((t: any) =>
                 isAll ||
                 (t.fromType === locationType && Number(t.fromId) === locationId) ||
-                (t.toType   === locationType && Number(t.toId)   === locationId)
+                (t.toType   === locationType && Number(t.toId)   === locationId) ||
+                (isWarehouseMode && ((t.fromType === 'outlet' && childOutletIds.has(Number(t.fromId))) || (t.toType === 'outlet' && childOutletIds.has(Number(t.toId)))))
               ).length} total
             </p>
           </div>
           <div>
             <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">All Expenses</p>
             <p className="font-semibold">
-              {isAll ? allLocExpenses.length : singleExpenses.length} total
+              {isAll ? allLocExpenses.length : isWarehouseMode
+                ? allLocExpenses.filter((e: any) =>
+                    (e.locationType === 'warehouse' && Number(e.locationId) === locationId) ||
+                    (e.locationType === 'outlet' && childOutletIds.has(Number(e.locationId)))
+                  ).length
+                : singleExpenses.length} total
             </p>
           </div>
         </div>

@@ -132,7 +132,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         (s as any).locationId === forceLocationId
       )
     : allSales;
-  const { data: customers = [] } = useListCustomers();
+  // When operating inside a specific location (Sales segment), scope customers to that location only
+  const { data: customers = [] } = useQuery({
+    queryKey: ['customers', forceLocationType, forceLocationId],
+    queryFn: () => forceLocationType && forceLocationId
+      ? customFetch(`/api/customers?locationType=${forceLocationType}&locationId=${forceLocationId}`)
+      : customFetch('/api/customers'),
+  });
   const { data: items = [] } = useListItems();
   const { data: companySettings } = useGetCompanySettings();
   const [search, setSearch] = useState('');
@@ -978,7 +984,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           <Form {...custForm}>
             <form onSubmit={custForm.handleSubmit((data: any) => {
               createCustomerMutation.mutate(
-                { data: { name: data.name, phone: data.phone || undefined, email: data.email || undefined, gstNumber: data.gstNumber || undefined, state: data.state || undefined, address: data.address || undefined, notes: data.notes || undefined } as any },
+                { data: { name: data.name, phone: data.phone || undefined, email: data.email || undefined, gstNumber: data.gstNumber || undefined, state: data.state || undefined, address: data.address || undefined, notes: data.notes || undefined, ...(forceLocationType && forceLocationId ? { locationType: forceLocationType, locationId: forceLocationId } : {}) } as any },
                 {
                   onSuccess: (created: any) => {
                     queryClient.invalidateQueries({ queryKey: getListCustomersQueryKey() });

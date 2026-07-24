@@ -15,7 +15,7 @@ export interface PolicyResult {
  * resetting passwords. NEVER store this as plaintext — always hash with
  * PasswordService.hash() before persisting.
  */
-export const DEFAULT_INITIAL_PASSWORD = 'marlin1458';
+export const DEFAULT_INITIAL_PASSWORD = '1234';
 
 /** Validate that a password meets the minimum policy requirements. */
 export function validatePassword(password: string): PolicyResult {

@@ -1,9 +1,10 @@
-import { useState } from 'react';
-import { useListAttendance, useCheckIn, useCheckOut, getListAttendanceQueryKey } from '@workspace/api-client-react';
+import { useState, useMemo } from 'react';
+import { useListAttendance, useCheckIn, useCheckOut, getListAttendanceQueryKey, useListEmployees, useListWarehouses, useListOutlets } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Search, Clock, Download, LogIn, LogOut, MapPin, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
@@ -43,11 +44,23 @@ export default function Attendance() {
   const [date, setDate] = useState(today);
   const [search, setSearch] = useState('');
   const [locLoading, setLocLoading] = useState<number | null>(null);
+  const [branchTypeFilter, setBranchTypeFilter] = useState<string>('all');
+  const [branchLocId, setBranchLocId] = useState<string>('all');
 
   const { data: attendance = [], isLoading } = useListAttendance({ date });
+  const { data: employees = [] } = useListEmployees();
+  const { data: warehouses = [] } = useListWarehouses();
+  const { data: outlets = [] } = useListOutlets();
   const queryClient = useQueryClient();
   const checkInMutation = useCheckIn();
   const checkOutMutation = useCheckOut();
+
+  // Build employee-id → branch map for filtering
+  const empBranchMap = useMemo(() => {
+    const m = new Map<number, { branchType: string; branchId: number }>();
+    for (const e of employees as any[]) m.set(e.id, { branchType: e.branchType, branchId: e.branchId });
+    return m;
+  }, [employees]);
 
   const handleMark = async (employeeId: number, action: 'checkin' | 'checkout') => {
     setLocLoading(employeeId);
@@ -75,9 +88,13 @@ export default function Attendance() {
     );
   };
 
-  const filtered = attendance.filter(a =>
-    a.employeeName?.toLowerCase().includes(search.toLowerCase()),
-  );
+  const filtered = (attendance as any[]).filter(a => {
+    const matchSearch = a.employeeName?.toLowerCase().includes(search.toLowerCase());
+    const branch = empBranchMap.get(a.employeeId);
+    const matchBranchType = branchTypeFilter === 'all' || branch?.branchType === branchTypeFilter;
+    const matchBranchLoc = branchLocId === 'all' || String(branch?.branchId) === branchLocId;
+    return matchSearch && matchBranchType && matchBranchLoc;
+  });
 
   return (
     <AppLayout>
@@ -96,7 +113,7 @@ export default function Attendance() {
               onClick={() =>
                 downloadCSV(
                   'attendance.csv',
-                  filtered.map(a => ({
+                  filtered.map((a: any) => ({
                     Employee: a.employeeName,
                     Date: a.date,
                     CheckIn: a.checkIn ? new Date(a.checkIn).toLocaleTimeString('en-IN') : '—',
@@ -121,6 +138,38 @@ export default function Attendance() {
           </div>
         </div>
 
+        {/* Branch filter */}
+        <div className="flex flex-wrap gap-2 items-center">
+          <Select value={branchTypeFilter} onValueChange={v => { setBranchTypeFilter(v); setBranchLocId('all'); }}>
+            <SelectTrigger className="h-7 w-38 text-xs"><SelectValue placeholder="All Branches" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Branches</SelectItem>
+              <SelectItem value="headoffice">Head Office</SelectItem>
+              <SelectItem value="production">Production</SelectItem>
+              <SelectItem value="warehouse">Warehouse</SelectItem>
+              <SelectItem value="outlet">Outlet</SelectItem>
+            </SelectContent>
+          </Select>
+          {branchTypeFilter === 'warehouse' && (
+            <Select value={branchLocId} onValueChange={setBranchLocId}>
+              <SelectTrigger className="h-7 w-44 text-xs"><SelectValue placeholder="All Warehouses" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Warehouses</SelectItem>
+                {(warehouses as any[]).map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
+          {branchTypeFilter === 'outlet' && (
+            <Select value={branchLocId} onValueChange={setBranchLocId}>
+              <SelectTrigger className="h-7 w-44 text-xs"><SelectValue placeholder="All Outlets" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Outlets</SelectItem>
+                {(outlets as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
             <Search className="w-4 h-4 text-muted-foreground" />
@@ -141,125 +190,73 @@ export default function Attendance() {
                 <TableHead>Check-Out Location</TableHead>
                 <TableHead>Hours</TableHead>
                 <TableHead>Status</TableHead>
-                {date === today && <TableHead className="text-right">Actions</TableHead>}
+                <TableHead className="text-right">Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 [...Array(4)].map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={8}>
-                      <div className="h-8 bg-muted/30 rounded animate-pulse" />
-                    </TableCell>
-                  </TableRow>
+                  <TableRow key={i}><TableCell colSpan={8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
                 ))
               ) : filtered.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
                     <Clock className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                    <p>No attendance records for this date</p>
+                    <p>No attendance records for {date}</p>
                   </TableCell>
                 </TableRow>
-              ) : (
-                filtered.map(a => (
-                  <TableRow key={a.id} className="hover:bg-muted/10">
-                    <TableCell className="font-semibold">{a.employeeName}</TableCell>
-
-                    {/* Check-In time */}
-                    <TableCell className="font-mono text-sm text-emerald-500">
-                      {a.checkIn
-                        ? new Date(a.checkIn).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
-                        : '—'}
-                    </TableCell>
-
-                    {/* Check-In location */}
-                    <TableCell>
-                      <MapLink
-                        lat={a.checkInLat as number | null}
-                        lng={a.checkInLng as number | null}
-                        label="Map"
-                      />
-                    </TableCell>
-
-                    {/* Check-Out time */}
-                    <TableCell className="font-mono text-sm text-amber-500">
-                      {a.checkOut
-                        ? new Date(a.checkOut).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
-                        : '—'}
-                    </TableCell>
-
-                    {/* Check-Out location */}
-                    <TableCell>
-                      <MapLink
-                        lat={a.checkOutLat as number | null}
-                        lng={a.checkOutLng as number | null}
-                        label="Map"
-                      />
-                    </TableCell>
-
-                    <TableCell className="font-mono text-sm">
-                      {a.hoursWorked ? `${Number(a.hoursWorked).toFixed(1)}h` : '—'}
-                    </TableCell>
-
-                    <TableCell>
-                      {!a.checkIn ? (
-                        <Badge variant="outline" className="text-muted-foreground">Absent</Badge>
-                      ) : !a.checkOut ? (
-                        <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">Present</Badge>
-                      ) : (
-                        <Badge variant="secondary">Left</Badge>
-                      )}
-                    </TableCell>
-
-                    {date === today && (
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          {locLoading === a.employeeId ? (
-                            <Button variant="outline" size="sm" className="h-7 text-xs" disabled>
-                              <Loader2 className="w-3 h-3 mr-1 animate-spin" /> Locating…
-                            </Button>
-                          ) : (
-                            <>
-                              {!a.checkIn && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-7 text-xs text-emerald-500 border-emerald-500/30 hover:bg-emerald-500/10"
-                                  onClick={() => handleMark(a.employeeId!, 'checkin')}
-                                  disabled={checkInMutation.isPending}
-                                >
-                                  <LogIn className="w-3 h-3 mr-1" /> Check In
-                                </Button>
-                              )}
-                              {a.checkIn && !a.checkOut && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-7 text-xs text-amber-500 border-amber-500/30 hover:bg-amber-500/10"
-                                  onClick={() => handleMark(a.employeeId!, 'checkout')}
-                                  disabled={checkOutMutation.isPending}
-                                >
-                                  <LogOut className="w-3 h-3 mr-1" /> Check Out
-                                </Button>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      </TableCell>
+              ) : filtered.map((a: any) => (
+                <TableRow key={a.employeeId} className="hover:bg-muted/10">
+                  <TableCell className="font-semibold">{a.employeeName}</TableCell>
+                  <TableCell className="text-sm font-mono">
+                    {a.checkIn ? new Date(a.checkIn).toLocaleTimeString('en-IN') : <span className="text-muted-foreground/50">—</span>}
+                  </TableCell>
+                  <TableCell>
+                    <MapLink lat={a.checkInLat} lng={a.checkInLng} label="Map" />
+                  </TableCell>
+                  <TableCell className="text-sm font-mono">
+                    {a.checkOut ? new Date(a.checkOut).toLocaleTimeString('en-IN') : <span className="text-muted-foreground/50">—</span>}
+                  </TableCell>
+                  <TableCell>
+                    <MapLink lat={a.checkOutLat} lng={a.checkOutLng} label="Map" />
+                  </TableCell>
+                  <TableCell className="font-mono text-sm">
+                    {a.hoursWorked ? `${Number(a.hoursWorked).toFixed(1)}h` : '—'}
+                  </TableCell>
+                  <TableCell>
+                    {a.status === 'present' ? (
+                      <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Present</Badge>
+                    ) : a.status === 'half_day' ? (
+                      <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/20">Half Day</Badge>
+                    ) : (
+                      <Badge className="bg-red-500/10 text-red-600 border-red-500/20">Absent</Badge>
                     )}
-                  </TableRow>
-                ))
-              )}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        variant="outline" size="sm" className="h-7 text-xs gap-1"
+                        disabled={!!a.checkIn || locLoading === a.employeeId}
+                        onClick={() => handleMark(a.employeeId, 'checkin')}
+                      >
+                        {locLoading === a.employeeId ? <Loader2 className="w-3 h-3 animate-spin" /> : <LogIn className="w-3 h-3" />}
+                        In
+                      </Button>
+                      <Button
+                        variant="outline" size="sm" className="h-7 text-xs gap-1"
+                        disabled={!a.checkIn || !!a.checkOut || locLoading === a.employeeId}
+                        onClick={() => handleMark(a.employeeId, 'checkout')}
+                      >
+                        {locLoading === a.employeeId ? <Loader2 className="w-3 h-3 animate-spin" /> : <LogOut className="w-3 h-3" />}
+                        Out
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
             </TableBody>
           </Table>
         </div>
-
-        {date === today && (
-          <p className="text-xs text-muted-foreground flex items-center gap-1">
-            <MapPin className="w-3 h-3" />
-            Check-in and check-out capture the device's GPS location. Allow location access when prompted.
-          </p>
-        )}
       </div>
     </AppLayout>
   );

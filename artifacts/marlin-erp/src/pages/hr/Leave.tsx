@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useListLeaves, useApplyLeave, useApproveLeave, getListLeavesQueryKey } from '@workspace/api-client-react';
+import { useState, useMemo } from 'react';
+import { useListLeaves, useApplyLeave, useApproveLeave, getListLeavesQueryKey, useListEmployees, useListWarehouses, useListOutlets } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -33,9 +33,20 @@ export default function Leave() {
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
+  const [branchTypeFilter, setBranchTypeFilter] = useState<string>('all');
+  const [branchLocId, setBranchLocId] = useState<string>('all');
   const queryClient = useQueryClient();
   const applyMutation = useApplyLeave();
   const approveMutation = useApproveLeave();
+  const { data: employees = [] } = useListEmployees();
+  const { data: warehouses = [] } = useListWarehouses();
+  const { data: outlets = [] } = useListOutlets();
+
+  const empBranchMap = useMemo(() => {
+    const m = new Map<number, { branchType: string; branchId: number }>();
+    for (const e of employees as any[]) m.set(e.id, { branchType: e.branchType, branchId: e.branchId });
+    return m;
+  }, [employees]);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -57,7 +68,13 @@ export default function Leave() {
   };
 
   const statusColor = (s: string) => s === 'approved' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : s === 'rejected' ? 'bg-red-500/10 text-red-500 border-red-500/20' : 'bg-amber-500/10 text-amber-500 border-amber-500/20';
-  const filtered = leaves.filter(l => l.employeeName?.toLowerCase().includes(search.toLowerCase()));
+  const filtered = (leaves as any[]).filter(l => {
+    const matchSearch = l.employeeName?.toLowerCase().includes(search.toLowerCase());
+    const branch = empBranchMap.get(l.employeeId);
+    const matchBranchType = branchTypeFilter === 'all' || branch?.branchType === branchTypeFilter;
+    const matchBranchLoc = branchLocId === 'all' || String(branch?.branchId) === branchLocId;
+    return matchSearch && matchBranchType && matchBranchLoc;
+  });
 
   return (
     <AppLayout>
@@ -73,6 +90,38 @@ export default function Leave() {
             </Button>
             <Button onClick={() => { form.reset(); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Apply Leave</Button>
           </div>
+        </div>
+
+        {/* Branch filter */}
+        <div className="flex flex-wrap gap-2 items-center">
+          <Select value={branchTypeFilter} onValueChange={v => { setBranchTypeFilter(v); setBranchLocId('all'); }}>
+            <SelectTrigger className="h-7 w-38 text-xs"><SelectValue placeholder="All Branches" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Branches</SelectItem>
+              <SelectItem value="headoffice">Head Office</SelectItem>
+              <SelectItem value="production">Production</SelectItem>
+              <SelectItem value="warehouse">Warehouse</SelectItem>
+              <SelectItem value="outlet">Outlet</SelectItem>
+            </SelectContent>
+          </Select>
+          {branchTypeFilter === 'warehouse' && (
+            <Select value={branchLocId} onValueChange={setBranchLocId}>
+              <SelectTrigger className="h-7 w-44 text-xs"><SelectValue placeholder="All Warehouses" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Warehouses</SelectItem>
+                {(warehouses as any[]).map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
+          {branchTypeFilter === 'outlet' && (
+            <Select value={branchLocId} onValueChange={setBranchLocId}>
+              <SelectTrigger className="h-7 w-44 text-xs"><SelectValue placeholder="All Outlets" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Outlets</SelectItem>
+                {(outlets as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
         </div>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">

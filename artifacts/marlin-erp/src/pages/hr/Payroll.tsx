@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   useListEnrichedPayroll, useGeneratePayroll, getEnrichedPayrollQueryKey,
   getListPayrollQueryKey, useMarkPayrollPaid, useGetCompanySettings,
+  useListEmployees, useListWarehouses, useListOutlets,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -27,12 +28,23 @@ export default function Payroll() {
   const [search, setSearch] = useState('');
   const [viewItem, setViewItem] = useState<any>(null);
   const [generating, setGenerating] = useState(false);
+  const [branchTypeFilter, setBranchTypeFilter] = useState<string>('all');
+  const [branchLocId, setBranchLocId] = useState<string>('all');
 
   const { data: payroll = [], isLoading } = useListEnrichedPayroll({ year: Number(year), month: Number(month) });
   const { data: companySettings } = useGetCompanySettings();
+  const { data: employees = [] } = useListEmployees();
+  const { data: warehouses = [] } = useListWarehouses();
+  const { data: outlets = [] } = useListOutlets();
   const queryClient = useQueryClient();
   const markPaidMutation = useMarkPayrollPaid();
   const generateMutation = useGeneratePayroll();
+
+  const empBranchMap = useMemo(() => {
+    const m = new Map<number, { branchType: string; branchId: number }>();
+    for (const e of employees as any[]) m.set(e.id, { branchType: e.branchType, branchId: e.branchId });
+    return m;
+  }, [employees]);
 
   const handleMarkPaid = (id: number, name: string) => {
     if (!confirm(`Mark payroll as paid for ${name}?`)) return;
@@ -63,9 +75,15 @@ export default function Payroll() {
     );
   };
 
-  const filtered = payroll.filter(p => p.employeeName?.toLowerCase().includes(search.toLowerCase()));
-  const totalPaid = filtered.filter(p => p.isPaid).reduce((s, p) => s + Number(p.netPay || 0), 0);
-  const totalPending = filtered.filter(p => !p.isPaid).reduce((s, p) => s + Number(p.netPay || 0), 0);
+  const filtered = (payroll as any[]).filter(p => {
+    const matchSearch = p.employeeName?.toLowerCase().includes(search.toLowerCase());
+    const branch = empBranchMap.get(p.employeeId);
+    const matchBranchType = branchTypeFilter === 'all' || branch?.branchType === branchTypeFilter;
+    const matchBranchLoc = branchLocId === 'all' || String(branch?.branchId) === branchLocId;
+    return matchSearch && matchBranchType && matchBranchLoc;
+  });
+  const totalPaid = filtered.filter((p: any) => p.isPaid).reduce((s: number, p: any) => s + Number(p.netPay || 0), 0);
+  const totalPending = filtered.filter((p: any) => !p.isPaid).reduce((s: number, p: any) => s + Number(p.netPay || 0), 0);
   const years = Array.from({ length: 5 }, (_, i) => String(now.getFullYear() - i));
   const monthLabel = `${MONTHS[Number(month)-1]} ${year}`;
 
@@ -114,6 +132,38 @@ export default function Payroll() {
             <p className="text-2xl font-bold text-primary font-mono mt-1">₹{(totalPaid + totalPending).toLocaleString('en-IN')}</p>
             <p className="text-xs text-muted-foreground">{filtered.length} employees</p>
           </div>
+        </div>
+
+        {/* Branch filter */}
+        <div className="flex flex-wrap gap-2 items-center">
+          <Select value={branchTypeFilter} onValueChange={v => { setBranchTypeFilter(v); setBranchLocId('all'); }}>
+            <SelectTrigger className="h-7 w-38 text-xs"><SelectValue placeholder="All Branches" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Branches</SelectItem>
+              <SelectItem value="headoffice">Head Office</SelectItem>
+              <SelectItem value="production">Production</SelectItem>
+              <SelectItem value="warehouse">Warehouse</SelectItem>
+              <SelectItem value="outlet">Outlet</SelectItem>
+            </SelectContent>
+          </Select>
+          {branchTypeFilter === 'warehouse' && (
+            <Select value={branchLocId} onValueChange={setBranchLocId}>
+              <SelectTrigger className="h-7 w-44 text-xs"><SelectValue placeholder="All Warehouses" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Warehouses</SelectItem>
+                {(warehouses as any[]).map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
+          {branchTypeFilter === 'outlet' && (
+            <Select value={branchLocId} onValueChange={setBranchLocId}>
+              <SelectTrigger className="h-7 w-44 text-xs"><SelectValue placeholder="All Outlets" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Outlets</SelectItem>
+                {(outlets as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
         </div>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">

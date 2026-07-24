@@ -198,6 +198,8 @@ export default function Employees() {
   const { data: outlets = [] } = useListOutlets();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
+  const [branchTypeFilter, setBranchTypeFilter] = useState<string>('all');
+  const [branchLocId, setBranchLocId] = useState<string>('all');
   const [isOpen, setIsOpen] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
   const [viewItem, setViewItem] = useState<any>(null);
@@ -270,7 +272,9 @@ export default function Employees() {
   const filtered = employees.filter(e => {
     const matchSearch = e.name.toLowerCase().includes(search.toLowerCase()) || e.username.toLowerCase().includes(search.toLowerCase());
     const matchStatus = statusFilter === 'all' ? true : statusFilter === 'active' ? e.isActive : !e.isActive;
-    return matchSearch && matchStatus;
+    const matchBranchType = branchTypeFilter === 'all' || (e as any).branchType === branchTypeFilter;
+    const matchBranchLoc = branchLocId === 'all' || String((e as any).branchId) === branchLocId;
+    return matchSearch && matchStatus && matchBranchType && matchBranchLoc;
   });
 
   const activeCount   = employees.filter(e => e.isActive).length;
@@ -311,7 +315,7 @@ export default function Employees() {
         </div>
 
         {/* Filters */}
-        <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+        <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center flex-wrap">
           <div className="flex items-center gap-1 p-1 bg-muted/30 rounded-lg border border-border">
             {(['all', 'active', 'inactive'] as StatusFilter[]).map(s => (
               <button
@@ -323,6 +327,34 @@ export default function Employees() {
               </button>
             ))}
           </div>
+          <Select value={branchTypeFilter} onValueChange={v => { setBranchTypeFilter(v); setBranchLocId('all'); }}>
+            <SelectTrigger className="h-7 w-38 text-xs"><SelectValue placeholder="All Branches" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Branches</SelectItem>
+              <SelectItem value="headoffice">Head Office</SelectItem>
+              <SelectItem value="production">Production</SelectItem>
+              <SelectItem value="warehouse">Warehouse</SelectItem>
+              <SelectItem value="outlet">Outlet</SelectItem>
+            </SelectContent>
+          </Select>
+          {branchTypeFilter === 'warehouse' && (
+            <Select value={branchLocId} onValueChange={setBranchLocId}>
+              <SelectTrigger className="h-7 w-44 text-xs"><SelectValue placeholder="All Warehouses" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Warehouses</SelectItem>
+                {warehouses.map((w: any) => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
+          {branchTypeFilter === 'outlet' && (
+            <Select value={branchLocId} onValueChange={setBranchLocId}>
+              <SelectTrigger className="h-7 w-44 text-xs"><SelectValue placeholder="All Outlets" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Outlets</SelectItem>
+                {outlets.map((o: any) => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
         </div>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">

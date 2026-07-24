@@ -270,6 +270,10 @@ async function runMigrations() {
   await pool.query(`ALTER TABLE cash_deposits ADD COLUMN IF NOT EXISTS warehouse_id integer REFERENCES warehouses(id)`);
   await pool.query(`ALTER TABLE cash_deposits ALTER COLUMN outlet_id DROP NOT NULL`);
 
+  // Location-scoped customers: add location columns (idempotent)
+  await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS location_type text`);
+  await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS location_id integer`);
+
   // Idempotent backfill: set location_id = outlet_id for existing outlet sales
   await pool.query(
     `UPDATE sales SET location_id = outlet_id WHERE location_id IS NULL AND outlet_id IS NOT NULL`

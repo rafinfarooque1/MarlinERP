@@ -29,7 +29,14 @@ function pickVendor(body: StrRecord): StrRecord {
 }
 
 // ── Customers ─────────────────────────────────────────────────────────────
-router.get("/customers", async (_req, res): Promise<void> => {
+router.get("/customers", async (req, res): Promise<void> => {
+  const { locationType, locationId } = req.query as { locationType?: string; locationId?: string };
+  const params: any[] = [];
+  let whereClause = '';
+  if (locationType && locationId) {
+    whereClause = `WHERE (c.location_type = $1 AND c.location_id = $2)`;
+    params.push(locationType, Number(locationId));
+  }
   const { rows } = await pool.query<any>(`
     SELECT
       c.*,
@@ -37,9 +44,10 @@ router.get("/customers", async (_req, res): Promise<void> => {
       COALESCE(SUM(s.total_amount - s.amount_paid), 0) AS "outstandingBalance"
     FROM customers c
     LEFT JOIN sales s ON s.customer_id = c.id
+    ${whereClause}
     GROUP BY c.id
     ORDER BY c.id
-  `);
+  `, params);
   res.json(rows.map((r: any) => ({
     ...r,
     totalPurchases:      Number(r.totalPurchases),
@@ -54,6 +62,15 @@ router.post("/customers", async (req, res): Promise<void> => {
     return;
   }
   const [row] = await db.insert(customersTable).values(data).returning();
+
+  // Stamp the location this customer belongs to (outlet or warehouse)
+  const { locationType, locationId } = req.body as { locationType?: string; locationId?: number };
+  if (locationType && locationId) {
+    await pool.query(
+      `UPDATE customers SET location_type = $1, location_id = $2 WHERE id = $3`,
+      [locationType, Number(locationId), row.id],
+    );
+  }
 
   // Auto-create a debtor ledger under Sundry Debtors
   try {
