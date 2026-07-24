@@ -107,6 +107,7 @@ const navigation = [
       { name: 'GST Summary', href: '/accounts/gst' },
       { name: 'Reconciliation', href: '/accounts/reconciliation' },
       { name: 'Cash Balance', href: '/accounts/cash-in-outlet' },
+      { name: 'Reports', href: '/accounts/reports' },
     ],
   },
   {

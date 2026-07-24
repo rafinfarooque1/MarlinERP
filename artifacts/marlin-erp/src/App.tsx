@@ -47,6 +47,7 @@ import Profile from './pages/company/Profile';
 import AuditLog from './pages/company/AuditLog';
 import Reconciliation from './pages/finance/Reconciliation';
 import CashInOutlet from './pages/finance/CashInOutlet';
+import Reports from './pages/accounts/Reports';
 
 import LocationPicker from './pages/sales/LocationPicker';
 import SalesStock from './pages/sales/SalesStock';
@@ -145,6 +146,7 @@ function Router() {
 
       <Route path="/accounts/reconciliation"><AuthGuard><Reconciliation /></AuthGuard></Route>
       <Route path="/accounts/cash-in-outlet"><AuthGuard><CashInOutlet /></AuthGuard></Route>
+      <Route path="/accounts/reports"><AuthGuard><Reports /></AuthGuard></Route>
 
       {/* Sales segment */}
       <Route path="/sales"><AuthGuard><LocationPicker /></AuthGuard></Route>

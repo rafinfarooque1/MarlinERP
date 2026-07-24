@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   useListStockTransfers, useCreateStockTransfer, useListItems,
   useListWarehouses, useListOutlets, useListStock, getListStockTransfersQueryKey,
@@ -238,7 +238,28 @@ export default function HoTransfers() {
   const watchToType = form.watch('toType');
 
   const fromOptions = watchFromType === 'warehouse' ? warehouses : outlets;
-  const toOptions = watchToType === 'warehouse' ? warehouses : outlets;
+
+  // Smart "To" options enforcing business rules:
+  // warehouse → outlet : only that warehouse's child outlets
+  // outlet   → warehouse: only the outlet's parent warehouse
+  // warehouse → warehouse: all warehouses (excluding self)
+  const toOptions = useMemo(() => {
+    if (watchToType === 'outlet') {
+      if (watchFromType === 'warehouse' && watchFromId > 0) {
+        return (outlets as any[]).filter(o => Number(o.warehouseId) === watchFromId);
+      }
+      return outlets;
+    }
+    // toType === 'warehouse'
+    if (watchFromType === 'outlet' && watchFromId > 0) {
+      const parentWHId = (outlets as any[]).find(o => o.id === watchFromId)?.warehouseId;
+      if (parentWHId) return (warehouses as any[]).filter(w => w.id === parentWHId);
+    }
+    // warehouse-to-warehouse: exclude self
+    return watchFromType === 'warehouse' && watchFromId > 0
+      ? (warehouses as any[]).filter(w => w.id !== watchFromId)
+      : warehouses;
+  }, [watchToType, watchFromType, watchFromId, outlets, warehouses]);
 
   const { data: fromStock = [] } = useListStock(
     { branchType: watchFromType as any, branchId: watchFromId },

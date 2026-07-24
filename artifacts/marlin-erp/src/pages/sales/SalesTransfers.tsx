@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useLocation } from 'wouter';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useLocationContext } from '@/lib/locationContext';
@@ -240,6 +240,7 @@ export default function SalesTransfers() {
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
   const watchToType = form.watch('toType');
 
+
   // Stock available at this location
   const { data: fromStock = [] } = useListStock(
     { branchType: locationType as any, branchId: locationId! },
@@ -250,7 +251,26 @@ export default function SalesTransfers() {
   );
   const availableItems = (items as any[]).filter(it => (stockMap.get(it.id) ?? 0) > 0);
 
-  const toOptions = watchToType === 'warehouse' ? warehouses : outlets;
+  // Smart "To" options enforcing business rules:
+  // warehouse → outlet: only this warehouse's child outlets
+  // outlet   → warehouse: only this outlet's parent warehouse
+  // warehouse → warehouse: all warehouses (excluding self)
+  const toOptions = useMemo(() => {
+    if (watchToType === 'outlet') {
+      if (locationType === 'warehouse' && locationId) {
+        return (outlets as any[]).filter(o => Number(o.warehouseId) === locationId);
+      }
+      return outlets;
+    }
+    // toType === 'warehouse'
+    if (locationType === 'outlet' && locationId) {
+      const parentWHId = (outlets as any[]).find(o => o.id === locationId)?.warehouseId;
+      if (parentWHId) return (warehouses as any[]).filter(w => w.id === parentWHId);
+    }
+    return locationType === 'warehouse' && locationId
+      ? (warehouses as any[]).filter(w => w.id !== locationId)
+      : warehouses;
+  }, [watchToType, locationType, locationId, outlets, warehouses]);
 
   const openCreate = () => {
     form.reset({ toType: 'warehouse', toId: 0, transferDate: new Date().toISOString().split('T')[0], lineItems: [{ itemId: 0, quantity: 1 }], notes: '' });
