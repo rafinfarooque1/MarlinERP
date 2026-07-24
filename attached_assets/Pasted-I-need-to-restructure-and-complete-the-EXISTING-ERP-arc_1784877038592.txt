@@ -1,0 +1,2000 @@
+I need to restructure and complete the EXISTING ERP architecture.
+
+CRITICAL INSTRUCTION:
+
+DO NOT rebuild the ERP.
+DO NOT create a new parallel system.
+DO NOT delete or replace existing working modules.
+DO NOT change existing business logic unnecessarily.
+
+I have already created much of the frontend/view and existing modules.
+
+FIRST inspect the complete existing codebase, database schema, APIs, Chart of Accounts, Warehouse, Outlet, POS, Stock, Sales, Purchase, Customer, Vendor, Expense and Accounting modules.
+
+Then modify and connect the EXISTING system according to the requirements below.
+
+The most important principle is:
+
+THIS MUST FUNCTION AS ONE FULLY INTEGRATED ERP.
+
+Operational transactions must automatically connect to:
+
+Stock
+Ledgers
+Chart of Accounts
+Trial Balance
+Profit & Loss
+Balance Sheet
+GST/Tax
+Cash
+Customer/Vendor balances
+
+Do not create disconnected modules.
+
+============================================================
+PART 1 — TWO MAIN ERP SEGMENTS
+============================================================
+
+At the main navigation/operational level, organize the ERP into TWO PRIMARY SEGMENTS:
+
+1. SALES
+2. ACCOUNTS
+
+This is mainly a navigation, permission and operational separation.
+
+It is NOT two separate databases or accounting systems.
+
+Both segments must use the SAME:
+
+Database
+Warehouse records
+Outlet records
+Stock
+Items
+Customers
+Vendors
+Chart of Accounts
+Ledger engine
+Accounting entries
+
+============================================================
+SEGMENT 1 — SALES
+============================================================
+
+The SALES segment is the simplified operational frontend for:
+
+WAREHOUSES
+and
+OUTLETS.
+
+Users operating a Warehouse or Outlet should not need to see the full accounting/administrative ERP.
+
+The Sales segment should focus only on daily operations.
+
+For each Warehouse/Outlet, provide:
+
+1. Stock
+2. Stock Transfer
+3. Sales / Point of Sale
+4. Expenses
+5. Relevant local operational history/details
+
+The Sales frontend must be LOCATION-SPECIFIC.
+
+============================================================
+SEGMENT 2 — ACCOUNTS
+============================================================
+
+The ACCOUNTS segment contains the complete administrative/back-office ERP.
+
+This includes existing modules such as:
+
+Production Unit
+Warehouse Creation/Management
+Outlet Creation/Management
+Customer Management
+Vendor Management
+Purchase
+Accounts
+Chart of Accounts
+Ledger
+Cash & Bank
+Expenses / Expense Management
+GST / Tax
+HR
+Payroll
+Reports
+Permissions
+Settings
+and other existing administrative modules.
+
+Warehouse and Outlet CREATION/MANAGEMENT belongs under ACCOUNTS.
+
+The SALES segment should OPERATE existing Warehouses/Outlets.
+
+Do not create Warehouses or Outlets from the operational Sales frontend unless an existing approved workflow explicitly requires it.
+
+Conceptually:
+
+ACCOUNTS
+    ↓
+Create/Manage Warehouse & Outlet
+    ↓
+Configure accounting/location
+    ↓
+SALES
+    ↓
+Operate Warehouse/Outlet
+    ↓
+Stock / Transfer / Sale / Expense
+
+============================================================
+PART 2 — LOCATION-BASED SALES FRONTEND
+============================================================
+
+When entering the SALES segment, the user should operate only the Warehouse(s) or Outlet(s) they have permission to access.
+
+Example:
+
+SALES
+
+Locations:
+
+Bangalore Warehouse
+Chennai Warehouse
+Koramangala Outlet
+Indiranagar Outlet
+
+When entering:
+
+Bangalore Warehouse
+
+show ONLY Bangalore Warehouse-related operational information.
+
+For example:
+
+BANGALORE WAREHOUSE
+
+Stock
+Stock Transfer
+Sales / POS
+Expenses
+
+Dashboard/details should only show:
+
+Bangalore Warehouse Stock
+Bangalore Warehouse Sales
+Bangalore Warehouse Expenses
+Bangalore Warehouse Stock Transfers
+
+Do not mix data from another Warehouse or Outlet.
+
+============================================================
+PART 3 — WAREHOUSE SALES FRONTEND
+============================================================
+
+WAREHOUSE operational frontend must support:
+
+1. STOCK
+
+View stock available specifically in that Warehouse.
+
+Show relevant existing fields such as:
+
+Item
+Quantity
+Unit
+Batch if applicable
+Cost where permission allows
+Other existing stock information
+
+Stock must be derived from the actual centralized stock ledger/system.
+
+Do not maintain a separate fake stock table just for the frontend.
+
+------------------------------------------------------------
+
+2. STOCK TRANSFER
+
+Warehouse must be able to perform stock transfers according to existing approved transfer rules.
+
+Examples may include:
+
+Head Office → Warehouse
+Warehouse → Warehouse
+Warehouse → Outlet
+
+and any other existing allowed flows.
+
+Reuse existing Stock Transfer logic.
+
+Every transfer must update:
+
+Source Stock
+Destination Stock
+Stock Movement History
+
+and accounting/tax implications where applicable.
+
+Do not duplicate stock movement.
+
+------------------------------------------------------------
+
+3. SALES / POINT OF SALE
+
+IMPORTANT CHANGE:
+
+Currently Outlet can make sales through POS.
+
+WAREHOUSE MUST ALSO BE ABLE TO SELL ITEMS DIRECTLY TO CUSTOMERS.
+
+Update existing Point of Sale / Sales logic so BOTH:
+
+WAREHOUSE
+
+and
+
+OUTLET
+
+can generate customer sales.
+
+Conceptually:
+
+Point of Sale
+    ↓
+Select/resolve Selling Location
+
+Warehouse
+OR
+Outlet
+    ↓
+Customer
+    ↓
+Items
+    ↓
+Sale
+    ↓
+Sales Invoice
+    ↓
+Stock Reduction
+    ↓
+Accounting Posting
+
+Do not create a separate POS system for Warehouse.
+
+Extend the EXISTING POS/Sales system to support:
+
+locationType = WAREHOUSE
+
+and
+
+locationType = OUTLET.
+
+------------------------------------------------------------
+
+4. EXPENSE
+
+Warehouse must be able to add its operational expenses.
+
+Create/reuse a simplified:
+
+ADD EXPENSE
+
+module inside the Sales frontend.
+
+The Sales user should NOT see the complete Chart of Accounts while adding an expense.
+
+They should only see valid expense ledgers under:
+
+DIRECT EXPENSES
+
+and
+
+INDIRECT EXPENSES.
+
+No other ledger groups should be selectable as an Expense Category.
+
+Example:
+
+Add Expense
+
+Date
+Expense Category
+Description
+Amount
+Reference / Bill Number if existing
+Attachment if existing
+
+Paid From:
+
+Warehouse Cash
+
+For:
+
+Bangalore Warehouse
+
+The transaction must automatically connect to accounting.
+
+Example:
+
+Warehouse pays ₹1,000 cash for an indirect expense.
+
+Accounting:
+
+Dr Appropriate Indirect Expense Ledger ₹1,000
+Cr Bangalore Warehouse Cash ₹1,000
+
+Use the existing double-entry accounting engine.
+
+Do not manually create disconnected expense records.
+
+============================================================
+PART 4 — OUTLET SALES FRONTEND
+============================================================
+
+OUTLET operational frontend should similarly provide:
+
+1. Stock
+2. Stock Transfer according to allowed rules
+3. Sales / POS
+4. Expense
+
+Only show data belonging to that Outlet.
+
+Example:
+
+Koramangala Outlet
+
+should show only:
+
+Koramangala Outlet Stock
+Koramangala Outlet Sales
+Koramangala Outlet Expenses
+Koramangala Outlet Stock Transfers
+
+Do not expose Bangalore Warehouse or another Outlet's operational records unless the user has permission and explicitly switches location.
+
+============================================================
+PART 5 — LOCATION-SPECIFIC CASH LEDGERS
+============================================================
+
+Every Warehouse and every Outlet must have its own Cash Ledger.
+
+Use the EXISTING Chart of Accounts hierarchy.
+
+ASSETS
+    ↓
+CURRENT ASSETS
+    ↓
+CASH
+        ↓
+        Bangalore Warehouse Cash
+        Chennai Warehouse Cash
+        Koramangala Outlet Cash
+        Indiranagar Outlet Cash
+
+When a Warehouse is created:
+
+Automatically create:
+
+{Warehouse Name} Cash
+
+Example:
+
+Bangalore Warehouse
+→ Bangalore Warehouse Cash
+
+When an Outlet is created:
+
+Automatically create:
+
+{Outlet Name} Cash
+
+Example:
+
+Koramangala Outlet
+→ Koramangala Outlet Cash
+
+Use strong ID relationships.
+
+Conceptually:
+
+locationType
+locationId
+ledgerId
+ledgerType = CASH
+isSystemGenerated = true
+
+Never rely only on names.
+
+============================================================
+PART 6 — CASH SALES ACCOUNTING
+============================================================
+
+When a Warehouse makes a Cash Sale:
+
+Example:
+
+Bangalore Warehouse
+Sale = ₹10,000
+Payment = Cash
+
+Accounting must automatically post to:
+
+Bangalore Warehouse Cash
+
+NOT:
+
+Koramangala Outlet Cash
+Head Office Cash
+another Warehouse Cash.
+
+Conceptually:
+
+Dr Bangalore Warehouse Cash
+Cr Bangalore Warehouse Sales
+
+plus tax accounting as applicable.
+
+Stock must reduce from:
+
+Bangalore Warehouse Stock.
+
+============================================================
+PART 7 — OUTLET CASH SALES
+============================================================
+
+When an Outlet makes a Cash Sale:
+
+Example:
+
+Koramangala Outlet
+Sale = ₹5,000
+
+Accounting:
+
+Dr Koramangala Outlet Cash
+Cr Koramangala Outlet Sales
+
+plus applicable tax accounting.
+
+Stock must reduce from:
+
+Koramangala Outlet Stock.
+
+============================================================
+PART 8 — SALES ACCOUNT AUTO-CREATION
+============================================================
+
+Every Warehouse and Outlet must have its own Sales Account/Ledger.
+
+When creating a WAREHOUSE:
+
+Automatically create:
+
+{Warehouse Name} Sales
+
+Example:
+
+Bangalore Warehouse Sales
+
+When creating an OUTLET:
+
+Automatically create:
+
+{Outlet Name} Sales
+
+Example:
+
+Koramangala Outlet Sales
+
+Place them correctly under the existing SALES / SALES ACCOUNTS hierarchy in Chart of Accounts.
+
+Do not create duplicate parent groups.
+
+Expected concept:
+
+SALES ACCOUNTS
+
+    Bangalore Warehouse Sales
+
+    Chennai Warehouse Sales
+
+    Koramangala Outlet Sales
+
+    Indiranagar Outlet Sales
+
+Use location IDs for relationships.
+
+============================================================
+PART 9 — PURCHASE ACCOUNT FOR WAREHOUSE
+============================================================
+
+Every WAREHOUSE must also have its corresponding Purchase Account where required by the business/accounting workflow.
+
+When creating:
+
+Bangalore Warehouse
+
+Automatically create:
+
+Bangalore Warehouse Purchase
+
+under the appropriate existing:
+
+PURCHASE ACCOUNTS / PURCHASE
+
+group.
+
+IMPORTANT:
+
+Outlet does NOT require an automatic Purchase Account unless existing business rules explicitly allow Outlet purchasing.
+
+Based on current requirement:
+
+WAREHOUSE:
+
+Cash Account
+Sales Account
+Purchase Account
+
+OUTLET:
+
+Cash Account
+Sales Account
+
+Do not automatically create Outlet Purchase Account.
+
+============================================================
+PART 10 — LEDGERS CREATED FOR LOCATION
+============================================================
+
+Therefore:
+
+CREATE WAREHOUSE:
+
+Automatically create:
+
+1. {Warehouse Name} Cash
+2. {Warehouse Name} Sales
+3. {Warehouse Name} Purchase
+
+Example:
+
+Bangalore Warehouse Cash
+Bangalore Warehouse Sales
+Bangalore Warehouse Purchase
+
+CREATE OUTLET:
+
+Automatically create:
+
+1. {Outlet Name} Cash
+2. {Outlet Name} Sales
+
+Example:
+
+Koramangala Outlet Cash
+Koramangala Outlet Sales
+
+Do not create unnecessary duplicate ledgers.
+
+============================================================
+PART 11 — CUSTOMER AUTO LEDGER
+============================================================
+
+Whenever a CUSTOMER is created:
+
+Automatically create a Customer Ledger under:
+
+SUNDRY DEBTORS.
+
+Example:
+
+Create Customer:
+
+ABC Traders
+
+Automatically create:
+
+CURRENT ASSETS
+→ SUNDRY DEBTORS
+→ ABC Traders
+
+or follow the exact existing Chart of Accounts hierarchy already implemented.
+
+Link:
+
+customerId
+↔
+ledgerId
+
+using IDs.
+
+Do not rely only on Customer Name.
+
+When a credit sale is made:
+
+Dr ABC Traders
+Cr Correct Location Sales Account
+
+plus applicable GST/tax entries.
+
+Example:
+
+Bangalore Warehouse credit sale:
+
+Dr ABC Traders
+Cr Bangalore Warehouse Sales
+Cr Output GST where applicable.
+
+============================================================
+PART 12 — VENDOR AUTO LEDGER
+============================================================
+
+Whenever a VENDOR is created:
+
+Automatically create a Vendor Ledger under:
+
+SUNDRY CREDITORS.
+
+Example:
+
+Create Vendor:
+
+Fresh Farms Pvt Ltd
+
+Automatically create/link:
+
+CURRENT LIABILITIES
+→ SUNDRY CREDITORS
+→ Fresh Farms Pvt Ltd
+
+Link:
+
+vendorId
+↔
+ledgerId
+
+using IDs.
+
+Purchase/accounting transactions must use this Vendor Ledger.
+
+============================================================
+PART 13 — CORE SYSTEM LEDGERS
+============================================================
+
+The ERP must maintain/create the required system accounting ledgers/groups for:
+
+OPENING STOCK
+
+CLOSING STOCK
+
+DUTY & TAX
+
+PURCHASE
+
+SALES
+
+and other required core accounting accounts already supported by the ERP.
+
+IMPORTANT:
+
+Do not blindly duplicate these ledgers for every transaction.
+
+First inspect the existing Chart of Accounts.
+
+If the required system ledger already exists:
+
+USE IT.
+
+If missing and required:
+
+CREATE IT ONCE at the correct company/accounting level.
+
+Location-specific Sales/Purchase ledgers should be children or appropriately classified under the relevant Sales/Purchase account structure.
+
+============================================================
+PART 14 — AUTO LEDGER CREATION AND EDITING
+============================================================
+
+Automatic ledger lifecycle must apply to:
+
+Warehouse
+Outlet
+Customer
+Vendor
+and required system/master accounts.
+
+CREATE:
+
+When entity is created:
+
+Automatically create required linked ledger(s).
+
+EDIT:
+
+If entity name changes:
+
+Update only the linked system-generated ledger DISPLAY NAME where appropriate.
+
+Example:
+
+Old:
+
+Bangalore Warehouse
+
+Ledgers:
+
+Bangalore Warehouse Cash
+Bangalore Warehouse Sales
+Bangalore Warehouse Purchase
+
+Rename Warehouse:
+
+Bangalore Central Warehouse
+
+Update same existing ledger IDs to:
+
+Bangalore Central Warehouse Cash
+Bangalore Central Warehouse Sales
+Bangalore Central Warehouse Purchase
+
+DO NOT delete and recreate ledgers simply because the name changed.
+
+Preserve:
+
+Ledger ID
+Balance
+Transactions
+Audit history.
+
+============================================================
+PART 15 — DELETE RULE: NO ENTRY = DELETE
+============================================================
+
+If a Warehouse, Outlet, Customer, Vendor or relevant master/entity is deleted:
+
+Check every linked ledger.
+
+If linked ledger has:
+
+NO entries
+NO transactions
+ZERO balance
+NO accounting references
+
+then the linked system-generated ledger can automatically be deleted with the entity where permanent deletion is allowed.
+
+Example:
+
+Create Customer:
+
+Test Customer
+
+Automatically creates:
+
+Test Customer Ledger
+
+No transaction occurs.
+
+Delete Test Customer.
+
+Automatically delete:
+
+Test Customer Ledger.
+
+============================================================
+PART 16 — CRITICAL DELETE RULE: IF ANY LEDGER ENTRY EXISTS, NOTHING CAN BE DELETED
+============================================================
+
+THIS IS A STRICT ACCOUNTING RULE.
+
+If ANY entry exists in a linked ledger:
+
+DO NOT ALLOW PERMANENT DELETION.
+
+This applies to:
+
+Warehouse
+Outlet
+Customer
+Vendor
+Cash Ledger
+Sales Ledger
+Purchase Ledger
+Debtor Ledger
+Creditor Ledger
+and other accounting-linked master records.
+
+Example:
+
+ABC Traders has even ONE accounting entry.
+
+User tries:
+
+Delete ABC Traders.
+
+BLOCK permanent deletion.
+
+Show:
+
+"This record cannot be deleted because accounting entries already exist. Deleting it would affect financial history."
+
+Use:
+
+Archive
+Deactivate
+
+where appropriate.
+
+Never destroy ledger history.
+
+============================================================
+PART 17 — DO NOT DELETE AND RECREATE LEDGER DURING NORMAL EDIT
+============================================================
+
+Clarification:
+
+When editing a master record:
+
+If only:
+
+Name
+Address
+Phone
+GST
+UPI
+or other non-accounting information
+
+changes:
+
+DO NOT delete its ledger.
+
+Update the linked ledger name/details where necessary.
+
+Only automatically delete an unused linked ledger if the corresponding ledger/account relationship itself is intentionally removed and:
+
+NO ledger entry exists
+NO transaction exists
+ZERO balance.
+
+If entries exist:
+
+BLOCK deletion.
+
+============================================================
+PART 18 — EXPENSE MODULE FOR SALES FRONTEND
+============================================================
+
+Create/reuse a simplified operational Expense module available inside:
+
+SALES
+→ Warehouse
+
+and
+
+SALES
+→ Outlet.
+
+This is NOT the complete accounting Expense management screen.
+
+This screen is specifically for local operational staff.
+
+Fields should use existing data model where possible:
+
+Date
+
+Expense Ledger / Category
+
+Description
+
+Amount
+
+Reference
+
+Attachment if existing
+
+Payment Source:
+
+Automatically use that location's CASH ledger.
+
+For Warehouse:
+
+{Warehouse Name} Cash
+
+For Outlet:
+
+{Outlet Name} Cash.
+
+============================================================
+PART 19 — EXPENSE LEDGER FILTER
+============================================================
+
+When selecting Expense Category/Ledger in the Sales frontend:
+
+ONLY show ledgers classified under:
+
+DIRECT EXPENSES
+
+or
+
+INDIRECT EXPENSES.
+
+Do NOT show:
+
+Cash
+Bank
+Sales
+Purchase
+Debtors
+Creditors
+Capital
+Loans
+Assets
+Liabilities
+Duty & Tax
+Payment Clearing
+
+as selectable expense categories.
+
+Conceptually query by account classification/group ID.
+
+Do NOT filter by text-name matching only.
+
+============================================================
+PART 20 — EXPENSE ACCOUNTING
+============================================================
+
+Example:
+
+Koramangala Outlet
+
+Expense:
+
+Electricity Expense ₹2,000
+
+Category:
+
+Indirect Expense → Electricity Expense
+
+Payment:
+
+Cash
+
+Automatically post:
+
+Dr Electricity Expense ₹2,000
+
+Cr Koramangala Outlet Cash ₹2,000
+
+Expense should immediately reflect in:
+
+Koramangala Outlet Expense History
+
+Cash Ledger
+
+Expense Ledger
+
+Trial Balance
+
+Profit & Loss
+
+and all relevant accounting reports.
+
+One transaction.
+
+One accounting source.
+
+Do not duplicate postings.
+
+============================================================
+PART 21 — DIRECT EXPENSE EXAMPLE
+============================================================
+
+If an expense is classified under Direct Expense:
+
+Example:
+
+Freight Inward ₹5,000
+
+Dr Freight Inward ₹5,000
+
+Cr Correct Warehouse/Outlet Cash ₹5,000
+
+It must correctly appear under Direct Expenses in P&L.
+
+============================================================
+PART 22 — SALES FRONTEND DATA IS LOCATION-SCOPED
+============================================================
+
+If logged into / operating:
+
+Bangalore Warehouse
+
+show only:
+
+Bangalore Warehouse Stock
+Bangalore Warehouse Stock Transfers
+Bangalore Warehouse Sales
+Bangalore Warehouse Expenses
+
+Do not show:
+
+Chennai Warehouse sales
+Koramangala Outlet expenses
+Indiranagar Outlet stock
+
+unless the authorized user intentionally switches location.
+
+Every query must be scoped using:
+
+companyId
++
+locationType
++
+locationId
+
+and permissions.
+
+============================================================
+PART 23 — POS: ADD WAREHOUSE SUPPORT
+============================================================
+
+CURRENTLY:
+
+Outlet can perform POS Sales.
+
+CHANGE:
+
+Warehouse must ALSO be able to perform Sales/POS.
+
+Modify existing POS.
+
+DO NOT create:
+
+Warehouse POS v2
+
+or another duplicate module.
+
+Use ONE POS engine supporting:
+
+SELLING LOCATION TYPE:
+
+WAREHOUSE
+
+or
+
+OUTLET.
+
+============================================================
+PART 24 — POS STOCK VALIDATION
+============================================================
+
+If selling from:
+
+Bangalore Warehouse
+
+POS must check:
+
+Bangalore Warehouse Stock.
+
+If:
+
+Frozen Strawberry available = 100
+
+Sale = 10
+
+After completed sale:
+
+Bangalore Warehouse Stock = 90.
+
+Do not reduce:
+
+Head Office Stock
+Another Warehouse Stock
+Outlet Stock.
+
+============================================================
+PART 25 — POS ACCOUNTING
+============================================================
+
+Every completed sale must automatically create proper double-entry accounting.
+
+CASH SALE EXAMPLE:
+
+Location:
+
+Bangalore Warehouse
+
+Sale:
+
+₹10,000 + applicable tax
+
+Accounting concept:
+
+Dr Bangalore Warehouse Cash
+
+Cr Bangalore Warehouse Sales
+
+Cr Output CGST/SGST/IGST as applicable.
+
+CREDIT SALE EXAMPLE:
+
+Customer:
+
+ABC Traders
+
+Location:
+
+Bangalore Warehouse
+
+Accounting:
+
+Dr ABC Traders / Sundry Debtor
+
+Cr Bangalore Warehouse Sales
+
+Cr applicable Output GST.
+
+Use actual accounting configuration and tax calculations.
+
+Do not double-post GST.
+
+============================================================
+PART 26 — OUTLET POS
+============================================================
+
+Existing Outlet POS must continue working.
+
+Example:
+
+Koramangala Outlet
+
+Sale:
+
+₹5,000
+
+Stock reduction:
+
+Koramangala Outlet Stock
+
+Sales posting:
+
+Koramangala Outlet Sales
+
+Cash posting if cash:
+
+Koramangala Outlet Cash.
+
+Do not break existing Outlet POS while adding Warehouse support.
+
+============================================================
+PART 27 — STOCK TRANSFER
+============================================================
+
+Sales frontend should allow location users to:
+
+Receive stock
+
+Transfer stock
+
+according to existing authorized business rules.
+
+Use the existing stock transfer engine.
+
+The stock movement must remain centralized.
+
+Example:
+
+Bangalore Warehouse
+
+Stock:
+
+100 units
+
+Transfer 20 to:
+
+Koramangala Outlet
+
+After successful transfer/receipt according to existing workflow:
+
+Bangalore Warehouse = 80
+
+Koramangala Outlet += 20.
+
+Maintain:
+
+Transfer Number
+Date
+Source
+Destination
+Items
+Quantity
+Status
+Audit history
+
+and existing Delivery Challan/tax logic where applicable.
+
+============================================================
+PART 28 — STOCK MUST BE ONE SOURCE OF TRUTH
+============================================================
+
+Do not create separate independent stock values for:
+
+Sales frontend
+Accounts frontend
+POS
+Warehouse screen
+Outlet screen.
+
+There must be ONE stock source of truth.
+
+All screens read from the same stock movement/inventory system.
+
+============================================================
+PART 29 — ACCOUNTS MUST RECEIVE EVERYTHING AUTOMATICALLY
+============================================================
+
+The user should NOT have to manually re-enter Sales frontend transactions into Accounts.
+
+Example:
+
+Outlet user creates Sale.
+
+Automatically:
+
+Stock updates
+Sales Invoice created
+Sales Ledger posts
+Cash/Debtor posts
+GST posts
+Trial Balance updates
+P&L updates
+Balance Sheet updates where applicable.
+
+Similarly:
+
+Expense added
+
+Automatically:
+
+Expense Ledger posts
+Cash reduces
+Trial Balance updates
+P&L updates.
+
+This is what makes the system an ERP.
+
+============================================================
+PART 30 — CHART OF ACCOUNTS STRUCTURE
+============================================================
+
+Reuse the existing Chart of Accounts.
+
+Based on the existing system, examples include:
+
+ASSETS
+
+CURRENT ASSETS
+
+Bank
+
+Cash
+    Outlet Cash Ledgers
+    Warehouse Cash Ledgers
+
+Payment
+    UPI
+    Card Swiping
+
+Sundry Debtors
+    Customer Ledgers
+
+Electronic Payment Clearing
+
+Cash in Transit
+
+
+LIABILITIES
+
+CURRENT LIABILITIES
+
+Duty & Tax
+
+Sundry Creditors
+    Vendor Ledgers
+
+Also maintain correct existing structures for:
+
+Sales Accounts
+Purchase Accounts
+Direct Expenses
+Indirect Expenses
+Opening Stock
+Closing Stock
+
+Do not duplicate parent groups.
+
+============================================================
+PART 31 — ACCOUNTING RELATIONSHIP MODEL
+============================================================
+
+Use IDs and proper relationships.
+
+Conceptually:
+
+Warehouse
+    ↓
+warehouseCashLedgerId
+warehouseSalesLedgerId
+warehousePurchaseLedgerId
+
+
+Outlet
+    ↓
+outletCashLedgerId
+outletSalesLedgerId
+
+
+Customer
+    ↓
+debtorLedgerId
+
+
+Vendor
+    ↓
+creditorLedgerId
+
+Do not find critical ledgers only by:
+
+ledger.name
+
+Use IDs.
+
+============================================================
+PART 32 — SYSTEM GENERATED LEDGER IDENTIFICATION
+============================================================
+
+Use existing schema where possible.
+
+If needed, conceptually identify:
+
+isSystemGenerated
+
+entityType:
+WAREHOUSE
+OUTLET
+CUSTOMER
+VENDOR
+SYSTEM
+
+entityId
+
+ledgerRole:
+CASH
+SALES
+PURCHASE
+DEBTOR
+CREDITOR
+OPENING_STOCK
+CLOSING_STOCK
+DUTY_TAX
+
+This is to prevent duplicate ledgers and incorrect deletion.
+
+Do not create a parallel ledger model if the current model can support this cleanly.
+
+============================================================
+PART 33 — ACCOUNTING ENTRY SOURCE LINK
+============================================================
+
+Every automatic journal/ledger posting should preserve its source.
+
+Conceptually:
+
+sourceType
+
+SALE
+PURCHASE
+EXPENSE
+PAYMENT
+RECEIPT
+STOCK_TRANSFER
+OPENING_BALANCE
+etc.
+
+sourceId
+
+This allows:
+
+Audit
+Drill-down
+Reversal
+Duplicate prevention.
+
+Do not allow the same Sales Invoice to post twice.
+
+============================================================
+PART 34 — ATOMIC TRANSACTIONS
+============================================================
+
+Critical operations should be atomic.
+
+Example Sale:
+
+BEGIN
+
+Validate Stock
+
+Create Sale
+
+Create Sales Invoice
+
+Reduce Stock
+
+Create Accounting Entries
+
+COMMIT
+
+If accounting posting fails:
+
+ROLLBACK appropriately.
+
+Do not create situations where:
+
+Invoice exists
+
+but
+
+Stock did not reduce
+
+or
+
+Ledger did not post.
+
+Apply the same principle to:
+
+Expense
+Purchase
+Stock Transfer
+Payment
+Receipt
+
+according to existing architecture.
+
+============================================================
+PART 35 — MAIN NAVIGATION TARGET
+============================================================
+
+Target top-level organization:
+
+1. SALES
+
+2. ACCOUNTS
+
+SALES:
+
+Warehouse/Outlet operational access
+
+→ Stock
+
+→ Stock Transfer
+
+→ Sales / POS
+
+→ Expense
+
+
+ACCOUNTS:
+
+Production Unit
+
+Warehouse Management
+
+Outlet Management
+
+Customers
+
+Vendors
+
+Purchases
+
+Full Accounts
+
+Chart of Accounts
+
+Ledger
+
+Cash & Bank
+
+Full Expense Management
+
+GST
+
+HR
+
+Payroll
+
+Reports
+
+Permissions
+
+Settings
+
+and other existing administrative modules.
+
+Do not remove existing functionality.
+
+Reorganize access/navigation carefully.
+
+============================================================
+PART 36 — PERMISSIONS
+============================================================
+
+Permissions are critical.
+
+Example:
+
+Koramangala Outlet User
+
+Can access SALES.
+
+Assigned Location:
+
+Koramangala Outlet.
+
+They should only see:
+
+Koramangala Outlet Stock
+
+Koramangala Outlet Transfers
+
+Koramangala Outlet Sales
+
+Koramangala Outlet Expenses.
+
+They should NOT automatically see:
+
+Full Chart of Accounts
+
+Company-wide P&L
+
+Vendor management
+
+Warehouse creation
+
+HR
+
+Payroll
+
+Other outlets' financial information.
+
+Accounts/Admin users can access broader functionality according to existing permissions.
+
+============================================================
+PART 37 — DO NOT CHANGE CURRENT UI UNNECESSARILY
+============================================================
+
+I HAVE ALREADY CREATED MUCH OF THE VIEW AND SYSTEM.
+
+Do not redesign everything.
+
+Preserve:
+
+Existing styling
+
+Existing forms where possible
+
+Existing navigation components where reusable
+
+Existing POS layout
+
+Existing invoice design
+
+Existing stock logic
+
+Existing Chart of Accounts UI.
+
+Make only the changes necessary to achieve the required architecture and navigation.
+
+============================================================
+PART 38 — SAFE MIGRATION / BACKFILL
+============================================================
+
+Existing data already exists.
+
+Do not wipe or reset it.
+
+Create a safe migration/backfill.
+
+For each existing Warehouse:
+
+Ensure exactly:
+
+1 Cash Ledger
+1 Sales Ledger
+1 Purchase Ledger
+
+For each existing Outlet:
+
+Ensure exactly:
+
+1 Cash Ledger
+1 Sales Ledger
+
+For each existing Customer:
+
+Ensure exactly:
+
+1 Sundry Debtor Ledger
+
+For each existing Vendor:
+
+Ensure exactly:
+
+1 Sundry Creditor Ledger
+
+For system ledgers:
+
+Ensure required:
+
+Opening Stock
+Closing Stock
+Duty & Tax
+Purchase/Sales parent structures
+
+exist correctly.
+
+BEFORE CREATING ANYTHING:
+
+Check existing ledger relationships.
+
+Do not duplicate existing ledgers.
+
+Do not alter balances.
+
+Do not delete transaction history.
+
+============================================================
+PART 39 — STRICT LEDGER DELETE SAFETY
+============================================================
+
+Before deleting ANY accounting-linked entity or ledger:
+
+Run:
+
+hasLedgerEntries?
+hasTransactions?
+hasReferences?
+balance != 0?
+
+If ANY is true:
+
+BLOCK HARD DELETE.
+
+Use archive/deactivate where appropriate.
+
+No financial history can ever disappear because a master was deleted.
+
+============================================================
+PART 40 — REQUIRED TEST SCENARIOS
+============================================================
+
+TEST 1:
+
+Create:
+
+Bangalore Warehouse.
+
+Expected automatic ledgers:
+
+Bangalore Warehouse Cash
+Bangalore Warehouse Sales
+Bangalore Warehouse Purchase.
+
+Correct Chart of Accounts classification.
+
+-----------------------------------------------
+
+TEST 2:
+
+Create:
+
+Koramangala Outlet.
+
+Expected:
+
+Koramangala Outlet Cash
+Koramangala Outlet Sales.
+
+NO automatic Outlet Purchase Ledger.
+
+-----------------------------------------------
+
+TEST 3:
+
+Create Customer:
+
+ABC Traders.
+
+Expected:
+
+ABC Traders ledger under Sundry Debtors.
+
+-----------------------------------------------
+
+TEST 4:
+
+Create Vendor:
+
+Fresh Farms Pvt Ltd.
+
+Expected:
+
+Fresh Farms Pvt Ltd under Sundry Creditors.
+
+-----------------------------------------------
+
+TEST 5:
+
+Warehouse POS Cash Sale:
+
+Bangalore Warehouse
+
+₹10,000 sale.
+
+Expected:
+
+Correct Warehouse stock reduces.
+
+Posting uses:
+
+Bangalore Warehouse Cash
+
+and
+
+Bangalore Warehouse Sales
+
+plus applicable tax.
+
+-----------------------------------------------
+
+TEST 6:
+
+Warehouse POS Credit Sale:
+
+Customer ABC Traders.
+
+Expected:
+
+Dr ABC Traders
+
+Cr Bangalore Warehouse Sales
+
+plus applicable tax.
+
+-----------------------------------------------
+
+TEST 7:
+
+Outlet POS Cash Sale.
+
+Expected:
+
+Correct Outlet Stock reduces.
+
+Correct Outlet Cash posts.
+
+Correct Outlet Sales posts.
+
+-----------------------------------------------
+
+TEST 8:
+
+Warehouse Expense:
+
+₹1,000
+
+Expense category under Indirect Expenses.
+
+Expected:
+
+Dr selected Indirect Expense
+
+Cr Warehouse Cash.
+
+Only Direct/Indirect Expense ledgers selectable.
+
+-----------------------------------------------
+
+TEST 9:
+
+Outlet Expense.
+
+Expected:
+
+Expense appears only in that Outlet's operational history.
+
+Accounting still appears centrally in Accounts/P&L.
+
+-----------------------------------------------
+
+TEST 10:
+
+Delete unused Customer.
+
+No entries.
+
+Expected:
+
+Customer and unused linked system ledger may be deleted safely.
+
+-----------------------------------------------
+
+TEST 11:
+
+Delete Customer with one ledger entry.
+
+Expected:
+
+PERMANENT DELETE BLOCKED.
+
+No ledger history lost.
+
+-----------------------------------------------
+
+TEST 12:
+
+Delete Warehouse with transactions.
+
+Expected:
+
+Do not delete Warehouse Cash/Sales/Purchase ledgers.
+
+Archive/deactivate according to existing architecture.
+
+Historical accounting remains correct.
+
+-----------------------------------------------
+
+TEST 13:
+
+Location isolation.
+
+Login/operate:
+
+Koramangala Outlet.
+
+Expected Sales frontend:
+
+Only Koramangala Outlet:
+
+Stock
+Transfer
+Sales
+Expense.
+
+No other location data leakage.
+
+-----------------------------------------------
+
+TEST 14:
+
+Accounts integration.
+
+Create sale in Sales frontend.
+
+Immediately verify:
+
+Stock
+Sales Invoice
+Ledger
+Trial Balance
+GST
+P&L
+Balance Sheet where applicable.
+
+No manual duplicate accounting entry required.
+
+============================================================
+FINAL ARCHITECTURAL RULE
+============================================================
+
+This must operate as ONE ERP:
+
+                    ACCOUNTS / ADMIN
+                          │
+        ┌─────────────────┼──────────────────┐
+        │                 │                  │
+   Production        Warehouse          Outlet
+                         │                  │
+                    configuration      configuration
+                         │                  │
+                         └────────┬─────────┘
+                                  │
+                               SALES
+                                  │
+                    Select Authorized Location
+                                  │
+                  ┌───────────────┼───────────────┐
+                  │               │               │
+                Stock          Transfer          POS/Sale
+                                                  │
+                                               Expense
+                                  │
+                                  ▼
+                      CENTRAL ERP ACCOUNTING
+                                  │
+             ┌────────────────────┼────────────────────┐
+             │                    │                    │
+          Ledgers              Stock               GST/Tax
+             │                    │                    │
+             └────────────────────┼────────────────────┘
+                                  │
+                    Trial Balance / P&L /
+                       Balance Sheet / Reports
+
+Operational users use a simple SALES frontend.
+
+Accounting/Admin users manage the complete ERP through ACCOUNTS.
+
+But everything uses ONE database, ONE stock engine and ONE accounting engine.
+
+============================================================
+BEFORE MAKING CHANGES
+============================================================
+
+First audit the existing code and identify:
+
+1. Current main navigation
+2. Existing Sales/POS module
+3. Current Outlet POS logic
+4. Warehouse model
+5. Outlet model
+6. Stock model / stock movement system
+7. Stock Transfer workflow
+8. Customer model
+9. Vendor model
+10. Expense module
+11. Chart of Accounts
+12. Ledger schema
+13. Journal/double-entry posting engine
+14. Existing automatic ledger creation
+15. Current delete behavior
+16. Existing Outlet Cash ledgers
+17. Sales Account hierarchy
+18. Purchase Account hierarchy
+19. Direct Expense hierarchy
+20. Indirect Expense hierarchy
+21. Duty & Tax
+22. Sundry Debtors
+23. Sundry Creditors
+24. Opening/Closing Stock handling
+25. Permissions/location access
+
+REUSE EXISTING WORKING LOGIC.
+
+Do not create parallel systems.
+
+After auditing, implement incrementally and verify existing functionality after each major change.
+
+At completion, provide a clear report of:
+
+- Navigation changes made
+- Existing modules reused
+- Warehouse ledger automation
+- Outlet ledger automation
+- Customer/Vendor ledger automation
+- Warehouse POS changes
+- Expense integration
+- Stock integration
+- Accounting posting integration
+- Delete/archive safeguards
+- Database migrations performed
+- Tests performed
+- Any accounting rule that still requires business clarification
+
+DO NOT RESET EXISTING DATA.
+DO NOT REBUILD THE APPLICATION FROM SCRATCH.
+DO NOT CHANGE EXISTING WORKING FEATURES UNLESS REQUIRED FOR THESE REQUIREMENTS.
