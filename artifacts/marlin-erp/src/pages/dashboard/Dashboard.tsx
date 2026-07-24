@@ -1,11 +1,10 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   useGetDashboardSummary,
   useGetStockAlerts,
   useGetRecentActivity,
-  useGetSalesTrend,
-  useGetTopItems,
-  useGetProductionTrend,
+  useListSales,
+  useListStock,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import {
@@ -18,24 +17,19 @@ import {
   Activity, AlertTriangle, Box, CreditCard, Users,
   ArrowUpRight, ArrowDownRight, Package, ArrowRightLeft,
   Clock, Building2, Factory, User, TrendingDown, Layers,
-  Landmark, Wallet,
+  Landmark, Wallet, Trophy, Warehouse, Store,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, LineChart, Line, Cell,
+  ResponsiveContainer, Cell, LabelList,
 } from 'recharts';
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function fmtDate(dateStr: string): string {
-  // e.g. "2026-07-10" → "Jul 10"
-  const [y, m, d] = dateStr.split('-').map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
-}
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmtRupee(v: number): string {
-  if (v >= 100000) return `₹${(v / 100000).toFixed(1)}L`;
-  if (v >= 1000) return `₹${(v / 1000).toFixed(1)}k`;
+  if (v >= 10000000) return `₹${(v / 10000000).toFixed(1)}Cr`;
+  if (v >= 100000)   return `₹${(v / 100000).toFixed(1)}L`;
+  if (v >= 1000)     return `₹${(v / 1000).toFixed(1)}k`;
   return `₹${v.toFixed(0)}`;
 }
 
@@ -43,56 +37,85 @@ function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) + '…' : s;
 }
 
-const CHART_COLORS = [
-  'hsl(var(--chart-1))',
-  'hsl(var(--chart-2))',
-  'hsl(var(--chart-3))',
-  'hsl(var(--chart-4))',
-  'hsl(var(--chart-5))',
-];
-
-// ── Custom Tooltip ────────────────────────────────────────────────────────────
-
 const tooltipStyle = {
   backgroundColor: 'hsl(var(--card))',
-  borderColor: 'hsl(var(--border))',
-  borderRadius: '8px',
-  fontSize: '12px',
+  borderColor:     'hsl(var(--border))',
+  borderRadius:    '8px',
+  fontSize:        '12px',
 };
+
+const WAREHOUSE_COLOR = 'hsl(var(--primary))';
+const OUTLET_COLOR    = 'hsl(var(--chart-2))';
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
   const [salesPeriod, setSalesPeriod] = useState<30 | 90>(30);
 
-  const { data: summary,    isLoading: loadingSummary }    = useGetDashboardSummary();
-  const { data: alerts,     isLoading: loadingAlerts }     = useGetStockAlerts();
-  const { data: activity,   isLoading: loadingActivity }   = useGetRecentActivity();
-  const { data: salesTrend, isLoading: loadingSalesTrend } = useGetSalesTrend({ days: salesPeriod });
-  const { data: topItems,   isLoading: loadingTopItems }   = useGetTopItems({ days: salesPeriod });
-  const { data: prodTrend,  isLoading: loadingProdTrend }  = useGetProductionTrend({ days: 30 });
+  const { data: summary,  isLoading: loadingSummary }  = useGetDashboardSummary();
+  const { data: alerts,   isLoading: loadingAlerts }   = useGetStockAlerts();
+  const { data: activity, isLoading: loadingActivity } = useGetRecentActivity();
+  const { data: allSales  = [], isLoading: loadingSales } = useListSales();
+  const { data: allStock  = [], isLoading: loadingStock } = useListStock({});
 
-  // Prepare chart-ready data
-  const salesChartData = (salesTrend ?? []).map(p => ({
-    ...p,
-    label: fmtDate(p.date),
-  }));
-  const prodChartData = (prodTrend ?? []).map(p => ({
-    ...p,
-    label: fmtDate(p.date),
-  }));
-  const topItemsData = (topItems ?? []).map(p => ({
-    ...p,
-    shortName: truncate(p.item_name, 20),
+  // ── Sales by location ──────────────────────────────────────────────────────
+  const cutoffDate = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - salesPeriod);
+    return d;
+  }, [salesPeriod]);
+
+  const periodSales = useMemo(() =>
+    (allSales as any[]).filter(s => s.saleDate && new Date(s.saleDate) >= cutoffDate),
+    [allSales, cutoffDate]
+  );
+
+  const salesByLocation = useMemo(() => {
+    const map = new Map<string, { name: string; type: string; total: number; count: number }>();
+    for (const s of periodSales) {
+      const key  = `${s.locationType}-${s.locationId}`;
+      const name = s.outletName || s.locationName || s.warehouseName || `${s.locationType} #${s.locationId}`;
+      if (!map.has(key)) map.set(key, { name, type: s.locationType ?? 'outlet', total: 0, count: 0 });
+      const grp = map.get(key)!;
+      grp.total += Number(s.totalAmount ?? 0);
+      grp.count += 1;
+    }
+    return [...map.values()].sort((a, b) => b.total - a.total);
+  }, [periodSales]);
+
+  const totalPeriodSales = periodSales.reduce((s, sale) => s + Number((sale as any).totalAmount ?? 0), 0);
+
+  const salesChartData = salesByLocation.map(loc => ({
+    name:     truncate(loc.name, 14),
+    fullName: loc.name,
+    revenue:  loc.total,
+    count:    loc.count,
+    type:     loc.type,
   }));
 
-  const totalSalesInPeriod = salesChartData.reduce((s, p) => s + p.revenue, 0);
-  const totalProduced = prodChartData.reduce((s, p) => s + p.quantity, 0);
+  // ── High stock items (aggregate across all locations) ─────────────────────
+  const highStockItems = useMemo(() => {
+    const map = new Map<string, { name: string; unit: string; total: number; locations: number }>();
+    for (const s of allStock as any[]) {
+      const key = s.itemName || `Item #${s.itemId}`;
+      if (!map.has(key)) map.set(key, { name: key, unit: s.unit || '', total: 0, locations: 0 });
+      const grp = map.get(key)!;
+      grp.total     += Number(s.quantity ?? 0);
+      grp.locations += 1;
+    }
+    return [...map.values()]
+      .filter(i => i.total > 0)
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 10);
+  }, [allStock]);
+
+  const maxStockQty = highStockItems[0]?.total ?? 1;
 
   return (
     <AppLayout>
       <div className="space-y-6">
-        {/* Header */}
+
+        {/* ── Header ─────────────────────────────────────────────────────── */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">System Overview</h1>
@@ -104,7 +127,7 @@ export default function Dashboard() {
           </Badge>
         </div>
 
-        {/* KPI Cards */}
+        {/* ── KPI Cards ──────────────────────────────────────────────────── */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <KpiCard
             title="Total Stock Value"
@@ -172,54 +195,72 @@ export default function Dashboard() {
           />
         </div>
 
-        {/* Sales Trend + Production Trend */}
+        {/* ── Sales by Location chart + Top Locations ────────────────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {/* Sales Trend — 2/3 width */}
+
+          {/* Bar chart — 2/3 width */}
           <Card className="lg:col-span-2 border-card-border bg-card shadow-sm">
             <CardHeader>
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <div>
-                  <CardTitle className="text-lg">Sales Revenue Trend</CardTitle>
+                  <CardTitle className="text-lg">Sales by Location</CardTitle>
                   <CardDescription>
-                    {loadingSalesTrend
+                    {loadingSales
                       ? 'Loading…'
-                      : salesChartData.length > 0
-                        ? `${fmtRupee(totalSalesInPeriod)} over last ${salesPeriod} days`
+                      : salesByLocation.length > 0
+                        ? `${fmtRupee(totalPeriodSales)} across ${salesByLocation.length} location${salesByLocation.length !== 1 ? 's' : ''} — last ${salesPeriod} days`
                         : `No sales in last ${salesPeriod} days`}
                   </CardDescription>
                 </div>
-                <div className="flex gap-1">
-                  {([30, 90] as const).map(d => (
-                    <Button
-                      key={d}
-                      variant={salesPeriod === d ? 'default' : 'outline'}
-                      size="sm"
-                      className="h-7 px-3 text-xs"
-                      onClick={() => setSalesPeriod(d)}
-                    >
-                      {d}d
-                    </Button>
-                  ))}
+                <div className="flex items-center gap-3">
+                  {/* Legend */}
+                  <div className="hidden sm:flex items-center gap-3 text-xs text-muted-foreground">
+                    <span className="flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 rounded-sm" style={{ background: WAREHOUSE_COLOR }} />
+                      Warehouse
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 rounded-sm" style={{ background: OUTLET_COLOR }} />
+                      Outlet
+                    </span>
+                  </div>
+                  {/* Period toggle */}
+                  <div className="flex gap-1">
+                    {([30, 90] as const).map(d => (
+                      <Button
+                        key={d}
+                        variant={salesPeriod === d ? 'default' : 'outline'}
+                        size="sm"
+                        className="h-7 px-3 text-xs"
+                        onClick={() => setSalesPeriod(d)}
+                      >
+                        {d}d
+                      </Button>
+                    ))}
+                  </div>
                 </div>
               </div>
             </CardHeader>
             <CardContent>
-              {loadingSalesTrend ? (
-                <Skeleton className="h-[280px] w-full rounded-md" />
+              {loadingSales ? (
+                <Skeleton className="h-[300px] w-full rounded-md" />
               ) : salesChartData.length === 0 ? (
-                <EmptyChart message="No sales recorded in this period" height={280} />
+                <EmptyChart message="No sales recorded in this period" height={300} />
               ) : (
-                <div className="h-[280px]">
+                <div className="h-[300px]">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={salesChartData} barCategoryGap="30%">
+                    <BarChart data={salesChartData} barCategoryGap="28%" margin={{ top: 16, right: 8, bottom: 4, left: 8 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                       <XAxis
-                        dataKey="label"
+                        dataKey="name"
                         stroke="hsl(var(--muted-foreground))"
                         fontSize={11}
                         tickLine={false}
                         axisLine={false}
-                        interval="preserveStartEnd"
+                        interval={0}
+                        angle={salesChartData.length > 5 ? -30 : 0}
+                        textAnchor={salesChartData.length > 5 ? 'end' : 'middle'}
+                        height={salesChartData.length > 5 ? 52 : 28}
                       />
                       <YAxis
                         stroke="hsl(var(--muted-foreground))"
@@ -227,15 +268,26 @@ export default function Dashboard() {
                         tickLine={false}
                         axisLine={false}
                         tickFormatter={fmtRupee}
-                        width={56}
+                        width={60}
                       />
                       <Tooltip
                         cursor={{ fill: 'hsl(var(--muted)/0.15)' }}
                         contentStyle={tooltipStyle}
-                        formatter={(v: number) => [`₹${v.toLocaleString('en-IN')}`, 'Revenue']}
+                        formatter={(v: number, _: string, props: any) => [
+                          `₹${v.toLocaleString('en-IN')} (${props.payload.count} orders)`,
+                          props.payload.type === 'warehouse' ? 'Warehouse' : 'Outlet',
+                        ]}
+                        labelFormatter={(_: string, payload: any[]) => payload?.[0]?.payload?.fullName ?? _}
                         labelStyle={{ color: 'hsl(var(--foreground))', marginBottom: 4 }}
                       />
-                      <Bar dataKey="revenue" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} maxBarSize={40} />
+                      <Bar dataKey="revenue" radius={[4, 4, 0, 0]} maxBarSize={48}>
+                        {salesChartData.map((entry, i) => (
+                          <Cell
+                            key={i}
+                            fill={entry.type === 'warehouse' ? WAREHOUSE_COLOR : OUTLET_COLOR}
+                          />
+                        ))}
+                      </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -243,83 +295,92 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          {/* Production Trend — 1/3 width */}
-          <Card className="border-card-border bg-card shadow-sm">
+          {/* Top Sale Locations — 1/3 width */}
+          <Card className="border-card-border bg-card shadow-sm flex flex-col">
             <CardHeader>
-              <CardTitle className="text-lg">Production Output</CardTitle>
-              <CardDescription>
-                {loadingProdTrend
-                  ? 'Loading…'
-                  : prodChartData.length > 0
-                    ? `${totalProduced.toLocaleString('en-IN')} units last 30 days`
-                    : 'No production recorded'}
-              </CardDescription>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Trophy className="w-5 h-5 text-amber-500" />
+                Top Sale Locations
+              </CardTitle>
+              <CardDescription>Ranked by revenue — last {salesPeriod} days</CardDescription>
             </CardHeader>
-            <CardContent>
-              {loadingProdTrend ? (
-                <Skeleton className="h-[280px] w-full rounded-md" />
-              ) : prodChartData.length === 0 ? (
-                <EmptyChart message="No production recorded" height={280} />
+            <CardContent className="flex-1 overflow-auto">
+              {loadingSales ? (
+                <div className="space-y-3">
+                  {[1, 2, 3, 4, 5].map(i => <Skeleton key={i} className="h-14 w-full rounded-md" />)}
+                </div>
+              ) : salesByLocation.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-muted-foreground py-8">
+                  <CreditCard className="w-10 h-10 mb-2 opacity-20" />
+                  <p className="text-sm">No sales this period</p>
+                </div>
               ) : (
-                <div className="h-[280px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={prodChartData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-                      <XAxis
-                        dataKey="label"
-                        stroke="hsl(var(--muted-foreground))"
-                        fontSize={11}
-                        tickLine={false}
-                        axisLine={false}
-                        interval="preserveStartEnd"
-                      />
-                      <YAxis
-                        stroke="hsl(var(--muted-foreground))"
-                        fontSize={11}
-                        tickLine={false}
-                        axisLine={false}
-                        width={40}
-                      />
-                      <Tooltip
-                        contentStyle={tooltipStyle}
-                        formatter={(v: number) => [v.toLocaleString('en-IN'), 'Units']}
-                        labelStyle={{ color: 'hsl(var(--foreground))', marginBottom: 4 }}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="quantity"
-                        stroke="hsl(var(--chart-3))"
-                        strokeWidth={2.5}
-                        dot={{ r: 3, fill: 'hsl(var(--chart-3))', strokeWidth: 0 }}
-                        activeDot={{ r: 5 }}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
+                <div className="space-y-2">
+                  {salesByLocation.slice(0, 8).map((loc, i) => {
+                    const pct = totalPeriodSales > 0 ? (loc.total / totalPeriodSales) * 100 : 0;
+                    const isWarehouse = loc.type === 'warehouse';
+                    const medals = ['🥇', '🥈', '🥉'];
+                    return (
+                      <div key={i} className="p-3 rounded-lg border border-border bg-muted/10 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-base shrink-0">{medals[i] ?? `#${i + 1}`}</span>
+                            {isWarehouse
+                              ? <Warehouse className="w-3.5 h-3.5 text-primary shrink-0" />
+                              : <Store className="w-3.5 h-3.5 text-chart-2 shrink-0" />}
+                            <span className="font-medium text-sm truncate">{loc.name}</span>
+                          </div>
+                          <span className="font-bold text-sm font-mono shrink-0">
+                            {fmtRupee(loc.total)}
+                          </span>
+                        </div>
+                        {/* Progress bar */}
+                        <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                          <div
+                            className="h-full rounded-full transition-all"
+                            style={{
+                              width: `${pct}%`,
+                              background: isWarehouse ? WAREHOUSE_COLOR : OUTLET_COLOR,
+                            }}
+                          />
+                        </div>
+                        <div className="flex justify-between text-[10px] text-muted-foreground">
+                          <span>{loc.count} order{loc.count !== 1 ? 's' : ''}</span>
+                          <span>{pct.toFixed(1)}% of total</span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </CardContent>
           </Card>
         </div>
 
-        {/* Top 10 Items */}
+        {/* ── High Stock Items ────────────────────────────────────────────── */}
         <Card className="border-card-border bg-card shadow-sm">
           <CardHeader>
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div>
-                <CardTitle className="text-lg">Top 10 Items by Revenue</CardTitle>
-                <CardDescription>Best-selling items in the last {salesPeriod} days</CardDescription>
-              </div>
+            <div>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Package className="w-5 h-5 text-primary" />
+                Items with Most Stock
+              </CardTitle>
+              <CardDescription>Top 10 items by total quantity across all locations</CardDescription>
             </div>
           </CardHeader>
           <CardContent>
-            {loadingTopItems ? (
-              <Skeleton className="h-[280px] w-full rounded-md" />
-            ) : topItemsData.length === 0 ? (
-              <EmptyChart message="No sales data for this period" height={280} />
+            {loadingStock ? (
+              <Skeleton className="h-[300px] w-full rounded-md" />
+            ) : highStockItems.length === 0 ? (
+              <EmptyChart message="No stock data available" height={300} />
             ) : (
-              <div className="h-[280px]">
+              <div className="h-[320px]">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={topItemsData} layout="vertical" margin={{ left: 8, right: 32, top: 4, bottom: 4 }}>
+                  <BarChart
+                    data={highStockItems.map(i => ({ ...i, shortName: truncate(i.name, 22) }))}
+                    layout="vertical"
+                    margin={{ left: 8, right: 64, top: 4, bottom: 4 }}
+                  >
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" horizontal={false} />
                     <XAxis
                       type="number"
@@ -327,12 +388,12 @@ export default function Dashboard() {
                       fontSize={11}
                       tickLine={false}
                       axisLine={false}
-                      tickFormatter={fmtRupee}
+                      tickFormatter={v => v.toLocaleString('en-IN')}
                     />
                     <YAxis
                       type="category"
                       dataKey="shortName"
-                      width={130}
+                      width={160}
                       stroke="hsl(var(--muted-foreground))"
                       fontSize={11}
                       tickLine={false}
@@ -341,17 +402,32 @@ export default function Dashboard() {
                     <Tooltip
                       cursor={{ fill: 'hsl(var(--muted)/0.15)' }}
                       contentStyle={tooltipStyle}
-                      formatter={(v: number, _name: string, props: any) => [
-                        `₹${v.toLocaleString('en-IN')} (${props.payload.quantity?.toLocaleString('en-IN')} units)`,
-                        'Revenue',
+                      formatter={(v: number, _: string, props: any) => [
+                        `${v.toLocaleString('en-IN')} ${props.payload.unit || 'units'} (${props.payload.locations} location${props.payload.locations !== 1 ? 's' : ''})`,
+                        'Total Stock',
                       ]}
-                      labelFormatter={(label: string) => label}
+                      labelFormatter={(_: string, payload: any[]) => payload?.[0]?.payload?.name ?? _}
                       labelStyle={{ color: 'hsl(var(--foreground))', marginBottom: 4 }}
                     />
-                    <Bar dataKey="revenue" radius={[0, 4, 4, 0]} maxBarSize={22}>
-                      {topItemsData.map((_, i) => (
-                        <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                      ))}
+                    <Bar dataKey="total" radius={[0, 4, 4, 0]} maxBarSize={24} fill="hsl(var(--chart-3))">
+                      {highStockItems.map((entry, i) => {
+                        const intensity = 0.4 + 0.6 * (1 - i / Math.max(highStockItems.length - 1, 1));
+                        return (
+                          <Cell
+                            key={i}
+                            fill={`hsl(var(--chart-3) / ${intensity})`}
+                            stroke="hsl(var(--chart-3))"
+                            strokeOpacity={i === 0 ? 1 : 0}
+                            strokeWidth={2}
+                          />
+                        );
+                      })}
+                      <LabelList
+                        dataKey="total"
+                        position="right"
+                        formatter={(v: number) => v.toLocaleString('en-IN')}
+                        style={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+                      />
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
@@ -360,8 +436,9 @@ export default function Dashboard() {
           </CardContent>
         </Card>
 
-        {/* Recent Activity + Stock Alerts */}
+        {/* ── Recent Activity + Stock Alerts ─────────────────────────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
           {/* Recent Activity */}
           <Card className="lg:col-span-2 border-card-border bg-card shadow-sm">
             <CardHeader>
@@ -463,7 +540,7 @@ export default function Dashboard() {
   );
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ── Sub-components ─────────────────────────────────────────────────────────────
 
 function EmptyChart({ message, height }: { message: string; height: number }) {
   return (
