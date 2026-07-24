@@ -15,6 +15,7 @@ import {
 } from '@workspace/api-client-react';
 import { toast } from 'sonner';
 import { Banknote, ArrowUpFromLine, CheckCircle2, Store, Warehouse, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { buildHierarchy } from '@/lib/locationHierarchy';
 
 function fmt(n: number) {
   return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -91,13 +92,8 @@ export default function CashBalance() {
   const outletTotal    = allBalances.filter(b => b.locationType === 'outlet').reduce((s, b) => s + b.availableBalance, 0);
   const warehouseTotal = allBalances.filter(b => b.locationType === 'warehouse').reduce((s, b) => s + b.availableBalance, 0);
 
-  // ── derived: location picker options (depends on type filter) ────────────
-  const locationOptions = useMemo(() => {
-    const src = typeFilter === 'all' ? allBalances
-      : allBalances.filter(b => b.locationType === typeFilter);
-    // Use "type-id" composite key so outlet-1 and warehouse-1 never clash
-    return src.map(b => ({ uid: `${b.locationType}-${b.locationId}`, name: b.locationName, type: b.locationType }));
-  }, [allBalances, typeFilter]);
+  // ── derived: warehouse→outlets hierarchy ─────────────────────────────────
+  const hierarchy = useMemo(() => buildHierarchy(allBalances), [allBalances]);
 
   // ── derived: filtered + sorted cards ─────────────────────────────────────
   const displayBalances = useMemo(() => {
@@ -300,20 +296,35 @@ export default function CashBalance() {
                   ))}
                 </div>
 
-                {/* Location picker */}
+                {/* Location picker — hierarchical */}
                 <Select value={locationId} onValueChange={setLocationId}>
-                  <SelectTrigger className="h-8 text-xs w-44">
+                  <SelectTrigger className="h-8 text-xs w-48">
                     <SelectValue placeholder="All locations" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All locations</SelectItem>
-                    {locationOptions.map(o => (
-                      <SelectItem key={o.uid} value={o.uid}>
+                    {hierarchy.nodes.map(wh => (
+                      <SelectGroup key={`wh-${wh.locationId}`}>
+                        {(typeFilter === 'all' || typeFilter === 'warehouse') && (
+                          <SelectItem value={`warehouse-${wh.locationId}`}>
+                            <span className="flex items-center gap-1.5">
+                              <Warehouse className="w-3 h-3 text-blue-500 shrink-0" />{wh.locationName}
+                            </span>
+                          </SelectItem>
+                        )}
+                        {(typeFilter === 'all' || typeFilter === 'outlet') && wh.outlets.map(o => (
+                          <SelectItem key={`outlet-${o.locationId}`} value={`outlet-${o.locationId}`}>
+                            <span className="flex items-center gap-1.5 pl-3">
+                              <Store className="w-3 h-3 text-emerald-500 shrink-0" />{o.locationName}
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    ))}
+                    {(typeFilter === 'all' || typeFilter === 'outlet') && hierarchy.orphanOutlets.map(o => (
+                      <SelectItem key={`outlet-${o.locationId}`} value={`outlet-${o.locationId}`}>
                         <span className="flex items-center gap-1.5">
-                          {o.type === 'outlet'
-                            ? <Store className="w-3 h-3 text-emerald-500 shrink-0" />
-                            : <Warehouse className="w-3 h-3 text-blue-500 shrink-0" />}
-                          {o.name}
+                          <Store className="w-3 h-3 text-emerald-500 shrink-0" />{o.locationName}
                         </span>
                       </SelectItem>
                     ))}
@@ -341,22 +352,16 @@ export default function CashBalance() {
                 </div>
               </div>
 
-              {/* ── Cards grid — grouped by type ── */}
+              {/* ── Cards grid — hierarchy: warehouse → its outlets ── */}
               {(() => {
-                const whCards  = displayBalances.filter(b => b.locationType === 'warehouse');
-                const outCards = displayBalances.filter(b => b.locationType === 'outlet');
-
                 const renderCard = (b: typeof displayBalances[0]) => (
                   <div key={`${b.locationType}-${b.locationId}`} className="rounded-xl border border-border p-4 space-y-3 bg-card hover:shadow-sm transition-shadow">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        {b.locationType === 'warehouse'
-                          ? <Warehouse className="w-4 h-4 text-blue-500 shrink-0" />
-                          : <Store      className="w-4 h-4 text-emerald-500 shrink-0" />}
-                        <p className="font-semibold text-sm">{b.locationName}</p>
-                      </div>
+                    <div className="flex items-center gap-2">
+                      {b.locationType === 'warehouse'
+                        ? <Warehouse className="w-4 h-4 text-blue-500 shrink-0" />
+                        : <Store      className="w-4 h-4 text-emerald-500 shrink-0" />}
+                      <p className="font-semibold text-sm">{b.locationName}</p>
                     </div>
-
                     <div className="space-y-1.5 text-sm">
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Cash balance</span>
@@ -374,12 +379,8 @@ export default function CashBalance() {
                         <span className="font-mono">{fmt(b.availableBalance)}</span>
                       </div>
                     </div>
-
                     {b.availableBalance > 0 && perm.canAdd && (
-                      <Button
-                        size="sm" variant="outline" className="w-full h-7 text-xs"
-                        onClick={() => openDeposit(b)}
-                      >
+                      <Button size="sm" variant="outline" className="w-full h-7 text-xs" onClick={() => openDeposit(b)}>
                         <ArrowUpFromLine className="w-3 h-3 mr-1" /> Deposit to Bank
                       </Button>
                     )}
@@ -395,31 +396,91 @@ export default function CashBalance() {
                   );
                 }
 
+                // Single location selected → show just that card
+                if (locationId !== 'all') {
+                  return <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{displayBalances.map(renderCard)}</div>;
+                }
+
+                // Warehouse-only filter → flat grid
+                if (typeFilter === 'warehouse') {
+                  return <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{displayBalances.map(renderCard)}</div>;
+                }
+
+                // Outlet-only filter → group outlets by parent warehouse label
+                if (typeFilter === 'outlet') {
+                  const displaySet = new Set(displayBalances.map(d => d.locationId));
+                  return (
+                    <div className="space-y-5">
+                      {hierarchy.nodes.filter(wh => wh.outlets.some(o => displaySet.has(o.locationId))).map(wh => (
+                        <div key={`wh-${wh.locationId}`} className="space-y-3">
+                          <div className="flex items-center gap-2">
+                            <Warehouse className="w-3.5 h-3.5 text-blue-400" />
+                            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">{wh.locationName}</p>
+                            <div className="flex-1 h-px bg-border" />
+                          </div>
+                          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                            {wh.outlets.filter(o => displaySet.has(o.locationId))
+                              .map(o => displayBalances.find(d => d.locationId === o.locationId)!)
+                              .map(renderCard)}
+                          </div>
+                        </div>
+                      ))}
+                      {hierarchy.orphanOutlets.filter(o => displaySet.has(o.locationId)).length > 0 && (
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2">
+                            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Other Outlets</p>
+                            <div className="flex-1 h-px bg-border" />
+                          </div>
+                          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                            {hierarchy.orphanOutlets.filter(o => displaySet.has(o.locationId))
+                              .map(o => displayBalances.find(d => d.locationId === o.locationId)!)
+                              .map(renderCard)}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+
+                // All filter → full hierarchy: warehouse card, then its outlet cards indented below
+                const displayMap = new Map(displayBalances.map(d => [`${d.locationType}-${d.locationId}`, d]));
+                const visibleNodes = hierarchy.nodes
+                  .map(wh => ({
+                    wh,
+                    whBal: displayMap.get(`warehouse-${wh.locationId}`),
+                    outletBals: wh.outlets
+                      .map(o => displayMap.get(`outlet-${o.locationId}`))
+                      .filter(Boolean) as typeof displayBalances,
+                  }))
+                  .filter(({ whBal, outletBals }) => whBal || outletBals.length > 0);
                 return (
-                  <div className="space-y-6">
-                    {whCards.length > 0 && (
-                      <div className="space-y-3">
-                        <div className="flex items-center gap-2">
-                          <Warehouse className="w-4 h-4 text-blue-500" />
-                          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Warehouses</p>
-                          <div className="flex-1 h-px bg-border" />
-                          <span className="text-xs text-muted-foreground">{fmt(warehouseTotal)}</span>
-                        </div>
-                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                          {whCards.map(renderCard)}
-                        </div>
+                  <div className="space-y-4">
+                    {visibleNodes.map(({ wh, whBal, outletBals }) => (
+                      <div key={`wh-${wh.locationId}`} className="space-y-2">
+                        {whBal && (
+                          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                            {renderCard(whBal)}
+                          </div>
+                        )}
+                        {outletBals.length > 0 && (
+                          <div className="ml-6 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 border-l-2 border-muted pl-4">
+                            {outletBals.map(renderCard)}
+                          </div>
+                        )}
                       </div>
-                    )}
-                    {outCards.length > 0 && (
-                      <div className="space-y-3">
+                    ))}
+                    {/* Orphan outlets (no parent warehouse) */}
+                    {hierarchy.orphanOutlets.map(o => displayMap.get(`outlet-${o.locationId}`)).filter(Boolean).length > 0 && (
+                      <div className="space-y-2">
                         <div className="flex items-center gap-2">
-                          <Store className="w-4 h-4 text-emerald-500" />
-                          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Outlets</p>
+                          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Other Outlets</p>
                           <div className="flex-1 h-px bg-border" />
-                          <span className="text-xs text-muted-foreground">{fmt(outletTotal)}</span>
                         </div>
                         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                          {outCards.map(renderCard)}
+                          {hierarchy.orphanOutlets
+                            .map(o => displayMap.get(`outlet-${o.locationId}`))
+                            .filter(Boolean)
+                            .map(b => renderCard(b!))}
                         </div>
                       </div>
                     )}
@@ -510,42 +571,48 @@ export default function CashBalance() {
               <Select value={depLocationUid} onValueChange={setDepLocationUid}>
                 <SelectTrigger className="h-9"><SelectValue placeholder="Select location…" /></SelectTrigger>
                 <SelectContent>
-                  {allBalances.filter(b => b.locationType === 'warehouse').length > 0 && (
-                    <SelectGroup>
-                      <SelectLabel className="flex items-center gap-1.5 text-xs text-blue-600">
-                        <Warehouse className="w-3 h-3" /> Warehouses
-                      </SelectLabel>
-                      {allBalances.filter(b => b.locationType === 'warehouse').map(b => {
-                        const uid = `${b.locationType}-${b.locationId}`;
-                        return (
-                          <SelectItem key={uid} value={uid}>
+                  {/* Hierarchy: each warehouse then its outlets */}
+                  {hierarchy.nodes
+                    .map(wh => ({
+                      wh,
+                      whBal: allBalances.find(b => b.locationType === 'warehouse' && b.locationId === wh.locationId),
+                      outletItems: wh.outlets
+                        .map(o => ({ o, oBal: allBalances.find(b => b.locationType === 'outlet' && b.locationId === o.locationId) }))
+                        .filter((x): x is { o: typeof x.o; oBal: NonNullable<typeof x.oBal> } => !!x.oBal),
+                    }))
+                    .filter(({ whBal, outletItems }) => whBal || outletItems.length > 0)
+                    .map(({ wh, whBal, outletItems }) => (
+                      <SelectGroup key={`wh-${wh.locationId}`}>
+                        {whBal && (
+                          <SelectItem value={`warehouse-${wh.locationId}`}>
                             <span className="flex items-center gap-1.5">
                               <Warehouse className="w-3 h-3 text-blue-500 shrink-0" />
-                              {b.locationName} — available {fmt(b.availableBalance)}
+                              {wh.locationName} — {fmt(whBal.availableBalance)}
                             </span>
                           </SelectItem>
-                        );
-                      })}
-                    </SelectGroup>
-                  )}
-                  {allBalances.filter(b => b.locationType === 'outlet').length > 0 && (
-                    <SelectGroup>
-                      <SelectLabel className="flex items-center gap-1.5 text-xs text-emerald-600">
-                        <Store className="w-3 h-3" /> Outlets
-                      </SelectLabel>
-                      {allBalances.filter(b => b.locationType === 'outlet').map(b => {
-                        const uid = `${b.locationType}-${b.locationId}`;
-                        return (
-                          <SelectItem key={uid} value={uid}>
-                            <span className="flex items-center gap-1.5">
+                        )}
+                        {outletItems.map(({ o, oBal }) => (
+                          <SelectItem key={`outlet-${o.locationId}`} value={`outlet-${o.locationId}`}>
+                            <span className="flex items-center gap-1.5 pl-4">
                               <Store className="w-3 h-3 text-emerald-500 shrink-0" />
-                              {b.locationName} — available {fmt(b.availableBalance)}
+                              {o.locationName} — {fmt(oBal.availableBalance)}
                             </span>
                           </SelectItem>
-                        );
-                      })}
-                    </SelectGroup>
-                  )}
+                        ))}
+                      </SelectGroup>
+                    ))}
+                  {/* Orphan outlets */}
+                  {hierarchy.orphanOutlets
+                    .map(o => ({ o, oBal: allBalances.find(b => b.locationType === 'outlet' && b.locationId === o.locationId) }))
+                    .filter((x): x is { o: typeof x.o; oBal: NonNullable<typeof x.oBal> } => !!x.oBal)
+                    .map(({ o, oBal }) => (
+                      <SelectItem key={`outlet-${o.locationId}`} value={`outlet-${o.locationId}`}>
+                        <span className="flex items-center gap-1.5">
+                          <Store className="w-3 h-3 text-emerald-500 shrink-0" />
+                          {o.locationName} — {fmt(oBal.availableBalance)}
+                        </span>
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>

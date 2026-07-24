@@ -30,7 +30,7 @@ router.get("/cash-in-outlet", async (_req, res): Promise<void> => {
 
   // ── Outlets ────────────────────────────────────────────────────────────────
   const { rows: outlets } = await pool.query(
-    `SELECT id, name FROM outlets ORDER BY name`
+    `SELECT id, name, warehouse_id FROM outlets ORDER BY name`
   );
   for (const outlet of outlets) {
     const cashCode = `OUTLET-CASH-${outlet.id}`;
@@ -38,7 +38,7 @@ router.get("/cash-in-outlet", async (_req, res): Promise<void> => {
       `SELECT id FROM account_ledgers WHERE code = $1`, [cashCode]
     );
     if (!ledger) {
-      result.push({ locationType: 'outlet', locationId: outlet.id, locationName: outlet.name, outletId: outlet.id, outletName: outlet.name, cashLedgerId: null, cashBalance: 0, pendingDeposits: 0, availableBalance: 0 });
+      result.push({ locationType: 'outlet', locationId: outlet.id, locationName: outlet.name, outletId: outlet.id, outletName: outlet.name, parentWarehouseId: outlet.warehouse_id ?? null, cashLedgerId: null, cashBalance: 0, pendingDeposits: 0, availableBalance: 0 });
       continue;
     }
     const balance = await getLedgerBalance(pool, ledger.id);
@@ -53,6 +53,7 @@ router.get("/cash-in-outlet", async (_req, res): Promise<void> => {
       locationName: outlet.name,
       outletId: outlet.id,
       outletName: outlet.name,
+      parentWarehouseId: outlet.warehouse_id ?? null,
       cashLedgerId: ledger.id,
       cashBalance: Math.round(balance * 100) / 100,
       pendingDeposits: Math.round(pendingDeposits * 100) / 100,
