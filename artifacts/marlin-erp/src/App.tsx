@@ -48,6 +48,12 @@ import AuditLog from './pages/company/AuditLog';
 import Reconciliation from './pages/finance/Reconciliation';
 import CashInOutlet from './pages/finance/CashInOutlet';
 
+import LocationPicker from './pages/sales/LocationPicker';
+import SalesStock from './pages/sales/SalesStock';
+import SalesTransfers from './pages/sales/SalesTransfers';
+import SalesPOS from './pages/sales/SalesPOS';
+import { LocationProvider } from './lib/locationContext';
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: { retry: 1, staleTime: 30_000 },
@@ -137,6 +143,12 @@ function Router() {
       <Route path="/accounts/reconciliation"><AuthGuard><Reconciliation /></AuthGuard></Route>
       <Route path="/accounts/cash-in-outlet"><AuthGuard><CashInOutlet /></AuthGuard></Route>
 
+      {/* Sales segment */}
+      <Route path="/sales"><AuthGuard><LocationPicker /></AuthGuard></Route>
+      <Route path="/sales/stock"><AuthGuard><SalesStock /></AuthGuard></Route>
+      <Route path="/sales/transfers"><AuthGuard><SalesTransfers /></AuthGuard></Route>
+      <Route path="/sales/pos"><AuthGuard><SalesPOS /></AuthGuard></Route>
+
       <Route component={NotFound} />
     </Switch>
   );
@@ -146,10 +158,12 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-          <Router />
-        </WouterRouter>
-        <Toaster richColors position="top-right" />
+        <LocationProvider>
+          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+            <Router />
+          </WouterRouter>
+          <Toaster richColors position="top-right" />
+        </LocationProvider>
       </TooltipProvider>
     </QueryClientProvider>
   );

@@ -111,13 +111,27 @@ const defaultFormValues: FormValues = {
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
-export default function Sales() {
+interface SalesProps {
+  /** When set, the POS form pre-selects this location and the list is filtered to it. */
+  forceLocationType?: 'warehouse' | 'outlet';
+  forceLocationId?: number;
+  forceLocationName?: string;
+}
+
+export default function Sales({ forceLocationType, forceLocationId, forceLocationName }: SalesProps = {}) {
   const perm = usePermission('Sales');
   const { data: outlets = [] } = useListOutlets();
   const [outletFilter, setOutletFilter] = useState<string>('all');
-  const { data: sales = [], isLoading } = useListSales(
+  const { data: allSales = [], isLoading } = useListSales(
     outletFilter !== 'all' ? { outletId: Number(outletFilter) } : undefined
   );
+  // When a location is forced (Sales segment), filter the list to that location
+  const sales = forceLocationType && forceLocationId
+    ? allSales.filter(s =>
+        (s as any).locationType === forceLocationType &&
+        (s as any).locationId === forceLocationId
+      )
+    : allSales;
   const { data: customers = [] } = useListCustomers();
   const { data: items = [] } = useListItems();
   const { data: companySettings } = useGetCompanySettings();
@@ -219,7 +233,14 @@ export default function Sales() {
     queryFn: () => customFetch('/api/warehouses'),
   });
 
-  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: defaultFormValues });
+  // When the Sales segment forces a specific location, override the default form values
+  const effectiveDefaultValues: FormValues = useMemo(() => ({
+    ...defaultFormValues,
+    locationType: (forceLocationType ?? defaultFormValues.locationType) as 'outlet' | 'warehouse',
+    locationId: forceLocationId ?? defaultFormValues.locationId,
+  }), [forceLocationType, forceLocationId]);
+
+  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: effectiveDefaultValues });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
   const watchLocationType = form.watch('locationType');
   const watchLocationId = form.watch('locationId');
@@ -321,7 +342,7 @@ export default function Sales() {
           if (viewItem?.id === editItem.id) setViewItem({ ...viewItem, ...updated });
           setIsOpen(false);
           setEditItem(null);
-          form.reset(defaultFormValues);
+          form.reset(effectiveDefaultValues);
         },
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Could not update sale'),
       });
@@ -332,7 +353,7 @@ export default function Sales() {
           toast.success('Sale recorded successfully');
           queryClient.invalidateQueries({ queryKey: getListSalesQueryKey() });
           setIsOpen(false);
-          form.reset(defaultFormValues);
+          form.reset(effectiveDefaultValues);
         },
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Could not record sale'),
       });
@@ -486,7 +507,7 @@ export default function Sales() {
               </Button>
             )}
             {perm.canAdd && (
-              <Button onClick={() => { form.reset(defaultFormValues); setIsOpen(true); }}>
+              <Button onClick={() => { form.reset(effectiveDefaultValues); setIsOpen(true); }}>
                 <Plus className="w-4 h-4 mr-2" /> New Sale
               </Button>
             )}
@@ -601,7 +622,7 @@ export default function Sales() {
       </div>
 
       {/* Sale Dialog */}
-      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditItem(null); form.reset(defaultFormValues); } }}>
+      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditItem(null); form.reset(effectiveDefaultValues); } }}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>{editItem ? `Edit Sale — ${editItem.invoiceNumber}` : 'Record Sale'}</DialogTitle></DialogHeader>
           <Form {...form}>
@@ -928,7 +949,7 @@ export default function Sales() {
                   </div>
                 )}
                 <div className="flex gap-2 justify-end w-full">
-                  <Button variant="outline" type="button" onClick={() => { setIsOpen(false); setEditItem(null); form.reset(defaultFormValues); }}>Cancel</Button>
+                  <Button variant="outline" type="button" onClick={() => { setIsOpen(false); setEditItem(null); form.reset(effectiveDefaultValues); }}>Cancel</Button>
                   <Button type="submit" disabled={(editItem ? updateMutation.isPending : createMutation.isPending) || !watchLocationId || availableItems.length === 0 || totals.finalAmount === 0}>
                     {editItem
                       ? (updateMutation.isPending ? 'Saving…' : 'Save Changes')

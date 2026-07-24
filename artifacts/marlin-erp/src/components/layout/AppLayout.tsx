@@ -22,7 +22,15 @@ import {
   KeyRound,
   Eye,
   EyeOff,
+  ShoppingCart,
+  BookOpen,
+  Warehouse,
+  Store,
+  Package,
+  ArrowLeftRight,
+  MapPin,
 } from 'lucide-react';
+import { useLocationContext } from '@/lib/locationContext';
 import { useTheme } from '@/lib/theme';
 import { Button } from '@/components/ui/button';
 import { useLogout, useGetMe, useChangePassword } from '@workspace/api-client-react';
@@ -219,6 +227,12 @@ function NavItem({ item, isActive, currentPath, collapsed }: any) {
   );
 }
 
+const salesNavItems = [
+  { name: 'Point of Sale', icon: ShoppingCart, href: '/sales/pos' },
+  { name: 'Stock', icon: Package, href: '/sales/stock' },
+  { name: 'Transfers', icon: ArrowLeftRight, href: '/sales/transfers' },
+];
+
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation();
   const logoutMutation = useLogout();
@@ -227,6 +241,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
   const [logo, setLogo] = useState<string | null>(() => localStorage.getItem(LOGO_KEY));
+  const { locationState } = useLocationContext();
+  const isSalesSegment = location.startsWith('/sales');
 
   // Change-password dialog state
   const [pwOpen, setPwOpen] = useState(false);
@@ -340,22 +356,107 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             </button>
           </div>
 
+          {/* Segment switcher */}
+          {!collapsed && (
+            <div className="px-3 pt-3 pb-1 shrink-0">
+              <div className="flex gap-1 p-1 bg-muted/50 rounded-lg">
+                <button
+                  onClick={() => setLocation('/sales')}
+                  className={`flex-1 flex items-center justify-center gap-1.5 text-xs py-1.5 rounded-md font-semibold transition-colors ${isSalesSegment ? 'bg-card shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                >
+                  <ShoppingCart className="w-3 h-3" /> Sales
+                </button>
+                <button
+                  onClick={() => setLocation('/')}
+                  className={`flex-1 flex items-center justify-center gap-1.5 text-xs py-1.5 rounded-md font-semibold transition-colors ${!isSalesSegment ? 'bg-card shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                >
+                  <BookOpen className="w-3 h-3" /> Accounts
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Nav items */}
           <div className={`flex-1 overflow-y-auto py-4 space-y-1 ${collapsed ? 'px-[14px]' : 'px-3'}`}>
-            {navigation.map((item) => {
-              const isActive = item.href
-                ? location === item.href
-                : item.children?.some(c => location.startsWith(c.href));
-              return (
-                <NavItem
-                  key={item.name}
-                  item={item}
-                  isActive={!!isActive}
-                  currentPath={location}
-                  collapsed={collapsed}
-                />
-              );
-            })}
+            {isSalesSegment ? (
+              /* ── Sales segment sidebar ── */
+              <>
+                {locationState.locationType && locationState.locationId ? (
+                  <>
+                    {/* Current location header */}
+                    {!collapsed && (
+                      <div className="mb-3 px-2 py-2 bg-muted/30 rounded-lg">
+                        <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Selling from</p>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            {locationState.locationType === 'warehouse'
+                              ? <Warehouse className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                              : <Store className="w-3.5 h-3.5 text-emerald-500 shrink-0" />}
+                            <span className="text-sm font-semibold truncate">{locationState.locationName}</span>
+                          </div>
+                          <Link href="/sales" className="text-[10px] text-primary hover:underline shrink-0">change</Link>
+                        </div>
+                      </div>
+                    )}
+                    {/* Sales sub-nav */}
+                    {salesNavItems.map(item => {
+                      const isActive = location === item.href;
+                      if (collapsed) {
+                        return (
+                          <Tooltip key={item.href}>
+                            <TooltipTrigger asChild>
+                              <Link href={item.href} className={`flex items-center justify-center w-10 h-10 rounded-md transition-colors ${isActive ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>
+                                <item.icon className="w-5 h-5 shrink-0" />
+                              </Link>
+                            </TooltipTrigger>
+                            <TooltipContent side="right">{item.name}</TooltipContent>
+                          </Tooltip>
+                        );
+                      }
+                      return (
+                        <Link key={item.href} href={item.href} className={`flex items-center gap-3 px-3 py-2 rounded-md transition-colors text-sm font-medium ${isActive ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>
+                          <item.icon className="w-4 h-4 shrink-0" />
+                          {item.name}
+                        </Link>
+                      );
+                    })}
+                  </>
+                ) : (
+                  /* No location selected */
+                  !collapsed ? (
+                    <Link href="/sales" className={`flex items-center gap-3 px-3 py-2 rounded-md transition-colors text-sm font-medium ${location === '/sales' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>
+                      <MapPin className="w-4 h-4 shrink-0" />
+                      Choose Location
+                    </Link>
+                  ) : (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Link href="/sales" className="flex items-center justify-center w-10 h-10 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
+                          <MapPin className="w-5 h-5" />
+                        </Link>
+                      </TooltipTrigger>
+                      <TooltipContent side="right">Choose Location</TooltipContent>
+                    </Tooltip>
+                  )
+                )}
+              </>
+            ) : (
+              /* ── Accounts segment sidebar (existing nav) ── */
+              navigation.map((item) => {
+                const isActive = item.href
+                  ? location === item.href
+                  : item.children?.some(c => location.startsWith(c.href));
+                return (
+                  <NavItem
+                    key={item.name}
+                    item={item}
+                    isActive={!!isActive}
+                    currentPath={location}
+                    collapsed={collapsed}
+                  />
+                );
+              })
+            )}
           </div>
         </aside>
 
