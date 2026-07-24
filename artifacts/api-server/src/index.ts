@@ -247,7 +247,8 @@ async function runMigrations() {
 
     CREATE TABLE IF NOT EXISTS cash_deposits (
       id serial PRIMARY KEY,
-      outlet_id integer NOT NULL,
+      outlet_id integer,
+      warehouse_id integer,
       source_cash_ledger_id integer NOT NULL,
       amount numeric(12,2) NOT NULL DEFAULT 0,
       deposit_date text NOT NULL,
@@ -264,6 +265,10 @@ async function runMigrations() {
 
   // Drop NOT NULL on sale_payments.outlet_id — warehouse sales have no outlet_id
   await pool.query(`ALTER TABLE sale_payments ALTER COLUMN outlet_id DROP NOT NULL`);
+
+  // Allow warehouse deposits: add warehouse_id column and make outlet_id nullable
+  await pool.query(`ALTER TABLE cash_deposits ADD COLUMN IF NOT EXISTS warehouse_id integer REFERENCES warehouses(id)`);
+  await pool.query(`ALTER TABLE cash_deposits ALTER COLUMN outlet_id DROP NOT NULL`);
 
   // Idempotent backfill: set location_id = outlet_id for existing outlet sales
   await pool.query(

@@ -127,7 +127,8 @@ export default function CashBalance() {
 
   // Create deposit dialog
   const [showDeposit, setShowDeposit] = useState(false);
-  const [depOutletId, setDepOutletId] = useState('');
+  // depLocationUid = "outlet-{id}" | "warehouse-{id}" composite key
+  const [depLocationUid, setDepLocationUid] = useState('');
   const [depAmount, setDepAmount] = useState('');
   const [depDate, setDepDate] = useState(new Date().toISOString().split('T')[0]);
   const [depRef, setDepRef] = useState('');
@@ -135,16 +136,28 @@ export default function CashBalance() {
   const [depNotes, setDepNotes] = useState('');
   const createDepositMutation = useCreateCashDeposit();
 
-  const selectedOutletBalance = outletBalances.find(b => b.outletId === Number(depOutletId));
+  // Parse selected location uid into type + id
+  const [depLocType, depLocId] = depLocationUid.split('-') as [string, string];
+  const selectedBalance = allBalances.find(b =>
+    b.locationType === depLocType && String(b.locationId) === depLocId
+  );
+
+  function openDeposit(b: typeof allBalances[0]) {
+    setDepLocationUid(`${b.locationType}-${b.locationId}`);
+    setDepAmount(String(b.availableBalance));
+    setShowDeposit(true);
+  }
 
   async function handleCreateDeposit() {
-    if (!depOutletId) { toast.error('Select an outlet'); return; }
+    if (!depLocationUid) { toast.error('Select a location'); return; }
     const amount = Number(depAmount);
     if (!amount || amount <= 0) { toast.error('Amount must be positive'); return; }
     if (!depDate) { toast.error('Deposit date is required'); return; }
     try {
       await createDepositMutation.mutateAsync({
-        outletId: Number(depOutletId),
+        ...(depLocType === 'warehouse'
+          ? { warehouseId: Number(depLocId) }
+          : { outletId: Number(depLocId) }),
         amount,
         depositDate: depDate,
         depositReference: depRef || undefined,
@@ -153,7 +166,7 @@ export default function CashBalance() {
       });
       toast.success('Cash deposit recorded');
       setShowDeposit(false);
-      setDepOutletId(''); setDepAmount(''); setDepRef(''); setDepNotes(''); setDepBankLedgerId('');
+      setDepLocationUid(''); setDepAmount(''); setDepRef(''); setDepNotes(''); setDepBankLedgerId('');
       refetchBalances();
     } catch (e: any) {
       toast.error(e?.data?.error || e?.message || 'Failed to record deposit');
@@ -209,7 +222,7 @@ export default function CashBalance() {
             </p>
           </div>
           {tab === 'balances' && (
-            <Button size="sm" onClick={() => setShowDeposit(true)} disabled={!perm.canAdd || outletBalances.length === 0}>
+            <Button size="sm" onClick={() => setShowDeposit(true)} disabled={!perm.canAdd || allBalances.length === 0}>
               <ArrowUpFromLine className="w-4 h-4 mr-1.5" /> Record Deposit
             </Button>
           )}
@@ -355,14 +368,10 @@ export default function CashBalance() {
                       </div>
                     </div>
 
-                    {b.locationType === 'outlet' && b.availableBalance > 0 && perm.canAdd && (
+                    {b.availableBalance > 0 && perm.canAdd && (
                       <Button
                         size="sm" variant="outline" className="w-full h-7 text-xs"
-                        onClick={() => {
-                          setDepOutletId(String(b.outletId));
-                          setDepAmount(String(b.availableBalance));
-                          setShowDeposit(true);
-                        }}
+                        onClick={() => openDeposit(b)}
                       >
                         <ArrowUpFromLine className="w-3 h-3 mr-1" /> Deposit to Bank
                       </Button>
@@ -418,7 +427,14 @@ export default function CashBalance() {
                   <TableBody>
                     {deposits.map(d => (
                       <TableRow key={d.id}>
-                        <TableCell className="text-sm font-medium">{d.outletName}</TableCell>
+                        <TableCell className="text-sm font-medium">
+                          <span className="flex items-center gap-1.5">
+                            {(d as any).locationType === 'warehouse'
+                              ? <Warehouse className="w-3 h-3 text-blue-500 shrink-0" />
+                              : <Store className="w-3 h-3 text-emerald-500 shrink-0" />}
+                            {(d as any).locationName ?? d.outletName}
+                          </span>
+                        </TableCell>
                         <TableCell className="text-sm text-muted-foreground">{d.depositDate}</TableCell>
                         <TableCell className="font-mono text-xs">{d.depositReference ?? '—'}</TableCell>
                         <TableCell className="text-sm">{d.bankLedgerName ?? <span className="text-muted-foreground italic text-xs">Not specified</span>}</TableCell>
@@ -441,7 +457,7 @@ export default function CashBalance() {
         )}
       </div>
 
-      {/* ── Create Deposit Dialog (outlets only) ── */}
+      {/* ── Create Deposit Dialog ── */}
       <Dialog open={showDeposit} onOpenChange={setShowDeposit}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -449,23 +465,31 @@ export default function CashBalance() {
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div>
-              <Label className="text-sm mb-1.5 block">Outlet <span className="text-destructive">*</span></Label>
-              <Select value={depOutletId} onValueChange={setDepOutletId}>
-                <SelectTrigger className="h-9"><SelectValue placeholder="Select outlet…" /></SelectTrigger>
+              <Label className="text-sm mb-1.5 block">Location <span className="text-destructive">*</span></Label>
+              <Select value={depLocationUid} onValueChange={setDepLocationUid}>
+                <SelectTrigger className="h-9"><SelectValue placeholder="Select location…" /></SelectTrigger>
                 <SelectContent>
-                  {outletBalances.map(b => (
-                    <SelectItem key={b.outletId!} value={String(b.outletId)}>
-                      {b.locationName} — available {fmt(b.availableBalance)}
-                    </SelectItem>
-                  ))}
+                  {allBalances.map(b => {
+                    const uid = `${b.locationType}-${b.locationId}`;
+                    return (
+                      <SelectItem key={uid} value={uid}>
+                        <span className="flex items-center gap-1.5">
+                          {b.locationType === 'outlet'
+                            ? <Store className="w-3 h-3 text-emerald-500 shrink-0" />
+                            : <Warehouse className="w-3 h-3 text-blue-500 shrink-0" />}
+                          {b.locationName} — available {fmt(b.availableBalance)}
+                        </span>
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </div>
             <div>
               <Label className="text-sm mb-1.5 block">Amount (₹) <span className="text-destructive">*</span></Label>
               <Input type="number" min={0.01} step={0.01} value={depAmount} onChange={e => setDepAmount(e.target.value)} className="h-9" placeholder="0.00" />
-              {selectedOutletBalance && (
-                <p className="text-xs text-muted-foreground mt-1">Available: {fmt(selectedOutletBalance.availableBalance)}</p>
+              {selectedBalance && (
+                <p className="text-xs text-muted-foreground mt-1">Available: {fmt(selectedBalance.availableBalance)}</p>
               )}
             </div>
             <div>

@@ -74,6 +74,11 @@ router.get("/cash-in-outlet", async (_req, res): Promise<void> => {
       continue;
     }
     const balance = await getLedgerBalance(pool, ledger.id);
+    const { rows: [whPendingRow] } = await pool.query(
+      `SELECT COALESCE(SUM(amount::numeric), 0) AS total FROM cash_deposits WHERE warehouse_id = $1 AND status = 'pending_reconciliation'`,
+      [wh.id]
+    );
+    const whPending = Number(whPendingRow?.total ?? 0);
     result.push({
       locationType: 'warehouse',
       locationId: wh.id,
@@ -82,7 +87,7 @@ router.get("/cash-in-outlet", async (_req, res): Promise<void> => {
       outletName: null,
       cashLedgerId: ledger.id,
       cashBalance: Math.round(balance * 100) / 100,
-      pendingDeposits: 0,
+      pendingDeposits: Math.round(whPending * 100) / 100,
       availableBalance: Math.round(Math.max(0, balance) * 100) / 100,
     });
   }
@@ -97,7 +102,7 @@ router.get("/cash-in-outlet/deposits", async (req, res): Promise<void> => {
   const params: any[] = [];
   const conds: string[] = [];
 
-  if (status) { params.push(status); conds.push(`cd.status = $${params.length}`); }
+  if (status)   { params.push(status);         conds.push(`cd.status = $${params.length}`); }
   if (outletId) { params.push(Number(outletId)); conds.push(`cd.outlet_id = $${params.length}`); }
 
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
@@ -105,10 +110,12 @@ router.get("/cash-in-outlet/deposits", async (req, res): Promise<void> => {
   const { rows } = await pool.query(
     `SELECT cd.*,
             cd.amount::numeric AS amount,
-            o.name AS outlet_name,
+            o.name  AS outlet_name,
+            w.name  AS warehouse_name,
             al.name AS bank_ledger_name
      FROM cash_deposits cd
-     JOIN outlets o ON o.id = cd.outlet_id
+     LEFT JOIN outlets    o  ON o.id  = cd.outlet_id
+     LEFT JOIN warehouses w  ON w.id  = cd.warehouse_id
      LEFT JOIN account_ledgers al ON al.id = cd.destination_bank_ledger_id
      ${where}
      ORDER BY cd.created_at DESC`,
@@ -119,6 +126,10 @@ router.get("/cash-in-outlet/deposits", async (req, res): Promise<void> => {
     id: r.id,
     outletId: r.outlet_id,
     outletName: r.outlet_name,
+    warehouseId: r.warehouse_id,
+    warehouseName: r.warehouse_name,
+    locationName: r.outlet_name ?? r.warehouse_name ?? "Unknown",
+    locationType: r.outlet_id ? "outlet" : "warehouse",
     sourceCashLedgerId: r.source_cash_ledger_id,
     amount: Number(r.amount),
     depositDate: r.deposit_date,
@@ -136,8 +147,9 @@ router.get("/cash-in-outlet/deposits", async (req, res): Promise<void> => {
 
 // ── POST /cash-in-outlet/deposits ─────────────────────────────────────────────
 router.post("/cash-in-outlet/deposits", async (req, res): Promise<void> => {
-  const { outletId, amount, depositDate, depositReference, destinationBankLedgerId, notes } = req.body as {
-    outletId: number;
+  const { outletId, warehouseId, amount, depositDate, depositReference, destinationBankLedgerId, notes } = req.body as {
+    outletId?: number;
+    warehouseId?: number;
     amount: number;
     depositDate: string;
     depositReference?: string;
@@ -145,10 +157,15 @@ router.post("/cash-in-outlet/deposits", async (req, res): Promise<void> => {
     notes?: string;
   };
 
-  if (!outletId) { res.status(400).json({ error: "outletId is required" }); return; }
+  if (!outletId && !warehouseId) { res.status(400).json({ error: "outletId or warehouseId is required" }); return; }
   const parsedAmount = Number(amount);
   if (!parsedAmount || parsedAmount <= 0) { res.status(400).json({ error: "amount must be positive" }); return; }
   if (!depositDate) { res.status(400).json({ error: "depositDate is required" }); return; }
+
+  const isWarehouse = !!warehouseId;
+  const locationId  = isWarehouse ? warehouseId! : outletId!;
+  const cashCode    = isWarehouse ? `WH-CASH-${locationId}` : `OUTLET-CASH-${locationId}`;
+  const locLabel    = isWarehouse ? `warehouse ${locationId}` : `outlet ${locationId}`;
 
   const createdBy = (req as any).user?.username ?? "system";
 
@@ -156,38 +173,30 @@ router.post("/cash-in-outlet/deposits", async (req, res): Promise<void> => {
   try {
     await client.query("BEGIN");
 
-    // 1. Get outlet cash ledger
-    const cashCode = `OUTLET-CASH-${outletId}`;
+    // 1. Resolve cash ledger
     const { rows: [cashLedger] } = await client.query(
-      `SELECT id FROM account_ledgers WHERE code = $1`,
-      [cashCode]
+      `SELECT id FROM account_ledgers WHERE code = $1`, [cashCode]
     );
     if (!cashLedger) {
       await client.query("ROLLBACK");
-      res.status(400).json({ error: "Cash ledger not found for this outlet" }); return;
+      res.status(400).json({ error: `Cash ledger not found for this ${isWarehouse ? "warehouse" : "outlet"}` }); return;
     }
 
     // 2. Check available balance
-    // The ledger balance already reflects prior deposits (each deposit posts a payment
-    // from outlet cash to STD-CIT, immediately reducing the outlet ledger balance).
-    // Subtracting pendingDeposits again would double-count.
     const balance = await getLedgerBalance(client, cashLedger.id);
-
     if (parsedAmount > balance + 0.001) {
       await client.query("ROLLBACK");
       res.status(400).json({ error: `Deposit amount (₹${parsedAmount}) exceeds available cash balance (₹${balance.toFixed(2)})` }); return;
     }
 
     // 3. Get STD-CIT ledger
-    const { rows: [citLedger] } = await client.query(
-      `SELECT id FROM account_ledgers WHERE code = 'STD-CIT'`
-    );
+    const { rows: [citLedger] } = await client.query(`SELECT id FROM account_ledgers WHERE code = 'STD-CIT'`);
     if (!citLedger) {
       await client.query("ROLLBACK");
       res.status(500).json({ error: "Cash in Transit ledger not configured" }); return;
     }
 
-    // 4. Post payment: paid_from=outlet_cash, paid_to=STD-CIT
+    // 4. Post payment: paid_from=cash, paid_to=STD-CIT
     const { rows: [cntRow] } = await client.query(`SELECT COUNT(*) FROM payments`);
     const payVoucher = `PAY-${String(Number(cntRow.count) + 1).padStart(4, "0")}`;
     const { rows: [payment] } = await client.query(
@@ -197,25 +206,32 @@ router.post("/cash-in-outlet/deposits", async (req, res): Promise<void> => {
         `Cash deposit to bank — ${depositReference ?? "no ref"}`]
     );
 
-    // 5. Insert cash_deposit record
+    // 5. Insert cash_deposit record (outlet_id or warehouse_id, the other stays NULL)
     const { rows: [deposit] } = await client.query(
-      `INSERT INTO cash_deposits (outlet_id, source_cash_ledger_id, amount, deposit_date, deposit_reference, destination_bank_ledger_id, notes, created_by, transit_payment_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [outletId, cashLedger.id, parsedAmount, depositDate, depositReference ?? null,
-        destinationBankLedgerId ?? null, notes ?? null, createdBy, payment.id]
+      `INSERT INTO cash_deposits
+         (outlet_id, warehouse_id, source_cash_ledger_id, amount, deposit_date, deposit_reference,
+          destination_bank_ledger_id, notes, created_by, transit_payment_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      [
+        isWarehouse ? null : locationId,
+        isWarehouse ? locationId : null,
+        cashLedger.id, parsedAmount, depositDate, depositReference ?? null,
+        destinationBankLedgerId ?? null, notes ?? null, createdBy, payment.id,
+      ]
     );
 
     await client.query("COMMIT");
 
     logActivity({
       action: "CREATE", module: "cash_in_outlet", entityType: "cash_deposit", entityId: deposit.id,
-      description: `Cash deposit of ₹${parsedAmount} from outlet ${outletId}`,
-      metadata: { after: { outletId, amount: parsedAmount, depositDate } },
+      description: `Cash deposit of ₹${parsedAmount} from ${locLabel}`,
+      metadata: { after: { outletId, warehouseId, amount: parsedAmount, depositDate } },
     }).catch(() => {});
 
     res.status(201).json({
       id: deposit.id,
       outletId: deposit.outlet_id,
+      warehouseId: deposit.warehouse_id,
       sourceCashLedgerId: deposit.source_cash_ledger_id,
       amount: Number(deposit.amount),
       depositDate: deposit.deposit_date,

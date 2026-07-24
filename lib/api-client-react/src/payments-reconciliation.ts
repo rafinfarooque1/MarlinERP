@@ -286,7 +286,7 @@ export function useGetCashDeposits(params?: { status?: string; outletId?: number
 export function useCreateCashDeposit() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: { outletId: number; amount: number; depositDate: string; depositReference?: string; destinationBankLedgerId?: number; notes?: string }) =>
+    mutationFn: (data: { outletId?: number; warehouseId?: number; amount: number; depositDate: string; depositReference?: string; destinationBankLedgerId?: number; notes?: string }) =>
       customFetch("/api/cash-in-outlet/deposits", { method: "POST", body: JSON.stringify(data), headers: { "Content-Type": "application/json" } }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: getCashInOutletQueryKey() });
