@@ -150,6 +150,26 @@ export default function Permissions() {
     setDirty(true);
   };
 
+  /** Toggle all modules in a segment (Sales / Accounts) */
+  const toggleSegment = (modules: string[], value: boolean) => {
+    if (!effectiveId || isTopLevel) return;
+    setPerms(prev => ({
+      ...prev,
+      [effectiveId]: { ...prev[effectiveId], ...Object.fromEntries(modules.map(m => [m, value])) },
+    }));
+    setDirty(true);
+  };
+
+  /** Toggle all modules in a group */
+  const toggleGroup = (modules: string[], value: boolean) => {
+    if (!effectiveId || isTopLevel) return;
+    setPerms(prev => ({
+      ...prev,
+      [effectiveId]: { ...prev[effectiveId], ...Object.fromEntries(modules.map(m => [m, value])) },
+    }));
+    setDirty(true);
+  };
+
   const save = async () => {
     if (!effectiveId) return;
     setSaving(true);
@@ -249,52 +269,77 @@ export default function Permissions() {
               {MODULE_SEGMENTS.map(seg => {
                 const segModules = seg.groups.flatMap(g => g.modules);
                 const segEnabled = segModules.filter(m => rolePerms[m]).length;
+                const segAllOn  = segEnabled === segModules.length;
+                const segAllOff = segEnabled === 0;
                 return (
                   <div key={seg.segment}>
-                    {/* Segment header */}
+                    {/* Segment header — with master toggle */}
                     <div className="flex items-center gap-3 mb-3">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2.5">
                         <span className="text-base font-bold text-foreground">{seg.segment}</span>
                         <Badge variant="secondary" className="text-xs font-semibold">
                           {segEnabled} / {segModules.length}
                         </Badge>
                       </div>
                       <div className="flex-1 h-px bg-border" />
-                      <span className="text-xs text-muted-foreground hidden sm:block">{seg.description}</span>
+                      <span className="text-xs text-muted-foreground hidden sm:block mr-2">{seg.description}</span>
+                      {/* Master segment switch */}
+                      {!isTopLevel && (
+                        <Switch
+                          checked={segAllOn}
+                          onCheckedChange={v => toggleSegment(segModules, v)}
+                          className="data-[state=checked]:bg-primary"
+                          title={segAllOn ? `Disable all ${seg.segment} modules` : `Enable all ${seg.segment} modules`}
+                        />
+                      )}
                     </div>
 
                     {/* Groups under this segment */}
                     <div className="space-y-3 pl-0">
-                      {seg.groups.map(group => (
-                        <div key={group.title} className="bg-card border border-border rounded-xl overflow-hidden">
-                          <div className="p-3 border-b border-border bg-muted/20 flex items-center justify-between">
-                            <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                              {group.title}
-                            </h3>
-                            <Badge variant="outline" className="text-xs">
-                              {group.modules.filter(m => rolePerms[m]).length} / {group.modules.length}
-                            </Badge>
-                          </div>
-                          <div className="divide-y divide-border/50">
-                            {group.modules.map(mod => (
-                              <div key={mod} className="flex items-center justify-between px-4 py-3 hover:bg-muted/5">
-                                <span className={`text-sm ${rolePerms[mod] ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
-                                  {mod}
-                                </span>
-                                <Switch
-                                  checked={!!rolePerms[mod]}
-                                  onCheckedChange={() =>
-                                    isTopLevel
-                                      ? toast.info('Top-level authority always has full access')
-                                      : toggle(mod)
-                                  }
-                                  disabled={isTopLevel}
-                                />
+                      {seg.groups.map(group => {
+                        const grpEnabled = group.modules.filter(m => rolePerms[m]).length;
+                        const grpAllOn   = grpEnabled === group.modules.length;
+                        return (
+                          <div key={group.title} className="bg-card border border-border rounded-xl overflow-hidden">
+                            <div className="p-3 border-b border-border bg-muted/20 flex items-center justify-between">
+                              <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                                {group.title}
+                              </h3>
+                              <div className="flex items-center gap-3">
+                                <Badge variant="outline" className="text-xs">
+                                  {grpEnabled} / {group.modules.length}
+                                </Badge>
+                                {/* Group-level master toggle */}
+                                {!isTopLevel && (
+                                  <Switch
+                                    checked={grpAllOn}
+                                    onCheckedChange={v => toggleGroup(group.modules, v)}
+                                    title={grpAllOn ? `Disable all ${group.title}` : `Enable all ${group.title}`}
+                                  />
+                                )}
                               </div>
-                            ))}
+                            </div>
+                            <div className="divide-y divide-border/50">
+                              {group.modules.map(mod => (
+                                <div key={mod} className="flex items-center justify-between px-4 py-3 hover:bg-muted/5">
+                                  <span className={`text-sm ${rolePerms[mod] ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
+                                    {mod}
+                                  </span>
+                                  <Switch
+                                    checked={!!rolePerms[mod]}
+                                    onCheckedChange={() =>
+                                      isTopLevel
+                                        ? toast.info('Top-level authority always has full access')
+                                        : toggle(mod)
+                                    }
+                                    disabled={isTopLevel}
+                                  />
+                                </div>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 );
