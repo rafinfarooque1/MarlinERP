@@ -8,7 +8,7 @@ import {
 } from '@workspace/api-client-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { ArrowLeftRight, Calendar, Eye, FileDown, PackageCheck, CheckCircle2, XCircle, AlertTriangle, Clock } from 'lucide-react';
+import { ArrowLeftRight, Calendar, Eye, FileDown, PackageCheck, CheckCircle2, XCircle, AlertTriangle, Clock, Download } from 'lucide-react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -16,7 +16,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { downloadPDFFromEndpoint } from '@/lib/download';
+import { downloadPDFFromEndpoint, downloadCSV } from '@/lib/download';
 
 // ── Status badge ──────────────────────────────────────────────────────────────
 function statusBadge(status: string) {
@@ -241,12 +241,37 @@ export default function SalesTransfers() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <ArrowLeftRight className="w-6 h-6 text-primary" />
-            Transfers — {locationName}
-          </h1>
-          <p className="text-muted-foreground mt-1">Stock movements involving this location</p>
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+              <ArrowLeftRight className="w-6 h-6 text-primary" />
+              Transfers — {locationName}
+            </h1>
+            <p className="text-muted-foreground mt-1">Stock movements involving this location</p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              downloadCSV(
+                `transfers-${locationName?.replace(/\s+/g, '-').toLowerCase()}.csv`,
+                transfers.map((t: any) => ({
+                  Challan: t.challanNumber ?? `#${t.id}`,
+                  Date: t.transferDate ? new Date(t.transferDate).toLocaleDateString('en-IN') : '—',
+                  From: t.fromName ?? `${t.fromType} #${t.fromId}`,
+                  'From Type': t.fromType,
+                  To: t.toName ?? `${t.toType} #${t.toId}`,
+                  'To Type': t.toType,
+                  Status: t.status,
+                  Items: (t.lineItems ?? t.items ?? []).length,
+                  Notes: t.notes ?? '',
+                })),
+              )
+            }
+            disabled={transfers.length === 0}
+          >
+            <Download className="w-4 h-4 mr-2" /> Export CSV
+          </Button>
         </div>
 
         {/* Pending approvals banner */}
