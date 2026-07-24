@@ -88,7 +88,11 @@ router.get("/sales", async (req, res): Promise<void> => {
   const { rows: rawRows } = await pgPool.query(`SELECT * FROM sales ORDER BY id`);
   const outlets = await db.select().from(outletsTable);
   const customers = await db.select().from(customersTable);
+  const { rows: warehouses } = await pgPool.query<{ id: number; name: string; upi_id: string | null }>(
+    `SELECT id, name, upi_id FROM warehouses ORDER BY id`
+  );
   const oMap = new Map(outlets.map((o) => [o.id, { name: o.name, upiId: (o as any).upiId ?? "" }]));
+  const wMap = new Map(warehouses.map((w) => [w.id, { name: w.name, upiId: w.upi_id ?? "" }]));
   const cMap = new Map(customers.map((c) => [c.id, { name: c.name, phone: c.phone ?? null }]));
 
   const outletIdFilter = req.query.outletId ? Number(req.query.outletId) : null;
@@ -96,13 +100,20 @@ router.get("/sales", async (req, res): Promise<void> => {
 
   res.json(filtered.map((r: any) => {
     const cust = r.customer_id ? cMap.get(r.customer_id) : null;
+    const locationType: string = r.location_type ?? 'outlet';
+    const locationId: number = r.location_id ?? r.outlet_id;
     const outlet = oMap.get(r.outlet_id);
+    const warehouse = locationType === 'warehouse' ? wMap.get(locationId) : null;
+    const locationName = warehouse?.name ?? outlet?.name ?? "";
+    const locationUpiId = warehouse?.upiId ?? outlet?.upiId ?? "";
     const totalAmount = Number(r.total_amount);
     const amountPaid  = Number(r.amount_paid ?? 0);
     return {
       id: r.id,
       invoiceNumber: r.invoice_number,
       outletId: r.outlet_id,
+      locationType,
+      locationId,
       customerId: r.customer_id,
       saleDate: r.sale_date,
       lineItems: r.line_items ?? [],
@@ -116,8 +127,8 @@ router.get("/sales", async (req, res): Promise<void> => {
       paymentStatus: r.payment_status ?? "paid",
       amountPaid,
       balanceDue: Math.max(0, totalAmount - amountPaid),
-      outletName: outlet?.name ?? "",
-      outletUpiId: outlet?.upiId ?? "",
+      outletName: locationName,
+      outletUpiId: locationUpiId,
       customerName: cust?.name ?? null,
       customerPhone: cust?.phone ?? null,
     };
@@ -128,9 +139,61 @@ router.post("/sales", async (req, res): Promise<void> => {
   const parsed = CreateSaleBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
+  const { pool: pgPool } = await import("@workspace/db");
+
   const rawLineItems = parsed.data.lineItems as Array<{
     itemId: number; quantity: number; unitPrice: number; discount: number; taxAmount: number;
   }>;
+
+  // ── Determine location (warehouse or outlet) ──────────────────────────────
+  const rawBody = req.body as any;
+  const locationType: 'outlet' | 'warehouse' = rawBody.locationType === 'warehouse' ? 'warehouse' : 'outlet';
+  const locationId: number = rawBody.locationId ? Number(rawBody.locationId) : parsed.data.outletId;
+
+  // Look up location name, UPI ID, and ledger IDs
+  let cashLedgerId: number | null = null;
+  let salesLedgerId: number | null = null;
+  let locationName = '';
+  let locationUpiId = '';
+
+  if (locationType === 'warehouse') {
+    const { rows: [wh] } = await pgPool.query<{
+      name: string; upi_id: string | null; cash_ledger_id: number | null; sales_ledger_id: number | null
+    }>(`SELECT name, upi_id, cash_ledger_id, sales_ledger_id FROM warehouses WHERE id = $1`, [locationId]);
+    if (!wh) { res.status(400).json({ error: 'Warehouse not found' }); return; }
+    cashLedgerId = wh.cash_ledger_id;
+    salesLedgerId = wh.sales_ledger_id;
+    locationName = wh.name;
+    locationUpiId = wh.upi_id ?? '';
+  } else {
+    const [outlet] = await db.select().from(outletsTable).where(eq(outletsTable.id, locationId)).limit(1);
+    if (!outlet) { res.status(400).json({ error: 'Outlet not found' }); return; }
+    const { rows: [ol] } = await pgPool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null }>(
+      `SELECT cash_ledger_id, sales_ledger_id FROM outlets WHERE id = $1`, [locationId]
+    );
+    cashLedgerId = ol?.cash_ledger_id ?? null;
+    salesLedgerId = ol?.sales_ledger_id ?? null;
+    locationName = outlet.name;
+    locationUpiId = (outlet as any).upiId ?? '';
+  }
+
+  // ── Validate stock availability before committing ─────────────────────────
+  for (const li of rawLineItems) {
+    const [stock] = await db.select().from(stockEntriesTable)
+      .where(and(
+        eq(stockEntriesTable.itemId, li.itemId),
+        eq(stockEntriesTable.branchType, locationType as any),
+        eq(stockEntriesTable.branchId, locationId)
+      ))
+      .limit(1);
+    const available = stock ? Number(stock.quantity) : 0;
+    if (available < li.quantity) {
+      res.status(400).json({
+        error: `Insufficient stock for item ${li.itemId}. Available: ${available}, requested: ${li.quantity}`
+      });
+      return;
+    }
+  }
 
   // ── Fetch (or create) company settings for invoice numbering and GST state ─
   let company = (await db.select().from(companySettingsTable).limit(1))[0];
@@ -174,7 +237,6 @@ router.post("/sales", async (req, res): Promise<void> => {
   const lineItems = rawLineItems.map(li => {
     const itemInfo = itemTaxMap.get(li.itemId);
     const taxRate = itemInfo?.taxRate ?? 0;
-    // MRP is GST-inclusive: gross = qty × unitPrice, taxable = back-calculated
     const grossAmount = li.quantity * li.unitPrice - (li.discount ?? 0);
     const taxInfo = computeLineTax(grossAmount, taxRate, isInterState);
     return {
@@ -185,7 +247,7 @@ router.post("/sales", async (req, res): Promise<void> => {
       quantity: li.quantity,
       unitPrice: li.unitPrice,
       discount: li.discount ?? 0,
-      lineSubtotal: taxInfo.taxableAmount, // taxable (ex-GST) stored as lineSubtotal
+      lineSubtotal: taxInfo.taxableAmount,
       ...taxInfo,
     };
   });
@@ -195,27 +257,24 @@ router.post("/sales", async (req, res): Promise<void> => {
   const discountTotal = (parsed.data as any).discountTotal ?? lineItems.reduce((s, li) => s + li.discount, 0);
   const totalAmount = subtotal + taxTotal - discountTotal;
 
-  const [row] = await db.insert(salesTable).values({
-    invoiceNumber,
-    outletId: parsed.data.outletId,
-    customerId: parsed.data.customerId ?? null,
-    saleDate: parsed.data.saleDate,
-    lineItems,
-    subtotal: String(subtotal),
-    taxTotal: String(taxTotal),
-    discountTotal: String(discountTotal),
-    totalAmount: String(totalAmount),
-    paymentMode: parsed.data.paymentMode ?? 'cash',
-    couponCode: parsed.data.couponCode ?? null,
-  }).returning();
+  // ── Insert sale with location columns via raw SQL (location_type/location_id not in Drizzle schema) ──
+  const outletIdForInsert = locationType === 'outlet' ? locationId : null;
+  const { rows: [row] } = await pgPool.query<any>(
+    `INSERT INTO sales (invoice_number, outlet_id, location_type, location_id, customer_id, sale_date, line_items, subtotal, tax_total, discount_total, total_amount, payment_mode, coupon_code)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13) RETURNING *`,
+    [invoiceNumber, outletIdForInsert, locationType, locationId,
+     parsed.data.customerId ?? null, parsed.data.saleDate,
+     JSON.stringify(lineItems), subtotal, taxTotal, discountTotal, totalAmount,
+     parsed.data.paymentMode ?? 'cash', parsed.data.couponCode ?? null]
+  );
 
-  // ── Deduct outlet stock ───────────────────────────────────────────────────
+  // ── Deduct stock from the selling location ────────────────────────────────
   for (const li of lineItems) {
     const [existing] = await db.select().from(stockEntriesTable)
       .where(and(
         eq(stockEntriesTable.itemId, li.itemId),
-        eq(stockEntriesTable.branchType, "outlet"),
-        eq(stockEntriesTable.branchId, parsed.data.outletId)
+        eq(stockEntriesTable.branchType, locationType as any),
+        eq(stockEntriesTable.branchId, locationId)
       ))
       .limit(1);
     if (existing) {
@@ -232,27 +291,57 @@ router.post("/sales", async (req, res): Promise<void> => {
       .where(eq(customersTable.id, parsed.data.customerId));
   }
 
-  const [outlet] = await db.select().from(outletsTable).where(eq(outletsTable.id, row.outletId)).limit(1);
-  const customerName = row.customerId
-    ? (await db.select().from(customersTable).where(eq(customersTable.id, row.customerId)).limit(1))[0]?.name ?? null
+  // ── Post accounting entry ─────────────────────────────────────────────────
+  if (salesLedgerId) {
+    // Determine which account to debit: customer debtor ledger (credit sale) or location cash (cash sale)
+    let debitLedgerId = cashLedgerId;
+    if (parsed.data.customerId && parsed.data.paymentMode !== 'cash') {
+      const { rows: [custLedger] } = await pgPool.query<{ id: number }>(
+        `SELECT id FROM account_ledgers WHERE code = $1`, [`CUST-${parsed.data.customerId}`]
+      );
+      if (custLedger) debitLedgerId = custLedger.id;
+    }
+    if (debitLedgerId) {
+      await pgPool.query(
+        `INSERT INTO receipts (receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, voucher_number)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [parsed.data.saleDate, salesLedgerId, debitLedgerId, totalAmount,
+         `Sale: ${invoiceNumber}${locationName ? ` at ${locationName}` : ''}`, invoiceNumber]
+      );
+    }
+  }
+
+  const customerName = parsed.data.customerId
+    ? (await db.select().from(customersTable).where(eq(customersTable.id, parsed.data.customerId)).limit(1))[0]?.name ?? null
     : null;
 
   logActivity({
     action: "CREATE", module: "sales", entityType: "sale", entityId: row.id,
     description: `New sale ${invoiceNumber} — ${customerName ?? "Walk-in"} — ₹${totalAmount.toFixed(2)}`,
-    metadata: { after: { invoiceNumber, outletId: row.outletId, customerId: row.customerId, totalAmount, lineCount: lineItems.length } },
+    metadata: { after: { invoiceNumber, locationType, locationId, customerId: parsed.data.customerId, totalAmount, lineCount: lineItems.length } },
   }).catch(() => {});
 
   res.status(201).json({
-    ...row,
-    outletName: outlet?.name ?? "",
-    outletUpiId: (outlet as any)?.upiId ?? "",
+    id: row.id,
+    invoiceNumber: row.invoice_number,
+    outletId: row.outlet_id,
+    locationType: row.location_type,
+    locationId: row.location_id,
+    outletName: locationName,
+    outletUpiId: locationUpiId,
     customerName,
+    saleDate: row.sale_date,
+    lineItems: row.line_items ?? [],
     subtotal: Number(row.subtotal),
-    taxTotal: Number(row.taxTotal),
-    discountTotal: Number(row.discountTotal),
-    totalAmount: Number(row.totalAmount),
-    lineItems: row.lineItems ?? [],
+    taxTotal: Number(row.tax_total),
+    discountTotal: Number(row.discount_total),
+    totalAmount: Number(row.total_amount),
+    paymentMode: row.payment_mode,
+    couponCode: row.coupon_code,
+    createdAt: row.created_at,
+    paymentStatus: row.payment_status ?? 'unpaid',
+    amountPaid: Number(row.amount_paid ?? 0),
+    balanceDue: Math.max(0, totalAmount - Number(row.amount_paid ?? 0)),
   });
 });
 
@@ -261,8 +350,9 @@ router.put("/sales/:id", async (req, res): Promise<void> => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid sale id" }); return; }
 
-  const [existing] = await db.select().from(salesTable).where(eq(salesTable.id, id)).limit(1);
-  if (!existing) { res.status(404).json({ error: "Sale not found" }); return; }
+  const { pool: pgPool } = await import("@workspace/db");
+  const { rows: [existingRaw] } = await pgPool.query<any>(`SELECT * FROM sales WHERE id = $1`, [id]);
+  if (!existingRaw) { res.status(404).json({ error: "Sale not found" }); return; }
 
   const parsed = CreateSaleBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
@@ -270,6 +360,15 @@ router.put("/sales/:id", async (req, res): Promise<void> => {
   const rawLineItems = parsed.data.lineItems as Array<{
     itemId: number; quantity: number; unitPrice: number; discount: number; taxAmount: number;
   }>;
+
+  // ── Determine new location ────────────────────────────────────────────────
+  const rawBody = req.body as any;
+  const newLocationType: 'outlet' | 'warehouse' = rawBody.locationType === 'warehouse' ? 'warehouse' : 'outlet';
+  const newLocationId: number = rawBody.locationId ? Number(rawBody.locationId) : parsed.data.outletId;
+
+  // Old location (for stock reversal)
+  const oldLocationType: string = existingRaw.location_type ?? 'outlet';
+  const oldLocationId: number = existingRaw.location_id ?? existingRaw.outlet_id;
 
   // Determine inter-state
   let company = (await db.select().from(companySettingsTable).limit(1))[0];
@@ -315,11 +414,11 @@ router.put("/sales/:id", async (req, res): Promise<void> => {
   const discountTotal = (parsed.data as any).discountTotal ?? lineItems.reduce((s, li) => s + li.discount, 0);
   const totalAmount = subtotal + taxTotal - discountTotal;
 
-  // Reverse old stock deductions (restore what the old sale consumed)
-  const oldLineItems = (existing.lineItems ?? []) as Array<{ itemId: number; quantity: number }>;
+  // Reverse old stock deductions
+  const oldLineItems = (existingRaw.line_items ?? []) as Array<{ itemId: number; quantity: number }>;
   for (const li of oldLineItems) {
     const [se] = await db.select().from(stockEntriesTable)
-      .where(and(eq(stockEntriesTable.itemId, li.itemId), eq(stockEntriesTable.branchType, "outlet"), eq(stockEntriesTable.branchId, existing.outletId)))
+      .where(and(eq(stockEntriesTable.itemId, li.itemId), eq(stockEntriesTable.branchType, oldLocationType as any), eq(stockEntriesTable.branchId, oldLocationId)))
       .limit(1);
     if (se) {
       await db.update(stockEntriesTable)
@@ -328,27 +427,22 @@ router.put("/sales/:id", async (req, res): Promise<void> => {
     }
   }
 
-  // Update the sale row (keep invoice number and payment state)
-  const [updated] = await db.update(salesTable)
-    .set({
-      outletId: parsed.data.outletId,
-      customerId: parsed.data.customerId ?? null,
-      saleDate: parsed.data.saleDate,
-      lineItems,
-      subtotal: String(subtotal),
-      taxTotal: String(taxTotal),
-      discountTotal: String(discountTotal),
-      totalAmount: String(totalAmount),
-      paymentMode: parsed.data.paymentMode ?? 'cash',
-      couponCode: parsed.data.couponCode ?? null,
-    })
-    .where(eq(salesTable.id, id))
-    .returning();
+  // Update the sale row via raw SQL to include location columns
+  const newOutletId = newLocationType === 'outlet' ? newLocationId : null;
+  const { rows: [updated] } = await pgPool.query<any>(
+    `UPDATE sales SET outlet_id=$1, location_type=$2, location_id=$3, customer_id=$4, sale_date=$5,
+     line_items=$6::jsonb, subtotal=$7, tax_total=$8, discount_total=$9, total_amount=$10,
+     payment_mode=$11, coupon_code=$12
+     WHERE id=$13 RETURNING *`,
+    [newOutletId, newLocationType, newLocationId, parsed.data.customerId ?? null,
+     parsed.data.saleDate, JSON.stringify(lineItems), subtotal, taxTotal, discountTotal, totalAmount,
+     parsed.data.paymentMode ?? 'cash', parsed.data.couponCode ?? null, id]
+  );
 
   // Apply new stock deductions
   for (const li of lineItems) {
     const [se] = await db.select().from(stockEntriesTable)
-      .where(and(eq(stockEntriesTable.itemId, li.itemId), eq(stockEntriesTable.branchType, "outlet"), eq(stockEntriesTable.branchId, parsed.data.outletId)))
+      .where(and(eq(stockEntriesTable.itemId, li.itemId), eq(stockEntriesTable.branchType, newLocationType as any), eq(stockEntriesTable.branchId, newLocationId)))
       .limit(1);
     if (se) {
       await db.update(stockEntriesTable)
@@ -358,8 +452,8 @@ router.put("/sales/:id", async (req, res): Promise<void> => {
   }
 
   // Adjust customer total purchases
-  const oldTotal = Number(existing.totalAmount);
-  const oldCustomerId = existing.customerId;
+  const oldTotal = Number(existingRaw.total_amount);
+  const oldCustomerId = existingRaw.customer_id;
   if (oldCustomerId) {
     await db.update(customersTable)
       .set({ totalPurchases: sql`${customersTable.totalPurchases}::numeric - ${oldTotal}` })
@@ -371,27 +465,52 @@ router.put("/sales/:id", async (req, res): Promise<void> => {
       .where(eq(customersTable.id, parsed.data.customerId));
   }
 
-  const [outlet] = await db.select().from(outletsTable).where(eq(outletsTable.id, updated.outletId)).limit(1);
-  const customerName = updated.customerId
-    ? (await db.select().from(customersTable).where(eq(customersTable.id, updated.customerId)).limit(1))[0]?.name ?? null
+  // Get location name for response
+  let locationName = '';
+  let locationUpiId = '';
+  if (newLocationType === 'warehouse') {
+    const { rows: [wh] } = await pgPool.query<{ name: string; upi_id: string | null }>(
+      `SELECT name, upi_id FROM warehouses WHERE id = $1`, [newLocationId]
+    );
+    locationName = wh?.name ?? '';
+    locationUpiId = wh?.upi_id ?? '';
+  } else {
+    const [outlet] = await db.select().from(outletsTable).where(eq(outletsTable.id, newLocationId)).limit(1);
+    locationName = outlet?.name ?? '';
+    locationUpiId = (outlet as any)?.upiId ?? '';
+  }
+
+  const customerName = parsed.data.customerId
+    ? (await db.select().from(customersTable).where(eq(customersTable.id, parsed.data.customerId)).limit(1))[0]?.name ?? null
     : null;
 
   logActivity({
     action: "UPDATE", module: "sales", entityType: "sale", entityId: id,
-    description: `Sale ${existing.invoiceNumber} updated — ₹${totalAmount.toFixed(2)}`,
+    description: `Sale ${existingRaw.invoice_number} updated — ₹${totalAmount.toFixed(2)}`,
     metadata: { before: { totalAmount: oldTotal }, after: { totalAmount } },
   }).catch(() => {});
 
   res.json({
-    ...updated,
-    outletName: outlet?.name ?? "",
-    outletUpiId: (outlet as any)?.upiId ?? "",
+    id: updated.id,
+    invoiceNumber: updated.invoice_number,
+    outletId: updated.outlet_id,
+    locationType: updated.location_type,
+    locationId: updated.location_id,
+    outletName: locationName,
+    outletUpiId: locationUpiId,
     customerName,
+    saleDate: updated.sale_date,
+    lineItems: updated.line_items ?? [],
     subtotal: Number(updated.subtotal),
-    taxTotal: Number(updated.taxTotal),
-    discountTotal: Number(updated.discountTotal),
-    totalAmount: Number(updated.totalAmount),
-    lineItems: updated.lineItems ?? [],
+    taxTotal: Number(updated.tax_total),
+    discountTotal: Number(updated.discount_total),
+    totalAmount: Number(updated.total_amount),
+    paymentMode: updated.payment_mode,
+    couponCode: updated.coupon_code,
+    createdAt: updated.created_at,
+    paymentStatus: updated.payment_status ?? 'paid',
+    amountPaid: Number(updated.amount_paid ?? 0),
+    balanceDue: Math.max(0, totalAmount - Number(updated.amount_paid ?? 0)),
   });
 });
 
@@ -444,7 +563,21 @@ router.get("/sales/:id", async (req, res): Promise<void> => {
   const { pool: pgPool } = await import("@workspace/db");
   const { rows: [row] } = await pgPool.query(`SELECT * FROM sales WHERE id = $1`, [id]);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
-  const [outlet] = await db.select().from(outletsTable).where(eq(outletsTable.id, row.outlet_id)).limit(1);
+  const locationType: string = row.location_type ?? 'outlet';
+  const locationId: number = row.location_id ?? row.outlet_id;
+  let locationName = '';
+  let locationUpiId = '';
+  if (locationType === 'warehouse') {
+    const { rows: [wh] } = await pgPool.query<{ name: string; upi_id: string | null }>(
+      `SELECT name, upi_id FROM warehouses WHERE id = $1`, [locationId]
+    );
+    locationName = wh?.name ?? '';
+    locationUpiId = wh?.upi_id ?? '';
+  } else {
+    const [outlet] = await db.select().from(outletsTable).where(eq(outletsTable.id, row.outlet_id)).limit(1);
+    locationName = outlet?.name ?? '';
+    locationUpiId = (outlet as any)?.upiId ?? '';
+  }
   const customerName = row.customer_id
     ? (await db.select().from(customersTable).where(eq(customersTable.id, row.customer_id)).limit(1))[0]?.name ?? null
     : null;
@@ -454,6 +587,8 @@ router.get("/sales/:id", async (req, res): Promise<void> => {
     id: row.id,
     invoiceNumber: row.invoice_number,
     outletId: row.outlet_id,
+    locationType,
+    locationId,
     customerId: row.customer_id,
     saleDate: row.sale_date,
     lineItems: row.line_items ?? [],
@@ -467,8 +602,8 @@ router.get("/sales/:id", async (req, res): Promise<void> => {
     paymentStatus: row.payment_status ?? "paid",
     amountPaid,
     balanceDue: Math.max(0, totalAmount - amountPaid),
-    outletName: outlet?.name ?? "",
-    outletUpiId: (outlet as any)?.upiId ?? "",
+    outletName: locationName,
+    outletUpiId: locationUpiId,
     customerName,
   });
 });

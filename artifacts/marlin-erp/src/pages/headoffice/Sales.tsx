@@ -14,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '@/components/ui/command';
 import { Textarea } from '@/components/ui/textarea';
@@ -38,7 +38,7 @@ function WhatsAppIcon({ className }: { className?: string }) {
 }
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
 import { downloadCSV } from '@/lib/download';
 import { Separator } from '@/components/ui/separator';
@@ -80,7 +80,8 @@ const saleLineSchema = z.object({
   unitPrice: z.coerce.number().min(0, 'Price required'),
 });
 const schema = z.object({
-  outletId: z.coerce.number().min(1, 'Outlet required'),
+  locationType: z.enum(['outlet', 'warehouse']).default('outlet'),
+  locationId: z.coerce.number().min(1, 'Location required'),
   customerId: z.coerce.number().optional(),
   saleDate: z.string().min(1, 'Date required'),
   couponCode: z.string().optional(),
@@ -101,7 +102,8 @@ const custSchema = z.object({
 type CustForm = z.infer<typeof custSchema>;
 
 const defaultFormValues: FormValues = {
-  outletId: 0,
+  locationType: 'outlet',
+  locationId: 0,
   saleDate: new Date().toISOString().split('T')[0],
   couponCode: '',
   lineItems: [{ itemId: 0, quantity: 1, unitPrice: 0 }],
@@ -162,7 +164,8 @@ export default function Sales() {
   const openEdit = (sale: any) => {
     setEditItem(sale);
     form.reset({
-      outletId: sale.outletId,
+      locationType: (sale.locationType ?? 'outlet') as 'outlet' | 'warehouse',
+      locationId: sale.locationId ?? sale.outletId ?? 0,
       customerId: sale.customerId ?? undefined,
       saleDate: sale.saleDate,
       couponCode: sale.couponCode ?? '',
@@ -210,21 +213,28 @@ export default function Sales() {
     defaultValues: { name: '', phone: '', email: '', gstNumber: '', state: '', address: '', notes: '' },
   });
 
+  // Fetch warehouses (for combined location picker)
+  const { data: warehouses = [] } = useQuery<any[]>({
+    queryKey: ['warehouses'],
+    queryFn: () => customFetch('/api/warehouses'),
+  });
+
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: defaultFormValues });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
-  const watchOutletId = form.watch('outletId');
+  const watchLocationType = form.watch('locationType');
+  const watchLocationId = form.watch('locationId');
   const watchCustomerId = form.watch('customerId');
 
   const { data: outletPrices = [] } = useListItemPrices(
-    { outletId: watchOutletId },
-    { query: { enabled: !!watchOutletId && watchOutletId > 0 } }
+    { outletId: watchLocationId },
+    { query: { enabled: watchLocationType === 'outlet' && !!watchLocationId && watchLocationId > 0 } }
   );
-  const { data: outletStock = [] } = useListStock(
-    { branchType: 'outlet' as any, branchId: watchOutletId },
-    { query: { enabled: !!watchOutletId && watchOutletId > 0 } }
+  const { data: locationStock = [] } = useListStock(
+    { branchType: (watchLocationType ?? 'outlet') as any, branchId: watchLocationId },
+    { query: { enabled: !!watchLocationId && watchLocationId > 0 } }
   );
 
-  const stockMap = new Map<number, number>(outletStock.map(s => [s.itemId!, Number(s.quantity ?? 0)]));
+  const stockMap = new Map<number, number>(locationStock.map(s => [s.itemId!, Number(s.quantity ?? 0)]));
   const availableItems = items.filter(it => (stockMap.get(it.id) ?? 0) > 0);
 
   // Price comes from item MRP (set in Item Master) — not outlet-specific
@@ -290,7 +300,16 @@ export default function Sales() {
       taxAmount: 0, // backend recomputes authoritatively
     }));
     const { discountAmount } = computeCartTotals();
-    const payload = { ...data, lineItems: enrichedItems, customerId: data.customerId || undefined, discountTotal: discountAmount } as any;
+    const payload = {
+      ...data,
+      locationType: data.locationType,
+      locationId: data.locationId,
+      // backward compat: send outletId for outlet sales
+      outletId: data.locationType === 'outlet' ? data.locationId : (outlets[0]?.id ?? 1),
+      lineItems: enrichedItems,
+      customerId: data.customerId || undefined,
+      discountTotal: discountAmount,
+    } as any;
 
     if (editItem) {
       // Edit mode — PUT to existing sale
@@ -516,7 +535,7 @@ export default function Sales() {
               <TableRow className="bg-muted/10">
                 <TableHead>Invoice</TableHead>
                 <TableHead>Date</TableHead>
-                <TableHead>Outlet</TableHead>
+                <TableHead>Location</TableHead>
                 <TableHead>Customer</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Tax</TableHead>
@@ -588,11 +607,36 @@ export default function Sales() {
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
               <div className="grid grid-cols-2 gap-4">
-                <FormField control={form.control} name="outletId" render={({ field }) => (
-                  <FormItem><FormLabel>Outlet <span className="text-destructive">*</span></FormLabel>
-                    <Select onValueChange={v => { field.onChange(Number(v)); form.setValue('lineItems', [{ itemId: 0, quantity: 1, unitPrice: 0 }]); }} value={field.value ? String(field.value) : ''}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select outlet" /></SelectTrigger></FormControl>
-                      <SelectContent>{outlets.map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}</SelectContent>
+                <FormField control={form.control} name="locationId" render={({ field }) => (
+                  <FormItem><FormLabel>Selling Location <span className="text-destructive">*</span></FormLabel>
+                    <Select
+                      onValueChange={v => {
+                        const [type, idStr] = v.split(':');
+                        field.onChange(Number(idStr));
+                        form.setValue('locationType', type as 'outlet' | 'warehouse');
+                        form.setValue('lineItems', [{ itemId: 0, quantity: 1, unitPrice: 0 }]);
+                      }}
+                      value={field.value && field.value > 0 ? `${form.watch('locationType')}:${field.value}` : ''}
+                    >
+                      <FormControl><SelectTrigger><SelectValue placeholder="Select outlet or warehouse" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {(warehouses as any[]).length > 0 && (
+                          <SelectGroup>
+                            <SelectLabel>Warehouses</SelectLabel>
+                            {(warehouses as any[]).map((w: any) => (
+                              <SelectItem key={w.id} value={`warehouse:${w.id}`}>🏭 {w.name}</SelectItem>
+                            ))}
+                          </SelectGroup>
+                        )}
+                        {outlets.length > 0 && (
+                          <SelectGroup>
+                            <SelectLabel>Outlets</SelectLabel>
+                            {outlets.map(o => (
+                              <SelectItem key={o.id} value={`outlet:${o.id}`}>🏪 {o.name}</SelectItem>
+                            ))}
+                          </SelectGroup>
+                        )}
+                      </SelectContent>
                     </Select><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="saleDate" render={({ field }) => (
@@ -687,8 +731,8 @@ export default function Sales() {
 
               {/* Line items */}
               <div>
-                {!watchOutletId || watchOutletId === 0 ? (
-                  <div className="p-6 border border-dashed border-border rounded-lg text-center text-muted-foreground">Select an outlet above to load available stock</div>
+                {!watchLocationId || watchLocationId === 0 ? (
+                  <div className="p-6 border border-dashed border-border rounded-lg text-center text-muted-foreground">Select a selling location above to load available stock</div>
                 ) : availableItems.length === 0 ? (
                   <div className="p-6 border border-dashed border-amber-500/40 rounded-lg text-center text-amber-500 bg-amber-500/5 flex flex-col items-center gap-2">
                     <PackageOpen className="w-8 h-8 opacity-60" />
@@ -699,7 +743,7 @@ export default function Sales() {
                   <>
                     <div className="flex justify-between items-center mb-3">
                       <p className="font-semibold">Cart Items <span className="text-xs text-muted-foreground font-normal ml-1">({availableItems.length} in stock)</span></p>
-                      <Button type="button" variant="outline" size="sm" onClick={() => append({ itemId: 0, quantity: 1 })}>
+                      <Button type="button" variant="outline" size="sm" onClick={() => append({ itemId: 0, quantity: 1, unitPrice: 0 })}>
                         <Plus className="w-3 h-3 mr-1" /> Add Item
                       </Button>
                     </div>
@@ -885,7 +929,7 @@ export default function Sales() {
                 )}
                 <div className="flex gap-2 justify-end w-full">
                   <Button variant="outline" type="button" onClick={() => { setIsOpen(false); setEditItem(null); form.reset(defaultFormValues); }}>Cancel</Button>
-                  <Button type="submit" disabled={(editItem ? updateMutation.isPending : createMutation.isPending) || !watchOutletId || availableItems.length === 0 || totals.finalAmount === 0}>
+                  <Button type="submit" disabled={(editItem ? updateMutation.isPending : createMutation.isPending) || !watchLocationId || availableItems.length === 0 || totals.finalAmount === 0}>
                     {editItem
                       ? (updateMutation.isPending ? 'Saving…' : 'Save Changes')
                       : (createMutation.isPending ? 'Processing…' : 'Complete Sale')}

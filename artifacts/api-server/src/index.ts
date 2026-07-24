@@ -33,6 +33,10 @@ async function runMigrations() {
     ALTER TABLE outlets    ADD COLUMN IF NOT EXISTS cash_ledger_id integer;
     ALTER TABLE outlets    ADD COLUMN IF NOT EXISTS sales_ledger_id integer;
 
+    ALTER TABLE sales ALTER COLUMN outlet_id DROP NOT NULL;
+    ALTER TABLE sales ADD COLUMN IF NOT EXISTS location_type text NOT NULL DEFAULT 'outlet';
+    ALTER TABLE sales ADD COLUMN IF NOT EXISTS location_id integer;
+
     CREATE TABLE IF NOT EXISTS payments (
       id serial PRIMARY KEY,
       voucher_number text,
@@ -232,6 +236,11 @@ async function runMigrations() {
       bank_receipt_id integer
     );
   `);
+
+  // Idempotent backfill: set location_id = outlet_id for existing outlet sales
+  await pool.query(
+    `UPDATE sales SET location_id = outlet_id WHERE location_id IS NULL AND outlet_id IS NOT NULL`
+  );
 
   // One-time backfill: mark all PRE-EXISTING sales (those created before the payment
   // tracking columns existed) as fully paid. Tracked in migration_log so it never
