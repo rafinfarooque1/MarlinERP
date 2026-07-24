@@ -122,17 +122,19 @@ async function runMigrations() {
 
   // Seed Tally-standard system group heads — parameterised INSERT to avoid dollar-quoting
   const sysGroups: [string, string, string, string, string][] = [
-    ['Capital Account',     'equity',    'SYS-CAP',    'balance_sheet', 'Owner capital and reserves'],
-    ['Loans (Liability)',   'liability', 'SYS-LOAN',   'balance_sheet', 'Long-term loans and borrowings'],
-    ['Current Liabilities', 'liability', 'SYS-CURL',   'balance_sheet', 'Short-term obligations due within a year'],
-    ['Fixed Assets',        'asset',     'SYS-FIXD',   'balance_sheet', 'Long-term tangible and intangible assets'],
-    ['Current Assets',      'asset',     'SYS-CURA',   'balance_sheet', 'Short-term assets convertible within a year'],
-    ['Purchase Accounts',   'expense',   'SYS-PUR',    'profit_loss',   'Cost of goods purchased for resale or production'],
-    ['Direct Expenses',     'expense',   'SYS-DIREXP', 'profit_loss',   'Expenses directly related to production'],
-    ['Indirect Expenses',   'expense',   'SYS-INDEXP', 'profit_loss',   'Administrative and overhead expenses'],
-    ['Sales Accounts',      'income',    'SYS-SAL',    'profit_loss',   'Revenue from sale of goods and services'],
-    ['Direct Incomes',      'income',    'SYS-DIRINC', 'profit_loss',   'Income directly from core operations'],
-    ['Indirect Incomes',    'income',    'SYS-INDINC', 'profit_loss',   'Other miscellaneous income'],
+    ['Capital Accounts',   'equity',    'SYS-CAP',      'balance_sheet', 'Owner capital and reserves'],
+    ['Loans (Liability)',  'liability', 'SYS-LOAN',     'balance_sheet', 'Long-term loans and borrowings'],
+    ['Current Liabilities','liability', 'SYS-CURL',     'balance_sheet', 'Short-term obligations due within a year'],
+    ['Fixed Asset',        'asset',     'SYS-FIXD',     'balance_sheet', 'Long-term tangible and intangible assets'],
+    ['Current Asset',      'asset',     'SYS-CURA',     'balance_sheet', 'Short-term assets convertible within a year'],
+    ['Opening Stock',      'asset',     'SYS-OPSTOCK',  'balance_sheet', 'Opening stock balance at the start of the accounting period'],
+    ['Closing Stock',      'asset',     'SYS-CLSTOCK',  'balance_sheet', 'Closing stock balance at the end of the accounting period'],
+    ['Purchase',           'expense',   'SYS-PUR',      'profit_loss',   'Cost of goods purchased for resale or production'],
+    ['Direct Expense',     'expense',   'SYS-DIREXP',   'profit_loss',   'Expenses directly related to production'],
+    ['Indirect Expense',   'expense',   'SYS-INDEXP',   'profit_loss',   'Administrative and overhead expenses'],
+    ['Sales',              'income',    'SYS-SAL',      'profit_loss',   'Revenue from sale of goods and services'],
+    ['Direct Income',      'income',    'SYS-DIRINC',   'profit_loss',   'Income directly from core operations'],
+    ['Indirect Income',    'income',    'SYS-INDINC',   'profit_loss',   'Other miscellaneous income'],
   ];
   for (const [name, type, code, section, description] of sysGroups) {
     await pool.query(
@@ -140,6 +142,26 @@ async function runMigrations() {
        SELECT $1, $2, $3, $4, true, $5
        WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $3)`,
       [name, type, code, section, description],
+    );
+  }
+
+  // ── Idempotent renames: keep display names in sync for existing installs ──────
+  // Uses code-based lookup so it is safe to run on every startup.
+  const groupRenames: [string, string][] = [
+    ['SYS-CAP',    'Capital Accounts'],
+    ['SYS-FIXD',   'Fixed Asset'],
+    ['SYS-CURA',   'Current Asset'],
+    ['SYS-PUR',    'Purchase'],
+    ['SYS-DIREXP', 'Direct Expense'],
+    ['SYS-INDEXP', 'Indirect Expense'],
+    ['SYS-SAL',    'Sales'],
+    ['SYS-DIRINC', 'Direct Income'],
+    ['SYS-INDINC', 'Indirect Income'],
+  ];
+  for (const [code, name] of groupRenames) {
+    await pool.query(
+      `UPDATE account_ledgers SET name = $1 WHERE code = $2 AND is_system_group = true AND name <> $1`,
+      [name, code],
     );
   }
 
