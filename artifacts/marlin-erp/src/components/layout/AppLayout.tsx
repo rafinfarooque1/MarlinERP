@@ -230,6 +230,7 @@ function NavItem({ item, isActive, currentPath, collapsed }: any) {
 }
 
 const salesNavItems = [
+  { name: 'Dashboard', icon: LayoutDashboard, href: '/sales/dashboard' },
   { name: 'Point of Sale', icon: ShoppingCart, href: '/sales/pos' },
   { name: 'Stock', icon: Package, href: '/sales/stock' },
   { name: 'Transfers', icon: ArrowLeftRight, href: '/sales/transfers' },
