@@ -18,12 +18,12 @@ import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import {
-  Plus, Search, Truck, Download, Eye, Calendar, Trash2, Printer,
+  Plus, Search, Truck, Download, Eye, Calendar, Trash2, FileDown,
   PackageOpen, AlertTriangle, Clock, CheckCircle2, XCircle, PackageCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { downloadCSV, printHTML, buildChallanHtml } from '@/lib/download';
+import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
@@ -244,23 +244,22 @@ export default function StockTransfers() {
 
   const iMap = new Map((items as any[]).map(i => [i.id, i]));
 
-  const handlePrintChallan = (t: any) => {
+  const handleDownloadPDF = async (t: any) => {
     const cs = companySettings as any;
     const challanNo = t.challanNumber || `DC-${String(t.id).padStart(4, '0')}`;
-    const lineItemsForChallan = (t.lineItems || []).map((li: any) => {
+    const lineItems = (t.lineItems || []).map((li: any) => {
       const item = iMap.get(li.itemId);
       return { name: (item as any)?.name ?? `Item #${li.itemId}`, hsnCode: (item as any)?.hsnCode, quantity: li.quantity, unit: (item as any)?.unit };
     });
-    printHTML(buildChallanHtml({
-      cs, challanNo,
-      date: new Date(t.transferDate).toLocaleDateString('en-IN'),
-      fromName: 'Production Unit', fromType: 'Production',
-      toName: t.toName || 'Warehouse', toType: t.toType || 'Warehouse',
-      lineItems: lineItemsForChallan,
-      isInterstate: t.isInterstate,
-      status: t.status,
-      notes: t.notes,
-    }), challanNo);
+    try {
+      await downloadPDFFromEndpoint('/api/pdf/challan', {
+        cs, challanNo,
+        date: new Date(t.transferDate).toLocaleDateString('en-IN'),
+        fromName: 'Production Unit', fromType: 'Production',
+        toName: t.toName || 'Warehouse', toType: t.toType || 'Warehouse',
+        lineItems, isInterstate: t.isInterstate, status: t.status, notes: t.notes,
+      }, `${challanNo}.pdf`);
+    } catch (e: any) { toast.error(e?.message || 'Failed to generate PDF'); }
   };
 
   // Only show production-sourced transfers on this page
@@ -369,7 +368,7 @@ export default function StockTransfers() {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(t)}><Eye className="w-4 h-4" /></Button>
-                      {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => handlePrintChallan(t)} title="Print Challan"><Printer className="w-4 h-4" /></Button>}
+                      {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => void handleDownloadPDF(t)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>}
                       {t.status === 'in_transit' && (
                         <Button size="sm" variant="outline" className="h-8 text-xs border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 px-2" onClick={() => setApproveTarget(t)}>
                           <PackageCheck className="w-3 h-3 mr-1" /> Receive
@@ -552,8 +551,8 @@ export default function StockTransfers() {
 
               <div className="flex gap-2 pt-2">
                 {perm.canDownload && (
-                  <Button className="flex-1" variant="outline" onClick={() => handlePrintChallan(viewItem)}>
-                    <Printer className="w-4 h-4 mr-2" /> Print Challan
+                  <Button className="flex-1" variant="outline" onClick={() => void handleDownloadPDF(viewItem)}>
+                    <FileDown className="w-4 h-4 mr-2" /> Download PDF
                   </Button>
                 )}
                 {viewItem.status === 'in_transit' && (

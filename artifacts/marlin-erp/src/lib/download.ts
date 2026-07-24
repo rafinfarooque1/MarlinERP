@@ -41,6 +41,46 @@ export function printHTML(html: string, title = 'Print') {
   w.document.close();
 }
 
+/**
+ * POST JSON data to an authenticated API endpoint that returns a PDF,
+ * then download the file and open it in a new browser tab.
+ *
+ * Opens a blank window synchronously (before the async fetch) so popup
+ * blockers don't interfere, then steers it to the blob URL once ready.
+ */
+export async function downloadPDFFromEndpoint(
+  endpoint: string,
+  data: unknown,
+  filename: string,
+): Promise<void> {
+  const win = window.open('about:blank', '_blank');
+  try {
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(data),
+    });
+    if (!resp.ok) {
+      win?.close();
+      const err: any = await resp.json().catch(() => ({}));
+      throw new Error(err?.error || `PDF generation failed (${resp.status})`);
+    }
+    const blob = await resp.blob();
+    const url  = URL.createObjectURL(blob);
+    // Download
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    // Display
+    if (win && !win.closed) win.location.href = url;
+    setTimeout(() => URL.revokeObjectURL(url), 15_000);
+  } catch (e) {
+    win?.close();
+    throw e;
+  }
+}
+
 /** Convert a number to Indian words (e.g. 1020 → "One Thousand And Twenty Only") */
 export function numberToWords(amount: number): string {
   const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',

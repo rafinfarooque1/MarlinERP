@@ -8,7 +8,7 @@ import {
 } from '@workspace/api-client-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { ArrowLeftRight, Calendar, Eye, Printer, PackageCheck, CheckCircle2, XCircle, AlertTriangle, Clock } from 'lucide-react';
+import { ArrowLeftRight, Calendar, Eye, FileDown, PackageCheck, CheckCircle2, XCircle, AlertTriangle, Clock } from 'lucide-react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -16,7 +16,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { printHTML, buildChallanHtml } from '@/lib/download';
+import { downloadPDFFromEndpoint } from '@/lib/download';
 
 // ── Status badge ──────────────────────────────────────────────────────────────
 function statusBadge(status: string) {
@@ -220,24 +220,22 @@ export default function SalesTransfers() {
 
   if (!locationType || !locationId) return null;
 
-  const handlePrint = (t: any) => {
+  const handleDownloadPDF = async (t: any) => {
     const cs = companySettings as any;
-    const lineItemsForChallan = (t.lineItems ?? []).map((li: any) => {
+    const lineItems = (t.lineItems ?? []).map((li: any) => {
       const item = iMap.get(li.itemId);
       return { name: item?.name ?? `Item #${li.itemId}`, hsnCode: (item as any)?.hsnCode, quantity: li.quantity, unit: item?.unit };
     });
-    printHTML(buildChallanHtml({
-      cs,
-      challanNo: t.challanNumber,
-      date: new Date(t.transferDate).toLocaleDateString('en-IN'),
-      fromName: t.fromName, fromType: t.fromType,
-      toName: t.toName, toType: t.toType,
-      lineItems: lineItemsForChallan,
-      isInterstate: t.isInterstate,
-      status: t.status,
-      notes: t.notes,
-      approvedBy: t.approvedBy,
-    }), t.challanNumber);
+    try {
+      await downloadPDFFromEndpoint('/api/pdf/challan', {
+        cs, challanNo: t.challanNumber,
+        date: new Date(t.transferDate).toLocaleDateString('en-IN'),
+        fromName: t.fromName, fromType: t.fromType,
+        toName: t.toName, toType: t.toType,
+        lineItems, isInterstate: t.isInterstate, status: t.status,
+        notes: t.notes, approvedBy: t.approvedBy,
+      }, `${t.challanNumber || 'Challan'}.pdf`);
+    } catch (e: any) { toast.error(e?.message || 'Failed to generate PDF'); }
   };
 
   return (
@@ -307,8 +305,8 @@ export default function SalesTransfers() {
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(t)}>
                         <Eye className="w-4 h-4" />
                       </Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => handlePrint(t)}>
-                        <Printer className="w-4 h-4" />
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => void handleDownloadPDF(t)} title="Download PDF">
+                        <FileDown className="w-4 h-4" />
                       </Button>
                       {t.status === 'in_transit' && (
                         <Button size="sm" variant="outline" className="h-8 text-xs border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/10 px-2" onClick={() => setApproveTarget(t)}>
@@ -405,8 +403,8 @@ export default function SalesTransfers() {
               )}
 
               <div className="flex gap-2 pt-2">
-                <Button className="flex-1" variant="outline" onClick={() => handlePrint(viewItem)}>
-                  <Printer className="w-4 h-4 mr-2" /> Print
+                <Button className="flex-1" variant="outline" onClick={() => void handleDownloadPDF(viewItem)}>
+                  <FileDown className="w-4 h-4 mr-2" /> Download PDF
                 </Button>
                 {viewItem.status === 'in_transit' && (
                   <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => { setViewItem(null); setApproveTarget(viewItem); }}>

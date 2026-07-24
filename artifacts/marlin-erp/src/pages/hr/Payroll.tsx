@@ -9,11 +9,11 @@ import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
-import { Search, DollarSign, Download, Eye, CheckCircle, Zap, RefreshCw, Printer, FileDown } from 'lucide-react';
+import { Search, DollarSign, Download, Eye, CheckCircle, Zap, RefreshCw, FileDown } from 'lucide-react';
 import { downloadPayslipPDF } from '@/lib/pdfUtils';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { downloadCSV, printHTML } from '@/lib/download';
+import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -61,58 +61,6 @@ export default function Payroll() {
         onError: (e: any) => { toast.error(e?.message || 'Failed to generate payroll'); setGenerating(false); },
       }
     );
-  };
-
-  // Escape user-supplied strings before interpolating into HTML to prevent XSS
-  const esc = (s: string) => String(s ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-
-  const handlePrintPayslip = (p: any) => {
-    const monthLabel = `${MONTHS[p.month - 1]} ${p.year}`;
-    const allowLines = (p.allowancesBreakdown || []).map((a: any) =>
-      `<tr><td>${esc(a.name)}</td><td class="text-right green">₹${Number(a.amount).toFixed(2)}</td></tr>`).join('');
-    const dedLines = (p.deductionsBreakdown || []).map((d: any) =>
-      `<tr><td>${esc(d.name)}</td><td class="text-right red">₹${Number(d.amount).toFixed(2)}</td></tr>`).join('');
-    printHTML(`
-      <style>
-        body{font-family:sans-serif;font-size:12px;color:#222}
-        h2{margin:0 0 4px;font-size:18px} p{margin:2px 0;color:#555}
-        table{width:100%;border-collapse:collapse;margin:8px 0}
-        th,td{padding:5px 8px;border:1px solid #ddd;font-size:11px}
-        th{background:#f5f5f5;font-weight:600}
-        .text-right{text-align:right} .green{color:#16a34a} .red{color:#dc2626}
-        .bold{font-weight:700} .total-row td{font-weight:700;border-top:2px solid #aaa}
-        .section{font-weight:600;background:#f0f0f0;padding:4px 8px;margin:10px 0 4px;border-radius:4px}
-      </style>
-      <h2>Payslip — ${esc(monthLabel)}</h2>
-      <table>
-        <tr><td><b>Employee:</b> ${esc(p.employeeName)}</td><td><b>Branch:</b> ${esc(p.branchName)}</td></tr>
-        <tr><td><b>Working Days:</b> ${p.workingDays}</td><td><b>Present Days:</b> ${p.presentDays}</td></tr>
-        ${p.lopDays > 0 ? `<tr><td><b>LOP Days:</b> <span style="color:#dc2626">${p.lopDays}</span></td><td><b>LOP Deduction:</b> <span style="color:#dc2626">₹${Number(p.lopDeduction).toFixed(2)}</span></td></tr>` : ''}
-      </table>
-      <div class="section">Earnings</div>
-      <table>
-        <tr><th>Component</th><th class="text-right">Amount</th></tr>
-        <tr><td>Basic Salary</td><td class="text-right">₹${Number(p.baseSalary).toFixed(2)}</td></tr>
-        ${p.lopDays > 0 ? `<tr><td style="color:#dc2626">Less: LOP</td><td class="text-right red">-₹${Number(p.lopDeduction).toFixed(2)}</td></tr>` : ''}
-        ${allowLines}
-        <tr class="total-row"><td>Gross Pay</td><td class="text-right green">₹${Number(p.grossPay).toFixed(2)}</td></tr>
-      </table>
-      <div class="section">Deductions</div>
-      <table>
-        <tr><th>Component</th><th class="text-right">Amount</th></tr>
-        ${dedLines || '<tr><td colspan="2">No deductions</td></tr>'}
-        <tr class="total-row"><td>Total Deductions</td><td class="text-right red">₹${Number(p.deductions).toFixed(2)}</td></tr>
-      </table>
-      <table style="margin-top:8px;border:2px solid #333">
-        <tr style="background:#e8f5e9"><td class="bold" style="font-size:14px">NET PAY</td><td class="text-right bold green" style="font-size:14px">₹${Number(p.netPay).toFixed(2)}</td></tr>
-      </table>
-      <p style="margin-top:12px;color:#777;font-size:10px">Status: ${p.isPaid ? 'PAID' : 'PENDING'} ${p.paidDate ? '| Paid on: ' + new Date(p.paidDate).toLocaleDateString('en-IN') : ''}</p>
-    `, `Payslip-${esc(p.employeeName)}-${esc(monthLabel)}`);
   };
 
   const filtered = payroll.filter(p => p.employeeName?.toLowerCase().includes(search.toLowerCase()));
@@ -239,7 +187,6 @@ export default function Payroll() {
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
                         <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(p)} title="View"><Eye className="w-4 h-4" /></Button>
-                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => handlePrintPayslip(p)} title="Print payslip"><Printer className="w-4 h-4" /></Button>
                         <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => downloadPayslipPDF(p, companySettings)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>
                         {!p.isPaid && (
                           <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-500" onClick={() => handleMarkPaid(p.id, p.employeeName || '')} title="Mark as Paid"><CheckCircle className="w-4 h-4" /></Button>
@@ -345,9 +292,6 @@ export default function Payroll() {
               </div>
 
               <div className="flex gap-2 flex-wrap">
-                <Button variant="outline" className="flex-1" onClick={() => handlePrintPayslip(viewItem)}>
-                  <Printer className="w-4 h-4 mr-2" /> Print
-                </Button>
                 <Button variant="outline" className="flex-1" onClick={() => downloadPayslipPDF(viewItem, companySettings)}>
                   <FileDown className="w-4 h-4 mr-2" /> Download PDF
                 </Button>
