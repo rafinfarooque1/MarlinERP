@@ -488,6 +488,65 @@ router.get("/accounts/expense-ledgers", async (_req, res): Promise<void> => {
   res.json(rows.map((r: any) => ({ id: r.id, name: r.name, type: r.type, code: r.code ?? null, parentId: r.parent_id ?? null })));
 });
 
+// Summary: all locations with expense count + total, for the "By Location" overview tab
+router.get("/accounts/location-expenses/summary", async (req, res): Promise<void> => {
+  const expenseLedgerIds = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
+
+  // Fetch all warehouses and outlets with their cash ledger ids
+  const { rows: warehouses } = await pool.query(
+    `SELECT id, name, cash_ledger_id FROM warehouses WHERE cash_ledger_id IS NOT NULL ORDER BY name`
+  );
+  const { rows: outlets } = await pool.query(
+    `SELECT id, name, cash_ledger_id FROM outlets WHERE cash_ledger_id IS NOT NULL ORDER BY name`
+  );
+
+  const locations: Array<{
+    locationType: string; locationId: number; locationName: string;
+    cashLedgerId: number; count: number; total: number;
+  }> = [];
+
+  if (expenseLedgerIds.length === 0) {
+    // No expense ledgers configured yet — return all locations with zero totals
+    for (const w of warehouses) {
+      locations.push({ locationType: 'warehouse', locationId: w.id, locationName: w.name, cashLedgerId: w.cash_ledger_id, count: 0, total: 0 });
+    }
+    for (const o of outlets) {
+      locations.push({ locationType: 'outlet', locationId: o.id, locationName: o.name, cashLedgerId: o.cash_ledger_id, count: 0, total: 0 });
+    }
+    res.json(locations); return;
+  }
+
+  // Collect all cash_ledger_ids → location mapping
+  const allLocations = [
+    ...warehouses.map((w: any) => ({ locationType: 'warehouse', locationId: w.id, locationName: w.name, cashLedgerId: w.cash_ledger_id })),
+    ...outlets.map((o: any) => ({ locationType: 'outlet', locationId: o.id, locationName: o.name, cashLedgerId: o.cash_ledger_id })),
+  ];
+
+  if (allLocations.length === 0) { res.json([]); return; }
+
+  const cashLedgerIds = allLocations.map(l => l.cashLedgerId);
+
+  // One query: count + sum grouped by paid_from_ledger_id
+  const { rows: stats } = await pool.query(`
+    SELECT paid_from_ledger_id, COUNT(*) AS cnt, SUM(amount) AS total
+    FROM payments
+    WHERE paid_from_ledger_id = ANY($1)
+      AND paid_to_ledger_id = ANY($2)
+    GROUP BY paid_from_ledger_id
+  `, [cashLedgerIds, expenseLedgerIds]);
+
+  const statsMap = new Map<number, { count: number; total: number }>(
+    stats.map((r: any) => [Number(r.paid_from_ledger_id), { count: Number(r.cnt), total: Number(r.total) }])
+  );
+
+  for (const loc of allLocations) {
+    const s = statsMap.get(loc.cashLedgerId) ?? { count: 0, total: 0 };
+    locations.push({ ...loc, count: s.count, total: s.total });
+  }
+
+  res.json(locations);
+});
+
 // List expenses for a specific location (payments where paid_from = location's cash ledger
 // AND paid_to belongs to Direct/Indirect Expense ledger subtree)
 router.get("/accounts/location-expenses", async (req, res): Promise<void> => {

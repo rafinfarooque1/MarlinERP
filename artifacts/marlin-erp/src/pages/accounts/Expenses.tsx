@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useListExpenses, useCreateExpense, getListExpensesQueryKey, useListChartOfAccounts, useListCashBankAccounts } from '@workspace/api-client-react';
+import { useListExpenses, useCreateExpense, getListExpensesQueryKey, useListChartOfAccounts, useListCashBankAccounts, useLocationExpensesSummary, useLocationExpenses, LocationExpenseSummary } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,10 +9,11 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Receipt, Download, Eye, Calendar, MapPin } from 'lucide-react';
+import { Plus, Search, Receipt, Download, Eye, Calendar, MapPin, Building2, ChevronRight, ArrowLeft, LayoutList } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -28,6 +29,239 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
+// ── By-Location drilldown panel ───────────────────────────────────────────────
+function LocationDrilldown({ loc, onBack }: { loc: LocationExpenseSummary; onBack: () => void }) {
+  const { data, isLoading } = useLocationExpenses(loc.locationType, loc.locationId);
+  const expenses = data?.expenses ?? [];
+  const [viewItem, setViewItem] = useState<any>(null);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onBack}>
+          <ArrowLeft className="w-4 h-4" />
+        </Button>
+        <div>
+          <h2 className="font-semibold text-lg flex items-center gap-2">
+            <Building2 className="w-4 h-4 text-primary" />
+            {loc.locationName}
+          </h2>
+          <p className="text-xs text-muted-foreground capitalize">{loc.locationType}</p>
+        </div>
+      </div>
+
+      {expenses.length > 0 && (
+        <div className="bg-card border border-border rounded-xl p-4 flex justify-between items-center">
+          <span className="text-muted-foreground text-sm">{expenses.length} expense entries</span>
+          <span className="text-xl font-bold text-red-500 font-mono">
+            ₹{expenses.reduce((s, e) => s + e.amount, 0).toLocaleString('en-IN')}
+          </span>
+        </div>
+      )}
+
+      <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+        <Table>
+          <TableHeader>
+            <TableRow className="bg-muted/10">
+              <TableHead>Date</TableHead>
+              <TableHead>Description</TableHead>
+              <TableHead>Expense Account</TableHead>
+              <TableHead className="text-right">Amount</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              [...Array(3)].map((_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
+                </TableRow>
+              ))
+            ) : expenses.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
+                  <Receipt className="w-8 h-8 mx-auto mb-2 opacity-20" />
+                  <p>No expenses recorded for this location</p>
+                </TableCell>
+              </TableRow>
+            ) : expenses.map(e => (
+              <TableRow key={e.id} className="hover:bg-muted/10">
+                <TableCell className="text-sm text-muted-foreground">
+                  <div className="flex items-center gap-1">
+                    <Calendar className="w-3 h-3" />
+                    {new Date(e.expenseDate).toLocaleDateString('en-IN')}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <span className="font-medium">{e.description ?? <span className="italic text-muted-foreground">No description</span>}</span>
+                  {e.voucherNumber && (
+                    <span className="ml-2 text-xs text-muted-foreground">{e.voucherNumber}</span>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <Badge variant="outline" className="text-xs">{e.expenseLedgerName || '—'}</Badge>
+                </TableCell>
+                <TableCell className="text-right font-mono font-bold text-red-500">
+                  ₹{e.amount.toLocaleString('en-IN')}
+                </TableCell>
+                <TableCell className="text-right">
+                  <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(e)}>
+                    <Eye className="w-4 h-4" />
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      {/* Detail sheet */}
+      <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
+        <SheetContent>
+          <SheetHeader>
+            <SheetTitle>{viewItem?.description ?? 'Expense Detail'}</SheetTitle>
+            <SheetDescription className="flex items-center gap-1">
+              <MapPin className="w-3 h-3" /> {loc.locationName}
+            </SheetDescription>
+          </SheetHeader>
+          {viewItem && (
+            <div className="mt-6 space-y-4">
+              {[
+                ['Amount', `₹${viewItem.amount.toLocaleString('en-IN')}`],
+                ['Date', new Date(viewItem.expenseDate).toLocaleDateString('en-IN')],
+                ['Expense Account', viewItem.expenseLedgerName || '—'],
+                ['Paid From', viewItem.cashLedgerName || '—'],
+                ...(viewItem.voucherNumber ? [['Voucher', viewItem.voucherNumber]] : []),
+                ['Location', `${loc.locationName} (${loc.locationType})`],
+              ].map(([k, v]) => (
+                <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
+                  <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
+                  <span className="font-medium">{v}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
+    </div>
+  );
+}
+
+// ── By-Location summary tab ───────────────────────────────────────────────────
+function ByLocationTab() {
+  const { data: summary = [], isLoading } = useLocationExpensesSummary();
+  const [drilldown, setDrilldown] = useState<LocationExpenseSummary | null>(null);
+
+  if (drilldown) {
+    return <LocationDrilldown loc={drilldown} onBack={() => setDrilldown(null)} />;
+  }
+
+  const grandTotal = (summary as LocationExpenseSummary[]).reduce((s, l) => s + l.total, 0);
+  const locationsWithExpenses = (summary as LocationExpenseSummary[]).filter(l => l.count > 0);
+  const locationsWithoutExpenses = (summary as LocationExpenseSummary[]).filter(l => l.count === 0);
+
+  return (
+    <div className="space-y-4">
+      {locationsWithExpenses.length > 0 && (
+        <div className="bg-card border border-border rounded-xl p-4 flex justify-between items-center">
+          <span className="text-muted-foreground text-sm">
+            {locationsWithExpenses.length} location{locationsWithExpenses.length !== 1 ? 's' : ''} with expenses
+          </span>
+          <span className="text-xl font-bold text-red-500 font-mono">
+            ₹{grandTotal.toLocaleString('en-IN')} total
+          </span>
+        </div>
+      )}
+
+      <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+        <Table>
+          <TableHeader>
+            <TableRow className="bg-muted/10">
+              <TableHead>Location</TableHead>
+              <TableHead>Type</TableHead>
+              <TableHead className="text-center">Entries</TableHead>
+              <TableHead className="text-right">Total Spend</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              [...Array(4)].map((_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
+                </TableRow>
+              ))
+            ) : summary.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={5} className="text-center py-16 text-muted-foreground">
+                  <Building2 className="w-10 h-10 mx-auto mb-3 opacity-20" />
+                  <p>No warehouses or outlets with cash ledgers found</p>
+                  <p className="text-xs mt-1">Provision ledgers under Accounts → Warehouses/Outlets</p>
+                </TableCell>
+              </TableRow>
+            ) : (
+              <>
+                {/* Locations that have expenses — sorted by spend descending */}
+                {[...locationsWithExpenses]
+                  .sort((a, b) => b.total - a.total)
+                  .map(loc => (
+                    <TableRow
+                      key={`${loc.locationType}-${loc.locationId}`}
+                      className="hover:bg-muted/10 cursor-pointer"
+                      onClick={() => setDrilldown(loc)}
+                    >
+                      <TableCell>
+                        <div className="flex items-center gap-2 font-semibold">
+                          <Building2 className="w-4 h-4 text-primary shrink-0" />
+                          {loc.locationName}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="secondary" className="capitalize text-xs">{loc.locationType}</Badge>
+                      </TableCell>
+                      <TableCell className="text-center text-sm">{loc.count}</TableCell>
+                      <TableCell className="text-right font-mono font-bold text-red-500">
+                        ₹{loc.total.toLocaleString('en-IN')}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+
+                {/* Locations with zero expenses — greyed out, still clickable */}
+                {locationsWithoutExpenses.map(loc => (
+                  <TableRow
+                    key={`${loc.locationType}-${loc.locationId}`}
+                    className="hover:bg-muted/10 cursor-pointer opacity-50"
+                    onClick={() => setDrilldown(loc)}
+                  >
+                    <TableCell>
+                      <div className="flex items-center gap-2 font-medium text-muted-foreground">
+                        <Building2 className="w-4 h-4 shrink-0" />
+                        {loc.locationName}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className="capitalize text-xs">{loc.locationType}</Badge>
+                    </TableCell>
+                    <TableCell className="text-center text-sm text-muted-foreground">0</TableCell>
+                    <TableCell className="text-right font-mono text-muted-foreground">₹0</TableCell>
+                    <TableCell className="text-right">
+                      <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </>
+            )}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  );
+}
+
+// ── Main Expenses page ────────────────────────────────────────────────────────
 export default function Expenses() {
   const { data: expenses = [], isLoading } = useListExpenses();
   const { data: accounts = [] } = useListChartOfAccounts();
@@ -96,83 +330,102 @@ export default function Expenses() {
           </div>
         </div>
 
-        {filtered.length > 0 && (
-          <div className="bg-card border border-border rounded-xl p-4 flex justify-between items-center">
-            <span className="text-muted-foreground text-sm">{filtered.length} expense entries</span>
-            <span className="text-xl font-bold text-red-500 font-mono">₹{total.toLocaleString('en-IN')}</span>
-          </div>
-        )}
+        <Tabs defaultValue="all">
+          <TabsList>
+            <TabsTrigger value="all" className="flex items-center gap-1.5">
+              <LayoutList className="w-3.5 h-3.5" /> All Expenses
+            </TabsTrigger>
+            <TabsTrigger value="by-location" className="flex items-center gap-1.5">
+              <MapPin className="w-3.5 h-3.5" /> By Location
+            </TabsTrigger>
+          </TabsList>
 
-        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
-            <Search className="w-4 h-4 text-muted-foreground" />
-            <Input
-              placeholder="Search by description, account…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm"
-            />
-          </div>
-          <Table>
-            <TableHeader>
-              <TableRow className="bg-muted/10">
-                <TableHead>Date</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead>Expense Account</TableHead>
-                <TableHead>Paid From</TableHead>
-                <TableHead className="text-right">Amount</TableHead>
-                <TableHead />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading ? (
-                [...Array(4)].map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
+          {/* ── All Expenses tab ── */}
+          <TabsContent value="all" className="mt-4 space-y-4">
+            {filtered.length > 0 && (
+              <div className="bg-card border border-border rounded-xl p-4 flex justify-between items-center">
+                <span className="text-muted-foreground text-sm">{filtered.length} expense entries</span>
+                <span className="text-xl font-bold text-red-500 font-mono">₹{total.toLocaleString('en-IN')}</span>
+              </div>
+            )}
+
+            <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+              <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
+                <Search className="w-4 h-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search by description, account…"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm"
+                />
+              </div>
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/10">
+                    <TableHead>Date</TableHead>
+                    <TableHead>Description</TableHead>
+                    <TableHead>Expense Account</TableHead>
+                    <TableHead>Paid From</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead />
                   </TableRow>
-                ))
-              ) : filtered.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
-                    <Receipt className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                    <p>No expenses recorded</p>
-                  </TableCell>
-                </TableRow>
-              ) : filtered.map(e => (
-                <TableRow key={`${e.source}-${e.id}`} className="hover:bg-muted/10">
-                  <TableCell className="text-sm text-muted-foreground">
-                    <div className="flex items-center gap-1">
-                      <Calendar className="w-3 h-3" />
-                      {new Date(e.expenseDate).toLocaleDateString('en-IN')}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold">{e.description ?? <span className="text-muted-foreground italic">No description</span>}</span>
-                      {e.source === 'location' && (
-                        <Badge variant="secondary" className="text-xs gap-1">
-                          <MapPin className="w-2.5 h-2.5" /> Location
-                        </Badge>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className="text-xs">{e.ledgerAccountName || '—'}</Badge>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{e.paymentAccountName || '—'}</TableCell>
-                  <TableCell className="text-right font-mono font-bold text-red-500">
-                    ₹{Number(e.amount).toLocaleString('en-IN')}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(e)}>
-                      <Eye className="w-4 h-4" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+                </TableHeader>
+                <TableBody>
+                  {isLoading ? (
+                    [...Array(4)].map((_, i) => (
+                      <TableRow key={i}>
+                        <TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
+                      </TableRow>
+                    ))
+                  ) : filtered.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
+                        <Receipt className="w-10 h-10 mx-auto mb-3 opacity-20" />
+                        <p>No expenses recorded</p>
+                      </TableCell>
+                    </TableRow>
+                  ) : filtered.map(e => (
+                    <TableRow key={`${e.source}-${e.id}`} className="hover:bg-muted/10">
+                      <TableCell className="text-sm text-muted-foreground">
+                        <div className="flex items-center gap-1">
+                          <Calendar className="w-3 h-3" />
+                          {new Date(e.expenseDate).toLocaleDateString('en-IN')}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold">{e.description ?? <span className="text-muted-foreground italic">No description</span>}</span>
+                          {e.source === 'location' && (
+                            <Badge variant="secondary" className="text-xs gap-1">
+                              <MapPin className="w-2.5 h-2.5" /> Location
+                            </Badge>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="text-xs">{e.ledgerAccountName || '—'}</Badge>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{e.paymentAccountName || '—'}</TableCell>
+                      <TableCell className="text-right font-mono font-bold text-red-500">
+                        ₹{Number(e.amount).toLocaleString('en-IN')}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(e)}>
+                          <Eye className="w-4 h-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </TabsContent>
+
+          {/* ── By Location tab ── */}
+          <TabsContent value="by-location" className="mt-4">
+            <ByLocationTab />
+          </TabsContent>
+        </Tabs>
       </div>
 
       {/* Add Expense Dialog */}
