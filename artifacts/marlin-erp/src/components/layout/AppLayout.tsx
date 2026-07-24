@@ -31,6 +31,7 @@ import {
   MapPin,
   Receipt,
   Banknote,
+  Layers,
 } from 'lucide-react';
 import { useLocationContext } from '@/lib/locationContext';
 import { useTheme } from '@/lib/theme';
@@ -401,17 +402,21 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             {isSalesSegment ? (
               /* ── Sales segment sidebar ── */
               <>
-                {locationState.locationType && locationState.locationId ? (
+                {locationState.locationType ? (
                   <>
                     {/* Current location header */}
                     {!collapsed && (
                       <div className="mb-3 px-2 py-2 bg-muted/30 rounded-lg">
-                        <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Selling from</p>
+                        <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">
+                          {locationState.locationType === 'all' ? 'Viewing' : 'Selling from'}
+                        </p>
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2 min-w-0">
                             {locationState.locationType === 'warehouse'
                               ? <Warehouse className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                              : <Store className="w-3.5 h-3.5 text-emerald-500 shrink-0" />}
+                              : locationState.locationType === 'outlet'
+                              ? <Store className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                              : <Layers className="w-3.5 h-3.5 text-primary shrink-0" />}
                             <span className="text-sm font-semibold truncate">{locationState.locationName}</span>
                           </div>
                           <Link href="/sales" className="text-[10px] text-primary hover:underline shrink-0">change</Link>

@@ -3,7 +3,7 @@ import { useLocation } from 'wouter';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { customFetch } from '@workspace/api-client-react';
 import { useLocationContext } from '@/lib/locationContext';
-import { MapPin, Warehouse, Store, ChevronRight } from 'lucide-react';
+import { MapPin, Warehouse, Store, ChevronRight, Layers } from 'lucide-react';
 
 export default function LocationPicker() {
   const [, navigate] = useLocation();
@@ -24,6 +24,11 @@ export default function LocationPicker() {
   const handleSelect = (locationType: 'warehouse' | 'outlet', locationId: number, locationName: string) => {
     setLocation({ locationType, locationId, locationName });
     navigate('/sales/pos');
+  };
+
+  const handleSelectAll = () => {
+    setLocation({ locationType: 'all', locationId: null, locationName: 'All Locations' });
+    navigate('/sales/dashboard');
   };
 
   return (
@@ -47,6 +52,30 @@ export default function LocationPicker() {
           </div>
         ) : (
           <>
+            {/* All Locations option */}
+            {(warehouses.length > 0 || outlets.length > 0) && (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground px-1">
+                  Overview
+                </p>
+                <button
+                  onClick={handleSelectAll}
+                  className="w-full flex items-center gap-4 p-4 rounded-xl bg-primary/5 border-2 border-primary/20 hover:border-primary/50 hover:bg-primary/10 transition-all text-left group"
+                >
+                  <div className="w-10 h-10 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
+                    <Layers className="w-5 h-5 text-primary" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold">All Locations</p>
+                    <p className="text-xs text-muted-foreground">
+                      View dashboard totals across all {warehouses.length} warehouse{warehouses.length !== 1 ? 's' : ''} and {outlets.length} outlet{outlets.length !== 1 ? 's' : ''}
+                    </p>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors shrink-0" />
+                </button>
+              </div>
+            )}
+
             {warehouses.length > 0 && (
               <div className="space-y-2">
                 <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground px-1">

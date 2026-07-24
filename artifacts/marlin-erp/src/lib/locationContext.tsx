@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, ReactNode } from 'react';
 
 export interface LocationState {
-  locationType: 'warehouse' | 'outlet' | null;
+  locationType: 'warehouse' | 'outlet' | 'all' | null;
   locationId: number | null;
   locationName: string;
 }

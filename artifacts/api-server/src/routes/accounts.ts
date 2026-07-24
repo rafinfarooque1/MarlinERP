@@ -595,6 +595,43 @@ router.get("/accounts/location-expenses/summary", async (req, res): Promise<void
 
 // List expenses for a specific location (payments where paid_from = location's cash ledger
 // AND paid_to belongs to Direct/Indirect Expense ledger subtree)
+// ── GET /accounts/location-expenses/all — all locations combined ──────────────
+router.get("/accounts/location-expenses/all", async (req, res): Promise<void> => {
+  const expenseLedgerIds = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
+  if (expenseLedgerIds.length === 0) { res.json([]); return; }
+
+  // Join warehouses and outlets on their cash ledger to tag each payment with location info
+  const { rows } = await pool.query(`
+    SELECT p.id, p.voucher_number, p.payment_date, p.paid_from_ledger_id, p.paid_to_ledger_id,
+           p.amount, p.narration, p.created_at,
+           pt.name AS expense_ledger_name,
+           COALESCE(w.name, o.name)         AS location_name,
+           CASE WHEN w.id IS NOT NULL THEN 'warehouse' ELSE 'outlet' END AS location_type,
+           COALESCE(w.id, o.id)             AS location_id
+    FROM payments p
+    LEFT JOIN account_ledgers pt ON p.paid_to_ledger_id = pt.id
+    LEFT JOIN warehouses w ON w.cash_ledger_id = p.paid_from_ledger_id
+    LEFT JOIN outlets    o ON o.cash_ledger_id = p.paid_from_ledger_id
+    WHERE p.paid_to_ledger_id = ANY($1)
+      AND (w.id IS NOT NULL OR o.id IS NOT NULL)
+    ORDER BY p.payment_date DESC, p.id DESC
+  `, [expenseLedgerIds]);
+
+  res.json(rows.map((r: any) => ({
+    id: r.id,
+    voucherNumber: r.voucher_number,
+    expenseDate: r.payment_date,
+    expenseLedgerId: r.paid_to_ledger_id,
+    expenseLedgerName: r.expense_ledger_name ?? '',
+    amount: Number(r.amount),
+    description: r.narration,
+    locationName: r.location_name,
+    locationType: r.location_type,
+    locationId: Number(r.location_id),
+    createdAt: r.created_at,
+  })));
+});
+
 router.get("/accounts/location-expenses", async (req, res): Promise<void> => {
   const { locationType, locationId } = req.query as { locationType?: string; locationId?: string };
   if (!locationType || !locationId) {

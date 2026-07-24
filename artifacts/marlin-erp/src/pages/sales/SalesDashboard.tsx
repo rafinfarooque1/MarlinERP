@@ -1,8 +1,6 @@
 /**
- * SalesDashboard — daily snapshot for the current sales location.
- * Shows Sales, Stock Transfers and Expenses for the selected date
- * (defaults to today). Each section is a clickable card that expands
- * inline to show the full detail table.
+ * SalesDashboard — daily snapshot for the current sales location,
+ * or an all-locations overview when locationType === 'all'.
  */
 import { useState, useEffect } from 'react';
 import { useLocation } from 'wouter';
@@ -20,7 +18,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import {
   ShoppingCart, ArrowLeftRight, Receipt, ChevronDown, ChevronUp,
   TrendingUp, Package, Wallet, CalendarDays, Store, Warehouse,
-  Clock, CheckCircle2, XCircle, ArrowUpRight,
+  Clock, CheckCircle2, XCircle, ArrowUpRight, Layers,
 } from 'lucide-react';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -62,22 +60,14 @@ function TransferBadge({ status }: { status: string }) {
 function SummaryCard({
   icon: Icon, iconColor, label, primary, secondary, open, onClick, accent,
 }: {
-  icon: React.ElementType;
-  iconColor: string;
-  label: string;
-  primary: string;
-  secondary: string;
-  open: boolean;
-  onClick: () => void;
-  accent: string;
+  icon: React.ElementType; iconColor: string; label: string;
+  primary: string; secondary: string; open: boolean; onClick: () => void; accent: string;
 }) {
   return (
     <button
       onClick={onClick}
       className={`w-full text-left rounded-xl border transition-all duration-200 p-4 group
-        ${open
-          ? `${accent} shadow-md`
-          : 'border-border bg-card hover:border-primary/30 hover:shadow-sm'}`}
+        ${open ? `${accent} shadow-md` : 'border-border bg-card hover:border-primary/30 hover:shadow-sm'}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className={`rounded-lg p-2.5 ${open ? 'bg-white/20 dark:bg-black/20' : 'bg-muted/40'}`}>
@@ -96,10 +86,10 @@ function SummaryCard({
   );
 }
 
-// ── Section header inside expanded panel ──────────────────────────────────────
+// ── Panel header ──────────────────────────────────────────────────────────────
 
-function PanelHeader({ icon: Icon, label, onNavigate, navLabel }: {
-  icon: React.ElementType; label: string; onNavigate?: () => void; navLabel?: string;
+function PanelHeader({ icon: Icon, label, onNavigate }: {
+  icon: React.ElementType; label: string; onNavigate?: () => void;
 }) {
   return (
     <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/20">
@@ -111,6 +101,22 @@ function PanelHeader({ icon: Icon, label, onNavigate, navLabel }: {
           Open full page <ArrowUpRight className="w-3 h-3" />
         </Button>
       )}
+    </div>
+  );
+}
+
+// ── Location section header inside expanded panels ────────────────────────────
+
+function LocationSection({ type, name, children }: { type: string; name: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="flex items-center gap-2 px-4 py-2 bg-muted/30 border-b border-border">
+        {type === 'warehouse'
+          ? <Warehouse className="w-3.5 h-3.5 text-blue-500" />
+          : <Store className="w-3.5 h-3.5 text-emerald-500" />}
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{name}</span>
+      </div>
+      {children}
     </div>
   );
 }
@@ -127,55 +133,89 @@ export default function SalesDashboard() {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [open, setOpen] = useState<Section>(null);
 
-  useEffect(() => {
-    if (!locationType || !locationId) navigate('/sales');
-  }, [locationType, locationId]);
+  const isAll = locationType === 'all';
 
-  // ── Data fetching ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!locationType) navigate('/sales');
+  }, [locationType]);
+
+  // ── Data fetching ─────────────────────────────────────────────────────────
 
   const { data: allSales = [], isLoading: salesLoading } = useListSales();
-
   const { data: allTransfers = [], isLoading: transfersLoading } = useListStockTransfers();
 
-  const { data: expenseData, isLoading: expensesLoading } = useQuery<{
+  // Single-location expenses
+  const { data: expenseData, isLoading: expensesLoadingSingle } = useQuery<{
     cashLedgerId: number; cashLedgerName: string; expenses: any[];
   }>({
     queryKey: ['location-expenses', locationType, locationId],
     queryFn: () => customFetch(`/api/accounts/location-expenses?locationType=${locationType}&locationId=${locationId}`),
-    enabled: !!locationType && !!locationId,
+    enabled: !isAll && !!locationType && !!locationId,
   });
 
-  // ── Filter to current location + selected date ─────────────────────────────
+  // All-locations expenses
+  const { data: allLocExpenses = [], isLoading: expensesLoadingAll } = useQuery<any[]>({
+    queryKey: ['location-expenses-all'],
+    queryFn: () => customFetch('/api/accounts/location-expenses/all'),
+    enabled: isAll,
+  });
+
+  const expensesLoading = isAll ? expensesLoadingAll : expensesLoadingSingle;
+
+  // ── Filter helpers ────────────────────────────────────────────────────────
 
   const daySales = (allSales as any[]).filter(s =>
-    s.locationType === locationType &&
-    Number(s.locationId) === locationId &&
+    (isAll || (s.locationType === locationType && Number(s.locationId) === locationId)) &&
     toDateStr(s.saleDate) === selectedDate
   );
 
   const dayTransfers = (allTransfers as any[]).filter(t => {
-    const fromMatch = t.fromType === locationType && Number(t.fromId) === locationId;
-    const toMatch   = t.toType   === locationType && Number(t.toId)   === locationId;
-    return (fromMatch || toMatch) && toDateStr(t.transferDate) === selectedDate;
+    const inScope = isAll ||
+      (t.fromType === locationType && Number(t.fromId) === locationId) ||
+      (t.toType   === locationType && Number(t.toId)   === locationId);
+    return inScope && toDateStr(t.transferDate) === selectedDate;
   });
 
-  const allExpenses: any[] = expenseData?.expenses ?? [];
-  const dayExpenses = allExpenses.filter(e => toDateStr(e.expenseDate) === selectedDate);
+  const singleExpenses: any[] = expenseData?.expenses ?? [];
+  const dayExpenses = isAll
+    ? allLocExpenses.filter(e => toDateStr(e.expenseDate) === selectedDate)
+    : singleExpenses.filter(e => toDateStr(e.expenseDate) === selectedDate);
 
-  // ── Totals ─────────────────────────────────────────────────────────────────
+  // ── Totals ────────────────────────────────────────────────────────────────
 
-  const salesTotal   = daySales.reduce((s: number, x: any) => s + Number(x.totalAmount ?? 0), 0);
-  const salesPaid    = daySales.reduce((s: number, x: any) => s + Number(x.amountPaid ?? 0), 0);
-  const expenseTotal = dayExpenses.reduce((s: number, x: any) => s + Number(x.amount ?? 0), 0);
-  const inTransit    = dayTransfers.filter((t: any) => t.status === 'in_transit').length;
-
-  // ── Toggle helper ──────────────────────────────────────────────────────────
+  const salesTotal   = daySales.reduce((s, x) => s + Number(x.totalAmount ?? 0), 0);
+  const salesPaid    = daySales.reduce((s, x) => s + Number(x.amountPaid ?? 0), 0);
+  const expenseTotal = dayExpenses.reduce((s, x) => s + Number(x.amount ?? 0), 0);
+  const inTransit    = dayTransfers.filter(t => t.status === 'in_transit').length;
 
   const toggle = (s: Section) => setOpen(prev => prev === s ? null : s);
 
-  const LocationIcon = locationType === 'warehouse' ? Warehouse : Store;
+  // ── All-mode: group by location ───────────────────────────────────────────
 
-  if (!locationType || !locationId) return null;
+  function groupByLocation<T extends { locationType?: string; locationId?: number; locationName?: string }>(items: T[]) {
+    const map = new Map<string, { type: string; name: string; items: T[] }>();
+    for (const item of items) {
+      const key = `${item.locationType}-${item.locationId}`;
+      if (!map.has(key)) map.set(key, { type: item.locationType!, name: item.locationName ?? '', items: [] });
+      map.get(key)!.items.push(item);
+    }
+    // Sort: warehouses first, then outlets; alphabetically within each group
+    return [...map.values()].sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'warehouse' ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  }
+
+  const salesByLocation     = isAll ? groupByLocation(daySales.map(s => ({ ...s, locationType: s.locationType, locationId: Number(s.locationId), locationName: s.locationName ?? s.outletName ?? s.warehouseName ?? '' }))) : [];
+  const transfersByLocation = isAll ? groupByLocation(dayTransfers.map(t => {
+    // A transfer involves two locations; we attribute it to the "from" location
+    return { ...t, locationType: t.fromType, locationId: Number(t.fromId), locationName: t.fromName ?? '' };
+  })) : [];
+  const expensesByLocation  = isAll ? groupByLocation(dayExpenses) : [];
+
+  const LocationIcon = isAll ? Layers : (locationType === 'warehouse' ? Warehouse : Store);
+
+  if (!locationType) return null;
 
   return (
     <AppLayout>
@@ -192,7 +232,6 @@ export default function SalesDashboard() {
             </p>
           </div>
 
-          {/* Date picker */}
           <div className="flex items-center gap-2">
             <CalendarDays className="w-4 h-4 text-muted-foreground" />
             <Input
@@ -203,11 +242,8 @@ export default function SalesDashboard() {
               className="h-8 w-40 text-sm"
             />
             {selectedDate !== new Date().toISOString().split('T')[0] && (
-              <Button
-                size="sm" variant="ghost"
-                className="h-8 text-xs text-muted-foreground"
-                onClick={() => setSelectedDate(new Date().toISOString().split('T')[0])}
-              >
+              <Button size="sm" variant="ghost" className="h-8 text-xs text-muted-foreground"
+                onClick={() => setSelectedDate(new Date().toISOString().split('T')[0])}>
                 Today
               </Button>
             )}
@@ -217,33 +253,24 @@ export default function SalesDashboard() {
         {/* ── Summary cards ── */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <SummaryCard
-            icon={ShoppingCart}
-            iconColor={open === 'sales' ? 'text-white' : 'text-blue-600'}
-            label="Sales"
-            primary={salesLoading ? '…' : fmt(salesTotal)}
+            icon={ShoppingCart} iconColor={open === 'sales' ? 'text-white' : 'text-blue-600'}
+            label="Sales" primary={salesLoading ? '…' : fmt(salesTotal)}
             secondary={salesLoading ? '' : `${daySales.length} order${daySales.length !== 1 ? 's' : ''} · collected ${fmt(salesPaid)}`}
-            open={open === 'sales'}
-            onClick={() => toggle('sales')}
+            open={open === 'sales'} onClick={() => toggle('sales')}
             accent="border-blue-500/60 bg-blue-600 text-white"
           />
           <SummaryCard
-            icon={ArrowLeftRight}
-            iconColor={open === 'transfers' ? 'text-white' : 'text-violet-600'}
-            label="Stock Transfers"
-            primary={transfersLoading ? '…' : `${dayTransfers.length}`}
+            icon={ArrowLeftRight} iconColor={open === 'transfers' ? 'text-white' : 'text-violet-600'}
+            label="Stock Transfers" primary={transfersLoading ? '…' : `${dayTransfers.length}`}
             secondary={transfersLoading ? '' : `${inTransit} in transit · ${dayTransfers.length - inTransit} completed`}
-            open={open === 'transfers'}
-            onClick={() => toggle('transfers')}
+            open={open === 'transfers'} onClick={() => toggle('transfers')}
             accent="border-violet-500/60 bg-violet-600 text-white"
           />
           <SummaryCard
-            icon={Receipt}
-            iconColor={open === 'expenses' ? 'text-white' : 'text-rose-600'}
-            label="Expenses"
-            primary={expensesLoading ? '…' : fmt(expenseTotal)}
+            icon={Receipt} iconColor={open === 'expenses' ? 'text-white' : 'text-rose-600'}
+            label="Expenses" primary={expensesLoading ? '…' : fmt(expenseTotal)}
             secondary={expensesLoading ? '' : `${dayExpenses.length} expense${dayExpenses.length !== 1 ? 's' : ''}`}
-            open={open === 'expenses'}
-            onClick={() => toggle('expenses')}
+            open={open === 'expenses'} onClick={() => toggle('expenses')}
             accent="border-rose-500/60 bg-rose-600 text-white"
           />
         </div>
@@ -253,7 +280,8 @@ export default function SalesDashboard() {
         {/* Sales detail */}
         {open === 'sales' && (
           <div className="rounded-xl border border-border overflow-hidden shadow-sm animate-in fade-in slide-in-from-top-2 duration-200">
-            <PanelHeader icon={ShoppingCart} label={`Sales on ${fmtDate(selectedDate)}`} onNavigate={() => navigate('/sales/pos')} navLabel="Open POS" />
+            <PanelHeader icon={ShoppingCart} label={`Sales on ${fmtDate(selectedDate)}`}
+              onNavigate={!isAll ? () => navigate('/sales/pos') : undefined} />
             {salesLoading ? (
               <div className="py-12 text-center text-muted-foreground text-sm">Loading…</div>
             ) : daySales.length === 0 ? (
@@ -261,9 +289,54 @@ export default function SalesDashboard() {
                 <ShoppingCart className="w-10 h-10 mx-auto opacity-20" />
                 <p className="font-medium">No sales on this date</p>
               </div>
+            ) : isAll ? (
+              /* All-locations: grouped by location */
+              <div>
+                {/* Grand total bar */}
+                <div className="flex flex-wrap gap-4 px-4 py-3 bg-blue-500/5 text-sm border-b border-border">
+                  <span className="text-muted-foreground">Total billed: <strong className="text-foreground">{fmt(salesTotal)}</strong></span>
+                  <span className="text-muted-foreground">Collected: <strong className="text-emerald-600">{fmt(salesPaid)}</strong></span>
+                  <span className="text-muted-foreground">Balance due: <strong className="text-rose-600">{fmt(salesTotal - salesPaid)}</strong></span>
+                </div>
+                {salesByLocation.map(loc => {
+                  const locTotal = loc.items.reduce((s, x) => s + Number(x.totalAmount ?? 0), 0);
+                  const locPaid  = loc.items.reduce((s, x) => s + Number(x.amountPaid ?? 0), 0);
+                  return (
+                    <LocationSection key={`${loc.type}-${loc.items[0]?.locationId}`} type={loc.type} name={`${loc.name} — ${fmt(locTotal)}`}>
+                      <div className="flex gap-4 px-4 py-2 bg-muted/5 border-b border-border/50 text-xs text-muted-foreground">
+                        <span>{loc.items.length} order{loc.items.length !== 1 ? 's' : ''}</span>
+                        <span>Collected: <strong className="text-emerald-600">{fmt(locPaid)}</strong></span>
+                        <span>Due: <strong className="text-rose-600">{fmt(locTotal - locPaid)}</strong></span>
+                      </div>
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-muted/10">
+                            <TableHead>Invoice</TableHead>
+                            <TableHead>Customer</TableHead>
+                            <TableHead className="text-right">Amount</TableHead>
+                            <TableHead className="text-right">Paid</TableHead>
+                            <TableHead>Status</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {loc.items.map((s: any) => (
+                            <TableRow key={s.id}>
+                              <TableCell className="font-mono text-xs font-bold text-primary">{s.invoiceNumber ?? `#${s.id}`}</TableCell>
+                              <TableCell className="text-sm">{s.customerName ?? <span className="text-muted-foreground italic">Walk-in</span>}</TableCell>
+                              <TableCell className="text-right font-mono text-sm font-semibold">{fmt(Number(s.totalAmount ?? 0))}</TableCell>
+                              <TableCell className="text-right font-mono text-sm text-emerald-600">{fmt(Number(s.amountPaid ?? 0))}</TableCell>
+                              <TableCell><PaymentBadge status={s.paymentStatus ?? 'unpaid'} /></TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </LocationSection>
+                  );
+                })}
+              </div>
             ) : (
+              /* Single-location */
               <>
-                {/* Totals bar */}
                 <div className="flex flex-wrap gap-4 px-4 py-3 bg-muted/10 text-sm border-b border-border">
                   <span className="text-muted-foreground">Total billed: <strong className="text-foreground">{fmt(salesTotal)}</strong></span>
                   <span className="text-muted-foreground">Collected: <strong className="text-emerald-600">{fmt(salesPaid)}</strong></span>
@@ -301,7 +374,8 @@ export default function SalesDashboard() {
         {/* Transfers detail */}
         {open === 'transfers' && (
           <div className="rounded-xl border border-border overflow-hidden shadow-sm animate-in fade-in slide-in-from-top-2 duration-200">
-            <PanelHeader icon={ArrowLeftRight} label={`Stock Transfers on ${fmtDate(selectedDate)}`} onNavigate={() => navigate('/sales/transfers')} navLabel="Open Transfers" />
+            <PanelHeader icon={ArrowLeftRight} label={`Stock Transfers on ${fmtDate(selectedDate)}`}
+              onNavigate={!isAll ? () => navigate('/sales/transfers') : undefined} />
             {transfersLoading ? (
               <div className="py-12 text-center text-muted-foreground text-sm">Loading…</div>
             ) : dayTransfers.length === 0 ? (
@@ -311,43 +385,64 @@ export default function SalesDashboard() {
               </div>
             ) : (
               <>
-                {/* In-transit banner */}
                 {inTransit > 0 && (
                   <div className="flex items-center gap-2 px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/20 text-amber-700 text-sm">
                     <Clock className="w-4 h-4 shrink-0" />
                     <span><strong>{inTransit}</strong> transfer{inTransit > 1 ? 's' : ''} awaiting approval</span>
                   </div>
                 )}
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-muted/10">
-                      <TableHead>Challan</TableHead>
-                      <TableHead>From</TableHead>
-                      <TableHead>To</TableHead>
-                      <TableHead>Items</TableHead>
-                      <TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {dayTransfers.map((t: any) => (
-                      <TableRow key={t.id}>
-                        <TableCell className="font-mono text-xs font-bold text-primary">{t.challanNumber ?? `#${t.id}`}</TableCell>
-                        <TableCell className="text-sm">
-                          {t.fromName ?? `${t.fromType} #${t.fromId}`}
-                          <span className="text-muted-foreground capitalize text-xs ml-1">({t.fromType})</span>
-                        </TableCell>
-                        <TableCell className="text-sm">
-                          {t.toName ?? `${t.toType} #${t.toId}`}
-                          <span className="text-muted-foreground capitalize text-xs ml-1">({t.toType})</span>
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {(t.lineItems ?? []).length} item{(t.lineItems ?? []).length !== 1 ? 's' : ''}
-                        </TableCell>
-                        <TableCell><TransferBadge status={t.status} /></TableCell>
+                {isAll ? (
+                  /* grouped by source location */
+                  transfersByLocation.map(loc => (
+                    <LocationSection key={`${loc.type}-${loc.items[0]?.fromId}`} type={loc.type} name={`${loc.name} — ${loc.items.length} transfer${loc.items.length !== 1 ? 's' : ''}`}>
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-muted/10">
+                            <TableHead>Challan</TableHead>
+                            <TableHead>From</TableHead>
+                            <TableHead>To</TableHead>
+                            <TableHead>Items</TableHead>
+                            <TableHead>Status</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {loc.items.map((t: any) => (
+                            <TableRow key={t.id}>
+                              <TableCell className="font-mono text-xs font-bold text-primary">{t.challanNumber ?? `#${t.id}`}</TableCell>
+                              <TableCell className="text-sm">{t.fromName ?? `${t.fromType} #${t.fromId}`}<span className="text-muted-foreground capitalize text-xs ml-1">({t.fromType})</span></TableCell>
+                              <TableCell className="text-sm">{t.toName ?? `${t.toType} #${t.toId}`}<span className="text-muted-foreground capitalize text-xs ml-1">({t.toType})</span></TableCell>
+                              <TableCell className="text-sm text-muted-foreground">{(t.lineItems ?? []).length} item{(t.lineItems ?? []).length !== 1 ? 's' : ''}</TableCell>
+                              <TableCell><TransferBadge status={t.status} /></TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </LocationSection>
+                  ))
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/10">
+                        <TableHead>Challan</TableHead>
+                        <TableHead>From</TableHead>
+                        <TableHead>To</TableHead>
+                        <TableHead>Items</TableHead>
+                        <TableHead>Status</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {dayTransfers.map((t: any) => (
+                        <TableRow key={t.id}>
+                          <TableCell className="font-mono text-xs font-bold text-primary">{t.challanNumber ?? `#${t.id}`}</TableCell>
+                          <TableCell className="text-sm">{t.fromName ?? `${t.fromType} #${t.fromId}`}<span className="text-muted-foreground capitalize text-xs ml-1">({t.fromType})</span></TableCell>
+                          <TableCell className="text-sm">{t.toName ?? `${t.toType} #${t.toId}`}<span className="text-muted-foreground capitalize text-xs ml-1">({t.toType})</span></TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{(t.lineItems ?? []).length} item{(t.lineItems ?? []).length !== 1 ? 's' : ''}</TableCell>
+                          <TableCell><TransferBadge status={t.status} /></TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
               </>
             )}
           </div>
@@ -356,13 +451,48 @@ export default function SalesDashboard() {
         {/* Expenses detail */}
         {open === 'expenses' && (
           <div className="rounded-xl border border-border overflow-hidden shadow-sm animate-in fade-in slide-in-from-top-2 duration-200">
-            <PanelHeader icon={Receipt} label={`Expenses on ${fmtDate(selectedDate)}`} onNavigate={() => navigate('/sales/expenses')} navLabel="Open Expenses" />
+            <PanelHeader icon={Receipt} label={`Expenses on ${fmtDate(selectedDate)}`}
+              onNavigate={!isAll ? () => navigate('/sales/expenses') : undefined} />
             {expensesLoading ? (
               <div className="py-12 text-center text-muted-foreground text-sm">Loading…</div>
             ) : dayExpenses.length === 0 ? (
               <div className="py-16 text-center text-muted-foreground space-y-2">
                 <Receipt className="w-10 h-10 mx-auto opacity-20" />
                 <p className="font-medium">No expenses on this date</p>
+              </div>
+            ) : isAll ? (
+              <div>
+                <div className="flex gap-4 px-4 py-3 bg-rose-500/5 border-b border-border text-sm">
+                  <span className="text-muted-foreground">Total spent: <strong className="text-rose-600">{fmt(expenseTotal)}</strong></span>
+                  <span className="text-muted-foreground">{dayExpenses.length} expense{dayExpenses.length !== 1 ? 's' : ''} across all locations</span>
+                </div>
+                {expensesByLocation.map(loc => {
+                  const locTotal = loc.items.reduce((s, x) => s + Number(x.amount ?? 0), 0);
+                  return (
+                    <LocationSection key={`${loc.type}-${loc.items[0]?.locationId}`} type={loc.type} name={`${loc.name} — ${fmt(locTotal)}`}>
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-muted/10">
+                            <TableHead>Voucher</TableHead>
+                            <TableHead>Category</TableHead>
+                            <TableHead>Description</TableHead>
+                            <TableHead className="text-right">Amount</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {loc.items.map((e: any) => (
+                            <TableRow key={e.id}>
+                              <TableCell className="font-mono text-xs text-muted-foreground">{e.voucherNumber ?? `#${e.id}`}</TableCell>
+                              <TableCell className="text-sm font-medium">{e.expenseLedgerName}</TableCell>
+                              <TableCell className="text-sm text-muted-foreground">{e.description ?? '—'}</TableCell>
+                              <TableCell className="text-right font-mono text-sm font-semibold text-rose-600">{fmt(Number(e.amount))}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </LocationSection>
+                  );
+                })}
               </div>
             ) : (
               <>
@@ -402,7 +532,8 @@ export default function SalesDashboard() {
             <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">All Sales</p>
             <p className="font-semibold">
               {(allSales as any[]).filter((s: any) =>
-                s.locationType === locationType && Number(s.locationId) === locationId
+                isAll ||
+                (s.locationType === locationType && Number(s.locationId) === locationId)
               ).length} orders
             </p>
           </div>
@@ -410,6 +541,7 @@ export default function SalesDashboard() {
             <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">All Transfers</p>
             <p className="font-semibold">
               {(allTransfers as any[]).filter((t: any) =>
+                isAll ||
                 (t.fromType === locationType && Number(t.fromId) === locationId) ||
                 (t.toType   === locationType && Number(t.toId)   === locationId)
               ).length} total
@@ -417,7 +549,9 @@ export default function SalesDashboard() {
           </div>
           <div>
             <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">All Expenses</p>
-            <p className="font-semibold">{allExpenses.length} total</p>
+            <p className="font-semibold">
+              {isAll ? allLocExpenses.length : singleExpenses.length} total
+            </p>
           </div>
         </div>
 
