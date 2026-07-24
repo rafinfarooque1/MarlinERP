@@ -89,6 +89,44 @@ router.patch("/customers/:id", async (req, res): Promise<void> => {
   res.json({ ...row, totalPurchases: Number(row.totalPurchases) });
 });
 
+router.delete("/customers/:id", async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(raw, 10);
+
+  // Always check business documents first — independent of ledger existence
+  const { rows: [docCnt] } = await pool.query<{ count: string }>(
+    `SELECT COUNT(*) AS count FROM sales WHERE customer_id = $1`, [id]
+  );
+  if (Number(docCnt.count) > 0) {
+    res.status(400).json({ error: "This customer cannot be deleted because sales records already exist. Deleting it would affect financial history." });
+    return;
+  }
+
+  // Also block if ledger-linked accounting entries exist
+  const { rows: [ledger] } = await pool.query<{ id: number }>(
+    `SELECT id FROM account_ledgers WHERE code = $1`, [`CUST-${id}`]
+  );
+  if (ledger) {
+    const { rows: [ledgerCnt] } = await pool.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM (
+         SELECT id FROM payments WHERE paid_from_ledger_id = $1 OR paid_to_ledger_id = $1
+         UNION ALL
+         SELECT id FROM receipts WHERE received_from_ledger_id = $1 OR received_in_ledger_id = $1
+       ) t`,
+      [ledger.id]
+    );
+    if (Number(ledgerCnt.count) > 0) {
+      res.status(400).json({ error: "This customer cannot be deleted because accounting entries already exist. Deleting it would affect financial history." });
+      return;
+    }
+    // No entries — safe to delete the orphaned system ledger
+    await pool.query(`DELETE FROM account_ledgers WHERE id = $1`, [ledger.id]);
+  }
+
+  await db.delete(customersTable).where(eq(customersTable.id, id));
+  res.status(204).send();
+});
+
 // ── Vendors ────────────────────────────────────────────────────────────────
 router.get("/vendors", async (_req, res): Promise<void> => {
   const { rows } = await pool.query<any>(`
@@ -163,6 +201,43 @@ router.patch("/vendors/:id", async (req, res): Promise<void> => {
   const [row] = await db.update(vendorsTable).set(data).where(eq(vendorsTable.id, id)).returning();
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   res.json(row);
+});
+
+router.delete("/vendors/:id", async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(raw, 10);
+
+  // Always check business documents first — independent of ledger existence
+  const { rows: [docCnt] } = await pool.query<{ count: string }>(
+    `SELECT COUNT(*) AS count FROM purchases WHERE vendor_id = $1`, [id]
+  );
+  if (Number(docCnt.count) > 0) {
+    res.status(400).json({ error: "This vendor cannot be deleted because purchase records already exist. Deleting it would affect financial history." });
+    return;
+  }
+
+  // Also block if ledger-linked accounting entries exist
+  const { rows: [ledger] } = await pool.query<{ id: number }>(
+    `SELECT id FROM account_ledgers WHERE code = $1`, [`VEND-${id}`]
+  );
+  if (ledger) {
+    const { rows: [ledgerCnt] } = await pool.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM (
+         SELECT id FROM payments WHERE paid_from_ledger_id = $1 OR paid_to_ledger_id = $1
+         UNION ALL
+         SELECT id FROM receipts WHERE received_from_ledger_id = $1 OR received_in_ledger_id = $1
+       ) t`,
+      [ledger.id]
+    );
+    if (Number(ledgerCnt.count) > 0) {
+      res.status(400).json({ error: "This vendor cannot be deleted because accounting entries already exist. Deleting it would affect financial history." });
+      return;
+    }
+    await pool.query(`DELETE FROM account_ledgers WHERE id = $1`, [ledger.id]);
+  }
+
+  await db.delete(vendorsTable).where(eq(vendorsTable.id, id));
+  res.status(204).send();
 });
 
 // ── Customer ledger (sales history as Dr/Cr statement) ────────────────────

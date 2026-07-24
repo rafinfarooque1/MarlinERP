@@ -27,6 +27,11 @@ async function runMigrations() {
     ALTER TABLE stock_transfers ALTER COLUMN status SET DEFAULT 'in_transit';
     ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS upi_id text;
     ALTER TABLE outlets    ADD COLUMN IF NOT EXISTS upi_id text;
+    ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS cash_ledger_id integer;
+    ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS sales_ledger_id integer;
+    ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS purchase_ledger_id integer;
+    ALTER TABLE outlets    ADD COLUMN IF NOT EXISTS cash_ledger_id integer;
+    ALTER TABLE outlets    ADD COLUMN IF NOT EXISTS sales_ledger_id integer;
 
     CREATE TABLE IF NOT EXISTS payments (
       id serial PRIMARY KEY,
@@ -312,6 +317,83 @@ async function runMigrations() {
          WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $2)`,
         [`${outlet.name} Cash`, outletCashCode, cashRootRow.id, `Cash held at ${outlet.name} outlet`],
       );
+    }
+  }
+
+  // ── Backfill warehouse & outlet ledger IDs (one-time, guarded) ───────────
+  const { rows: [woBfApplied] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'warehouse_outlet_ledger_backfill_v1'`
+  );
+  if (!woBfApplied) {
+    const { rows: [cashParent] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = 'STD-CASH' LIMIT 1`);
+    const { rows: [salParent] }  = await pool.query(`SELECT id FROM account_ledgers WHERE code = 'SYS-SAL' LIMIT 1`);
+    const { rows: [purParent] }  = await pool.query(`SELECT id FROM account_ledgers WHERE code = 'SYS-PUR' LIMIT 1`);
+
+    if (cashParent && salParent && purParent) {
+      // Warehouses missing any ledger ID
+      const { rows: warehouses } = await pool.query(
+        `SELECT id, name FROM warehouses WHERE cash_ledger_id IS NULL OR sales_ledger_id IS NULL OR purchase_ledger_id IS NULL ORDER BY id`
+      );
+      for (const wh of warehouses) {
+        // Cash
+        await pool.query(
+          `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_system_group, description)
+           SELECT $1, 'asset', $2, 'balance_sheet', $3, false, $4
+           WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $2)`,
+          [`${wh.name} Cash`, `WH-CASH-${wh.id}`, cashParent.id, `Cash held at ${wh.name}`]
+        );
+        const { rows: [cl] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1`, [`WH-CASH-${wh.id}`]);
+        // Sales
+        await pool.query(
+          `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_system_group, description)
+           SELECT $1, 'income', $2, 'profit_loss', $3, false, $4
+           WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $2)`,
+          [`${wh.name} Sales`, `WH-SAL-${wh.id}`, salParent.id, `Sales revenue from ${wh.name}`]
+        );
+        const { rows: [sl] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1`, [`WH-SAL-${wh.id}`]);
+        // Purchase
+        await pool.query(
+          `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_system_group, description)
+           SELECT $1, 'expense', $2, 'profit_loss', $3, false, $4
+           WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $2)`,
+          [`${wh.name} Purchase`, `WH-PUR-${wh.id}`, purParent.id, `Purchases at ${wh.name}`]
+        );
+        const { rows: [pl] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1`, [`WH-PUR-${wh.id}`]);
+        await pool.query(
+          `UPDATE warehouses SET cash_ledger_id = $1, sales_ledger_id = $2, purchase_ledger_id = $3 WHERE id = $4`,
+          [cl?.id ?? null, sl?.id ?? null, pl?.id ?? null, wh.id]
+        );
+      }
+
+      // Outlets missing any ledger ID
+      const { rows: outlets } = await pool.query(
+        `SELECT id, name FROM outlets WHERE cash_ledger_id IS NULL OR sales_ledger_id IS NULL ORDER BY id`
+      );
+      for (const outlet of outlets) {
+        // Cash (may already exist from per-outlet cash ledger provisioning above)
+        await pool.query(
+          `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_system_group, description)
+           SELECT $1, 'asset', $2, 'balance_sheet', $3, false, $4
+           WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $2)`,
+          [`${outlet.name} Cash`, `OUTLET-CASH-${outlet.id}`, cashParent.id, `Cash held at ${outlet.name}`]
+        );
+        const { rows: [cl] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1`, [`OUTLET-CASH-${outlet.id}`]);
+        // Sales
+        await pool.query(
+          `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_system_group, description)
+           SELECT $1, 'income', $2, 'profit_loss', $3, false, $4
+           WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $2)`,
+          [`${outlet.name} Sales`, `OUTLET-SAL-${outlet.id}`, salParent.id, `Sales revenue from ${outlet.name}`]
+        );
+        const { rows: [sl] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1`, [`OUTLET-SAL-${outlet.id}`]);
+        await pool.query(
+          `UPDATE outlets SET cash_ledger_id = $1, sales_ledger_id = $2 WHERE id = $3`,
+          [cl?.id ?? null, sl?.id ?? null, outlet.id]
+        );
+      }
+
+      await pool.query(`INSERT INTO migration_log (name) VALUES ('warehouse_outlet_ledger_backfill_v1')`);
+      console.log(`[migration] warehouse_outlet_ledger_backfill_v1: linked ledgers for ${warehouses.length} warehouse(s) + ${outlets.length} outlet(s)`);
     }
   }
 }
