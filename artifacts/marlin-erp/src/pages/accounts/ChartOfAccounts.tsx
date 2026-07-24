@@ -9,14 +9,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
-import { Building2, CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, Plus, ChevronDown, ChevronRight, Package, Lock, Trash2, ScrollText, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
+import { Building2, CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, Plus, ChevronDown, ChevronRight, Package, Lock, Trash2, ScrollText, ArrowUpRight, ArrowDownLeft, FolderPlus, Folder } from 'lucide-react';
 import { toast } from 'sonner';
 
 /* ── types ──────────────────────────────────────────────────────────────────── */
 type ALType = 'asset' | 'liability' | 'income' | 'expense' | 'equity';
 
 interface StockItem { id: number; name: string; unit: string; stock: number; mrp: number; total: number }
-interface LedgerNode { id: number; name: string; type: string; parentId: number | null; code: string | null; balance: number; children: LedgerNode[] }
+interface LedgerNode { id: number; name: string; type: string; parentId: number | null; code: string | null; balance: number; isGroup?: boolean; children: LedgerNode[] }
 interface GroupSummary { id: number | null; name: string; code: string | null; type?: string; total: number; children: LedgerNode[]; dutyAndTax?: number }
 interface FinancialStatements {
   filters: { warehouses: { id: number; name: string }[]; outlets: { id: number; name: string }[] };
@@ -93,6 +93,69 @@ function InlineAdd({ parentId, parentType, depth = 1, onCreated, hint }: {
     >
       <Plus className="w-3.5 h-3.5" />
       {hint ?? (depth === 1 ? 'Add ledger' : 'Add sub-ledger')}
+    </button>
+  );
+}
+
+/* ── inline add sub-group ────────────────────────────────────────────────────── */
+function InlineAddGroup({ parentId, parentType, depth = 1, onCreated }: {
+  parentId: number; parentType: ALType; depth?: number; onCreated: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
+
+  const submit = async () => {
+    const t = name.trim();
+    if (!t) { setEditing(false); setName(''); return; }
+    setSaving(true);
+    try {
+      await customFetch('/api/accounts/chart', {
+        method: 'POST',
+        body: JSON.stringify({ name: t, type: parentType, parentId, isGroup: true }),
+      });
+      toast.success('Sub-group created');
+      setEditing(false);
+      setName('');
+      onCreated();
+    } catch (e: any) {
+      toast.error(e?.data?.error || e?.message || 'Failed to create sub-group');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const pl = `${8 + depth * 16}px`;
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-2 py-2" style={{ paddingLeft: pl }}>
+        <FolderPlus className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+        <input
+          ref={ref} value={name}
+          onChange={e => setName(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') { setEditing(false); setName(''); } }}
+          onBlur={submit}
+          placeholder="Sub-group name…"
+          disabled={saving}
+          className="flex-1 text-sm bg-transparent border-b-2 border-violet-500 outline-none pb-0.5 text-foreground placeholder:text-muted-foreground/40"
+        />
+        {saving && <span className="text-[10px] text-muted-foreground">Saving…</span>}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setEditing(true)}
+      style={{ paddingLeft: pl }}
+      className="flex items-center gap-1.5 py-1.5 w-full text-xs text-violet-400/60 hover:text-violet-400 transition-colors font-medium"
+    >
+      <FolderPlus className="w-3.5 h-3.5" />
+      Add sub-group
     </button>
   );
 }
@@ -278,44 +341,108 @@ function LedgerStatementSheet({ ledgerNode, fromDate, toDate, onClose }: {
   );
 }
 
-/* ── ledger line (recursive) ─────────────────────────────────────────────────── */
-function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename, onViewStatement }: {
+/* ── ledger line (handles both leaf ledgers and user sub-groups) ─────────────── */
+type LedgerLineProps = {
   node: LedgerNode; depth: number; onCreated: () => void;
   onBankAdd?: (parentId: number, parentType: ALType) => void;
   onDelete?: (id: number, name: string) => void;
   onRename?: (id: number, newName: string) => void;
   onViewStatement?: (node: LedgerNode) => void;
-}) {
+  onMove?: (nodeId: number, newParentId: number) => void;
+};
+function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename, onViewStatement, onMove }: LedgerLineProps) {
   const pl = `${8 + depth * 16}px`;
   const balance = Math.abs(node.balance);
   const isBank = node.code === 'STD-BANK';
-  const isSystem = node.code != null; // any STD-* ledger
+  const isSystem = node.code != null;
+  const canDrag = !isSystem;
+
   const [renaming, setRenaming] = useState(false);
   const [renameVal, setRenameVal] = useState('');
+  const [dropOver, setDropOver] = useState(false);
+  const [subOpen, setSubOpen] = useState(true);
 
-  const startRename = () => {
-    if (isSystem) return;
-    setRenameVal(node.name);
-    setRenaming(true);
-  };
+  const startRename = () => { if (isSystem) return; setRenameVal(node.name); setRenaming(true); };
+  const submitRename = () => { const t = renameVal.trim(); setRenaming(false); if (!t || t === node.name) return; onRename?.(node.id, t); };
 
-  const submitRename = () => {
-    const t = renameVal.trim();
-    setRenaming(false);
-    if (!t || t === node.name) return;
-    onRename?.(node.id, t);
-  };
+  const sharedProps: Omit<LedgerLineProps, 'node' | 'depth'> = { onCreated, onBankAdd, onDelete, onRename, onViewStatement, onMove };
 
+  /* ── sub-group rendering ────────────────────────────────────────────────── */
+  if (node.isGroup) {
+    return (
+      <div>
+        {/* Sub-group header row — draggable + drop target */}
+        <div
+          className={`flex items-center gap-1.5 py-1.5 pr-2 mx-2 my-0.5 rounded-md group transition-colors
+            ${dropOver
+              ? 'bg-violet-500/15 ring-1 ring-violet-500/40'
+              : 'bg-muted/5 hover:bg-muted/10'}`}
+          style={{ paddingLeft: pl }}
+          draggable={canDrag}
+          onDragStart={canDrag ? (e) => { e.stopPropagation(); e.dataTransfer.setData('text/plain', String(node.id)); e.dataTransfer.effectAllowed = 'move'; } : undefined}
+          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDropOver(true); }}
+          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropOver(false); }}
+          onDrop={(e) => { e.preventDefault(); e.stopPropagation(); setDropOver(false); const id = Number(e.dataTransfer.getData('text/plain')); if (id && id !== node.id) onMove?.(id, node.id); }}
+        >
+          <button onClick={() => setSubOpen(o => !o)} className="shrink-0 text-muted-foreground/50 hover:text-muted-foreground">
+            {subOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+          </button>
+          <Folder className="w-3.5 h-3.5 text-violet-400/80 shrink-0" />
+
+          {renaming ? (
+            <input autoFocus value={renameVal}
+              onChange={e => setRenameVal(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') submitRename(); if (e.key === 'Escape') setRenaming(false); }}
+              onBlur={submitRename}
+              className="flex-1 text-xs bg-transparent border-b-2 border-violet-500 outline-none pb-0.5 text-foreground"
+            />
+          ) : (
+            <span
+              className={`flex-1 text-xs font-semibold select-none ${canDrag ? 'cursor-grab' : 'cursor-default'} text-foreground/80`}
+              onDoubleClick={startRename}
+              title={canDrag ? 'Drag to move · double-click to rename' : 'System sub-group'}
+            >
+              {node.name}
+            </span>
+          )}
+
+          {balance > 0 && <span className="text-[11px] font-mono tabular-nums text-muted-foreground shrink-0">{fmt(balance)}</span>}
+
+          {!isSystem && (
+            <button onClick={() => onDelete?.(node.id, node.name)}
+              className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:text-red-400 text-muted-foreground/30 shrink-0"
+              title="Delete sub-group">
+              <Trash2 className="w-3 h-3" />
+            </button>
+          )}
+        </div>
+
+        {/* Children of sub-group */}
+        {subOpen && (
+          <>
+            {node.children.map(c => (
+              <LedgerLine key={c.id} node={c} depth={depth + 1} {...sharedProps} />
+            ))}
+            <InlineAdd parentId={node.id} parentType={node.type as ALType} depth={depth + 1} onCreated={onCreated} />
+            <InlineAddGroup parentId={node.id} parentType={node.type as ALType} depth={depth + 1} onCreated={onCreated} />
+          </>
+        )}
+      </div>
+    );
+  }
+
+  /* ── leaf ledger rendering ─────────────────────────────────────────────── */
   return (
-    <div>
+    <div
+      draggable={canDrag}
+      onDragStart={canDrag ? (e) => { e.dataTransfer.setData('text/plain', String(node.id)); e.dataTransfer.effectAllowed = 'move'; } : undefined}
+    >
       {/* Row */}
       <div className="flex items-center gap-1.5 py-1.5 pr-2 group" style={{ paddingLeft: pl }}>
         <span className="w-1 h-1 rounded-full bg-muted-foreground/25 shrink-0" />
 
         {renaming ? (
-          <input
-            autoFocus
-            value={renameVal}
+          <input autoFocus value={renameVal}
             onChange={e => setRenameVal(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') submitRename(); if (e.key === 'Escape') setRenaming(false); }}
             onBlur={submitRename}
@@ -323,54 +450,45 @@ function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename, onV
           />
         ) : (
           <span
-            className={`flex-1 text-xs select-none ${depth === 1 ? 'text-foreground font-medium' : 'text-muted-foreground'} ${!isSystem ? 'cursor-text' : 'cursor-default'}`}
+            className={`flex-1 text-xs select-none ${depth === 1 ? 'text-foreground font-medium' : 'text-muted-foreground'} ${canDrag ? 'cursor-grab' : 'cursor-default'}`}
             onDoubleClick={startRename}
-            title={isSystem ? 'System ledger — name is locked' : 'Double-click to rename'}
+            title={isSystem ? 'System ledger — locked' : 'Drag to move · double-click to rename'}
           >
             {node.name}
           </span>
         )}
 
-        {/* System badge — shows on hover */}
         {isSystem && (
           <span className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded bg-muted text-muted-foreground/50 font-medium uppercase tracking-wide shrink-0">
             <Lock className="w-2.5 h-2.5" /> system
           </span>
         )}
 
-        {balance > 0 && (
-          <span className="text-[11px] font-mono tabular-nums text-muted-foreground shrink-0">{fmt(balance)}</span>
-        )}
+        {balance > 0 && <span className="text-[11px] font-mono tabular-nums text-muted-foreground shrink-0">{fmt(balance)}</span>}
 
-        {/* Statement — only on leaf nodes (no children), visible on hover */}
         {node.children.length === 0 && (
-          <button
-            onClick={() => onViewStatement?.(node)}
+          <button onClick={() => onViewStatement?.(node)}
             className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:text-primary text-muted-foreground/30 shrink-0"
-            title="View ledger statement"
-          >
+            title="View ledger statement">
             <ScrollText className="w-3 h-3" />
           </button>
         )}
 
-        {/* Delete — only for non-system ledgers, visible on hover */}
         {!isSystem && (
-          <button
-            onClick={() => onDelete?.(node.id, node.name)}
+          <button onClick={() => onDelete?.(node.id, node.name)}
             className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:text-red-400 text-muted-foreground/30 shrink-0"
-            title="Delete ledger"
-          >
+            title="Delete ledger">
             <Trash2 className="w-3 h-3" />
           </button>
         )}
       </div>
 
-      {/* Sub-ledgers */}
+      {/* Sub-ledgers (existing recursive pattern) */}
       {node.children.map(c => (
-        <LedgerLine key={c.id} node={c} depth={depth + 1} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
+        <LedgerLine key={c.id} node={c} depth={depth + 1} {...sharedProps} />
       ))}
 
-      {/* Add sub-ledger button (only at depth 1) */}
+      {/* Add sub-ledger at depth 1 */}
       {depth === 1 && (
         isBank && onBankAdd
           ? (
@@ -390,39 +508,50 @@ function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename, onV
 }
 
 /* ── group block ────────────────────────────────────────────────────────────── */
-function GroupBlock({ group, onCreated, onBankAdd, onDelete, onRename, onViewStatement }: {
+function GroupBlock({ group, onCreated, onBankAdd, onDelete, onRename, onViewStatement, onMove }: {
   group: GroupSummary;
   onCreated: () => void;
   onBankAdd?: (parentId: number, parentType: ALType) => void;
   onDelete?: (id: number, name: string) => void;
   onRename?: (id: number, newName: string) => void;
   onViewStatement?: (node: LedgerNode) => void;
+  onMove?: (nodeId: number, newParentId: number) => void;
 }) {
   if (!group.id) return null;
   const hasChildren = group.children.length > 0;
+  const [dropOver, setDropOver] = useState(false);
+  const pt = (group.type ?? 'expense') as ALType;
 
   return (
     <div className="mb-3">
-      {/* Group label row */}
-      <div className="flex items-center gap-2 py-2 px-3 bg-muted/10 rounded-md mx-2">
+      {/* Group label row — drop target for drag-and-drop */}
+      <div
+        className={`flex items-center gap-2 py-2 px-3 rounded-md mx-2 transition-colors select-none
+          ${dropOver ? 'bg-blue-500/15 ring-1 ring-blue-500/30' : 'bg-muted/10'}`}
+        onDragOver={(e) => { e.preventDefault(); setDropOver(true); }}
+        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropOver(false); }}
+        onDrop={(e) => { e.preventDefault(); setDropOver(false); const id = Number(e.dataTransfer.getData('text/plain')); if (id && group.id) onMove?.(id, group.id); }}
+      >
         <span className="flex-1 text-xs font-bold text-foreground/70 uppercase tracking-wide">{group.name}</span>
-        {group.total > 0 && (
+        {dropOver && <span className="text-[10px] text-blue-400 font-medium">Drop here</span>}
+        {group.total > 0 && !dropOver && (
           <span className="text-xs font-mono font-semibold tabular-nums text-foreground/60">{fmt(group.total)}</span>
         )}
       </div>
 
-      {/* Ledgers under group */}
-      {group.children.map(ledger => (
-        <LedgerLine key={ledger.id} node={ledger} depth={1} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
+      {/* Ledgers and sub-groups under this group */}
+      {group.children.map(node => (
+        <LedgerLine key={node.id} node={node} depth={1} onCreated={onCreated}
+          onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename}
+          onViewStatement={onViewStatement} onMove={onMove} />
       ))}
 
-      {/* Empty state hint */}
       {!hasChildren && (
         <p className="pl-6 py-1 text-[11px] text-muted-foreground/40 italic">No ledgers yet</p>
       )}
 
-      {/* Inline add ledger */}
-      <InlineAdd parentId={group.id!} parentType={(group.type ?? 'expense') as ALType} depth={1} onCreated={onCreated} />
+      <InlineAdd parentId={group.id!} parentType={pt} depth={1} onCreated={onCreated} />
+      <InlineAddGroup parentId={group.id!} parentType={pt} depth={1} onCreated={onCreated} />
 
       <div className="border-b border-border/20 mx-2 mt-1" />
     </div>
@@ -540,13 +669,26 @@ export default function ChartOfAccounts() {
   };
 
   const onDelete = async (id: number, name: string) => {
-    if (!window.confirm(`Delete ledger "${name}"? This cannot be undone.`)) return;
+    if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return;
     try {
       await customFetch(`/api/accounts/chart/${id}`, { method: 'DELETE' });
-      toast.success(`Ledger "${name}" deleted`);
+      toast.success(`"${name}" deleted`);
       queryClient.invalidateQueries({ queryKey: qKey });
     } catch (e: any) {
-      toast.error(e?.data?.error || e?.message || 'Could not delete ledger');
+      toast.error(e?.data?.error || e?.message || 'Could not delete');
+    }
+  };
+
+  const onMove = async (nodeId: number, newParentId: number) => {
+    try {
+      await customFetch(`/api/accounts/chart/${nodeId}/move`, {
+        method: 'PATCH',
+        body: JSON.stringify({ parentId: newParentId }),
+      });
+      toast.success('Moved successfully');
+      queryClient.invalidateQueries({ queryKey: qKey });
+    } catch (e: any) {
+      toast.error(e?.data?.error || e?.message || 'Could not move account');
     }
   };
 
@@ -658,13 +800,13 @@ export default function ChartOfAccounts() {
                   {bs && (
                     <>
                       {/* Capital Account */}
-                      <GroupBlock group={bs.liabilities.capitalAccount} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
+                      <GroupBlock group={bs.liabilities.capitalAccount} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} />
 
                       {/* Loans */}
-                      <GroupBlock group={bs.liabilities.loans} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
+                      <GroupBlock group={bs.liabilities.loans} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} />
 
                       {/* Current Liabilities — STD-DTX (Duty & Tax) is already a child ledger with correct balance */}
-                      <GroupBlock group={bs.liabilities.currentLiabilities} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
+                      <GroupBlock group={bs.liabilities.currentLiabilities} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} />
 
                       <Divider />
 
@@ -699,8 +841,8 @@ export default function ChartOfAccounts() {
                 >
                   {bs && (
                     <>
-                      <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
-                      <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
+                      <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} />
+                      <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} />
                     </>
                   )}
                 </Panel>
@@ -746,10 +888,10 @@ export default function ChartOfAccounts() {
                       <Divider />
 
                       {/* Direct Expenses */}
-                      <GroupBlock group={exp.directExpenses} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
+                      <GroupBlock group={exp.directExpenses} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} />
 
                       {/* Indirect Expenses */}
-                      <GroupBlock group={exp.indirectExpenses} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
+                      <GroupBlock group={exp.indirectExpenses} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} />
                     </>
                   )}
                 </Panel>
@@ -769,7 +911,7 @@ export default function ChartOfAccounts() {
                       <Divider />
 
                       {/* Direct Incomes */}
-                      <GroupBlock group={inc.directIncomes} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
+                      <GroupBlock group={inc.directIncomes} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} />
 
                       {/* Closing Stock */}
                       <StockBlock
@@ -781,7 +923,7 @@ export default function ChartOfAccounts() {
                       <Divider />
 
                       {/* Indirect Incomes */}
-                      <GroupBlock group={inc.indirectIncomes} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} />
+                      <GroupBlock group={inc.indirectIncomes} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} />
                     </>
                   )}
                 </Panel>

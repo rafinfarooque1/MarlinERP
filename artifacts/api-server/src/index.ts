@@ -106,7 +106,10 @@ async function runMigrations() {
     ALTER TABLE account_ledgers ADD COLUMN IF NOT EXISTS section text;
     ALTER TABLE account_ledgers ADD COLUMN IF NOT EXISTS is_system_group boolean NOT NULL DEFAULT false;
     ALTER TABLE account_ledgers ADD COLUMN IF NOT EXISTS bank_details jsonb;
+    ALTER TABLE account_ledgers ADD COLUMN IF NOT EXISTS is_group boolean NOT NULL DEFAULT false;
   `);
+  // Backfill: every system group is also a group container
+  await pool.query(`UPDATE account_ledgers SET is_group = true WHERE is_system_group = true AND is_group = false`);
 
   // ── One-time: clean up old user-created ledgers, create standard ones ──────
   const { rows: stdCheck } = await pool.query(

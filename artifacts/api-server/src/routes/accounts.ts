@@ -25,6 +25,7 @@ router.get("/accounts/chart", async (_req, res): Promise<void> => {
     code: r.code ?? null,
     section: r.section ?? null,
     isSystemGroup: r.is_system_group ?? false,
+    isGroup: r.is_group ?? false,
     createdAt: r.created_at,
     children: [],
     balance: 0,
@@ -53,6 +54,7 @@ router.get("/accounts/chart/flat", async (_req, res): Promise<void> => {
     code: r.code ?? null,
     section: r.section ?? null,
     isSystemGroup: r.is_system_group ?? false,
+    isGroup: r.is_group ?? false,
     bankDetails: r.bank_details ?? null,
     balance: 0,
   })));
@@ -84,18 +86,23 @@ router.post("/accounts/chart", async (req, res): Promise<void> => {
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const code = (req.body as any).code ?? null;
   const bankDetails = (req.body as any).bankDetails ?? null;
+  const isGroup = !!(req.body as any).isGroup;
   const [row] = await db.insert(accountLedgersTable).values({ ...parsed.data, ...(code ? {} : {}) }).returning();
-  // Set code and bank_details via raw query if provided
-  if (code || bankDetails) {
+  // Set code, bank_details, and is_group via raw query if provided
+  if (code || bankDetails || isGroup) {
     await pool.query(
-      `UPDATE account_ledgers SET code = COALESCE($1, code), bank_details = COALESCE($2, bank_details) WHERE id = $3`,
-      [code, bankDetails ? JSON.stringify(bankDetails) : null, row.id]
+      `UPDATE account_ledgers SET
+         code = COALESCE($1, code),
+         bank_details = COALESCE($2, bank_details),
+         is_group = CASE WHEN $4 THEN true ELSE is_group END
+       WHERE id = $3`,
+      [code, bankDetails ? JSON.stringify(bankDetails) : null, row.id, isGroup]
     );
   }
   const parentName = parsed.data.parentId
     ? (await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, parsed.data.parentId!)).limit(1))[0]?.name ?? null
     : null;
-  res.status(201).json({ ...row, code, bankDetails, parentName, children: [], balance: 0 });
+  res.status(201).json({ ...row, code, bankDetails, isGroup, parentName, children: [], balance: 0 });
 });
 
 router.patch("/accounts/chart/:id", async (req, res): Promise<void> => {
@@ -116,6 +123,45 @@ router.patch("/accounts/chart/:id", async (req, res): Promise<void> => {
     await pool.query(`UPDATE account_ledgers SET code = $1 WHERE id = $2`, [(req.body as any).code, id]);
   }
   res.json({ ...row, code: (req.body as any).code ?? null, parentName: null, children: [], balance: 0 });
+});
+
+// ── Move account to a different parent (drag-and-drop reparent) ───────────────
+router.patch("/accounts/chart/:id/move", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const { parentId } = req.body as { parentId: number };
+  if (!parentId) { res.status(400).json({ error: "parentId is required" }); return; }
+
+  // Node must exist and must not be a system group
+  const { rows: [node] } = await pool.query(
+    `SELECT is_system_group, code FROM account_ledgers WHERE id = $1`, [id]
+  );
+  if (!node) { res.status(404).json({ error: "Account not found" }); return; }
+  if (node.is_system_group) { res.status(400).json({ error: "System groups cannot be moved" }); return; }
+
+  // Target parent must exist and must be a group (container)
+  const { rows: [parent] } = await pool.query(
+    `SELECT id, is_group FROM account_ledgers WHERE id = $1`, [parentId]
+  );
+  if (!parent) { res.status(404).json({ error: "Target parent not found" }); return; }
+  if (!parent.is_group) { res.status(400).json({ error: "Target must be a group or sub-group, not a leaf ledger" }); return; }
+
+  // Prevent circular reference: target must not be a descendant of the node being moved
+  const { rows: circular } = await pool.query(`
+    WITH RECURSIVE descendants AS (
+      SELECT id FROM account_ledgers WHERE parent_id = $1
+      UNION ALL
+      SELECT al.id FROM account_ledgers al JOIN descendants d ON al.parent_id = d.id
+    )
+    SELECT id FROM descendants WHERE id = $2
+  `, [id, parentId]);
+  if (circular.length > 0) {
+    res.status(400).json({ error: "Cannot move a group into one of its own sub-groups" }); return;
+  }
+
+  await pool.query(`UPDATE account_ledgers SET parent_id = $1 WHERE id = $2`, [parentId, id]);
+  res.json({ success: true });
 });
 
 router.delete("/accounts/chart/:id", async (req, res): Promise<void> => {
