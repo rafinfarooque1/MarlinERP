@@ -34,7 +34,7 @@ import {
 import { useLocationContext } from '@/lib/locationContext';
 import { useTheme } from '@/lib/theme';
 import { Button } from '@/components/ui/button';
-import { useLogout, useGetMe, useChangePassword } from '@workspace/api-client-react';
+import { useLogout, useGetMe, useChangePassword, useListPermissions, useListHierarchies } from '@workspace/api-client-react';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -239,12 +239,25 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation();
   const logoutMutation = useLogout();
   const { data: user } = useGetMe();
+  const { data: allPerms = [] } = useListPermissions();
+  const { data: hierarchies = [] } = useListHierarchies();
   const { theme, toggleTheme } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
   const [logo, setLogo] = useState<string | null>(() => localStorage.getItem(LOGO_KEY));
   const { locationState } = useLocationContext();
   const isSalesSegment = location.startsWith('/sales');
+
+  // Compute whether this user can access the Sales segment.
+  // Level 1 always has full access. Otherwise check any Sales-segment module permission.
+  const SALES_MODULES = ['Point of Sale', 'Location Stock', 'Location Transfers', 'Location Expenses'];
+  const userHierarchy = (hierarchies as any[]).find((h: any) => h.id === (user as any)?.hierarchyId);
+  const userLevel = userHierarchy?.level ?? 99;
+  const hasSalesAccess = userLevel === 1 || SALES_MODULES.some(mod => {
+    const perm = (allPerms as any[]).find((p: any) => p.hierarchyId === (user as any)?.hierarchyId && p.module === mod);
+    // If no DB row yet, default to true for level ≤ 4 (same logic as defaultAccess)
+    return perm ? !!(perm.canView || perm.canAdd || perm.canEdit) : userLevel <= 4;
+  });
 
   // Change-password dialog state
   const [pwOpen, setPwOpen] = useState(false);
@@ -358,16 +371,18 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             </button>
           </div>
 
-          {/* Segment switcher */}
+          {/* Segment switcher — only show Sales tab if user has Sales access */}
           {!collapsed && (
             <div className="px-3 pt-3 pb-1 shrink-0">
               <div className="flex gap-1 p-1 bg-muted/50 rounded-lg">
-                <button
-                  onClick={() => setLocation('/sales')}
-                  className={`flex-1 flex items-center justify-center gap-1.5 text-xs py-1.5 rounded-md font-semibold transition-colors ${isSalesSegment ? 'bg-card shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-                >
-                  <ShoppingCart className="w-3 h-3" /> Sales
-                </button>
+                {hasSalesAccess && (
+                  <button
+                    onClick={() => setLocation('/sales')}
+                    className={`flex-1 flex items-center justify-center gap-1.5 text-xs py-1.5 rounded-md font-semibold transition-colors ${isSalesSegment ? 'bg-card shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                  >
+                    <ShoppingCart className="w-3 h-3" /> Sales
+                  </button>
+                )}
                 <button
                   onClick={() => setLocation('/')}
                   className={`flex-1 flex items-center justify-center gap-1.5 text-xs py-1.5 rounded-md font-semibold transition-colors ${!isSalesSegment ? 'bg-card shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}

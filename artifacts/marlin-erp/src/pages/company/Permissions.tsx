@@ -8,60 +8,77 @@ import { toast } from 'sonner';
 import { useListHierarchies, useListPermissions, setPermission } from '@workspace/api-client-react';
 import type { Hierarchy, Permission } from '@workspace/api-client-react';
 
-const MODULE_GROUPS = [
+// Two top-level segments: Sales and Accounts.
+// Each segment has sub-groups; each group has individual module toggles.
+const MODULE_SEGMENTS = [
   {
-    title: 'Production',
-    modules: ['Materials', 'Raw Materials', 'Items', 'Purchases', 'Production', 'Stock Transfers'],
+    segment: 'Sales',
+    description: 'Point-of-sale operations at warehouses and outlets',
+    groups: [
+      {
+        title: 'Sales Department',
+        modules: ['Point of Sale', 'Location Stock', 'Location Transfers', 'Location Expenses'],
+      },
+    ],
   },
   {
-    title: 'Inventory',
-    modules: ['Warehouses', 'Outlets', 'Stock', 'HO Transfers', 'Item Prices'],
-  },
-  {
-    title: 'Sales',
-    modules: ['Sales', 'Customers', 'Vendors', 'Coupons', 'Payments'],
-  },
-  {
-    title: 'HR',
-    modules: ['Hierarchy', 'Employees', 'Payroll', 'Attendance', 'Leave'],
-  },
-  {
-    title: 'Accounts',
-    modules: ['Chart of Accounts', 'Ledger', 'Cash & Bank', 'Expenses', 'GST Summary', 'Reconciliation', 'Cash in Outlet'],
-  },
-  {
-    title: 'Company',
-    modules: ['Settings', 'Permissions', 'Profile'],
+    segment: 'Accounts',
+    description: 'Back-office: production, inventory, finance, HR and company settings',
+    groups: [
+      {
+        title: 'Production',
+        modules: ['Materials', 'Raw Materials', 'Items', 'Purchases', 'Production', 'Stock Transfers'],
+      },
+      {
+        title: 'Inventory',
+        modules: ['Warehouses', 'Outlets', 'Stock', 'HO Transfers', 'Item Prices'],
+      },
+      {
+        title: 'Sales (HO)',
+        modules: ['Sales', 'Customers', 'Vendors', 'Coupons', 'Payments'],
+      },
+      {
+        title: 'HR',
+        modules: ['Hierarchy', 'Employees', 'Payroll', 'Attendance', 'Leave'],
+      },
+      {
+        title: 'Accounts',
+        modules: ['Chart of Accounts', 'Ledger', 'Cash & Bank', 'Expenses', 'GST Summary', 'Reconciliation', 'Cash in Outlet'],
+      },
+      {
+        title: 'Company',
+        modules: ['Settings', 'Permissions', 'Profile'],
+      },
+    ],
   },
 ];
 
-const ALL_MODULES = MODULE_GROUPS.flatMap(g => g.modules);
+const ALL_MODULES = MODULE_SEGMENTS.flatMap(s => s.groups.flatMap(g => g.modules));
 
 /** Default access based on hierarchy level: level 1 = top authority, higher = more restricted */
 function defaultAccess(level: number, module: string): boolean {
   if (level === 1) return true; // Top level: full access
 
+  // Sales segment modules
+  const salesSegmentModules = ['Point of Sale', 'Location Stock', 'Location Transfers', 'Location Expenses'];
   const productionModules = ['Materials', 'Raw Materials', 'Items', 'Purchases', 'Production', 'Stock Transfers'];
   const inventoryModules = ['Warehouses', 'Outlets', 'Stock', 'HO Transfers', 'Item Prices'];
   const salesModules = ['Sales', 'Customers', 'Vendors', 'Coupons'];
-  const hrModules = ['Hierarchy', 'Employees', 'Payroll', 'Attendance', 'Leave'];
-  const accountsModules = ['Chart of Accounts', 'Ledger', 'Cash & Bank', 'Expenses', 'GST Summary'];
-  const companyModules = ['Settings', 'Permissions', 'Profile'];
 
   if (level === 2) {
     // Manager: everything except company settings & permissions
     return !['Settings', 'Permissions'].includes(module);
   }
   if (level === 3) {
-    // Senior staff: their domain + profile
-    return [...productionModules, ...inventoryModules, 'Profile'].includes(module);
+    // Supervisor: sales segment + production + inventory + profile
+    return [...salesSegmentModules, ...productionModules, ...inventoryModules, 'Profile'].includes(module);
   }
   if (level === 4) {
-    // Mid staff: production and inventory
-    return [...productionModules, 'Stock', 'HO Transfers'].includes(module);
+    // Staff: sales segment + basic production/inventory
+    return [...salesSegmentModules, ...productionModules, 'Stock', 'HO Transfers'].includes(module);
   }
   // Level 5+: limited access
-  return ['Profile', 'Production', 'Stock', 'Sales', 'Attendance', 'Leave'].includes(module);
+  return ['Point of Sale', 'Profile', 'Production', 'Stock', 'Sales', 'Attendance', 'Leave'].includes(module);
 }
 
 /** Build a local perm map from DB records + fill gaps with defaults */
@@ -227,38 +244,61 @@ export default function Permissions() {
               )}
             </div>
 
-            {/* Module grid */}
-            <div className="space-y-4">
-              {MODULE_GROUPS.map(group => (
-                <div key={group.title} className="bg-card border border-border rounded-xl overflow-hidden">
-                  <div className="p-3 border-b border-border bg-muted/20 flex items-center justify-between">
-                    <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                      {group.title}
-                    </h3>
-                    <Badge variant="outline" className="text-xs">
-                      {group.modules.filter(m => rolePerms[m]).length} / {group.modules.length}
-                    </Badge>
-                  </div>
-                  <div className="divide-y divide-border/50">
-                    {group.modules.map(mod => (
-                      <div key={mod} className="flex items-center justify-between px-4 py-3 hover:bg-muted/5">
-                        <span className={`text-sm ${rolePerms[mod] ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
-                          {mod}
-                        </span>
-                        <Switch
-                          checked={!!rolePerms[mod]}
-                          onCheckedChange={() =>
-                            isTopLevel
-                              ? toast.info('Top-level authority always has full access')
-                              : toggle(mod)
-                          }
-                          disabled={isTopLevel}
-                        />
+            {/* Module grid — two top-level segments: Sales and Accounts */}
+            <div className="space-y-6">
+              {MODULE_SEGMENTS.map(seg => {
+                const segModules = seg.groups.flatMap(g => g.modules);
+                const segEnabled = segModules.filter(m => rolePerms[m]).length;
+                return (
+                  <div key={seg.segment}>
+                    {/* Segment header */}
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="flex items-center gap-2">
+                        <span className="text-base font-bold text-foreground">{seg.segment}</span>
+                        <Badge variant="secondary" className="text-xs font-semibold">
+                          {segEnabled} / {segModules.length}
+                        </Badge>
                       </div>
-                    ))}
+                      <div className="flex-1 h-px bg-border" />
+                      <span className="text-xs text-muted-foreground hidden sm:block">{seg.description}</span>
+                    </div>
+
+                    {/* Groups under this segment */}
+                    <div className="space-y-3 pl-0">
+                      {seg.groups.map(group => (
+                        <div key={group.title} className="bg-card border border-border rounded-xl overflow-hidden">
+                          <div className="p-3 border-b border-border bg-muted/20 flex items-center justify-between">
+                            <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                              {group.title}
+                            </h3>
+                            <Badge variant="outline" className="text-xs">
+                              {group.modules.filter(m => rolePerms[m]).length} / {group.modules.length}
+                            </Badge>
+                          </div>
+                          <div className="divide-y divide-border/50">
+                            {group.modules.map(mod => (
+                              <div key={mod} className="flex items-center justify-between px-4 py-3 hover:bg-muted/5">
+                                <span className={`text-sm ${rolePerms[mod] ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
+                                  {mod}
+                                </span>
+                                <Switch
+                                  checked={!!rolePerms[mod]}
+                                  onCheckedChange={() =>
+                                    isTopLevel
+                                      ? toast.info('Top-level authority always has full access')
+                                      : toggle(mod)
+                                  }
+                                  disabled={isTopLevel}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </>
         )}
