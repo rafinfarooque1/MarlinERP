@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import {
@@ -341,13 +341,20 @@ export default function CashBalance() {
                 </div>
               </div>
 
-              {/* ── Cards grid ── */}
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {displayBalances.map(b => (
+              {/* ── Cards grid — grouped by type ── */}
+              {(() => {
+                const whCards  = displayBalances.filter(b => b.locationType === 'warehouse');
+                const outCards = displayBalances.filter(b => b.locationType === 'outlet');
+
+                const renderCard = (b: typeof displayBalances[0]) => (
                   <div key={`${b.locationType}-${b.locationId}`} className="rounded-xl border border-border p-4 space-y-3 bg-card hover:shadow-sm transition-shadow">
                     <div className="flex items-center justify-between">
-                      <p className="font-semibold text-sm">{b.locationName}</p>
-                      <LocationTypeBadge type={b.locationType} />
+                      <div className="flex items-center gap-2">
+                        {b.locationType === 'warehouse'
+                          ? <Warehouse className="w-4 h-4 text-blue-500 shrink-0" />
+                          : <Store      className="w-4 h-4 text-emerald-500 shrink-0" />}
+                        <p className="font-semibold text-sm">{b.locationName}</p>
+                      </div>
                     </div>
 
                     <div className="space-y-1.5 text-sm">
@@ -377,14 +384,48 @@ export default function CashBalance() {
                       </Button>
                     )}
                   </div>
-                ))}
-                {displayBalances.length === 0 && (
-                  <div className="col-span-full py-16 text-center text-muted-foreground space-y-2">
-                    <Banknote className="w-10 h-10 mx-auto opacity-30" />
-                    <p className="font-medium">{allBalances.length === 0 ? 'No cash balance data' : 'No locations match the filter'}</p>
+                );
+
+                if (displayBalances.length === 0) {
+                  return (
+                    <div className="py-16 text-center text-muted-foreground space-y-2">
+                      <Banknote className="w-10 h-10 mx-auto opacity-30" />
+                      <p className="font-medium">{allBalances.length === 0 ? 'No cash balance data' : 'No locations match the filter'}</p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-6">
+                    {whCards.length > 0 && (
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2">
+                          <Warehouse className="w-4 h-4 text-blue-500" />
+                          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Warehouses</p>
+                          <div className="flex-1 h-px bg-border" />
+                          <span className="text-xs text-muted-foreground">{fmt(warehouseTotal)}</span>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                          {whCards.map(renderCard)}
+                        </div>
+                      </div>
+                    )}
+                    {outCards.length > 0 && (
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2">
+                          <Store className="w-4 h-4 text-emerald-500" />
+                          <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Outlets</p>
+                          <div className="flex-1 h-px bg-border" />
+                          <span className="text-xs text-muted-foreground">{fmt(outletTotal)}</span>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                          {outCards.map(renderCard)}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                );
+              })()}
             </div>
           )
         )}
@@ -469,19 +510,42 @@ export default function CashBalance() {
               <Select value={depLocationUid} onValueChange={setDepLocationUid}>
                 <SelectTrigger className="h-9"><SelectValue placeholder="Select location…" /></SelectTrigger>
                 <SelectContent>
-                  {allBalances.map(b => {
-                    const uid = `${b.locationType}-${b.locationId}`;
-                    return (
-                      <SelectItem key={uid} value={uid}>
-                        <span className="flex items-center gap-1.5">
-                          {b.locationType === 'outlet'
-                            ? <Store className="w-3 h-3 text-emerald-500 shrink-0" />
-                            : <Warehouse className="w-3 h-3 text-blue-500 shrink-0" />}
-                          {b.locationName} — available {fmt(b.availableBalance)}
-                        </span>
-                      </SelectItem>
-                    );
-                  })}
+                  {allBalances.filter(b => b.locationType === 'warehouse').length > 0 && (
+                    <SelectGroup>
+                      <SelectLabel className="flex items-center gap-1.5 text-xs text-blue-600">
+                        <Warehouse className="w-3 h-3" /> Warehouses
+                      </SelectLabel>
+                      {allBalances.filter(b => b.locationType === 'warehouse').map(b => {
+                        const uid = `${b.locationType}-${b.locationId}`;
+                        return (
+                          <SelectItem key={uid} value={uid}>
+                            <span className="flex items-center gap-1.5">
+                              <Warehouse className="w-3 h-3 text-blue-500 shrink-0" />
+                              {b.locationName} — available {fmt(b.availableBalance)}
+                            </span>
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectGroup>
+                  )}
+                  {allBalances.filter(b => b.locationType === 'outlet').length > 0 && (
+                    <SelectGroup>
+                      <SelectLabel className="flex items-center gap-1.5 text-xs text-emerald-600">
+                        <Store className="w-3 h-3" /> Outlets
+                      </SelectLabel>
+                      {allBalances.filter(b => b.locationType === 'outlet').map(b => {
+                        const uid = `${b.locationType}-${b.locationId}`;
+                        return (
+                          <SelectItem key={uid} value={uid}>
+                            <span className="flex items-center gap-1.5">
+                              <Store className="w-3 h-3 text-emerald-500 shrink-0" />
+                              {b.locationName} — available {fmt(b.availableBalance)}
+                            </span>
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectGroup>
+                  )}
                 </SelectContent>
               </Select>
             </div>
