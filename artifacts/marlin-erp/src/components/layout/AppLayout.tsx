@@ -30,6 +30,7 @@ import {
   ArrowLeftRight,
   MapPin,
   Receipt,
+  Banknote,
 } from 'lucide-react';
 import { useLocationContext } from '@/lib/locationContext';
 import { useTheme } from '@/lib/theme';
@@ -104,7 +105,7 @@ const navigation = [
       { name: 'Receipts', href: '/accounts/receipts' },
       { name: 'GST Summary', href: '/accounts/gst' },
       { name: 'Reconciliation', href: '/accounts/reconciliation' },
-      { name: 'Cash in Outlet', href: '/accounts/cash-in-outlet' },
+      { name: 'Cash Balance', href: '/accounts/cash-in-outlet' },
     ],
   },
   {
@@ -233,6 +234,7 @@ const salesNavItems = [
   { name: 'Stock', icon: Package, href: '/sales/stock' },
   { name: 'Transfers', icon: ArrowLeftRight, href: '/sales/transfers' },
   { name: 'Expenses', icon: Receipt, href: '/sales/expenses' },
+  { name: 'Cash Balance', icon: Banknote, href: '/sales/cash-balance' },
 ];
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
@@ -250,7 +252,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
   // Compute whether this user can access the Sales segment.
   // Level 1 always has full access. Otherwise check any Sales-segment module permission.
-  const SALES_MODULES = ['Point of Sale', 'Location Stock', 'Location Transfers', 'Location Expenses'];
+  const SALES_MODULES = ['Point of Sale', 'Location Stock', 'Location Transfers', 'Location Expenses', 'Cash Balance'];
   const userHierarchy = (hierarchies as any[]).find((h: any) => h.id === (user as any)?.hierarchyId);
   const userLevel = userHierarchy?.level ?? 99;
   const hasSalesAccess = userLevel === 1 || SALES_MODULES.some(mod => {

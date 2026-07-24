@@ -53,6 +53,7 @@ import SalesStock from './pages/sales/SalesStock';
 import SalesTransfers from './pages/sales/SalesTransfers';
 import SalesPOS from './pages/sales/SalesPOS';
 import SalesExpenses from './pages/sales/SalesExpenses';
+import SalesCashBalance from './pages/sales/SalesCashBalance';
 import { LocationProvider } from './lib/locationContext';
 
 const queryClient = new QueryClient({
@@ -150,6 +151,7 @@ function Router() {
       <Route path="/sales/transfers"><AuthGuard><SalesTransfers /></AuthGuard></Route>
       <Route path="/sales/pos"><AuthGuard><SalesPOS /></AuthGuard></Route>
       <Route path="/sales/expenses"><AuthGuard><SalesExpenses /></AuthGuard></Route>
+      <Route path="/sales/cash-balance"><AuthGuard><SalesCashBalance /></AuthGuard></Route>
 
       <Route component={NotFound} />
     </Switch>

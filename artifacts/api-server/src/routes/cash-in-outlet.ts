@@ -22,46 +22,68 @@ async function getLedgerBalance(client: any, ledgerId: number): Promise<number> 
 }
 
 // ── GET /cash-in-outlet ───────────────────────────────────────────────────────
+// Returns cash balances for ALL locations (outlets + warehouses).
+// Each entry includes locationType/locationId/locationName for display,
+// plus legacy outletId/outletName (null for warehouses) for deposit compat.
 router.get("/cash-in-outlet", async (_req, res): Promise<void> => {
-  const { rows: outlets } = await pool.query(
-    `SELECT id, name FROM outlets ORDER BY id`
-  );
+  const result: any[] = [];
 
-  const result = [];
+  // ── Outlets ────────────────────────────────────────────────────────────────
+  const { rows: outlets } = await pool.query(
+    `SELECT id, name FROM outlets ORDER BY name`
+  );
   for (const outlet of outlets) {
     const cashCode = `OUTLET-CASH-${outlet.id}`;
     const { rows: [ledger] } = await pool.query(
-      `SELECT id, name FROM account_ledgers WHERE code = $1`,
-      [cashCode]
+      `SELECT id FROM account_ledgers WHERE code = $1`, [cashCode]
     );
-
     if (!ledger) {
-      result.push({ outletId: outlet.id, outletName: outlet.name, cashLedgerId: null, cashBalance: 0, pendingDeposits: 0, availableBalance: 0 });
+      result.push({ locationType: 'outlet', locationId: outlet.id, locationName: outlet.name, outletId: outlet.id, outletName: outlet.name, cashLedgerId: null, cashBalance: 0, pendingDeposits: 0, availableBalance: 0 });
       continue;
     }
-
-    // The ledger balance already reflects any in-transit deposits
-    // (creating a deposit posts a payment from outlet cash to STD-CIT,
-    // which reduces the outlet balance). Do NOT subtract pendingDeposits again.
     const balance = await getLedgerBalance(pool, ledger.id);
-
-    // Sum of amounts currently in-transit (purely informational)
     const { rows: [pendingRow] } = await pool.query(
-      `SELECT COALESCE(SUM(amount::numeric), 0) AS total
-       FROM cash_deposits WHERE outlet_id = $1 AND status = 'pending_reconciliation'`,
+      `SELECT COALESCE(SUM(amount::numeric), 0) AS total FROM cash_deposits WHERE outlet_id = $1 AND status = 'pending_reconciliation'`,
       [outlet.id]
     );
     const pendingDeposits = Number(pendingRow?.total ?? 0);
-    // Available = ledger balance (already accounts for in-transit amounts)
-    const availableBalance = Math.max(0, balance);
-
     result.push({
+      locationType: 'outlet',
+      locationId: outlet.id,
+      locationName: outlet.name,
       outletId: outlet.id,
       outletName: outlet.name,
       cashLedgerId: ledger.id,
       cashBalance: Math.round(balance * 100) / 100,
       pendingDeposits: Math.round(pendingDeposits * 100) / 100,
-      availableBalance: Math.round(availableBalance * 100) / 100,
+      availableBalance: Math.round(Math.max(0, balance) * 100) / 100,
+    });
+  }
+
+  // ── Warehouses ─────────────────────────────────────────────────────────────
+  const { rows: warehouses } = await pool.query(
+    `SELECT id, name FROM warehouses ORDER BY name`
+  );
+  for (const wh of warehouses) {
+    const cashCode = `WH-CASH-${wh.id}`;
+    const { rows: [ledger] } = await pool.query(
+      `SELECT id FROM account_ledgers WHERE code = $1`, [cashCode]
+    );
+    if (!ledger) {
+      result.push({ locationType: 'warehouse', locationId: wh.id, locationName: wh.name, outletId: null, outletName: null, cashLedgerId: null, cashBalance: 0, pendingDeposits: 0, availableBalance: 0 });
+      continue;
+    }
+    const balance = await getLedgerBalance(pool, ledger.id);
+    result.push({
+      locationType: 'warehouse',
+      locationId: wh.id,
+      locationName: wh.name,
+      outletId: null,
+      outletName: null,
+      cashLedgerId: ledger.id,
+      cashBalance: Math.round(balance * 100) / 100,
+      pendingDeposits: 0,
+      availableBalance: Math.round(Math.max(0, balance) * 100) / 100,
     });
   }
 

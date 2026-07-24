@@ -14,7 +14,7 @@ import {
   useGetBankLedgers,
 } from '@workspace/api-client-react';
 import { toast } from 'sonner';
-import { Banknote, ArrowUpFromLine, CheckCircle2 } from 'lucide-react';
+import { Banknote, ArrowUpFromLine, CheckCircle2, Store, Warehouse } from 'lucide-react';
 
 function fmt(n: number) {
   return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -26,8 +26,23 @@ function DepositStatusBadge({ status }: { status: string }) {
   return <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/20">Pending</Badge>;
 }
 
-export default function CashInOutlet() {
-  const perm = usePermission('Cash in Outlet');
+function LocationTypeBadge({ type }: { type: string }) {
+  if (type === 'warehouse') {
+    return (
+      <Badge variant="outline" className="text-[10px] text-blue-600 border-blue-400/40 bg-blue-500/5 font-normal flex items-center gap-0.5 px-1.5">
+        <Warehouse className="w-2.5 h-2.5" /> Warehouse
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="text-[10px] text-emerald-600 border-emerald-400/40 bg-emerald-500/5 font-normal flex items-center gap-0.5 px-1.5">
+      <Store className="w-2.5 h-2.5" /> Outlet
+    </Badge>
+  );
+}
+
+export default function CashBalance() {
+  const perm = usePermission('Cash Balance');
   const [tab, setTab] = useState<'balances' | 'deposits'>('balances');
 
   if (!perm.isLoading && !perm.canView) {
@@ -36,18 +51,21 @@ export default function CashInOutlet() {
         <div className="flex flex-col items-center justify-center py-32 text-muted-foreground gap-3">
           <Banknote className="w-10 h-10 text-destructive/50" />
           <p className="text-lg font-medium">Access Denied</p>
-          <p className="text-sm">You don't have permission to view Cash in Outlet.</p>
+          <p className="text-sm">You don't have permission to view Cash Balance.</p>
         </div>
       </AppLayout>
     );
   }
   const [depositFilter, setDepositFilter] = useState('all');
 
-  const { data: balances = [], isLoading: balancesLoading, refetch: refetchBalances } = useGetCashInOutlet();
+  const { data: allBalances = [], isLoading: balancesLoading, refetch: refetchBalances } = useGetCashInOutlet();
   const { data: deposits = [], isLoading: depositsLoading } = useGetCashDeposits(
     depositFilter !== 'all' ? { status: depositFilter } : undefined
   );
   const { data: bankLedgers = [] } = useGetBankLedgers();
+
+  // Only outlets can have deposits recorded
+  const outletBalances = allBalances.filter(b => b.locationType === 'outlet');
 
   // Create deposit dialog
   const [showDeposit, setShowDeposit] = useState(false);
@@ -59,7 +77,7 @@ export default function CashInOutlet() {
   const [depNotes, setDepNotes] = useState('');
   const createDepositMutation = useCreateCashDeposit();
 
-  const selectedOutletBalance = balances.find(b => b.outletId === Number(depOutletId));
+  const selectedOutletBalance = outletBalances.find(b => b.outletId === Number(depOutletId));
 
   async function handleCreateDeposit() {
     if (!depOutletId) { toast.error('Select an outlet'); return; }
@@ -78,6 +96,7 @@ export default function CashInOutlet() {
       toast.success('Cash deposit recorded');
       setShowDeposit(false);
       setDepOutletId(''); setDepAmount(''); setDepRef(''); setDepNotes(''); setDepBankLedgerId('');
+      refetchBalances();
     } catch (e: any) {
       toast.error(e?.data?.error || e?.message || 'Failed to record deposit');
     }
@@ -126,11 +145,13 @@ export default function CashInOutlet() {
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Cash in Outlet</h1>
-            <p className="text-sm text-muted-foreground mt-0.5">Track physical cash at each outlet and record bank deposits</p>
+            <h1 className="text-2xl font-bold tracking-tight">Cash Balance</h1>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              Track physical cash at each outlet and warehouse, and record bank deposits
+            </p>
           </div>
           {tab === 'balances' && (
-            <Button size="sm" onClick={() => setShowDeposit(true)} disabled={!perm.canAdd}>
+            <Button size="sm" onClick={() => setShowDeposit(true)} disabled={!perm.canAdd || outletBalances.length === 0}>
               <ArrowUpFromLine className="w-4 h-4 mr-1.5" /> Record Deposit
             </Button>
           )}
@@ -155,11 +176,11 @@ export default function CashInOutlet() {
             <div className="py-12 text-center text-muted-foreground">Loading…</div>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {balances.map(b => (
-                <div key={b.outletId} className="rounded-xl border border-border p-4 space-y-3 bg-card hover:shadow-sm transition-shadow">
+              {allBalances.map(b => (
+                <div key={`${b.locationType}-${b.locationId}`} className="rounded-xl border border-border p-4 space-y-3 bg-card hover:shadow-sm transition-shadow">
                   <div className="flex items-center justify-between">
-                    <p className="font-semibold text-sm">{b.outletName}</p>
-                    <Banknote className="w-4 h-4 text-muted-foreground" />
+                    <p className="font-semibold text-sm">{b.locationName}</p>
+                    <LocationTypeBadge type={b.locationType} />
                   </div>
 
                   <div className="space-y-1.5 text-sm">
@@ -180,7 +201,8 @@ export default function CashInOutlet() {
                     </div>
                   </div>
 
-                  {b.availableBalance > 0 && perm.canAdd && (
+                  {/* Deposits only for outlets */}
+                  {b.locationType === 'outlet' && b.availableBalance > 0 && perm.canAdd && (
                     <Button
                       size="sm" variant="outline" className="w-full h-7 text-xs"
                       onClick={() => {
@@ -194,10 +216,10 @@ export default function CashInOutlet() {
                   )}
                 </div>
               ))}
-              {balances.length === 0 && (
+              {allBalances.length === 0 && (
                 <div className="col-span-full py-16 text-center text-muted-foreground space-y-2">
                   <Banknote className="w-10 h-10 mx-auto opacity-30" />
-                  <p className="font-medium">No outlet cash data</p>
+                  <p className="font-medium">No cash balance data</p>
                 </div>
               )}
             </div>
@@ -230,7 +252,7 @@ export default function CashInOutlet() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Outlet</TableHead>
+                      <TableHead>Location</TableHead>
                       <TableHead>Date</TableHead>
                       <TableHead>Reference</TableHead>
                       <TableHead>Bank Account</TableHead>
@@ -265,7 +287,7 @@ export default function CashInOutlet() {
         )}
       </div>
 
-      {/* ── Create Deposit Dialog ── */}
+      {/* ── Create Deposit Dialog (outlets only) ── */}
       <Dialog open={showDeposit} onOpenChange={setShowDeposit}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -277,9 +299,9 @@ export default function CashInOutlet() {
               <Select value={depOutletId} onValueChange={setDepOutletId}>
                 <SelectTrigger className="h-9"><SelectValue placeholder="Select outlet…" /></SelectTrigger>
                 <SelectContent>
-                  {balances.map(b => (
-                    <SelectItem key={b.outletId} value={String(b.outletId)}>
-                      {b.outletName} — available {fmt(b.availableBalance)}
+                  {outletBalances.map(b => (
+                    <SelectItem key={b.outletId!} value={String(b.outletId)}>
+                      {b.locationName} — available {fmt(b.availableBalance)}
                     </SelectItem>
                   ))}
                 </SelectContent>

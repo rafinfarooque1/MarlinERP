@@ -145,8 +145,13 @@ export interface BankLedger {
 }
 
 export interface OutletCashBalance {
-  outletId: number;
-  outletName: string;
+  /** 'outlet' or 'warehouse' */
+  locationType: string;
+  locationId: number;
+  locationName: string;
+  /** null for warehouses — kept for backward compat with deposit flow */
+  outletId: number | null;
+  outletName: string | null;
   cashLedgerId: number | null;
   cashBalance: number;
   pendingDeposits: number;
