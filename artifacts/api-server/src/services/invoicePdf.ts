@@ -1,14 +1,18 @@
 /**
  * Canonical Sales Invoice PDF service.
  *
+ * Professional A4 GST tax-invoice layout matching the Marlin brand design:
+ *   • Dark-navy header — company info (left) + TAX INVOICE badge (right)
+ *   • Teal "Billed To / Shipped To" section
+ *   • Navy items table with CGST/SGST/IGST group columns
+ *   • Amount-in-words (left) + tax summary (right) with navy Grand Total
+ *   • UPI QR (left) + bank account details (right)
+ *   • Navy "Thank You" footer bar
+ *
  * ONE renderer used by every output channel:
  *   • Preview  (inline PDF in browser tab)
  *   • Download (attachment download)
  *   • WhatsApp (secure tokenized public link)
- *
- * Professional A4 GST tax-invoice layout rendered with jsPDF.
- * The UPI QR (outlet UPI ID + grand total + invoice ref) is embedded
- * as a plain PNG image — no active/executable PDF content.
  */
 import { jsPDF } from "jspdf";
 import QRCode from "qrcode";
@@ -27,9 +31,9 @@ export interface InvoiceLineItem {
   quantity: number;
   unitPrice: number;
   discount?: number;
-  lineSubtotal?: number;   // taxable (ex-GST)
+  lineSubtotal?: number;
   taxRate?: number;
-  taxType?: string;        // 'cgst_sgst' | 'igst'
+  taxType?: string;
   cgst?: number;
   sgst?: number;
   igst?: number;
@@ -57,10 +61,9 @@ export interface InvoiceData {
     state: string;
     gstNumber: string;
   } | null;
-  cs: Record<string, unknown>; // company settings
+  cs: Record<string, unknown>;
 }
 
-/** Load everything the renderer needs for one sale. Returns null if not found. */
 export async function assembleInvoiceData(saleId: number): Promise<InvoiceData | null> {
   const [sale] = await db.select().from(salesTable).where(eq(salesTable.id, saleId)).limit(1);
   if (!sale) return null;
@@ -73,8 +76,6 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
 
   const lineItems: InvoiceLineItem[] = Array.isArray(sale.lineItems) ? (sale.lineItems as InvoiceLineItem[]) : [];
 
-  // Older sales may lack itemName/hsnCode/unit inside lineItems — backfill each
-  // field independently from the items table.
   const missingIds = [...new Set(
     lineItems.filter((li) => !li.itemName || !li.hsnCode || !li.unit).map((li) => li.itemId),
   )];
@@ -118,7 +119,6 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** "TST/2025-26/0004" → "Invoice-TST-2025-26-0004.pdf" (filesystem/header safe). */
 export function invoiceFileName(invoiceNumber: string | null, saleId: number): string {
   const base = (invoiceNumber || `INV-${saleId}`).replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return `Invoice-${base}.pdf`;
@@ -126,12 +126,10 @@ export function invoiceFileName(invoiceNumber: string | null, saleId: number): s
 
 function esc(s: unknown): string { return String(s ?? ""); }
 
-/** Consistent money formatting inside the PDF (standard fonts lack the ₹ glyph). */
 function money(n: number): string {
   return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-/** Convert a numeric amount to Indian-English words (Rupees ... Only). */
 function toIndianWords(amount: number): string {
   const o = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
     "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
@@ -161,342 +159,408 @@ function buildUpiUri(upiId: string, payeeName: string, amount: number, ref: stri
   return `upi://pay?${params.toString()}`;
 }
 
+// ── Colour palette ────────────────────────────────────────────────────────────
+type RGB = [number, number, number];
+const NAVY:   RGB = [13,  42,  83];   // primary dark navy
+const TEAL:   RGB = [14,  85, 105];   // billed/shipped header teal
+const WHITE:  RGB = [255, 255, 255];
+const LGRAY:  RGB = [245, 247, 250];  // alternating row / light bg
+const MGRAY:  RGB = [160, 170, 185];  // label text
+const BORDER: RGB = [200, 210, 220];  // table grid lines
+const BK:     RGB = [20,  20,  20];   // body text
+
+// ── Page constants ────────────────────────────────────────────────────────────
+const PW = 210;
+const PH = 297;
+const M  = 10;
+const CW = PW - M * 2;  // 190
+const HW = CW / 2;      // 95
+const L2 = M + HW;
+
 // ── Renderer ──────────────────────────────────────────────────────────────────
 
-const PAGE_W = 210;
-const PAGE_H = 297;
-const M = 10;                    // page margin
-const CW = PAGE_W - M * 2;       // 190 mm content width
-const HW = CW / 2;               // half width
-const L2 = M + HW;               // x of right column
-
-type RGB = [number, number, number];
-const BK: RGB = [0, 0, 0];
-const GR: RGB = [80, 80, 80];
-const LG: RGB = [235, 235, 235];
-const ZEBRA: RGB = [248, 248, 248];
-
-/** Render the canonical invoice PDF. Returns the PDF bytes + safe filename. */
 export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buffer; fileName: string }> {
   const { sale, outletName, outletUpiId, customer, cs } = data;
   const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
 
-  // ── UPI QR (plain PNG data URL — no active content) ───────────────────────
+  // ── UPI QR ─────────────────────────────────────────────────────────────────
   let qrDataUrl: string | undefined;
   if (outletUpiId) {
     try {
       const uri = buildUpiUri(outletUpiId, outletName, sale.totalAmount, sale.invoiceNumber || "");
-      qrDataUrl = await QRCode.toDataURL(uri, { width: 300, margin: 2, color: { dark: "#000000", light: "#FFFFFF" } });
+      qrDataUrl = await QRCode.toDataURL(uri, { width: 300, margin: 1, color: { dark: "#000000", light: "#FFFFFF" } });
     } catch { /* render without QR */ }
   }
 
-  const setColor = (rgb: RGB) => doc.setTextColor(rgb[0], rgb[1], rgb[2]);
-  const ln = (x1: number, y1: number, x2: number, y2: number, lw = 0.3) => {
-    doc.setDrawColor(BK[0], BK[1], BK[2]); doc.setLineWidth(lw); doc.line(x1, y1, x2, y2);
-  };
-  const bx = (x: number, y: number, w: number, h: number) => {
-    doc.setDrawColor(BK[0], BK[1], BK[2]); doc.setLineWidth(0.3); doc.rect(x, y, w, h);
-  };
+  // ── Drawing helpers ─────────────────────────────────────────────────────────
   const fill = (x: number, y: number, w: number, h: number, rgb: RGB) => {
     doc.setFillColor(rgb[0], rgb[1], rgb[2]); doc.rect(x, y, w, h, "F");
   };
-  const txt = (s: string, x: number, y: number, opts?: { align?: "left" | "right" | "center"; bold?: boolean; size?: number; color?: RGB }) => {
+  const bx = (x: number, y: number, w: number, h: number, rgb: RGB = BORDER) => {
+    doc.setDrawColor(rgb[0], rgb[1], rgb[2]); doc.setLineWidth(0.25); doc.rect(x, y, w, h);
+  };
+  const ln = (x1: number, y1: number, x2: number, y2: number, rgb: RGB = BORDER, lw = 0.2) => {
+    doc.setDrawColor(rgb[0], rgb[1], rgb[2]); doc.setLineWidth(lw); doc.line(x1, y1, x2, y2);
+  };
+  const txt = (s: string, x: number, y: number, opts?: {
+    align?: "left" | "right" | "center"; bold?: boolean; size?: number; color?: RGB; maxWidth?: number;
+  }) => {
     doc.setFont("helvetica", opts?.bold ? "bold" : "normal");
     doc.setFontSize(opts?.size ?? 7.5);
-    setColor(opts?.color ?? BK);
-    doc.text(s, x, y, { align: opts?.align ?? "left" });
+    const c = opts?.color ?? BK;
+    doc.setTextColor(c[0], c[1], c[2]);
+    const tOpts: { align?: "left" | "right" | "center"; maxWidth?: number } = {};
+    if (opts?.align) tOpts.align = opts.align;
+    if (opts?.maxWidth) tOpts.maxWidth = opts.maxWidth;
+    doc.text(s, x, y, tOpts);
   };
 
-  const companyName = esc(cs.companyName || "Marlin Frozen Fruits");
-  let y = M;
+  const companyName  = esc(cs.companyName  || "Marlin Frozen Fruits");
+  const companyAddr  = [cs.address, cs.city, cs.state, cs.pincode].filter(Boolean).join(", ");
+  const companyPhone = esc(cs.phone || "");
+  const companyEmail = esc(cs.email || "");
+  const companyGstin = esc(cs.gstNumber || "");
 
-  // ── 1. Header ──────────────────────────────────────────────────────────────
-  txt(companyName, PAGE_W / 2, y + 6, { bold: true, size: 15, align: "center" });
-  y += 10;
-
-  const addrLine = [cs.address, cs.city, cs.state, cs.pincode].filter(Boolean).join(", ");
-  if (addrLine) { txt(addrLine, PAGE_W / 2, y, { size: 8, color: GR, align: "center" }); y += 4.5; }
-
-  const contactBits: string[] = [];
-  if (cs.gstNumber) contactBits.push(`GSTIN: ${esc(cs.gstNumber)}`);
-  if (cs.phone)     contactBits.push(`Phone: ${esc(cs.phone)}`);
-  if (cs.email)     contactBits.push(`E-Mail: ${esc(cs.email)}`);
-  if (contactBits.length) { txt(contactBits.join("   |   "), PAGE_W / 2, y, { size: 8, color: GR, align: "center" }); y += 5; }
-
-  // TAX INVOICE banner
-  fill(M, y, CW, 7, LG);
-  bx(M, y, CW, 7);
-  txt("TAX INVOICE", PAGE_W / 2, y + 4.8, { bold: true, size: 10.5, align: "center" });
-  y += 7;
-
-  // ── 2. Invoice information grid ────────────────────────────────────────────
-  const rowH = 6;
   const fmtDate = new Date(sale.saleDate).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" });
   const placeOfSupply = customer?.state || esc(cs.state || "");
-  const metaL: [string, string][] = [
-    ["GST Number", esc(cs.gstNumber || "-")],
-    ["Invoice Number", esc(sale.invoiceNumber || "-")],
-    ["Invoice Date", fmtDate],
-    ["Tax Payable on Reverse Charge", "No"],
-  ];
-  const metaR: [string, string][] = [
-    ["Transportation Mode", "-"],
-    ["Vehicle Number", "-"],
-    ["Date & Time of Supply", fmtDate],
-    ["Place of Supply", placeOfSupply || "-"],
-  ];
-  const mH = metaL.length * rowH;
-  bx(M, y, CW, mH);
-  ln(L2, y, L2, y + mH);
-  for (let i = 1; i < metaL.length; i++) ln(M, y + i * rowH, PAGE_W - M, y + i * rowH, 0.1);
-  metaL.forEach(([k, v], i) => {
-    const ry = y + i * rowH + rowH - 2;
-    txt(k, M + 2, ry, { size: 7.5, color: GR });
-    txt(`:  ${v}`, M + 52, ry, { size: 7.5 });
-    txt(metaR[i][0], L2 + 2, ry, { size: 7.5, color: GR });
-    txt(`:  ${metaR[i][1]}`, L2 + 52, ry, { size: 7.5 });
-  });
-  y += mH;
 
-  // ── 3. Receiver / Consignee ────────────────────────────────────────────────
-  // Only rows with actual data (billed-to = shipped-to for retail sales).
-  const custRows: [string, string][] = [["Name", customer?.name || "Walk-in Customer"]];
+  let y = M;
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // 1. HEADER — company left | TAX INVOICE badge right
+  // ══════════════════════════════════════════════════════════════════════════
+  const HDR_H = 30;
+
+  // Left side: navy "M" logo mark
+  fill(M, y, 11, 11, NAVY);
+  txt("M", M + 5.5, y + 7.8, { bold: true, size: 9, color: WHITE, align: "center" });
+
+  // Company name
+  txt(companyName.toUpperCase(), M + 14, y + 7, { bold: true, size: 14, color: NAVY });
+
+  // Address
+  if (companyAddr) txt(companyAddr, M + 14, y + 12, { size: 7, color: MGRAY });
+
+  // Phone / email row
+  const contactLine = [companyPhone ? `+${companyPhone}` : "", companyEmail].filter(Boolean).join("   |   ");
+  if (contactLine) txt(contactLine, M + 14, y + 17, { size: 6.5, color: MGRAY });
+
+  // GSTIN bar (below contact line)
+  fill(M, y + 20, CW, 7, LGRAY);
+  bx(M, y + 20, CW, 7, BORDER);
+  txt(`GSTIN: ${companyGstin || "-"}`, M + 3, y + 25, { bold: true, size: 7.5, color: NAVY });
+
+  // Right: TAX INVOICE badge — navy box
+  const badgeX = M + CW - 68;
+  fill(badgeX, y, 68, 8, NAVY);
+  txt("TAX INVOICE", badgeX + 34, y + 5.8, { bold: true, size: 9.5, color: WHITE, align: "center" });
+
+  // Invoice meta box below badge
+  const metaX = badgeX;
+  const metaW = 68;
+  const metaRows: [string, string][] = [
+    ["Invoice No.", esc(sale.invoiceNumber || "-")],
+    ["Invoice Date", fmtDate],
+    ["Place of Supply", placeOfSupply || "-"],
+    ["Reverse Charge", "No"],
+  ];
+  const mRH = 4.8;
+  fill(metaX, y + 8, metaW, metaRows.length * mRH + 0.5, [250, 252, 255]);
+  bx(metaX, y + 8, metaW, metaRows.length * mRH + 0.5, BORDER);
+  metaRows.forEach(([k, v], i) => {
+    const ry = y + 8 + i * mRH + 3.5;
+    txt(k, metaX + 2, ry, { size: 6.5, color: MGRAY });
+    txt(`: ${v}`, metaX + 30, ry, { size: 6.5, bold: true, color: NAVY });
+  });
+
+  y += HDR_H;
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // 2. BILLED TO / SHIPPED TO
+  // ══════════════════════════════════════════════════════════════════════════
+  const custRows: [string, string][] = [
+    ["Name", customer?.name || "Walk-in Customer"],
+  ];
   if (customer?.address)   custRows.push(["Address", customer.address]);
   if (customer?.state)     custRows.push(["State", customer.state]);
   if (customer?.phone)     custRows.push(["Mobile No.", customer.phone]);
   if (customer?.gstNumber) custRows.push(["GSTIN", customer.gstNumber]);
 
-  const cH = (custRows.length + 1) * rowH;
-  bx(M, y, CW, cH);
-  ln(L2, y, L2, y + cH);
-  fill(M, y, CW, rowH, LG);
-  ln(M, y + rowH, PAGE_W - M, y + rowH);
-  ln(L2, y, L2, y + rowH);
-  txt("Details of Receiver (Billed to)", M + 2, y + rowH - 1.5, { bold: true, size: 7.5 });
-  txt("Details of Consignee (Shipped to)", L2 + 2, y + rowH - 1.5, { bold: true, size: 7.5 });
-  y += rowH;
-  custRows.forEach(([k, v], i) => {
-    if (i > 0) ln(M, y + i * rowH, PAGE_W - M, y + i * rowH, 0.1);
-    const ry = y + i * rowH + rowH - 1.5;
-    txt(k, M + 2, ry, { size: 7.5, color: GR });
-    txt(`: ${v}`, M + 24, ry, { size: 7.5 });
-    txt(k, L2 + 2, ry, { size: 7.5, color: GR });
-    txt(`: ${v}`, L2 + 24, ry, { size: 7.5 });
-  });
-  y += custRows.length * rowH;
+  const BT_HDR = 7;
+  const BT_ROW = 5.5;
+  const BT_H   = BT_HDR + custRows.length * BT_ROW + 2;
 
-  // ── 4. Item table (grouped GST columns) ────────────────────────────────────
-  // Leaf columns — widths sum to 190:
-  // Sl 7 | Desc 46 | HSN 12 | Qty 8 | Unit 9 | Price 15 | Taxable 18 |
-  // C% 7.5 | CAmt 11.5 | S% 7.5 | SAmt 11.5 | I% 7.5 | IAmt 11.5 | Total 18
-  const W = [7, 46, 12, 8, 9, 15, 18, 7.5, 11.5, 7.5, 11.5, 7.5, 11.5, 18];
+  // Left box — Billed To
+  fill(M, y, HW, BT_HDR, TEAL);
+  bx(M, y, HW, BT_H, BORDER);
+  txt("  BILLED TO", M + 3, y + BT_HDR - 1.8, { bold: true, size: 7.5, color: WHITE });
+
+  // Right box — Shipped To
+  fill(L2, y, HW, BT_HDR, TEAL);
+  bx(L2, y, HW, BT_H, BORDER);
+  txt("  SHIPPED TO", L2 + 3, y + BT_HDR - 1.8, { bold: true, size: 7.5, color: WHITE });
+
+  custRows.forEach(([k, v], i) => {
+    const ry = y + BT_HDR + i * BT_ROW + BT_ROW - 1.5;
+    if (i > 0) {
+      ln(M, y + BT_HDR + i * BT_ROW, M + HW, y + BT_HDR + i * BT_ROW);
+      ln(L2, y + BT_HDR + i * BT_ROW, L2 + HW, y + BT_HDR + i * BT_ROW);
+    }
+    // Billed
+    txt(k, M + 3, ry, { size: 7, color: MGRAY });
+    txt(`:  ${v}`, M + 28, ry, { size: 7, color: BK, maxWidth: HW - 32 });
+    // Shipped (same values — retail)
+    txt(k, L2 + 3, ry, { size: 7, color: MGRAY });
+    txt(`:  ${v}`, L2 + 28, ry, { size: 7, color: BK, maxWidth: HW - 32 });
+  });
+
+  y += BT_H + 2;
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // 3. ITEMS TABLE
+  // ══════════════════════════════════════════════════════════════════════════
+  // Col widths: Sl | Desc | HSN | Qty | Unit | UnitPrice | Taxable | C% | CAmt | S% | SAmt | I% | IAmt | Total
+  const W = [7, 44, 13, 8, 9, 15, 18, 7, 11, 7, 11, 7, 11, 18];
   const X: number[] = [];
   { let cx = M; for (const w of W) { X.push(cx); cx += w; } }
   const XEND = M + CW;
-  const hdr1H = 5.5, hdr2H = 4.5, tHdrH = hdr1H + hdr2H;
-  const tRowH = 6.5;
 
-  const drawItemHeader = (yy: number): number => {
-    fill(M, yy, CW, tHdrH, LG);
-    bx(M, yy, CW, tHdrH);
-    // Vertical separators: simple columns span both header rows
-    const simpleCols = [1, 2, 3, 4, 5, 6, 7, 13]; // x-index where a full-height line starts
-    for (const i of simpleCols) ln(X[i], yy, X[i], yy + tHdrH);
-    // Group boundaries (CGST|SGST|IGST) — full height at group starts already covered (7, 9, 11, 13)
-    ln(X[9], yy, X[9], yy + tHdrH);
-    ln(X[11], yy, X[11], yy + tHdrH);
-    // Sub-column separators only in second header row
-    ln(X[8], yy + hdr1H, X[8], yy + tHdrH, 0.15);
-    ln(X[10], yy + hdr1H, X[10], yy + tHdrH, 0.15);
-    ln(X[12], yy + hdr1H, X[12], yy + tHdrH, 0.15);
-    // Horizontal split under group labels only
-    ln(X[7], yy + hdr1H, X[13], yy + hdr1H, 0.15);
+  const HDR1 = 6;   // first header row height
+  const HDR2 = 5;   // second header row height
+  const THDR = HDR1 + HDR2;
+  const TROW = 6.5;
 
-    const midTop = yy + 6.4; // vertical centre for full-height labels
-    txt("Sl", X[0] + W[0] / 2, midTop - 2, { bold: true, size: 6.5, align: "center" });
-    txt("No", X[0] + W[0] / 2, midTop + 1.5, { bold: true, size: 6.5, align: "center" });
-    txt("Description of Goods", X[1] + 1.5, midTop, { bold: true, size: 7 });
-    txt("HSN", X[2] + W[2] / 2, midTop - 2, { bold: true, size: 6.5, align: "center" });
-    txt("Code", X[2] + W[2] / 2, midTop + 1.5, { bold: true, size: 6.5, align: "center" });
-    txt("Qty", X[3] + W[3] - 1, midTop, { bold: true, size: 6.5, align: "right" });
-    txt("Unit", X[4] + W[4] / 2, midTop, { bold: true, size: 6.5, align: "center" });
-    txt("Unit", X[5] + W[5] - 1, midTop - 2, { bold: true, size: 6.5, align: "right" });
-    txt("Price", X[5] + W[5] - 1, midTop + 1.5, { bold: true, size: 6.5, align: "right" });
-    txt("Taxable", X[6] + W[6] - 1, midTop - 2, { bold: true, size: 6.5, align: "right" });
-    txt("Value", X[6] + W[6] - 1, midTop + 1.5, { bold: true, size: 6.5, align: "right" });
-    // Group headers
-    txt("CGST", X[7] + (W[7] + W[8]) / 2, yy + 4, { bold: true, size: 7, align: "center" });
-    txt("SGST", X[9] + (W[9] + W[10]) / 2, yy + 4, { bold: true, size: 7, align: "center" });
-    txt("IGST", X[11] + (W[11] + W[12]) / 2, yy + 4, { bold: true, size: 7, align: "center" });
-    const sub = yy + hdr1H + 3.3;
-    txt("%", X[7] + W[7] / 2, sub, { bold: true, size: 6, align: "center" });
-    txt("Amount", X[8] + W[8] - 1, sub, { bold: true, size: 6, align: "right" });
-    txt("%", X[9] + W[9] / 2, sub, { bold: true, size: 6, align: "center" });
-    txt("Amount", X[10] + W[10] - 1, sub, { bold: true, size: 6, align: "right" });
-    txt("%", X[11] + W[11] / 2, sub, { bold: true, size: 6, align: "center" });
-    txt("Amount", X[12] + W[12] - 1, sub, { bold: true, size: 6, align: "right" });
-    txt("Total", X[13] + W[13] - 1, midTop, { bold: true, size: 7, align: "right" });
-    return yy + tHdrH;
+  const drawTableHeader = (yy: number): number => {
+    // Navy background for header
+    fill(M, yy, CW, THDR, NAVY);
+
+    // Draw all vertical lines in white through full header
+    const allCols = [1,2,3,4,5,6,7,9,11,13];
+    for (const i of allCols) ln(X[i], yy, X[i], yy + THDR, WHITE, 0.2);
+    // Sub-separators in row 2 for Rate/Amount pairs
+    ln(X[8],  yy + HDR1, X[8],  yy + THDR, WHITE, 0.15);
+    ln(X[10], yy + HDR1, X[10], yy + THDR, WHITE, 0.15);
+    ln(X[12], yy + HDR1, X[12], yy + THDR, WHITE, 0.15);
+    // Separator between row1 and row2 inside GST groups
+    ln(X[7], yy + HDR1, X[13], yy + HDR1, WHITE, 0.15);
+
+    // Row 1 headers (vertically centred in full height for simple cols)
+    const cy1 = yy + THDR / 2 + 1.8; // centre of full header
+    txt("SL",           X[0]  + W[0]/2,  cy1 - 1.5, { bold: true, size: 6, color: WHITE, align: "center" });
+    txt("NO.",          X[0]  + W[0]/2,  cy1 + 1.5, { bold: true, size: 6, color: WHITE, align: "center" });
+    txt("DESCRIPTION OF GOODS", X[1]+2, cy1,         { bold: true, size: 6.5, color: WHITE });
+    txt("HSN",          X[2]  + W[2]/2,  cy1 - 1.5, { bold: true, size: 6, color: WHITE, align: "center" });
+    txt("CODE",         X[2]  + W[2]/2,  cy1 + 1.5, { bold: true, size: 6, color: WHITE, align: "center" });
+    txt("QTY",          X[3]  + W[3]-1,  cy1,        { bold: true, size: 6, color: WHITE, align: "right" });
+    txt("UNIT",         X[4]  + W[4]/2,  cy1,        { bold: true, size: 6, color: WHITE, align: "center" });
+    txt("UNIT",         X[5]  + W[5]-1,  cy1 - 1.5, { bold: true, size: 6, color: WHITE, align: "right" });
+    txt("PRICE (Rs.)",  X[5]  + W[5]-1,  cy1 + 1.5, { bold: true, size: 5.5, color: WHITE, align: "right" });
+    txt("TAXABLE",      X[6]  + W[6]-1,  cy1 - 1.5, { bold: true, size: 6, color: WHITE, align: "right" });
+    txt("VALUE (Rs.)",  X[6]  + W[6]-1,  cy1 + 1.5, { bold: true, size: 5.5, color: WHITE, align: "right" });
+    // GST group labels row 1
+    const gy1 = yy + HDR1 - 1.5;
+    txt("CGST", X[7]  + (W[7]+W[8])/2,  gy1, { bold: true, size: 6.5, color: WHITE, align: "center" });
+    txt("SGST", X[9]  + (W[9]+W[10])/2, gy1, { bold: true, size: 6.5, color: WHITE, align: "center" });
+    txt("IGST", X[11] + (W[11]+W[12])/2,gy1, { bold: true, size: 6.5, color: WHITE, align: "center" });
+    txt("TOTAL (Rs.)", X[13] + W[13]-1,  cy1, { bold: true, size: 6, color: WHITE, align: "right" });
+    // Sub-labels row 2
+    const gy2 = yy + HDR1 + HDR2 - 1.5;
+    txt("RATE(%)", X[7]  + W[7]/2,  gy2, { bold: true, size: 5,   color: WHITE, align: "center" });
+    txt("AMOUNT",  X[8]  + W[8]-1,  gy2, { bold: true, size: 5,   color: WHITE, align: "right" });
+    txt("RATE(%)", X[9]  + W[9]/2,  gy2, { bold: true, size: 5,   color: WHITE, align: "center" });
+    txt("AMOUNT",  X[10] + W[10]-1, gy2, { bold: true, size: 5,   color: WHITE, align: "right" });
+    txt("RATE(%)", X[11] + W[11]/2, gy2, { bold: true, size: 5,   color: WHITE, align: "center" });
+    txt("AMOUNT",  X[12] + W[12]-1, gy2, { bold: true, size: 5,   color: WHITE, align: "right" });
+
+    bx(M, yy, CW, THDR, NAVY);
+    return yy + THDR;
   };
 
-  y = drawItemHeader(y);
+  y = drawTableHeader(y);
 
-  const drawRowLines = (yy: number, h: number, lw = 0.15) => {
-    for (let i = 1; i < X.length; i++) {
-      // Skip internal sub-separators of merged look? keep all leaf separators for clean grid
-      ln(X[i], yy, X[i], yy + h, lw);
-    }
-    ln(M, yy, M, yy + h, 0.3);
-    ln(XEND, yy, XEND, yy + h, 0.3);
-    ln(M, yy + h, XEND, yy + h, lw);
+  const drawRowGrid = (yy: number, h: number) => {
+    ln(M, yy + h, XEND, yy + h, BORDER, 0.2);
+    ln(M, yy, M, yy + h, BORDER, 0.3);
+    ln(XEND, yy, XEND, yy + h, BORDER, 0.3);
+    for (let i = 1; i < X.length; i++) ln(X[i], yy, X[i], yy + h, BORDER, 0.15);
   };
 
   let tQty = 0, tTaxable = 0, tCgst = 0, tSgst = 0, tIgst = 0, tTot = 0;
   const items = sale.lineItems || [];
+
   items.forEach((li, idx) => {
-    // Page break with header redraw
-    if (y + tRowH > PAGE_H - 20) {
-      doc.addPage();
-      y = M;
-      y = drawItemHeader(y);
-    }
-    const qty = Number(li.quantity ?? 0);
-    const gross = qty * Number(li.unitPrice ?? 0) - Number(li.discount ?? 0);
+    if (y + TROW > PH - 50) { doc.addPage(); y = M; y = drawTableHeader(y); }
+
+    const qty     = Number(li.quantity  ?? 0);
+    const gross   = qty * Number(li.unitPrice ?? 0) - Number(li.discount ?? 0);
     const taxable = Number(li.lineSubtotal ?? gross);
-    const cgst = Number(li.cgst ?? 0);
-    const sgst = Number(li.sgst ?? 0);
-    const igst = Number(li.igst ?? 0);
-    const rate = Number(li.taxRate ?? 0);
-    const lineTotal = taxable + Number(li.taxAmount ?? 0);
-    const isIgst = li.taxType === "igst" || igst > 0;
-    tQty += qty; tTaxable += taxable; tCgst += cgst; tSgst += sgst; tIgst += igst; tTot += lineTotal;
+    const cgst    = Number(li.cgst ?? 0);
+    const sgst    = Number(li.sgst ?? 0);
+    const igst    = Number(li.igst ?? 0);
+    const rate    = Number(li.taxRate ?? 0);
+    const lineTot = taxable + Number(li.taxAmount ?? 0);
+    const isIgst  = li.taxType === "igst" || igst > 0;
+    tQty += qty; tTaxable += taxable; tCgst += cgst; tSgst += sgst; tIgst += igst; tTot += lineTot;
 
-    if (idx % 2 === 1) fill(M, y, CW, tRowH, ZEBRA);
-    drawRowLines(y, tRowH);
-    const ry = y + tRowH - 2.2;
-    txt(String(idx + 1), X[0] + W[0] / 2, ry, { size: 7, align: "center" });
+    if (idx % 2 === 1) fill(M, y, CW, TROW, LGRAY);
+    drawRowGrid(y, TROW);
+
+    const ry = y + TROW - 2;
+    txt(String(idx + 1), X[0] + W[0]/2, ry, { size: 7, align: "center" });
     const name = esc(li.itemName || `Item #${li.itemId}`);
-    txt(name.length > 34 ? name.slice(0, 33) + "…" : name, X[1] + 1.5, ry, { size: 7 });
-    txt(li.hsnCode ? esc(li.hsnCode) : "-", X[2] + W[2] / 2, ry, { size: 7, align: "center" });
-    txt(String(qty), X[3] + W[3] - 1, ry, { size: 7, align: "right" });
-    txt((li.unit || "-").toUpperCase(), X[4] + W[4] / 2, ry, { size: 7, align: "center" });
-    txt(money(Number(li.unitPrice ?? 0)), X[5] + W[5] - 1, ry, { size: 7, align: "right" });
-    txt(money(taxable), X[6] + W[6] - 1, ry, { size: 7, align: "right" });
+    txt(name.length > 32 ? name.slice(0, 31) + "…" : name, X[1] + 1.5, ry, { size: 7 });
+    txt(li.hsnCode ? esc(li.hsnCode) : "-", X[2] + W[2]/2, ry, { size: 6.5, align: "center" });
+    txt(String(qty),                          X[3] + W[3]-1, ry, { size: 7, align: "right" });
+    txt((li.unit || "-").toUpperCase(),        X[4] + W[4]/2, ry, { size: 7, align: "center" });
+    txt(money(Number(li.unitPrice ?? 0)),      X[5] + W[5]-1, ry, { size: 7, align: "right" });
+    txt(money(taxable),                        X[6] + W[6]-1, ry, { size: 7, align: "right" });
+
     if (isIgst) {
-      txt("-", X[7] + W[7] / 2, ry, { size: 7, align: "center" });
-      txt("-", X[8] + W[8] - 1, ry, { size: 7, align: "right" });
-      txt("-", X[9] + W[9] / 2, ry, { size: 7, align: "center" });
-      txt("-", X[10] + W[10] - 1, ry, { size: 7, align: "right" });
-      txt(`${rate}%`, X[11] + W[11] / 2, ry, { size: 6.5, align: "center" });
-      txt(money(igst), X[12] + W[12] - 1, ry, { size: 7, align: "right" });
+      txt("-", X[7] + W[7]/2,  ry, { size: 7, align: "center", color: MGRAY });
+      txt("-", X[8] + W[8]-1,  ry, { size: 7, align: "right",  color: MGRAY });
+      txt("-", X[9] + W[9]/2,  ry, { size: 7, align: "center", color: MGRAY });
+      txt("-", X[10]+ W[10]-1, ry, { size: 7, align: "right",  color: MGRAY });
+      txt(`${rate}%`,   X[11]+ W[11]/2, ry, { size: 6.5, align: "center" });
+      txt(money(igst),  X[12]+ W[12]-1, ry, { size: 7,   align: "right" });
     } else {
-      txt(`${rate / 2}%`, X[7] + W[7] / 2, ry, { size: 6.5, align: "center" });
-      txt(money(cgst), X[8] + W[8] - 1, ry, { size: 7, align: "right" });
-      txt(`${rate / 2}%`, X[9] + W[9] / 2, ry, { size: 6.5, align: "center" });
-      txt(money(sgst), X[10] + W[10] - 1, ry, { size: 7, align: "right" });
-      txt("-", X[11] + W[11] / 2, ry, { size: 7, align: "center" });
-      txt("-", X[12] + W[12] - 1, ry, { size: 7, align: "right" });
+      txt(`${rate/2}%`, X[7] + W[7]/2,  ry, { size: 6.5, align: "center" });
+      txt(money(cgst),  X[8] + W[8]-1,  ry, { size: 7,   align: "right" });
+      txt(`${rate/2}%`, X[9] + W[9]/2,  ry, { size: 6.5, align: "center" });
+      txt(money(sgst),  X[10]+ W[10]-1, ry, { size: 7,   align: "right" });
+      txt("-", X[11]+ W[11]/2, ry, { size: 7, align: "center", color: MGRAY });
+      txt("-", X[12]+ W[12]-1, ry, { size: 7, align: "right",  color: MGRAY });
     }
-    txt(money(lineTotal), X[13] + W[13] - 1, ry, { size: 7, align: "right" });
-    y += tRowH;
+    txt(money(lineTot), X[13] + W[13]-1, ry, { size: 7, align: "right", bold: true });
+    y += TROW;
   });
 
-  // Totals row of the table
-  drawRowLines(y, tRowH, 0.3);
-  ln(M, y, XEND, y, 0.3);
-  const sr = y + tRowH - 2.2;
-  txt("Total  (E&OE)", X[1] + 1.5, sr, { bold: true, size: 7 });
-  txt(String(tQty), X[3] + W[3] - 1, sr, { bold: true, size: 7, align: "right" });
-  txt(money(tTaxable), X[6] + W[6] - 1, sr, { bold: true, size: 7, align: "right" });
-  txt(tCgst > 0 ? money(tCgst) : "-", X[8] + W[8] - 1, sr, { bold: true, size: 7, align: "right" });
-  txt(tSgst > 0 ? money(tSgst) : "-", X[10] + W[10] - 1, sr, { bold: true, size: 7, align: "right" });
-  txt(tIgst > 0 ? money(tIgst) : "-", X[12] + W[12] - 1, sr, { bold: true, size: 7, align: "right" });
-  txt(money(tTot), X[13] + W[13] - 1, sr, { bold: true, size: 7, align: "right" });
-  y += tRowH;
+  // TOTAL row — navy bg
+  fill(M, y, CW, TROW, NAVY);
+  drawRowGrid(y, TROW);
+  const sr = y + TROW - 2;
+  txt("TOTAL  (E&OE)", X[1] + 1.5, sr, { bold: true, size: 7, color: WHITE });
+  txt(String(tQty), X[3] + W[3]-1, sr, { bold: true, size: 7, color: WHITE, align: "right" });
+  txt(money(tTaxable), X[6] + W[6]-1, sr, { bold: true, size: 7, color: WHITE, align: "right" });
+  txt(tCgst > 0 ? money(tCgst) : "-", X[8]  + W[8]-1,  sr, { bold: true, size: 7, color: WHITE, align: "right" });
+  txt(tSgst > 0 ? money(tSgst) : "-", X[10] + W[10]-1, sr, { bold: true, size: 7, color: WHITE, align: "right" });
+  txt(tIgst > 0 ? money(tIgst) : "-", X[12] + W[12]-1, sr, { bold: true, size: 7, color: WHITE, align: "right" });
+  txt(money(tTot), X[13] + W[13]-1, sr, { bold: true, size: 7, color: WHITE, align: "right" });
+  y += TROW + 1;
 
-  // ── 5. Totals section ──────────────────────────────────────────────────────
-  const grandTotal = sale.totalAmount;
-  const discount = sale.discountTotal;
+  // ══════════════════════════════════════════════════════════════════════════
+  // 4. AMOUNT IN WORDS (left) + TAX SUMMARY (right)
+  // ══════════════════════════════════════════════════════════════════════════
+  const grandTotal  = sale.totalAmount;
+  const discount    = sale.discountTotal;
+  const roundOff    = 0;
 
-  const totRows: [string, string, boolean?][] = [["Taxable Value", money(sale.subtotal)]];
-  if (tCgst > 0) totRows.push(["CGST", money(tCgst)]);
-  if (tSgst > 0) totRows.push(["SGST", money(tSgst)]);
-  if (tIgst > 0) totRows.push(["IGST", money(tIgst)]);
-  if (discount > 0) totRows.push(["Discount", `- ${money(discount)}`]);
-  totRows.push(["Round Off", "0.00"]);
-  totRows.push(["GRAND TOTAL", `Rs. ${money(grandTotal)}`, true]);
+  const taxRows: [string, string, boolean?][] = [["Taxable Value", `Rs. ${money(sale.subtotal)}`]];
+  if (tCgst > 0) taxRows.push([`CGST (${items[0]?.taxRate ? items[0].taxRate / 2 : ""}%)`, `Rs. ${money(tCgst)}`]);
+  if (tSgst > 0) taxRows.push([`SGST (${items[0]?.taxRate ? items[0].taxRate / 2 : ""}%)`, `Rs. ${money(tSgst)}`]);
+  if (tIgst > 0) taxRows.push([`IGST (${items[0]?.taxRate ?? ""}%)`, `Rs. ${money(tIgst)}`]);
+  if (discount > 0) taxRows.push(["Discount", `- Rs. ${money(discount)}`]);
+  taxRows.push(["Round Off", `Rs. ${money(roundOff)}`]);
 
-  const trH = 5.5;
-  const totSH = Math.max(totRows.length * trH, 24);
-  if (y + totSH > PAGE_H - 20) { doc.addPage(); y = M; }
-  bx(M, y, CW, totSH);
-  ln(L2, y, L2, y + totSH);
+  const TR_H    = 6;
+  const SUMH    = taxRows.length * TR_H + TR_H + 2; // +TR_H for Grand Total row
+  const WORDS_H = Math.max(SUMH, 28);
+  if (y + WORDS_H > PH - 55) { doc.addPage(); y = M; }
 
-  txt("Invoice Value (In Words)", M + 2, y + 5, { bold: true, size: 7.5 });
-  const words = doc.splitTextToSize(toIndianWords(grandTotal), HW - 6) as string[];
-  words.forEach((w, i) => txt(w, M + 2, y + 10 + i * 4, { size: 7.5, color: GR }));
-  txt("Certified that the particulars given above are true and correct.", M + 2, y + totSH - 3, { size: 6.5, color: GR });
+  bx(M, y, HW, WORDS_H, BORDER);
+  fill(M, y, HW, 7, LGRAY);
+  txt("AMOUNT IN WORDS", M + 3, y + 5, { bold: true, size: 7, color: NAVY });
+  const wordStr = doc.splitTextToSize(toIndianWords(grandTotal), HW - 6) as string[];
+  wordStr.forEach((w, i) => txt(w, M + 3, y + 10 + i * 4.5, { size: 7.5, color: BK }));
+  txt("Certified that the particulars given above are true and correct.",
+      M + 3, y + WORDS_H - 4, { size: 6, color: MGRAY, maxWidth: HW - 6 });
 
-  totRows.forEach(([label, val, big], i) => {
-    const ry = y + i * trH;
-    if (i > 0) ln(L2, ry, PAGE_W - M, ry, 0.1);
-    if (big) fill(L2 + 0.2, ry + 0.2, HW - 0.4, trH - 0.4 + (totSH - totRows.length * trH), LG);
-    const ty = ry + trH - 1.6;
-    txt(label, L2 + 2, ty, { bold: big, size: big ? 9 : 7.5 });
-    txt(val, PAGE_W - M - 2, ty, { bold: big, size: big ? 9 : 7.5, align: "right" });
+  // Right: tax summary box
+  bx(L2, y, HW, WORDS_H, BORDER);
+  taxRows.forEach(([label, val], i) => {
+    const ry = y + i * TR_H;
+    if (i > 0) ln(L2, ry, L2 + HW, ry, BORDER);
+    txt(label, L2 + 3, ry + TR_H - 1.8, { size: 7.5, color: MGRAY });
+    txt(val, L2 + HW - 2, ry + TR_H - 1.8, { size: 7.5, align: "right" });
   });
-  y += totSH;
 
-  // ── 6. Payment details: UPI QR ─────────────────────────────────────────────
+  // Grand Total — navy highlight row
+  const gtY = y + taxRows.length * TR_H;
+  fill(L2, gtY, HW, TR_H + 2, NAVY);
+  txt("GRAND TOTAL", L2 + 3, gtY + TR_H - 0.5, { bold: true, size: 9, color: WHITE });
+  txt(`Rs. ${money(grandTotal)}`, L2 + HW - 2, gtY + TR_H - 0.5, { bold: true, size: 9, color: WHITE, align: "right" });
+
+  y += WORDS_H + 2;
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // 5. PAYMENT DETAILS — QR left | Bank details right
+  // ══════════════════════════════════════════════════════════════════════════
+  const QR_SIZE = 34;
+  const PAY_H   = Math.max(QR_SIZE + 18, 55);
+  if (y + PAY_H > PH - 18) { doc.addPage(); y = M; }
+
+  // Left: UPI QR panel
+  bx(M, y, HW, PAY_H, BORDER);
+  fill(M, y, HW, 7, LGRAY);
+  txt("PAYMENT DETAILS", M + 3, y + 5, { bold: true, size: 7, color: NAVY });
+
   if (qrDataUrl && outletUpiId) {
-    const qrSize = 34;               // ≈ 128 px equivalent — reliable scanning
-    const qrBH = qrSize + 12;
-    if (y + qrBH > PAGE_H - 20) { doc.addPage(); y = M; }
-    bx(M, y, CW, qrBH);
-    ln(L2, y, L2, y + qrBH);
-
-    txt("PAYMENT DETAILS", M + 2, y + 5.5, { bold: true, size: 8 });
-    txt("SCAN TO PAY (UPI)", M + 2, y + 11, { bold: true, size: 7.5, color: GR });
-    txt(`UPI ID : ${outletUpiId}`, M + 2, y + 17, { size: 7.5 });
-    txt(`Amount : Rs. ${money(grandTotal)}`, M + 2, y + 22, { bold: true, size: 7.5 });
-    txt(`Ref : ${esc(sale.invoiceNumber)}`, M + 2, y + 27, { size: 7.5, color: GR });
-    if (sale.paymentMode) txt(`Payment Mode : ${esc(sale.paymentMode).replace(/_/g, " ").toUpperCase()}`, M + 2, y + 32, { size: 7, color: GR });
-
-    doc.addImage(qrDataUrl, "PNG", L2 - qrSize - 6, y + (qrBH - qrSize) / 2, qrSize, qrSize);
-
-    txt("Scan the QR code with any UPI app", L2 + 4, y + qrBH / 2 - 2, { size: 7.5, color: GR });
-    txt("(GPay / PhonePe / Paytm / BHIM) to pay instantly.", L2 + 4, y + qrBH / 2 + 2.5, { size: 7.5, color: GR });
-    y += qrBH;
-  }
-
-  // ── 7. Bank details + signature ────────────────────────────────────────────
-  const bankRows: [string, string][] = [];
-  if (cs.bankName)    bankRows.push(["Bank Name", esc(cs.bankName)]);
-  if (cs.bankAccount) bankRows.push(["A/C No", esc(cs.bankAccount)]);
-  if (cs.ifscCode)    bankRows.push(["IFSC", esc(cs.ifscCode)]);
-
-  const footH = Math.max(24, bankRows.length * 4.5 + 12);
-  if (y + footH > PAGE_H - 14) { doc.addPage(); y = M; }
-  bx(M, y, CW, footH);
-  ln(L2, y, L2, y + footH);
-
-  if (bankRows.length > 0) {
-    txt("Bank Details", M + 2, y + 5.5, { bold: true, size: 7.5 });
-    bankRows.forEach(([k, v], i) => {
-      const by = y + 10.5 + i * 4.5;
-      txt(k, M + 2, by, { size: 7.5, color: GR });
-      txt(`: ${v}`, M + 22, by, { size: 7.5 });
-    });
+    txt("SCAN TO PAY (UPI)", M + HW/2, y + 13, { bold: true, size: 7, color: TEAL, align: "center" });
+    const qrX = M + (HW - QR_SIZE) / 2;
+    doc.addImage(qrDataUrl, "PNG", qrX, y + 15, QR_SIZE, QR_SIZE);
+    txt(`UPI ID  :  ${outletUpiId}`, M + 3, y + 16 + QR_SIZE, { size: 6.5, color: BK });
+    txt(`Amount  :  Rs. ${money(grandTotal)}`, M + 3, y + 21 + QR_SIZE, { size: 6.5, bold: true, color: NAVY });
+    txt(`Ref       :  ${esc(sale.invoiceNumber)}`, M + 3, y + 26 + QR_SIZE, { size: 6.5, color: MGRAY });
   } else {
-    txt(`Payment Mode : ${esc(sale.paymentMode ?? "-").replace(/_/g, " ").toUpperCase()}`, M + 2, y + 5.5, { size: 7.5, color: GR });
+    // No UPI configured — show payment mode only
+    txt(`Payment Mode : ${esc(sale.paymentMode ?? "-").replace(/_/g, " ").toUpperCase()}`,
+        M + 3, y + 18, { size: 7.5, color: BK });
+  }
+  if (sale.paymentMode) {
+    txt(`Payment Mode  :  ${esc(sale.paymentMode).replace(/_/g, " ").toUpperCase()}`,
+        M + 3, y + PAY_H - 5, { size: 7, color: MGRAY });
   }
 
-  txt(`For ${companyName}`, PAGE_W - M - 3, y + 6, { bold: true, size: 8.5, align: "right" });
-  txt("Authorised Signatory", PAGE_W - M - 3, y + footH - 4, { size: 7.5, color: GR, align: "right" });
-  y += footH;
+  // Right: Bank account details panel
+  bx(L2, y, HW, PAY_H, BORDER);
+  fill(L2, y, HW, 7, LGRAY);
+  txt("BANK ACCOUNT DETAILS", L2 + 3, y + 5, { bold: true, size: 7, color: NAVY });
+  txt("You can make the payment via bank transfer using the following details.",
+      L2 + 3, y + 10, { size: 6, color: MGRAY, maxWidth: HW - 6 });
 
-  // ── 8. Footer ──────────────────────────────────────────────────────────────
-  txt("This is a computer-generated invoice.", PAGE_W / 2, y + 4.5, { size: 7, color: GR, align: "center" });
+  const bankRows: [string, string][] = [];
+  if (companyName)       bankRows.push(["Account Holder Name", companyName]);
+  if (cs.bankName)       bankRows.push(["Bank Name",           esc(cs.bankName)]);
+  if (cs.bankBranch)     bankRows.push(["Branch",              esc(cs.bankBranch)]);
+  if (cs.bankAccount)    bankRows.push(["Account Number",      esc(cs.bankAccount)]);
+  if (cs.accountType)    bankRows.push(["Account Type",        esc(cs.accountType)]);
+  if (cs.ifscCode)       bankRows.push(["IFSC Code",           esc(cs.ifscCode)]);
+
+  bankRows.forEach(([k, v], i) => {
+    const by = y + 16 + i * 5.5;
+    txt(k, L2 + 3, by, { size: 6.5, color: MGRAY });
+    txt(`:  ${v}`, L2 + 38, by, { size: 6.5, color: BK, maxWidth: HW - 44 });
+  });
+
+  y += PAY_H + 2;
+
+  // Payment mode badge line (below the two boxes)
+  if (sale.paymentMode) {
+    bx(M, y, CW, 7, BORDER);
+    fill(M, y, CW, 7, LGRAY);
+    txt(`Payment Mode : ${esc(sale.paymentMode).replace(/_/g, " ").toUpperCase()}`,
+        M + 3, y + 5, { bold: true, size: 7.5, color: NAVY });
+    txt(`For ${companyName}`, M + CW - 3, y + 5, { bold: true, size: 7.5, color: NAVY, align: "right" });
+    y += 9;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // 6. FOOTER — navy bar + subtitle
+  // ══════════════════════════════════════════════════════════════════════════
+  if (y + 14 > PH - 4) { doc.addPage(); y = M; }
+  fill(M, y, CW, 9, NAVY);
+  txt("THANK YOU FOR YOUR BUSINESS!", PW / 2, y + 6, { bold: true, size: 9, color: WHITE, align: "center" });
+  y += 11;
+  txt("This is a computer-generated invoice.", PW / 2, y + 3, { size: 6.5, color: MGRAY, align: "center" });
 
   const buffer = Buffer.from(doc.output("arraybuffer"));
   return { buffer, fileName: invoiceFileName(sale.invoiceNumber, sale.id) };
