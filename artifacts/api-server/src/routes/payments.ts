@@ -91,9 +91,10 @@ router.post("/sales/:id/payments", async (req, res): Promise<void> => {
   try {
     await client.query("BEGIN");
 
-    // 1. Lock and fetch sale
+    // 1. Lock and fetch sale (include location columns added by Task #33)
     const { rows: [sale] } = await client.query(
-      `SELECT id, outlet_id, total_amount::numeric AS total_amount,
+      `SELECT id, outlet_id, location_type, location_id,
+              total_amount::numeric AS total_amount,
               amount_paid::numeric AS amount_paid, payment_status
        FROM sales WHERE id = $1 FOR UPDATE`,
       [saleId]
@@ -135,15 +136,19 @@ router.post("/sales/:id/payments", async (req, res): Promise<void> => {
 
     if (!isElectronic) {
       // ── CASH PAYMENT ────────────────────────────────────────────────────
-      // Get outlet cash ledger
-      const outletCashCode = `OUTLET-CASH-${sale.outlet_id}`;
+      // Resolve cash ledger based on location type (warehouse or outlet)
+      const locType = sale.location_type ?? 'outlet';
+      const locId   = sale.location_id ?? sale.outlet_id;
+      const cashLedgerCode = locType === 'warehouse'
+        ? `WH-CASH-${locId}`
+        : `OUTLET-CASH-${locId}`;
       const { rows: [cashLedger] } = await client.query(
         `SELECT id FROM account_ledgers WHERE code = $1`,
-        [outletCashCode]
+        [cashLedgerCode]
       );
       if (!cashLedger) {
         await client.query("ROLLBACK");
-        res.status(500).json({ error: "Cash ledger not found for this outlet. Contact administrator." });
+        res.status(500).json({ error: `Cash ledger (${cashLedgerCode}) not found for this location. Go to Accounts → Warehouses/Outlets and provision ledgers first.` });
         return;
       }
 
