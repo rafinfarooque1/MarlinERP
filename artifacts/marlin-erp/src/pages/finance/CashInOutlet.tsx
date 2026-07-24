@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
 import { Button } from '@/components/ui/button';
@@ -14,7 +14,7 @@ import {
   useGetBankLedgers,
 } from '@workspace/api-client-react';
 import { toast } from 'sonner';
-import { Banknote, ArrowUpFromLine, CheckCircle2, Store, Warehouse } from 'lucide-react';
+import { Banknote, ArrowUpFromLine, CheckCircle2, Store, Warehouse, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 
 function fmt(n: number) {
   return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -41,6 +41,17 @@ function LocationTypeBadge({ type }: { type: string }) {
   );
 }
 
+type SortKey   = 'name' | 'balance' | 'available';
+type SortDir   = 'asc' | 'desc';
+type TypeFilter = 'all' | 'outlet' | 'warehouse';
+
+function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
+  if (!active) return <ArrowUpDown className="w-3 h-3 text-muted-foreground/40" />;
+  return dir === 'asc'
+    ? <ArrowUp className="w-3 h-3 text-primary" />
+    : <ArrowDown className="w-3 h-3 text-primary" />;
+}
+
 export default function CashBalance() {
   const perm = usePermission('Cash Balance');
   const [tab, setTab] = useState<'balances' | 'deposits'>('balances');
@@ -56,6 +67,12 @@ export default function CashBalance() {
       </AppLayout>
     );
   }
+
+  // ── filter / sort state ───────────────────────────────────────────────────
+  const [typeFilter, setTypeFilter]       = useState<TypeFilter>('all');
+  const [locationId,  setLocationId]      = useState<string>('all');
+  const [sortKey,     setSortKey]         = useState<SortKey>('name');
+  const [sortDir,     setSortDir]         = useState<SortDir>('asc');
   const [depositFilter, setDepositFilter] = useState('all');
 
   const { data: allBalances = [], isLoading: balancesLoading, refetch: refetchBalances } = useGetCashInOutlet();
@@ -66,6 +83,47 @@ export default function CashBalance() {
 
   // Only outlets can have deposits recorded
   const outletBalances = allBalances.filter(b => b.locationType === 'outlet');
+
+  // ── derived: totals ───────────────────────────────────────────────────────
+  const totalCash      = allBalances.reduce((s, b) => s + b.cashBalance,      0);
+  const totalTransit   = allBalances.reduce((s, b) => s + b.pendingDeposits,  0);
+  const totalAvailable = allBalances.reduce((s, b) => s + b.availableBalance, 0);
+  const outletTotal    = allBalances.filter(b => b.locationType === 'outlet').reduce((s, b) => s + b.availableBalance, 0);
+  const warehouseTotal = allBalances.filter(b => b.locationType === 'warehouse').reduce((s, b) => s + b.availableBalance, 0);
+
+  // ── derived: location picker options (depends on type filter) ────────────
+  const locationOptions = useMemo(() => {
+    const src = typeFilter === 'all' ? allBalances
+      : allBalances.filter(b => b.locationType === typeFilter);
+    // Use "type-id" composite key so outlet-1 and warehouse-1 never clash
+    return src.map(b => ({ uid: `${b.locationType}-${b.locationId}`, name: b.locationName, type: b.locationType }));
+  }, [allBalances, typeFilter]);
+
+  // ── derived: filtered + sorted cards ─────────────────────────────────────
+  const displayBalances = useMemo(() => {
+    let list = [...allBalances];
+    if (typeFilter !== 'all') list = list.filter(b => b.locationType === typeFilter);
+    if (locationId !== 'all') list = list.filter(b => `${b.locationType}-${b.locationId}` === locationId);
+    list.sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === 'name')      cmp = a.locationName.localeCompare(b.locationName);
+      if (sortKey === 'balance')   cmp = a.cashBalance - b.cashBalance;
+      if (sortKey === 'available') cmp = a.availableBalance - b.availableBalance;
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return list;
+  }, [allBalances, typeFilter, locationId, sortKey, sortDir]);
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortKey(key); setSortDir('desc'); }
+  }
+
+  // reset location picker when type filter changes
+  function handleTypeChange(v: TypeFilter) {
+    setTypeFilter(v);
+    setLocationId('all');
+  }
 
   // Create deposit dialog
   const [showDeposit, setShowDeposit] = useState(false);
@@ -175,53 +233,149 @@ export default function CashBalance() {
           balancesLoading ? (
             <div className="py-12 text-center text-muted-foreground">Loading…</div>
           ) : (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {allBalances.map(b => (
-                <div key={`${b.locationType}-${b.locationId}`} className="rounded-xl border border-border p-4 space-y-3 bg-card hover:shadow-sm transition-shadow">
-                  <div className="flex items-center justify-between">
-                    <p className="font-semibold text-sm">{b.locationName}</p>
-                    <LocationTypeBadge type={b.locationType} />
-                  </div>
+            <div className="space-y-4">
 
-                  <div className="space-y-1.5 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Cash balance</span>
-                      <span className="font-mono font-semibold">{fmt(b.cashBalance)}</span>
+              {/* ── Total summary banner ── */}
+              {allBalances.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="rounded-xl border border-border bg-card p-3 space-y-0.5">
+                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">Total Cash</p>
+                    <p className="text-lg font-bold font-mono">{fmt(totalCash)}</p>
+                    <p className="text-[10px] text-muted-foreground">{allBalances.length} location{allBalances.length !== 1 ? 's' : ''}</p>
+                  </div>
+                  <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 space-y-0.5">
+                    <p className="text-[11px] uppercase tracking-wide text-amber-600 font-medium">In Transit</p>
+                    <p className="text-lg font-bold font-mono text-amber-600">{fmt(totalTransit)}</p>
+                    <p className="text-[10px] text-muted-foreground">pending deposits</p>
+                  </div>
+                  <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-0.5">
+                    <p className="text-[11px] uppercase tracking-wide text-emerald-600 font-medium">Available</p>
+                    <p className="text-lg font-bold font-mono text-emerald-600">{fmt(totalAvailable)}</p>
+                    <p className="text-[10px] text-muted-foreground">after transit</p>
+                  </div>
+                  <div className="rounded-xl border border-border bg-card p-3 space-y-0.5">
+                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">Breakdown</p>
+                    <div className="flex items-center gap-1.5 pt-0.5">
+                      <Store className="w-3 h-3 text-emerald-500 shrink-0" />
+                      <span className="text-xs text-muted-foreground">Outlets</span>
+                      <span className="ml-auto text-xs font-mono font-semibold">{fmt(outletTotal)}</span>
                     </div>
-                    {b.pendingDeposits > 0 && (
-                      <div className="flex justify-between text-amber-600">
-                        <span>In transit</span>
-                        <span className="font-mono">({fmt(b.pendingDeposits)})</span>
-                      </div>
-                    )}
-                    <Separator />
-                    <div className="flex justify-between font-semibold text-emerald-600">
-                      <span>Available</span>
-                      <span className="font-mono">{fmt(b.availableBalance)}</span>
+                    <div className="flex items-center gap-1.5">
+                      <Warehouse className="w-3 h-3 text-blue-500 shrink-0" />
+                      <span className="text-xs text-muted-foreground">Warehouses</span>
+                      <span className="ml-auto text-xs font-mono font-semibold">{fmt(warehouseTotal)}</span>
                     </div>
                   </div>
-
-                  {/* Deposits only for outlets */}
-                  {b.locationType === 'outlet' && b.availableBalance > 0 && perm.canAdd && (
-                    <Button
-                      size="sm" variant="outline" className="w-full h-7 text-xs"
-                      onClick={() => {
-                        setDepOutletId(String(b.outletId));
-                        setDepAmount(String(b.availableBalance));
-                        setShowDeposit(true);
-                      }}
-                    >
-                      <ArrowUpFromLine className="w-3 h-3 mr-1" /> Deposit to Bank
-                    </Button>
-                  )}
-                </div>
-              ))}
-              {allBalances.length === 0 && (
-                <div className="col-span-full py-16 text-center text-muted-foreground space-y-2">
-                  <Banknote className="w-10 h-10 mx-auto opacity-30" />
-                  <p className="font-medium">No cash balance data</p>
                 </div>
               )}
+
+              {/* ── Filter + Sort bar ── */}
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Type filter */}
+                <div className="flex items-center gap-1 bg-muted/20 rounded-lg p-1">
+                  {(['all', 'outlet', 'warehouse'] as TypeFilter[]).map(t => (
+                    <button
+                      key={t}
+                      onClick={() => handleTypeChange(t)}
+                      className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors
+                        ${typeFilter === t ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                    >
+                      {t === 'outlet' && <Store className="w-3 h-3" />}
+                      {t === 'warehouse' && <Warehouse className="w-3 h-3" />}
+                      {t === 'all' ? 'All' : t === 'outlet' ? 'Outlets' : 'Warehouses'}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Location picker */}
+                <Select value={locationId} onValueChange={setLocationId}>
+                  <SelectTrigger className="h-8 text-xs w-44">
+                    <SelectValue placeholder="All locations" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All locations</SelectItem>
+                    {locationOptions.map(o => (
+                      <SelectItem key={o.uid} value={o.uid}>
+                        <span className="flex items-center gap-1.5">
+                          {o.type === 'outlet'
+                            ? <Store className="w-3 h-3 text-emerald-500 shrink-0" />
+                            : <Warehouse className="w-3 h-3 text-blue-500 shrink-0" />}
+                          {o.name}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                {/* Sort buttons */}
+                <div className="flex items-center gap-1 ml-auto">
+                  <span className="text-[11px] text-muted-foreground mr-0.5">Sort:</span>
+                  {([
+                    { key: 'name'      as SortKey, label: 'Name' },
+                    { key: 'balance'   as SortKey, label: 'Balance' },
+                    { key: 'available' as SortKey, label: 'Available' },
+                  ]).map(({ key, label }) => (
+                    <button
+                      key={key}
+                      onClick={() => toggleSort(key)}
+                      className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors
+                        ${sortKey === key ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                    >
+                      {label}
+                      <SortIcon active={sortKey === key} dir={sortDir} />
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* ── Cards grid ── */}
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {displayBalances.map(b => (
+                  <div key={`${b.locationType}-${b.locationId}`} className="rounded-xl border border-border p-4 space-y-3 bg-card hover:shadow-sm transition-shadow">
+                    <div className="flex items-center justify-between">
+                      <p className="font-semibold text-sm">{b.locationName}</p>
+                      <LocationTypeBadge type={b.locationType} />
+                    </div>
+
+                    <div className="space-y-1.5 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Cash balance</span>
+                        <span className="font-mono font-semibold">{fmt(b.cashBalance)}</span>
+                      </div>
+                      {b.pendingDeposits > 0 && (
+                        <div className="flex justify-between text-amber-600">
+                          <span>In transit</span>
+                          <span className="font-mono">({fmt(b.pendingDeposits)})</span>
+                        </div>
+                      )}
+                      <Separator />
+                      <div className="flex justify-between font-semibold text-emerald-600">
+                        <span>Available</span>
+                        <span className="font-mono">{fmt(b.availableBalance)}</span>
+                      </div>
+                    </div>
+
+                    {b.locationType === 'outlet' && b.availableBalance > 0 && perm.canAdd && (
+                      <Button
+                        size="sm" variant="outline" className="w-full h-7 text-xs"
+                        onClick={() => {
+                          setDepOutletId(String(b.outletId));
+                          setDepAmount(String(b.availableBalance));
+                          setShowDeposit(true);
+                        }}
+                      >
+                        <ArrowUpFromLine className="w-3 h-3 mr-1" /> Deposit to Bank
+                      </Button>
+                    )}
+                  </div>
+                ))}
+                {displayBalances.length === 0 && (
+                  <div className="col-span-full py-16 text-center text-muted-foreground space-y-2">
+                    <Banknote className="w-10 h-10 mx-auto opacity-30" />
+                    <p className="font-medium">{allBalances.length === 0 ? 'No cash balance data' : 'No locations match the filter'}</p>
+                  </div>
+                )}
+              </div>
             </div>
           )
         )}
