@@ -141,20 +141,20 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const [viewItem, setViewItem] = useState<any>(null);
   const [viewQrUrl, setViewQrUrl] = useState<string | null>(null);
 
-  // Payment collection state — declared before the QR useEffect that reads paymentAmount
-  const [paymentMethod, setPaymentMethod] = useState('cash');
-  const [paymentAmount, setPaymentAmount] = useState('');
-  const [paymentRef, setPaymentRef] = useState('');
+  // Multi-method payment state — each row has its own method, amount and reference
+  type PRow = { id: number; method: string; amount: string; ref: string };
+  const [paymentRows, setPaymentRows] = useState<PRow[]>([{ id: 1, method: 'cash', amount: '', ref: '' }]);
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
   const [showPaymentForm, setShowPaymentForm] = useState(false);
+  // Derived values used by the UPI QR effect below
+  const upiRow = paymentRows.find(r => r.method === 'upi');
+  const paymentMethod = upiRow ? 'upi' : (paymentRows[0]?.method ?? 'cash');
+  const paymentAmount = upiRow?.amount ?? paymentRows[0]?.amount ?? '';
 
-  // Generate UPI QR data URL whenever the invoice view opens or the collection amount changes.
-  // The QR amount uses balance due (outstanding amount), not the full invoice total —
-  // so partial payers are prompted for exactly what they owe.
+  // Generate UPI QR data URL whenever the invoice view opens or a UPI row's amount changes.
   useEffect(() => {
     if (!viewItem || !(viewItem as any).outletUpiId) { setViewQrUrl(null); return; }
     const upiId  = (viewItem as any).outletUpiId as string;
-    // Use balance due for outstanding invoices; fall back to totalAmount for fully new sales
     const balanceDue = Number((viewItem as any).balanceDue ?? viewItem.totalAmount);
     const collectionAmount = paymentAmount && Number(paymentAmount) > 0
       ? Number(paymentAmount)
@@ -166,7 +166,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       QR.toDataURL(upiUri, { width: 200, margin: 2 }).then((url: string) => { if (!cancelled) setViewQrUrl(url); });
     }).catch(() => { if (!cancelled) setViewQrUrl(null); });
     return () => { cancelled = true; };
-  }, [viewItem, paymentAmount]);
+  }, [viewItem, paymentRows]);
   const queryClient = useQueryClient();
   const createMutation = useCreateSale();
   const updateMutation = useUpdateSale();
@@ -197,19 +197,28 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
 
   const handleCollectPayment = async () => {
     if (!viewItem) return;
-    const amount = Number(paymentAmount);
-    if (!amount || amount <= 0) { toast.error('Enter a valid amount'); return; }
+    const validRows = paymentRows.filter(r => Number(r.amount) > 0);
+    if (validRows.length === 0) { toast.error('Enter at least one payment amount'); return; }
+    const totalPaying = validRows.reduce((s, r) => s + Number(r.amount), 0);
+    const balanceDue = Number((viewItem as any).balanceDue ?? 0);
+    if (totalPaying > balanceDue + 0.001) {
+      toast.error(`Total ₹${totalPaying.toFixed(2)} exceeds balance due ₹${balanceDue.toFixed(2)}`); return;
+    }
     try {
-      const result = await createPaymentMutation.mutateAsync({
-        saleId: viewItem.id,
-        data: { method: paymentMethod, amount, referenceNumber: paymentRef || undefined, paymentDate },
-      });
-      toast.success(`Payment of ₹${amount.toLocaleString('en-IN')} collected (${paymentMethod})`);
-      // Update viewItem state with new payment status
-      setViewItem((prev: any) => prev ? { ...prev, paymentStatus: result.newPaymentStatus, amountPaid: result.newAmountPaid, balanceDue: Math.max(0, prev.totalAmount - result.newAmountPaid) } : null);
+      let lastResult: any;
+      for (const row of validRows) {
+        lastResult = await createPaymentMutation.mutateAsync({
+          saleId: viewItem.id,
+          data: { method: row.method, amount: Number(row.amount), referenceNumber: row.ref || undefined, paymentDate },
+        });
+      }
+      const label = validRows.length > 1
+        ? `${validRows.length} payments totalling ₹${totalPaying.toLocaleString('en-IN')}`
+        : `₹${totalPaying.toLocaleString('en-IN')} via ${validRows[0].method}`;
+      toast.success(`Payment collected — ${label}`);
+      setViewItem((prev: any) => prev ? { ...prev, paymentStatus: lastResult.newPaymentStatus, amountPaid: lastResult.newAmountPaid, balanceDue: Math.max(0, prev.totalAmount - lastResult.newAmountPaid) } : null);
       queryClient.invalidateQueries({ queryKey: getListSalesQueryKey() });
-      setPaymentAmount('');
-      setPaymentRef('');
+      setPaymentRows([{ id: Date.now(), method: 'cash', amount: '', ref: '' }]);
       setShowPaymentForm(false);
     } catch (e: any) {
       toast.error(e?.data?.error || e?.message || 'Failed to collect payment');
@@ -1155,12 +1164,14 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   </div>
                 )}
 
-                {/* Collect payment button / form */}
+                {/* Collect payment — supports split payments across multiple methods */}
                 {(viewItem as any).paymentStatus !== 'paid' && perm.canAdd && (
                   <div className="mt-3">
                     {!showPaymentForm ? (
                       <Button size="sm" className="w-full h-8" onClick={() => {
-                        setPaymentAmount(String(Number((viewItem as any).balanceDue ?? 0)));
+                        const bal = Number((viewItem as any).balanceDue ?? 0).toFixed(2);
+                        setPaymentRows([{ id: Date.now(), method: 'cash', amount: bal, ref: '' }]);
+                        setPaymentDate(new Date().toISOString().split('T')[0]);
                         setShowPaymentForm(true);
                       }}>
                         <IndianRupee className="w-3.5 h-3.5 mr-1" /> Collect Payment
@@ -1168,36 +1179,104 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     ) : (
                       <div className="space-y-2 bg-background/60 rounded-lg p-3">
                         <p className="text-xs font-semibold text-foreground">Collect Payment</p>
-                        <div className="grid grid-cols-2 gap-2">
-                          <div>
-                            <p className="text-[10px] text-muted-foreground mb-1">Method</p>
-                            <Select value={paymentMethod} onValueChange={setPaymentMethod}>
-                              <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="cash">Cash</SelectItem>
-                                <SelectItem value="upi">UPI</SelectItem>
-                                <SelectItem value="card">Card</SelectItem>
-                                <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
-                                <SelectItem value="other">Other</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <div>
-                            <p className="text-[10px] text-muted-foreground mb-1">Amount (₹)</p>
-                            <Input type="number" min={0.01} step={0.01} value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} className="h-7 text-xs font-mono" />
-                          </div>
-                        </div>
-                        {paymentMethod !== 'cash' && (
-                          <div>
-                            <p className="text-[10px] text-muted-foreground mb-1">Reference / UTR</p>
-                            <Input value={paymentRef} onChange={e => setPaymentRef(e.target.value)} className="h-7 text-xs font-mono" placeholder="Optional reference number" />
-                          </div>
-                        )}
+
+                        {/* One card per payment row */}
+                        {paymentRows.map((row) => {
+                          const balDue = Number((viewItem as any).balanceDue ?? 0);
+                          const otherTotal = paymentRows.filter(r => r.id !== row.id).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+                          const maxForRow = Math.max(0, balDue - otherTotal);
+                          return (
+                            <div key={row.id} className="border border-border/60 rounded-lg p-2 bg-muted/10 space-y-1.5">
+                              <div className="flex items-center gap-1.5">
+                                <div className="flex-1 grid grid-cols-2 gap-1.5">
+                                  <div>
+                                    <p className="text-[10px] text-muted-foreground mb-1">Method</p>
+                                    <Select value={row.method} onValueChange={v => setPaymentRows(rs => rs.map(r => r.id === row.id ? { ...r, method: v } : r))}>
+                                      <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="cash">Cash</SelectItem>
+                                        <SelectItem value="upi">UPI</SelectItem>
+                                        <SelectItem value="card">Card</SelectItem>
+                                        <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
+                                        <SelectItem value="other">Other</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                  <div>
+                                    <p className="text-[10px] text-muted-foreground mb-1">Amount (₹)</p>
+                                    <Input
+                                      type="number" min={0.01} step={0.01} max={maxForRow}
+                                      value={row.amount}
+                                      onChange={e => setPaymentRows(rs => rs.map(r => r.id === row.id ? { ...r, amount: e.target.value } : r))}
+                                      className="h-7 text-xs font-mono"
+                                    />
+                                  </div>
+                                </div>
+                                {paymentRows.length > 1 && (
+                                  <button
+                                    onClick={() => setPaymentRows(rs => rs.filter(r => r.id !== row.id))}
+                                    className="mt-4 p-1 text-muted-foreground hover:text-destructive rounded"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                              {row.method !== 'cash' && (
+                                <div>
+                                  <p className="text-[10px] text-muted-foreground mb-1">Reference / UTR (optional)</p>
+                                  <Input
+                                    value={row.ref}
+                                    onChange={e => setPaymentRows(rs => rs.map(r => r.id === row.id ? { ...r, ref: e.target.value } : r))}
+                                    className="h-7 text-xs font-mono" placeholder="e.g. UPI ref, txn ID"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+
+                        {/* Add another method — only if balance remains */}
+                        {(() => {
+                          const bal = Number((viewItem as any).balanceDue ?? 0);
+                          const total = paymentRows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+                          const remaining = bal - total;
+                          return remaining > 0.001 ? (
+                            <button
+                              onClick={() => setPaymentRows(rs => [...rs, { id: Date.now(), method: 'upi', amount: remaining.toFixed(2), ref: '' }])}
+                              className="flex items-center gap-1 text-xs text-primary hover:underline"
+                            >
+                              <Plus className="w-3 h-3" /> Add another payment method
+                            </button>
+                          ) : null;
+                        })()}
+
+                        {/* Running totals (shown when there are multiple rows) */}
+                        {paymentRows.length > 1 && (() => {
+                          const bal = Number((viewItem as any).balanceDue ?? 0);
+                          const total = paymentRows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+                          const over = total - bal;
+                          return (
+                            <div className="text-xs border-t border-border pt-1.5 space-y-0.5">
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Total collecting</span>
+                                <span className="font-mono font-semibold">₹{total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                              </div>
+                              {over > 0.001
+                                ? <div className="flex justify-between text-red-600"><span>Exceeds balance by</span><span className="font-mono">₹{over.toFixed(2)}</span></div>
+                                : total < bal - 0.001
+                                ? <div className="flex justify-between text-amber-600"><span>Still due after</span><span className="font-mono">₹{(bal - total).toFixed(2)}</span></div>
+                                : <div className="text-emerald-600 text-center text-[10px] font-semibold">Full balance collected ✓</div>
+                              }
+                            </div>
+                          );
+                        })()}
+
+                        {/* Date + action buttons */}
                         <div>
-                          <p className="text-[10px] text-muted-foreground mb-1">Date</p>
+                          <p className="text-[10px] text-muted-foreground mb-1">Payment Date</p>
                           <Input type="date" value={paymentDate} onChange={e => setPaymentDate(e.target.value)} className="h-7 text-xs" />
                         </div>
-                        {paymentMethod !== 'cash' && (
+                        {paymentRows.some(r => r.method !== 'cash') && (
                           <div className="text-[10px] text-amber-600 bg-amber-500/5 rounded px-2 py-1">
                             Electronic payments appear in Reconciliation until matched to a bank settlement.
                           </div>
