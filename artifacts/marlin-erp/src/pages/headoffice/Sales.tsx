@@ -116,20 +116,23 @@ interface SalesProps {
   forceLocationType?: 'warehouse' | 'outlet';
   forceLocationId?: number;
   forceLocationName?: string;
+  /** Additional outlet IDs to include in the list (used in warehouse mode to show child outlets). */
+  forceChildOutletIds?: number[];
 }
 
-export default function Sales({ forceLocationType, forceLocationId, forceLocationName }: SalesProps = {}) {
+export default function Sales({ forceLocationType, forceLocationId, forceLocationName, forceChildOutletIds }: SalesProps = {}) {
   const perm = usePermission('Sales');
   const { data: outlets = [] } = useListOutlets();
   const [outletFilter, setOutletFilter] = useState<string>('all');
   const { data: allSales = [], isLoading } = useListSales(
     outletFilter !== 'all' ? { outletId: Number(outletFilter) } : undefined
   );
-  // When a location is forced (Sales segment), filter the list to that location
+  // When a location is forced (Sales segment), filter the list to that location + optional child outlets
+  const forceChildOutletIdSet = new Set(forceChildOutletIds ?? []);
   const sales = forceLocationType && forceLocationId
     ? allSales.filter(s =>
-        (s as any).locationType === forceLocationType &&
-        (s as any).locationId === forceLocationId
+        ((s as any).locationType === forceLocationType && Number((s as any).locationId) === forceLocationId) ||
+        (forceChildOutletIdSet.size > 0 && (s as any).locationType === 'outlet' && forceChildOutletIdSet.has(Number((s as any).locationId)))
       )
     : allSales;
   // When operating inside a specific location (Sales segment), scope customers to that location only

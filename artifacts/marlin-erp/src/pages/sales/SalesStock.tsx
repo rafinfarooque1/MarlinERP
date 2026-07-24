@@ -1,35 +1,61 @@
-import { useEffect } from 'react';
-import { useLocation } from 'wouter';
+import { useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useLocationContext } from '@/lib/locationContext';
-import { useListStock, useListItems } from '@workspace/api-client-react';
-import { Package, AlertTriangle } from 'lucide-react';
+import { useListStock, useListItems, useListOutlets } from '@workspace/api-client-react';
+import { Package, AlertTriangle, Search } from 'lucide-react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 
 export default function SalesStock() {
-  const [, navigate] = useLocation();
   const { locationState } = useLocationContext();
+  const [search, setSearch] = useState('');
 
-  useEffect(() => {
-    if (!locationState.locationType || !locationState.locationId) {
-      navigate('/sales');
-    }
-  }, [locationState, navigate]);
+  const { locationType, locationId, locationName } = locationState;
+  const isAll       = locationType === 'all';
+  const isWarehouse = locationType === 'warehouse' && !!locationId && !isAll;
+  const isSpecific  = !isAll && !!locationType && !!locationId;
 
-  const { data: stock = [], isLoading } = useListStock(
-    locationState.locationType && locationState.locationId
-      ? { branchType: locationState.locationType as any, branchId: locationState.locationId }
-      : {},
-    { query: { enabled: !!locationState.locationType && !!locationState.locationId } }
+  // Child outlets for warehouse mode
+  const { data: outlets = [] } = useListOutlets();
+  const childOutletIds = isWarehouse
+    ? new Set((outlets as any[]).filter(o => Number(o.warehouseId) === locationId).map(o => o.id))
+    : new Set<number>();
+
+  // Fetch all stock for 'all' / 'warehouse' modes; specific otherwise
+  const { data: allStock = [], isLoading } = useListStock(
+    isSpecific ? { branchType: locationType as any, branchId: locationId! } : {},
+    { query: { enabled: isAll || isWarehouse || isSpecific } }
   );
 
   const { data: items = [] } = useListItems();
   const itemMap = new Map((items as any[]).map(i => [i.id, i]));
 
-  const sortedStock = [...(stock as any[])].sort((a, b) => Number(b.quantity) - Number(a.quantity));
+  // In warehouse mode filter to warehouse + child outlets
+  const stock = isWarehouse
+    ? (allStock as any[]).filter(s =>
+        (s.branchType === 'warehouse' && Number(s.branchId) === locationId) ||
+        (s.branchType === 'outlet'    && childOutletIds.has(Number(s.branchId)))
+      )
+    : (allStock as any[]);
 
-  if (!locationState.locationType || !locationState.locationId) return null;
+  const filtered = stock.filter(s =>
+    !search ||
+    (s.itemName ?? '').toLowerCase().includes(search.toLowerCase()) ||
+    (s.branchName ?? '').toLowerCase().includes(search.toLowerCase())
+  );
+
+  const sorted = [...filtered].sort((a, b) => Number(b.quantity) - Number(a.quantity));
+
+  const showLocationCol = isAll || isWarehouse;
+  const title    = isAll ? 'Stock — All Locations' : `Stock — ${locationName}`;
+  const subtitle = isAll
+    ? 'Current inventory across all warehouses and outlets'
+    : isWarehouse
+    ? `Stock at ${locationName} and its outlets`
+    : 'Current inventory at this location';
+
+  if (!locationType) return null;
 
   return (
     <AppLayout>
@@ -37,16 +63,31 @@ export default function SalesStock() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
             <Package className="w-6 h-6 text-primary" />
-            Stock — {locationState.locationName}
+            {title}
           </h1>
-          <p className="text-muted-foreground mt-1">Current inventory at this location</p>
+          <p className="text-muted-foreground mt-1">{subtitle}</p>
         </div>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+          {/* Search bar — useful for all/warehouse multi-location views */}
+          {showLocationCol && (
+            <div className="p-3 border-b border-border bg-muted/20 flex items-center gap-2">
+              <Search className="w-4 h-4 text-muted-foreground shrink-0" />
+              <Input
+                placeholder="Search item or location…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="border-transparent bg-transparent focus-visible:ring-0 h-8"
+              />
+            </div>
+          )}
+
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
                 <TableHead>Item</TableHead>
+                {showLocationCol && <TableHead>Location</TableHead>}
+                {showLocationCol && <TableHead>Type</TableHead>}
                 <TableHead>Unit</TableHead>
                 <TableHead className="text-right">Quantity</TableHead>
                 <TableHead>Status</TableHead>
@@ -54,28 +95,46 @@ export default function SalesStock() {
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                [...Array(4)].map((_, i) => (
+                [...Array(5)].map((_, i) => (
                   <TableRow key={i}>
-                    <TableCell colSpan={4}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
+                    <TableCell colSpan={showLocationCol ? 6 : 4}>
+                      <div className="h-8 bg-muted/30 rounded animate-pulse" />
+                    </TableCell>
                   </TableRow>
                 ))
-              ) : sortedStock.length === 0 ? (
+              ) : sorted.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center py-16 text-muted-foreground">
+                  <TableCell colSpan={showLocationCol ? 6 : 4} className="text-center py-16 text-muted-foreground">
                     <Package className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                    <p>No stock at this location</p>
+                    <p>{isAll ? 'No stock across any location' : `No stock at ${locationName}`}</p>
                   </TableCell>
                 </TableRow>
-              ) : sortedStock.map((entry: any) => {
+              ) : sorted.map((entry: any, i: number) => {
                 const item = itemMap.get(entry.itemId);
-                const qty = Number(entry.quantity ?? 0);
-                const isLow = qty > 0 && qty < 10;
+                const qty    = Number(entry.quantity ?? 0);
+                const isLow  = qty > 0 && qty < 10;
                 const isEmpty = qty <= 0;
                 return (
-                  <TableRow key={entry.id} className={isEmpty ? 'opacity-50' : ''}>
-                    <TableCell className="font-medium">{entry.itemName || item?.name || `Item #${entry.itemId}`}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{item?.unit ?? '—'}</TableCell>
-                    <TableCell className="text-right font-mono font-bold">{qty.toLocaleString('en-IN')}</TableCell>
+                  <TableRow key={`${entry.branchType}-${entry.branchId}-${entry.itemId}-${i}`} className={isEmpty ? 'opacity-50' : ''}>
+                    <TableCell className="font-medium">
+                      {entry.itemName || item?.name || `Item #${entry.itemId}`}
+                    </TableCell>
+                    {showLocationCol && (
+                      <TableCell className="text-sm text-muted-foreground">
+                        {entry.branchName ?? '—'}
+                      </TableCell>
+                    )}
+                    {showLocationCol && (
+                      <TableCell>
+                        <Badge variant="outline" className="text-[10px] capitalize">{entry.branchType}</Badge>
+                      </TableCell>
+                    )}
+                    <TableCell className="text-sm text-muted-foreground">
+                      {item?.unit ?? '—'}
+                    </TableCell>
+                    <TableCell className="text-right font-mono font-bold">
+                      {qty.toLocaleString('en-IN')}
+                    </TableCell>
                     <TableCell>
                       {isEmpty ? (
                         <Badge variant="destructive" className="text-[10px]">Out of Stock</Badge>
@@ -84,7 +143,9 @@ export default function SalesStock() {
                           <AlertTriangle className="w-3 h-3 mr-1" />Low
                         </Badge>
                       ) : (
-                        <Badge className="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20">In Stock</Badge>
+                        <Badge className="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20">
+                          In Stock
+                        </Badge>
                       )}
                     </TableCell>
                   </TableRow>
@@ -92,10 +153,15 @@ export default function SalesStock() {
               })}
             </TableBody>
           </Table>
-          {sortedStock.length > 0 && (
+
+          {sorted.length > 0 && (
             <div className="p-3 border-t border-border flex justify-between text-sm">
-              <span className="text-muted-foreground">{sortedStock.filter((s: any) => Number(s.quantity) > 0).length} item types with stock</span>
-              <span className="font-bold">{sortedStock.reduce((s: number, e: any) => s + Number(e.quantity ?? 0), 0).toLocaleString('en-IN')} total units</span>
+              <span className="text-muted-foreground">
+                {sorted.filter((s: any) => Number(s.quantity) > 0).length} stock entries with quantity
+              </span>
+              <span className="font-bold">
+                {sorted.reduce((s: number, e: any) => s + Number(e.quantity ?? 0), 0).toLocaleString('en-IN')} total units
+              </span>
             </div>
           )}
         </div>
