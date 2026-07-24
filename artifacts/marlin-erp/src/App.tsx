@@ -60,7 +60,13 @@ import { LocationProvider } from './lib/locationContext';
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { retry: 1, staleTime: 30_000 },
+    queries: {
+      retry: 1,
+      staleTime: 60_000,          // serve cached data for 60s before background refresh
+      gcTime: 10 * 60_000,        // keep unused data in cache for 10min
+      refetchOnWindowFocus: false, // don't re-fetch just because user switches tabs
+      refetchOnReconnect: false,   // don't blast the server on reconnect
+    },
   },
 });
 

@@ -442,6 +442,57 @@ async function runMigrations() {
       console.log(`[migration] warehouse_outlet_ledger_backfill_v1: linked ledgers for ${warehouses.length} warehouse(s) + ${outlets.length} outlet(s)`);
     }
   }
+
+  // ── Performance indexes (all idempotent via IF NOT EXISTS) ───────────────
+  await pool.query(`
+    -- stock_entries: main lookup by branch (used on every stock page)
+    CREATE INDEX IF NOT EXISTS idx_stock_entries_branch
+      ON stock_entries(branch_type, branch_id);
+    CREATE INDEX IF NOT EXISTS idx_stock_entries_item
+      ON stock_entries(item_id);
+
+    -- sales: filter by location and date (dashboard, reports, POS)
+    CREATE INDEX IF NOT EXISTS idx_sales_location
+      ON sales(location_type, location_id);
+    CREATE INDEX IF NOT EXISTS idx_sales_date
+      ON sales(sale_date);
+    CREATE INDEX IF NOT EXISTS idx_sales_payment_status
+      ON sales(payment_status);
+
+    -- stock_transfers: filter by status and branch (transfers page)
+    CREATE INDEX IF NOT EXISTS idx_stock_transfers_status
+      ON stock_transfers(status);
+    CREATE INDEX IF NOT EXISTS idx_stock_transfers_from
+      ON stock_transfers(from_type, from_id);
+    CREATE INDEX IF NOT EXISTS idx_stock_transfers_to
+      ON stock_transfers(to_type, to_id);
+
+    -- activity_log: always ordered by created_at desc (dashboard)
+    CREATE INDEX IF NOT EXISTS idx_activity_log_created
+      ON activity_log(created_at DESC);
+
+    -- payments: date lookups (expenses/location expenses pages)
+    CREATE INDEX IF NOT EXISTS idx_payments_date
+      ON payments(payment_date);
+    CREATE INDEX IF NOT EXISTS idx_payments_from_ledger
+      ON payments(paid_from_ledger_id);
+    CREATE INDEX IF NOT EXISTS idx_payments_to_ledger
+      ON payments(paid_to_ledger_id);
+
+    -- purchases: vendor and date lookups
+    CREATE INDEX IF NOT EXISTS idx_purchases_vendor
+      ON purchases(vendor_id);
+    CREATE INDEX IF NOT EXISTS idx_purchases_date
+      ON purchases(purchase_date);
+
+    -- customers: location lookup
+    CREATE INDEX IF NOT EXISTS idx_customers_location
+      ON customers(location_type, location_id);
+
+    -- outlets: warehouse association
+    CREATE INDEX IF NOT EXISTS idx_outlets_warehouse
+      ON outlets(warehouse_id);
+  `);
 }
 
 const rawPort = process.env["PORT"];

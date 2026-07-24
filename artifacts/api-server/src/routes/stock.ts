@@ -7,37 +7,39 @@ import { pool } from "@workspace/db";
 
 const router = Router();
 
-async function getBranchName(branchType: string, branchId: number): Promise<string> {
-  if (branchType === "production") return "Production Unit";
-  if (branchType === "headoffice") return "Head Office";
-  if (branchType === "warehouse") {
-    const [w] = await db.select().from(warehousesTable).where(eq(warehousesTable.id, branchId)).limit(1);
-    return w?.name ?? `Warehouse #${branchId}`;
-  }
-  if (branchType === "outlet") {
-    const [o] = await db.select().from(outletsTable).where(eq(outletsTable.id, branchId)).limit(1);
-    return o?.name ?? `Outlet #${branchId}`;
-  }
-  return `Branch #${branchId}`;
+// ── Branch-name lookup with preloaded maps (no per-row DB hits) ────────────────
+async function buildBranchMaps() {
+  const [warehouses, outlets] = await Promise.all([
+    db.select({ id: warehousesTable.id, name: warehousesTable.name }).from(warehousesTable),
+    db.select({ id: outletsTable.id, name: outletsTable.name }).from(outletsTable),
+  ]);
+  const wMap = new Map(warehouses.map(w => [w.id, w.name]));
+  const oMap = new Map(outlets.map(o => [o.id, o.name]));
+  return (type: string, id: number): string => {
+    if (type === "production") return "Production Unit";
+    if (type === "headoffice") return "Head Office";
+    if (type === "warehouse") return wMap.get(id) ?? `Warehouse #${id}`;
+    if (type === "outlet") return oMap.get(id) ?? `Outlet #${id}`;
+    return `Branch #${id}`;
+  };
 }
 
 router.get("/stock", async (req, res): Promise<void> => {
   const qp = ListStockQueryParams.safeParse(req.query);
-  let rows = await db.select().from(stockEntriesTable);
-  const items = await db.select().from(itemsTable);
+
+  // Fetch all three in parallel
+  const [rows, items, branchName] = await Promise.all([
+    db.select().from(stockEntriesTable),
+    db.select().from(itemsTable),
+    buildBranchMaps(),
+  ]);
   const iMap = new Map(items.map((i) => [i.id, i]));
 
-  if (qp.success && qp.data.branchType) {
-    rows = rows.filter((r) => r.branchType === qp.data.branchType);
-  }
-  if (qp.success && qp.data.branchId) {
-    rows = rows.filter((r) => r.branchId === Number(qp.data.branchId));
-  }
+  let filtered = rows;
+  if (qp.success && qp.data.branchType) filtered = filtered.filter(r => r.branchType === qp.data.branchType);
+  if (qp.success && qp.data.branchId)   filtered = filtered.filter(r => r.branchId  === Number(qp.data.branchId));
 
-  const branchNames: Record<string, string> = {};
-  const enriched = await Promise.all(rows.map(async (r) => {
-    const key = `${r.branchType}:${r.branchId}`;
-    if (!branchNames[key]) branchNames[key] = await getBranchName(r.branchType, r.branchId);
+  const enriched = filtered.map(r => {
     const item = iMap.get(r.itemId);
     return {
       id: r.id,
@@ -46,25 +48,27 @@ router.get("/stock", async (req, res): Promise<void> => {
       hsnCode: item?.hsnCode ?? "",
       branchType: r.branchType,
       branchId: r.branchId,
-      branchName: branchNames[key],
+      branchName: branchName(r.branchType, r.branchId),
       quantity: Number(r.quantity),
       costPrice: Number(r.costPrice),
       unit: item?.unit ?? "",
     };
-  }));
+  });
 
   res.json(enriched);
 });
 
 router.get("/stock/transfers", async (_req, res): Promise<void> => {
-  const result = await pool.query(`
-    SELECT id, challan_number, from_type, from_id, to_type, to_id, transfer_date,
-           line_items, is_interstate, status, notes, created_at,
-           approved_by, approved_at, received_line_items, rejection_reason
-    FROM stock_transfers ORDER BY id DESC
-  `);
-  const rows = result.rows;
-  const enriched = await Promise.all(rows.map(async (r: any) => ({
+  const [result, branchName] = await Promise.all([
+    pool.query(`
+      SELECT id, challan_number, from_type, from_id, to_type, to_id, transfer_date,
+             line_items, is_interstate, status, notes, created_at,
+             approved_by, approved_at, received_line_items, rejection_reason
+      FROM stock_transfers ORDER BY id DESC
+    `),
+    buildBranchMaps(),
+  ]);
+  const enriched = result.rows.map((r: any) => ({
     id: r.id,
     challanNumber: r.challan_number,
     fromType: r.from_type,
@@ -81,9 +85,9 @@ router.get("/stock/transfers", async (_req, res): Promise<void> => {
     approvedAt: r.approved_at,
     receivedLineItems: r.received_line_items ?? [],
     rejectionReason: r.rejection_reason,
-    fromName: await getBranchName(r.from_type, r.from_id),
-    toName: await getBranchName(r.to_type, r.to_id),
-  })));
+    fromName: branchName(r.from_type, r.from_id),
+    toName: branchName(r.to_type, r.to_id),
+  }));
   res.json(enriched);
 });
 
