@@ -5,18 +5,37 @@ import { useLocationContext } from '@/lib/locationContext';
 import {
   useListStockTransfers, useListItems, useGetCompanySettings,
   useApproveTransfer, useRejectTransfer, getListStockTransfersQueryKey,
+  useCreateStockTransfer, useListWarehouses, useListOutlets, useListStock,
 } from '@workspace/api-client-react';
 import { useQueryClient } from '@tanstack/react-query';
+import { useForm, useFieldArray } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import * as z from 'zod';
 import { toast } from 'sonner';
-import { ArrowLeftRight, Calendar, Eye, FileDown, PackageCheck, CheckCircle2, XCircle, AlertTriangle, Clock, Download } from 'lucide-react';
+import { ArrowLeftRight, Calendar, Eye, FileDown, PackageCheck, CheckCircle2, XCircle, AlertTriangle, Clock, Download, Plus, Trash2, PackageOpen } from 'lucide-react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { downloadPDFFromEndpoint, downloadCSV } from '@/lib/download';
+
+// ── New transfer form schema ───────────────────────────────────────────────────
+const newTransferSchema = z.object({
+  toType: z.enum(['warehouse', 'outlet']),
+  toId: z.coerce.number().min(1, 'Destination required'),
+  transferDate: z.string().min(1, 'Date required'),
+  lineItems: z.array(z.object({
+    itemId: z.coerce.number().min(1, 'Select item'),
+    quantity: z.coerce.number().min(1, 'Qty > 0'),
+  })).min(1, 'Add at least one item'),
+  notes: z.string().optional(),
+});
+type NewTransferValues = z.infer<typeof newTransferSchema>;
 
 // ── Status badge ──────────────────────────────────────────────────────────────
 function statusBadge(status: string) {
@@ -201,11 +220,64 @@ export default function SalesTransfers() {
   const { data: allTransfers = [], isLoading } = useListStockTransfers();
   const { data: items = [] } = useListItems();
   const { data: companySettings } = useGetCompanySettings();
+  const { data: warehouses = [] } = useListWarehouses();
+  const { data: outlets = [] } = useListOutlets();
 
-  const [viewItem, setViewItem]         = useState<any>(null);
+  const [viewItem, setViewItem]           = useState<any>(null);
   const [approveTarget, setApproveTarget] = useState<any>(null);
+  const [isOpen, setIsOpen]               = useState(false);
+
+  const queryClient = useQueryClient();
+  const createMutation = useCreateStockTransfer();
 
   const { locationType, locationId, locationName } = locationState;
+
+  // New-transfer form — "from" is always this location
+  const form = useForm<NewTransferValues>({
+    resolver: zodResolver(newTransferSchema),
+    defaultValues: { toType: 'warehouse', toId: 0, transferDate: new Date().toISOString().split('T')[0], lineItems: [{ itemId: 0, quantity: 1 }], notes: '' },
+  });
+  const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
+  const watchToType = form.watch('toType');
+
+  // Stock available at this location
+  const { data: fromStock = [] } = useListStock(
+    { branchType: locationType as any, branchId: locationId! },
+    { query: { enabled: !!locationType && !!locationId } }
+  );
+  const stockMap = new Map<number, number>(
+    (fromStock as any[]).map((s: any) => [s.itemId, Number(s.quantity ?? 0)])
+  );
+  const availableItems = (items as any[]).filter(it => (stockMap.get(it.id) ?? 0) > 0);
+
+  const toOptions = watchToType === 'warehouse' ? warehouses : outlets;
+
+  const openCreate = () => {
+    form.reset({ toType: 'warehouse', toId: 0, transferDate: new Date().toISOString().split('T')[0], lineItems: [{ itemId: 0, quantity: 1 }], notes: '' });
+    setIsOpen(true);
+  };
+
+  const onSubmit = (data: NewTransferValues) => {
+    createMutation.mutate({
+      data: {
+        fromType: locationType,
+        fromId: locationId,
+        toType: data.toType,
+        toId: data.toId,
+        transferDate: data.transferDate,
+        lineItems: data.lineItems,
+        notes: data.notes,
+      } as any,
+    }, {
+      onSuccess: () => {
+        toast.success('Transfer dispatched — awaiting receiver approval');
+        queryClient.invalidateQueries({ queryKey: getListStockTransfersQueryKey() });
+        setIsOpen(false);
+        form.reset();
+      },
+      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+    });
+  };
 
   const iMap = new Map((items as any[]).map((i: any) => [i.id, i]));
 
@@ -249,29 +321,34 @@ export default function SalesTransfers() {
             </h1>
             <p className="text-muted-foreground mt-1">Stock movements involving this location</p>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() =>
-              downloadCSV(
-                `transfers-${locationName?.replace(/\s+/g, '-').toLowerCase()}.csv`,
-                transfers.map((t: any) => ({
-                  Challan: t.challanNumber ?? `#${t.id}`,
-                  Date: t.transferDate ? new Date(t.transferDate).toLocaleDateString('en-IN') : '—',
-                  From: t.fromName ?? `${t.fromType} #${t.fromId}`,
-                  'From Type': t.fromType,
-                  To: t.toName ?? `${t.toType} #${t.toId}`,
-                  'To Type': t.toType,
-                  Status: t.status,
-                  Items: (t.lineItems ?? t.items ?? []).length,
-                  Notes: t.notes ?? '',
-                })),
-              )
-            }
-            disabled={transfers.length === 0}
-          >
-            <Download className="w-4 h-4 mr-2" /> Export CSV
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                downloadCSV(
+                  `transfers-${locationName?.replace(/\s+/g, '-').toLowerCase()}.csv`,
+                  transfers.map((t: any) => ({
+                    Challan: t.challanNumber ?? `#${t.id}`,
+                    Date: t.transferDate ? new Date(t.transferDate).toLocaleDateString('en-IN') : '—',
+                    From: t.fromName ?? `${t.fromType} #${t.fromId}`,
+                    'From Type': t.fromType,
+                    To: t.toName ?? `${t.toType} #${t.toId}`,
+                    'To Type': t.toType,
+                    Status: t.status,
+                    Items: (t.lineItems ?? t.items ?? []).length,
+                    Notes: t.notes ?? '',
+                  })),
+                )
+              }
+              disabled={transfers.length === 0}
+            >
+              <Download className="w-4 h-4 mr-2" /> Export CSV
+            </Button>
+            <Button size="sm" onClick={openCreate}>
+              <Plus className="w-4 h-4 mr-2" /> New Transfer
+            </Button>
+          </div>
         </div>
 
         {/* Pending approvals banner */}
@@ -441,6 +518,150 @@ export default function SalesTransfers() {
           )}
         </SheetContent>
       </Sheet>
+
+      {/* ── New Transfer dialog ────────────────────────────────────────── */}
+      <Dialog open={isOpen} onOpenChange={setIsOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>New Transfer from {locationName}</DialogTitle>
+            <DialogDescription>
+              Stock will be deducted from <strong>{locationName}</strong> immediately. The receiving location must approve to credit their inventory.
+            </DialogDescription>
+          </DialogHeader>
+
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
+
+              {/* From (locked) + To */}
+              <div className="grid grid-cols-2 gap-4 p-4 bg-muted/20 rounded-lg border border-border">
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase text-muted-foreground tracking-wider">From</p>
+                  <div className="p-2.5 rounded-md border border-border bg-muted/30 text-sm font-medium">
+                    {locationName}
+                    <span className="ml-2 text-xs text-muted-foreground capitalize">({locationType})</span>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase text-muted-foreground tracking-wider">To</p>
+                  <FormField control={form.control} name="toType" render={({ field }) => (
+                    <FormItem>
+                      <Select onValueChange={v => { field.onChange(v); form.setValue('toId', 0); }} value={field.value}>
+                        <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger></FormControl>
+                        <SelectContent>
+                          <SelectItem value="warehouse">Warehouse</SelectItem>
+                          <SelectItem value="outlet">Outlet</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </FormItem>
+                  )} />
+                  <FormField control={form.control} name="toId" render={({ field }) => (
+                    <FormItem>
+                      <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
+                        <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select destination" /></SelectTrigger></FormControl>
+                        <SelectContent>
+                          {(toOptions as any[]).map((o: any) => (
+                            <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                </div>
+              </div>
+
+              {/* Date */}
+              <FormField control={form.control} name="transferDate" render={({ field }) => (
+                <FormItem className="max-w-xs">
+                  <FormLabel>Date</FormLabel>
+                  <FormControl><Input type="date" {...field} /></FormControl>
+                  <FormMessage />
+                </FormItem>
+              )} />
+
+              {/* Line items */}
+              <div>
+                {availableItems.length === 0 ? (
+                  <div className="p-5 border border-dashed border-amber-500/40 rounded-lg text-center text-amber-600 bg-amber-500/5 flex flex-col items-center gap-2">
+                    <PackageOpen className="w-7 h-7 opacity-60" />
+                    <p className="font-medium text-sm">No stock available at {locationName}</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex justify-between items-center mb-3">
+                      <p className="font-semibold text-sm">
+                        Items <span className="text-xs text-muted-foreground font-normal ml-1">({availableItems.length} in stock)</span>
+                      </p>
+                      <Button type="button" variant="outline" size="sm" onClick={() => append({ itemId: 0, quantity: 1 })}>
+                        <Plus className="w-3 h-3 mr-1" /> Add
+                      </Button>
+                    </div>
+                    <div className="space-y-2">
+                      {fields.map((field, i) => {
+                        const selItemId = form.watch(`lineItems.${i}.itemId`);
+                        const availQty = stockMap.get(selItemId) ?? 0;
+                        return (
+                          <div key={field.id} className="grid grid-cols-11 gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border">
+                            <div className="col-span-7">
+                              <FormField control={form.control} name={`lineItems.${i}.itemId`} render={({ field: f }) => (
+                                <FormItem>
+                                  <FormLabel className="text-xs">Item</FormLabel>
+                                  <Select onValueChange={v => f.onChange(Number(v))} value={f.value ? String(f.value) : ''}>
+                                    <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select item" /></SelectTrigger></FormControl>
+                                    <SelectContent>
+                                      {availableItems.map((it: any) => (
+                                        <SelectItem key={it.id} value={String(it.id)}>
+                                          {it.name} — {stockMap.get(it.id) ?? 0} {it.unit} avail
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </FormItem>
+                              )} />
+                            </div>
+                            <div className="col-span-3">
+                              <FormField control={form.control} name={`lineItems.${i}.quantity`} render={({ field: f }) => (
+                                <FormItem>
+                                  <FormLabel className="text-xs">
+                                    Qty {selItemId > 0 && <span className="text-muted-foreground">(max {availQty})</span>}
+                                  </FormLabel>
+                                  <FormControl>
+                                    <Input type="number" min={1} max={selItemId > 0 ? availQty : undefined} className="h-8 text-xs" {...f} />
+                                  </FormControl>
+                                </FormItem>
+                              )} />
+                            </div>
+                            <div className="col-span-1 pb-1 flex justify-end">
+                              <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(i)} disabled={fields.length === 1}>
+                                <Trash2 className="w-3 h-3" />
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Notes */}
+              <FormField control={form.control} name="notes" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Notes</FormLabel>
+                  <FormControl><Textarea rows={2} placeholder="Optional dispatch notes…" {...field} /></FormControl>
+                </FormItem>
+              )} />
+
+              <DialogFooter>
+                <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
+                <Button type="submit" disabled={createMutation.isPending || availableItems.length === 0}>
+                  {createMutation.isPending ? 'Dispatching…' : 'Dispatch Transfer'}
+                </Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
     </AppLayout>
   );
 }
