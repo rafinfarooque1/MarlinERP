@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useListExpenses, useCreateExpense, getListExpensesQueryKey, useListChartOfAccounts } from '@workspace/api-client-react';
+import { useListExpenses, useCreateExpense, getListExpensesQueryKey, useListChartOfAccounts, useListCashBankAccounts } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,27 +12,26 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Receipt, Download, Eye, Calendar } from 'lucide-react';
+import { Plus, Search, Receipt, Download, Eye, Calendar, MapPin } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 
 const schema = z.object({
-  title: z.string().min(1, 'Title required'),
+  description: z.string().min(1, 'Description required'),
   amount: z.coerce.number().min(0.01, 'Amount > 0'),
-  category: z.string().min(1, 'Category required'),
   expenseDate: z.string().min(1, 'Date required'),
-  ledgerAccountId: z.coerce.number().optional(),
+  ledgerAccountId: z.coerce.number().min(1, 'Ledger account required'),
+  paymentAccountId: z.coerce.number().min(1, 'Payment account required'),
   notes: z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
 
-const CATEGORIES = ['Salaries', 'Rent', 'Utilities', 'Logistics', 'Marketing', 'Maintenance', 'Raw Materials', 'Packaging', 'Travel', 'Other'];
-
 export default function Expenses() {
   const { data: expenses = [], isLoading } = useListExpenses();
   const { data: accounts = [] } = useListChartOfAccounts();
+  const { data: cashBanks = [] } = useListCashBankAccounts();
   const expenseAccounts = accounts.filter(a => a.type === 'expense');
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -42,17 +41,29 @@ export default function Expenses() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { title: '', amount: 0, category: '', expenseDate: new Date().toISOString().split('T')[0], notes: '' },
+    defaultValues: { description: '', amount: 0, expenseDate: new Date().toISOString().split('T')[0], ledgerAccountId: 0, paymentAccountId: 0 },
   });
 
   const onSubmit = (data: FormValues) => {
     createMutation.mutate({ data: { ...data, amount: String(data.amount) } as any }, {
-      onSuccess: () => { toast.success('Expense recorded'); queryClient.invalidateQueries({ queryKey: getListExpensesQueryKey() }); setIsOpen(false); form.reset(); },
+      onSuccess: () => {
+        toast.success('Expense recorded');
+        queryClient.invalidateQueries({ queryKey: getListExpensesQueryKey() });
+        setIsOpen(false);
+        form.reset();
+      },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
   };
 
-  const filtered = expenses.filter(e => e.title?.toLowerCase().includes(search.toLowerCase()) || e.category?.toLowerCase().includes(search.toLowerCase()));
+  const filtered = (expenses as any[]).filter(e => {
+    const q = search.toLowerCase();
+    return (
+      (e.description ?? '').toLowerCase().includes(q) ||
+      (e.ledgerAccountName ?? '').toLowerCase().includes(q) ||
+      (e.paymentAccountName ?? '').toLowerCase().includes(q)
+    );
+  });
   const total = filtered.reduce((s, e) => s + Number(e.amount || 0), 0);
 
   return (
@@ -60,14 +71,26 @@ export default function Expenses() {
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Receipt className="w-6 h-6 text-primary" /> Expenses</h1>
-            <p className="text-muted-foreground mt-1">Business expenditure tracking</p>
+            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+              <Receipt className="w-6 h-6 text-primary" /> Expenses
+            </h1>
+            <p className="text-muted-foreground mt-1">All business expenditure — head office and locations</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('expenses.csv', filtered.map(e => ({ Title: e.title, Amount: e.amount, Category: e.category, Date: e.expenseDate })))}>
+            <Button variant="outline" size="sm" onClick={() => downloadCSV('expenses.csv', filtered.map(e => ({
+              Date: e.expenseDate,
+              Description: e.description ?? '',
+              Account: e.ledgerAccountName ?? '',
+              PaidFrom: e.paymentAccountName ?? '',
+              Amount: e.amount,
+              Source: e.source === 'location' ? 'Location' : 'Direct',
+            })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
-            <Button onClick={() => { form.reset({ title: '', amount: 0, category: '', expenseDate: new Date().toISOString().split('T')[0], notes: '' }); setIsOpen(true); }}>
+            <Button onClick={() => {
+              form.reset({ description: '', amount: 0, expenseDate: new Date().toISOString().split('T')[0], ledgerAccountId: 0, paymentAccountId: 0 });
+              setIsOpen(true);
+            }}>
               <Plus className="w-4 h-4 mr-2" /> Add Expense
             </Button>
           </div>
@@ -83,33 +106,67 @@ export default function Expenses() {
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
             <Search className="w-4 h-4 text-muted-foreground" />
-            <Input placeholder="Search expenses..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm" />
+            <Input
+              placeholder="Search by description, account…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm"
+            />
           </div>
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
                 <TableHead>Date</TableHead>
-                <TableHead>Title</TableHead>
-                <TableHead>Category</TableHead>
+                <TableHead>Description</TableHead>
+                <TableHead>Expense Account</TableHead>
+                <TableHead>Paid From</TableHead>
                 <TableHead className="text-right">Amount</TableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? [...Array(4)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-              )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={5} className="text-center py-16 text-muted-foreground">
-                  <Receipt className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No expenses recorded</p>
-                </TableCell></TableRow>
+              {isLoading ? (
+                [...Array(4)].map((_, i) => (
+                  <TableRow key={i}>
+                    <TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
+                  </TableRow>
+                ))
+              ) : filtered.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
+                    <Receipt className="w-10 h-10 mx-auto mb-3 opacity-20" />
+                    <p>No expenses recorded</p>
+                  </TableCell>
+                </TableRow>
               ) : filtered.map(e => (
-                <TableRow key={e.id} className="hover:bg-muted/10">
-                  <TableCell className="text-sm text-muted-foreground"><div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(e.expenseDate).toLocaleDateString('en-IN')}</div></TableCell>
-                  <TableCell className="font-semibold">{e.title}</TableCell>
-                  <TableCell><Badge variant="outline" className="text-xs">{e.category}</Badge></TableCell>
-                  <TableCell className="text-right font-mono font-bold text-red-500">₹{Number(e.amount).toLocaleString('en-IN')}</TableCell>
+                <TableRow key={`${e.source}-${e.id}`} className="hover:bg-muted/10">
+                  <TableCell className="text-sm text-muted-foreground">
+                    <div className="flex items-center gap-1">
+                      <Calendar className="w-3 h-3" />
+                      {new Date(e.expenseDate).toLocaleDateString('en-IN')}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold">{e.description ?? <span className="text-muted-foreground italic">No description</span>}</span>
+                      {e.source === 'location' && (
+                        <Badge variant="secondary" className="text-xs gap-1">
+                          <MapPin className="w-2.5 h-2.5" /> Location
+                        </Badge>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className="text-xs">{e.ledgerAccountName || '—'}</Badge>
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{e.paymentAccountName || '—'}</TableCell>
+                  <TableCell className="text-right font-mono font-bold text-red-500">
+                    ₹{Number(e.amount).toLocaleString('en-IN')}
+                  </TableCell>
                   <TableCell className="text-right">
-                    <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(e)}><Eye className="w-4 h-4" /></Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(e)}>
+                      <Eye className="w-4 h-4" />
+                    </Button>
                   </TableCell>
                 </TableRow>
               ))}
@@ -118,59 +175,92 @@ export default function Expenses() {
         </div>
       </div>
 
+      {/* Add Expense Dialog */}
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader><DialogTitle>Record Expense</DialogTitle></DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
-              <FormField control={form.control} name="title" render={({ field }) => (
-                <FormItem><FormLabel>Title <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="e.g. Office rent - July" {...field} /></FormControl><FormMessage /></FormItem>
+              <FormField control={form.control} name="description" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Description <span className="text-destructive">*</span></FormLabel>
+                  <FormControl><Input placeholder="e.g. Office rent - July" {...field} /></FormControl>
+                  <FormMessage />
+                </FormItem>
               )} />
               <div className="grid grid-cols-2 gap-4">
                 <FormField control={form.control} name="amount" render={({ field }) => (
-                  <FormItem><FormLabel>Amount ₹ <span className="text-destructive">*</span></FormLabel><FormControl><Input type="number" step="0.01" min={0} {...field} /></FormControl><FormMessage /></FormItem>
+                  <FormItem>
+                    <FormLabel>Amount ₹ <span className="text-destructive">*</span></FormLabel>
+                    <FormControl><Input type="number" step="0.01" min={0} {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
                 )} />
                 <FormField control={form.control} name="expenseDate" render={({ field }) => (
-                  <FormItem><FormLabel>Date</FormLabel><FormControl><Input type="date" {...field} /></FormControl></FormItem>
+                  <FormItem>
+                    <FormLabel>Date</FormLabel>
+                    <FormControl><Input type="date" {...field} /></FormControl>
+                  </FormItem>
                 )} />
               </div>
-              <FormField control={form.control} name="category" render={({ field }) => (
-                <FormItem><FormLabel>Category <span className="text-destructive">*</span></FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <FormControl><SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger></FormControl>
-                    <SelectContent>{CATEGORIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-                  </Select><FormMessage /></FormItem>
+              <FormField control={form.control} name="ledgerAccountId" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Expense Account <span className="text-destructive">*</span></FormLabel>
+                  <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Select account" /></SelectTrigger></FormControl>
+                    <SelectContent>
+                      {expenseAccounts.map(a => <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
               )} />
-              {expenseAccounts.length > 0 && (
-                <FormField control={form.control} name="ledgerAccountId" render={({ field }) => (
-                  <FormItem><FormLabel>Ledger Account</FormLabel>
-                    <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Optional" /></SelectTrigger></FormControl>
-                      <SelectContent>{expenseAccounts.map(a => <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>)}</SelectContent>
-                    </Select></FormItem>
-                )} />
-              )}
+              <FormField control={form.control} name="paymentAccountId" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Paid From <span className="text-destructive">*</span></FormLabel>
+                  <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Select cash/bank account" /></SelectTrigger></FormControl>
+                    <SelectContent>
+                      {(cashBanks as any[]).map((cb: any) => <SelectItem key={cb.id} value={String(cb.id)}>{cb.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )} />
               <FormField control={form.control} name="notes" render={({ field }) => (
                 <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
               )} />
               <DialogFooter>
                 <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
-                <Button type="submit" disabled={createMutation.isPending}>{createMutation.isPending ? 'Saving…' : 'Record Expense'}</Button>
+                <Button type="submit" disabled={createMutation.isPending}>
+                  {createMutation.isPending ? 'Saving…' : 'Record Expense'}
+                </Button>
               </DialogFooter>
             </form>
           </Form>
         </DialogContent>
       </Dialog>
 
+      {/* View Expense Sheet */}
       <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
         <SheetContent>
           <SheetHeader>
-            <SheetTitle>{viewItem?.title}</SheetTitle>
-            <SheetDescription>{viewItem?.category}</SheetDescription>
+            <SheetTitle>{viewItem?.description ?? 'Expense Detail'}</SheetTitle>
+            <SheetDescription className="flex items-center gap-1">
+              {viewItem?.source === 'location' && <MapPin className="w-3 h-3" />}
+              {viewItem?.ledgerAccountName || '—'}
+            </SheetDescription>
           </SheetHeader>
           {viewItem && (
             <div className="mt-6 space-y-4">
-              {[['Amount', `₹${Number(viewItem.amount).toLocaleString('en-IN')}`], ['Date', new Date(viewItem.expenseDate).toLocaleDateString('en-IN')], ['Category', viewItem.category], ['Notes', viewItem.notes || '—']].map(([k, v]) => (
+              {[
+                ['Amount', `₹${Number(viewItem.amount).toLocaleString('en-IN')}`],
+                ['Date', new Date(viewItem.expenseDate).toLocaleDateString('en-IN')],
+                ['Expense Account', viewItem.ledgerAccountName || '—'],
+                ['Paid From', viewItem.paymentAccountName || '—'],
+                ...(viewItem.voucherNumber ? [['Voucher', viewItem.voucherNumber]] : []),
+                ['Source', viewItem.source === 'location' ? 'Location (Sales segment)' : 'Direct entry'],
+              ].map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
                   <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                   <span className="font-medium">{v}</span>

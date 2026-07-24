@@ -372,19 +372,69 @@ router.post("/accounts/cash-bank", async (req, res): Promise<void> => {
   res.status(201).json({ ...row, balance: Number(row.balance) });
 });
 
-// ── Expenses (kept for backward compat) ───────────────────────────────────
+// ── Expenses (merged: expenses table + location expense payments) ──────────
 router.get("/expenses", async (_req, res): Promise<void> => {
+  // 1. Regular expenses from the expenses table
   const rows = await db.select().from(expensesTable).orderBy(expensesTable.id);
   const ledgers = await db.select().from(accountLedgersTable);
   const cashBanks = await db.select().from(cashBankAccountsTable);
   const lMap = new Map(ledgers.map(l => [l.id, l.name]));
   const cbMap = new Map(cashBanks.map(cb => [cb.id, cb.name]));
-  res.json(rows.map(r => ({
-    ...r,
+
+  const directExpenses = rows.map(r => ({
+    id: r.id,
+    source: 'direct' as const,
+    expenseDate: r.expenseDate,
+    description: r.description ?? null,
+    ledgerAccountId: r.ledgerAccountId,
     ledgerAccountName: lMap.get(r.ledgerAccountId) ?? "",
+    paymentAccountId: r.paymentAccountId,
     paymentAccountName: cbMap.get(r.paymentAccountId) ?? "",
     amount: Number(r.amount),
-  })));
+    voucherNumber: null as string | null,
+    createdAt: r.createdAt,
+  }));
+
+  // 2. Location expenses: payments where paid_to is in Direct/Indirect Expense subtree
+  const expenseLedgerIds = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
+  let locationExpenses: Array<{
+    id: number; source: 'direct' | 'location'; expenseDate: any;
+    description: string | null; ledgerAccountId: number; ledgerAccountName: string;
+    paymentAccountId: number; paymentAccountName: string; amount: number;
+    voucherNumber: string | null; createdAt: any;
+  }> = [];
+  if (expenseLedgerIds.length > 0) {
+    const { rows: pmtRows } = await pool.query(`
+      SELECT p.id, p.voucher_number, p.payment_date, p.paid_from_ledger_id,
+             p.paid_to_ledger_id, p.amount, p.narration, p.created_at,
+             pf.name AS paid_from_name, pt.name AS paid_to_name
+      FROM payments p
+      LEFT JOIN account_ledgers pf ON p.paid_from_ledger_id = pf.id
+      LEFT JOIN account_ledgers pt ON p.paid_to_ledger_id = pt.id
+      WHERE p.paid_to_ledger_id = ANY($1)
+      ORDER BY p.id DESC
+    `, [expenseLedgerIds]);
+
+    locationExpenses = pmtRows.map((r: any) => ({
+      id: r.id,
+      source: 'location' as const,
+      expenseDate: r.payment_date,
+      description: r.narration ?? null,
+      ledgerAccountId: r.paid_to_ledger_id,
+      ledgerAccountName: r.paid_to_name ?? "",
+      paymentAccountId: r.paid_from_ledger_id,
+      paymentAccountName: r.paid_from_name ?? "",
+      amount: Number(r.amount),
+      voucherNumber: r.voucher_number ?? null,
+      createdAt: r.created_at,
+    }));
+  }
+
+  // Merge and sort by expenseDate descending (most recent first)
+  const all = [...directExpenses, ...locationExpenses].sort(
+    (a, b) => String(b.expenseDate).localeCompare(String(a.expenseDate))
+  );
+  res.json(all);
 });
 
 router.post("/expenses", async (req, res): Promise<void> => {
