@@ -38,7 +38,7 @@ export default function ReceiptPage() {
   const deleteMutation = useDeleteReceipt();
 
   // "Received From" — all non-system-group ledgers
-  const fromOptions = (allAccounts as any[]).filter(a => !a.isSystemGroup);
+  const fromOptions = (allAccounts as any[]).filter(a => !a.isSystemGroup && !a.isGroup);
   // "Received In" — only Bank / Cash and their sub-ledgers
   const inOptions = cashBankAccounts as any[];
 

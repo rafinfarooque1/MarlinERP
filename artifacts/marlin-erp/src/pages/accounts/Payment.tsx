@@ -40,7 +40,7 @@ export default function Payment() {
   // "Paid From" — only Bank / Cash and their sub-ledgers
   const fromOptions = cashBankAccounts as any[];
   // "Paid To" — all non-system-group ledgers (expense, payable, etc.)
-  const toOptions = (allAccounts as any[]).filter(a => !a.isSystemGroup);
+  const toOptions = (allAccounts as any[]).filter(a => !a.isSystemGroup && !a.isGroup);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),

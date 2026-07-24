@@ -40,7 +40,7 @@ export default function Ledger() {
         <div className="flex flex-wrap gap-3">
           <Select value={accountId} onValueChange={setAccountId}>
             <SelectTrigger className="w-60"><SelectValue placeholder="Select account" /></SelectTrigger>
-            <SelectContent>{(accounts as any[]).map((a: any) => <SelectItem key={a.id} value={String(a.id)}>{a.code ? `[${a.code}] ` : ''}{a.name}</SelectItem>)}</SelectContent>
+            <SelectContent>{(accounts as any[]).filter((a: any) => !a.isGroup).map((a: any) => <SelectItem key={a.id} value={String(a.id)}>{a.code ? `[${a.code}] ` : ''}{a.name}</SelectItem>)}</SelectContent>
           </Select>
           <div className="flex items-center gap-2">
             <Calendar className="w-4 h-4 text-muted-foreground" />
