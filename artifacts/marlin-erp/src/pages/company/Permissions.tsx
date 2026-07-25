@@ -43,7 +43,7 @@ const MODULE_SEGMENTS = [
       },
       {
         title: 'Accounts',
-        modules: ['Chart of Accounts', 'Ledger', 'Cash & Bank', 'Expenses', 'GST Summary', 'Reconciliation', 'Cash Balance'],
+        modules: ['Chart of Accounts', 'Ledger', 'Cash & Bank', 'Expenses', 'GST Summary', 'Reconciliation', 'Cash Balance', 'Vouchers', 'Books'],
       },
       {
         title: 'Company',

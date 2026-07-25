@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { pool } from "@workspace/db";
 import { logActivity } from "../lib/audit";
+import { nextVoucherNumber } from "../lib/voucherNumber";
 
 const router = Router();
 
@@ -124,13 +125,6 @@ router.post("/sales/:id/payments", async (req, res): Promise<void> => {
       return;
     }
 
-    // 3. Get voucher number helpers
-    const nextVoucher = async (prefix: string, table: string): Promise<string> => {
-      const { rows } = await client.query(`SELECT COUNT(*) FROM ${table}`);
-      const n = Number(rows[0].count) + 1;
-      return `${prefix}-${String(n).padStart(4, "0")}`;
-    };
-
     let clearingReceiptId: number | null = null;
     let reconciliationStatus: string | null = null;
 
@@ -162,7 +156,7 @@ router.post("/sales/:id/payments", async (req, res): Promise<void> => {
         return;
       }
 
-      const voucherNum = await nextVoucher("REC", "receipts");
+      const voucherNum = await nextVoucherNumber(client, "receipt", pDate);
       const { rows: [receipt] } = await client.query(
         `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration)
          VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
@@ -193,7 +187,7 @@ router.post("/sales/:id/payments", async (req, res): Promise<void> => {
         return;
       }
 
-      const voucherNum = await nextVoucher("REC", "receipts");
+      const voucherNum = await nextVoucherNumber(client, "receipt", pDate);
       const { rows: [invRow] } = await client.query(`SELECT invoice_number FROM sales WHERE id=$1`, [saleId]);
       const { rows: [receipt] } = await client.query(
         `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration)

@@ -39,6 +39,12 @@ import Expenses from './pages/accounts/Expenses';
 import GstSummary from './pages/accounts/GstSummary';
 import Payment from './pages/accounts/Payment';
 import ReceiptPage from './pages/accounts/Receipt';
+import Journal from './pages/accounts/Journal';
+import Contra from './pages/accounts/Contra';
+import Notes from './pages/accounts/Notes';
+import DayBook from './pages/accounts/DayBook';
+import CashBankBook from './pages/accounts/CashBankBook';
+import TrialBalance from './pages/accounts/TrialBalance';
 import ItemMaster from './pages/production/ItemMaster';
 
 import CompanySettings from './pages/company/Settings';
@@ -142,6 +148,13 @@ function Router() {
       <Route path="/accounts/expenses"><AuthGuard><Expenses /></AuthGuard></Route>
       <Route path="/accounts/payments"><AuthGuard><Payment /></AuthGuard></Route>
       <Route path="/accounts/receipts"><AuthGuard><ReceiptPage /></AuthGuard></Route>
+      <Route path="/accounts/journal"><AuthGuard><Journal /></AuthGuard></Route>
+      <Route path="/accounts/contra"><AuthGuard><Contra /></AuthGuard></Route>
+      <Route path="/accounts/notes"><AuthGuard><Notes /></AuthGuard></Route>
+      <Route path="/accounts/day-book"><AuthGuard><DayBook /></AuthGuard></Route>
+      <Route path="/accounts/cash-book"><AuthGuard><CashBankBook kind="cash" /></AuthGuard></Route>
+      <Route path="/accounts/bank-book"><AuthGuard><CashBankBook kind="bank" /></AuthGuard></Route>
+      <Route path="/accounts/trial-balance"><AuthGuard><TrialBalance /></AuthGuard></Route>
       <Route path="/accounts/gst"><AuthGuard><GstSummary /></AuthGuard></Route>
 
       <Route path="/production/item-master"><AuthGuard><ItemMaster /></AuthGuard></Route>

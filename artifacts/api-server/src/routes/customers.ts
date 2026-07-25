@@ -5,6 +5,7 @@ import { pool } from "@workspace/db";
 import {
   CreateCouponBody, UpdateCouponBody, DeleteCouponParams,
 } from "@workspace/api-zod";
+import { nextVoucherNumber } from "../lib/voucherNumber";
 
 const router = Router();
 
@@ -103,6 +104,13 @@ router.patch("/customers/:id", async (req, res): Promise<void> => {
   if (Object.keys(data).length === 0) { res.status(400).json({ error: "No valid fields to update" }); return; }
   const [row] = await db.update(customersTable).set(data).where(eq(customersTable.id, id)).returning();
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
+  // Keep the linked debtor ledger's name in sync when the customer is renamed
+  if (typeof (data as any).name === "string" && String((data as any).name).trim()) {
+    await pool.query(
+      `UPDATE account_ledgers SET name = $1, description = $2 WHERE code = $3`,
+      [row.name, `Customer ledger — ${row.name}`, `CUST-${id}`]
+    ).catch(() => {});
+  }
   res.json({ ...row, totalPurchases: Number(row.totalPurchases) });
 });
 
@@ -217,6 +225,13 @@ router.patch("/vendors/:id", async (req, res): Promise<void> => {
   if (Object.keys(data).length === 0) { res.status(400).json({ error: "No valid fields to update" }); return; }
   const [row] = await db.update(vendorsTable).set(data).where(eq(vendorsTable.id, id)).returning();
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
+  // Keep the linked creditor ledger's name in sync when the vendor is renamed
+  if (typeof (data as any).name === "string" && String((data as any).name).trim()) {
+    await pool.query(
+      `UPDATE account_ledgers SET name = $1, description = $2 WHERE code = $3`,
+      [row.name, `Vendor ledger — ${row.name}`, `VEND-${id}`]
+    ).catch(() => {});
+  }
   res.json(row);
 });
 
@@ -275,25 +290,51 @@ router.get("/customers/:id/ledger", async (req, res): Promise<void> => {
     [id],
   );
 
-  let running = 0;
-  const entries = rows.map((r: any) => {
-    const debit = Number(r.total_amount);
-    running += debit;
-    return {
+  // Credit notes / journal lines touching this customer's ledger
+  const jvRes = await pool.query<any>(
+    `SELECT l.id, v.voucher_date AS date, v.voucher_number, v.voucher_type, v.narration,
+            l.debit, l.credit
+     FROM journal_voucher_lines l
+     JOIN journal_vouchers v ON v.id = l.voucher_id
+     JOIN account_ledgers al ON al.id = l.ledger_id
+     WHERE al.code = $1
+     ORDER BY v.voucher_date, l.id`,
+    [`CUST-${id}`],
+  ).catch(() => ({ rows: [] as any[] }));
+  const jvRows = jvRes.rows;
+
+  const combined = [
+    ...rows.map((r: any) => ({
+      sortKey: `${r.sale_date}-S${String(r.id).padStart(8, '0')}`,
       date: r.sale_date,
       description: r.invoice_number ?? `Sale #${r.id}`,
-      entryType: 'sale',
-      debit,
+      entryType: 'sale' as string,
+      debit: Number(r.total_amount),
       credit: 0,
-      balance: running,
       paymentStatus: r.payment_status,
-    };
+    })),
+    ...jvRows.map((r: any) => ({
+      sortKey: `${r.date}-J${String(r.id).padStart(8, '0')}`,
+      date: r.date,
+      description: r.narration || `${r.voucher_type === 'credit_note' ? 'Credit Note' : r.voucher_type === 'debit_note' ? 'Debit Note' : 'Journal'} ${r.voucher_number}`,
+      entryType: r.voucher_type as string,
+      debit: Number(r.debit),
+      credit: Number(r.credit),
+      paymentStatus: undefined,
+    })),
+  ].sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+
+  let running = 0;
+  const entries = combined.map(({ sortKey: _sk, ...e }) => {
+    running += e.debit - e.credit;
+    return { ...e, balance: running };
   });
 
   const totalBilled = rows.reduce((s: number, r: any) => s + Number(r.total_amount), 0);
   const totalPaid   = rows.reduce((s: number, r: any) => s + Number(r.amount_paid), 0);
+  const jvNet = jvRows.reduce((s: number, r: any) => s + Number(r.debit) - Number(r.credit), 0);
 
-  res.json({ balance: totalBilled - totalPaid, totalBilled, totalPaid, entries });
+  res.json({ balance: totalBilled - totalPaid + jvNet, totalBilled, totalPaid, entries });
 });
 
 // ── Vendor ledger (purchases + payments as Dr/Cr statement) ───────────────
@@ -315,19 +356,38 @@ router.get("/vendors/:id/ledger", async (req, res): Promise<void> => {
     [`VEND-${id}`],
   );
 
+  // Debit notes / journal lines touching this vendor's ledger
+  const jvRes = await pool.query<any>(
+    `SELECT l.id, v.voucher_date AS date, v.voucher_number, v.voucher_type, v.narration,
+            l.debit, l.credit
+     FROM journal_voucher_lines l
+     JOIN journal_vouchers v ON v.id = l.voucher_id
+     JOIN account_ledgers al ON al.id = l.ledger_id
+     WHERE al.code = $1
+     ORDER BY v.voucher_date, l.id`,
+    [`VEND-${id}`],
+  ).catch(() => ({ rows: [] as any[] }));
+  const jvRows = jvRes.rows;
+
   // Merge and sort by date
   const combined = [
     ...purchaseRows.map((r: any) => ({
       date: r.date, sortKey: r.date + '-P' + r.id,
-      entryType: 'purchase' as const,
+      entryType: 'purchase' as string,
       description: r.invoice_number ? `Purchase — Ref: ${r.invoice_number}` : `Purchase #${r.id}`,
       debit: 0, credit: Number(r.amount),
     })),
     ...paymentRows.map((r: any) => ({
       date: r.date, sortKey: r.date + '-V' + r.id,
-      entryType: 'payment' as const,
+      entryType: 'payment' as string,
       description: `Payment via ${r.paid_from_name} (${r.voucher_number})`,
       debit: Number(r.amount), credit: 0,
+    })),
+    ...jvRows.map((r: any) => ({
+      date: r.date, sortKey: r.date + '-J' + r.id,
+      entryType: r.voucher_type as string,
+      description: r.narration || `${r.voucher_type === 'debit_note' ? 'Debit Note' : r.voucher_type === 'credit_note' ? 'Credit Note' : 'Journal'} ${r.voucher_number}`,
+      debit: Number(r.debit), credit: Number(r.credit),
     })),
   ].sort((a, b) => a.sortKey.localeCompare(b.sortKey));
 
@@ -339,7 +399,8 @@ router.get("/vendors/:id/ledger", async (req, res): Promise<void> => {
 
   const totalPurchased = purchaseRows.reduce((s: number, r: any) => s + Number(r.amount), 0);
   const totalPaid      = paymentRows.reduce((s: number, r: any) => s + Number(r.amount), 0);
-  res.json({ balance: Math.max(0, totalPurchased - totalPaid), totalPurchased, totalPaid, entries });
+  const jvNet = jvRows.reduce((s: number, r: any) => s + Number(r.credit) - Number(r.debit), 0);
+  res.json({ balance: Math.max(0, totalPurchased - totalPaid + jvNet), totalPurchased, totalPaid, entries });
 });
 
 // ── Record vendor payment ─────────────────────────────────────────────────
@@ -360,9 +421,8 @@ router.post("/vendors/:id/payment", async (req, res): Promise<void> => {
     res.status(400).json({ error: `Ledger account VEND-${vendorId} not found. Please re-save the vendor to create it.` }); return;
   }
 
-  // Auto-number the payment voucher
-  const { rows: [cnt] } = await pool.query(`SELECT COUNT(*) FROM payments`);
-  const voucherNumber = `PAY-${String(Number(cnt.count) + 1).padStart(4, '0')}`;
+  // Auto-number the payment voucher (FY-aware sequence)
+  const voucherNumber = await nextVoucherNumber(pool, 'payment', date);
 
   const { rows: [row] } = await pool.query<any>(
     `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration)

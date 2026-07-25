@@ -502,6 +502,47 @@ async function runMigrations() {
     ALTER TABLE employees ADD COLUMN IF NOT EXISTS date_of_birth     text;
     ALTER TABLE employees ADD COLUMN IF NOT EXISTS bio               text;
   `);
+
+  // ── Phase 1: Professional Accounts Core (additive only) ──────────────────
+  // Journal / Contra / Credit Note / Debit Note vouchers + FY-aware
+  // sequence-based voucher numbering. Existing payments/receipts untouched.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS journal_vouchers (
+      id serial PRIMARY KEY,
+      voucher_type text NOT NULL DEFAULT 'journal',
+      voucher_number text NOT NULL,
+      voucher_date text NOT NULL,
+      narration text,
+      party_ledger_id integer,
+      reason text,
+      total_amount numeric(14,2) NOT NULL DEFAULT 0,
+      created_by text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS journal_voucher_lines (
+      id serial PRIMARY KEY,
+      voucher_id integer NOT NULL REFERENCES journal_vouchers(id) ON DELETE CASCADE,
+      ledger_id integer NOT NULL,
+      debit numeric(14,2) NOT NULL DEFAULT 0,
+      credit numeric(14,2) NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS voucher_sequences (
+      voucher_type text NOT NULL,
+      fy_label text NOT NULL,
+      last_number integer NOT NULL DEFAULT 0,
+      PRIMARY KEY (voucher_type, fy_label)
+    );
+
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS fy_start_month integer NOT NULL DEFAULT 4;
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS voucher_prefixes jsonb;
+
+    CREATE INDEX IF NOT EXISTS idx_jv_lines_voucher ON journal_voucher_lines(voucher_id);
+    CREATE INDEX IF NOT EXISTS idx_jv_lines_ledger  ON journal_voucher_lines(ledger_id);
+    CREATE INDEX IF NOT EXISTS idx_jv_date          ON journal_vouchers(voucher_date);
+    CREATE INDEX IF NOT EXISTS idx_jv_type          ON journal_vouchers(voucher_type);
+  `);
 }
 
 const rawPort = process.env["PORT"];

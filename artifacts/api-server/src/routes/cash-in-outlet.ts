@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { pool } from "@workspace/db";
 import { logActivity } from "../lib/audit";
+import { nextVoucherNumber } from "../lib/voucherNumber";
 
 const router = Router();
 
@@ -198,8 +199,7 @@ router.post("/cash-in-outlet/deposits", async (req, res): Promise<void> => {
     }
 
     // 4. Post payment: paid_from=cash, paid_to=STD-CIT
-    const { rows: [cntRow] } = await client.query(`SELECT COUNT(*) FROM payments`);
-    const payVoucher = `PAY-${String(Number(cntRow.count) + 1).padStart(4, "0")}`;
+    const payVoucher = await nextVoucherNumber(client, 'payment', depositDate);
     const { rows: [payment] } = await client.query(
       `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
@@ -316,8 +316,7 @@ router.post("/cash-in-outlet/deposits/:id/reconcile", async (req, res): Promise<
     if (!citLedger) { await client.query("ROLLBACK"); res.status(500).json({ error: "Cash in Transit ledger not configured" }); return; }
 
     // 4. Post receipt: received_from=CIT, received_in=bank, net
-    const { rows: [cntRecRow] } = await client.query(`SELECT COUNT(*) FROM receipts`);
-    const recVoucher = `REC-${String(Number(cntRecRow.count) + 1).padStart(4, "0")}`;
+    const recVoucher = await nextVoucherNumber(client, 'receipt', settlementDate);
     const { rows: [receipt] } = await client.query(
       `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
@@ -333,8 +332,7 @@ router.post("/cash-in-outlet/deposits/:id/reconcile", async (req, res): Promise<
         res.status(500).json({ error: "Bank & Processor Charges ledger (STD-PROC-CHG) not configured. Cannot post charges." });
         return;
       }
-      const { rows: [cntPayRow] } = await client.query(`SELECT COUNT(*) FROM payments`);
-      const payVoucher = `PAY-${String(Number(cntPayRow.count) + 1).padStart(4, "0")}`;
+      const payVoucher = await nextVoucherNumber(client, 'payment', settlementDate);
       await client.query(
         `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration)
          VALUES ($1, $2, $3, $4, $5, $6)`,

@@ -6,6 +6,7 @@ import {
   CreateCashBankAccountBody, CreateExpenseBody,
   GetLedgerStatementQueryParams,
 } from "@workspace/api-zod";
+import { nextVoucherNumber, VOUCHER_TYPE_LABELS } from "../lib/voucherNumber";
 
 const router = Router();
 
@@ -222,8 +223,7 @@ router.post("/accounts/payments", async (req, res): Promise<void> => {
   if (!paymentDate || !paidFromLedgerId || !paidToLedgerId || !amount) {
     res.status(400).json({ error: "paymentDate, paidFromLedgerId, paidToLedgerId and amount are required" }); return;
   }
-  const countRes = await pool.query(`SELECT COUNT(*) FROM payments`);
-  const voucherNumber = `PAY-${String(Number(countRes.rows[0].count) + 1).padStart(4, '0')}`;
+  const voucherNumber = await nextVoucherNumber(pool, 'payment', paymentDate);
   const result = await pool.query(
     `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration)
      VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
@@ -278,8 +278,7 @@ router.post("/accounts/receipts", async (req, res): Promise<void> => {
   if (!receiptDate || !receivedFromLedgerId || !receivedInLedgerId || !amount) {
     res.status(400).json({ error: "receiptDate, receivedFromLedgerId, receivedInLedgerId and amount are required" }); return;
   }
-  const countRes = await pool.query(`SELECT COUNT(*) FROM receipts`);
-  const voucherNumber = `REC-${String(Number(countRes.rows[0].count) + 1).padStart(4, '0')}`;
+  const voucherNumber = await nextVoucherNumber(pool, 'receipt', receiptDate);
   const result = await pool.query(
     `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration)
      VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
@@ -381,6 +380,23 @@ router.get("/accounts/ledger-statement", async (req, res): Promise<void> => {
       description: `Purchase Bill ${p.invoiceNumber || '#' + p.id}`,
       debit: Number(p.totalAmount), credit: 0, entryType: 'purchase',
     })));
+  }
+
+  // Journal-family voucher lines touching this ledger (journal/contra/CN/DN)
+  const { rows: jvLines } = await pool.query(
+    `SELECT v.voucher_date AS date, v.voucher_number, v.voucher_type, v.narration,
+            l.debit, l.credit
+     FROM journal_voucher_lines l
+     JOIN journal_vouchers v ON v.id = l.voucher_id
+     WHERE l.ledger_id = $1`, [accountId]
+  ).catch(() => ({ rows: [] as any[] }));
+  for (const jl of jvLines) {
+    entries.push({
+      date: jl.date,
+      description: jl.narration || `${jl.voucher_type === 'contra' ? 'Contra' : jl.voucher_type === 'credit_note' ? 'Credit Note' : jl.voucher_type === 'debit_note' ? 'Debit Note' : 'Journal'} ${jl.voucher_number}`,
+      debit: Number(jl.debit), credit: Number(jl.credit),
+      entryType: jl.voucher_type,
+    });
   }
 
   // Filter by date range
@@ -701,8 +717,7 @@ router.post("/accounts/location-expenses", async (req, res): Promise<void> => {
     res.status(400).json({ error: "This location has no Cash ledger. Provision ledgers under Accounts → Warehouses/Outlets first." }); return;
   }
   const narration = reference ? `${description} [Ref: ${reference}]` : description;
-  const countRes = await pool.query(`SELECT COUNT(*) FROM payments`);
-  const voucherNumber = `PAY-${String(Number(countRes.rows[0].count) + 1).padStart(4, '0')}`;
+  const voucherNumber = await nextVoucherNumber(pool, 'payment', expenseDate);
   const { rows: [r] } = await pool.query(
     `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration)
      VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
@@ -1001,6 +1016,17 @@ router.get("/accounts/ledger/:id/statement", async (req, res): Promise<void> => 
      ORDER BY e.expense_date, e.id`, expParams
   ).catch(() => ({ rows: [] }));
 
+  // Journal-family voucher lines touching this ledger
+  const jvParams: any[] = [id];
+  const { rows: jvRows } = await pool.query(
+    `SELECT l.id, v.voucher_date AS date, v.voucher_number, v.voucher_type, v.narration,
+            l.debit, l.credit
+     FROM journal_voucher_lines l
+     JOIN journal_vouchers v ON v.id = l.voucher_id
+     WHERE l.ledger_id = $1${dateClause('v.voucher_date', jvParams)}
+     ORDER BY v.voucher_date, l.id`, jvParams
+  ).catch(() => ({ rows: [] }));
+
   // Merge all entries
   const combined: { sortKey: string; date: string; description: string; reference: string; entryType: string; debit: number; credit: number }[] = [];
 
@@ -1033,6 +1059,14 @@ router.get("/accounts/ledger/:id/statement", async (req, res): Promise<void> => 
     date: r.date, reference: `EXP-${r.id}`,
     description: r.description || r.category || 'Expense',
     entryType: 'expense', debit: Number(r.amount), credit: 0,
+  });
+  for (const r of jvRows) combined.push({
+    sortKey: `${r.date}J+${String(r.id).padStart(8,'0')}`,
+    date: r.date, reference: r.voucher_number,
+    description: r.narration || (r.voucher_type === 'contra' ? 'Contra entry'
+      : r.voucher_type === 'credit_note' ? 'Credit note'
+      : r.voucher_type === 'debit_note' ? 'Debit note' : 'Journal entry'),
+    entryType: r.voucher_type, debit: Number(r.debit), credit: Number(r.credit),
   });
 
   combined.sort((a, b) => a.sortKey.localeCompare(b.sortKey));

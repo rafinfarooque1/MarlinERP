@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,7 +8,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Trash2, TriangleAlert } from 'lucide-react';
+import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Trash2, TriangleAlert, CalendarRange } from 'lucide-react';
 import { toast } from 'sonner';
 import { customFetch } from '@workspace/api-client-react';
 
@@ -80,6 +80,127 @@ function getInitial() {
   const init: Record<string, any> = {};
   SETTING_GROUPS.forEach(g => g.settings.forEach(s => (init[s.key] = s.defaultValue)));
   return init;
+}
+
+// ─── Financial Year & Voucher Numbering (server-persisted) ───────────────────
+
+const MONTHS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+const VOUCHER_PREFIX_FIELDS = [
+  { key: 'payment',     label: 'Payment',     def: 'PAY' },
+  { key: 'receipt',     label: 'Receipt',     def: 'REC' },
+  { key: 'journal',     label: 'Journal',     def: 'JV'  },
+  { key: 'contra',      label: 'Contra',      def: 'CTR' },
+  { key: 'credit_note', label: 'Credit Note', def: 'CN'  },
+  { key: 'debit_note',  label: 'Debit Note',  def: 'DN'  },
+];
+
+function currentFyLabel(fyStartMonth: number): string {
+  const now = new Date();
+  const month = now.getMonth() + 1;
+  const year = now.getFullYear();
+  const startYear = month >= fyStartMonth ? year : year - 1;
+  if (fyStartMonth === 1) return String(startYear);
+  return `${startYear}-${String((startYear + 1) % 100).padStart(2, '0')}`;
+}
+
+function FinancialYearSection() {
+  const [fyStartMonth, setFyStartMonth] = useState(4);
+  const [prefixes, setPrefixes] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    customFetch<any>('/api/company/settings')
+      .then(s => {
+        setFyStartMonth(Number(s?.fyStartMonth ?? 4) || 4);
+        setPrefixes((s?.voucherPrefixes && typeof s.voucherPrefixes === 'object') ? s.voucherPrefixes : {});
+      })
+      .catch(() => { /* keep defaults */ })
+      .finally(() => setLoading(false));
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const cleanPrefixes: Record<string, string> = {};
+      for (const f of VOUCHER_PREFIX_FIELDS) {
+        const v = (prefixes[f.key] ?? '').trim().toUpperCase();
+        if (v && v !== f.def) cleanPrefixes[f.key] = v;
+      }
+      await customFetch('/api/company/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fyStartMonth, voucherPrefixes: cleanPrefixes }),
+      });
+      toast.success('Financial year settings saved');
+    } catch (e: any) {
+      toast.error(e?.data?.error || e.message || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const fyLabel = currentFyLabel(fyStartMonth);
+  const sample = `${(prefixes.journal || 'JV').toUpperCase()}/${fyLabel}/0001`;
+
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <div className="p-4 border-b border-border bg-muted/20 flex items-center gap-3">
+        <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center"><CalendarRange className="w-4 h-4 text-primary" /></div>
+        <div>
+          <h3 className="font-semibold">Financial Year & Voucher Numbering</h3>
+          <p className="text-xs text-muted-foreground">Vouchers are numbered per financial year, e.g. {sample}</p>
+        </div>
+      </div>
+      {loading ? (
+        <div className="p-6 flex items-center gap-2 text-muted-foreground text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>
+      ) : (
+        <div className="divide-y divide-border">
+          <div className="p-4 flex items-center justify-between gap-4">
+            <div className="flex-1">
+              <label className="text-sm font-medium">Financial Year starts in</label>
+              <p className="text-xs text-muted-foreground mt-0.5">Current FY: <span className="font-mono font-semibold text-foreground">{fyLabel}</span></p>
+            </div>
+            <Select value={String(fyStartMonth)} onValueChange={v => setFyStartMonth(Number(v))}>
+              <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {MONTHS.map((m, i) => (
+                  <SelectItem key={m} value={String(i + 1)}>{m}{i + 1 === 4 ? ' (Indian FY)' : i + 1 === 1 ? ' (Calendar year)' : ''}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="p-4 space-y-3">
+            <label className="text-sm font-medium">Voucher prefixes</label>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {VOUCHER_PREFIX_FIELDS.map(f => (
+                <div key={f.key} className="space-y-1">
+                  <span className="text-xs text-muted-foreground">{f.label}</span>
+                  <Input
+                    value={prefixes[f.key] ?? ''}
+                    placeholder={f.def}
+                    maxLength={6}
+                    className="font-mono uppercase"
+                    onChange={e => setPrefixes(prev => ({ ...prev, [f.key]: e.target.value.toUpperCase() }))}
+                  />
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">Leave blank to use the defaults. Changing a prefix affects new vouchers only — existing numbers stay as they are.</p>
+          </div>
+          <div className="p-4 flex justify-end">
+            <Button onClick={save} disabled={saving}>
+              {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> Save FY Settings</>}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function Settings() {
@@ -158,6 +279,9 @@ export default function Settings() {
             {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> Save Settings</>}
           </Button>
         </div>
+
+        {/* ── Financial Year & Voucher Numbering (server-persisted) ────────── */}
+        <FinancialYearSection />
 
         {/* ── Danger Zone ──────────────────────────────────────────────────── */}
         <div className="border border-destructive/40 rounded-xl overflow-hidden">

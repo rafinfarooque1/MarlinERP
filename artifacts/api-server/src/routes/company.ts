@@ -13,6 +13,7 @@ const ALLOWED_COMPANY_FIELDS = new Set([
   'phone', 'email', 'website', 'gstNumber', 'panNumber',
   'bankName', 'bankAccount', 'ifscCode', 'logoUrl',
   'currency', 'financialYear', 'invoicePrefix',
+  'fyStartMonth', 'voucherPrefixes',
 ]);
 
 function pickCompanyFields(body: Record<string, any>) {

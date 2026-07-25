@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { pool } from "@workspace/db";
 import { logActivity } from "../lib/audit";
+import { nextVoucherNumber } from "../lib/voucherNumber";
 
 const router = Router();
 
@@ -300,8 +301,7 @@ router.post("/reconciliation/batches", async (req, res): Promise<void> => {
 
     // 9. Post accounting entries
     // Dr Bank (net) — receipt: received_from=clearing, received_in=bank
-    const { rows: [cntRecRow] } = await client.query(`SELECT COUNT(*) FROM receipts`);
-    const recVoucher = `REC-${String(Number(cntRecRow.count) + 1).padStart(4, "0")}`;
+    const recVoucher = await nextVoucherNumber(client, 'receipt', settlementDate);
     await client.query(
       `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration)
        VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -311,8 +311,7 @@ router.post("/reconciliation/batches", async (req, res): Promise<void> => {
 
     // Dr Charges expense (if any) — payment: paid_from=clearing, paid_to=charges ledger
     if (parsedCharges > 0 && chargesLedger) {
-      const { rows: [cntPayRow] } = await client.query(`SELECT COUNT(*) FROM payments`);
-      const payVoucher = `PAY-${String(Number(cntPayRow.count) + 1).padStart(4, "0")}`;
+      const payVoucher = await nextVoucherNumber(client, 'payment', settlementDate);
       await client.query(
         `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration)
          VALUES ($1, $2, $3, $4, $5, $6)`,
