@@ -29,6 +29,37 @@ function pickVendor(body: StrRecord): StrRecord {
   return r;
 }
 
+// ── Credit-control fields (raw columns — not in the Drizzle schema) ────────
+function validateCreditFields(body: StrRecord): string | null {
+  if ('creditLimit' in body && body.creditLimit !== null) {
+    const v = Number(body.creditLimit);
+    if (!Number.isFinite(v) || v < 0) return "creditLimit must be a number ≥ 0";
+  }
+  if ('creditDays' in body && body.creditDays !== null) {
+    const v = Number(body.creditDays);
+    if (!Number.isInteger(v) || v < 0) return "creditDays must be a whole number ≥ 0";
+  }
+  return null;
+}
+
+async function applyCreditFields(id: number, body: StrRecord): Promise<void> {
+  if ('creditLimit' in body) {
+    const v = body.creditLimit === null ? 0 : Math.round(Number(body.creditLimit) * 100) / 100;
+    await pool.query(`UPDATE customers SET credit_limit = $1 WHERE id = $2`, [v, id]);
+  }
+  if ('creditDays' in body) {
+    const v = body.creditDays === null ? 0 : Number(body.creditDays);
+    await pool.query(`UPDATE customers SET credit_days = $1 WHERE id = $2`, [v, id]);
+  }
+}
+
+async function creditFieldsRow(id: number): Promise<{ creditLimit: number; creditDays: number }> {
+  const { rows: [r] } = await pool.query<any>(
+    `SELECT COALESCE(credit_limit, 0)::numeric AS cl, COALESCE(credit_days, 0) AS cd FROM customers WHERE id = $1`, [id]
+  );
+  return { creditLimit: Number(r?.cl ?? 0), creditDays: Number(r?.cd ?? 0) };
+}
+
 // ── Customers ─────────────────────────────────────────────────────────────
 router.get("/customers", async (req, res): Promise<void> => {
   const { locationType, locationId } = req.query as { locationType?: string; locationId?: string };
@@ -53,6 +84,8 @@ router.get("/customers", async (req, res): Promise<void> => {
     ...r,
     totalPurchases:      Number(r.totalPurchases),
     outstandingBalance:  Number(r.outstandingBalance),
+    creditLimit:         Number(r.credit_limit ?? 0),
+    creditDays:          Number(r.credit_days ?? 0),
   })));
 });
 
@@ -62,7 +95,10 @@ router.post("/customers", async (req, res): Promise<void> => {
     res.status(400).json({ error: "name is required" });
     return;
   }
-  const [row] = await db.insert(customersTable).values(data).returning();
+  const creditErr = validateCreditFields(req.body);
+  if (creditErr) { res.status(400).json({ error: creditErr }); return; }
+  // pickCustomer whitelists keys and the guard above ensures name is present
+  const [row] = await db.insert(customersTable).values(data as typeof customersTable.$inferInsert).returning();
 
   // Stamp the location this customer belongs to (outlet or warehouse)
   const { locationType, locationId } = req.body as { locationType?: string; locationId?: number };
@@ -86,7 +122,9 @@ router.post("/customers", async (req, res): Promise<void> => {
     }
   } catch { /* non-fatal — ledger can be created manually */ }
 
-  res.status(201).json({ ...row, totalPurchases: Number(row.totalPurchases) });
+  await applyCreditFields(row.id, req.body);
+  const credit = await creditFieldsRow(row.id);
+  res.status(201).json({ ...row, ...credit, totalPurchases: Number(row.totalPurchases) });
 });
 
 router.get("/customers/:id", async (req, res): Promise<void> => {
@@ -94,16 +132,27 @@ router.get("/customers/:id", async (req, res): Promise<void> => {
   const id = parseInt(raw, 10);
   const [row] = await db.select().from(customersTable).where(eq(customersTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
-  res.json({ ...row, totalPurchases: Number(row.totalPurchases) });
+  const credit = await creditFieldsRow(id);
+  res.json({ ...row, ...credit, totalPurchases: Number(row.totalPurchases) });
 });
 
 router.patch("/customers/:id", async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   const data = pickCustomer(req.body);
-  if (Object.keys(data).length === 0) { res.status(400).json({ error: "No valid fields to update" }); return; }
-  const [row] = await db.update(customersTable).set(data).where(eq(customersTable.id, id)).returning();
+  const creditErr = validateCreditFields(req.body);
+  if (creditErr) { res.status(400).json({ error: creditErr }); return; }
+  const hasCreditFields = ('creditLimit' in req.body) || ('creditDays' in req.body);
+  if (Object.keys(data).length === 0 && !hasCreditFields) { res.status(400).json({ error: "No valid fields to update" }); return; }
+
+  let row;
+  if (Object.keys(data).length > 0) {
+    [row] = await db.update(customersTable).set(data).where(eq(customersTable.id, id)).returning();
+  } else {
+    [row] = await db.select().from(customersTable).where(eq(customersTable.id, id)).limit(1);
+  }
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
+  await applyCreditFields(id, req.body);
   // Keep the linked debtor ledger's name in sync when the customer is renamed
   if (typeof (data as any).name === "string" && String((data as any).name).trim()) {
     await pool.query(
@@ -111,7 +160,8 @@ router.patch("/customers/:id", async (req, res): Promise<void> => {
       [row.name, `Customer ledger — ${row.name}`, `CUST-${id}`]
     ).catch(() => {});
   }
-  res.json({ ...row, totalPurchases: Number(row.totalPurchases) });
+  const credit = await creditFieldsRow(id);
+  res.json({ ...row, ...credit, totalPurchases: Number(row.totalPurchases) });
 });
 
 router.delete("/customers/:id", async (req, res): Promise<void> => {
@@ -192,7 +242,8 @@ router.post("/vendors", async (req, res): Promise<void> => {
     res.status(400).json({ error: "name is required" });
     return;
   }
-  const [row] = await db.insert(vendorsTable).values(data).returning();
+  // pickVendor whitelists keys and the guard above ensures name is present
+  const [row] = await db.insert(vendorsTable).values(data as typeof vendorsTable.$inferInsert).returning();
 
   // Auto-create a creditor ledger under Sundry Creditors
   try {

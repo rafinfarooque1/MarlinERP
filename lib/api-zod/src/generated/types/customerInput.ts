@@ -12,4 +12,6 @@ export interface CustomerInput {
   email?: string;
   address?: string;
   gstNumber?: string;
+  creditLimit?: number;
+  creditDays?: number;
 }

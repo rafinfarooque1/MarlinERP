@@ -28,6 +28,8 @@ const schema = z.object({
   gstNumber: z.string().optional(),
   state: z.string().optional(),
   notes: z.string().optional(),
+  creditLimit: z.coerce.number().min(0, 'Must be ≥ 0').optional(),
+  creditDays: z.coerce.number().int('Whole days').min(0, 'Must be ≥ 0').optional(),
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -124,11 +126,11 @@ export default function Customers() {
   const createMutation = useCreateCustomer();
   const updateMutation = useUpdateCustomer();
 
-  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', phone: '', email: '', address: '', gstNumber: '', state: '', notes: '' } });
+  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', phone: '', email: '', address: '', gstNumber: '', state: '', notes: '', creditLimit: 0, creditDays: 0 } });
 
   const openEdit = (c: any) => {
     setEditItem(c);
-    form.reset({ name: c.name, phone: c.phone ?? '', email: c.email ?? '', address: c.address ?? '', gstNumber: c.gstNumber ?? '', state: (c as any).state ?? '', notes: c.notes ?? '' });
+    form.reset({ name: c.name, phone: c.phone ?? '', email: c.email ?? '', address: c.address ?? '', gstNumber: c.gstNumber ?? '', state: (c as any).state ?? '', notes: c.notes ?? '', creditLimit: Number(c.creditLimit ?? 0), creditDays: Number(c.creditDays ?? 0) });
     setIsOpen(true);
   };
 
@@ -241,6 +243,24 @@ export default function Customers() {
                   </FormItem>
                 )} />
               </div>
+              <div className="grid grid-cols-2 gap-4">
+                <FormField control={form.control} name="creditLimit" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Credit Limit (₹)</FormLabel>
+                    <FormControl><Input type="number" min={0} step="0.01" className="font-mono" {...field} /></FormControl>
+                    <p className="text-[11px] text-muted-foreground">0 = no limit enforced</p>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                <FormField control={form.control} name="creditDays" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Credit Days</FormLabel>
+                    <FormControl><Input type="number" min={0} step="1" className="font-mono" {...field} /></FormControl>
+                    <p className="text-[11px] text-muted-foreground">Days until an invoice falls due</p>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+              </div>
               <FormField control={form.control} name="address" render={({ field }) => (
                 <FormItem><FormLabel>Address</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
               )} />
@@ -291,7 +311,7 @@ export default function Customers() {
                 <button onClick={() => setActiveTab('ledger')} className="text-xs text-primary underline">View ledger →</button>
               </div>
               <Separator />
-              {[['Phone', viewItem.phone || '—'], ['Email', viewItem.email || '—'], ['State', (viewItem as any).state || '—'], ['GSTIN', viewItem.gstNumber || '—'], ['Address', viewItem.address || '—'], ['Notes', viewItem.notes || '—']].map(([k, v]) => (
+              {[['Phone', viewItem.phone || '—'], ['Email', viewItem.email || '—'], ['State', (viewItem as any).state || '—'], ['GSTIN', viewItem.gstNumber || '—'], ['Credit Limit', Number((viewItem as any).creditLimit ?? 0) > 0 ? `₹${Number((viewItem as any).creditLimit).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : 'No limit'], ['Credit Days', String(Number((viewItem as any).creditDays ?? 0) || '—')], ['Address', viewItem.address || '—'], ['Notes', viewItem.notes || '—']].map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
                   <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                   <span className="font-medium">{v}</span>

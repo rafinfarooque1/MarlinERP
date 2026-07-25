@@ -52,10 +52,36 @@ function calcLineItems(rawLineItems: any[]) {
   return { enriched, subtotal, discountTotal, taxTotal, roundOff, totalAmount };
 }
 
+// ── Material-name enrichment (PO PDFs and detail views need names, not IDs) ──
+type NameMaps = { material: Map<number, string>; raw_material: Map<number, string>; item: Map<number, string> };
+
+async function buildNameMaps(): Promise<NameMaps> {
+  const [mats, raws, its] = await Promise.all([
+    db.select({ id: materialsTable.id, name: materialsTable.name }).from(materialsTable),
+    db.select({ id: rawMaterialsTable.id, name: rawMaterialsTable.name }).from(rawMaterialsTable),
+    db.select({ id: itemsTable.id, name: itemsTable.name }).from(itemsTable),
+  ]);
+  return {
+    material: new Map(mats.map(m => [m.id, m.name])),
+    raw_material: new Map(raws.map(m => [m.id, m.name])),
+    item: new Map(its.map(m => [m.id, m.name])),
+  };
+}
+
+function enrichLines(lineItems: unknown, maps: NameMaps): any[] {
+  return (Array.isArray(lineItems) ? lineItems : []).map((li: any) => ({
+    ...li,
+    materialName: li.materialName
+      || maps[(li.materialType as keyof NameMaps)]?.get(Number(li.materialId))
+      || `${li.materialType === 'raw_material' ? 'Raw material' : li.materialType === 'item' ? 'Item' : 'Material'} #${li.materialId}`,
+  }));
+}
+
 router.get("/purchases", async (_req, res): Promise<void> => {
   const rows = await db.select().from(purchasesTable).orderBy(purchasesTable.id);
   const vendors = await db.select().from(vendorsTable);
   const vMap = new Map(vendors.map(v => [v.id, v.name]));
+  const nameMaps = await buildNameMaps();
   res.json(rows.map(r => ({
     ...r,
     vendorName: vMap.get(r.vendorId) ?? "",
@@ -63,7 +89,7 @@ router.get("/purchases", async (_req, res): Promise<void> => {
     taxTotal: Number((r as any).taxTotal ?? 0),
     discountTotal: Number((r as any).discountTotal ?? 0),
     roundOff: Number((r as any).roundOff ?? 0),
-    lineItems: r.lineItems ?? [],
+    lineItems: enrichLines(r.lineItems, nameMaps),
   })));
 });
 
@@ -134,7 +160,7 @@ router.post("/purchases", async (req, res): Promise<void> => {
 
   res.status(201).json({
     ...row, vendorName: vendor?.name ?? "", totalAmount, taxTotal, discountTotal, roundOff,
-    lineItems: enriched,
+    lineItems: enrichLines(enriched, await buildNameMaps()),
   });
 });
 
@@ -148,7 +174,7 @@ router.get("/purchases/:id", async (req, res): Promise<void> => {
     taxTotal: Number((row as any).taxTotal ?? 0),
     discountTotal: Number((row as any).discountTotal ?? 0),
     roundOff: Number((row as any).roundOff ?? 0),
-    lineItems: row.lineItems ?? [],
+    lineItems: enrichLines(row.lineItems, await buildNameMaps()),
   });
 });
 

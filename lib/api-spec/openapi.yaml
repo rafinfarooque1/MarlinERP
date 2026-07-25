@@ -2390,6 +2390,10 @@ components:
           type: ["string", "null"]
         totalPurchases:
           type: number
+        creditLimit:
+          type: number
+        creditDays:
+          type: integer
         createdAt:
           type: string
 
@@ -2407,6 +2411,10 @@ components:
           type: string
         gstNumber:
           type: string
+        creditLimit:
+          type: number
+        creditDays:
+          type: integer
 
     CustomerUpdate:
       type: object
@@ -2421,6 +2429,10 @@ components:
           type: string
         gstNumber:
           type: string
+        creditLimit:
+          type: number
+        creditDays:
+          type: integer
 
     # VENDORS
     Vendor:
@@ -2718,6 +2730,10 @@ components:
           type: string
         financialYear:
           type: string
+        paymentTerms:
+          type: ["string", "null"]
+        invoiceFooter:
+          type: ["string", "null"]
 
     CompanySettingsUpdate:
       type: object
@@ -2742,6 +2758,10 @@ components:
           type: string
         financialYear:
           type: string
+        paymentTerms:
+          type: ["string", "null"]
+        invoiceFooter:
+          type: ["string", "null"]
 
     # PERMISSIONS
     Permission:

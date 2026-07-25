@@ -18,5 +18,7 @@ export interface Customer {
   /** @nullable */
   gstNumber?: string | null;
   totalPurchases?: number;
+  creditLimit?: number;
+  creditDays?: number;
   createdAt: string;
 }

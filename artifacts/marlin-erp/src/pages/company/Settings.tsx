@@ -8,9 +8,10 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Trash2, TriangleAlert, CalendarRange } from 'lucide-react';
+import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Trash2, TriangleAlert, CalendarRange, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { customFetch } from '@workspace/api-client-react';
+import { Textarea } from '@/components/ui/textarea';
 
 interface SettingGroup {
   icon: React.ElementType;
@@ -203,6 +204,87 @@ function FinancialYearSection() {
   );
 }
 
+// ─── Invoice PDF: payment terms & footer (server-persisted) ──────────────────
+
+function InvoicePdfSection() {
+  const [paymentTerms, setPaymentTerms] = useState('');
+  const [invoiceFooter, setInvoiceFooter] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    customFetch<any>('/api/company/settings')
+      .then(s => {
+        setPaymentTerms(typeof s?.paymentTerms === 'string' ? s.paymentTerms : '');
+        setInvoiceFooter(typeof s?.invoiceFooter === 'string' ? s.invoiceFooter : '');
+      })
+      .catch(() => { /* keep empty */ })
+      .finally(() => setLoading(false));
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await customFetch('/api/company/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          paymentTerms: paymentTerms.trim() || null,
+          invoiceFooter: invoiceFooter.trim() || null,
+        }),
+      });
+      toast.success('Invoice PDF settings saved');
+    } catch (e: any) {
+      toast.error(e?.data?.error || e.message || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <div className="p-4 border-b border-border bg-muted/20 flex items-center gap-3">
+        <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center"><FileText className="w-4 h-4 text-primary" /></div>
+        <div>
+          <h3 className="font-semibold">Invoice PDF</h3>
+          <p className="text-xs text-muted-foreground">Payment terms and footer text printed on every sales invoice</p>
+        </div>
+      </div>
+      {loading ? (
+        <div className="p-6 flex items-center gap-2 text-muted-foreground text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>
+      ) : (
+        <div className="divide-y divide-border">
+          <div className="p-4 space-y-2">
+            <label className="text-sm font-medium">Payment terms</label>
+            <Textarea
+              rows={3}
+              value={paymentTerms}
+              placeholder="e.g. Payment due within 15 days of invoice date. 2% late fee per month thereafter."
+              onChange={e => setPaymentTerms(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">Shown in a “Payment Terms” box below the payment details. Leave blank to omit.</p>
+          </div>
+          <div className="p-4 space-y-2">
+            <label className="text-sm font-medium">Invoice footer</label>
+            <Textarea
+              rows={2}
+              value={invoiceFooter}
+              placeholder="e.g. Goods once sold will not be taken back without a return authorization."
+              onChange={e => setInvoiceFooter(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">Printed under the “Thank You” bar at the bottom of the invoice. Leave blank to omit.</p>
+          </div>
+          <div className="p-4 flex justify-end">
+            <Button onClick={save} disabled={saving}>
+              {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> Save Invoice Settings</>}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Settings() {
   const [values, setValues] = useState<Record<string, any>>(getInitial);
   const [saving, setSaving] = useState(false);
@@ -282,6 +364,9 @@ export default function Settings() {
 
         {/* ── Financial Year & Voucher Numbering (server-persisted) ────────── */}
         <FinancialYearSection />
+
+        {/* ── Invoice PDF: payment terms & footer (server-persisted) ───────── */}
+        <InvoicePdfSection />
 
         {/* ── Danger Zone ──────────────────────────────────────────────────── */}
         <div className="border border-destructive/40 rounded-xl overflow-hidden">

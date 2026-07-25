@@ -14,5 +14,6 @@ export * from "./transfers";
 export * from "./payments-reconciliation";
 export * from "./location-expenses";
 export * from "./inventory-batches";
+export * from "./returns";
 export * from './generated/api';
 export * from './generated/api.schemas';

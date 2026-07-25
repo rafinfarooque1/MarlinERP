@@ -21,6 +21,7 @@ import companyRouter from "./company";
 import auditRouter from "./audit";
 import publicInvoicesRouter from "./publicInvoices";
 import pdfGenRouter from "./pdfGen";
+import returnsRouter from "./returns";
 const router: IRouter = Router();
 
 router.use(healthRouter);
@@ -45,5 +46,6 @@ router.use(companyRouter);
 router.use(auditRouter);
 router.use(publicInvoicesRouter);
 router.use(pdfGenRouter);
+router.use(returnsRouter);
 
 export default router;

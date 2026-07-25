@@ -33,6 +33,8 @@ import Leave from './pages/hr/Leave';
 import Customers from './pages/customers/Customers';
 import Vendors from './pages/customers/Vendors';
 import Coupons from './pages/customers/Coupons';
+import Returns from './pages/returns/Returns';
+import Outstanding from './pages/outstanding/Outstanding';
 
 import ChartOfAccounts from './pages/accounts/ChartOfAccounts';
 import Ledger from './pages/accounts/Ledger';
@@ -146,6 +148,8 @@ function Router() {
       <Route path="/customers"><AuthGuard><Customers /></AuthGuard></Route>
       <Route path="/vendors"><AuthGuard><Vendors /></AuthGuard></Route>
       <Route path="/coupons"><AuthGuard><Coupons /></AuthGuard></Route>
+      <Route path="/returns"><AuthGuard><Returns /></AuthGuard></Route>
+      <Route path="/outstanding"><AuthGuard><Outstanding /></AuthGuard></Route>
 
       <Route path="/accounts/chart"><AuthGuard><ChartOfAccounts /></AuthGuard></Route>
       <Route path="/accounts/ledger"><AuthGuard><Ledger /></AuthGuard></Route>

@@ -98,10 +98,12 @@ const navigation = [
     icon: Calculator,
     branchGroups: ['warehouse', null],
     children: [
-      { name: 'Orders',    href: '/headoffice/sales', module: 'Sales'     },
-      { name: 'Customers', href: '/customers',         module: 'Customers' },
-      { name: 'Vendors',   href: '/vendors',           module: 'Vendors'   },
-      { name: 'Coupons',   href: '/coupons',           module: 'Coupons'   },
+      { name: 'Orders',      href: '/headoffice/sales', module: 'Sales'     },
+      { name: 'Returns',     href: '/returns',          module: 'Sales'     },
+      { name: 'Outstanding', href: '/outstanding',      module: 'Sales'     },
+      { name: 'Customers',   href: '/customers',        module: 'Customers' },
+      { name: 'Vendors',     href: '/vendors',          module: 'Vendors'   },
+      { name: 'Coupons',     href: '/coupons',          module: 'Coupons'   },
     ],
   },
   {

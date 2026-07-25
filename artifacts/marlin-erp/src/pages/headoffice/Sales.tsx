@@ -42,6 +42,10 @@ import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
 import { downloadCSV } from '@/lib/download';
 import { Separator } from '@/components/ui/separator';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -84,6 +88,7 @@ const schema = z.object({
   locationId: z.coerce.number().min(1, 'Location required'),
   customerId: z.coerce.number().optional(),
   saleDate: z.string().min(1, 'Date required'),
+  paymentMode: z.enum(['cash', 'upi', 'card', 'credit']).default('cash'),
   couponCode: z.string().optional(),
   lineItems: z.array(saleLineSchema).min(1, 'Add at least one item'),
 });
@@ -105,6 +110,7 @@ const defaultFormValues: FormValues = {
   locationType: 'outlet',
   locationId: 0,
   saleDate: new Date().toISOString().split('T')[0],
+  paymentMode: 'cash',
   couponCode: '',
   lineItems: [{ itemId: 0, quantity: 1, unitPrice: 0 }],
 };
@@ -149,6 +155,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
   const [viewQrUrl, setViewQrUrl] = useState<string | null>(null);
+  // Credit-limit override: holds the rejected payload + 409 details while the
+  // manager decides whether to proceed anyway.
+  const [creditWarning, setCreditWarning] = useState<{ payload: any; info: any } | null>(null);
 
   // Multi-method payment state — each row has its own method, amount and reference
   type PRow = { id: number; method: string; amount: string; ref: string };
@@ -191,6 +200,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       locationId: sale.locationId ?? sale.outletId ?? 0,
       customerId: sale.customerId ?? undefined,
       saleDate: sale.saleDate,
+      paymentMode: (['cash', 'upi', 'card', 'credit'].includes(sale.paymentMode) ? sale.paymentMode : 'cash') as FormValues['paymentMode'],
       couponCode: sale.couponCode ?? '',
       lineItems: (sale.lineItems ?? []).map((li: any) => ({
         itemId: li.itemId,
@@ -331,6 +341,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const hasItems = fields.some((_, i) => (form.watch(`lineItems.${i}.itemId`) ?? 0) > 0);
 
   const onSubmit = (data: FormValues) => {
+    if (data.paymentMode === 'credit' && !data.customerId) {
+      toast.error('Credit sales need a registered customer — pick one or change the payment mode.');
+      return;
+    }
     const enrichedItems = data.lineItems.map(li => ({
       itemId: li.itemId,
       quantity: li.quantity,
@@ -373,9 +387,42 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           setIsOpen(false);
           form.reset(effectiveDefaultValues);
         },
-        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Could not record sale'),
+        onError: (e: any) => {
+          const info = e?.data;
+          if (e?.status === 409 && info?.code === 'CREDIT_LIMIT_EXCEEDED') {
+            if (perm.canEdit) {
+              // Managers may override — show the warning dialog
+              setCreditWarning({ payload, info });
+            } else {
+              toast.error(
+                `Credit limit exceeded: outstanding ₹${Number(info.currentOutstanding ?? 0).toLocaleString('en-IN')} + this sale ₹${Number(info.saleAmount ?? 0).toLocaleString('en-IN')} would pass the ₹${Number(info.creditLimit ?? 0).toLocaleString('en-IN')} limit. Ask a manager to override or collect payment first.`,
+                { duration: 8000 },
+              );
+            }
+            return;
+          }
+          toast.error(e?.data?.error || e.message || 'Could not record sale');
+        },
       });
     }
+  };
+
+  // Manager confirmed: retry the same sale with the credit-override flag set.
+  const proceedDespiteCredit = () => {
+    if (!creditWarning) return;
+    createMutation.mutate({ data: { ...creditWarning.payload, creditOverride: true } }, {
+      onSuccess: () => {
+        toast.success('Sale recorded (credit limit overridden)');
+        queryClient.invalidateQueries({ queryKey: getListSalesQueryKey() });
+        setCreditWarning(null);
+        setIsOpen(false);
+        form.reset(effectiveDefaultValues);
+      },
+      onError: (e: any) => {
+        setCreditWarning(null);
+        toast.error(e?.data?.error || e.message || 'Could not record sale');
+      },
+    });
   };
 
   // ── Invoice PDF (canonical server-side renderer) ───────────────────────────
@@ -733,6 +780,24 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     </FormItem>
                   );
                 }} />
+                <FormField control={form.control} name="paymentMode" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Payment Mode <span className="text-destructive">*</span></FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl><SelectTrigger><SelectValue placeholder="Select mode" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        <SelectItem value="cash">💵 Cash</SelectItem>
+                        <SelectItem value="upi">📱 UPI</SelectItem>
+                        <SelectItem value="card">💳 Card</SelectItem>
+                        <SelectItem value="credit">🕒 Credit (pay later)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {field.value === 'credit' && !watchCustomerId && (
+                      <p className="text-xs text-amber-500 mt-1">Credit sales need a registered customer</p>
+                    )}
+                    <FormMessage />
+                  </FormItem>
+                )} />
               </div>
 
               {/* Coupon code */}
@@ -1351,6 +1416,52 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           )}
         </SheetContent>
       </Sheet>
+
+      {/* ── Credit-limit override confirmation ─────────────────────────────── */}
+      <AlertDialog open={!!creditWarning} onOpenChange={v => { if (!v) setCreditWarning(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-amber-600">
+              <AlertTriangle className="w-5 h-5" /> Credit limit exceeded
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 text-sm text-muted-foreground">
+                <span className="block">
+                  Recording this sale on credit would take the customer past their credit limit.
+                </span>
+                <div className="rounded-lg border border-border bg-muted/20 divide-y divide-border text-foreground">
+                  {[
+                    ['Credit limit', creditWarning?.info?.creditLimit],
+                    ['Current outstanding', creditWarning?.info?.currentOutstanding],
+                    ['This sale', creditWarning?.info?.saleAmount],
+                    ['Projected outstanding', creditWarning?.info?.projectedOutstanding],
+                  ].map(([k, v]) => (
+                    <div key={k as string} className="flex justify-between px-3 py-1.5">
+                      <span className="text-xs text-muted-foreground">{k}</span>
+                      <span className={`font-mono text-xs font-semibold ${k === 'Projected outstanding' ? 'text-red-500' : ''}`}>
+                        ₹{Number(v ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <span className="block">
+                  You can proceed anyway (manager override), or cancel and collect payment first.
+                </span>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={createMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-amber-600 text-white hover:bg-amber-700"
+              onClick={e => { e.preventDefault(); proceedDespiteCredit(); }}
+              disabled={createMutation.isPending}
+            >
+              {createMutation.isPending ? 'Recording…' : 'Proceed anyway'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppLayout>
   );
 }

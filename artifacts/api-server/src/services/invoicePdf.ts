@@ -17,7 +17,7 @@
 import { jsPDF } from "jspdf";
 import QRCode from "qrcode";
 import {
-  db, salesTable, outletsTable, customersTable, itemsTable, companySettingsTable,
+  db, pool, salesTable, outletsTable, customersTable, itemsTable, companySettingsTable,
 } from "@workspace/db";
 import { eq, inArray } from "drizzle-orm";
 
@@ -68,11 +68,42 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
   const [sale] = await db.select().from(salesTable).where(eq(salesTable.id, saleId)).limit(1);
   if (!sale) return null;
 
-  const [outlet] = await db.select().from(outletsTable).where(eq(outletsTable.id, sale.outletId)).limit(1);
+  // Location-aware lookup: warehouse sales carry location_type/location_id in
+  // raw columns (not in the Drizzle schema). Fall back to the legacy outlet_id
+  // path for older rows.
+  let locationName = "";
+  let locationUpiId = "";
+  const { rows: [locRow] } = await pool.query<{ location_type: string | null; location_id: number | null }>(
+    `SELECT location_type, location_id FROM sales WHERE id = $1`, [saleId]
+  );
+  if (locRow?.location_type === "warehouse" && locRow.location_id) {
+    const { rows: [wh] } = await pool.query<{ name: string; upi_id: string | null }>(
+      `SELECT name, upi_id FROM warehouses WHERE id = $1`, [locRow.location_id]
+    );
+    locationName = wh?.name ?? "";
+    locationUpiId = wh?.upi_id ?? "";
+  } else {
+    const outletId = (locRow?.location_type === "outlet" && locRow.location_id) ? locRow.location_id : sale.outletId;
+    const [outlet] = await db.select().from(outletsTable).where(eq(outletsTable.id, outletId)).limit(1);
+    locationName = outlet?.name ?? "";
+    locationUpiId = (outlet?.upiId as string | null) ?? "";
+  }
+
   const customerRow = sale.customerId
     ? (await db.select().from(customersTable).where(eq(customersTable.id, sale.customerId)).limit(1))[0] ?? null
     : null;
   const [cs] = await db.select().from(companySettingsTable).limit(1);
+
+  // Invoice-PDF settings live in raw columns (startup migration)
+  let paymentTerms: string | null = null;
+  let invoiceFooter: string | null = null;
+  if (cs) {
+    const { rows: [pdfCols] } = await pool.query<{ payment_terms: string | null; invoice_footer: string | null }>(
+      `SELECT payment_terms, invoice_footer FROM company_settings WHERE id = $1`, [cs.id]
+    );
+    paymentTerms = pdfCols?.payment_terms ?? null;
+    invoiceFooter = pdfCols?.invoice_footer ?? null;
+  }
 
   const lineItems: InvoiceLineItem[] = Array.isArray(sale.lineItems) ? (sale.lineItems as InvoiceLineItem[]) : [];
 
@@ -104,8 +135,8 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
       totalAmount: Number(sale.totalAmount),
       lineItems,
     },
-    outletName: outlet?.name ?? "",
-    outletUpiId: (outlet?.upiId as string | null) ?? "",
+    outletName: locationName,
+    outletUpiId: locationUpiId,
     customer: customerRow ? {
       name: customerRow.name,
       phone: customerRow.phone ?? "",
@@ -113,7 +144,7 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
       state: customerRow.state ?? "",
       gstNumber: customerRow.gstNumber ?? "",
     } : null,
-    cs: (cs ?? {}) as Record<string, unknown>,
+    cs: { ...(cs ?? {}), paymentTerms, invoiceFooter } as Record<string, unknown>,
   };
 }
 
@@ -553,13 +584,32 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     y += 9;
   }
 
+  // Payment terms (Company Settings → Invoice PDF section)
+  const payTerms = typeof cs.paymentTerms === "string" ? cs.paymentTerms.trim() : "";
+  if (payTerms) {
+    const termLines = doc.splitTextToSize(payTerms, CW - 6) as string[];
+    const termsH = 9 + termLines.length * 3.8;
+    if (y + termsH > PH - 18) { doc.addPage(); y = M; }
+    bx(M, y, CW, termsH, BORDER);
+    fill(M, y, CW, 7, LGRAY);
+    txt("PAYMENT TERMS", M + 3, y + 5, { bold: true, size: 7, color: NAVY });
+    termLines.forEach((t, i) => txt(t, M + 3, y + 10.5 + i * 3.8, { size: 6.5, color: BK }));
+    y += termsH + 2;
+  }
+
   // ══════════════════════════════════════════════════════════════════════════
-  // 6. FOOTER — navy bar + subtitle
+  // 6. FOOTER — navy bar + custom footer + subtitle
   // ══════════════════════════════════════════════════════════════════════════
-  if (y + 14 > PH - 4) { doc.addPage(); y = M; }
+  const customFooter = typeof cs.invoiceFooter === "string" ? cs.invoiceFooter.trim() : "";
+  const footerLines = customFooter ? (doc.splitTextToSize(customFooter, CW - 10) as string[]) : [];
+  if (y + 14 + footerLines.length * 3.8 > PH - 4) { doc.addPage(); y = M; }
   fill(M, y, CW, 9, NAVY);
   txt("THANK YOU FOR YOUR BUSINESS!", PW / 2, y + 6, { bold: true, size: 9, color: WHITE, align: "center" });
   y += 11;
+  for (const t of footerLines) {
+    txt(t, PW / 2, y + 3, { size: 6.5, color: BK, align: "center" });
+    y += 3.8;
+  }
   txt("This is a computer-generated invoice.", PW / 2, y + 3, { size: 6.5, color: MGRAY, align: "center" });
 
   const buffer = Buffer.from(doc.output("arraybuffer"));

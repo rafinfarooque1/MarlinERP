@@ -7,3 +7,6 @@
 - [Invoice PDFs & share links](invoice-pdf-links.md) — ONE server-side renderer + HMAC public links; open popups synchronously in the click gesture; blob-URL PDFs trigger AV false positives.
 - [Accounts derivation & numbering](accounts-derivation.md) — books derive from buildDerivedPostings(); sale-linked receipts stay excluded (double-count trap); ALL GST math via lineTaxHeads(); never COUNT(*)-number vouchers.
 - [Inventory batch layer](inventory-batches.md) — additive lot layer over stock_entries (qty truth); FEFO clamped consumption, shortfall = "Untracked"; zod strips unknown keys so optional passthrough fields read from raw body.
+- [pg query gotchas](pg-gotchas.md) — date columns return JS Date (never string-compare vs YYYY-MM-DD); creates return 201; check-then-insert guards need one txn + pg_advisory_xact_lock.
+- [Codegen staleness trap](codegen-staleness.md) — regenerating api-zod can flip stale-optional fields to required; diff generated output and verify UI forms send them after codegen.
+- [Sales settlement semantics](sales-settlement.md) — cash/upi/card settle at creation (paid); only 'credit' mode is credit-controlled; dues = total−amount_paid everywhere; backfills go after their DDL + migration_log guard.

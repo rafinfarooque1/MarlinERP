@@ -10,6 +10,8 @@ export const DEFAULT_VOUCHER_PREFIXES: Record<string, string> = {
   contra: "CTR",
   credit_note: "CN",
   debit_note: "DN",
+  sales_return: "SR",
+  purchase_return: "PR",
 };
 
 export const VOUCHER_TYPE_LABELS: Record<string, string> = {
@@ -19,6 +21,8 @@ export const VOUCHER_TYPE_LABELS: Record<string, string> = {
   contra: "Contra",
   credit_note: "Credit Note",
   debit_note: "Debit Note",
+  sales_return: "Sales Return",
+  purchase_return: "Purchase Return",
 };
 
 /**

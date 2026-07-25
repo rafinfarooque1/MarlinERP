@@ -1372,6 +1372,8 @@ export const ListCustomersResponseItem = zod.object({
   "address": zod.string().nullish(),
   "gstNumber": zod.string().nullish(),
   "totalPurchases": zod.number().optional(),
+  "creditLimit": zod.number().optional(),
+  "creditDays": zod.number().optional(),
   "createdAt": zod.string()
 })
 export const ListCustomersResponse = zod.array(ListCustomersResponseItem)
@@ -1385,7 +1387,9 @@ export const CreateCustomerBody = zod.object({
   "phone": zod.string().optional(),
   "email": zod.string().optional(),
   "address": zod.string().optional(),
-  "gstNumber": zod.string().optional()
+  "gstNumber": zod.string().optional(),
+  "creditLimit": zod.number().optional(),
+  "creditDays": zod.number().optional()
 })
 
 export const CreateCustomerResponse = zod.object({
@@ -1396,6 +1400,8 @@ export const CreateCustomerResponse = zod.object({
   "address": zod.string().nullish(),
   "gstNumber": zod.string().nullish(),
   "totalPurchases": zod.number().optional(),
+  "creditLimit": zod.number().optional(),
+  "creditDays": zod.number().optional(),
   "createdAt": zod.string()
 })
 
@@ -1412,6 +1418,8 @@ export const GetCustomerResponse = zod.object({
   "address": zod.string().nullish(),
   "gstNumber": zod.string().nullish(),
   "totalPurchases": zod.number().optional(),
+  "creditLimit": zod.number().optional(),
+  "creditDays": zod.number().optional(),
   "createdAt": zod.string()
 })
 
@@ -1425,7 +1433,9 @@ export const UpdateCustomerBody = zod.object({
   "phone": zod.string().optional(),
   "email": zod.string().optional(),
   "address": zod.string().optional(),
-  "gstNumber": zod.string().optional()
+  "gstNumber": zod.string().optional(),
+  "creditLimit": zod.number().optional(),
+  "creditDays": zod.number().optional()
 })
 
 export const UpdateCustomerResponse = zod.object({
@@ -1436,6 +1446,8 @@ export const UpdateCustomerResponse = zod.object({
   "address": zod.string().nullish(),
   "gstNumber": zod.string().nullish(),
   "totalPurchases": zod.number().optional(),
+  "creditLimit": zod.number().optional(),
+  "creditDays": zod.number().optional(),
   "createdAt": zod.string()
 })
 
@@ -1789,7 +1801,9 @@ export const GetCompanySettingsResponse = zod.object({
   "panNumber": zod.string().nullish(),
   "logoUrl": zod.string().nullish(),
   "currency": zod.string().optional(),
-  "financialYear": zod.string().optional()
+  "financialYear": zod.string().optional(),
+  "paymentTerms": zod.string().nullish(),
+  "invoiceFooter": zod.string().nullish()
 })
 
 
@@ -1806,7 +1820,9 @@ export const UpdateCompanySettingsBody = zod.object({
   "panNumber": zod.string().optional(),
   "logoUrl": zod.string().optional(),
   "currency": zod.string().optional(),
-  "financialYear": zod.string().optional()
+  "financialYear": zod.string().optional(),
+  "paymentTerms": zod.string().nullish(),
+  "invoiceFooter": zod.string().nullish()
 })
 
 export const UpdateCompanySettingsResponse = zod.object({
@@ -1820,7 +1836,9 @@ export const UpdateCompanySettingsResponse = zod.object({
   "panNumber": zod.string().nullish(),
   "logoUrl": zod.string().nullish(),
   "currency": zod.string().optional(),
-  "financialYear": zod.string().optional()
+  "financialYear": zod.string().optional(),
+  "paymentTerms": zod.string().nullish(),
+  "invoiceFooter": zod.string().nullish()
 })
 
 

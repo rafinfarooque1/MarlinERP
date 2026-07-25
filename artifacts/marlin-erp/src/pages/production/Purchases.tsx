@@ -1,8 +1,9 @@
 import { Fragment, useState } from 'react';
 import {
   useListPurchases, useCreatePurchase, useListVendors, useListMaterials, useListRawMaterials, useListItems,
-  getListPurchasesQueryKey, useUpdatePurchase, useDeletePurchase,
+  getListPurchasesQueryKey, useUpdatePurchase, useDeletePurchase, useGetCompanySettings,
 } from '@workspace/api-client-react';
+import { downloadPurchaseOrderPDF } from '@/lib/pdfUtils';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -88,10 +89,24 @@ export default function Purchases() {
   const updateMutation = useUpdatePurchase();
   const deleteMutation = useDeletePurchase();
 
+  const { data: companySettings } = useGetCompanySettings();
+
   const getMaterialName = (li: any) => {
+    if (li.materialName) return li.materialName; // server-enriched
     if (li.materialType === 'raw_material') return rawMaterials.find((m: any) => m.id === li.materialId)?.name || `Item #${li.materialId}`;
     if (li.materialType === 'item') return (finishedItems as any[]).find((m: any) => m.id === li.materialId)?.name || `Item #${li.materialId}`;
     return materials.find((m: any) => m.id === li.materialId)?.name || `Item #${li.materialId}`;
+  };
+
+  const handleDownloadPO = (p: any) => {
+    try {
+      const matMap = new Map<number, string>((materials as any[]).map((m: any) => [m.id, m.name]));
+      const rawMap = new Map<number, string>((rawMaterials as any[]).map((m: any) => [m.id, m.name]));
+      const vendorGstin = (vendors as any[]).find((v: any) => v.id === p.vendorId)?.gstNumber;
+      downloadPurchaseOrderPDF({ ...p, vendorGstin }, companySettings ?? {}, matMap, rawMap);
+    } catch {
+      toast.error('Could not generate the PO PDF');
+    }
   };
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', lineItems: [defaultLine], notes: '' } });
@@ -390,6 +405,14 @@ export default function Purchases() {
                   {viewItem.invoiceNumber && ` · Ref: ${viewItem.invoiceNumber}`}
                 </SheetDescription>
               </SheetHeader>
+
+              {perm.canDownload && (
+                <div className="flex justify-end mb-4">
+                  <Button variant="outline" size="sm" onClick={() => handleDownloadPO(viewItem)}>
+                    <FileDown className="w-4 h-4 mr-2" /> Download PO PDF
+                  </Button>
+                </div>
+              )}
 
               {/* Line items table */}
               <div className="border border-border rounded-lg overflow-hidden mb-4">

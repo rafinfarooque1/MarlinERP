@@ -279,6 +279,12 @@ async function runMigrations() {
     `UPDATE sales SET location_id = outlet_id WHERE location_id IS NULL AND outlet_id IS NOT NULL`
   );
 
+  // Normalize any accidental 'partial' status rows to the canonical enum value
+  // ('unpaid' | 'partially_paid' | 'paid') used by payments, filters and badges.
+  await pool.query(
+    `UPDATE sales SET payment_status = 'partially_paid' WHERE payment_status = 'partial'`
+  );
+
   // One-time backfill: mark all PRE-EXISTING sales (those created before the payment
   // tracking columns existed) as fully paid. Tracked in migration_log so it never
   // re-runs on subsequent boots and cannot overwrite legitimate payment state.
@@ -294,6 +300,25 @@ async function runMigrations() {
       `INSERT INTO migration_log (name) VALUES ('sales_payment_backfill_v1')`
     );
     console.log('[migration] sales_payment_backfill_v1 applied');
+  }
+
+  // One-time backfill: counter-settled sales (cash/upi/card) recorded before
+  // settlement-at-creation existed carry amount_paid = 0 (many already say
+  // payment_status 'paid'), which pollutes outstanding/collections and the
+  // credit-limit check. Mark them fully paid. Placed AFTER the payment columns
+  // above are guaranteed to exist; migration_log keeps it one-time. Credit
+  // sales and partially-collected rows are untouched.
+  const { rows: [settledBackfill] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'settled_sales_paid_backfill_v1'`
+  );
+  if (!settledBackfill) {
+    const { rowCount: settledFixed } = await pool.query(`
+      UPDATE sales SET amount_paid = total_amount, payment_status = 'paid'
+      WHERE payment_mode IN ('cash', 'upi', 'card')
+        AND COALESCE(amount_paid, 0) = 0
+    `);
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('settled_sales_paid_backfill_v1')`);
+    console.log(`[migration] settled_sales_paid_backfill_v1: marked ${settledFixed} counter-settled sales paid`);
   }
 
   // ── Backfill CUST-{id} / VEND-{id} ledgers for pre-existing records ──────
@@ -603,6 +628,53 @@ async function runMigrations() {
     ALTER TABLE productions ADD COLUMN IF NOT EXISTS batch_number text;
     ALTER TABLE productions ADD COLUMN IF NOT EXISTS mfg_date text;
     ALTER TABLE productions ADD COLUMN IF NOT EXISTS expiry_date text;
+
+    -- Phase 4: credit control, returns, invoice PDF settings
+    ALTER TABLE customers ADD COLUMN IF NOT EXISTS credit_limit numeric(14,2) NOT NULL DEFAULT 0;
+    ALTER TABLE customers ADD COLUMN IF NOT EXISTS credit_days integer NOT NULL DEFAULT 0;
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS payment_terms text;
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS invoice_footer text;
+
+    CREATE TABLE IF NOT EXISTS sales_returns (
+      id serial PRIMARY KEY,
+      return_number text NOT NULL,
+      sale_id integer NOT NULL REFERENCES sales(id),
+      customer_id integer,
+      location_type text NOT NULL DEFAULT 'outlet',
+      location_id integer NOT NULL DEFAULT 0,
+      return_date text NOT NULL,
+      line_items jsonb NOT NULL DEFAULT '[]',
+      subtotal numeric(14,2) NOT NULL DEFAULT 0,
+      tax_total numeric(14,2) NOT NULL DEFAULT 0,
+      total_amount numeric(14,2) NOT NULL DEFAULT 0,
+      refund_mode text NOT NULL DEFAULT 'credit_note',
+      credit_note_id integer,
+      refund_payment_id integer,
+      reason text,
+      created_by text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS purchase_returns (
+      id serial PRIMARY KEY,
+      return_number text NOT NULL,
+      purchase_id integer NOT NULL REFERENCES purchases(id),
+      vendor_id integer NOT NULL,
+      return_date text NOT NULL,
+      line_items jsonb NOT NULL DEFAULT '[]',
+      subtotal numeric(14,2) NOT NULL DEFAULT 0,
+      tax_total numeric(14,2) NOT NULL DEFAULT 0,
+      total_amount numeric(14,2) NOT NULL DEFAULT 0,
+      debit_note_id integer,
+      reason text,
+      created_by text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sales_returns_sale     ON sales_returns(sale_id);
+    CREATE INDEX IF NOT EXISTS idx_sales_returns_customer ON sales_returns(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_purchase_returns_purchase ON purchase_returns(purchase_id);
+    CREATE INDEX IF NOT EXISTS idx_purchase_returns_vendor   ON purchase_returns(vendor_id);
   `);
 
   // De-duplicate stock_entries so (item, branch_type, branch_id) is unique,

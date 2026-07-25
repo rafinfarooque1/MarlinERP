@@ -17,4 +17,8 @@ export interface CompanySettingsUpdate {
   logoUrl?: string;
   currency?: string;
   financialYear?: string;
+  /** @nullable */
+  paymentTerms?: string | null;
+  /** @nullable */
+  invoiceFooter?: string | null;
 }

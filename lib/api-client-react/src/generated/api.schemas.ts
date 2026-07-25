@@ -663,6 +663,8 @@ export interface Customer {
   /** @nullable */
   gstNumber?: string | null;
   totalPurchases?: number;
+  creditLimit?: number;
+  creditDays?: number;
   createdAt: string;
 }
 
@@ -672,6 +674,8 @@ export interface CustomerInput {
   email?: string;
   address?: string;
   gstNumber?: string;
+  creditLimit?: number;
+  creditDays?: number;
 }
 
 export interface CustomerUpdate {
@@ -680,6 +684,8 @@ export interface CustomerUpdate {
   email?: string;
   address?: string;
   gstNumber?: string;
+  creditLimit?: number;
+  creditDays?: number;
 }
 
 export interface Vendor {
@@ -917,6 +923,10 @@ export interface CompanySettings {
   logoUrl?: string | null;
   currency?: string;
   financialYear?: string;
+  /** @nullable */
+  paymentTerms?: string | null;
+  /** @nullable */
+  invoiceFooter?: string | null;
 }
 
 export interface CompanySettingsUpdate {
@@ -930,6 +940,10 @@ export interface CompanySettingsUpdate {
   logoUrl?: string;
   currency?: string;
   financialYear?: string;
+  /** @nullable */
+  paymentTerms?: string | null;
+  /** @nullable */
+  invoiceFooter?: string | null;
 }
 
 export interface Permission {

@@ -204,18 +204,6 @@ router.post("/sales", async (req, res): Promise<void> => {
   }
   const companyState = (company.state ?? '').trim().toLowerCase();
 
-  // ── Atomically increment invoice sequence ─────────────────────────────────
-  const [updatedCompany] = await db
-    .update(companySettingsTable)
-    .set({ invoiceSequence: sql`${companySettingsTable.invoiceSequence} + 1` })
-    .where(eq(companySettingsTable.id, company.id))
-    .returning();
-
-  const seq = updatedCompany.invoiceSequence;
-  const fy = updatedCompany.financialYear || '2025-26';
-  const prefix = updatedCompany.invoicePrefix || 'INV';
-  const invoiceNumber = computeInvoiceNumber(prefix, fy, seq);
-
   // ── Determine inter-state vs intra-state ──────────────────────────────────
   let customerState = '';
   if (parsed.data.customerId) {
@@ -259,16 +247,142 @@ router.post("/sales", async (req, res): Promise<void> => {
   const discountTotal = (parsed.data as any).discountTotal ?? lineItems.reduce((s, li) => s + li.discount, 0);
   const totalAmount = subtotal + taxTotal - discountTotal;
 
-  // ── Insert sale with location columns via raw SQL (location_type/location_id not in Drizzle schema) ──
-  const outletIdForInsert = locationType === 'outlet' ? locationId : null;
-  const { rows: [row] } = await pgPool.query<any>(
-    `INSERT INTO sales (invoice_number, outlet_id, location_type, location_id, customer_id, sale_date, line_items, subtotal, tax_total, discount_total, total_amount, payment_mode, coupon_code)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13) RETURNING *`,
-    [invoiceNumber, outletIdForInsert, locationType, locationId,
-     parsed.data.customerId ?? null, parsed.data.saleDate,
-     JSON.stringify(lineItems), subtotal, taxTotal, discountTotal, totalAmount,
-     parsed.data.paymentMode ?? 'cash', parsed.data.couponCode ?? null]
-  );
+  // ── Credit control + atomic sale insert ───────────────────────────────────
+  // The credit-limit check, invoice-sequence increment, and sale INSERT run in
+  // ONE transaction. A per-customer advisory lock serializes concurrent credit
+  // sales so two requests cannot both pass the limit check, and a rejected
+  // sale never burns an invoice number.
+  const paymentModeIn = parsed.data.paymentMode ?? 'cash';
+  // cash/upi/card are settled at the counter — mark them paid immediately so
+  // outstanding, collections, and the credit check only track true credit
+  // exposure. Only 'credit' (pay later) sales are credit-controlled.
+  const settledAtSale = ['cash', 'upi', 'card'].includes(paymentModeIn);
+  const isCreditControlled = !!parsed.data.customerId && paymentModeIn === 'credit';
+  const overrideRequested = rawBody.creditOverride === true;
+
+  // Credit (pay later) sales must have a customer — otherwise there is no
+  // account to owe the balance and the credit check would be bypassed.
+  if (paymentModeIn === 'credit' && !parsed.data.customerId) {
+    res.status(400).json({
+      error: 'Credit sales require a customer. Pick a customer or choose cash/UPI/card.',
+      code: 'CREDIT_REQUIRES_CUSTOMER',
+    });
+    return;
+  }
+
+  // Server-side authorization for the override flag: hierarchy level 1 (top
+  // authority) or an explicit Sales-module can_edit permission. The client
+  // gates the override dialog the same way, but the API must not trust it.
+  let overrideAllowed = false;
+  if (isCreditControlled && overrideRequested) {
+    const hierarchyId = req.employee?.hierarchyId ?? -1;
+    const { rows: [h] } = await pgPool.query<{ level: number }>(
+      `SELECT level FROM hierarchies WHERE id = $1`, [hierarchyId]
+    );
+    if (Number(h?.level) === 1) {
+      overrideAllowed = true;
+    } else {
+      const { rows: [p] } = await pgPool.query<{ can_edit: boolean }>(
+        `SELECT can_edit FROM permissions WHERE hierarchy_id = $1 AND module = 'Sales' LIMIT 1`,
+        [hierarchyId]
+      );
+      overrideAllowed = p?.can_edit === true;
+    }
+  }
+
+  const txClient = await pgPool.connect();
+  let row: any;
+  let invoiceNumber = '';
+  try {
+    await txClient.query('BEGIN');
+
+    if (isCreditControlled) {
+      // Serialize concurrent credit sales for this customer; the lock is
+      // released automatically at COMMIT/ROLLBACK.
+      await txClient.query(
+        `SELECT pg_advisory_xact_lock(hashtext('customer-credit'), $1)`,
+        [parsed.data.customerId]
+      );
+      const { rows: [cc] } = await txClient.query<{ credit_limit: string }>(
+        `SELECT COALESCE(credit_limit, 0)::numeric AS credit_limit FROM customers WHERE id = $1`,
+        [parsed.data.customerId]
+      );
+      const creditLimit = Number(cc?.credit_limit ?? 0);
+      if (creditLimit > 0) {
+        const { rows: [ob] } = await txClient.query<{ due: string }>(
+          `SELECT COALESCE(SUM(total_amount::numeric - COALESCE(amount_paid, 0)::numeric), 0) AS due
+           FROM sales WHERE customer_id = $1`,
+          [parsed.data.customerId]
+        );
+        const { rows: [cnr] } = await txClient.query<{ amt: string }>(
+          `SELECT COALESCE(SUM(v.total_amount::numeric), 0) AS amt
+           FROM journal_vouchers v
+           JOIN account_ledgers l ON l.id = v.party_ledger_id
+           WHERE v.voucher_type = 'credit_note' AND l.code = $1`,
+          [`CUST-${parsed.data.customerId}`]
+        );
+        const currentOutstanding = Math.max(0, Math.round((Number(ob?.due ?? 0) - Number(cnr?.amt ?? 0)) * 100) / 100);
+        const projectedOutstanding = Math.round((currentOutstanding + totalAmount) * 100) / 100;
+        const exceeded = projectedOutstanding > creditLimit + 0.009;
+        if (exceeded && !(overrideRequested && overrideAllowed)) {
+          await txClient.query('ROLLBACK');
+          const figures = {
+            creditLimit,
+            currentOutstanding,
+            saleAmount: Math.round(totalAmount * 100) / 100,
+            projectedOutstanding,
+          };
+          if (overrideRequested && !overrideAllowed) {
+            res.status(403).json({
+              error: 'You are not authorized to override the credit limit. Ask a manager with Sales edit permission.',
+              code: 'CREDIT_OVERRIDE_FORBIDDEN',
+              ...figures,
+            });
+          } else {
+            res.status(409).json({
+              error: `Credit limit exceeded: current outstanding ₹${currentOutstanding.toFixed(2)} plus this sale of ₹${totalAmount.toFixed(2)} exceeds the credit limit of ₹${creditLimit.toFixed(2)}.`,
+              code: 'CREDIT_LIMIT_EXCEEDED',
+              ...figures,
+            });
+          }
+          return;
+        }
+      }
+    }
+
+    // ── Atomically increment invoice sequence (same transaction) ────────────
+    const { rows: [comp] } = await txClient.query<{
+      invoice_sequence: number; financial_year: string | null; invoice_prefix: string | null;
+    }>(
+      `UPDATE company_settings SET invoice_sequence = invoice_sequence + 1
+       WHERE id = $1 RETURNING invoice_sequence, financial_year, invoice_prefix`,
+      [company.id]
+    );
+    const seq = comp.invoice_sequence;
+    const fy = comp.financial_year || '2025-26';
+    const prefix = comp.invoice_prefix || 'INV';
+    invoiceNumber = computeInvoiceNumber(prefix, fy, seq);
+
+    // ── Insert sale with location columns via raw SQL (location_type/location_id not in Drizzle schema) ──
+    // Counter-settled modes are recorded fully paid; credit sales start unpaid.
+    const outletIdForInsert = locationType === 'outlet' ? locationId : null;
+    ({ rows: [row] } = await txClient.query<any>(
+      `INSERT INTO sales (invoice_number, outlet_id, location_type, location_id, customer_id, sale_date, line_items, subtotal, tax_total, discount_total, total_amount, payment_mode, coupon_code, amount_paid, payment_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+      [invoiceNumber, outletIdForInsert, locationType, locationId,
+       parsed.data.customerId ?? null, parsed.data.saleDate,
+       JSON.stringify(lineItems), subtotal, taxTotal, discountTotal, totalAmount,
+       paymentModeIn, parsed.data.couponCode ?? null,
+       settledAtSale ? totalAmount : 0, settledAtSale ? 'paid' : 'unpaid']
+    ));
+
+    await txClient.query('COMMIT');
+  } catch (txErr) {
+    try { await txClient.query('ROLLBACK'); } catch { /* already rolled back */ }
+    throw txErr;
+  } finally {
+    txClient.release();
+  }
 
   // ── Deduct stock from the selling location + consume batches (FEFO) ──────
   const lineItemsWithBatches: any[] = [];
@@ -302,9 +416,16 @@ router.post("/sales", async (req, res): Promise<void> => {
 
   // ── Post accounting entry ─────────────────────────────────────────────────
   if (salesLedgerId) {
-    // Determine which account to debit: customer debtor ledger (credit sale) or location cash (cash sale)
+    // Debit routing follows settlement semantics: cash → location cash ledger,
+    // upi/card (settled, awaiting bank) → Electronic Payment Clearing, and only
+    // true credit sales → the customer debtor ledger.
     let debitLedgerId = cashLedgerId;
-    if (parsed.data.customerId && parsed.data.paymentMode !== 'cash') {
+    if (paymentModeIn === 'upi' || paymentModeIn === 'card') {
+      const { rows: [clr] } = await pgPool.query<{ id: number }>(
+        `SELECT id FROM account_ledgers WHERE code = 'STD-ELEC-CLR'`
+      );
+      if (clr) debitLedgerId = clr.id;
+    } else if (paymentModeIn === 'credit' && parsed.data.customerId) {
       const { rows: [custLedger] } = await pgPool.query<{ id: number }>(
         `SELECT id FROM account_ledgers WHERE code = $1`, [`CUST-${parsed.data.customerId}`]
       );
@@ -365,6 +486,16 @@ router.put("/sales/:id", async (req, res): Promise<void> => {
 
   const parsed = CreateSaleBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  // Credit (pay later) sales must have a customer — same server-side rule as
+  // creation, enforced before any stock reversal side effects run.
+  if ((parsed.data.paymentMode ?? 'cash') === 'credit' && !parsed.data.customerId) {
+    res.status(400).json({
+      error: 'Credit sales require a customer. Pick a customer or choose cash/UPI/card.',
+      code: 'CREDIT_REQUIRES_CUSTOMER',
+    });
+    return;
+  }
 
   const rawLineItems = parsed.data.lineItems as Array<{
     itemId: number; quantity: number; unitPrice: number; discount: number; taxAmount: number;
@@ -439,16 +570,29 @@ router.put("/sales/:id", async (req, res): Promise<void> => {
     await restoreBatches(pool, li.itemId, oldLocationType, oldLocationId, li.batchBreakdown, "sale", id);
   }
 
-  // Update the sale row via raw SQL to include location columns
+  // Update the sale row via raw SQL to include location columns.
+  // Settlement fields: counter-settled modes (cash/upi/card) stay fully paid;
+  // credit sales re-derive amount_paid from recorded sale_payments so an edit
+  // never wipes out collected payments.
+  const newPaymentMode = parsed.data.paymentMode ?? 'cash';
+  let newAmountPaid = totalAmount;
+  let newPaymentStatus = 'paid';
+  if (!['cash', 'upi', 'card'].includes(newPaymentMode)) {
+    const { rows: [pp] } = await pgPool.query<{ paid: string }>(
+      `SELECT COALESCE(SUM(amount::numeric), 0) AS paid FROM sale_payments WHERE sale_id = $1`, [id]
+    );
+    newAmountPaid = Number(pp?.paid ?? 0);
+    newPaymentStatus = newAmountPaid >= totalAmount - 0.004 ? 'paid' : newAmountPaid > 0.004 ? 'partially_paid' : 'unpaid';
+  }
   const newOutletId = newLocationType === 'outlet' ? newLocationId : null;
   const { rows: [updated] } = await pgPool.query<any>(
     `UPDATE sales SET outlet_id=$1, location_type=$2, location_id=$3, customer_id=$4, sale_date=$5,
      line_items=$6::jsonb, subtotal=$7, tax_total=$8, discount_total=$9, total_amount=$10,
-     payment_mode=$11, coupon_code=$12
-     WHERE id=$13 RETURNING *`,
+     payment_mode=$11, coupon_code=$12, amount_paid=$13, payment_status=$14
+     WHERE id=$15 RETURNING *`,
     [newOutletId, newLocationType, newLocationId, parsed.data.customerId ?? null,
      parsed.data.saleDate, JSON.stringify(lineItems), subtotal, taxTotal, discountTotal, totalAmount,
-     parsed.data.paymentMode ?? 'cash', parsed.data.couponCode ?? null, id]
+     newPaymentMode, parsed.data.couponCode ?? null, newAmountPaid, newPaymentStatus, id]
   );
 
   // Apply new stock deductions + consume batches (FEFO)

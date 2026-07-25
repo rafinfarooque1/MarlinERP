@@ -1,0 +1,535 @@
+import { useMemo, useState } from 'react';
+import {
+  useListSales, useListPurchases, useListItems,
+  useListSalesReturns, useCreateSalesReturn,
+  useListPurchaseReturns, useCreatePurchaseReturn,
+  type SalesReturn, type PurchaseReturn,
+} from '@workspace/api-client-react';
+import { AppLayout } from '@/components/layout/AppLayout';
+import { usePermission } from '@/lib/usePermission';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Undo2, Plus, Search, Eye, PackageX } from 'lucide-react';
+import { toast } from 'sonner';
+
+const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+const dfmt = (d?: string | null) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
+const today = () => new Date().toISOString().split('T')[0];
+
+// ─── New Sales Return dialog ──────────────────────────────────────────────────
+
+function NewSalesReturnDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const { data: sales = [] } = useListSales();
+  const { data: items = [] } = useListItems();
+  const { data: allReturns = [] } = useListSalesReturns();
+  const createMutation = useCreateSalesReturn();
+
+  const [saleId, setSaleId] = useState<number>(0);
+  const [returnDate, setReturnDate] = useState(today());
+  const [reason, setReason] = useState('');
+  const [qty, setQty] = useState<Record<number, string>>({});
+
+  const itemName = (id: number) => (items as any[]).find(i => i.id === id)?.name || `Item #${id}`;
+
+  const candidates = useMemo(
+    () => [...(sales as any[])].sort((a, b) => b.id - a.id).slice(0, 200),
+    [sales],
+  );
+  const sale: any = candidates.find(s => s.id === saleId);
+
+  // Quantities already returned against this sale, per original line index
+  const returnedByIx = useMemo(() => {
+    const m = new Map<number, number>();
+    (allReturns as SalesReturn[]).filter(r => r.saleId === saleId).forEach(r =>
+      (r.lineItems || []).forEach((li: any) => m.set(li.lineIndex, (m.get(li.lineIndex) ?? 0) + Number(li.quantity))),
+    );
+    return m;
+  }, [allReturns, saleId]);
+
+  const lines: any[] = sale?.lineItems ?? [];
+  const rows = lines.map((li, ix) => {
+    const sold = Number(li.quantity);
+    const returned = returnedByIx.get(ix) ?? 0;
+    const remaining = Math.max(0, sold - returned);
+    return { ix, li, sold, returned, remaining };
+  });
+
+  const estRefund = rows.reduce((s, r) => {
+    const q = Number(qty[r.ix] || 0);
+    return s + (q > 0 ? q * Number(r.li.unitPrice) : 0);
+  }, 0);
+
+  const reset = () => { setSaleId(0); setReturnDate(today()); setReason(''); setQty({}); };
+
+  const submit = () => {
+    if (!sale) { toast.error('Pick an invoice first'); return; }
+    const selected = rows
+      .map(r => ({ lineIndex: r.ix, quantity: Number(qty[r.ix] || 0), remaining: r.remaining }))
+      .filter(l => l.quantity > 0);
+    if (selected.length === 0) { toast.error('Enter a return quantity on at least one line'); return; }
+    const bad = selected.find(l => l.quantity > l.remaining);
+    if (bad) { toast.error(`Line ${bad.lineIndex + 1}: only ${bad.remaining} left to return`); return; }
+
+    createMutation.mutate(
+      { saleId: sale.id, returnDate, reason: reason.trim() || undefined, lines: selected.map(({ lineIndex, quantity }) => ({ lineIndex, quantity })) },
+      {
+        onSuccess: (r: any) => {
+          toast.success(
+            r?.refundMode === 'cash'
+              ? `${r.returnNumber} recorded — cash refund ₹${fmt(r.totalAmount)}`
+              : `${r?.returnNumber} recorded — Credit Note ${r?.creditNoteNumber ?? ''} issued`,
+          );
+          reset();
+          onOpenChange(false);
+        },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Could not record the return'),
+      },
+    );
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={v => { if (!v) reset(); onOpenChange(v); }}>
+      <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>New Sales Return</DialogTitle>
+          <DialogDescription>Pick the original invoice, then enter how many units are coming back.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 pt-1">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Invoice</label>
+              <Select value={saleId ? String(saleId) : ''} onValueChange={v => { setSaleId(Number(v)); setQty({}); }}>
+                <SelectTrigger><SelectValue placeholder="Select invoice…" /></SelectTrigger>
+                <SelectContent>
+                  {candidates.map((s: any) => (
+                    <SelectItem key={s.id} value={String(s.id)}>
+                      {(s.invoiceNumber || `Sale #${s.id}`) + ' — ' + (s.customerName || 'Walk-in') + ' — ₹' + fmt(s.totalAmount)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Return date</label>
+              <Input type="date" value={returnDate} onChange={e => setReturnDate(e.target.value)} />
+            </div>
+          </div>
+
+          {sale && (
+            <>
+              <div className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs flex flex-wrap gap-x-4 gap-y-1">
+                <span><span className="text-muted-foreground">Customer:</span> <strong>{sale.customerName || 'Walk-in'}</strong></span>
+                <span><span className="text-muted-foreground">Sold on:</span> {dfmt(sale.saleDate)}</span>
+                <span><span className="text-muted-foreground">Refund via:</span> <strong>{sale.customerId ? 'Credit Note' : 'Cash refund'}</strong></span>
+              </div>
+              <div className="border border-border rounded-lg overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead className="bg-muted/30">
+                    <tr>
+                      <th className="text-left px-3 py-2">Item</th>
+                      <th className="text-right px-2 py-2">Sold</th>
+                      <th className="text-right px-2 py-2">Returned</th>
+                      <th className="text-right px-2 py-2">Left</th>
+                      <th className="text-right px-2 py-2">Rate</th>
+                      <th className="text-right px-3 py-2 w-28">Return Qty</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(r => (
+                      <tr key={r.ix} className={`border-t border-border ${r.remaining === 0 ? 'opacity-50' : ''}`}>
+                        <td className="px-3 py-2 font-medium">{r.li.itemName || itemName(Number(r.li.itemId))}</td>
+                        <td className="text-right px-2 py-2">{r.sold}</td>
+                        <td className="text-right px-2 py-2">{r.returned > 0 ? r.returned : '—'}</td>
+                        <td className="text-right px-2 py-2 font-semibold">{r.remaining}</td>
+                        <td className="text-right px-2 py-2 font-mono">₹{fmt(r.li.unitPrice)}</td>
+                        <td className="text-right px-3 py-1.5">
+                          <Input
+                            type="number" min={0} max={r.remaining} step="any" disabled={r.remaining === 0}
+                            className="h-8 text-right font-mono" placeholder="0"
+                            value={qty[r.ix] ?? ''}
+                            onChange={e => setQty(q => ({ ...q, [r.ix]: e.target.value }))}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Reason <span className="text-muted-foreground font-normal">(optional)</span></label>
+                <Textarea rows={2} value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Damaged in transit, wrong flavour delivered…" />
+              </div>
+              <div className="flex justify-between items-center rounded-lg bg-primary/5 border border-primary/20 px-3 py-2 text-sm">
+                <span className="text-muted-foreground">Approx. refund value (incl. GST)</span>
+                <span className="font-mono font-bold text-primary">₹{fmt(estRefund)}</span>
+              </div>
+            </>
+          )}
+        </div>
+        <DialogFooter className="pt-2">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button onClick={submit} disabled={createMutation.isPending || !sale}>
+            {createMutation.isPending ? 'Recording…' : 'Record Return'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── New Purchase Return dialog ───────────────────────────────────────────────
+
+function NewPurchaseReturnDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const { data: purchases = [] } = useListPurchases();
+  const { data: allReturns = [] } = useListPurchaseReturns();
+  const createMutation = useCreatePurchaseReturn();
+
+  const [purchaseId, setPurchaseId] = useState<number>(0);
+  const [returnDate, setReturnDate] = useState(today());
+  const [reason, setReason] = useState('');
+  const [qty, setQty] = useState<Record<number, string>>({});
+
+  const candidates = useMemo(
+    () => [...(purchases as any[])].sort((a, b) => b.id - a.id).slice(0, 200),
+    [purchases],
+  );
+  const purchase: any = candidates.find(p => p.id === purchaseId);
+
+  const returnedByIx = useMemo(() => {
+    const m = new Map<number, number>();
+    (allReturns as PurchaseReturn[]).filter(r => r.purchaseId === purchaseId).forEach(r =>
+      (r.lineItems || []).forEach((li: any) => m.set(li.lineIndex, (m.get(li.lineIndex) ?? 0) + Number(li.quantity))),
+    );
+    return m;
+  }, [allReturns, purchaseId]);
+
+  const lines: any[] = purchase?.lineItems ?? [];
+  const rows = lines.map((li, ix) => {
+    const bought = Number(li.quantity);
+    const returned = returnedByIx.get(ix) ?? 0;
+    const remaining = Math.max(0, bought - returned);
+    return { ix, li, bought, returned, remaining };
+  });
+
+  const estValue = rows.reduce((s, r) => {
+    const q = Number(qty[r.ix] || 0);
+    if (q <= 0 || r.bought <= 0) return s;
+    const lineTotal = Number(r.li.lineTotal ?? r.li.grossAmount ?? r.bought * Number(r.li.unitCost));
+    return s + (q / r.bought) * lineTotal;
+  }, 0);
+
+  const reset = () => { setPurchaseId(0); setReturnDate(today()); setReason(''); setQty({}); };
+
+  const submit = () => {
+    if (!purchase) { toast.error('Pick a purchase bill first'); return; }
+    const selected = rows
+      .map(r => ({ lineIndex: r.ix, quantity: Number(qty[r.ix] || 0), remaining: r.remaining }))
+      .filter(l => l.quantity > 0);
+    if (selected.length === 0) { toast.error('Enter a return quantity on at least one line'); return; }
+    const bad = selected.find(l => l.quantity > l.remaining);
+    if (bad) { toast.error(`Line ${bad.lineIndex + 1}: only ${bad.remaining} left to return`); return; }
+
+    createMutation.mutate(
+      { purchaseId: purchase.id, returnDate, reason: reason.trim() || undefined, lines: selected.map(({ lineIndex, quantity }) => ({ lineIndex, quantity })) },
+      {
+        onSuccess: (r: any) => {
+          toast.success(`${r?.returnNumber} recorded — Debit Note ${r?.debitNoteNumber ?? ''} issued`);
+          reset();
+          onOpenChange(false);
+        },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Could not record the return'),
+      },
+    );
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={v => { if (!v) reset(); onOpenChange(v); }}>
+      <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>New Purchase Return</DialogTitle>
+          <DialogDescription>Pick the original purchase bill, then enter the quantities going back to the vendor.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 pt-1">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Purchase bill</label>
+              <Select value={purchaseId ? String(purchaseId) : ''} onValueChange={v => { setPurchaseId(Number(v)); setQty({}); }}>
+                <SelectTrigger><SelectValue placeholder="Select bill…" /></SelectTrigger>
+                <SelectContent>
+                  {candidates.map((p: any) => (
+                    <SelectItem key={p.id} value={String(p.id)}>
+                      {(p.invoiceNumber || `PB #${String(p.id).padStart(4, '0')}`) + ' — ' + (p.vendorName || 'Vendor') + ' — ₹' + fmt(p.totalAmount)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Return date</label>
+              <Input type="date" value={returnDate} onChange={e => setReturnDate(e.target.value)} />
+            </div>
+          </div>
+
+          {purchase && (
+            <>
+              <div className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs flex flex-wrap gap-x-4 gap-y-1">
+                <span><span className="text-muted-foreground">Vendor:</span> <strong>{purchase.vendorName}</strong></span>
+                <span><span className="text-muted-foreground">Billed on:</span> {dfmt(purchase.purchaseDate)}</span>
+                <span><span className="text-muted-foreground">Adjustment via:</span> <strong>Debit Note</strong></span>
+              </div>
+              <div className="border border-border rounded-lg overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead className="bg-muted/30">
+                    <tr>
+                      <th className="text-left px-3 py-2">Material</th>
+                      <th className="text-right px-2 py-2">Bought</th>
+                      <th className="text-right px-2 py-2">Returned</th>
+                      <th className="text-right px-2 py-2">Left</th>
+                      <th className="text-right px-2 py-2">Rate</th>
+                      <th className="text-right px-3 py-2 w-28">Return Qty</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(r => (
+                      <tr key={r.ix} className={`border-t border-border ${r.remaining === 0 ? 'opacity-50' : ''}`}>
+                        <td className="px-3 py-2 font-medium">{r.li.materialName || `#${r.li.materialId}`}</td>
+                        <td className="text-right px-2 py-2">{r.bought}</td>
+                        <td className="text-right px-2 py-2">{r.returned > 0 ? r.returned : '—'}</td>
+                        <td className="text-right px-2 py-2 font-semibold">{r.remaining}</td>
+                        <td className="text-right px-2 py-2 font-mono">₹{fmt(r.li.unitCost)}</td>
+                        <td className="text-right px-3 py-1.5">
+                          <Input
+                            type="number" min={0} max={r.remaining} step="any" disabled={r.remaining === 0}
+                            className="h-8 text-right font-mono" placeholder="0"
+                            value={qty[r.ix] ?? ''}
+                            onChange={e => setQty(q => ({ ...q, [r.ix]: e.target.value }))}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Reason <span className="text-muted-foreground font-normal">(optional)</span></label>
+                <Textarea rows={2} value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Quality rejection, short supply…" />
+              </div>
+              <div className="flex justify-between items-center rounded-lg bg-primary/5 border border-primary/20 px-3 py-2 text-sm">
+                <span className="text-muted-foreground">Approx. debit value (incl. GST)</span>
+                <span className="font-mono font-bold text-primary">₹{fmt(estValue)}</span>
+              </div>
+            </>
+          )}
+        </div>
+        <DialogFooter className="pt-2">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button onClick={submit} disabled={createMutation.isPending || !purchase}>
+            {createMutation.isPending ? 'Recording…' : 'Record Return'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
+export default function Returns() {
+  const perm = usePermission('Sales');
+  const [tab, setTab] = useState<'sales' | 'purchase'>('sales');
+  const [search, setSearch] = useState('');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [view, setView] = useState<{ kind: 'sales'; doc: SalesReturn } | { kind: 'purchase'; doc: PurchaseReturn } | null>(null);
+
+  const { data: salesReturns = [], isLoading: srLoading } = useListSalesReturns();
+  const { data: purchaseReturns = [], isLoading: prLoading } = useListPurchaseReturns();
+
+  const q = search.trim().toLowerCase();
+  const filteredSR = (salesReturns as SalesReturn[]).filter(r =>
+    !q || [r.returnNumber, r.invoiceNumber, r.customerName, r.creditNoteNumber].some(v => v && String(v).toLowerCase().includes(q)),
+  );
+  const filteredPR = (purchaseReturns as PurchaseReturn[]).filter(r =>
+    !q || [r.returnNumber, r.invoiceNumber, r.vendorName, r.debitNoteNumber].some(v => v && String(v).toLowerCase().includes(q)),
+  );
+
+  const isLoading = tab === 'sales' ? srLoading : prLoading;
+  const empty = tab === 'sales' ? filteredSR.length === 0 : filteredPR.length === 0;
+
+  return (
+    <AppLayout>
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold flex items-center gap-2"><Undo2 className="w-6 h-6 text-primary" /> Returns</h1>
+            <p className="text-sm text-muted-foreground mt-0.5">Sales returns restock inventory and issue credit notes; purchase returns raise debit notes on the vendor.</p>
+          </div>
+          {perm.canAdd && (
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="w-4 h-4 mr-2" /> {tab === 'sales' ? 'New Sales Return' : 'New Purchase Return'}
+            </Button>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="inline-flex rounded-lg border border-border p-0.5 bg-muted/30">
+            {([['sales', 'Sales Returns'], ['purchase', 'Purchase Returns']] as const).map(([k, label]) => (
+              <button
+                key={k}
+                onClick={() => setTab(k)}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${tab === k ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="relative flex-1 min-w-[220px] max-w-xs">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input className="pl-9" placeholder="Search number, party, note…" value={search} onChange={e => setSearch(e.target.value)} />
+          </div>
+        </div>
+
+        <div className="bg-card border border-border rounded-xl overflow-hidden">
+          {isLoading ? (
+            <div className="p-10 text-center text-muted-foreground text-sm">Loading returns…</div>
+          ) : empty ? (
+            <div className="p-12 text-center">
+              <PackageX className="w-10 h-10 mx-auto text-muted-foreground/40 mb-3" />
+              <p className="font-medium">No {tab === 'sales' ? 'sales' : 'purchase'} returns yet</p>
+              <p className="text-sm text-muted-foreground mt-1">
+                {tab === 'sales' ? 'Record one when a customer brings stock back.' : 'Record one when goods go back to a vendor.'}
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/30 text-xs uppercase tracking-wide text-muted-foreground">
+                  <tr>
+                    <th className="text-left px-4 py-2.5">Return #</th>
+                    <th className="text-left px-3 py-2.5">Date</th>
+                    <th className="text-left px-3 py-2.5">{tab === 'sales' ? 'Invoice' : 'Bill'}</th>
+                    <th className="text-left px-3 py-2.5">{tab === 'sales' ? 'Customer' : 'Vendor'}</th>
+                    <th className="text-right px-3 py-2.5">Amount</th>
+                    <th className="text-left px-3 py-2.5">{tab === 'sales' ? 'Refund' : 'Debit Note'}</th>
+                    <th className="text-right px-4 py-2.5 w-14"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tab === 'sales'
+                    ? filteredSR.map(r => (
+                        <tr key={r.id} className="border-t border-border hover:bg-muted/10">
+                          <td className="px-4 py-2.5 font-mono font-semibold text-primary">{r.returnNumber}</td>
+                          <td className="px-3 py-2.5 whitespace-nowrap">{dfmt(r.returnDate)}</td>
+                          <td className="px-3 py-2.5 font-mono text-xs">{r.invoiceNumber || `Sale #${r.saleId}`}</td>
+                          <td className="px-3 py-2.5">{r.customerName || 'Walk-in'}</td>
+                          <td className="px-3 py-2.5 text-right font-mono font-semibold">₹{fmt(r.totalAmount)}</td>
+                          <td className="px-3 py-2.5">
+                            {r.refundMode === 'cash'
+                              ? <Badge variant="outline" className="text-amber-600 border-amber-500/40">Cash refund</Badge>
+                              : <Badge variant="outline" className="text-emerald-600 border-emerald-500/40 font-mono">{r.creditNoteNumber || 'Credit Note'}</Badge>}
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView({ kind: 'sales', doc: r })}><Eye className="w-4 h-4" /></Button>
+                          </td>
+                        </tr>
+                      ))
+                    : filteredPR.map(r => (
+                        <tr key={r.id} className="border-t border-border hover:bg-muted/10">
+                          <td className="px-4 py-2.5 font-mono font-semibold text-primary">{r.returnNumber}</td>
+                          <td className="px-3 py-2.5 whitespace-nowrap">{dfmt(r.returnDate)}</td>
+                          <td className="px-3 py-2.5 font-mono text-xs">{r.invoiceNumber || `PB #${String(r.purchaseId).padStart(4, '0')}`}</td>
+                          <td className="px-3 py-2.5">{r.vendorName}</td>
+                          <td className="px-3 py-2.5 text-right font-mono font-semibold">₹{fmt(r.totalAmount)}</td>
+                          <td className="px-3 py-2.5"><Badge variant="outline" className="text-sky-600 border-sky-500/40 font-mono">{r.debitNoteNumber || 'Debit Note'}</Badge></td>
+                          <td className="px-4 py-2.5 text-right">
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView({ kind: 'purchase', doc: r })}><Eye className="w-4 h-4" /></Button>
+                          </td>
+                        </tr>
+                      ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {tab === 'sales'
+        ? <NewSalesReturnDialog open={createOpen} onOpenChange={setCreateOpen} />
+        : <NewPurchaseReturnDialog open={createOpen} onOpenChange={setCreateOpen} />}
+
+      {/* ── View return sheet ── */}
+      <Sheet open={!!view} onOpenChange={v => !v && setView(null)}>
+        <SheetContent className="sm:max-w-xl overflow-y-auto">
+          {view && (
+            <>
+              <SheetHeader className="mb-4">
+                <SheetTitle className="text-primary font-mono">{view.doc.returnNumber}</SheetTitle>
+                <SheetDescription>
+                  {view.kind === 'sales'
+                    ? `${(view.doc as SalesReturn).customerName || 'Walk-in'} · against ${(view.doc as SalesReturn).invoiceNumber || `Sale #${(view.doc as SalesReturn).saleId}`} · ${dfmt(view.doc.returnDate)}`
+                    : `${(view.doc as PurchaseReturn).vendorName} · against ${(view.doc as PurchaseReturn).invoiceNumber || `PB #${(view.doc as PurchaseReturn).purchaseId}`} · ${dfmt(view.doc.returnDate)}`}
+                </SheetDescription>
+              </SheetHeader>
+
+              <div className="border border-border rounded-lg overflow-hidden mb-4">
+                <table className="w-full text-xs">
+                  <thead className="bg-muted/30">
+                    <tr>
+                      <th className="text-left px-3 py-2">{view.kind === 'sales' ? 'Item' : 'Material'}</th>
+                      <th className="text-right px-2 py-2">Qty</th>
+                      <th className="text-right px-2 py-2">Rate</th>
+                      <th className="text-right px-2 py-2">Tax</th>
+                      <th className="text-right px-3 py-2">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(view.doc.lineItems as any[]).map((li: any, i: number) => (
+                      <tr key={i} className="border-t border-border">
+                        <td className="px-3 py-2 font-medium">
+                          {view.kind === 'sales' ? (li.itemName || `Item #${li.itemId}`) : (li.materialName || `#${li.materialId}`)}
+                          {view.kind === 'sales' && Array.isArray(li.batchRestore) && li.batchRestore.length > 0 && (
+                            <span className="block text-[10px] font-mono text-muted-foreground">
+                              Restocked: {li.batchRestore.map((b: any) => `${b.batchNumber ?? 'Untracked'} ×${b.quantity}`).join(', ')}
+                            </span>
+                          )}
+                        </td>
+                        <td className="text-right px-2 py-2">{li.quantity}</td>
+                        <td className="text-right px-2 py-2 font-mono">₹{fmt(li.unitPrice ?? li.unitCost)}</td>
+                        <td className="text-right px-2 py-2 font-mono">₹{fmt(li.taxAmount)}</td>
+                        <td className="text-right px-3 py-2 font-mono font-semibold">₹{fmt(li.lineTotal ?? li.grossAmount ?? Number(li.quantity ?? 0) * Number(li.unitPrice ?? li.unitCost ?? 0))}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="bg-muted/20 rounded-lg p-4 space-y-2 text-sm mb-4">
+                <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="font-mono">₹{fmt(view.doc.subtotal)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">GST</span><span className="font-mono">₹{fmt(view.doc.taxTotal)}</span></div>
+                <Separator />
+                <div className="flex justify-between font-bold"><span>Total</span><span className="font-mono text-primary">₹{fmt(view.doc.totalAmount)}</span></div>
+                <div className="flex justify-between text-xs pt-1">
+                  <span className="text-muted-foreground">{view.kind === 'sales' ? 'Refund' : 'Adjustment'}</span>
+                  <span className="font-mono font-semibold">
+                    {view.kind === 'sales'
+                      ? ((view.doc as SalesReturn).refundMode === 'cash' ? 'Cash refund' : (view.doc as SalesReturn).creditNoteNumber || 'Credit Note')
+                      : (view.doc as PurchaseReturn).debitNoteNumber || 'Debit Note'}
+                  </span>
+                </div>
+              </div>
+
+              {view.doc.reason && <p className="text-sm text-muted-foreground italic">“{view.doc.reason}”</p>}
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
+    </AppLayout>
+  );
+}

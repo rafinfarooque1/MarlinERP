@@ -25,28 +25,53 @@ function pickCompanyFields(body: Record<string, any>) {
 }
 
 // ── Company Settings ──────────────────────────────────────────────────────
+
+// Invoice-PDF fields live in raw columns (not in the Drizzle schema)
+async function invoicePdfFields(id: number): Promise<{ paymentTerms: string | null; invoiceFooter: string | null }> {
+  const { rows: [r] } = await pool.query<any>(
+    `SELECT payment_terms, invoice_footer FROM company_settings WHERE id = $1`, [id]
+  );
+  return { paymentTerms: r?.payment_terms ?? null, invoiceFooter: r?.invoice_footer ?? null };
+}
+
 router.get("/company/settings", async (_req, res): Promise<void> => {
   const rows = await db.select().from(companySettingsTable).limit(1);
-  if (rows.length === 0) {
-    const [row] = await db.insert(companySettingsTable).values({}).returning();
-    res.json(row);
-    return;
+  let row = rows[0];
+  if (!row) {
+    [row] = await db.insert(companySettingsTable).values({}).returning();
   }
-  res.json(rows[0]);
+  res.json({ ...row, ...(await invoicePdfFields(row.id)) });
 });
 
 router.patch("/company/settings", async (req, res): Promise<void> => {
   const data = pickCompanyFields(req.body);
-  if (Object.keys(data).length === 0) { res.status(400).json({ error: "No valid fields to update" }); return; }
+
+  // paymentTerms / invoiceFooter are handled via raw SQL (columns added by
+  // startup migration; Drizzle's .set() would drop unknown keys).
+  const pdfUpdates: Array<[column: string, value: string | null]> = [];
+  for (const [bodyKey, column] of [['paymentTerms', 'payment_terms'], ['invoiceFooter', 'invoice_footer']] as const) {
+    if (bodyKey in req.body) {
+      const v = (req.body as any)[bodyKey];
+      if (v !== null && typeof v !== 'string') { res.status(400).json({ error: `${bodyKey} must be a string or null` }); return; }
+      pdfUpdates.push([column, typeof v === 'string' && v.trim() ? v.trim() : null]);
+    }
+  }
+
+  if (Object.keys(data).length === 0 && pdfUpdates.length === 0) { res.status(400).json({ error: "No valid fields to update" }); return; }
 
   const rows = await db.select().from(companySettingsTable).limit(1);
   let row;
   if (rows.length === 0) {
     [row] = await db.insert(companySettingsTable).values(data).returning();
-  } else {
+  } else if (Object.keys(data).length > 0) {
     [row] = await db.update(companySettingsTable).set(data).where(eq(companySettingsTable.id, rows[0].id)).returning();
+  } else {
+    row = rows[0];
   }
-  res.json(row);
+  for (const [column, value] of pdfUpdates) {
+    await pool.query(`UPDATE company_settings SET ${column} = $1 WHERE id = $2`, [value, row.id]);
+  }
+  res.json({ ...row, ...(await invoicePdfFields(row.id)) });
 });
 
 // ── Permissions ────────────────────────────────────────────────────────────
