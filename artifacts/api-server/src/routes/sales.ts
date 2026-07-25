@@ -4,6 +4,8 @@ import { eq, and, inArray, sql } from "drizzle-orm";
 import { CreateSaleBody, GetSaleParams, SetItemPriceBody, ListItemPricesQueryParams } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
 import { createInvoiceShareToken } from "../lib/shareToken";
+import { pool } from "@workspace/db";
+import { consumeBatches, restoreBatches } from "../lib/batches";
 
 const router = Router();
 
@@ -268,7 +270,8 @@ router.post("/sales", async (req, res): Promise<void> => {
      parsed.data.paymentMode ?? 'cash', parsed.data.couponCode ?? null]
   );
 
-  // ── Deduct stock from the selling location ────────────────────────────────
+  // ── Deduct stock from the selling location + consume batches (FEFO) ──────
+  const lineItemsWithBatches: any[] = [];
   for (const li of lineItems) {
     const [existing] = await db.select().from(stockEntriesTable)
       .where(and(
@@ -282,7 +285,13 @@ router.post("/sales", async (req, res): Promise<void> => {
         .set({ quantity: sql`${stockEntriesTable.quantity}::numeric - ${li.quantity}` })
         .where(eq(stockEntriesTable.id, existing.id));
     }
+    const batchBreakdown = await consumeBatches(pool, {
+      itemId: li.itemId, branchType: locationType, branchId: locationId, quantity: li.quantity,
+    });
+    lineItemsWithBatches.push({ ...li, batchBreakdown });
   }
+  // Persist which batches served this sale (traceability + exact reversal on edit)
+  await pool.query(`UPDATE sales SET line_items = $1::jsonb WHERE id = $2`, [JSON.stringify(lineItemsWithBatches), row.id]);
 
   // ── Update customer total purchases ───────────────────────────────────────
   if (parsed.data.customerId) {
@@ -331,7 +340,7 @@ router.post("/sales", async (req, res): Promise<void> => {
     outletUpiId: locationUpiId,
     customerName,
     saleDate: row.sale_date,
-    lineItems: row.line_items ?? [],
+    lineItems: lineItemsWithBatches,
     subtotal: Number(row.subtotal),
     taxTotal: Number(row.tax_total),
     discountTotal: Number(row.discount_total),
@@ -415,7 +424,7 @@ router.put("/sales/:id", async (req, res): Promise<void> => {
   const totalAmount = subtotal + taxTotal - discountTotal;
 
   // Reverse old stock deductions
-  const oldLineItems = (existingRaw.line_items ?? []) as Array<{ itemId: number; quantity: number }>;
+  const oldLineItems = (existingRaw.line_items ?? []) as Array<{ itemId: number; quantity: number; batchBreakdown?: any[] }>;
   for (const li of oldLineItems) {
     const [se] = await db.select().from(stockEntriesTable)
       .where(and(eq(stockEntriesTable.itemId, li.itemId), eq(stockEntriesTable.branchType, oldLocationType as any), eq(stockEntriesTable.branchId, oldLocationId)))
@@ -425,6 +434,9 @@ router.put("/sales/:id", async (req, res): Promise<void> => {
         .set({ quantity: sql`${stockEntriesTable.quantity}::numeric + ${li.quantity}` })
         .where(eq(stockEntriesTable.id, se.id));
     }
+    // Restore the exact batches this sale consumed. Legacy lines without a
+    // stored breakdown leave batches untouched (residual shows as untracked).
+    await restoreBatches(pool, li.itemId, oldLocationType, oldLocationId, li.batchBreakdown, "sale", id);
   }
 
   // Update the sale row via raw SQL to include location columns
@@ -439,7 +451,8 @@ router.put("/sales/:id", async (req, res): Promise<void> => {
      parsed.data.paymentMode ?? 'cash', parsed.data.couponCode ?? null, id]
   );
 
-  // Apply new stock deductions
+  // Apply new stock deductions + consume batches (FEFO)
+  const newLineItemsWithBatches: any[] = [];
   for (const li of lineItems) {
     const [se] = await db.select().from(stockEntriesTable)
       .where(and(eq(stockEntriesTable.itemId, li.itemId), eq(stockEntriesTable.branchType, newLocationType as any), eq(stockEntriesTable.branchId, newLocationId)))
@@ -449,7 +462,12 @@ router.put("/sales/:id", async (req, res): Promise<void> => {
         .set({ quantity: sql`${stockEntriesTable.quantity}::numeric - ${li.quantity}` })
         .where(eq(stockEntriesTable.id, se.id));
     }
+    const batchBreakdown = await consumeBatches(pool, {
+      itemId: li.itemId, branchType: newLocationType, branchId: newLocationId, quantity: li.quantity,
+    });
+    newLineItemsWithBatches.push({ ...li, batchBreakdown });
   }
+  await pool.query(`UPDATE sales SET line_items = $1::jsonb WHERE id = $2`, [JSON.stringify(newLineItemsWithBatches), id]);
 
   // Adjust customer total purchases
   const oldTotal = Number(existingRaw.total_amount);

@@ -564,6 +564,148 @@ async function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_jv_date          ON journal_vouchers(voucher_date);
     CREATE INDEX IF NOT EXISTS idx_jv_type          ON journal_vouchers(voucher_type);
   `);
+
+  // ── Phase 3: Batch-level inventory, expiry, valuation, reorder levels ─────
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS stock_batches (
+      id serial PRIMARY KEY,
+      item_id integer NOT NULL,
+      branch_type text NOT NULL,
+      branch_id integer NOT NULL,
+      batch_number text NOT NULL,
+      mfg_date text,
+      expiry_date text,
+      quantity numeric(12,3) NOT NULL DEFAULT 0,
+      unit_cost numeric(12,2) NOT NULL DEFAULT 0,
+      source text,
+      source_id integer,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (item_id, branch_type, branch_id, batch_number)
+    );
+    CREATE INDEX IF NOT EXISTS idx_stock_batches_loc    ON stock_batches(branch_type, branch_id);
+    CREATE INDEX IF NOT EXISTS idx_stock_batches_item   ON stock_batches(item_id);
+    CREATE INDEX IF NOT EXISTS idx_stock_batches_expiry ON stock_batches(expiry_date);
+
+    CREATE TABLE IF NOT EXISTS stock_verifications (
+      id serial PRIMARY KEY,
+      branch_type text NOT NULL,
+      branch_id integer NOT NULL,
+      verify_date text NOT NULL,
+      notes text,
+      created_by text,
+      lines jsonb NOT NULL DEFAULT '[]',
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS reorder_level numeric(12,3) NOT NULL DEFAULT 10;
+    ALTER TABLE items ADD COLUMN IF NOT EXISTS avg_cost numeric(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE productions ADD COLUMN IF NOT EXISTS batch_number text;
+    ALTER TABLE productions ADD COLUMN IF NOT EXISTS mfg_date text;
+    ALTER TABLE productions ADD COLUMN IF NOT EXISTS expiry_date text;
+  `);
+
+  // De-duplicate stock_entries so (item, branch_type, branch_id) is unique,
+  // then enforce it. Atomic: the merged quantity lands on the keeper row and
+  // duplicates are removed in one transaction. Once the unique index exists,
+  // the dedup query matches nothing and this is a permanent no-op.
+  {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`
+        UPDATE stock_entries se SET quantity = d.total_qty, cost_price = d.max_cost, updated_at = now()
+        FROM (
+          SELECT item_id, branch_type, branch_id, MIN(id) AS keep_id,
+                 SUM(quantity::numeric) AS total_qty, MAX(cost_price::numeric) AS max_cost
+          FROM stock_entries
+          GROUP BY item_id, branch_type, branch_id
+          HAVING COUNT(*) > 1
+        ) d
+        WHERE se.id = d.keep_id
+      `);
+      await client.query(`
+        DELETE FROM stock_entries se USING (
+          SELECT item_id, branch_type, branch_id, MIN(id) AS keep_id
+          FROM stock_entries
+          GROUP BY item_id, branch_type, branch_id
+          HAVING COUNT(*) > 1
+        ) d
+        WHERE se.item_id = d.item_id AND se.branch_type = d.branch_type
+          AND se.branch_id = d.branch_id AND se.id <> d.keep_id
+      `);
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+  await pool.query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_entries_item_branch
+     ON stock_entries(item_id, branch_type, branch_id)`
+  );
+
+  // One-time: seed weighted-average cost from the manual cost field
+  const { rows: [avgSeeded] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'items_avg_cost_seed_v1'`
+  );
+  if (!avgSeeded) {
+    await pool.query(`UPDATE items SET avg_cost = cost WHERE avg_cost = 0 AND cost > 0`);
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('items_avg_cost_seed_v1')`);
+    console.log('[migration] items_avg_cost_seed_v1 applied');
+  }
+
+  // One-time v2: items with no manual cost still get a real average from the
+  // weighted cost_price of their existing stock entries, and zero-cost
+  // OPENING batches inherit it — otherwise valuation shows ₹0 for stocked
+  // locations.
+  const { rows: [avgSeededV2] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'items_avg_cost_seed_v2'`
+  );
+  if (!avgSeededV2) {
+    await pool.query(`
+      UPDATE items i SET avg_cost = sub.wavg
+      FROM (
+        SELECT item_id,
+               ROUND((SUM(quantity::numeric * cost_price::numeric) / NULLIF(SUM(quantity::numeric), 0))::numeric, 2) AS wavg
+        FROM stock_entries
+        WHERE quantity::numeric > 0 AND cost_price::numeric > 0
+        GROUP BY item_id
+      ) sub
+      WHERE i.id = sub.item_id AND COALESCE(i.avg_cost, 0) = 0 AND sub.wavg > 0
+    `);
+    await pool.query(`
+      UPDATE stock_batches sb SET unit_cost = i.avg_cost
+      FROM items i
+      WHERE i.id = sb.item_id AND sb.unit_cost = 0 AND i.avg_cost > 0
+    `);
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('items_avg_cost_seed_v2')`);
+    console.log('[migration] items_avg_cost_seed_v2 applied');
+  }
+
+  // One-time: wrap every existing positive stock quantity into an OPENING
+  // batch so legacy stock participates in batch views with quantities
+  // preserved exactly. Runs after dedup so (item, branch) rows are unique.
+  const { rows: [openingDone] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'stock_batches_opening_v1'`
+  );
+  if (!openingDone) {
+    await pool.query(`
+      INSERT INTO stock_batches (item_id, branch_type, branch_id, batch_number, quantity, unit_cost, source)
+      SELECT se.item_id, se.branch_type, se.branch_id, 'OPENING',
+             se.quantity::numeric,
+             CASE WHEN se.cost_price::numeric > 0 THEN se.cost_price::numeric ELSE COALESCE(i.avg_cost, 0) END,
+             'opening'
+      FROM stock_entries se
+      LEFT JOIN items i ON i.id = se.item_id
+      WHERE se.quantity::numeric > 0
+      ON CONFLICT (item_id, branch_type, branch_id, batch_number) DO NOTHING
+    `);
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('stock_batches_opening_v1')`);
+    console.log('[migration] stock_batches_opening_v1 applied');
+  }
 }
 
 const rawPort = process.env["PORT"];

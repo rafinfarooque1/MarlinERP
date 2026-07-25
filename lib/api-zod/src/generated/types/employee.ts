@@ -25,5 +25,4 @@ export interface Employee {
   /** @nullable */
   photoUrl?: string | null;
   isActive?: boolean;
-  mustChangePassword?: boolean;
 }

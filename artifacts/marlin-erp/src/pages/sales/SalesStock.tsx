@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useLocation } from 'wouter';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useLocationContext } from '@/lib/locationContext';
-import { useListStock, useListItems, useListOutlets } from '@workspace/api-client-react';
+import { useListStock, useListItems, useListOutlets, useListStockBatches, type StockBatch } from '@workspace/api-client-react';
 import { Package, AlertTriangle, Search } from 'lucide-react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
@@ -10,11 +11,17 @@ import { Input } from '@/components/ui/input';
 export default function SalesStock() {
   const { locationState } = useLocationContext();
   const [search, setSearch] = useState('');
+  const [, navigate] = useLocation();
 
   const { locationType, locationId, locationName } = locationState;
   const isAll       = locationType === 'all';
   const isWarehouse = locationType === 'warehouse' && !!locationId && !isAll;
   const isSpecific  = !isAll && !!locationType && !!locationId;
+
+  // No location chosen (e.g. direct link / fresh session) → send to the picker
+  useEffect(() => {
+    if (!locationType) navigate('/sales');
+  }, [locationType]);
 
   // Child outlets for warehouse mode
   const { data: outlets = [] } = useListOutlets();
@@ -30,6 +37,18 @@ export default function SalesStock() {
 
   const { data: items = [] } = useListItems();
   const itemMap = new Map((items as any[]).map(i => [i.id, i]));
+
+  // Nearest-expiry column only for a single-location view (warehouse mode mixes
+  // in child-outlet rows, whose batches live at a different branch)
+  const showExpiryCol = isSpecific && !isWarehouse;
+  const { data: locBatches = [] } = useListStockBatches(
+    showExpiryCol ? { branchType: locationType as string, branchId: locationId! } : undefined,
+    { enabled: showExpiryCol },
+  );
+  const nearestExpiry = new Map<number, StockBatch>();
+  for (const b of locBatches as StockBatch[]) {
+    if (b.expiryDate && !nearestExpiry.has(b.itemId)) nearestExpiry.set(b.itemId, b);
+  }
 
   // In warehouse mode filter to warehouse + child outlets
   const stock = isWarehouse
@@ -90,6 +109,7 @@ export default function SalesStock() {
                 {showLocationCol && <TableHead>Type</TableHead>}
                 <TableHead>Unit</TableHead>
                 <TableHead className="text-right">Quantity</TableHead>
+                {showExpiryCol && <TableHead>Nearest Expiry</TableHead>}
                 <TableHead>Status</TableHead>
               </TableRow>
             </TableHeader>
@@ -97,14 +117,14 @@ export default function SalesStock() {
               {isLoading ? (
                 [...Array(5)].map((_, i) => (
                   <TableRow key={i}>
-                    <TableCell colSpan={showLocationCol ? 6 : 4}>
+                    <TableCell colSpan={showLocationCol ? 6 : showExpiryCol ? 5 : 4}>
                       <div className="h-8 bg-muted/30 rounded animate-pulse" />
                     </TableCell>
                   </TableRow>
                 ))
               ) : sorted.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={showLocationCol ? 6 : 4} className="text-center py-16 text-muted-foreground">
+                  <TableCell colSpan={showLocationCol ? 6 : showExpiryCol ? 5 : 4} className="text-center py-16 text-muted-foreground">
                     <Package className="w-10 h-10 mx-auto mb-3 opacity-20" />
                     <p>{isAll ? 'No stock across any location' : `No stock at ${locationName}`}</p>
                   </TableCell>
@@ -112,7 +132,8 @@ export default function SalesStock() {
               ) : sorted.map((entry: any, i: number) => {
                 const item = itemMap.get(entry.itemId);
                 const qty    = Number(entry.quantity ?? 0);
-                const isLow  = qty > 0 && qty < 10;
+                const reorder = Number(entry.reorderLevel ?? 10);
+                const isLow  = qty > 0 && (entry.lowStock ?? qty < reorder);
                 const isEmpty = qty <= 0;
                 return (
                   <TableRow key={`${entry.branchType}-${entry.branchId}-${entry.itemId}-${i}`} className={isEmpty ? 'opacity-50' : ''}>
@@ -135,6 +156,21 @@ export default function SalesStock() {
                     <TableCell className="text-right font-mono font-bold">
                       {qty.toLocaleString('en-IN')}
                     </TableCell>
+                    {showExpiryCol && (
+                      <TableCell>
+                        {(() => {
+                          const nb = nearestExpiry.get(Number(entry.itemId));
+                          if (!nb) return <span className="text-xs text-muted-foreground">—</span>;
+                          const cls = nb.status === 'expired' ? 'text-red-500 font-medium' : nb.status === 'near_expiry' ? 'text-amber-600 font-medium' : 'text-muted-foreground';
+                          return (
+                            <span className={`text-xs ${cls}`}>
+                              {new Date(nb.expiryDate!).toLocaleDateString('en-IN')}
+                              {nb.daysToExpiry != null && <span className="ml-1 font-mono">({nb.daysToExpiry}d)</span>}
+                            </span>
+                          );
+                        })()}
+                      </TableCell>
+                    )}
                     <TableCell>
                       {isEmpty ? (
                         <Badge variant="destructive" className="text-[10px]">Out of Stock</Badge>

@@ -84,7 +84,9 @@ const navigation = [
     icon: Building2,
     branchGroups: ['warehouse', 'production', null],
     children: [
-      { name: 'Stock',       href: '/headoffice/stock',       module: 'Stock'        },
+      { name: 'Stock',        href: '/headoffice/stock',              module: 'Stock'              },
+      { name: 'Reports',      href: '/headoffice/inventory-reports',  module: 'Inventory Reports'  },
+      { name: 'Verification', href: '/headoffice/stock-verification', module: 'Stock Verification' },
       { name: 'Transfers',   href: '/headoffice/transfers',   module: 'HO Transfers' },
       { name: 'Warehouses',  href: '/headoffice/warehouses',  module: 'Warehouses'   },
       { name: 'Outlets',     href: '/headoffice/outlets',     module: 'Outlets'      },

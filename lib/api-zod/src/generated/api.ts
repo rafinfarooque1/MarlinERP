@@ -94,7 +94,12 @@ export const GetDashboardSummaryResponse = zod.object({
   "pendingTransfers": zod.number().optional(),
   "todayAttendance": zod.number().optional(),
   "pendingLeaves": zod.number().optional(),
-  "lowStockCount": zod.number().optional()
+  "lowStockCount": zod.number().optional(),
+  "totalExpense": zod.number().optional(),
+  "totalBatchesCreated": zod.number().optional(),
+  "totalBatchQuantity": zod.number().optional(),
+  "bankBalance": zod.number().optional(),
+  "cashBalance": zod.number().optional()
 })
 
 
@@ -368,10 +373,13 @@ export const ListPurchasesResponseItem = zod.object({
   "purchaseDate": zod.string(),
   "invoiceNumber": zod.string().nullish(),
   "lineItems": zod.array(zod.object({
-  "materialType": zod.enum(['material', 'raw_material']),
+  "materialType": zod.enum(['material', 'raw_material', 'item']),
   "materialId": zod.number(),
   "quantity": zod.number(),
-  "unitCost": zod.number()
+  "unitCost": zod.number(),
+  "batchNumber": zod.string().optional(),
+  "mfgDate": zod.string().optional(),
+  "expiryDate": zod.string().optional()
 })),
   "totalAmount": zod.number(),
   "notes": zod.string().nullish(),
@@ -388,10 +396,13 @@ export const CreatePurchaseBody = zod.object({
   "purchaseDate": zod.string(),
   "invoiceNumber": zod.string().optional(),
   "lineItems": zod.array(zod.object({
-  "materialType": zod.enum(['material', 'raw_material']),
+  "materialType": zod.enum(['material', 'raw_material', 'item']),
   "materialId": zod.number(),
   "quantity": zod.number(),
-  "unitCost": zod.number()
+  "unitCost": zod.number(),
+  "batchNumber": zod.string().optional(),
+  "mfgDate": zod.string().optional(),
+  "expiryDate": zod.string().optional()
 })),
   "notes": zod.string().optional()
 })
@@ -403,10 +414,13 @@ export const CreatePurchaseResponse = zod.object({
   "purchaseDate": zod.string(),
   "invoiceNumber": zod.string().nullish(),
   "lineItems": zod.array(zod.object({
-  "materialType": zod.enum(['material', 'raw_material']),
+  "materialType": zod.enum(['material', 'raw_material', 'item']),
   "materialId": zod.number(),
   "quantity": zod.number(),
-  "unitCost": zod.number()
+  "unitCost": zod.number(),
+  "batchNumber": zod.string().optional(),
+  "mfgDate": zod.string().optional(),
+  "expiryDate": zod.string().optional()
 })),
   "totalAmount": zod.number(),
   "notes": zod.string().nullish(),
@@ -425,10 +439,13 @@ export const GetPurchaseResponse = zod.object({
   "purchaseDate": zod.string(),
   "invoiceNumber": zod.string().nullish(),
   "lineItems": zod.array(zod.object({
-  "materialType": zod.enum(['material', 'raw_material']),
+  "materialType": zod.enum(['material', 'raw_material', 'item']),
   "materialId": zod.number(),
   "quantity": zod.number(),
-  "unitCost": zod.number()
+  "unitCost": zod.number(),
+  "batchNumber": zod.string().optional(),
+  "mfgDate": zod.string().optional(),
+  "expiryDate": zod.string().optional()
 })),
   "totalAmount": zod.number(),
   "notes": zod.string().nullish(),
@@ -533,6 +550,10 @@ export const ListStockResponse = zod.array(ListStockResponseItem)
 /**
  * @summary List all stock transfers
  */
+export const listStockTransfersResponseLineItemsItemQuantityExclusiveMin = 0;
+
+
+
 export const ListStockTransfersResponseItem = zod.object({
   "id": zod.number(),
   "challanNumber": zod.string().optional(),
@@ -545,11 +566,11 @@ export const ListStockTransfersResponseItem = zod.object({
   "transferDate": zod.string(),
   "lineItems": zod.array(zod.object({
   "itemId": zod.number(),
-  "quantity": zod.number(),
+  "quantity": zod.number().gt(listStockTransfersResponseLineItemsItemQuantityExclusiveMin),
   "costPrice": zod.number().optional()
 })),
   "isInterstate": zod.boolean().optional(),
-  "status": zod.enum(['pending', 'completed', 'cancelled']).optional(),
+  "status": zod.enum(['pending', 'in_transit', 'completed', 'rejected', 'cancelled']).optional(),
   "createdAt": zod.string()
 })
 export const ListStockTransfersResponse = zod.array(ListStockTransfersResponseItem)
@@ -558,6 +579,10 @@ export const ListStockTransfersResponse = zod.array(ListStockTransfersResponseIt
 /**
  * @summary Create stock transfer (with delivery challan)
  */
+export const createStockTransferBodyLineItemsItemQuantityExclusiveMin = 0;
+
+
+
 export const CreateStockTransferBody = zod.object({
   "fromType": zod.enum(['production', 'warehouse', 'outlet']),
   "fromId": zod.number(),
@@ -566,11 +591,15 @@ export const CreateStockTransferBody = zod.object({
   "transferDate": zod.string(),
   "lineItems": zod.array(zod.object({
   "itemId": zod.number(),
-  "quantity": zod.number(),
+  "quantity": zod.number().gt(createStockTransferBodyLineItemsItemQuantityExclusiveMin),
   "costPrice": zod.number().optional()
 })),
   "notes": zod.string().optional()
 })
+
+export const createStockTransferResponseLineItemsItemQuantityExclusiveMin = 0;
+
+
 
 export const CreateStockTransferResponse = zod.object({
   "id": zod.number(),
@@ -584,11 +613,11 @@ export const CreateStockTransferResponse = zod.object({
   "transferDate": zod.string(),
   "lineItems": zod.array(zod.object({
   "itemId": zod.number(),
-  "quantity": zod.number(),
+  "quantity": zod.number().gt(createStockTransferResponseLineItemsItemQuantityExclusiveMin),
   "costPrice": zod.number().optional()
 })),
   "isInterstate": zod.boolean().optional(),
-  "status": zod.enum(['pending', 'completed', 'cancelled']).optional(),
+  "status": zod.enum(['pending', 'in_transit', 'completed', 'rejected', 'cancelled']).optional(),
   "createdAt": zod.string()
 })
 
@@ -596,6 +625,10 @@ export const CreateStockTransferResponse = zod.object({
 export const GetStockTransferParams = zod.object({
   "id": zod.coerce.number()
 })
+
+export const getStockTransferResponseLineItemsItemQuantityExclusiveMin = 0;
+
+
 
 export const GetStockTransferResponse = zod.object({
   "id": zod.number(),
@@ -609,11 +642,11 @@ export const GetStockTransferResponse = zod.object({
   "transferDate": zod.string(),
   "lineItems": zod.array(zod.object({
   "itemId": zod.number(),
-  "quantity": zod.number(),
+  "quantity": zod.number().gt(getStockTransferResponseLineItemsItemQuantityExclusiveMin),
   "costPrice": zod.number().optional()
 })),
   "isInterstate": zod.boolean().optional(),
-  "status": zod.enum(['pending', 'completed', 'cancelled']).optional(),
+  "status": zod.enum(['pending', 'in_transit', 'completed', 'rejected', 'cancelled']).optional(),
   "createdAt": zod.string()
 })
 
@@ -644,8 +677,7 @@ export const CreateWarehouseBody = zod.object({
   "gstNumber": zod.string(),
   "address": zod.string().optional(),
   "contactPerson": zod.string().optional(),
-  "phone": zod.string().optional(),
-  "upiId": zod.string().optional()
+  "phone": zod.string().optional()
 })
 
 export const CreateWarehouseResponse = zod.object({
@@ -688,8 +720,7 @@ export const UpdateWarehouseBody = zod.object({
   "gstNumber": zod.string().optional(),
   "address": zod.string().optional(),
   "contactPerson": zod.string().optional(),
-  "phone": zod.string().optional(),
-  "upiId": zod.string().optional()
+  "phone": zod.string().optional()
 })
 
 export const UpdateWarehouseResponse = zod.object({
@@ -736,8 +767,7 @@ export const CreateOutletBody = zod.object({
   "warehouseId": zod.number(),
   "address": zod.string().optional(),
   "contactPerson": zod.string().optional(),
-  "phone": zod.string().optional(),
-  "upiId": zod.string().optional()
+  "phone": zod.string().optional()
 })
 
 export const CreateOutletResponse = zod.object({
@@ -777,8 +807,7 @@ export const UpdateOutletBody = zod.object({
   "warehouseId": zod.number().optional(),
   "address": zod.string().optional(),
   "contactPerson": zod.string().optional(),
-  "phone": zod.string().optional(),
-  "upiId": zod.string().optional()
+  "phone": zod.string().optional()
 })
 
 export const UpdateOutletResponse = zod.object({
@@ -886,7 +915,7 @@ export const CreateSaleBody = zod.object({
   "discount": zod.number().optional(),
   "taxAmount": zod.number().optional()
 })),
-  "paymentMode": zod.string().optional(),
+  "paymentMode": zod.string(),
   "couponCode": zod.string().optional()
 })
 

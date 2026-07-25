@@ -28,6 +28,9 @@ const schema = z.object({
   itemId: z.coerce.number().min(1, 'Item required'),
   producedQuantity: z.coerce.number().min(1, 'Quantity > 0'),
   productionDate: z.string().min(1, 'Date required'),
+  batchNumber: z.string().optional(),
+  mfgDate: z.string().optional(),
+  expiryDate: z.string().optional(),
   materialUsed: z.array(z.object({
     materialType: z.enum(['material', 'raw_material']),
     materialId: z.coerce.number().min(1, 'Select material'),
@@ -48,6 +51,9 @@ const defaultValues: FormValues = {
   itemId: 0,
   producedQuantity: 1,
   productionDate: new Date().toISOString().split('T')[0],
+  batchNumber: '',
+  mfgDate: '',
+  expiryDate: '',
   materialUsed: [defaultLine],
   notes: '',
 };
@@ -165,25 +171,34 @@ export default function ProductionList() {
                 <TableHead>Date</TableHead>
                 <TableHead>Item</TableHead>
                 <TableHead>Qty Produced</TableHead>
+                <TableHead>Expiry</TableHead>
                 <TableHead>Materials Used</TableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
+                <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
                   <Factory className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No production batches yet</p>
                 </TableCell></TableRow>
               ) : filtered.map(p => (
                 <TableRow key={p.id} className="hover:bg-muted/10">
-                  <TableCell className="font-mono text-primary font-bold">B-{String(p.id).padStart(4, '0')}</TableCell>
+                  <TableCell className="font-mono text-primary font-bold">{(p as any).batchNumber || `B-${String(p.id).padStart(4, '0')}`}</TableCell>
                   <TableCell className="text-sm text-muted-foreground flex items-center gap-1">
                     <Calendar className="w-3 h-3" />{new Date(p.productionDate).toLocaleDateString('en-IN')}
                   </TableCell>
                   <TableCell className="font-medium">{p.itemName}</TableCell>
                   <TableCell className="font-mono font-bold text-emerald-500">{Number(p.producedQuantity).toLocaleString()}</TableCell>
+                  <TableCell>{(() => {
+                    const e = (p as any).expiryDate;
+                    if (!e) return <span className="text-xs text-muted-foreground">—</span>;
+                    const days = Math.ceil((new Date(e).getTime() - Date.now()) / 86400000);
+                    if (days < 0) return <Badge variant="destructive" className="text-[10px]">Expired {new Date(e).toLocaleDateString('en-IN')}</Badge>;
+                    if (days <= 30) return <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">{new Date(e).toLocaleDateString('en-IN')} · {days}d</Badge>;
+                    return <span className="text-xs text-muted-foreground">{new Date(e).toLocaleDateString('en-IN')}</span>;
+                  })()}</TableCell>
                   <TableCell><Badge variant="secondary">{p.materialUsed?.length || 0} materials</Badge></TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
@@ -229,6 +244,15 @@ export default function ProductionList() {
                 )} />
                 <FormField control={form.control} name="productionDate" render={({ field }) => (
                   <FormItem><FormLabel>Production Date <span className="text-destructive">*</span></FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
+                )} />
+                <FormField control={form.control} name="batchNumber" render={({ field }) => (
+                  <FormItem><FormLabel>Batch # <span className="text-[10px] font-normal text-muted-foreground">(auto if blank)</span></FormLabel><FormControl><Input placeholder="e.g. LOT-A1" className="font-mono" {...field} /></FormControl></FormItem>
+                )} />
+                <FormField control={form.control} name="mfgDate" render={({ field }) => (
+                  <FormItem><FormLabel>Mfg Date <span className="text-[10px] font-normal text-muted-foreground">(defaults to production date)</span></FormLabel><FormControl><Input type="date" {...field} /></FormControl></FormItem>
+                )} />
+                <FormField control={form.control} name="expiryDate" render={({ field }) => (
+                  <FormItem><FormLabel>Expiry Date <span className="text-[10px] font-normal text-amber-500">drives FEFO &amp; expiry alerts</span></FormLabel><FormControl><Input type="date" {...field} /></FormControl></FormItem>
                 )} />
               </div>
 
@@ -343,7 +367,14 @@ export default function ProductionList() {
           {viewItem && (
             <div className="mt-6 space-y-5">
               <div className="grid grid-cols-2 gap-4">
-                {[['Item', viewItem.itemName], ['Date', new Date(viewItem.productionDate).toLocaleDateString('en-IN')], ['Qty Produced', viewItem.producedQuantity]].map(([k, v]) => (
+                {[
+                  ['Item', viewItem.itemName],
+                  ['Date', new Date(viewItem.productionDate).toLocaleDateString('en-IN')],
+                  ['Qty Produced', viewItem.producedQuantity],
+                  ['Batch #', (viewItem as any).batchNumber || `B-${String(viewItem.id).padStart(4, '0')}`],
+                  ['Mfg Date', (viewItem as any).mfgDate ? new Date((viewItem as any).mfgDate).toLocaleDateString('en-IN') : '—'],
+                  ['Expiry Date', (viewItem as any).expiryDate ? new Date((viewItem as any).expiryDate).toLocaleDateString('en-IN') : '—'],
+                ].map(([k, v]) => (
                   <div key={String(k)} className="flex flex-col gap-1">
                     <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                     <span className="font-semibold">{String(v)}</span>

@@ -45,6 +45,7 @@ const schema = z.object({
   taxRate:     z.coerce.number().min(0).max(28).optional(),
   mrp:         z.coerce.number().min(0).optional(),
   cost:        z.coerce.number().min(0).optional(),
+  reorderLevel: z.coerce.number().min(0).optional(),
   description: z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
@@ -69,7 +70,7 @@ export default function ItemMaster() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { itemType: 'raw_material', name: '', unit: '', hsnCode: '', taxRate: 5, mrp: 0, cost: 0, description: '' },
+    defaultValues: { itemType: 'raw_material', name: '', unit: '', hsnCode: '', taxRate: 5, mrp: 0, cost: 0, reorderLevel: 10, description: '' },
   });
 
   const watchType = form.watch('itemType');
@@ -90,7 +91,7 @@ export default function ItemMaster() {
 
   const openAdd = (type?: ItemType) => {
     setEditTarget(null);
-    form.reset({ itemType: type || 'raw_material', name: '', unit: units[0] || '', hsnCode: '', taxRate: 5, mrp: 0, cost: 0, description: '' });
+    form.reset({ itemType: type || 'raw_material', name: '', unit: units[0] || '', hsnCode: '', taxRate: 5, mrp: 0, cost: 0, reorderLevel: 10, description: '' });
     setIsOpen(true);
   };
 
@@ -104,6 +105,7 @@ export default function ItemMaster() {
       taxRate: Number(item.taxRate ?? 5),
       mrp: Number(item.mrp ?? 0),
       cost: Number(item.cost ?? 0),
+      reorderLevel: Number(item.reorderLevel ?? 10),
       description: item.description || '',
     });
     setIsOpen(true);
@@ -121,7 +123,7 @@ export default function ItemMaster() {
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     };
     const sharedData = { name: data.name, unit: data.unit, description: data.description, hsnCode: data.hsnCode || '', taxRate: Number(data.taxRate ?? 5), cost: Number(data.cost ?? 0) };
-    const itemData = { ...sharedData, mrp: Number(data.mrp ?? 0) };
+    const itemData = { ...sharedData, mrp: Number(data.mrp ?? 0), reorderLevel: Number(data.reorderLevel ?? 10) };
 
     if (editTarget) {
       if (type === 'raw_material') updateRM.mutate({ id: editTarget.id, data: sharedData as any }, opts);
@@ -335,6 +337,17 @@ export default function ItemMaster() {
                     </FormItem>
                   )} />
                 )}
+
+                {/* Reorder level — finished items only */}
+                {watchType === 'item' && (
+                  <FormField control={form.control} name="reorderLevel" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Reorder Level <span className="text-[10px] font-normal text-muted-foreground">low-stock alert threshold</span></FormLabel>
+                      <FormControl><Input type="number" min={0} step="1" placeholder="10" className="font-mono" {...field} /></FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                )}
               </div>
               <FormField control={form.control} name="description" render={({ field }) => (
                 <FormItem><FormLabel>Description</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
@@ -368,6 +381,18 @@ export default function ItemMaster() {
                   <div className="flex justify-between py-2 border-b border-border">
                     <span className="text-muted-foreground">Cost / Rate</span>
                     <span className="font-mono font-bold">₹{Number(viewItem.cost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                {viewItem._type === 'item' && Number(viewItem.avgCost) > 0 && (
+                  <div className="flex justify-between py-2 border-b border-border">
+                    <span className="text-muted-foreground">Avg Cost (weighted)</span>
+                    <span className="font-mono font-bold">₹{Number(viewItem.avgCost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                {viewItem._type === 'item' && (
+                  <div className="flex justify-between py-2 border-b border-border">
+                    <span className="text-muted-foreground">Reorder Level</span>
+                    <span className="font-mono">{Number(viewItem.reorderLevel ?? 10)}</span>
                   </div>
                 )}
                 {viewItem._type === 'item' && (

@@ -164,6 +164,7 @@ export type PurchaseLineItemMaterialType = typeof PurchaseLineItemMaterialType[k
 export const PurchaseLineItemMaterialType = {
   material: 'material',
   raw_material: 'raw_material',
+  item: 'item',
 } as const;
 
 export interface PurchaseLineItem {
@@ -171,6 +172,9 @@ export interface PurchaseLineItem {
   materialId: number;
   quantity: number;
   unitCost: number;
+  batchNumber?: string;
+  mfgDate?: string;
+  expiryDate?: string;
 }
 
 export interface Purchase {
@@ -253,6 +257,7 @@ export interface StockEntry {
 
 export interface StockTransferLine {
   itemId: number;
+  /** @exclusiveMinimum 0 */
   quantity: number;
   costPrice?: number;
 }
@@ -280,7 +285,9 @@ export type StockTransferStatus = typeof StockTransferStatus[keyof typeof StockT
 
 export const StockTransferStatus = {
   pending: 'pending',
+  in_transit: 'in_transit',
   completed: 'completed',
+  rejected: 'rejected',
   cancelled: 'cancelled',
 } as const;
 

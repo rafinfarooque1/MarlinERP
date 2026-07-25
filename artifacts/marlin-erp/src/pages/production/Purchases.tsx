@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import {
   useListPurchases, useCreatePurchase, useListVendors, useListMaterials, useListRawMaterials, useListItems,
   getListPurchasesQueryKey, useUpdatePurchase, useDeletePurchase,
@@ -34,6 +34,9 @@ const lineSchema = z.object({
   discount: z.coerce.number().min(0).max(100).default(0),
   gstRate: z.coerce.number().default(0),
   taxType: z.enum(['intra', 'inter']).default('intra'),
+  batchNumber: z.string().optional(),
+  mfgDate: z.string().optional(),
+  expiryDate: z.string().optional(),
 });
 
 const schema = z.object({
@@ -52,7 +55,7 @@ const editSchema = z.object({
 });
 type EditFormValues = z.infer<typeof editSchema>;
 
-const defaultLine = { materialType: 'raw_material' as const, materialId: 0, hsnCode: '', quantity: 1, unitCost: 0, discount: 0, gstRate: 5, taxType: 'intra' as const };
+const defaultLine = { materialType: 'raw_material' as const, materialId: 0, hsnCode: '', quantity: 1, unitCost: 0, discount: 0, gstRate: 5, taxType: 'intra' as const, batchNumber: '', mfgDate: '', expiryDate: '' };
 
 function calcLine(q: number, rate: number, disc: number, gst: number, taxType: string) {
   const lineSubtotal = q * rate;
@@ -283,7 +286,8 @@ export default function Purchases() {
                     const li = watchLines[index] || {};
                     const calc = calcLine(Number(li.quantity) || 0, Number(li.unitCost) || 0, Number(li.discount) || 0, Number(li.gstRate) || 0, li.taxType || 'intra');
                     return (
-                      <div key={field.id} className="grid items-center gap-2 px-3 py-2 border-t border-border" style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr 1fr auto' }}>
+                      <Fragment key={field.id}>
+                      <div className="grid items-center gap-2 px-3 py-2 border-t border-border" style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr 1fr auto' }}>
                         {/* Item type + item selector combined */}
                         <div className="flex gap-1">
                           <Select onValueChange={v => form.setValue(`lineItems.${index}.materialType`, v as any)} value={form.watch(`lineItems.${index}.materialType`)}>
@@ -325,6 +329,17 @@ export default function Purchases() {
                           <X className="w-3.5 h-3.5" />
                         </Button>
                       </div>
+                      {form.watch(`lineItems.${index}.materialType`) === 'item' && (
+                        <div className="flex flex-wrap items-center gap-2 px-3 pb-2 bg-emerald-500/[0.03]">
+                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Batch</span>
+                          <Input className="h-7 text-xs font-mono w-40" placeholder="Vendor lot (auto if blank)" {...form.register(`lineItems.${index}.batchNumber`)} />
+                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground ml-2">Mfg</span>
+                          <Input className="h-7 text-xs w-36" type="date" {...form.register(`lineItems.${index}.mfgDate`)} />
+                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground ml-2">Expiry</span>
+                          <Input className="h-7 text-xs w-36" type="date" {...form.register(`lineItems.${index}.expiryDate`)} />
+                        </div>
+                      )}
+                      </Fragment>
                     );
                   })}
                 </div>
@@ -396,7 +411,10 @@ export default function Purchases() {
                   <tbody>
                     {(viewItem.lineItems as any[])?.map((li: any, i: number) => (
                       <tr key={i} className="border-t border-border hover:bg-muted/10">
-                        <td className="px-3 py-2 font-medium">{getMaterialName(li)}</td>
+                        <td className="px-3 py-2 font-medium">
+                          {getMaterialName(li)}
+                          {li.batchNumber && <span className="block text-[10px] font-mono text-muted-foreground">Lot {li.batchNumber}{li.expiryDate ? ` · exp ${new Date(li.expiryDate).toLocaleDateString('en-IN')}` : ''}</span>}
+                        </td>
                         <td className="px-2 py-2 font-mono text-muted-foreground">{li.hsnCode || '—'}</td>
                         <td className="text-right px-2 py-2">{li.quantity}</td>
                         <td className="text-right px-2 py-2 font-mono">₹{fmt(Number(li.unitCost))}</td>

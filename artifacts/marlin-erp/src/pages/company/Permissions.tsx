@@ -31,7 +31,7 @@ const MODULE_SEGMENTS = [
       },
       {
         title: 'Inventory',
-        modules: ['Warehouses', 'Outlets', 'Stock', 'HO Transfers', 'Item Prices'],
+        modules: ['Warehouses', 'Outlets', 'Stock', 'Inventory Reports', 'Stock Verification', 'HO Transfers', 'Item Prices'],
       },
       {
         title: 'Sales (HO)',

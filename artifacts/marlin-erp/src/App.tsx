@@ -18,6 +18,8 @@ import StockTransfers from './pages/production/StockTransfers';
 import Warehouses from './pages/headoffice/Warehouses';
 import Outlets from './pages/headoffice/Outlets';
 import Stock from './pages/headoffice/Stock';
+import InventoryReports from './pages/headoffice/InventoryReports';
+import StockVerification from './pages/headoffice/StockVerification';
 import HoTransfers from './pages/headoffice/HoTransfers';
 import ItemPrices from './pages/headoffice/ItemPrices';
 import Sales from './pages/headoffice/Sales';
@@ -129,6 +131,8 @@ function Router() {
       <Route path="/headoffice/warehouses"><AuthGuard><Warehouses /></AuthGuard></Route>
       <Route path="/headoffice/outlets"><AuthGuard><Outlets /></AuthGuard></Route>
       <Route path="/headoffice/stock"><AuthGuard><Stock /></AuthGuard></Route>
+      <Route path="/headoffice/inventory-reports"><AuthGuard><InventoryReports /></AuthGuard></Route>
+      <Route path="/headoffice/stock-verification"><AuthGuard><StockVerification /></AuthGuard></Route>
       <Route path="/headoffice/transfers"><AuthGuard><HoTransfers /></AuthGuard></Route>
       <Route path="/headoffice/item-price"><AuthGuard><ItemPrices /></AuthGuard></Route>
       <Route path="/headoffice/sales"><AuthGuard><Sales /></AuthGuard></Route>

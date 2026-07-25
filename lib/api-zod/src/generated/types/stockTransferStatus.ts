@@ -11,6 +11,8 @@ export type StockTransferStatus = typeof StockTransferStatus[keyof typeof StockT
 
 export const StockTransferStatus = {
   pending: 'pending',
+  in_transit: 'in_transit',
   completed: 'completed',
+  rejected: 'rejected',
   cancelled: 'cancelled',
 } as const;

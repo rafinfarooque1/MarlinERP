@@ -1521,6 +1521,16 @@ components:
           type: integer
         lowStockCount:
           type: integer
+        totalExpense:
+          type: number
+        totalBatchesCreated:
+          type: integer
+        totalBatchQuantity:
+          type: number
+        bankBalance:
+          type: number
+        cashBalance:
+          type: number
 
     StockAlert:
       type: object
@@ -1686,13 +1696,19 @@ components:
       properties:
         materialType:
           type: string
-          enum: [material, raw_material]
+          enum: [material, raw_material, item]
         materialId:
           type: integer
         quantity:
           type: number
         unitCost:
           type: number
+        batchNumber:
+          type: string
+        mfgDate:
+          type: string
+        expiryDate:
+          type: string
 
     Purchase:
       type: object
@@ -1822,6 +1838,7 @@ components:
           type: integer
         quantity:
           type: number
+          exclusiveMinimum: 0
         costPrice:
           type: number
 
@@ -1857,7 +1874,7 @@ components:
           type: boolean
         status:
           type: string
-          enum: [pending, completed, cancelled]
+          enum: [pending, in_transit, completed, rejected, cancelled]
         createdAt:
           type: string
 

@@ -77,3 +77,5 @@ description: Full stack ERP for Marlin Frozen Fruits — api-server + marlin-erp
 ## Item prices
 - valid_from/valid_to added as text columns via startup migration
 - ItemPrice type from generated code lacks these; use (ip as any).validFrom casts
+
+- Dev-login gotcha: the stored admin hash can drift from DEFAULT_INITIAL_PASSWORD (password-change tests do this). If admin login fails, suspect drift — re-seed the hash from the constant instead of debugging auth; a restart also clears the login rate-limit.

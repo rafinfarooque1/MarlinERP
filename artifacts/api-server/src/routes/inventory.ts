@@ -27,6 +27,7 @@ const fmtItem = (r: any) => ({
   id: r.id, name: r.name, hsnCode: r.hsn_code, taxRate: Number(r.tax_rate),
   unit: r.unit, description: r.description, productionStock: Number(r.production_stock),
   mrp: Number(r.mrp || 0), cost: Number(r.cost || 0),
+  reorderLevel: Number(r.reorder_level ?? 10), avgCost: Number(r.avg_cost || 0),
   createdAt: r.created_at, updatedAt: r.updated_at,
 });
 
@@ -139,18 +140,18 @@ router.delete("/raw-materials/:id", async (req, res): Promise<void> => {
 // ── Items (Finished SKUs) ──────────────────────────────────────────────────
 router.get("/items", async (_req, res): Promise<void> => {
   const result = await pool.query(
-    `SELECT id, name, hsn_code, tax_rate, unit, description, production_stock, mrp, cost, created_at, updated_at FROM items ORDER BY id`
+    `SELECT id, name, hsn_code, tax_rate, unit, description, production_stock, mrp, cost, reorder_level, avg_cost, created_at, updated_at FROM items ORDER BY id`
   );
   res.json(result.rows.map(fmtItem));
 });
 
 router.post("/items", async (req, res): Promise<void> => {
-  const { name, hsnCode, taxRate, unit, description, mrp, cost } = req.body;
+  const { name, hsnCode, taxRate, unit, description, mrp, cost, reorderLevel } = req.body;
   if (!name || !unit) { res.status(400).json({ error: "name and unit are required" }); return; }
   if (slabViolation(taxRate, res)) return;
   const result = await pool.query(
-    `INSERT INTO items (name, hsn_code, tax_rate, unit, description, mrp, cost) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-    [name, hsnCode || '', Number(taxRate ?? 0), unit, description || null, Number(mrp ?? 0), Number(cost ?? 0)]
+    `INSERT INTO items (name, hsn_code, tax_rate, unit, description, mrp, cost, reorder_level) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [name, hsnCode || '', Number(taxRate ?? 0), unit, description || null, Number(mrp ?? 0), Number(cost ?? 0), Number(reorderLevel ?? 10)]
   );
   res.status(201).json(fmtItem(result.rows[0]));
 });
@@ -164,7 +165,7 @@ router.get("/items/:id", async (req, res): Promise<void> => {
 
 router.patch("/items/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
-  const { name, hsnCode, taxRate, unit, description, mrp, cost } = req.body;
+  const { name, hsnCode, taxRate, unit, description, mrp, cost, reorderLevel } = req.body;
   if (slabViolation(taxRate, res)) return;
   const result = await pool.query(
     `UPDATE items SET
@@ -175,11 +176,13 @@ router.patch("/items/:id", async (req, res): Promise<void> => {
       description = COALESCE($5, description),
       mrp = COALESCE($6, mrp),
       cost = COALESCE($7, cost),
+      reorder_level = COALESCE($8, reorder_level),
       updated_at = now()
-     WHERE id = $8 RETURNING *`,
+     WHERE id = $9 RETURNING *`,
     [name ?? null, hsnCode ?? null, taxRate != null ? Number(taxRate) : null,
      unit ?? null, description ?? null, mrp != null ? Number(mrp) : null,
-     cost != null ? Number(cost) : null, id]
+     cost != null ? Number(cost) : null,
+     reorderLevel != null ? Number(reorderLevel) : null, id]
   );
   if (!result.rows[0]) { res.status(404).json({ error: "Not found" }); return; }
   res.json(fmtItem(result.rows[0]));

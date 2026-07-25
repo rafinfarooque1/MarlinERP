@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, pool, itemsTable, salesTable, stockEntriesTable, employeesTable, stockTransfersTable, attendanceTable, leavesTable, productionsTable, expensesTable } from "@workspace/db";
-import { count, sum, eq, sql } from "drizzle-orm";
+import { count, sum, eq, sql, inArray } from "drizzle-orm";
 
 const router = Router();
 
@@ -73,10 +73,14 @@ router.get("/dashboard/summary", async (req, res): Promise<void> => {
     db.select({ total: sum(salesTable.totalAmount) }).from(salesTable),
     db.select({ total: sql<number>`sum(${stockEntriesTable.quantity}::numeric * ${stockEntriesTable.costPrice}::numeric)` }).from(stockEntriesTable),
     db.select({ count: count() }).from(employeesTable).where(eq(employeesTable.isActive, true)),
-    db.select({ count: count() }).from(stockTransfersTable).where(eq(stockTransfersTable.status, "pending")),
+    // Transfers awaiting action: legacy rows use "pending"; the dispatch →
+    // approve lifecycle creates them as "in_transit".
+    db.select({ count: count() }).from(stockTransfersTable).where(inArray(stockTransfersTable.status, ["pending", "in_transit"])),
     db.select({ count: count() }).from(attendanceTable).where(eq(attendanceTable.date, today)),
     db.select({ count: count() }).from(leavesTable).where(eq(leavesTable.status, "pending")),
-    db.select({ count: count() }).from(stockEntriesTable).where(sql`${stockEntriesTable.quantity}::numeric < 10`),
+    db.select({ count: count() }).from(stockEntriesTable)
+      .leftJoin(itemsTable, eq(stockEntriesTable.itemId, itemsTable.id))
+      .where(sql`${stockEntriesTable.quantity}::numeric < COALESCE(items.reorder_level, 10)::numeric`),
     db.select({ total: sum(expensesTable.amount) }).from(expensesTable),
     db.execute(sql`SELECT COUNT(*)::int AS batch_count, COALESCE(SUM(produced_quantity::numeric), 0)::float AS total_qty FROM productions`),
   ]);
@@ -109,10 +113,11 @@ router.get("/dashboard/stock-alerts", async (req, res): Promise<void> => {
       branchType: stockEntriesTable.branchType,
       branchId: stockEntriesTable.branchId,
       quantity: stockEntriesTable.quantity,
+      reorderLevel: sql<string>`COALESCE(items.reorder_level, 10)`,
     })
     .from(stockEntriesTable)
     .leftJoin(itemsTable, eq(stockEntriesTable.itemId, itemsTable.id))
-    .where(sql`${stockEntriesTable.quantity}::numeric < 10`)
+    .where(sql`${stockEntriesTable.quantity}::numeric < COALESCE(items.reorder_level, 10)::numeric`)
     .limit(20);
 
   res.json(alerts.map((a) => ({
@@ -121,6 +126,7 @@ router.get("/dashboard/stock-alerts", async (req, res): Promise<void> => {
     branchName: `${a.branchType} #${a.branchId}`,
     branchType: a.branchType,
     quantity: Number(a.quantity),
+    reorderLevel: Number(a.reorderLevel),
   })));
 });
 

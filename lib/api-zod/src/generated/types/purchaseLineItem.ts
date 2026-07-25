@@ -12,4 +12,7 @@ export interface PurchaseLineItem {
   materialId: number;
   quantity: number;
   unitCost: number;
+  batchNumber?: string;
+  mfgDate?: string;
+  expiryDate?: string;
 }

@@ -1,8 +1,11 @@
 import { Router } from "express";
-import { db, productionsTable, itemsTable, stockEntriesTable, materialsTable, rawMaterialsTable } from "@workspace/db";
+import { db, pool, productionsTable, itemsTable, stockEntriesTable, materialsTable, rawMaterialsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { CreateProductionBody, GetProductionParams } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
+import { creditBatch, updateAvgCostOnInbound, inboundCostForItem } from "../lib/batches";
+
+const defaultBatchNumber = (id: number) => `B-${String(id).padStart(4, "0")}`;
 
 const router = Router();
 
@@ -10,12 +13,21 @@ router.get("/productions", async (_req, res): Promise<void> => {
   const rows = await db.select().from(productionsTable).orderBy(productionsTable.id);
   const items = await db.select().from(itemsTable);
   const iMap = new Map(items.map((i) => [i.id, i.name]));
-  res.json(rows.map((r) => ({
-    ...r,
-    itemName: iMap.get(r.itemId) ?? "",
-    producedQuantity: Number(r.producedQuantity),
-    materialUsed: r.materialUsed ?? [],
-  })));
+  // batch columns are migration-added (not in the Drizzle schema) — fetch raw
+  const extra = await pool.query(`SELECT id, batch_number, mfg_date, expiry_date FROM productions`);
+  const eMap = new Map(extra.rows.map((e: any) => [e.id, e]));
+  res.json(rows.map((r) => {
+    const ex = eMap.get(r.id);
+    return {
+      ...r,
+      itemName: iMap.get(r.itemId) ?? "",
+      producedQuantity: Number(r.producedQuantity),
+      materialUsed: r.materialUsed ?? [],
+      batchNumber: ex?.batch_number ?? defaultBatchNumber(r.id),
+      mfgDate: ex?.mfg_date ?? null,
+      expiryDate: ex?.expiry_date ?? null,
+    };
+  }));
 });
 
 router.post("/productions", async (req, res): Promise<void> => {
@@ -31,6 +43,16 @@ router.post("/productions", async (req, res): Promise<void> => {
     materialUsed: materialUsed,
     notes: parsed.data.notes ?? null,
   }).returning();
+
+  // Batch identity: user-provided or the existing display convention (B-0001)
+  const rawBody = req.body as { batchNumber?: string; mfgDate?: string; expiryDate?: string };
+  const batchNumber = (rawBody.batchNumber ?? "").trim() || defaultBatchNumber(row.id);
+  const mfgDate = rawBody.mfgDate || parsed.data.productionDate || null;
+  const expiryDate = rawBody.expiryDate || null;
+  await pool.query(
+    `UPDATE productions SET batch_number = $1, mfg_date = $2, expiry_date = $3 WHERE id = $4`,
+    [batchNumber, mfgDate, expiryDate, row.id]
+  );
 
   // Deduct materials used
   for (const mat of materialUsed) {
@@ -69,6 +91,18 @@ router.post("/productions", async (req, res): Promise<void> => {
     });
   }
 
+  // Track the produced batch and roll the weighted-average cost. Until
+  // Phase 5 costing lands, production output is booked at the item's current
+  // average (falling back to its manual cost), which keeps the average stable.
+  const unitCost = await inboundCostForItem(pool, parsed.data.itemId);
+  await creditBatch(pool, {
+    itemId: parsed.data.itemId, branchType: "production", branchId: 1,
+    batchNumber, mfgDate, expiryDate,
+    quantity: parsed.data.producedQuantity, unitCost,
+    source: "production", sourceId: row.id,
+  });
+  await updateAvgCostOnInbound(pool, parsed.data.itemId, parsed.data.producedQuantity, unitCost);
+
   const [item] = await db.select().from(itemsTable).where(eq(itemsTable.id, row.itemId)).limit(1);
 
   logActivity({
@@ -77,7 +111,7 @@ router.post("/productions", async (req, res): Promise<void> => {
     metadata: { after: { itemId: row.itemId, itemName: item?.name, producedQuantity: parsed.data.producedQuantity, materialCount: materialUsed.length } },
   }).catch(() => {});
 
-  res.status(201).json({ ...row, itemName: item?.name ?? "", producedQuantity: Number(row.producedQuantity), materialUsed: row.materialUsed ?? [] });
+  res.status(201).json({ ...row, itemName: item?.name ?? "", producedQuantity: Number(row.producedQuantity), materialUsed: row.materialUsed ?? [], batchNumber, mfgDate, expiryDate });
 });
 
 router.get("/productions/:id", async (req, res): Promise<void> => {
@@ -86,7 +120,11 @@ router.get("/productions/:id", async (req, res): Promise<void> => {
   const [row] = await db.select().from(productionsTable).where(eq(productionsTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const [item] = await db.select().from(itemsTable).where(eq(itemsTable.id, row.itemId)).limit(1);
-  res.json({ ...row, itemName: item?.name ?? "", producedQuantity: Number(row.producedQuantity), materialUsed: row.materialUsed ?? [] });
+  const { rows: [ex] } = await pool.query(`SELECT batch_number, mfg_date, expiry_date FROM productions WHERE id = $1`, [id]);
+  res.json({
+    ...row, itemName: item?.name ?? "", producedQuantity: Number(row.producedQuantity), materialUsed: row.materialUsed ?? [],
+    batchNumber: ex?.batch_number ?? defaultBatchNumber(id), mfgDate: ex?.mfg_date ?? null, expiryDate: ex?.expiry_date ?? null,
+  });
 });
 
 // ── Update (metadata only — date and notes) ───────────────────────────────────
@@ -138,6 +176,15 @@ router.delete("/productions/:id", async (req, res): Promise<void> => {
       eq(stockEntriesTable.branchType, "production"),
       eq(stockEntriesTable.branchId, 1),
     ));
+
+  // Reverse this production's own batch (floored — it may be partly consumed)
+  const { rows: [prodExtra] } = await pool.query(`SELECT batch_number FROM productions WHERE id = $1`, [id]);
+  const delBatchNumber = prodExtra?.batch_number || defaultBatchNumber(id);
+  await pool.query(
+    `UPDATE stock_batches SET quantity = GREATEST(0, quantity - $1), updated_at = now()
+     WHERE item_id = $2 AND branch_type = 'production' AND branch_id = 1 AND batch_number = $3`,
+    [qty, row.itemId, delBatchNumber]
+  );
 
   await db.delete(productionsTable).where(eq(productionsTable.id, id));
 

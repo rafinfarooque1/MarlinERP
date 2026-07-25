@@ -12,4 +12,5 @@ export type PurchaseLineItemMaterialType = typeof PurchaseLineItemMaterialType[k
 export const PurchaseLineItemMaterialType = {
   material: 'material',
   raw_material: 'raw_material',
+  item: 'item',
 } as const;

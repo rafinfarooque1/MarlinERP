@@ -1,18 +1,32 @@
-import { useState } from 'react';
-import { useListStock, useListWarehouses, useListOutlets } from '@workspace/api-client-react';
+import { Fragment, useMemo, useState } from 'react';
+import { useListStock, useListWarehouses, useListOutlets, useListStockBatches, type StockBatch } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Search, BarChart3, Download, AlertTriangle } from 'lucide-react';
+import { Search, BarChart3, Download, AlertTriangle, ChevronRight, ChevronDown, Layers } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
+
+const money = (n: number) => `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const dateIN = (d: string | null) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
+
+function ExpiryBadge({ batch }: { batch: StockBatch }) {
+  if (batch.status === 'expired')
+    return <Badge variant="destructive" className="text-[10px]">Expired {Math.abs(batch.daysToExpiry ?? 0)}d ago</Badge>;
+  if (batch.status === 'near_expiry')
+    return <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">{batch.daysToExpiry}d left</Badge>;
+  if (batch.status === 'no_expiry')
+    return <span className="text-xs text-muted-foreground">—</span>;
+  return <Badge variant="outline" className="text-[10px] text-emerald-500 border-emerald-500/30">{batch.daysToExpiry}d</Badge>;
+}
 
 export default function Stock() {
   const [branchType, setBranchType] = useState<string>('all');
   const [branchId, setBranchId] = useState<string>('');
   const [search, setSearch] = useState('');
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
 
@@ -21,9 +35,31 @@ export default function Stock() {
   if (branchId && branchId !== '0') params.branchId = Number(branchId);
 
   const { data: stock = [], isLoading } = useListStock(params);
-  const filtered = stock.filter(s => s.itemName?.toLowerCase().includes(search.toLowerCase()) || s.branchName?.toLowerCase().includes(search.toLowerCase()));
+  const { data: batches = [] } = useListStockBatches(params);
+
+  // Group batches (already FEFO-ordered by the API) per item-location entry
+  const batchMap = useMemo(() => {
+    const m = new Map<string, StockBatch[]>();
+    for (const b of batches as StockBatch[]) {
+      const key = `${b.branchType}:${b.branchId}:${b.itemId}`;
+      const arr = m.get(key) ?? [];
+      arr.push(b);
+      m.set(key, arr);
+    }
+    return m;
+  }, [batches]);
+
+  const filtered = (stock as any[]).filter(s => s.itemName?.toLowerCase().includes(search.toLowerCase()) || s.branchName?.toLowerCase().includes(search.toLowerCase()));
 
   const branchOptions = branchType === 'warehouse' ? warehouses : branchType === 'outlet' ? outlets : [];
+
+  const toggle = (key: string) => setExpanded(prev => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+
+  const totalValue = filtered.reduce((s, r) => s + Number(r.stockValue || 0), 0);
 
   return (
     <AppLayout>
@@ -31,9 +67,12 @@ export default function Stock() {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><BarChart3 className="w-6 h-6 text-primary" /> Live Stock</h1>
-            <p className="text-muted-foreground mt-1">Current inventory levels across all locations</p>
+            <p className="text-muted-foreground mt-1">Current inventory levels across all locations — expand a row for batches &amp; expiry</p>
           </div>
-          <Button variant="outline" size="sm" onClick={() => downloadCSV('stock.csv', filtered.map(s => ({ Item: s.itemName, Location: s.branchName, Type: s.branchType, Qty: s.quantity, Unit: s.unit })))}>
+          <Button variant="outline" size="sm" onClick={() => downloadCSV('stock.csv', filtered.map(s => ({
+            Item: s.itemName, Location: s.branchName, Type: s.branchType, Qty: s.quantity, Unit: s.unit,
+            'Reorder Level': s.reorderLevel, 'Avg Cost': s.avgCost, Value: s.stockValue,
+          })))}>
             <Download className="w-4 h-4 mr-2" /> Export
           </Button>
         </div>
@@ -67,42 +106,108 @@ export default function Stock() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
+                <TableHead className="w-8" />
                 <TableHead>Item</TableHead>
                 <TableHead>Location</TableHead>
                 <TableHead>Type</TableHead>
                 <TableHead className="text-right">Quantity</TableHead>
+                <TableHead className="text-right">Value</TableHead>
                 <TableHead className="text-right">Status</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(5)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={5} className="text-center py-16 text-muted-foreground">
+                <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
                   <BarChart3 className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No stock data found</p>
                 </TableCell></TableRow>
               ) : filtered.map((s, i) => {
-                const low = Number(s.quantity) < 50;
+                const key = `${s.branchType}:${s.branchId}:${s.itemId}`;
+                const rowBatches = batchMap.get(key) ?? [];
+                const tracked = rowBatches.reduce((sum, b) => sum + Number(b.quantity), 0);
+                const untracked = Math.round((Number(s.quantity) - tracked) * 1000) / 1000;
+                const low = !!s.lowStock;
+                const worst = rowBatches.some(b => b.status === 'expired') ? 'expired'
+                  : rowBatches.some(b => b.status === 'near_expiry') ? 'near_expiry' : null;
+                const isOpen = expanded.has(key);
                 return (
-                  <TableRow key={i} className={`hover:bg-muted/10 ${low ? 'bg-red-500/5' : ''}`}>
-                    <TableCell className="font-semibold">{s.itemName}</TableCell>
-                    <TableCell className="text-muted-foreground">{s.branchName}</TableCell>
-                    <TableCell><Badge variant="outline" className="text-xs capitalize">{s.branchType}</Badge></TableCell>
-                    <TableCell className={`text-right font-mono font-bold ${low ? 'text-red-500' : 'text-emerald-500'}`}>
-                      {Number(s.quantity).toLocaleString()}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {low ? <Badge variant="destructive" className="text-xs gap-1"><AlertTriangle className="w-3 h-3" /> Low Stock</Badge>
-                           : <Badge variant="outline" className="text-xs text-emerald-500 border-emerald-500/30">OK</Badge>}
-                    </TableCell>
-                  </TableRow>
+                  <Fragment key={key + i}>
+                    <TableRow className={`hover:bg-muted/10 cursor-pointer ${low ? 'bg-red-500/5' : ''}`} onClick={() => toggle(key)}>
+                      <TableCell className="pr-0">
+                        {isOpen ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
+                      </TableCell>
+                      <TableCell className="font-semibold">{s.itemName}</TableCell>
+                      <TableCell className="text-muted-foreground">{s.branchName}</TableCell>
+                      <TableCell><Badge variant="outline" className="text-xs capitalize">{s.branchType}</Badge></TableCell>
+                      <TableCell className={`text-right font-mono font-bold ${low ? 'text-red-500' : 'text-emerald-500'}`}>
+                        {Number(s.quantity).toLocaleString('en-IN')} <span className="text-xs font-normal text-muted-foreground">{s.unit}</span>
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-sm">{Number(s.stockValue) > 0 ? money(s.stockValue) : '—'}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-1 flex-wrap">
+                          {worst === 'expired' && <Badge variant="destructive" className="text-[10px]">Expired batch</Badge>}
+                          {worst === 'near_expiry' && <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">Expiring</Badge>}
+                          {low ? <Badge variant="destructive" className="text-xs gap-1"><AlertTriangle className="w-3 h-3" /> Low (&lt;{Number(s.reorderLevel)})</Badge>
+                               : <Badge variant="outline" className="text-xs text-emerald-500 border-emerald-500/30">OK</Badge>}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                    {isOpen && (
+                      <TableRow className="bg-muted/5 hover:bg-muted/5">
+                        <TableCell />
+                        <TableCell colSpan={6} className="py-3">
+                          {rowBatches.length === 0 && untracked <= 0 ? (
+                            <p className="text-xs text-muted-foreground flex items-center gap-2"><Layers className="w-3.5 h-3.5" /> No batch records for this stock</p>
+                          ) : (
+                            <div className="rounded-lg border border-border overflow-hidden max-w-3xl">
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="bg-muted/20 text-muted-foreground">
+                                    <th className="text-left px-3 py-1.5 font-medium">Batch</th>
+                                    <th className="text-left px-3 py-1.5 font-medium">Mfg</th>
+                                    <th className="text-left px-3 py-1.5 font-medium">Expiry</th>
+                                    <th className="text-left px-3 py-1.5 font-medium">Shelf Life</th>
+                                    <th className="text-right px-3 py-1.5 font-medium">Qty</th>
+                                    <th className="text-right px-3 py-1.5 font-medium">Unit Cost</th>
+                                    <th className="text-left px-3 py-1.5 font-medium">Source</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {rowBatches.map(b => (
+                                    <tr key={b.id} className="border-t border-border/60">
+                                      <td className="px-3 py-1.5 font-mono">{b.batchNumber}</td>
+                                      <td className="px-3 py-1.5">{dateIN(b.mfgDate)}</td>
+                                      <td className="px-3 py-1.5">{dateIN(b.expiryDate)}</td>
+                                      <td className="px-3 py-1.5"><ExpiryBadge batch={b} /></td>
+                                      <td className="px-3 py-1.5 text-right font-mono">{Number(b.quantity).toLocaleString('en-IN')}</td>
+                                      <td className="px-3 py-1.5 text-right font-mono">{Number(b.unitCost) > 0 ? money(b.unitCost) : '—'}</td>
+                                      <td className="px-3 py-1.5 capitalize text-muted-foreground">{b.source}</td>
+                                    </tr>
+                                  ))}
+                                  {untracked > 0 && (
+                                    <tr className="border-t border-border/60 text-muted-foreground">
+                                      <td className="px-3 py-1.5 italic" colSpan={4}>Untracked (no batch record)</td>
+                                      <td className="px-3 py-1.5 text-right font-mono">{untracked.toLocaleString('en-IN')}</td>
+                                      <td colSpan={2} />
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </Fragment>
                 );
               })}
             </TableBody>
           </Table>
           {filtered.length > 0 && (
-            <div className="p-3 border-t border-border text-xs text-muted-foreground text-right">
-              {filtered.length} entries · Total: {filtered.reduce((s, r) => s + Number(r.quantity || 0), 0).toLocaleString()} units
+            <div className="p-3 border-t border-border text-xs text-muted-foreground flex justify-between">
+              <span>{filtered.length} entries · {filtered.reduce((s, r) => s + Number(r.quantity || 0), 0).toLocaleString('en-IN')} units</span>
+              <span className="font-semibold text-foreground">Stock value: {money(totalValue)}</span>
             </div>
           )}
         </div>

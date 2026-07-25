@@ -1,9 +1,10 @@
 import { Router } from "express";
-import { db, purchasesTable, vendorsTable, materialsTable, rawMaterialsTable, itemsTable } from "@workspace/db";
+import { db, pool, purchasesTable, vendorsTable, materialsTable, rawMaterialsTable, itemsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { CreatePurchaseBody, GetPurchaseParams } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
 import { isValidGstSlab, gstSlabErrorMessage } from "../lib/gst";
+import { creditBatch, updateAvgCostOnInbound } from "../lib/batches";
 
 const router = Router();
 
@@ -39,6 +40,10 @@ function calcLineItems(rawLineItems: any[]) {
       cgst, sgst, igst,
       taxAmount: Math.round(taxAmount * 100) / 100,
       lineTotal: Math.round(lineTotal * 100) / 100,
+      // batch capture (used for finished-goods "item" lines)
+      batchNumber: li.batchNumber ?? null,
+      mfgDate: li.mfgDate ?? null,
+      expiryDate: li.expiryDate ?? null,
     };
   });
   const rawTotal = subtotal - discountTotal + taxTotal;
@@ -92,6 +97,27 @@ router.post("/purchases", async (req, res): Promise<void> => {
       await db.update(rawMaterialsTable).set({ currentStock: sql`${rawMaterialsTable.currentStock}::numeric + ${li.quantity}` }).where(eq(rawMaterialsTable.id, li.materialId));
     } else if (li.materialType === "item") {
       await db.update(itemsTable).set({ productionStock: sql`${itemsTable.productionStock}::numeric + ${li.quantity}` }).where(eq(itemsTable.id, li.materialId));
+      // Purchased finished goods arrive at the production unit: keep the
+      // location-level stock ledger consistent (previously only the item
+      // counter was bumped), roll the weighted-average cost, and track the
+      // inbound batch.
+      await pool.query(
+        `INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price)
+         VALUES ($1, 'production', 1, $2, $3)
+         ON CONFLICT (item_id, branch_type, branch_id) DO UPDATE SET
+           quantity = stock_entries.quantity::numeric + EXCLUDED.quantity::numeric,
+           cost_price = EXCLUDED.cost_price,
+           updated_at = now()`,
+        [li.materialId, li.quantity, li.unitCost]
+      );
+      await updateAvgCostOnInbound(pool, li.materialId, li.quantity, li.unitCost);
+      await creditBatch(pool, {
+        itemId: li.materialId, branchType: "production", branchId: 1,
+        batchNumber: li.batchNumber || `PUR-${row.id}`,
+        mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
+        quantity: li.quantity, unitCost: li.unitCost,
+        source: "purchase", sourceId: row.id,
+      });
     }
   }
 
@@ -144,7 +170,7 @@ router.delete("/purchases/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const [row] = await db.select().from(purchasesTable).where(eq(purchasesTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
-  const lineItems = (row.lineItems ?? []) as Array<{ materialType: string; materialId: number; quantity: number }>;
+  const lineItems = (row.lineItems ?? []) as Array<{ materialType: string; materialId: number; quantity: number; batchNumber?: string | null }>;
   for (const li of lineItems) {
     if (li.materialType === "material") {
       await db.update(materialsTable).set({ currentStock: sql`GREATEST(0, ${materialsTable.currentStock}::numeric - ${li.quantity})` }).where(eq(materialsTable.id, li.materialId));
@@ -152,6 +178,17 @@ router.delete("/purchases/:id", async (req, res): Promise<void> => {
       await db.update(rawMaterialsTable).set({ currentStock: sql`GREATEST(0, ${rawMaterialsTable.currentStock}::numeric - ${li.quantity})` }).where(eq(rawMaterialsTable.id, li.materialId));
     } else if (li.materialType === "item") {
       await db.update(itemsTable).set({ productionStock: sql`GREATEST(0, ${itemsTable.productionStock}::numeric - ${li.quantity})` }).where(eq(itemsTable.id, li.materialId));
+      // Reverse the stock-entry credit and the inbound batch (floored)
+      await pool.query(
+        `UPDATE stock_entries SET quantity = GREATEST(0, quantity::numeric - $1), updated_at = now()
+         WHERE item_id = $2 AND branch_type = 'production' AND branch_id = 1`,
+        [li.quantity, li.materialId]
+      );
+      await pool.query(
+        `UPDATE stock_batches SET quantity = GREATEST(0, quantity - $1), updated_at = now()
+         WHERE item_id = $2 AND branch_type = 'production' AND branch_id = 1 AND batch_number = $3`,
+        [li.quantity, li.materialId, li.batchNumber || `PUR-${id}`]
+      );
     }
   }
   await db.delete(purchasesTable).where(eq(purchasesTable.id, id));

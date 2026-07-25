@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   useListStockTransfers, useCreateStockTransfer, useListItems,
   useListWarehouses, useListStock, getListStockTransfersQueryKey, useGetCompanySettings,
+  useSuggestBatches, useListStockBatches, type StockBatch,
 } from '@workspace/api-client-react';
 import { useApproveTransfer, useRejectTransfer } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
@@ -19,7 +20,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import {
   Plus, Search, Truck, Download, Eye, Calendar, Trash2, FileDown,
-  PackageOpen, AlertTriangle, Clock, CheckCircle2, XCircle, PackageCheck,
+  PackageOpen, AlertTriangle, Clock, CheckCircle2, XCircle, PackageCheck, Layers,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
@@ -51,6 +52,86 @@ function StatusBadge({ status }: { status: string }) {
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-semibold ${cfg.color}`}>
       {cfg.icon}{cfg.label}
     </span>
+  );
+}
+
+// ── FEFO batch picker (per transfer line) ─────────────────────────────────────
+type BatchOverride = Array<{ batchId: number; quantity: number }>;
+
+function BatchPicker({ itemId, quantity, unit, override, onChange }: {
+  itemId: number; quantity: number; unit?: string;
+  override?: BatchOverride;
+  onChange: (v?: BatchOverride) => void;
+}) {
+  const [manual, setManual] = useState(false);
+  const { data: suggestion } = useSuggestBatches({
+    branchType: 'production', branchId: 1,
+    itemId: itemId > 0 ? itemId : undefined,
+    quantity: quantity > 0 ? quantity : undefined,
+  });
+  const { data: allBatches = [] } = useListStockBatches({ branchType: 'production', branchId: 1 });
+  if (!itemId || !(quantity > 0)) return null;
+  const itemBatches = (allBatches as StockBatch[]).filter(b => b.itemId === itemId);
+  if (itemBatches.length === 0) return null;
+
+  const plan = suggestion?.plan ?? [];
+  const shortfall = suggestion?.shortfall ?? 0;
+  const overrideQty = (batchId: number) => override?.find(o => o.batchId === batchId)?.quantity ?? 0;
+  const overrideTotal = (override ?? []).reduce((s, o) => s + Number(o.quantity || 0), 0);
+  const fmtExp = (b: { expiryDate?: string | null }) => b.expiryDate ? new Date(b.expiryDate).toLocaleDateString('en-IN') : 'no expiry';
+
+  const startManual = () => {
+    const seeded = plan.filter(p => p.batchId != null).map(p => ({ batchId: p.batchId!, quantity: Number(p.quantity) }));
+    onChange(seeded.length ? seeded : []);
+    setManual(true);
+  };
+  const resetFefo = () => { onChange(undefined); setManual(false); };
+  const setQty = (batchId: number, q: number) => {
+    const rest = (override ?? []).filter(o => o.batchId !== batchId);
+    onChange(q > 0 ? [...rest, { batchId, quantity: q }] : rest);
+  };
+
+  return (
+    <div className="col-span-11 -mt-1 rounded-md border border-dashed border-primary/25 bg-primary/[0.03] px-3 py-2">
+      {!manual ? (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground flex items-center gap-1"><Layers className="w-3 h-3" /> FEFO picks</span>
+          {plan.length === 0 ? (
+            <span className="text-xs text-muted-foreground">no batch records — dispatch proceeds untracked</span>
+          ) : plan.map((p, idx) => (
+            <span key={idx} className="inline-flex items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-[11px] font-mono">
+              {p.batchNumber} · {Number(p.quantity)} <span className="text-muted-foreground">exp {fmtExp(p)}</span>
+            </span>
+          ))}
+          {shortfall > 0 && <span className="text-[11px] text-amber-500 font-medium">+{shortfall} untracked</span>}
+          {itemBatches.length > 1 && (
+            <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-[11px] text-primary ml-auto" onClick={startManual}>Pick manually</Button>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] uppercase tracking-wide text-muted-foreground flex items-center gap-1"><Layers className="w-3 h-3" /> Manual batch allocation</span>
+            <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-[11px]" onClick={resetFefo}>Use FEFO</Button>
+          </div>
+          {itemBatches.map(b => (
+            <div key={b.id} className="flex items-center gap-2 text-xs">
+              <span className="font-mono w-28 truncate">{b.batchNumber}</span>
+              <span className="text-muted-foreground flex-1">exp {fmtExp(b)} · {Number(b.quantity)} {b.unit} avail</span>
+              <Input
+                type="number" min={0} max={Number(b.quantity)} step="any"
+                className="h-7 w-24 text-xs font-mono"
+                value={overrideQty(b.id) || ''} placeholder="0"
+                onChange={e => setQty(b.id, Math.min(Number(e.target.value) || 0, Number(b.quantity)))}
+              />
+            </div>
+          ))}
+          <p className={`text-[11px] font-medium ${Math.abs(overrideTotal - quantity) < 0.001 ? 'text-emerald-500' : 'text-amber-500'}`}>
+            Allocated {overrideTotal} of {quantity} {unit ?? ''}{Math.abs(overrideTotal - quantity) >= 0.001 ? ' — totals must match to dispatch' : ''}
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -142,6 +223,11 @@ function ApproveDialog({
                     <div className="col-span-5">
                       <p className="font-medium text-sm">{item?.name ?? `Item #${li.itemId}`}</p>
                       <p className="text-xs text-muted-foreground">{(item as any)?.hsnCode ? `HSN: ${(item as any).hsnCode}` : item?.unit ?? ''}</p>
+                      {Array.isArray(li.batchBreakdown) && li.batchBreakdown.length > 0 && (
+                        <p className="text-[10px] font-mono text-muted-foreground mt-1 leading-relaxed">
+                          {li.batchBreakdown.map((bb: any) => `${bb.batchNumber || `#${bb.batchId}`} · ${Number(bb.quantity)}`).join('   ')}
+                        </p>
+                      )}
                     </div>
                     <div className="col-span-3 text-center">
                       <p className="text-xs text-muted-foreground mb-1">Dispatched</p>
@@ -230,8 +316,38 @@ export default function StockTransfers() {
   });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
 
+  // Optional manual batch allocation per line index (undefined = FEFO default)
+  const [overrides, setOverrides] = useState<Record<number, BatchOverride | undefined>>({});
+  const removeLine = (i: number) => {
+    remove(i);
+    setOverrides(prev => {
+      const next: typeof prev = {};
+      for (const [k, v] of Object.entries(prev)) {
+        const idx = Number(k);
+        if (idx < i) next[idx] = v;
+        else if (idx > i) next[idx - 1] = v;
+      }
+      return next;
+    });
+  };
+
   const onSubmit = (data: FormValues) => {
-    createMutation.mutate({ data: { ...data, fromType: 'production', fromId: 1, toType: 'warehouse', toId: data.toWarehouseId } as any }, {
+    const lineItems = data.lineItems.map((li, i) => {
+      const ov = (overrides[i] ?? []).filter(o => Number(o.quantity) > 0);
+      if (ov.length === 0) return li;
+      return { ...li, batchOverride: ov.map(o => ({ batchId: o.batchId, quantity: Number(o.quantity) })) };
+    });
+    for (let i = 0; i < lineItems.length; i++) {
+      const li: any = lineItems[i];
+      if (li.batchOverride) {
+        const total = li.batchOverride.reduce((s: number, o: any) => s + o.quantity, 0);
+        if (Math.abs(total - Number(li.quantity)) > 0.001) {
+          toast.error(`Line ${i + 1}: batch allocation (${total}) must equal transfer quantity (${li.quantity})`);
+          return;
+        }
+      }
+    }
+    createMutation.mutate({ data: { ...data, lineItems, fromType: 'production', fromId: 1, toType: 'warehouse', toId: data.toWarehouseId } as any }, {
       onSuccess: () => {
         toast.success('Transfer dispatched — warehouse must approve to receive stock');
         queryClient.invalidateQueries({ queryKey: getListStockTransfersQueryKey() });
@@ -298,7 +414,7 @@ export default function StockTransfers() {
               </Button>
             )}
             {perm.canAdd && (
-              <Button onClick={() => { form.reset({ toWarehouseId: 0, transferDate: new Date().toISOString().split('T')[0], lineItems: [{ itemId: 0, quantity: 1 }], notes: '' }); setIsOpen(true); }}>
+              <Button onClick={() => { form.reset({ toWarehouseId: 0, transferDate: new Date().toISOString().split('T')[0], lineItems: [{ itemId: 0, quantity: 1 }], notes: '' }); setOverrides({}); setIsOpen(true); }}>
                 <Plus className="w-4 h-4 mr-2" /> New Transfer
               </Button>
             )}
@@ -429,7 +545,7 @@ export default function StockTransfers() {
                             <div className="col-span-7">
                               <FormField control={form.control} name={`lineItems.${i}.itemId`} render={({ field: f }) => (
                                 <FormItem><FormLabel className="text-xs">Item</FormLabel>
-                                  <Select onValueChange={v => f.onChange(Number(v))} value={f.value ? String(f.value) : ''}>
+                                  <Select onValueChange={v => { f.onChange(Number(v)); setOverrides(prev => ({ ...prev, [i]: undefined })); }} value={f.value ? String(f.value) : ''}>
                                     <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select item" /></SelectTrigger></FormControl>
                                     <SelectContent>
                                       {availableItems.map(it => {
@@ -449,8 +565,15 @@ export default function StockTransfers() {
                               )} />
                             </div>
                             <div className="col-span-1 pb-1 flex justify-end">
-                              <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(i)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
+                              <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => removeLine(i)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
                             </div>
+                            <BatchPicker
+                              itemId={selItemId}
+                              quantity={Number(form.watch(`lineItems.${i}.quantity`)) || 0}
+                              unit={(iMap.get(selItemId) as any)?.unit}
+                              override={overrides[i]}
+                              onChange={v => setOverrides(prev => ({ ...prev, [i]: v }))}
+                            />
                           </div>
                         );
                       })}
@@ -508,9 +631,20 @@ export default function StockTransfers() {
                   {(viewItem.lineItems || []).map((li: any, i: number) => {
                     const item = iMap.get(li.itemId);
                     return (
-                      <div key={i} className="flex justify-between p-3 bg-muted/20 rounded-lg text-sm border border-border">
-                        <span className="font-medium">{item?.name ?? `Item #${li.itemId}`}</span>
-                        <span className="font-bold font-mono">{li.quantity} {item?.unit ?? ''}</span>
+                      <div key={i} className="p-3 bg-muted/20 rounded-lg text-sm border border-border">
+                        <div className="flex justify-between">
+                          <span className="font-medium">{item?.name ?? `Item #${li.itemId}`}</span>
+                          <span className="font-bold font-mono">{li.quantity} {item?.unit ?? ''}</span>
+                        </div>
+                        {Array.isArray(li.batchBreakdown) && li.batchBreakdown.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {li.batchBreakdown.map((bb: any, j: number) => (
+                              <span key={j} className="inline-flex items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-[10px] font-mono text-muted-foreground">
+                                {bb.batchNumber || `#${bb.batchId}`} · {Number(bb.quantity)}{bb.expiryDate ? ` · exp ${new Date(bb.expiryDate).toLocaleDateString('en-IN')}` : ''}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     );
                   })}

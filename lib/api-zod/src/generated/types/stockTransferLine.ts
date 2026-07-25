@@ -8,6 +8,7 @@
 
 export interface StockTransferLine {
   itemId: number;
+  /** @exclusiveMinimum 0 */
   quantity: number;
   costPrice?: number;
 }
