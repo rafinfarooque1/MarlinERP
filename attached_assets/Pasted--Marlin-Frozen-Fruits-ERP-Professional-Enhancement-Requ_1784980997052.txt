@@ -1,0 +1,387 @@
+# Marlin Frozen Fruits ERP – Professional Enhancement Request (PLAN MODE ONLY)
+
+I have attached the complete documentation of my existing Marlin Frozen Fruits ERP. Analyze the entire project and use it as the reference for all recommendations and planning.
+
+## IMPORTANT
+
+**Use PLAN MODE only.**
+
+Do **NOT** modify, generate, delete, refactor, or rewrite any code.
+
+Do **NOT** change the database.
+
+Do **NOT** create migrations.
+
+Do **NOT** modify APIs.
+
+Do **NOT** redesign the UI.
+
+Do **NOT** start implementation until I approve the complete development plan.
+
+---
+
+# Project Goal
+
+I want to upgrade my ERP into a professional Indian Manufacturing, Distribution, Inventory, Sales, and Accounts ERP while keeping the existing business workflow intact.
+
+My ERP already contains Production, Inventory, Sales, HR, Accounts, GST, Company Settings, Warehouses, Outlets, Customers, Vendors, Payroll, and Permissions.
+
+I want you to analyze the current ERP and identify everything required to make it comparable to a professional Indian ERP.
+
+---
+
+# Existing Business Rules (Must Never Change)
+
+These workflows must remain exactly the same unless I explicitly approve changes.
+
+* Production at Head Office
+* Finished goods manufacturing
+* Stock transfers
+* Warehouse workflow
+* Outlet workflow
+* Sales workflow
+* Payment collection workflow
+* Customer workflow
+* Vendor workflow
+* Existing permissions
+* Existing database data
+* Existing accounting entries
+* Existing APIs wherever possible
+
+---
+
+# Printed Documents (DO NOT CHANGE)
+
+The design and format of these documents must remain exactly as they are.
+
+Do NOT redesign or modify:
+
+* Quotation
+* Purchase Order
+* Purchase Invoice
+* Delivery Challan
+* Sales Invoice
+* Tax Invoice
+* Payment Receipt
+* Company Branding
+* Invoice Layout
+
+If any additional information is required, it should be added without changing the existing design.
+
+---
+
+# Professional ERP Analysis Required
+
+Review every module and provide recommendations.
+
+## Production
+
+Review
+
+* BOM
+* Production Cost
+* Manufacturing
+* Batch Cost
+* Material Consumption
+* Wastage
+* Finished Goods
+* Production Reports
+
+Suggest professional improvements.
+
+---
+
+## Inventory
+
+Review
+
+* Stock
+* Warehouse
+* Outlet
+* Transfers
+* Batch
+* Expiry
+* Valuation
+* Reorder
+* FIFO
+* Weighted Average
+* Physical Verification
+
+Suggest improvements.
+
+---
+
+## Sales
+
+Review
+
+* POS
+* Orders
+* Returns
+* Coupons
+* Discounts
+* Customer Credit
+* Outstanding
+* Collections
+
+Suggest improvements.
+
+---
+
+## Accounts
+
+Review the entire accounting module professionally.
+
+Recommend improvements for:
+
+* Chart of Accounts
+* Ledger
+* Double Entry Accounting
+* Journal Voucher
+* Payment Voucher
+* Receipt Voucher
+* Contra Voucher
+* Credit Note
+* Debit Note
+* Purchase Return
+* Sales Return
+* Day Book
+* Cash Book
+* Bank Book
+* Trial Balance
+* Balance Sheet
+* Profit & Loss
+* Cash Flow
+* Fund Flow
+* Ratio Analysis
+* Cost Centers
+* Profit Centers
+* Warehouse Accounting
+* Outlet Accounting
+* Multi Cash
+* Multi Bank
+* Bank Reconciliation
+* GST
+* TDS Ready Structure
+* Financial Year Closing
+* Voucher Numbering
+* Approval Workflow
+* Audit Trail
+
+Recommend all additional professional accounting features that are expected in a modern Indian ERP.
+
+---
+
+## GST
+
+Review GST implementation.
+
+Recommend support for:
+
+* GSTR-1
+* GSTR-3B
+* HSN Summary
+* Input GST
+* Output GST
+* GST Ledger
+* GST Reconciliation
+* GST Audit
+
+---
+
+## Reports
+
+Review all reports.
+
+Recommend additional reports including:
+
+* Financial Reports
+* Sales Reports
+* Purchase Reports
+* Expense Reports
+* Inventory Reports
+* Production Reports
+* Warehouse Reports
+* Outlet Reports
+* Customer Reports
+* Vendor Reports
+* Profitability Reports
+
+---
+
+## HR
+
+Review HR.
+
+Recommend improvements for:
+
+* Attendance
+* Leave
+* Payroll
+* Salary Structure
+* Employee Assets
+* Performance
+* Approval Workflow
+
+---
+
+## Security
+
+Review:
+
+* Permissions
+* Branch Restrictions
+* Warehouse Restrictions
+* Outlet Restrictions
+* Audit Log
+* Login History
+* Password Policy
+
+Recommend improvements.
+
+---
+
+# UI Review
+
+Do NOT redesign the ERP unnecessarily.
+
+Recommend only professional improvements.
+
+Improve
+
+* Dashboard
+* Navigation
+* Tables
+* Search
+* Filters
+* Reports
+* User Experience
+
+Keep the application clean, fast, and professional.
+
+---
+
+# Database Review
+
+Analyze the database.
+
+Provide:
+
+* Missing tables
+* Missing relationships
+* Missing indexes
+* Missing constraints
+* Future scalability improvements
+
+Do NOT implement anything.
+
+---
+
+# API Review
+
+Analyze all APIs.
+
+Recommend:
+
+* Missing APIs
+* Improvements
+* Better architecture
+* Performance optimization
+
+Do NOT implement.
+
+---
+
+# Code Review
+
+Review the project architecture.
+
+Recommend:
+
+* Better folder structure
+* Better reusable components
+* Better services
+* Better validation
+* Better security
+* Better maintainability
+
+Do NOT modify any code.
+
+---
+
+# Development Plan
+
+After analysis, prepare a phased implementation plan.
+
+Example:
+
+Phase 1
+Professional Accounts
+
+Phase 2
+Inventory Improvements
+
+Phase 3
+Production Improvements
+
+Phase 4
+Reports
+
+Phase 5
+Dashboard
+
+Phase 6
+Optimization
+
+Explain each phase.
+
+---
+
+# Safe Development Strategy
+
+Before any implementation, explain how development will be done safely.
+
+Answer these questions:
+
+1. Can a separate development branch be created?
+2. Can the existing ERP remain untouched during development?
+3. Can the new version be developed independently?
+4. Can a demo version be provided before merging?
+5. Can only selected modules be merged?
+6. Can the current version be restored completely if I reject the update?
+7. Can Git branches be used?
+8. Will backups be created before development?
+9. Will database migrations be reversible?
+10. What is the safest rollout strategy?
+
+---
+
+# Deliverables (PLAN MODE ONLY)
+
+Provide only:
+
+1. Complete ERP Review
+2. Gap Analysis
+3. Professional ERP Recommendations
+4. Missing Features
+5. Database Recommendations
+6. API Recommendations
+7. UI Recommendations
+8. Security Recommendations
+9. Development Phases
+10. Risk Analysis
+11. Rollback Strategy
+12. Demo Strategy
+13. Estimated Development Timeline
+
+Do not generate any code.
+
+Do not modify any files.
+
+Do not create migrations.
+
+Do not make database changes.
+
+Do not update the project.
+
+Wait for my approval before entering implementation mode.
