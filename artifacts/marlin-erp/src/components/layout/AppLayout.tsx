@@ -47,6 +47,10 @@ import { toast } from 'sonner';
 
 const LOGO_KEY = 'marlin_company_logo';
 
+// ─── Navigation definition ────────────────────────────────────────────────────
+// Each child has a `module` key matching the Permissions page MODULE_GROUPS.
+// The `branchGroups` array lists which branchTypes can see this section.
+// Omitting `branchGroups` = visible to all (incl. HO employees).
 const navigation = [
   {
     name: 'Dashboard',
@@ -56,71 +60,106 @@ const navigation = [
   {
     name: 'Production',
     icon: Factory,
+    // Warehouses + HO can see Production; outlets cannot
+    branchGroups: ['warehouse', 'production', null],
     children: [
-      { name: 'Units', href: '/production/units' },
-      { name: 'Item Master', href: '/production/item-master' },
-      { name: 'Batches', href: '/production/production' },
-      { name: 'Stock Transfers', href: '/production/stock-transfer' },
-      { name: 'Purchases', href: '/production/purchase' },
+      { name: 'Units',           href: '/production/units',          module: 'Materials'       },
+      { name: 'Item Master',     href: '/production/item-master',    module: 'Items'           },
+      { name: 'Batches',         href: '/production/production',     module: 'Production'      },
+      { name: 'Stock Transfers', href: '/production/stock-transfer', module: 'Stock Transfers' },
+      { name: 'Purchases',       href: '/production/purchase',       module: 'Purchases'       },
     ],
   },
   {
     name: 'Inventory',
     icon: Building2,
+    branchGroups: ['warehouse', 'production', null],
     children: [
-      { name: 'Stock', href: '/headoffice/stock' },
-      { name: 'Transfers', href: '/headoffice/transfers' },
-      { name: 'Warehouses', href: '/headoffice/warehouses' },
-      { name: 'Outlets', href: '/headoffice/outlets' },
-      { name: 'Item Prices', href: '/headoffice/item-price' },
+      { name: 'Stock',       href: '/headoffice/stock',       module: 'Stock'        },
+      { name: 'Transfers',   href: '/headoffice/transfers',   module: 'HO Transfers' },
+      { name: 'Warehouses',  href: '/headoffice/warehouses',  module: 'Warehouses'   },
+      { name: 'Outlets',     href: '/headoffice/outlets',     module: 'Outlets'      },
+      { name: 'Item Prices', href: '/headoffice/item-price',  module: 'Item Prices'  },
     ],
   },
   {
     name: 'Sales',
     icon: Calculator,
+    branchGroups: ['warehouse', null],
     children: [
-      { name: 'Orders', href: '/headoffice/sales' },
-      { name: 'Customers', href: '/customers' },
-      { name: 'Vendors', href: '/vendors' },
-      { name: 'Coupons', href: '/coupons' },
+      { name: 'Orders',    href: '/headoffice/sales', module: 'Sales'     },
+      { name: 'Customers', href: '/customers',         module: 'Customers' },
+      { name: 'Vendors',   href: '/vendors',           module: 'Vendors'   },
+      { name: 'Coupons',   href: '/coupons',           module: 'Coupons'   },
     ],
   },
   {
     name: 'HR',
     icon: Users,
+    branchGroups: [null], // HO only
     children: [
-      { name: 'Employees', href: '/hr/employees' },
-      { name: 'Attendance', href: '/hr/attendance' },
-      { name: 'Leave', href: '/hr/leave' },
-      { name: 'Payroll', href: '/hr/payroll' },
-      { name: 'Hierarchy', href: '/hr/hierarchy' },
+      { name: 'Employees',  href: '/hr/employees',  module: 'Employees'  },
+      { name: 'Attendance', href: '/hr/attendance', module: 'Attendance' },
+      { name: 'Leave',      href: '/hr/leave',      module: 'Leave'      },
+      { name: 'Payroll',    href: '/hr/payroll',    module: 'Payroll'    },
+      { name: 'Hierarchy',  href: '/hr/hierarchy',  module: 'Hierarchy'  },
     ],
   },
   {
     name: 'Accounts',
     icon: UsersRound,
+    branchGroups: [null], // HO only
     children: [
-      { name: 'Chart of Accounts', href: '/accounts/chart' },
-      { name: 'Ledger', href: '/accounts/ledger' },
-      { name: 'Payments', href: '/accounts/payments' },
-      { name: 'Receipts', href: '/accounts/receipts' },
-      { name: 'GST Summary', href: '/accounts/gst' },
-      { name: 'Reconciliation', href: '/accounts/reconciliation' },
-      { name: 'Cash Balance', href: '/accounts/cash-in-outlet' },
-      { name: 'Reports', href: '/accounts/reports' },
+      { name: 'Chart of Accounts', href: '/accounts/chart',           module: 'Chart of Accounts' },
+      { name: 'Ledger',            href: '/accounts/ledger',          module: 'Ledger'            },
+      { name: 'Payments',          href: '/accounts/payments',        module: 'Payments'          },
+      { name: 'Receipts',          href: '/accounts/receipts',        module: 'Payments'          },
+      { name: 'GST Summary',       href: '/accounts/gst',             module: 'GST Summary'       },
+      { name: 'Reconciliation',    href: '/accounts/reconciliation',  module: 'Reconciliation'    },
+      { name: 'Cash Balance',      href: '/accounts/cash-in-outlet',  module: 'Cash Balance'      },
+      { name: 'Reports',           href: '/accounts/reports',         module: 'Chart of Accounts' },
     ],
   },
   {
     name: 'Company',
     icon: Settings,
+    // Everyone can see Company (at least their own Profile)
     children: [
-      { name: 'Settings', href: '/company/settings' },
-      { name: 'Profile', href: '/company/profile' },
-      { name: 'Permissions', href: '/company/permissions' },
-      { name: 'Audit Log', href: '/company/audit' },
+      { name: 'Settings',    href: '/company/settings',     module: 'Settings'     },
+      { name: 'Profile',     href: '/company/profile',      module: 'Profile'      },
+      { name: 'Permissions', href: '/company/permissions',  module: 'Permissions'  },
+      { name: 'Audit Log',   href: '/company/audit',        module: 'Settings'     },
     ],
   },
 ];
+
+const salesNavItems = [
+  { name: 'Dashboard',     icon: LayoutDashboard,  href: '/sales/dashboard',    module: 'Point of Sale'      },
+  { name: 'Point of Sale', icon: ShoppingCart,     href: '/sales/pos',          module: 'Point of Sale'      },
+  { name: 'Stock',         icon: Package,          href: '/sales/stock',        module: 'Location Stock'     },
+  { name: 'Transfers',     icon: ArrowLeftRight,   href: '/sales/transfers',    module: 'Location Transfers' },
+  { name: 'Expenses',      icon: Receipt,          href: '/sales/expenses',     module: 'Location Expenses'  },
+  { name: 'Cash Balance',  icon: Banknote,         href: '/sales/cash-balance', module: 'Cash Balance'       },
+];
+
+// ─── Permission helpers ───────────────────────────────────────────────────────
+
+/** Returns true if the current user can view this module.
+ *  Mirrors the logic in usePermission.ts — if no DB row exists, default is canView=true. */
+function checkCanView(
+  module: string | undefined,
+  hierarchyId: number | undefined,
+  level: number,
+  perms: any[],
+): boolean {
+  if (!module) return true;           // no module restriction
+  if (level === 1) return true;       // level 1 = admin = full access always
+  const perm = perms.find((p: any) => p.hierarchyId === hierarchyId && p.module === module);
+  if (!perm) return true;             // no explicit row → default view-only (canView: true)
+  return perm.canView ?? true;
+}
+
+// ─── PasswordInput ────────────────────────────────────────────────────────────
 
 function PasswordInput({ value, onChange, placeholder, id, autoComplete }: {
   value: string;
@@ -152,6 +191,8 @@ function PasswordInput({ value, onChange, placeholder, id, autoComplete }: {
     </div>
   );
 }
+
+// ─── NavItem ──────────────────────────────────────────────────────────────────
 
 function NavItem({ item, isActive, currentPath, collapsed }: any) {
   const [isOpen, setIsOpen] = useState(isActive);
@@ -231,14 +272,7 @@ function NavItem({ item, isActive, currentPath, collapsed }: any) {
   );
 }
 
-const salesNavItems = [
-  { name: 'Dashboard', icon: LayoutDashboard, href: '/sales/dashboard' },
-  { name: 'Point of Sale', icon: ShoppingCart, href: '/sales/pos' },
-  { name: 'Stock', icon: Package, href: '/sales/stock' },
-  { name: 'Transfers', icon: ArrowLeftRight, href: '/sales/transfers' },
-  { name: 'Expenses', icon: Receipt, href: '/sales/expenses' },
-  { name: 'Cash Balance', icon: Banknote, href: '/sales/cash-balance' },
-];
+// ─── AppLayout ────────────────────────────────────────────────────────────────
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation();
@@ -250,19 +284,101 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
   const [logo, setLogo] = useState<string | null>(() => localStorage.getItem(LOGO_KEY));
-  const { locationState } = useLocationContext();
+  const { locationState, setLocation: setLocContext } = useLocationContext();
   const isSalesSegment = location.startsWith('/sales');
 
-  // Compute whether this user can access the Sales segment.
-  // Level 1 always has full access. Otherwise check any Sales-segment module permission.
-  const SALES_MODULES = ['Point of Sale', 'Location Stock', 'Location Transfers', 'Location Expenses', 'Cash Balance'];
+  // ── User branch info ────────────────────────────────────────────────────────
+  const userBranchType = (user as any)?.branchType as 'warehouse' | 'outlet' | 'production' | null | undefined;
+  const userBranchId   = (user as any)?.branchId   as number | null | undefined;
+  const userBranchName = (user as any)?.branchName as string | undefined;
+
+  // Whether this is a location-locked user (outlet or warehouse employee)
+  const isOutletEmployee    = userBranchType === 'outlet';
+  const isWarehouseEmployee = userBranchType === 'warehouse';
+  const isLocationEmployee  = isOutletEmployee || isWarehouseEmployee;
+
+  // ── User hierarchy level ────────────────────────────────────────────────────
   const userHierarchy = (hierarchies as any[]).find((h: any) => h.id === (user as any)?.hierarchyId);
-  const userLevel = userHierarchy?.level ?? 99;
-  const hasSalesAccess = userLevel === 1 || SALES_MODULES.some(mod => {
+  const userLevel     = userHierarchy?.level ?? 99;
+  const isAdmin       = userLevel === 1;
+
+  // ── Auto-set location context for location-locked employees ─────────────────
+  // When an outlet/warehouse employee logs in, pin their location automatically
+  useEffect(() => {
+    if (!user) return;
+    if (!isLocationEmployee) return;
+    if (!userBranchId) return;
+    // Only auto-set if not already set to their branch (avoids overwriting on every render)
+    if (locationState.locationId === userBranchId && locationState.locationType === userBranchType) return;
+    setLocContext({
+      locationType: userBranchType!,
+      locationId: userBranchId,
+      locationName: userBranchName || (isOutletEmployee ? 'Outlet' : 'Warehouse'),
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, userBranchType, userBranchId]);
+
+  // ── Redirect outlet employees to Sales segment ──────────────────────────────
+  useEffect(() => {
+    if (!user) return;
+    if (!isOutletEmployee) return;
+    // If they somehow landed on an Accounts segment page, push them to Sales
+    if (!location.startsWith('/sales') && location !== '/change-password' && location !== '/login') {
+      setLocation('/sales/pos');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, isOutletEmployee, location]);
+
+  // ── Permission-filtered navigation ─────────────────────────────────────────
+  const filteredNavigation = navigation
+    .filter(item => {
+      if (isAdmin) return true; // Level 1 always sees everything
+
+      // branchGroups: if defined, the item is only shown for listed branch types
+      if ('branchGroups' in item && item.branchGroups) {
+        const allowed = (item.branchGroups as (string | null)[]).includes(userBranchType ?? null);
+        if (!allowed) return false;
+      }
+
+      // For leaf-level items, check canView directly
+      if (item.href) return true; // Dashboard, always show
+
+      // For group items: show if at least one child is accessible (canView)
+      if (item.children) {
+        return item.children.some((child: any) =>
+          checkCanView(child.module, (user as any)?.hierarchyId, userLevel, allPerms as any[])
+        );
+      }
+      return true;
+    })
+    .map(item => {
+      if (isAdmin || !item.children) return item;
+      // Filter out children where canView is explicitly false
+      return {
+        ...item,
+        children: item.children.filter((child: any) =>
+          checkCanView(child.module, (user as any)?.hierarchyId, userLevel, allPerms as any[])
+        ),
+      };
+    })
+    .filter(item => !item.children || item.children.length > 0);
+
+  // ── Permission-filtered sales nav ───────────────────────────────────────────
+  const filteredSalesNavItems = salesNavItems.filter(item =>
+    isAdmin || checkCanView(item.module, (user as any)?.hierarchyId, userLevel, allPerms as any[])
+  );
+
+  // ── Sales segment access ────────────────────────────────────────────────────
+  const SALES_MODULES = ['Point of Sale', 'Location Stock', 'Location Transfers', 'Location Expenses', 'Cash Balance'];
+  const hasSalesAccess = isAdmin || isLocationEmployee || SALES_MODULES.some(mod => {
     const perm = (allPerms as any[]).find((p: any) => p.hierarchyId === (user as any)?.hierarchyId && p.module === mod);
-    // If no DB row yet, default to true for level ≤ 4 (same logic as defaultAccess)
     return perm ? !!(perm.canView || perm.canAdd || perm.canEdit) : userLevel <= 4;
   });
+
+  // Outlet employees only see Sales segment — hide the Accounts switcher button
+  const showAccountsSegment = !isOutletEmployee;
+  // Location-locked employees cannot change their location
+  const canChangeLocation = !isLocationEmployee;
 
   // Change-password dialog state
   const [pwOpen, setPwOpen] = useState(false);
@@ -341,7 +457,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           <div className="h-16 flex items-center justify-between px-4 border-b border-border shrink-0">
             {!collapsed && (
               logo ? (
-                <Link href="/" className="flex items-center h-10 max-w-[160px]">
+                <Link href={isOutletEmployee ? '/sales/pos' : '/'} className="flex items-center h-10 max-w-[160px]">
                   <img src={logo} alt="Company logo" className="h-full w-full object-contain object-left" />
                 </Link>
               ) : (
@@ -360,7 +476,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               </div>
             )}
 
-            {/* Collapse toggle — always visible */}
+            {/* Collapse toggle */}
             <button
               onClick={() => {
                 if (window.innerWidth < 768) {
@@ -376,18 +492,16 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             </button>
           </div>
 
-          {/* Segment switcher — only show Sales tab if user has Sales access */}
-          {!collapsed && (
+          {/* Segment switcher — only when both segments are accessible */}
+          {!collapsed && hasSalesAccess && showAccountsSegment && (
             <div className="px-3 pt-3 pb-1 shrink-0">
               <div className="flex gap-1 p-1 bg-muted/50 rounded-lg">
-                {hasSalesAccess && (
-                  <button
-                    onClick={() => setLocation('/sales')}
-                    className={`flex-1 flex items-center justify-center gap-1.5 text-xs py-1.5 rounded-md font-semibold transition-colors ${isSalesSegment ? 'bg-card shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-                  >
-                    <ShoppingCart className="w-3 h-3" /> Sales
-                  </button>
-                )}
+                <button
+                  onClick={() => setLocation('/sales')}
+                  className={`flex-1 flex items-center justify-center gap-1.5 text-xs py-1.5 rounded-md font-semibold transition-colors ${isSalesSegment ? 'bg-card shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                >
+                  <ShoppingCart className="w-3 h-3" /> Sales
+                </button>
                 <button
                   onClick={() => setLocation('/')}
                   className={`flex-1 flex items-center justify-center gap-1.5 text-xs py-1.5 rounded-md font-semibold transition-colors ${!isSalesSegment ? 'bg-card shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
@@ -398,9 +512,20 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             </div>
           )}
 
+          {/* Outlet employee: show "Sales" label (no switcher) */}
+          {!collapsed && isOutletEmployee && (
+            <div className="px-3 pt-3 pb-1 shrink-0">
+              <div className="flex gap-1 p-1 bg-muted/50 rounded-lg">
+                <div className="flex-1 flex items-center justify-center gap-1.5 text-xs py-1.5 rounded-md font-semibold bg-card shadow text-foreground">
+                  <ShoppingCart className="w-3 h-3" /> Sales
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Nav items */}
           <div className={`flex-1 overflow-y-auto py-4 space-y-1 ${collapsed ? 'px-[14px]' : 'px-3'}`}>
-            {isSalesSegment ? (
+            {isSalesSegment || isOutletEmployee ? (
               /* ── Sales segment sidebar ── */
               <>
                 {locationState.locationType ? (
@@ -420,12 +545,15 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                               : <Layers className="w-3.5 h-3.5 text-primary shrink-0" />}
                             <span className="text-sm font-semibold truncate">{locationState.locationName}</span>
                           </div>
-                          <Link href="/sales" className="text-[10px] text-primary hover:underline shrink-0">change</Link>
+                          {/* Only non-location-locked users can change their location */}
+                          {canChangeLocation && (
+                            <Link href="/sales" className="text-[10px] text-primary hover:underline shrink-0">change</Link>
+                          )}
                         </div>
                       </div>
                     )}
-                    {/* Sales sub-nav */}
-                    {salesNavItems.map(item => {
+                    {/* Sales sub-nav (permission filtered) */}
+                    {filteredSalesNavItems.map(item => {
                       const isActive = location === item.href;
                       if (collapsed) {
                         return (
@@ -467,11 +595,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 )}
               </>
             ) : (
-              /* ── Accounts segment sidebar (existing nav) ── */
-              navigation.map((item) => {
+              /* ── Accounts segment sidebar (permission + branch filtered) ── */
+              filteredNavigation.map((item) => {
                 const isActive = item.href
                   ? location === item.href
-                  : item.children?.some(c => location.startsWith(c.href));
+                  : item.children?.some((c: any) => location.startsWith(c.href));
                 return (
                   <NavItem
                     key={item.name}
@@ -491,7 +619,6 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           {/* Top Header */}
           <header className="h-16 bg-card border-b border-border flex items-center justify-between px-4 lg:px-8 z-40 sticky top-0">
             <div className="flex items-center gap-4">
-              {/* Mobile hamburger */}
               <Button
                 variant="ghost"
                 size="icon"
@@ -508,14 +635,12 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             </div>
 
             <div className="flex items-center gap-2 lg:gap-4">
-              {/* Company logo in header (visible on mobile when sidebar is hidden) */}
               {logo && (
                 <div className="md:hidden flex items-center h-8">
                   <img src={logo} alt="Company logo" className="h-full object-contain max-w-[100px]" />
                 </div>
               )}
 
-              {/* Theme toggle */}
               <Button
                 variant="ghost"
                 size="icon"
@@ -545,6 +670,12 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                     <div className="flex flex-col space-y-1">
                       <p className="text-sm font-medium leading-none">{user?.name}</p>
                       <p className="text-xs leading-none text-muted-foreground">{user?.email || user?.username}</p>
+                      {/* Show branch badge for location employees */}
+                      {userBranchType && userBranchName && (
+                        <p className="text-[10px] leading-none text-primary mt-1 capitalize">
+                          {userBranchType} · {userBranchName}
+                        </p>
+                      )}
                     </div>
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
@@ -558,12 +689,14 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                     <KeyRound className="mr-2 h-4 w-4" />
                     Change Password
                   </DropdownMenuItem>
-                  <DropdownMenuItem asChild>
-                    <Link href="/company/settings" className="cursor-pointer w-full flex items-center">
-                      <Settings className="mr-2 h-4 w-4" />
-                      Settings
-                    </Link>
-                  </DropdownMenuItem>
+                  {showAccountsSegment && (
+                    <DropdownMenuItem asChild>
+                      <Link href="/company/settings" className="cursor-pointer w-full flex items-center">
+                        <Settings className="mr-2 h-4 w-4" />
+                        Settings
+                      </Link>
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleLogout} className="text-destructive cursor-pointer">
                     <LogOut className="mr-2 h-4 w-4" />
