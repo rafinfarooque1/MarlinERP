@@ -50,6 +50,7 @@ import CashInOutlet from './pages/finance/CashInOutlet';
 import Reports from './pages/accounts/Reports';
 
 import LocationPicker from './pages/sales/LocationPicker';
+import ProfileMe from './pages/profile/ProfileMe';
 import SalesStock from './pages/sales/SalesStock';
 import SalesTransfers from './pages/sales/SalesTransfers';
 import SalesPOS from './pages/sales/SalesPOS';
@@ -153,6 +154,8 @@ function Router() {
       <Route path="/accounts/reconciliation"><AuthGuard><Reconciliation /></AuthGuard></Route>
       <Route path="/accounts/cash-in-outlet"><AuthGuard><CashInOutlet /></AuthGuard></Route>
       <Route path="/accounts/reports"><AuthGuard><Reports /></AuthGuard></Route>
+
+      <Route path="/profile/me"><AuthGuard><ProfileMe /></AuthGuard></Route>
 
       {/* Sales segment */}
       <Route path="/sales"><AuthGuard><LocationPicker /></AuthGuard></Route>

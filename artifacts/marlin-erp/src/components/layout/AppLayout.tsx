@@ -56,6 +56,15 @@ const navigation = [
     name: 'Dashboard',
     icon: LayoutDashboard,
     href: '/',
+    // Only show main Dashboard in Accounts segment for HO/warehouse employees
+    // Outlet employees are redirected to Sales segment anyway
+    branchGroups: ['warehouse', 'production', null],
+  },
+  {
+    name: 'My Profile',
+    icon: User,
+    href: '/profile/me',
+    // Always visible — every employee can access their own profile
   },
   {
     name: 'Production',
@@ -123,12 +132,12 @@ const navigation = [
   {
     name: 'Company',
     icon: Settings,
-    // Everyone can see Company (at least their own Profile)
+    // Company group — most items are admin-only (Settings module guards them)
     children: [
-      { name: 'Settings',    href: '/company/settings',     module: 'Settings'     },
-      { name: 'Profile',     href: '/company/profile',      module: 'Profile'      },
-      { name: 'Permissions', href: '/company/permissions',  module: 'Permissions'  },
-      { name: 'Audit Log',   href: '/company/audit',        module: 'Settings'     },
+      { name: 'Settings',         href: '/company/settings',     module: 'Settings'     },
+      { name: 'Company Profile',  href: '/company/profile',      module: 'Settings'     },
+      { name: 'Permissions',      href: '/company/permissions',  module: 'Permissions'  },
+      { name: 'Audit Log',        href: '/company/audit',        module: 'Settings'     },
     ],
   },
 ];
@@ -680,9 +689,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem asChild>
-                    <Link href="/company/profile" className="cursor-pointer w-full flex items-center">
+                    <Link href="/profile/me" className="cursor-pointer w-full flex items-center">
                       <User className="mr-2 h-4 w-4" />
-                      Profile
+                      My Profile
                     </Link>
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={openChangePw} className="cursor-pointer">

@@ -1,7 +1,8 @@
+import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from 'wouter';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { customFetch } from '@workspace/api-client-react';
+import { customFetch, useGetMe } from '@workspace/api-client-react';
 import { useLocationContext } from '@/lib/locationContext';
 import { buildPickerHierarchy } from '@/lib/locationHierarchy';
 import { MapPin, Warehouse, Store, ChevronRight, Layers } from 'lucide-react';
@@ -9,6 +10,10 @@ import { MapPin, Warehouse, Store, ChevronRight, Layers } from 'lucide-react';
 export default function LocationPicker() {
   const [, navigate] = useLocation();
   const { setLocation } = useLocationContext();
+  const { data: user } = useGetMe();
+
+  const userBranchType = (user as any)?.branchType as 'warehouse' | 'outlet' | null | undefined;
+  const userBranchId   = (user as any)?.branchId   as number | null | undefined;
 
   const { data: warehouses = [], isLoading: wLoading } = useQuery<any[]>({
     queryKey: ['warehouses'],
@@ -19,8 +24,30 @@ export default function LocationPicker() {
     queryFn: () => customFetch('/api/outlets'),
   });
 
+  // ── Outlet employees: skip the picker entirely ────────────────────────────
+  useEffect(() => {
+    if (userBranchType === 'outlet' && userBranchId) {
+      navigate('/sales/pos');
+    }
+  }, [userBranchType, userBranchId, navigate]);
+
   const isLoading = wLoading || oLoading;
-  const { nodes, orphanOutlets } = buildPickerHierarchy(warehouses, outlets);
+
+  // ── Filter locations by employee's assigned branch ────────────────────────
+  // Warehouse employees: show only their warehouse + its child outlets
+  // HO / admin: show all
+  const isWarehouseEmployee = userBranchType === 'warehouse';
+
+  const visibleWarehouses = isWarehouseEmployee
+    ? warehouses.filter(w => w.id === userBranchId)
+    : warehouses;
+
+  const visibleOutlets = isWarehouseEmployee
+    ? outlets.filter(o => o.warehouseId === userBranchId)
+    : outlets;
+
+  const { nodes, orphanOutlets } = buildPickerHierarchy(visibleWarehouses, visibleOutlets);
+  const totalCount = visibleWarehouses.length + visibleOutlets.length;
 
   const handleSelect = (locationType: 'warehouse' | 'outlet', locationId: number, locationName: string) => {
     setLocation({ locationType, locationId, locationName });
@@ -32,8 +59,6 @@ export default function LocationPicker() {
     navigate('/sales/dashboard');
   };
 
-  const totalCount = warehouses.length + outlets.length;
-
   return (
     <AppLayout>
       <div className="max-w-2xl mx-auto space-y-4">
@@ -43,7 +68,9 @@ export default function LocationPicker() {
             Select Selling Location
           </h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            Choose the warehouse or outlet you are selling from today.
+            {isWarehouseEmployee
+              ? 'Choose the outlet you are selling from today.'
+              : 'Choose the warehouse or outlet you are selling from today.'}
           </p>
         </div>
 
@@ -56,8 +83,8 @@ export default function LocationPicker() {
         ) : (
           <div className="space-y-2">
 
-            {/* ── All Locations ── */}
-            {totalCount > 0 && (
+            {/* ── All Locations — only for HO/admin employees ── */}
+            {!isWarehouseEmployee && totalCount > 0 && (
               <button
                 onClick={handleSelectAll}
                 className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl bg-primary/5 border-2 border-primary/20 hover:border-primary/50 hover:bg-primary/10 transition-all text-left group"
@@ -114,8 +141,8 @@ export default function LocationPicker() {
               </div>
             ))}
 
-            {/* ── Orphan outlets (no parent warehouse) ── */}
-            {orphanOutlets.length > 0 && (
+            {/* ── Orphan outlets (no parent warehouse) — only for HO employees ── */}
+            {!isWarehouseEmployee && orphanOutlets.length > 0 && (
               <div className="space-y-1">
                 <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground px-1 pt-2">
                   Other Outlets

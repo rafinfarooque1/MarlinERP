@@ -493,6 +493,15 @@ async function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_outlets_warehouse
       ON outlets(warehouse_id);
   `);
+
+  // ── Employee personal profile fields ──────────────────────────────────────
+  await pool.query(`
+    ALTER TABLE employees ADD COLUMN IF NOT EXISTS education       jsonb DEFAULT '[]'::jsonb;
+    ALTER TABLE employees ADD COLUMN IF NOT EXISTS emergency_contact jsonb;
+    ALTER TABLE employees ADD COLUMN IF NOT EXISTS personal_address  text;
+    ALTER TABLE employees ADD COLUMN IF NOT EXISTS date_of_birth     text;
+    ALTER TABLE employees ADD COLUMN IF NOT EXISTS bio               text;
+  `);
 }
 
 const rawPort = process.env["PORT"];

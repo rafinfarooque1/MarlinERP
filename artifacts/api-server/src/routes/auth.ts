@@ -62,6 +62,12 @@ async function buildEmployeeResponse(emp: Record<string, any>) {
     photoUrl:         emp.photoUrl ?? emp.photo_url ?? null,
     isActive:         emp.isActive ?? emp.is_active,
     mustChangePassword: emp.mustChangePassword ?? emp.must_change_password ?? false,
+    // Personal profile fields
+    education:        emp.education ?? [],
+    emergencyContact: emp.emergency_contact ?? null,
+    personalAddress:  emp.personal_address ?? null,
+    dateOfBirth:      emp.date_of_birth ?? null,
+    bio:              emp.bio ?? null,
   };
 }
 
@@ -218,7 +224,9 @@ router.get('/auth/me', async (req, res): Promise<void> => {
     const { rows } = await pool.query(
       `SELECT id, name, username, email, phone, hierarchy_id, branch_type, branch_id,
               salary, join_date, photo_url, is_active,
-              COALESCE(must_change_password, false) AS must_change_password
+              COALESCE(must_change_password, false) AS must_change_password,
+              COALESCE(education, '[]'::jsonb) AS education,
+              emergency_contact, personal_address, date_of_birth, bio
        FROM employees WHERE id = $1 LIMIT 1`,
       [empId],
     );
@@ -230,6 +238,57 @@ router.get('/auth/me', async (req, res): Promise<void> => {
   } catch {
     res.status(401).json({ error: 'Invalid token' });
   }
+});
+
+// ── PATCH /auth/profile — employee updates their own profile ──────────────────
+router.patch('/auth/profile', async (req, res): Promise<void> => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) { res.status(401).json({ error: 'Authentication required' }); return; }
+  const token = authHeader.slice(7);
+  let empId: number;
+  try {
+    empId = parseInt(Buffer.from(token, 'base64').toString('utf-8').split(':')[0], 10);
+    if (isNaN(empId)) throw new Error('bad token');
+  } catch {
+    res.status(401).json({ error: 'Invalid token' }); return;
+  }
+
+  const { name, phone, email, photoUrl, education, emergencyContact, personalAddress, dateOfBirth, bio } = req.body as Record<string, any>;
+
+  const sets: string[] = [];
+  const vals: any[] = [];
+  const add = (col: string, val: any) => { sets.push(`${col}=$${vals.length + 1}`); vals.push(val); };
+
+  if (name           !== undefined) add('name', name);
+  if (phone          !== undefined) add('phone', phone);
+  if (email          !== undefined) add('email', email);
+  if (photoUrl       !== undefined) add('photo_url', photoUrl);
+  if (education      !== undefined) add('education', JSON.stringify(education));
+  if (emergencyContact !== undefined) add('emergency_contact', JSON.stringify(emergencyContact));
+  if (personalAddress !== undefined) add('personal_address', personalAddress);
+  if (dateOfBirth    !== undefined) add('date_of_birth', dateOfBirth);
+  if (bio            !== undefined) add('bio', bio);
+
+  if (sets.length === 0) { res.status(400).json({ error: 'No fields to update' }); return; }
+
+  vals.push(empId);
+  const { rows } = await pool.query(
+    `UPDATE employees SET ${sets.join(', ')} WHERE id=$${vals.length}
+     RETURNING id, name, username, email, phone, hierarchy_id, branch_type, branch_id,
+               salary, join_date, photo_url, is_active,
+               COALESCE(must_change_password, false) AS must_change_password,
+               COALESCE(education, '[]'::jsonb) AS education,
+               emergency_contact, personal_address, date_of_birth, bio`,
+    vals,
+  );
+  if (!rows[0]) { res.status(404).json({ error: 'Employee not found' }); return; }
+
+  logActivity({
+    action: 'UPDATE', module: 'auth', entityType: 'employee', entityId: empId,
+    description: `Employee updated own profile (fields: ${Object.keys(req.body).join(', ')})`,
+  }).catch(() => {});
+
+  res.json(await buildEmployeeResponse(rows[0]));
 });
 
 export default router;
