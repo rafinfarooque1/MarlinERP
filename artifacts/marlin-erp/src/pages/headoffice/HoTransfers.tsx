@@ -263,7 +263,7 @@ export default function HoTransfers() {
 
   const { data: fromStock = [] } = useListStock(
     { branchType: watchFromType as any, branchId: watchFromId },
-    { query: { enabled: !!watchFromId && watchFromId > 0 } }
+    { query: { enabled: !!watchFromId && watchFromId > 0 } as any }
   );
 
   const stockMap = new Map<number, number>(

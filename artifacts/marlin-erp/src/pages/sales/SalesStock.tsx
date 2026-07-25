@@ -25,7 +25,7 @@ export default function SalesStock() {
   // Fetch all stock for 'all' / 'warehouse' modes; specific otherwise
   const { data: allStock = [], isLoading } = useListStock(
     isSpecific ? { branchType: locationType as any, branchId: locationId! } : {},
-    { query: { enabled: isAll || isWarehouse || isSpecific } }
+    { query: { enabled: isAll || isWarehouse || isSpecific } as any }
   );
 
   const { data: items = [] } = useListItems();

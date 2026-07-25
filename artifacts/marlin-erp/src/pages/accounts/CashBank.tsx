@@ -48,7 +48,7 @@ export default function CashBank() {
   };
 
   const filtered = accounts.filter(a => a.name?.toLowerCase().includes(search.toLowerCase()) || a.bankName?.toLowerCase().includes(search.toLowerCase()));
-  const totalBalance = filtered.reduce((s, a) => s + Number(a.currentBalance || 0), 0);
+  const totalBalance = filtered.reduce((s, a) => s + Number((a as any).currentBalance || 0), 0);
 
   const typeColor = (t: string) => t === 'cash' ? 'bg-emerald-500/10 text-emerald-500' : t === 'bank' ? 'bg-primary/10 text-primary' : t === 'upi' ? 'bg-purple-500/10 text-purple-500' : 'bg-muted';
 
@@ -61,7 +61,7 @@ export default function CashBank() {
             <p className="text-muted-foreground mt-1">Payment account balances and details</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('cash-bank.csv', filtered.map(a => ({ Name: a.name, Type: a.accountType, Bank: a.bankName || '', 'Account No': a.accountNumber || '', Balance: a.currentBalance || 0 })))}>
+            <Button variant="outline" size="sm" onClick={() => downloadCSV('cash-bank.csv', filtered.map(a => ({ Name: a.name, Type: a.accountType, Bank: a.bankName || '', 'Account No': a.accountNumber || '', Balance: (a as any).currentBalance || 0 })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
             <Button onClick={() => { form.reset(); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Account</Button>
@@ -107,7 +107,7 @@ export default function CashBank() {
                   <TableCell><Badge variant="outline" className={`capitalize ${typeColor(a.accountType)}`}>{a.accountType}</Badge></TableCell>
                   <TableCell className="text-sm text-muted-foreground">{a.bankName || '—'}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{a.accountNumber || '—'}</TableCell>
-                  <TableCell className="text-right font-mono font-bold text-primary text-lg">₹{Number(a.currentBalance || 0).toLocaleString('en-IN')}</TableCell>
+                  <TableCell className="text-right font-mono font-bold text-primary text-lg">₹{Number((a as any).currentBalance || 0).toLocaleString('en-IN')}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

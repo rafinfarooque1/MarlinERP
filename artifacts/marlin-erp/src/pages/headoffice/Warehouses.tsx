@@ -49,8 +49,8 @@ export default function Warehouses() {
       onSuccess: () => { toast.success(editingId ? 'Warehouse updated' : 'Warehouse added'); queryClient.invalidateQueries({ queryKey: getListWarehousesQueryKey() }); setIsOpen(false); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     };
-    if (editingId) updateMutation.mutate({ id: editingId, data }, opts);
-    else createMutation.mutate({ data }, opts);
+    if (editingId) updateMutation.mutate({ id: editingId, data: data as any }, opts);
+    else createMutation.mutate({ data: data as any }, opts);
   };
 
   const handleDelete = (id: number, name: string) => {

@@ -36,7 +36,7 @@ function ActionBadge({ action }: { action: string }) {
     UPDATE: 'bg-blue-500/10   text-blue-600   border-blue-500/20',
     DELETE: 'bg-red-500/10    text-red-600    border-red-500/20',
   };
-  const icons: Record<string, JSX.Element> = {
+  const icons: Record<string, React.ReactElement> = {
     CREATE: <Plus  className="w-3 h-3 mr-1" />,
     UPDATE: <Pencil className="w-3 h-3 mr-1" />,
     DELETE: <Trash2 className="w-3 h-3 mr-1" />,

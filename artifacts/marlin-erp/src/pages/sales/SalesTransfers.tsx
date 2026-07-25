@@ -244,7 +244,7 @@ export default function SalesTransfers() {
   // Stock available at this location
   const { data: fromStock = [] } = useListStock(
     { branchType: locationType as any, branchId: locationId! },
-    { query: { enabled: !!locationType && !!locationId } }
+    { query: { enabled: !!locationType && !!locationId } as any }
   );
   const stockMap = new Map<number, number>(
     (fromStock as any[]).map((s: any) => [s.itemId, Number(s.quantity ?? 0)])

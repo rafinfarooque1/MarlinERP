@@ -77,7 +77,7 @@ export default function SalesCashBalance() {
         depositReference: depRef || undefined,
         destinationBankLedgerId: depBankId ? Number(depBankId) : undefined,
         notes: depNotes || undefined,
-      });
+      } as any);
       toast.success('Cash deposit recorded');
       setShowDeposit(false);
       refetch();

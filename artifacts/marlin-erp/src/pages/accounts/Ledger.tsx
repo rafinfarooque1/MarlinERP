@@ -18,7 +18,7 @@ export default function Ledger() {
 
   const { data: statement, isLoading } = useGetLedgerStatement(
     accountId && fromDate && toDate ? { accountId: Number(accountId), fromDate, toDate } : { accountId: 0, fromDate, toDate },
-    { query: { enabled: !!accountId } }
+    { query: { enabled: !!accountId } as any }
   );
 
   const entries = (statement as any)?.entries || (statement as any)?.transactions || [];

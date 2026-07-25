@@ -159,7 +159,7 @@ export default function CashBalance() {
         depositReference: depRef || undefined,
         destinationBankLedgerId: depBankLedgerId ? Number(depBankLedgerId) : undefined,
         notes: depNotes || undefined,
-      });
+      } as any);
       toast.success('Cash deposit recorded');
       setShowDeposit(false);
       setDepLocationUid(''); setDepAmount(''); setDepRef(''); setDepNotes(''); setDepBankLedgerId('');

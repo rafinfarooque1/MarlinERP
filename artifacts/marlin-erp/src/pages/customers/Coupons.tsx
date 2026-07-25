@@ -50,7 +50,7 @@ export default function Coupons() {
   };
 
   const now = new Date();
-  const isActive = (c: any) => new Date(c.validFrom) <= now && new Date(c.validTo) >= now && (c.usedCount || 0) < (c.maxUses || 999);
+  const isActive = (c: any) => new Date(c.validFrom ?? c.expiryDate) <= now && new Date(c.validTo ?? c.expiryDate) >= now && (c.usageCount || c.usedCount || 0) < (c.maxUses || 999);
   const filtered = coupons.filter(c => c.code.toLowerCase().includes(search.toLowerCase()));
 
   return (
@@ -62,7 +62,7 @@ export default function Coupons() {
             <p className="text-muted-foreground mt-1">Discount codes and promotional offers</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('coupons.csv', filtered.map(c => ({ Code: c.code, Type: c.discountType, Value: c.discountValue, MinPurchase: c.minPurchase || 0, MaxUses: c.maxUses, Used: c.usedCount || 0, ValidFrom: c.validFrom, ValidTo: c.validTo })))}>
+            <Button variant="outline" size="sm" onClick={() => downloadCSV('coupons.csv', (filtered as any[]).map(c => ({ Code: c.code, Type: c.discountType, Value: c.discountValue, MinPurchase: c.minPurchase || 0, MaxUses: c.maxUses, Used: c.usageCount || c.usedCount || 0, ValidFrom: c.validFrom, ValidTo: c.validTo })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
             <Button onClick={() => { form.reset({ code: '', discountType: 'percent', discountValue: 10, minPurchase: 0, maxUses: 100, validFrom: new Date().toISOString().split('T')[0], validTo: '' }); setIsOpen(true); }}>
@@ -99,11 +99,11 @@ export default function Coupons() {
                 <TableRow key={c.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono font-bold text-primary tracking-wider">{c.code}</TableCell>
                   <TableCell className="font-bold text-emerald-500">
-                    {c.discountType === 'percent' ? `${c.discountValue}% OFF` : `₹${c.discountValue} OFF`}
+                    {(c as any).discountType === 'percent' ? `${(c as any).discountValue}% OFF` : `₹${(c as any).discountValue} OFF`}
                   </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">₹{Number(c.minPurchase || 0).toLocaleString()}</TableCell>
-                  <TableCell className="text-sm">{c.usedCount || 0} / {c.maxUses}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{c.validTo ? new Date(c.validTo).toLocaleDateString('en-IN') : '—'}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">₹{Number((c as any).minPurchase || 0).toLocaleString()}</TableCell>
+                  <TableCell className="text-sm">{(c as any).usageCount ?? (c as any).usedCount ?? 0} / {(c as any).maxUses ?? '∞'}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{(c as any).validTo ? new Date((c as any).validTo).toLocaleDateString('en-IN') : '—'}</TableCell>
                   <TableCell>
                     {isActive(c)
                       ? <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">Active</Badge>

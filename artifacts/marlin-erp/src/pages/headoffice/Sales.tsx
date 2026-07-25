@@ -136,7 +136,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       )
     : allSales;
   // When operating inside a specific location (Sales segment), scope customers to that location only
-  const { data: customers = [] } = useQuery({
+  const { data: customers = [] } = useQuery<any[]>({
     queryKey: ['customers', forceLocationType, forceLocationId],
     queryFn: () => forceLocationType && forceLocationId
       ? customFetch(`/api/customers?locationType=${forceLocationType}&locationId=${forceLocationId}`)
@@ -266,11 +266,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
 
   const { data: outletPrices = [] } = useListItemPrices(
     { outletId: watchLocationId },
-    { query: { enabled: watchLocationType === 'outlet' && !!watchLocationId && watchLocationId > 0 } }
+    { query: { enabled: watchLocationType === 'outlet' && !!watchLocationId && watchLocationId > 0 } as any }
   );
   const { data: locationStock = [] } = useListStock(
     { branchType: (watchLocationType ?? 'outlet') as any, branchId: watchLocationId },
-    { query: { enabled: !!watchLocationId && watchLocationId > 0 } }
+    { query: { enabled: !!watchLocationId && watchLocationId > 0 } as any }
   );
 
   const stockMap = new Map<number, number>(locationStock.map(s => [s.itemId!, Number(s.quantity ?? 0)]));
