@@ -37,6 +37,7 @@ import Ledger from './pages/accounts/Ledger';
 import CashBank from './pages/accounts/CashBank';
 import Expenses from './pages/accounts/Expenses';
 import GstSummary from './pages/accounts/GstSummary';
+import GstReturns from './pages/accounts/GstReturns';
 import Payment from './pages/accounts/Payment';
 import ReceiptPage from './pages/accounts/Receipt';
 import Journal from './pages/accounts/Journal';
@@ -156,6 +157,7 @@ function Router() {
       <Route path="/accounts/bank-book"><AuthGuard><CashBankBook kind="bank" /></AuthGuard></Route>
       <Route path="/accounts/trial-balance"><AuthGuard><TrialBalance /></AuthGuard></Route>
       <Route path="/accounts/gst"><AuthGuard><GstSummary /></AuthGuard></Route>
+      <Route path="/accounts/gst-returns"><AuthGuard><GstReturns /></AuthGuard></Route>
 
       <Route path="/production/item-master"><AuthGuard><ItemMaster /></AuthGuard></Route>
 

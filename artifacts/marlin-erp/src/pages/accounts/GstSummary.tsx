@@ -18,6 +18,7 @@ export default function GstSummary() {
 
   const salesData: any[] = (gst as any)?.salesByRate || [];
   const purchasesData: any[] = (gst as any)?.purchasesByRate || [];
+  const monthWise: any[] = (gst as any)?.monthWise || [];
 
   const totalOutputTax = salesData.reduce((s: number, r: any) => s + Number(r.taxAmount || 0), 0);
   const totalInputTax = purchasesData.reduce((s: number, r: any) => s + Number(r.taxAmount || 0), 0);
@@ -144,14 +145,15 @@ export default function GstSummary() {
                   <TableHead className="text-right">Purchase Value</TableHead>
                   <TableHead className="text-right">CGST</TableHead>
                   <TableHead className="text-right">SGST</TableHead>
+                  <TableHead className="text-right">IGST</TableHead>
                   <TableHead className="text-right">Total Tax</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {isLoading ? (
-                  <TableRow><TableCell colSpan={5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                  <TableRow><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
                 ) : purchasesData.length === 0 ? (
-                  <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground text-sm">
+                  <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground text-sm">
                     No purchase data in this period
                   </TableCell></TableRow>
                 ) : purchasesData.map((r: any, i: number) => (
@@ -170,12 +172,54 @@ export default function GstSummary() {
                     <TableCell className="text-right font-mono text-xs">{fmt(Number(r.taxableValue))}</TableCell>
                     <TableCell className="text-right font-mono text-xs">{fmt(Number(r.cgst))}</TableCell>
                     <TableCell className="text-right font-mono text-xs">{fmt(Number(r.sgst))}</TableCell>
+                    <TableCell className="text-right font-mono text-xs">{fmt(Number(r.igst ?? 0))}</TableCell>
                     <TableCell className="text-right font-mono font-bold text-primary">{fmt(Number(r.taxAmount))}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           </div>
+        </div>
+
+        {/* Month-wise Breakdown */}
+        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-border bg-muted/20">
+            <h3 className="font-semibold flex items-center gap-2"><Receipt className="w-4 h-4 text-primary" /> Month-wise Breakdown</h3>
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/10">
+                <TableHead>Month</TableHead>
+                <TableHead className="text-right">Output Taxable</TableHead>
+                <TableHead className="text-right">Output Tax</TableHead>
+                <TableHead className="text-right">Input Taxable</TableHead>
+                <TableHead className="text-right">Input Tax</TableHead>
+                <TableHead className="text-right">Net GST</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                <TableRow><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+              ) : monthWise.length === 0 ? (
+                <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground text-sm">
+                  No activity in this period
+                </TableCell></TableRow>
+              ) : monthWise.map((m: any) => (
+                <TableRow key={m.month} className="hover:bg-muted/10">
+                  <TableCell className="text-sm font-medium">
+                    {new Date(`${m.month}-01T00:00:00`).toLocaleString('en-IN', { month: 'short', year: 'numeric' })}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-xs">{fmt(Number(m.outputTaxable))}</TableCell>
+                  <TableCell className="text-right font-mono text-xs text-emerald-500">{fmt(Number(m.outputTax))}</TableCell>
+                  <TableCell className="text-right font-mono text-xs">{fmt(Number(m.inputTaxable))}</TableCell>
+                  <TableCell className="text-right font-mono text-xs text-primary">{fmt(Number(m.inputTax))}</TableCell>
+                  <TableCell className={`text-right font-mono text-xs font-bold ${Number(m.netGst) > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                    {fmt(Number(m.netGst))}{Number(m.netGst) < 0 ? ' (credit)' : ''}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </div>
       </div>
     </AppLayout>

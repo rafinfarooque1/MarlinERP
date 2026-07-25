@@ -4,7 +4,11 @@ description: Full stack ERP for Marlin Frozen Fruits — api-server + marlin-erp
 ---
 
 ## Login
-- username: admin, password: marlin1458 (bcrypt; see security-hardening.md)
+- username: admin; dev password = the DEFAULT_INITIAL_PASSWORD constant in artifacts/api-server/src/lib/passwordPolicy.ts (read it from code — never store the value in memory files)
+- curl testing: POST /api/auth/login → use `Authorization: Bearer <token>` (cookie auth does NOT work from curl); JWTs survive server restarts
+
+## Router mounting trap
+- ALL routers in routes/index.ts mount FLAT under /api with no per-router prefix — accounts.ts's `/gst/summary` is `/api/gst/summary` (NOT /api/accounts/...), sharing the namespace with routes/gst.ts. Check index.ts before assuming a path; collisions are silent.
 
 ## Dev workflow quirk
 - api-server dev workflow runs `pnpm run build && pnpm run start` (esbuild bundle) — NO watch/HMR; must restart the workflow to pick up backend changes
@@ -56,7 +60,7 @@ description: Full stack ERP for Marlin Frozen Fruits — api-server + marlin-erp
 
 ## Navigation (current)
 - Production: Units, Item Master, BOM Templates, Batches, Stock Transfers, Purchases
-- Accounts: Chart of Accounts, Ledger, Payments, Receipts, GST Summary
+- Accounts: Chart of Accounts, Ledger, Payments, Receipts, GST Summary, GST Returns (/accounts/gst-returns — HSN, GSTR-1, GSTR-3B, reconciliation)
 - Old: Cash & Bank and Expenses removed from sidebar (routes kept for backward compat)
 
 ## Item Master page (/production/item-master)

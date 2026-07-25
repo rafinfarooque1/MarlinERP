@@ -351,6 +351,27 @@ async function runMigrations() {
     }
   }
 
+  // ── GST ledgers under Duty & Tax (Output = liability, Input = ITC asset) ──
+  const gstLedgers: [string, string, string, string][] = [
+    ['Output CGST', 'liability', 'STD-OUT-CGST', 'CGST collected on sales (output tax)'],
+    ['Output SGST', 'liability', 'STD-OUT-SGST', 'SGST collected on sales (output tax)'],
+    ['Output IGST', 'liability', 'STD-OUT-IGST', 'IGST collected on inter-state sales (output tax)'],
+    ['Input CGST',  'asset',     'STD-INP-CGST', 'CGST paid on purchases (input tax credit)'],
+    ['Input SGST',  'asset',     'STD-INP-SGST', 'SGST paid on purchases (input tax credit)'],
+    ['Input IGST',  'asset',     'STD-INP-IGST', 'IGST paid on inter-state purchases (input tax credit)'],
+  ];
+  const { rows: [dtxParent] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = 'STD-DTX'`);
+  if (dtxParent) {
+    for (const [name, type, code, desc] of gstLedgers) {
+      await pool.query(
+        `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_system_group, description)
+         SELECT $1, $2, $3, 'balance_sheet', $4, false, $5
+         WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $3)`,
+        [name, type, code, dtxParent.id, desc],
+      );
+    }
+  }
+
   // ── Per-outlet cash ledgers (provision at startup, idempotent) ──────────
   const { rows: allOutlets } = await pool.query(`SELECT id, name FROM outlets ORDER BY id`);
   const { rows: [cashRootRow] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = 'STD-CASH'`);

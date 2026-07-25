@@ -9,6 +9,7 @@ export * from "./audit";
 export * from "./production";
 export * from "./vouchers";
 export * from "./journal";
+export * from "./gst";
 export * from "./transfers";
 export * from "./payments-reconciliation";
 export * from "./location-expenses";

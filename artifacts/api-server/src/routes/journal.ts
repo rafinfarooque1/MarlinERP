@@ -2,6 +2,7 @@ import { Router } from "express";
 import { pool } from "@workspace/db";
 import { nextVoucherNumber, VOUCHER_TYPE_LABELS } from "../lib/voucherNumber";
 import { logActivity } from "../lib/audit";
+import { lineTaxHeads } from "../lib/gst";
 
 const router = Router();
 
@@ -284,7 +285,7 @@ interface Posting {
   description: string;
 }
 
-async function buildDerivedPostings(opts: { toDate?: string } = {}): Promise<Posting[]> {
+export async function buildDerivedPostings(opts: { toDate?: string } = {}): Promise<Posting[]> {
   const { toDate } = opts;
   const postings: Posting[] = [];
   const push = (p: Posting) => {
@@ -381,12 +382,15 @@ async function buildDerivedPostings(opts: { toDate?: string } = {}): Promise<Pos
     push({ date: r.date, ledgerId: creditLedger, debit: 0, credit: amt, source: "expense", voucherNumber: null, description: desc });
   }
 
-  // 5. Sales: Cr sales ledger (net) + Cr Duty & Tax (GST); Dr cash/clearing via
+  // 5. Sales: Cr sales ledger (net) + Cr Output GST (split CGST/SGST/IGST when
+  //    line detail exists, else Duty & Tax lump); Dr cash/clearing via
   //    sale_payments; Dr customer ledger for any unpaid remainder.
+  const outCgst = byCode.get("STD-OUT-CGST")?.id, outSgst = byCode.get("STD-OUT-SGST")?.id, outIgst = byCode.get("STD-OUT-IGST")?.id;
+  const inpCgst = byCode.get("STD-INP-CGST")?.id, inpSgst = byCode.get("STD-INP-SGST")?.id, inpIgst = byCode.get("STD-INP-IGST")?.id;
   const sp: any[] = [];
   const { rows: sales } = await pool.query(
     `SELECT id, invoice_number, sale_date, total_amount, tax_total, amount_paid,
-            payment_mode, customer_id, location_type, location_id
+            payment_mode, customer_id, location_type, location_id, line_items
      FROM sales WHERE 1=1${upTo("sale_date", sp)}`, sp
   );
   const spp: any[] = [];
@@ -411,7 +415,23 @@ async function buildDerivedPostings(opts: { toDate?: string } = {}): Promise<Pos
     const cashLedger = loc?.cash_ledger_id ?? stdCash;
 
     push({ date: s.sale_date, ledgerId: salesLedger, debit: 0, credit: net, source: "sale", voucherNumber: s.invoice_number, description: `Sales ${inv}` });
-    if (tax > 0) push({ date: s.sale_date, ledgerId: stdDtx, debit: 0, credit: tax, source: "sale", voucherNumber: s.invoice_number, description: `GST on ${inv}` });
+    if (tax > 0) {
+      const sLines = (s.line_items ?? []) as any[];
+      let cg = 0, sg = 0, ig = 0;
+      for (const li of sLines) { const h = lineTaxHeads(li); cg += h.cgst; sg += h.sgst; ig += h.igst; }
+      cg = round2(cg); sg = round2(sg); ig = round2(ig);
+      const split = round2(cg + sg + ig);
+      if (outCgst && outSgst && outIgst && split > 0.004 && Math.abs(split - tax) <= 0.05) {
+        if (cg > 0.004) push({ date: s.sale_date, ledgerId: outCgst, debit: 0, credit: cg, source: "sale", voucherNumber: s.invoice_number, description: `Output CGST — ${inv}` });
+        if (sg > 0.004) push({ date: s.sale_date, ledgerId: outSgst, debit: 0, credit: sg, source: "sale", voucherNumber: s.invoice_number, description: `Output SGST — ${inv}` });
+        if (ig > 0.004) push({ date: s.sale_date, ledgerId: outIgst, debit: 0, credit: ig, source: "sale", voucherNumber: s.invoice_number, description: `Output IGST — ${inv}` });
+        const resid = round2(tax - split);
+        if (resid > 0.004) push({ date: s.sale_date, ledgerId: stdDtx, debit: 0, credit: resid, source: "sale", voucherNumber: s.invoice_number, description: `GST rounding — ${inv}` });
+        else if (resid < -0.004) push({ date: s.sale_date, ledgerId: stdDtx, debit: -resid, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `GST rounding — ${inv}` });
+      } else {
+        push({ date: s.sale_date, ledgerId: stdDtx, debit: 0, credit: tax, source: "sale", voucherNumber: s.invoice_number, description: `GST on ${inv}` });
+      }
+    }
 
     let paidViaSp = 0;
     for (const p of spBySale.get(s.id) ?? []) {
@@ -435,17 +455,39 @@ async function buildDerivedPostings(opts: { toDate?: string } = {}): Promise<Pos
     }
   }
 
-  // 6. Purchases: Dr Purchases / Cr vendor ledger
+  // 6. Purchases: Dr Purchases (taxable + round-off) + Dr Input GST / Cr vendor.
+  //    Legacy rows without line-level GST detail stay as a single lump debit.
   const pup: any[] = [];
   const { rows: purchases } = await pool.query(
-    `SELECT id, vendor_id, purchase_date, invoice_number, total_amount
+    `SELECT id, vendor_id, purchase_date, invoice_number, total_amount, tax_total, line_items
      FROM purchases WHERE 1=1${upTo("purchase_date", pup)}`, pup
   );
   for (const p of purchases) {
     const amt = Number(p.total_amount);
     const bill = p.invoice_number || `Purchase #${p.id}`;
     const vendLedger = byCode.get(`VEND-${p.vendor_id}`)?.id ?? creditors;
-    push({ date: p.purchase_date, ledgerId: stdPur, debit: amt, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}` });
+    const pLines = (p.line_items ?? []) as any[];
+    let cg = 0, sg = 0, ig = 0;
+    for (const li of pLines) { const h = lineTaxHeads(li); cg += h.cgst; sg += h.sgst; ig += h.igst; }
+    cg = round2(cg); sg = round2(sg); ig = round2(ig);
+    const inputTax = round2(cg + sg + ig);
+    // Split only when the head split is internally consistent: per-line heads
+    // must agree with the per-line taxAmount sum, and with the stored document
+    // tax_total when one exists (legacy purchases have tax_total = 0).
+    // Anything inconsistent keeps the legacy lump posting.
+    const lineTaxSum = round2(pLines.reduce((a, li) => a + Number(li?.taxAmount ?? 0), 0));
+    const pTaxTotal = Number(p.tax_total ?? 0);
+    const consistent =
+      (lineTaxSum <= 0.004 || Math.abs(inputTax - lineTaxSum) <= 0.05) &&
+      (pTaxTotal <= 0.004 || Math.abs(inputTax - pTaxTotal) <= 0.05);
+    if (inpCgst && inpSgst && inpIgst && inputTax > 0.004 && inputTax < amt && consistent) {
+      push({ date: p.purchase_date, ledgerId: stdPur, debit: round2(amt - inputTax), credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}` });
+      if (cg > 0.004) push({ date: p.purchase_date, ledgerId: inpCgst, debit: cg, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Input CGST — ${bill}` });
+      if (sg > 0.004) push({ date: p.purchase_date, ledgerId: inpSgst, debit: sg, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Input SGST — ${bill}` });
+      if (ig > 0.004) push({ date: p.purchase_date, ledgerId: inpIgst, debit: ig, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Input IGST — ${bill}` });
+    } else {
+      push({ date: p.purchase_date, ledgerId: stdPur, debit: amt, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}` });
+    }
     push({ date: p.purchase_date, ledgerId: vendLedger, debit: 0, credit: amt, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}` });
   }
 

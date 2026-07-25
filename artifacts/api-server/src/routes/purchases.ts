@@ -3,6 +3,7 @@ import { db, purchasesTable, vendorsTable, materialsTable, rawMaterialsTable, it
 import { eq, sql } from "drizzle-orm";
 import { CreatePurchaseBody, GetPurchaseParams } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
+import { isValidGstSlab, gstSlabErrorMessage } from "../lib/gst";
 
 const router = Router();
 
@@ -66,6 +67,12 @@ router.post("/purchases", async (req, res): Promise<void> => {
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
   const rawLineItems = (req.body.lineItems || []) as any[];
+  for (const li of rawLineItems) {
+    if (!isValidGstSlab(li.gstRate ?? 0)) {
+      res.status(400).json({ error: gstSlabErrorMessage(li.gstRate) });
+      return;
+    }
+  }
   const { enriched, subtotal, discountTotal, taxTotal, roundOff, totalAmount } = calcLineItems(rawLineItems);
 
   const [row] = await db.insert(purchasesTable).values({

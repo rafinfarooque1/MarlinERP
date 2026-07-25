@@ -3,8 +3,18 @@ import { db, itemsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { GetItemParams, DeleteItemParams } from "@workspace/api-zod";
 import { pool } from "@workspace/db";
+import { isValidGstSlab, gstSlabErrorMessage } from "../lib/gst";
 
 const router = Router();
+
+/** Reject non-slab GST rates (undefined/null = untouched, allowed). */
+function slabViolation(taxRate: unknown, res: any): boolean {
+  if (taxRate != null && !isValidGstSlab(taxRate)) {
+    res.status(400).json({ error: gstSlabErrorMessage(taxRate) });
+    return true;
+  }
+  return false;
+}
 
 // ── Shared helpers ─────────────────────────────────────────────────────────
 const fmtMaterial = (r: any) => ({
@@ -31,6 +41,7 @@ router.get("/materials", async (_req, res): Promise<void> => {
 router.post("/materials", async (req, res): Promise<void> => {
   const { name, unit, description, hsnCode, taxRate, cost } = req.body;
   if (!name || !unit) { res.status(400).json({ error: "name and unit are required" }); return; }
+  if (slabViolation(taxRate, res)) return;
   const result = await pool.query(
     `INSERT INTO materials (name, unit, description, hsn_code, tax_rate, cost) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
     [name, unit, description || null, hsnCode || '', Number(taxRate ?? 0), Number(cost ?? 0)]
@@ -48,6 +59,7 @@ router.get("/materials/:id", async (req, res): Promise<void> => {
 router.patch("/materials/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { name, unit, description, hsnCode, taxRate, cost } = req.body;
+  if (slabViolation(taxRate, res)) return;
   const result = await pool.query(
     `UPDATE materials SET
       name = COALESCE($1, name),
@@ -82,6 +94,7 @@ router.get("/raw-materials", async (_req, res): Promise<void> => {
 router.post("/raw-materials", async (req, res): Promise<void> => {
   const { name, unit, description, hsnCode, taxRate, cost } = req.body;
   if (!name || !unit) { res.status(400).json({ error: "name and unit are required" }); return; }
+  if (slabViolation(taxRate, res)) return;
   const result = await pool.query(
     `INSERT INTO raw_materials (name, unit, description, hsn_code, tax_rate, cost) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
     [name, unit, description || null, hsnCode || '', Number(taxRate ?? 0), Number(cost ?? 0)]
@@ -99,6 +112,7 @@ router.get("/raw-materials/:id", async (req, res): Promise<void> => {
 router.patch("/raw-materials/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { name, unit, description, hsnCode, taxRate, cost } = req.body;
+  if (slabViolation(taxRate, res)) return;
   const result = await pool.query(
     `UPDATE raw_materials SET
       name = COALESCE($1, name),
@@ -133,6 +147,7 @@ router.get("/items", async (_req, res): Promise<void> => {
 router.post("/items", async (req, res): Promise<void> => {
   const { name, hsnCode, taxRate, unit, description, mrp, cost } = req.body;
   if (!name || !unit) { res.status(400).json({ error: "name and unit are required" }); return; }
+  if (slabViolation(taxRate, res)) return;
   const result = await pool.query(
     `INSERT INTO items (name, hsn_code, tax_rate, unit, description, mrp, cost) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
     [name, hsnCode || '', Number(taxRate ?? 0), unit, description || null, Number(mrp ?? 0), Number(cost ?? 0)]
@@ -150,6 +165,7 @@ router.get("/items/:id", async (req, res): Promise<void> => {
 router.patch("/items/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { name, hsnCode, taxRate, unit, description, mrp, cost } = req.body;
+  if (slabViolation(taxRate, res)) return;
   const result = await pool.query(
     `UPDATE items SET
       name = COALESCE($1, name),

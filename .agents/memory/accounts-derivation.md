@@ -15,6 +15,14 @@ Trial balance, cash/bank book (and their opening/running balances) all flow thro
 
 **As-of-date caveat (accepted for Phase 1):** customer outstanding uses the CURRENT `sales.amount_paid`, so a historical `toDate` reflects later collections too.
 
+## GST head split (Phase 2)
+
+Sales/purchase tax splits to Output/Input CGST-SGST-IGST ledgers inside `buildDerivedPostings`. ONE per-line classifier — `lineTaxHeads()` in `api-server/src/lib/gst.ts` (falls back from `taxAmount`+`taxType` when head fields are absent) — is shared by the derivation, all `/gst/*` report endpoints, AND `/gst/summary`. Route any new GST aggregation through it.
+
+**Why:** independent aggregations diverge immediately: reports counted heads the ledger refused to split. Also, purchases' stored `tax_total` is 0 on legacy rows (the column started being populated later) — a split gate requiring it zeroed ALL real input-tax ledgers in one shot.
+
+**How to apply:** split gates = head sum consistent with per-line `taxAmount` sum, and with stored `tax_total` only when > 0. Inconsistent docs keep the legacy lump ON PURPOSE and reconciliation flags them (`matched:false` there is a feature — it surfaces bills whose ITC isn't in books). To test legacy/corrupt shapes, insert simulation rows via psql (the API validates them away), verify TB balance + recon, then delete.
+
 ## FY voucher numbering
 
 `nextVoucherNumber(queryableOrNull, type, date?)` in `artifacts/api-server/src/lib/voucherNumber.ts` — atomic upsert on `voucher_sequences` (PK type + fy_label), format `JV/2026-27/0001`. Prefixes/FY start month configurable via company_settings (`voucher_prefixes` jsonb, `fy_start_month`).

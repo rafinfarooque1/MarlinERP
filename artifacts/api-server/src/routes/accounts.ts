@@ -7,6 +7,7 @@ import {
   GetLedgerStatementQueryParams,
 } from "@workspace/api-zod";
 import { nextVoucherNumber, VOUCHER_TYPE_LABELS } from "../lib/voucherNumber";
+import { lineTaxHeads } from "../lib/gst";
 
 const router = Router();
 
@@ -1098,6 +1099,14 @@ router.get("/gst/summary", async (req, res): Promise<void> => {
   if (fromDate) allPurchases = allPurchases.filter(p => p.purchaseDate >= fromDate);
   if (toDate) allPurchases = allPurchases.filter(p => p.purchaseDate <= toDate);
 
+  // Document-level tax: prefer the stored total when present, else the
+  // per-line head sum via lineTaxHeads (legacy purchases have tax_total = 0).
+  const docTax = (lines: any[], stored: number): number => {
+    if (stored > 0.004) return stored;
+    const headSum = lines.reduce((a, li) => { const h = lineTaxHeads(li); return a + h.cgst + h.sgst + h.igst; }, 0);
+    return Math.round(headSum * 100) / 100;
+  };
+
   const salesByRate = new Map<number, { taxableValue: number; cgst: number; sgst: number; igst: number; taxAmount: number }>();
   for (const sale of allSales) {
     const lineItems = (sale.lineItems ?? []) as any[];
@@ -1105,10 +1114,11 @@ router.get("/gst/summary", async (req, res): Promise<void> => {
       const rate = Number(li.taxRate ?? 0);
       const sub = Number(li.lineSubtotal ?? (li.quantity * li.unitPrice - (li.discount ?? 0)));
       const existing = salesByRate.get(rate) ?? { taxableValue: 0, cgst: 0, sgst: 0, igst: 0, taxAmount: 0 };
+      const h = lineTaxHeads(li);
       existing.taxableValue += sub;
-      existing.cgst += Number(li.cgst ?? 0);
-      existing.sgst += Number(li.sgst ?? 0);
-      existing.igst += Number(li.igst ?? 0);
+      existing.cgst += h.cgst;
+      existing.sgst += h.sgst;
+      existing.igst += h.igst;
       existing.taxAmount += Number(li.taxAmount ?? 0);
       salesByRate.set(rate, existing);
     }
@@ -1121,24 +1131,53 @@ router.get("/gst/summary", async (req, res): Promise<void> => {
     for (const li of lineItems) {
       const rate = Number(li.gstRate ?? 0);
       const existing = purchasesByRate.get(rate) ?? { taxableValue: 0, cgst: 0, sgst: 0, igst: 0, taxAmount: 0 };
+      const h = lineTaxHeads(li);
       existing.taxableValue += Number(li.taxableValue ?? 0);
-      existing.cgst += Number(li.cgst ?? 0);
-      existing.sgst += Number(li.sgst ?? 0);
-      existing.igst += Number(li.igst ?? 0);
+      existing.cgst += h.cgst;
+      existing.sgst += h.sgst;
+      existing.igst += h.igst;
       existing.taxAmount += Number(li.taxAmount ?? 0);
       purchasesByRate.set(rate, existing);
     }
   }
 
   const totalSales = allSales.reduce((s, r) => s + Number(r.totalAmount), 0);
-  const totalTaxCollected = allSales.reduce((s, r) => s + Number(r.taxTotal ?? 0), 0);
+  const totalTaxCollected = allSales.reduce((s, r) => s + docTax((r.lineItems ?? []) as any[], Number(r.taxTotal ?? 0)), 0);
   const totalPurchases = allPurchases.reduce((s, p) => s + Number(p.totalAmount), 0);
-  const totalTaxPaid = allPurchases.reduce((s, p) => s + Number((p as any).taxTotal ?? 0), 0);
+  const totalTaxPaid = allPurchases.reduce((s, p) => s + docTax((p.lineItems ?? []) as any[], Number((p as any).taxTotal ?? 0)), 0);
   const netGstLiability = totalTaxCollected - totalTaxPaid;
+
+  // Month-wise breakdown (output vs input tax per calendar month)
+  const monthMap = new Map<string, { outputTaxable: number; outputTax: number; inputTaxable: number; inputTax: number }>();
+  for (const s of allSales) {
+    const k = String((s as any).saleDate).slice(0, 7);
+    const e = monthMap.get(k) ?? { outputTaxable: 0, outputTax: 0, inputTaxable: 0, inputTax: 0 };
+    const tax = docTax((s.lineItems ?? []) as any[], Number((s as any).taxTotal ?? 0));
+    e.outputTax += tax;
+    e.outputTaxable += Number(s.totalAmount) - tax;
+    monthMap.set(k, e);
+  }
+  for (const p of allPurchases) {
+    const k = String((p as any).purchaseDate).slice(0, 7);
+    const e = monthMap.get(k) ?? { outputTaxable: 0, outputTax: 0, inputTaxable: 0, inputTax: 0 };
+    const tax = docTax((p.lineItems ?? []) as any[], Number((p as any).taxTotal ?? 0));
+    e.inputTax += tax;
+    e.inputTaxable += Number(p.totalAmount) - tax;
+    monthMap.set(k, e);
+  }
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const monthWise = [...monthMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([month, d]) => ({
+      month,
+      outputTaxable: r2(d.outputTaxable), outputTax: r2(d.outputTax),
+      inputTaxable: r2(d.inputTaxable), inputTax: r2(d.inputTax),
+      netGst: r2(d.outputTax - d.inputTax),
+    }));
+
   const warehouses = await db.select().from(warehousesTable);
 
   res.json({
-    totalSales, totalTaxCollected, totalPurchases, totalTaxPaid, netGstLiability,
+    totalSales, totalTaxCollected, totalPurchases, totalTaxPaid, netGstLiability, monthWise,
     salesByRate: Array.from(salesByRate.entries()).sort((a, b) => a[0] - b[0]).map(([taxRate, d]) => ({ taxRate, ...d })),
     purchasesByRate: Array.from(purchasesByRate.entries()).sort((a, b) => a[0] - b[0]).map(([taxRate, d]) => ({ taxRate, ...d, estimated: false })),
     byWarehouse: warehouses.map(w => ({ warehouseId: w.id, warehouseName: w.name, gstNumber: w.gstNumber, salesTax: 0, purchaseTax: 0 })),

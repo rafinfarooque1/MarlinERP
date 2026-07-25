@@ -7,7 +7,7 @@ description: What was done, decisions made, and constraints to maintain for auth
 
 - `reset-22d57e92.ts` deleted — this was an unauthenticated TRUNCATE ALL endpoint
 - `artifacts/api-server/src/lib/password.ts` — PasswordService (bcryptjs, work factor 12)
-- `artifacts/api-server/src/lib/passwordPolicy.ts` — validatePassword (8-char min), DEFAULT_INITIAL_PASSWORD='marlin1458'
+- `artifacts/api-server/src/lib/passwordPolicy.ts` — validatePassword (8-char min) + DEFAULT_INITIAL_PASSWORD constant (single source of truth for the seeded/initial password — read the value from that file, never copy it here)
 - `artifacts/api-server/src/middleware/auth.ts` — requireAuth middleware + in-memory rate limiter (5 failures → 15 min lockout per username)
 - `artifacts/api-server/src/routes/auth.ts` — full rewrite; no backdoor, bcrypt verify, rate limiting, audit log (LOGIN_SUCCESS/FAILED/LOGOUT/PASSWORD_CHANGED), mustChangePassword in responses
 - `artifacts/api-server/src/app.ts` — global requireAuth middleware for all /api routes; exempts /health and POST /auth/login
@@ -18,9 +18,9 @@ description: What was done, decisions made, and constraints to maintain for auth
 
 ## Credentials
 
-- Dev + Neon prod admin: username=admin, password=marlin1458 (bcrypt $2b$12$), must_change_password=true
-- New employees: initial password=marlin1458 (hashed), must_change_password=true (forced change on first login)
-- Password reset endpoint: POST /api/hr/employees/:id/reset-password — resets to marlin1458 hash with must_change_password=true
+- Dev + Neon prod admin: username=admin, password = DEFAULT_INITIAL_PASSWORD (bcrypt $2b$12$ in DB), must_change_password=true
+- New employees: initial password = DEFAULT_INITIAL_PASSWORD (hashed), must_change_password=true (forced change on first login)
+- Password reset endpoint: POST /api/hr/employees/:id/reset-password — resets to the DEFAULT_INITIAL_PASSWORD hash with must_change_password=true
 
 ## Invariants to maintain
 

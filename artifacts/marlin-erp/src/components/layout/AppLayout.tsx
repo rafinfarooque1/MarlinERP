@@ -131,6 +131,7 @@ const navigation = [
       { name: 'Bank Book',         href: '/accounts/bank-book',       module: 'Books'             },
       { name: 'Trial Balance',     href: '/accounts/trial-balance',   module: 'Books'             },
       { name: 'GST Summary',       href: '/accounts/gst',             module: 'GST Summary'       },
+      { name: 'GST Returns',       href: '/accounts/gst-returns',     module: 'GST Returns'       },
       { name: 'Reconciliation',    href: '/accounts/reconciliation',  module: 'Reconciliation'    },
       { name: 'Cash Balance',      href: '/accounts/cash-in-outlet',  module: 'Cash Balance'      },
       { name: 'Reports',           href: '/accounts/reports',         module: 'Chart of Accounts' },

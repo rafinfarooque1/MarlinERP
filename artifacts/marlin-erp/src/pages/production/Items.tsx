@@ -143,7 +143,16 @@ export default function Items() {
                   <FormItem><FormLabel>HSN Code <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="08119000" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="taxRate" render={({ field }) => (
-                  <FormItem><FormLabel>Tax Rate %</FormLabel><FormControl><Input type="number" min={0} max={28} step={0.5} {...field} /></FormControl><FormMessage /></FormItem>
+                  <FormItem>
+                    <FormLabel>Tax Rate %</FormLabel>
+                    <Select onValueChange={v => field.onChange(Number(v))} value={String(field.value ?? 5)}>
+                      <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {[0, 5, 12, 18, 28].map(r => <SelectItem key={r} value={String(r)}>{r}%</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
                 )} />
                 <FormField control={form.control} name="unit" render={({ field }) => (
                   <FormItem>
