@@ -35,6 +35,7 @@ ERP for a frozen-fruit business: production, inventory, purchases, sales/invoici
 
 - Company/locations/permissions, materials & BOM production, purchases & vendors, POS-style sales with server-rendered invoice PDFs, HR/payroll, double-entry accounts (ledgers, day book, trial balance)
 - GST: slab-locked rates (0/5/12/18/28), head-wise Output/Input CGST-SGST-IGST ledgers, GST Returns page (HSN summary, GSTR-1, GSTR-3B with ITC set-off, ledger-vs-register reconciliation) with CSV exports
+- Production costing: BOM templates (per-unit recipes; non-blocking over-consumption warning at entry), absorption batch costing (materials at current cost + overhead %, default in Settings), wastage lines (never enter stock), production reports (output / consumption vs BOM / wastage / batch costs); legacy batches stay "Not costed"
 
 ## User preferences
 

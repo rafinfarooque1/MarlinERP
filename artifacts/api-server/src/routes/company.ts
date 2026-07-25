@@ -26,12 +26,17 @@ function pickCompanyFields(body: Record<string, any>) {
 
 // ── Company Settings ──────────────────────────────────────────────────────
 
-// Invoice-PDF fields live in raw columns (not in the Drizzle schema)
-async function invoicePdfFields(id: number): Promise<{ paymentTerms: string | null; invoiceFooter: string | null }> {
+// Extra settings live in raw columns (not in the Drizzle schema): invoice-PDF
+// text fields plus the default production overhead percentage (Phase 5).
+async function extraSettingsFields(id: number): Promise<{ paymentTerms: string | null; invoiceFooter: string | null; productionOverheadPercent: number }> {
   const { rows: [r] } = await pool.query<any>(
-    `SELECT payment_terms, invoice_footer FROM company_settings WHERE id = $1`, [id]
+    `SELECT payment_terms, invoice_footer, production_overhead_percent FROM company_settings WHERE id = $1`, [id]
   );
-  return { paymentTerms: r?.payment_terms ?? null, invoiceFooter: r?.invoice_footer ?? null };
+  return {
+    paymentTerms: r?.payment_terms ?? null,
+    invoiceFooter: r?.invoice_footer ?? null,
+    productionOverheadPercent: Number(r?.production_overhead_percent ?? 0),
+  };
 }
 
 router.get("/company/settings", async (_req, res): Promise<void> => {
@@ -40,7 +45,7 @@ router.get("/company/settings", async (_req, res): Promise<void> => {
   if (!row) {
     [row] = await db.insert(companySettingsTable).values({}).returning();
   }
-  res.json({ ...row, ...(await invoicePdfFields(row.id)) });
+  res.json({ ...row, ...(await extraSettingsFields(row.id)) });
 });
 
 router.patch("/company/settings", async (req, res): Promise<void> => {
@@ -57,7 +62,18 @@ router.patch("/company/settings", async (req, res): Promise<void> => {
     }
   }
 
-  if (Object.keys(data).length === 0 && pdfUpdates.length === 0) { res.status(400).json({ error: "No valid fields to update" }); return; }
+  // Default production overhead % (raw column, numeric 0–100)
+  let overheadUpdate: number | undefined;
+  if ('productionOverheadPercent' in req.body) {
+    const v = Number((req.body as any).productionOverheadPercent);
+    if (!Number.isFinite(v) || v < 0 || v > 100) {
+      res.status(400).json({ error: "productionOverheadPercent must be a number between 0 and 100" });
+      return;
+    }
+    overheadUpdate = Math.round(v * 100) / 100;
+  }
+
+  if (Object.keys(data).length === 0 && pdfUpdates.length === 0 && overheadUpdate === undefined) { res.status(400).json({ error: "No valid fields to update" }); return; }
 
   const rows = await db.select().from(companySettingsTable).limit(1);
   let row;
@@ -71,7 +87,10 @@ router.patch("/company/settings", async (req, res): Promise<void> => {
   for (const [column, value] of pdfUpdates) {
     await pool.query(`UPDATE company_settings SET ${column} = $1 WHERE id = $2`, [value, row.id]);
   }
-  res.json({ ...row, ...(await invoicePdfFields(row.id)) });
+  if (overheadUpdate !== undefined) {
+    await pool.query(`UPDATE company_settings SET production_overhead_percent = $1 WHERE id = $2`, [overheadUpdate, row.id]);
+  }
+  res.json({ ...row, ...(await extraSettingsFields(row.id)) });
 });
 
 // ── Permissions ────────────────────────────────────────────────────────────

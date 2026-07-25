@@ -3,20 +3,21 @@ import {
   useListMaterials, useCreateMaterial, useUpdateMaterial, useDeleteMaterial, getListMaterialsQueryKey,
   useListRawMaterials, useCreateRawMaterial, useUpdateRawMaterial, useDeleteRawMaterial, getListRawMaterialsQueryKey,
   useListItems, useCreateItem, useUpdateItem, useDeleteItem, getListItemsQueryKey,
+  useListBomTemplates, useCreateBomTemplate, useUpdateBomTemplate, useDeleteBomTemplate,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { useForm } from 'react-hook-form';
+import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Edit2, Trash2, Layers, Download, Eye } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, Layers, Download, Eye, ClipboardList } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -50,10 +51,23 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
+const bomSchema = z.object({
+  lines: z.array(z.object({
+    materialType: z.enum(['material', 'raw_material']),
+    materialId: z.coerce.number().min(1, 'Select material'),
+    quantity: z.coerce.number().min(0.0001, 'Qty > 0'),
+  })).min(1, 'Add at least one material line'),
+  notes: z.string().optional(),
+});
+type BomFormValues = z.infer<typeof bomSchema>;
+
+const defaultBomLine = { materialType: 'raw_material' as const, materialId: 0, quantity: 1 };
+
 export default function ItemMaster() {
   const { data: rawMaterials = [], isLoading: rmLoading } = useListRawMaterials();
   const { data: materials = [], isLoading: mLoading } = useListMaterials();
   const { data: items = [], isLoading: iLoading } = useListItems();
+  const { data: bomTemplates = [] } = useListBomTemplates();
   const { units } = useUnits();
   const queryClient = useQueryClient();
 
@@ -63,10 +77,12 @@ export default function ItemMaster() {
   const [editTarget, setEditTarget] = useState<{ id: number; type: ItemType } | null>(null);
   const [viewItem, setViewItem] = useState<any>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; type: ItemType } | null>(null);
+  const [bomTarget, setBomTarget] = useState<any>(null);
 
   const createRM = useCreateRawMaterial(); const updateRM = useUpdateRawMaterial(); const deleteRM = useDeleteRawMaterial();
   const createM = useCreateMaterial(); const updateM = useUpdateMaterial(); const deleteM = useDeleteMaterial();
   const createI = useCreateItem(); const updateI = useUpdateItem(); const deleteI = useDeleteItem();
+  const createBom = useCreateBomTemplate(); const updateBom = useUpdateBomTemplate(); const deleteBom = useDeleteBomTemplate();
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -74,6 +90,14 @@ export default function ItemMaster() {
   });
 
   const watchType = form.watch('itemType');
+
+  const bomForm = useForm<BomFormValues>({
+    resolver: zodResolver(bomSchema),
+    defaultValues: { lines: [defaultBomLine], notes: '' },
+  });
+  const { fields: bomFields, append: appendBomLine, remove: removeBomLine } = useFieldArray({ control: bomForm.control, name: 'lines' });
+
+  const bomByItem = new Map((bomTemplates as any[]).map(t => [t.itemId, t]));
 
   // Combine all into one unified list
   const allItems = [
@@ -109,6 +133,41 @@ export default function ItemMaster() {
       description: item.description || '',
     });
     setIsOpen(true);
+  };
+
+  const openBom = (item: any) => {
+    const existing = bomByItem.get(item.id);
+    bomForm.reset(existing
+      ? { lines: (existing.lines || []).map((l: any) => ({ materialType: l.materialType, materialId: l.materialId, quantity: Number(l.quantity) })), notes: existing.notes || '' }
+      : { lines: [defaultBomLine], notes: '' });
+    setBomTarget(item);
+  };
+
+  const onBomSubmit = (data: BomFormValues) => {
+    if (!bomTarget) return;
+    const existing = bomByItem.get(bomTarget.id);
+    const opts = {
+      onSuccess: () => {
+        toast.success(existing ? 'BOM template updated' : 'BOM template created');
+        setBomTarget(null);
+      },
+      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed to save BOM'),
+    };
+    if (existing) {
+      updateBom.mutate({ id: existing.id, data: { lines: data.lines as any, notes: data.notes } }, opts);
+    } else {
+      createBom.mutate({ itemId: bomTarget.id, lines: data.lines as any, notes: data.notes }, opts);
+    }
+  };
+
+  const handleBomDelete = () => {
+    if (!bomTarget) return;
+    const existing = bomByItem.get(bomTarget.id);
+    if (!existing) return;
+    deleteBom.mutate(existing.id, {
+      onSuccess: () => { toast.success('BOM template deleted'); setBomTarget(null); },
+      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Delete failed'),
+    });
   };
 
   const onSubmit = (data: FormValues) => {
@@ -150,6 +209,7 @@ export default function ItemMaster() {
   };
 
   const isPending = createRM.isPending || updateRM.isPending || createM.isPending || updateM.isPending || createI.isPending || updateI.isPending;
+  const bomExisting = bomTarget ? bomByItem.get(bomTarget.id) : null;
 
   return (
     <AppLayout>
@@ -230,7 +290,12 @@ export default function ItemMaster() {
                       {item._type === 'raw_material' ? 'Raw' : item._type === 'material' ? 'Material' : 'Item'}
                     </Badge>
                   </TableCell>
-                  <TableCell className="font-medium">{item.name}</TableCell>
+                  <TableCell className="font-medium">
+                    {item.name}
+                    {item._type === 'item' && bomByItem.has(item.id) && (
+                      <Badge variant="outline" className="ml-2 text-[10px] bg-primary/5 text-primary border-primary/30">BOM</Badge>
+                    )}
+                  </TableCell>
                   <TableCell className="text-muted-foreground text-sm">{item.unit}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{(item as any).hsnCode || '—'}</TableCell>
                   <TableCell className="text-sm">{(item as any).taxRate ? `${Number((item as any).taxRate)}%` : '—'}</TableCell>
@@ -245,6 +310,11 @@ export default function ItemMaster() {
                   <TableCell className="text-right font-mono font-bold">{Number(item.stock).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 3 })}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
+                      {item._type === 'item' && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title={bomByItem.has(item.id) ? 'Edit BOM template' : 'Set BOM template'} onClick={() => openBom(item)}>
+                          <ClipboardList className="w-4 h-4" />
+                        </Button>
+                      )}
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(item)}><Eye className="w-4 h-4" /></Button>
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(item)}><Edit2 className="w-4 h-4" /></Button>
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => setDeleteTarget({ id: item.id, name: item.name, type: item._type })}><Trash2 className="w-4 h-4" /></Button>
@@ -361,6 +431,85 @@ export default function ItemMaster() {
         </DialogContent>
       </Dialog>
 
+      {/* BOM Template Dialog */}
+      <Dialog open={!!bomTarget} onOpenChange={v => !v && setBomTarget(null)}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><ClipboardList className="w-5 h-5 text-primary" /> BOM Template — {bomTarget?.name}</DialogTitle>
+            <DialogDescription>
+              Materials required to produce <span className="font-semibold text-foreground">one {bomTarget?.unit || 'unit'}</span> of this item.
+              Production entry warns when a batch consumes more than the template allows.
+            </DialogDescription>
+          </DialogHeader>
+          <Form {...bomForm}>
+            <form onSubmit={bomForm.handleSubmit(onBomSubmit)} className="space-y-5">
+              <div>
+                <div className="flex justify-between items-center mb-3">
+                  <p className="font-semibold text-sm">Materials per unit</p>
+                  <Button type="button" variant="outline" size="sm" onClick={() => appendBomLine(defaultBomLine)}><Plus className="w-3 h-3 mr-1" /> Add</Button>
+                </div>
+                <div className="space-y-2">
+                  {bomFields.map((field, i) => {
+                    const matType = bomForm.watch(`lines.${i}.materialType`);
+                    const opts = matType === 'raw_material' ? rawMaterials : materials;
+                    return (
+                      <div key={field.id} className="grid grid-cols-11 gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border">
+                        <div className="col-span-3">
+                          <FormField control={bomForm.control} name={`lines.${i}.materialType`} render={({ field: f }) => (
+                            <FormItem><FormLabel className="text-xs">Type</FormLabel>
+                              <Select onValueChange={f.onChange} value={f.value}>
+                                <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger></FormControl>
+                                <SelectContent><SelectItem value="raw_material">Raw Material</SelectItem><SelectItem value="material">Packaging</SelectItem></SelectContent>
+                              </Select></FormItem>
+                          )} />
+                        </div>
+                        <div className="col-span-5">
+                          <FormField control={bomForm.control} name={`lines.${i}.materialId`} render={({ field: f }) => (
+                            <FormItem><FormLabel className="text-xs">Material</FormLabel>
+                              <Select onValueChange={v => f.onChange(Number(v))} value={f.value ? String(f.value) : ''}>
+                                <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger></FormControl>
+                                <SelectContent>{(opts as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}</SelectContent>
+                              </Select><FormMessage /></FormItem>
+                          )} />
+                        </div>
+                        <div className="col-span-2">
+                          <FormField control={bomForm.control} name={`lines.${i}.quantity`} render={({ field: f }) => (
+                            <FormItem><FormLabel className="text-xs">Qty / unit</FormLabel><FormControl><Input type="number" step="0.0001" className="h-8 text-xs font-mono" {...f} /></FormControl><FormMessage /></FormItem>
+                          )} />
+                        </div>
+                        <div className="col-span-1 pb-1 flex justify-end">
+                          <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => removeBomLine(i)} disabled={bomFields.length === 1}><Trash2 className="w-3 h-3" /></Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <FormField control={bomForm.control} name="notes" render={({ field }) => (
+                <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea placeholder="e.g. Standard recipe for 1 kg pack…" rows={2} {...field} /></FormControl></FormItem>
+              )} />
+
+              <DialogFooter className="gap-2 sm:justify-between">
+                <div>
+                  {bomExisting && (
+                    <Button type="button" variant="outline" className="text-destructive border-destructive/40 hover:bg-destructive/10" onClick={handleBomDelete} disabled={deleteBom.isPending}>
+                      <Trash2 className="w-4 h-4 mr-1.5" /> {deleteBom.isPending ? 'Deleting…' : 'Delete BOM'}
+                    </Button>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="outline" type="button" onClick={() => setBomTarget(null)}>Cancel</Button>
+                  <Button type="submit" disabled={createBom.isPending || updateBom.isPending}>
+                    {(createBom.isPending || updateBom.isPending) ? 'Saving…' : bomExisting ? 'Update BOM' : 'Save BOM'}
+                  </Button>
+                </div>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+
       {/* View Sheet */}
       <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
         <SheetContent>
@@ -403,9 +552,22 @@ export default function ItemMaster() {
                     </span>
                   </div>
                 )}
+                {viewItem._type === 'item' && (
+                  <div className="flex justify-between py-2 border-b border-border items-center">
+                    <span className="text-muted-foreground">BOM Template</span>
+                    {bomByItem.has(viewItem.id)
+                      ? <Badge variant="outline" className="text-xs bg-primary/5 text-primary border-primary/30">{(bomByItem.get(viewItem.id) as any).lines?.length ?? 0} materials / unit</Badge>
+                      : <span className="text-muted-foreground text-xs">Not set</span>}
+                  </div>
+                )}
                 {viewItem.description && <div className="py-2"><p className="text-muted-foreground mb-1">Description</p><p>{viewItem.description}</p></div>}
               </div>
               <div className="flex gap-2 mt-6">
+                {viewItem._type === 'item' && (
+                  <Button className="flex-1" variant="outline" onClick={() => { const it = viewItem; setViewItem(null); openBom(it); }}>
+                    <ClipboardList className="w-4 h-4 mr-2" /> BOM
+                  </Button>
+                )}
                 <Button className="flex-1" variant="outline" onClick={() => { setViewItem(null); openEdit(viewItem); }}>
                   <Edit2 className="w-4 h-4 mr-2" /> Edit
                 </Button>

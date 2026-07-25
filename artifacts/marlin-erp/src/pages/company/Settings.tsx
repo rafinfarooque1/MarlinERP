@@ -285,6 +285,77 @@ function InvoicePdfSection() {
   );
 }
 
+// ─── Production costing: default overhead % (server-persisted) ───────────────
+
+function ProductionCostingSection() {
+  const [overheadPct, setOverheadPct] = useState('0');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    customFetch<any>('/api/company/settings')
+      .then(s => setOverheadPct(String(Number(s?.productionOverheadPercent ?? 0))))
+      .catch(() => { /* keep default */ })
+      .finally(() => setLoading(false));
+  }, []);
+
+  const save = async () => {
+    const v = Number(overheadPct);
+    if (!Number.isFinite(v) || v < 0 || v > 100) {
+      toast.error('Overhead % must be between 0 and 100');
+      return;
+    }
+    setSaving(true);
+    try {
+      await customFetch('/api/company/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productionOverheadPercent: v }),
+      });
+      toast.success('Production costing settings saved');
+    } catch (e: any) {
+      toast.error(e?.data?.error || e.message || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <div className="p-4 border-b border-border bg-muted/20 flex items-center gap-3">
+        <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center"><DollarSign className="w-4 h-4 text-primary" /></div>
+        <div>
+          <h3 className="font-semibold">Production Costing</h3>
+          <p className="text-xs text-muted-foreground">Default overhead applied on top of material cost for new production batches</p>
+        </div>
+      </div>
+      {loading ? (
+        <div className="p-6 flex items-center gap-2 text-muted-foreground text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>
+      ) : (
+        <div className="divide-y divide-border">
+          <div className="p-4 flex items-center justify-between gap-4">
+            <div className="flex-1">
+              <label className="text-sm font-medium">Default overhead (%)</label>
+              <p className="text-xs text-muted-foreground mt-0.5">Covers indirect costs like power, labor, and rent. Each batch can override it at entry time.</p>
+            </div>
+            <Input
+              type="number" min={0} max={100} step="0.5"
+              value={overheadPct}
+              onChange={e => setOverheadPct(e.target.value)}
+              className="w-28 font-mono"
+            />
+          </div>
+          <div className="p-4 flex justify-end">
+            <Button onClick={save} disabled={saving}>
+              {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> Save Costing Settings</>}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Settings() {
   const [values, setValues] = useState<Record<string, any>>(getInitial);
   const [saving, setSaving] = useState(false);
@@ -367,6 +438,9 @@ export default function Settings() {
 
         {/* ── Invoice PDF: payment terms & footer (server-persisted) ───────── */}
         <InvoicePdfSection />
+
+        {/* ── Production costing: default overhead % (server-persisted) ────── */}
+        <ProductionCostingSection />
 
         {/* ── Danger Zone ──────────────────────────────────────────────────── */}
         <div className="border border-destructive/40 rounded-xl overflow-hidden">

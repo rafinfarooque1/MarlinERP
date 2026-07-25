@@ -13,6 +13,7 @@ import RawMaterials from './pages/production/RawMaterials';
 import Items from './pages/production/Items';
 import Purchases from './pages/production/Purchases';
 import ProductionList from './pages/production/Production';
+import ProductionReports from './pages/production/ProductionReports';
 import StockTransfers from './pages/production/StockTransfers';
 
 import Warehouses from './pages/headoffice/Warehouses';
@@ -128,6 +129,7 @@ function Router() {
       <Route path="/production/items"><AuthGuard><Items /></AuthGuard></Route>
       <Route path="/production/purchase"><AuthGuard><Purchases /></AuthGuard></Route>
       <Route path="/production/production"><AuthGuard><ProductionList /></AuthGuard></Route>
+      <Route path="/production/reports"><AuthGuard><ProductionReports /></AuthGuard></Route>
       <Route path="/production/stock-transfer"><AuthGuard><StockTransfers /></AuthGuard></Route>
 
       <Route path="/headoffice/warehouses"><AuthGuard><Warehouses /></AuthGuard></Route>

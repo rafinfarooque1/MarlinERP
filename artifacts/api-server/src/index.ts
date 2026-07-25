@@ -285,6 +285,21 @@ async function runMigrations() {
     `UPDATE sales SET payment_status = 'partially_paid' WHERE payment_status = 'partial'`
   );
 
+  // ── Phase 5: production costing & wastage (additive, idempotent) ──────────
+  // Cost columns are nullable on purpose: pre-existing batches stay NULL
+  // ("not costed") and are never backfilled — costing applies to new batches.
+  await pool.query(`
+    ALTER TABLE productions ADD COLUMN IF NOT EXISTS material_cost numeric(12,2);
+    ALTER TABLE productions ADD COLUMN IF NOT EXISTS overhead_percent numeric(5,2);
+    ALTER TABLE productions ADD COLUMN IF NOT EXISTS overhead_amount numeric(12,2);
+    ALTER TABLE productions ADD COLUMN IF NOT EXISTS total_cost numeric(12,2);
+    ALTER TABLE productions ADD COLUMN IF NOT EXISTS cost_per_unit numeric(12,4);
+    ALTER TABLE productions ADD COLUMN IF NOT EXISTS wastage jsonb NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE productions ADD COLUMN IF NOT EXISTS wastage_qty numeric(10,3) NOT NULL DEFAULT 0;
+    ALTER TABLE productions ADD COLUMN IF NOT EXISTS wastage_value numeric(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS production_overhead_percent numeric(5,2) NOT NULL DEFAULT 0;
+  `);
+
   // One-time backfill: mark all PRE-EXISTING sales (those created before the payment
   // tracking columns existed) as fully paid. Tracked in migration_log so it never
   // re-runs on subsequent boots and cannot overwrite legitimate payment state.

@@ -75,6 +75,7 @@ const navigation = [
       { name: 'Units',           href: '/production/units',          module: 'Materials'       },
       { name: 'Item Master',     href: '/production/item-master',    module: 'Items'           },
       { name: 'Batches',         href: '/production/production',     module: 'Production'      },
+      { name: 'Reports',         href: '/production/reports',        module: 'Production'      },
       { name: 'Stock Transfers', href: '/production/stock-transfer', module: 'Stock Transfers' },
       { name: 'Purchases',       href: '/production/purchase',       module: 'Purchases'       },
     ],

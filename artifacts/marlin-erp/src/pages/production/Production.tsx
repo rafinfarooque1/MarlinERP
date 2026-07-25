@@ -3,6 +3,7 @@ import {
   useListProductions, useCreateProduction, useListItems, useListRawMaterials,
   useListMaterials, getListProductionsQueryKey,
   useUpdateProduction, useDeleteProduction,
+  useGetBomTemplateByItem, useGetCompanySettings,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -16,13 +17,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Factory, Download, Eye, Calendar, Trash2, Edit2, AlertTriangle } from 'lucide-react';
+import { Plus, Search, Factory, Download, Eye, Calendar, Trash2, Edit2, AlertTriangle, Recycle, ClipboardList } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
-import { Label } from '@/components/ui/label';
 
 const schema = z.object({
   itemId: z.coerce.number().min(1, 'Item required'),
@@ -36,6 +36,11 @@ const schema = z.object({
     materialId: z.coerce.number().min(1, 'Select material'),
     usedQuantity: z.coerce.number().min(0.01, 'Qty > 0'),
   })).min(1, 'Add at least one material'),
+  overheadPercent: z.coerce.number().min(0, 'Min 0%').max(100, 'Max 100%').optional(),
+  wastage: z.array(z.object({
+    quantity: z.coerce.number().min(0.001, 'Qty > 0'),
+    reason: z.string().min(1, 'Reason required'),
+  })).optional(),
   notes: z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
@@ -55,8 +60,16 @@ const defaultValues: FormValues = {
   mfgDate: '',
   expiryDate: '',
   materialUsed: [defaultLine],
+  overheadPercent: 0,
+  wastage: [],
   notes: '',
 };
+
+const inr = (n: number | null | undefined, dashWhenNull = true) =>
+  n === null || n === undefined
+    ? (dashWhenNull ? '—' : '₹0.00')
+    : `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+const fmtQty = (n: number) => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 3 });
 
 export default function ProductionList() {
   const perm = usePermission('Production');
@@ -64,6 +77,7 @@ export default function ProductionList() {
   const { data: items = [] } = useListItems();
   const { data: rawMaterials = [] } = useListRawMaterials();
   const { data: materials = [] } = useListMaterials();
+  const { data: companySettings } = useGetCompanySettings();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
@@ -76,14 +90,92 @@ export default function ProductionList() {
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues });
   const { fields, append, remove, replace } = useFieldArray({ control: form.control, name: 'materialUsed' });
+  const { fields: wastageFields, append: appendWastage, remove: removeWastage } = useFieldArray({ control: form.control, name: 'wastage' });
 
   const editForm = useForm<EditFormValues>({
     resolver: zodResolver(editSchema),
     defaultValues: { productionDate: '', notes: '' },
   });
 
+  // ── Live costing & BOM comparison (create dialog) ─────────────────────────
+  const wItemId = Number(form.watch('itemId')) || 0;
+  const wProduced = Number(form.watch('producedQuantity')) || 0;
+  const wMaterials = form.watch('materialUsed');
+  const wWastage = form.watch('wastage');
+  const wOverhead = Number(form.watch('overheadPercent')) || 0;
+
+  const { data: bomTemplate } = useGetBomTemplateByItem(wItemId, { enabled: isOpen && wItemId > 0 });
+
+  const matInfo = (type: string | undefined, id: number) => {
+    const list = type === 'raw_material' ? rawMaterials : materials;
+    return (list as any[]).find(m => m.id === id);
+  };
+  const matName = (type: string, id: number) => matInfo(type, id)?.name ?? `#${id}`;
+
+  const wastageQty = (wWastage ?? []).reduce((s, w) => s + (Number(w?.quantity) || 0), 0);
+  const grossOut = wProduced + wastageQty;
+
+  const estMaterialCost = (wMaterials ?? []).reduce((s, l) => {
+    const info = matInfo(l?.materialType, Number(l?.materialId));
+    return s + (Number(l?.usedQuantity) || 0) * Math.max(0, Number(info?.cost ?? 0));
+  }, 0);
+  const estOverhead = estMaterialCost * wOverhead / 100;
+  const estTotal = estMaterialCost + estOverhead;
+  const estPerUnit = wProduced > 0 ? estTotal / wProduced : 0;
+
+  // Over-consumption vs BOM (allowed = per-unit qty × gross output incl. wastage)
+  const bomOver: Array<{ name: string; used: number; allowed: number; unit: string }> = [];
+  const bomExtra: Array<{ name: string; used: number }> = [];
+  if (bomTemplate?.lines?.length && grossOut > 0) {
+    for (const bl of bomTemplate.lines) {
+      const used = (wMaterials ?? [])
+        .filter(l => l?.materialType === bl.materialType && Number(l?.materialId) === bl.materialId)
+        .reduce((s, l) => s + (Number(l?.usedQuantity) || 0), 0);
+      const allowed = bl.quantity * grossOut;
+      if (used > allowed + 1e-9) {
+        bomOver.push({ name: matName(bl.materialType, bl.materialId), used, allowed, unit: matInfo(bl.materialType, bl.materialId)?.unit ?? '' });
+      }
+    }
+    const extraMap = new Map<string, { name: string; used: number }>();
+    for (const l of wMaterials ?? []) {
+      const id = Number(l?.materialId);
+      if (!id) continue;
+      if (!bomTemplate.lines.some(bl => bl.materialType === l.materialType && bl.materialId === id)) {
+        const key = `${l.materialType}:${id}`;
+        const cur = extraMap.get(key) ?? { name: matName(l.materialType!, id), used: 0 };
+        cur.used += Number(l?.usedQuantity) || 0;
+        extraMap.set(key, cur);
+      }
+    }
+    for (const e of extraMap.values()) if (e.used > 0) bomExtra.push(e);
+  }
+
+  const loadFromBom = () => {
+    if (!bomTemplate?.lines?.length) return;
+    const scale = grossOut > 0 ? grossOut : 1;
+    replace(bomTemplate.lines.map(l => ({
+      materialType: l.materialType,
+      materialId: l.materialId,
+      usedQuantity: Math.round(l.quantity * scale * 1000) / 1000,
+    })));
+    toast.info(`Materials loaded from BOM for ${fmtQty(scale)} units`);
+  };
+
+  const openCreate = () => {
+    form.reset({
+      ...defaultValues,
+      productionDate: new Date().toISOString().split('T')[0],
+      overheadPercent: Number((companySettings as any)?.productionOverheadPercent ?? 0),
+    });
+    setIsOpen(true);
+  };
+
   const onSubmit = (data: FormValues) => {
-    createMutation.mutate({ data: data as any }, {
+    const payload = {
+      ...data,
+      wastage: (data.wastage ?? []).filter(w => Number(w.quantity) > 0),
+    };
+    createMutation.mutate({ data: payload as any }, {
       onSuccess: () => {
         toast.success('Production batch recorded');
         queryClient.invalidateQueries({ queryKey: getListProductionsQueryKey() });
@@ -116,10 +208,6 @@ export default function ProductionList() {
   };
 
   const filtered = productions.filter(p => p.itemName?.toLowerCase().includes(search.toLowerCase()));
-  const matName = (type: string, id: number) => {
-    const list = type === 'raw_material' ? rawMaterials : materials;
-    return (list as any[]).find(m => m.id === id)?.name ?? `#${id}`;
-  };
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -146,13 +234,20 @@ export default function ProductionList() {
           <div className="flex gap-2">
             {perm.canDownload && (
               <Button variant="outline" size="sm" onClick={() => downloadCSV('production.csv', filtered.map(p => ({
-                Batch: `B-${String(p.id).padStart(4, '0')}`, Date: p.productionDate, Item: p.itemName, Qty: p.producedQuantity, Materials: p.materialUsed?.length || 0,
+                Batch: (p as any).batchNumber || `B-${String(p.id).padStart(4, '0')}`,
+                Date: p.productionDate, Item: p.itemName, Qty: p.producedQuantity,
+                'Wastage Qty': (p as any).wastageQty || 0,
+                'Material Cost': (p as any).materialCost ?? '',
+                'Overhead': (p as any).overheadAmount ?? '',
+                'Total Cost': (p as any).totalCost ?? '',
+                'Cost/Unit': (p as any).costPerUnit ?? '',
+                Materials: p.materialUsed?.length || 0,
               })))}>
                 <Download className="w-4 h-4 mr-2" /> Export
               </Button>
             )}
             {perm.canAdd && (
-              <Button onClick={() => { form.reset(defaultValues); setIsOpen(true); }}>
+              <Button onClick={openCreate}>
                 <Plus className="w-4 h-4 mr-2" /> New Batch
               </Button>
             )}
@@ -171,6 +266,8 @@ export default function ProductionList() {
                 <TableHead>Date</TableHead>
                 <TableHead>Item</TableHead>
                 <TableHead>Qty Produced</TableHead>
+                <TableHead className="text-right">Cost/Unit</TableHead>
+                <TableHead className="text-right">Wastage</TableHead>
                 <TableHead>Expiry</TableHead>
                 <TableHead>Materials Used</TableHead>
                 <TableHead />
@@ -178,9 +275,9 @@ export default function ProductionList() {
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
+                <TableRow><TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
                   <Factory className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No production batches yet</p>
                 </TableCell></TableRow>
               ) : filtered.map(p => (
@@ -191,6 +288,16 @@ export default function ProductionList() {
                   </TableCell>
                   <TableCell className="font-medium">{p.itemName}</TableCell>
                   <TableCell className="font-mono font-bold text-emerald-500">{Number(p.producedQuantity).toLocaleString()}</TableCell>
+                  <TableCell className="text-right font-mono">
+                    {(p as any).costPerUnit != null
+                      ? <span className="font-bold">{inr((p as any).costPerUnit)}</span>
+                      : <span className="text-xs text-muted-foreground">—</span>}
+                  </TableCell>
+                  <TableCell className="text-right font-mono">
+                    {Number((p as any).wastageQty) > 0
+                      ? <span className="text-destructive font-semibold">{fmtQty(Number((p as any).wastageQty))}</span>
+                      : <span className="text-xs text-muted-foreground">—</span>}
+                  </TableCell>
                   <TableCell>{(() => {
                     const e = (p as any).expiryDate;
                     if (!e) return <span className="text-xs text-muted-foreground">—</span>;
@@ -259,7 +366,14 @@ export default function ProductionList() {
               <div>
                 <div className="flex justify-between items-center mb-3">
                   <p className="font-semibold text-sm">Materials Consumed</p>
-                  <Button type="button" variant="outline" size="sm" onClick={() => append(defaultLine)}><Plus className="w-3 h-3 mr-1" /> Add</Button>
+                  <div className="flex gap-2">
+                    {bomTemplate && bomTemplate.lines?.length > 0 && (
+                      <Button type="button" variant="outline" size="sm" onClick={loadFromBom} title="Fill lines from the item's BOM template scaled to output">
+                        <ClipboardList className="w-3 h-3 mr-1" /> Load from BOM
+                      </Button>
+                    )}
+                    <Button type="button" variant="outline" size="sm" onClick={() => append(defaultLine)}><Plus className="w-3 h-3 mr-1" /> Add</Button>
+                  </div>
                 </div>
                 <div className="space-y-2">
                   {fields.map((field, i) => {
@@ -296,6 +410,75 @@ export default function ProductionList() {
                       </div>
                     );
                   })}
+                </div>
+
+                {/* BOM over-consumption warning (non-blocking) */}
+                {(bomOver.length > 0 || bomExtra.length > 0) && (
+                  <div className="mt-3 p-3 rounded-lg border border-amber-500/40 bg-amber-500/10 space-y-1.5">
+                    <p className="text-sm font-semibold text-amber-600 flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4" /> Consumption exceeds the BOM template
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      BOM allows the following for {fmtQty(grossOut)} units (incl. wastage). You can still record the batch — this is a warning, not a block.
+                    </p>
+                    <ul className="text-xs space-y-0.5 text-amber-700 dark:text-amber-400">
+                      {bomOver.map((w, i) => (
+                        <li key={`over-${i}`} className="font-mono">
+                          {w.name}: using {fmtQty(w.used)}, BOM allows {fmtQty(w.allowed)} (+{fmtQty(w.used - w.allowed)} over)
+                        </li>
+                      ))}
+                      {bomExtra.map((w, i) => (
+                        <li key={`extra-${i}`} className="font-mono">{w.name}: {fmtQty(w.used)} used — not in BOM</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+
+              {/* Wastage lines */}
+              <div>
+                <div className="flex justify-between items-center mb-3">
+                  <p className="font-semibold text-sm flex items-center gap-1.5"><Recycle className="w-4 h-4 text-muted-foreground" /> Wastage <span className="text-xs font-normal text-muted-foreground">(optional — scrapped units that never reach stock)</span></p>
+                  <Button type="button" variant="outline" size="sm" onClick={() => appendWastage({ quantity: 1, reason: '' })}><Plus className="w-3 h-3 mr-1" /> Add</Button>
+                </div>
+                {wastageFields.length > 0 && (
+                  <div className="space-y-2">
+                    {wastageFields.map((field, i) => (
+                      <div key={field.id} className="grid grid-cols-11 gap-2 items-end p-3 bg-destructive/5 rounded-lg border border-destructive/20">
+                        <div className="col-span-3">
+                          <FormField control={form.control} name={`wastage.${i}.quantity`} render={({ field: f }) => (
+                            <FormItem><FormLabel className="text-xs">Qty wasted</FormLabel><FormControl><Input type="number" step="0.001" className="h-8 text-xs" {...f} /></FormControl><FormMessage /></FormItem>
+                          )} />
+                        </div>
+                        <div className="col-span-7">
+                          <FormField control={form.control} name={`wastage.${i}.reason`} render={({ field: f }) => (
+                            <FormItem><FormLabel className="text-xs">Reason</FormLabel><FormControl><Input placeholder="e.g. Damaged in freezing, spillage, QC reject…" className="h-8 text-xs" {...f} /></FormControl><FormMessage /></FormItem>
+                          )} />
+                        </div>
+                        <div className="col-span-1 pb-1 flex justify-end">
+                          <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => removeWastage(i)}><Trash2 className="w-3 h-3" /></Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Overhead + live cost estimate */}
+              <div className="grid grid-cols-2 gap-4 items-start">
+                <FormField control={form.control} name="overheadPercent" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Overhead % <span className="text-[10px] font-normal text-muted-foreground">(power, labor, rent — default from Settings)</span></FormLabel>
+                    <FormControl><Input type="number" min={0} max={100} step="0.5" className="font-mono" {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                <div className="rounded-lg border border-border bg-muted/20 p-3 text-sm space-y-1">
+                  <div className="flex justify-between"><span className="text-muted-foreground text-xs">Material cost</span><span className="font-mono">{inr(estMaterialCost, false)}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground text-xs">Overhead ({wOverhead}%)</span><span className="font-mono">{inr(estOverhead, false)}</span></div>
+                  <div className="flex justify-between border-t border-border pt-1"><span className="text-xs font-semibold">Batch cost</span><span className="font-mono font-bold">{inr(estTotal, false)}</span></div>
+                  <div className="flex justify-between"><span className="text-xs font-semibold text-primary">Cost / unit</span><span className="font-mono font-bold text-primary">{inr(estPerUnit, false)}</span></div>
+                  {estMaterialCost === 0 && <p className="text-[10px] text-muted-foreground pt-1">Set purchase costs on materials to get batch costing.</p>}
                 </div>
               </div>
 
@@ -361,7 +544,7 @@ export default function ProductionList() {
       <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
         <SheetContent className="overflow-y-auto">
           <SheetHeader>
-            <SheetTitle>B-{viewItem && String(viewItem.id).padStart(4, '0')}</SheetTitle>
+            <SheetTitle>{viewItem && ((viewItem as any).batchNumber || `B-${String(viewItem.id).padStart(4, '0')}`)}</SheetTitle>
             <SheetDescription>Production batch details</SheetDescription>
           </SheetHeader>
           {viewItem && (
@@ -381,6 +564,27 @@ export default function ProductionList() {
                   </div>
                 ))}
               </div>
+
+              {/* Batch costing */}
+              <div>
+                <p className="text-sm font-semibold mb-2">Batch Costing</p>
+                {(viewItem as any).totalCost != null ? (
+                  <div className="rounded-lg border border-border bg-muted/20 p-3 text-sm space-y-1.5">
+                    <div className="flex justify-between"><span className="text-muted-foreground">Material cost</span><span className="font-mono">{inr((viewItem as any).materialCost)}</span></div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Overhead{(viewItem as any).overheadPercent != null ? ` (${Number((viewItem as any).overheadPercent)}%)` : ''}</span>
+                      <span className="font-mono">{inr((viewItem as any).overheadAmount)}</span>
+                    </div>
+                    <div className="flex justify-between border-t border-border pt-1.5"><span className="font-semibold">Total batch cost</span><span className="font-mono font-bold">{inr((viewItem as any).totalCost)}</span></div>
+                    <div className="flex justify-between"><span className="font-semibold text-primary">Cost per unit</span><span className="font-mono font-bold text-primary">{inr((viewItem as any).costPerUnit)}</span></div>
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-dashed border-border p-3 text-sm text-muted-foreground">
+                    Not costed — this batch was recorded before batch costing was introduced.
+                  </div>
+                )}
+              </div>
+
               <div>
                 <p className="text-sm font-semibold mb-2">Materials Consumed</p>
                 <div className="space-y-2">
@@ -388,13 +592,36 @@ export default function ProductionList() {
                     <div key={i} className="flex justify-between items-center p-3 bg-muted/20 rounded-lg text-sm">
                       <div>
                         <Badge variant="secondary" className="text-xs mr-2">{m.materialType === 'raw_material' ? 'Raw' : 'Pkg'}</Badge>
-                        {matName(m.materialType, m.materialId)}
+                        {m.materialName ?? matName(m.materialType, m.materialId)}
                       </div>
-                      <span className="font-bold">{m.usedQuantity} units</span>
+                      <div className="text-right">
+                        <span className="font-bold">{fmtQty(Number(m.usedQuantity))} {m.unit || 'units'}</span>
+                        {m.lineCost != null && <span className="block text-xs text-muted-foreground font-mono">{inr(Number(m.lineCost))}{m.unitCost != null ? ` @ ${inr(Number(m.unitCost))}` : ''}</span>}
+                      </div>
                     </div>
                   ))}
                 </div>
               </div>
+
+              {/* Wastage */}
+              {Number((viewItem as any).wastageQty) > 0 && (
+                <div>
+                  <p className="text-sm font-semibold mb-2 flex items-center gap-1.5"><Recycle className="w-4 h-4 text-destructive" /> Wastage</p>
+                  <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm space-y-1.5">
+                    {(((viewItem as any).wastage || []) as any[]).map((w, i) => (
+                      <div key={i} className="flex justify-between gap-3">
+                        <span className="text-muted-foreground">{w.reason}</span>
+                        <span className="font-mono font-semibold text-destructive shrink-0">{fmtQty(Number(w.quantity))}</span>
+                      </div>
+                    ))}
+                    <div className="flex justify-between border-t border-destructive/20 pt-1.5">
+                      <span className="font-semibold">Total wasted · value lost</span>
+                      <span className="font-mono font-bold text-destructive">{fmtQty(Number((viewItem as any).wastageQty))} · {inr((viewItem as any).wastageValue)}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {viewItem.notes && <div><span className="text-xs text-muted-foreground">Notes</span><p className="mt-1">{viewItem.notes}</p></div>}
               {perm.canEdit && (
                 <Button className="w-full" variant="outline" onClick={() => { setViewItem(null); setEditItem(viewItem); editForm.reset({ productionDate: viewItem.productionDate, notes: viewItem.notes || '' }); }}>

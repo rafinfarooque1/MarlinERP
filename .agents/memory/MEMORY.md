@@ -4,6 +4,7 @@
 - [Permission system](permissions.md) — usePermission hook at src/lib/usePermission.ts; module names must match Permissions page MODULE_GROUPS exactly; level 1 hierarchy = full access always.
 - [Custom API client hooks](custom-hooks.md) — New hooks go in lib/api-client-react/src/<name>.ts + export from index.ts; must run `pnpm tsc` in lib/api-client-react after adding files to generate .d.ts types.
 - [Item prices date range](item-prices-dates.md) — valid_from/valid_to added as text columns via startup migration in api-server/src/index.ts; ItemPrice type from generated code lacks these fields, use (ip as any).validFrom casts.
+- [Raw-migration columns](raw-migration-columns.md) — startup-migration columns are invisible to drizzle: db.select() silently drops them (fields read as 0/undefined); read AND write them via raw SQL.
 - [Invoice PDFs & share links](invoice-pdf-links.md) — ONE server-side renderer + HMAC public links; open popups synchronously in the click gesture; blob-URL PDFs trigger AV false positives.
 - [Accounts derivation & numbering](accounts-derivation.md) — books derive from buildDerivedPostings(); sale-linked receipts stay excluded (double-count trap); ALL GST math via lineTaxHeads(); never COUNT(*)-number vouchers.
 - [Inventory batch layer](inventory-batches.md) — additive lot layer over stock_entries (qty truth); FEFO clamped consumption, shortfall = "Untracked"; zod strips unknown keys so optional passthrough fields read from raw body.
