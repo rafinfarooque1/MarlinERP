@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { pool } from "@workspace/db";
+import { requireModuleView } from "../middleware/permissions";
 import { logActivity } from "../lib/audit";
 import { buildBranchMaps } from "./stock";
 import { consumeBatches, creditBatch, planFEFO, inboundCostForItem } from "../lib/batches";
@@ -79,7 +80,7 @@ router.get("/stock/batches/suggest", async (req, res): Promise<void> => {
 });
 
 // ── Expiry report ─────────────────────────────────────────────────────────────
-router.get("/stock/expiry-report", async (req, res): Promise<void> => {
+router.get("/stock/expiry-report", requireModuleView("Stock"), async (req, res): Promise<void> => {
   const days = Math.max(1, Number(req.query.days ?? 30) || 30);
   const [result, branchName] = await Promise.all([
     pool.query(
@@ -137,7 +138,7 @@ router.get("/stock/expiry-report", async (req, res): Promise<void> => {
 });
 
 // ── Stock valuation (weighted-average) ───────────────────────────────────────
-router.get("/stock/valuation", async (_req, res): Promise<void> => {
+router.get("/stock/valuation", requireModuleView("Stock"), async (_req, res): Promise<void> => {
   const [result, branchName] = await Promise.all([
     pool.query(
       `SELECT se.branch_type, se.branch_id, se.item_id, se.quantity::numeric AS qty,
@@ -185,7 +186,7 @@ router.get("/stock/valuation", async (_req, res): Promise<void> => {
 });
 
 // ── Reorder report (per-item reorder levels) ─────────────────────────────────
-router.get("/stock/reorder-report", async (_req, res): Promise<void> => {
+router.get("/stock/reorder-report", requireModuleView("Stock"), async (_req, res): Promise<void> => {
   const [result, branchName] = await Promise.all([
     pool.query(
       `SELECT se.branch_type, se.branch_id, se.item_id, se.quantity::numeric AS qty,

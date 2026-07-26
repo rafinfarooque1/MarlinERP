@@ -29,3 +29,7 @@ ONE canonical renderer: `api-server/src/services/invoicePdf.ts` (jsPDF + qrcode 
 - Sales `lineItems` JSONB snapshots `itemName`/`hsnCode`/`unit` at creation (units matter — items are sold in "pkt", not KG).
 - Renderer backfills each field INDEPENDENTLY from the items table for old rows (never gate hsn/unit backfill on name being missing).
 - Standard PDF fonts lack the ₹ glyph — use "Rs.".
+
+## Auth on PDF fetches
+- ALL /api routes require `Authorization: Bearer` (base64 `id:x`); `credentials: 'include'` alone → 401. `downloadPDFFromEndpoint` (marlin-erp `lib/download.ts`) attaches the token from localStorage `marlin_auth_token` — any new direct `fetch` to the API must do the same rather than relying on cookies.
+- **How to apply:** when a PDF/download flow 401s with "Authentication required", check the Bearer header first, not the server.

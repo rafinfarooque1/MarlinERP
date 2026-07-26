@@ -10,6 +10,7 @@
 
 import { Router, type IRouter, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
+import { requireModuleView } from "../middleware/permissions";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import { restoreBatches, type BatchBreakdownEntry } from "../lib/batches";
 import { logActivity } from "../lib/audit";
@@ -718,7 +719,7 @@ const addDays = (iso: string, days: number): string =>
 // GET /outstanding/receivables — per-customer aging on unpaid invoice balances,
 // aged by days PAST DUE (due = sale date + customer credit days), with issued
 // credit notes shown as unallocated credits.
-router.get("/outstanding/receivables", async (_req: Request, res: Response) => {
+router.get("/outstanding/receivables", requireModuleView(["Customers", "Sales"]), async (_req: Request, res: Response) => {
   try {
     const asOf = todayISO();
     const { rows: invoices } = await pool.query(
@@ -807,7 +808,7 @@ router.get("/outstanding/receivables", async (_req: Request, res: Response) => {
 // GET /outstanding/payables — per-vendor aging. Purchases have no amount_paid,
 // so vendor payments + debit notes are FIFO-allocated against bills oldest-first;
 // unallocated remainder ages by days since the bill date.
-router.get("/outstanding/payables", async (_req: Request, res: Response) => {
+router.get("/outstanding/payables", requireModuleView(["Vendors", "Sales"]), async (_req: Request, res: Response) => {
   try {
     const asOf = todayISO();
     const { rows: bills } = await pool.query(

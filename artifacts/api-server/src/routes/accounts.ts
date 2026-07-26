@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { db, pool, accountLedgersTable, cashBankAccountsTable, expensesTable, salesTable, purchasesTable, warehousesTable } from "@workspace/db";
+import { requireModuleView } from "../middleware/permissions";
 import { eq, and, sql, gte, lte } from "drizzle-orm";
 import {
   CreateAccountLedgerBody, UpdateAccountLedgerBody,
@@ -735,7 +736,7 @@ router.post("/accounts/location-expenses", async (req, res): Promise<void> => {
 });
 
 // ── Financial Statements (Balance Sheet + P&L) ────────────────────────────
-router.get("/accounts/financial-statements", async (req, res): Promise<void> => {
+router.get("/accounts/financial-statements", requireModuleView("Chart of Accounts"), async (req, res): Promise<void> => {
   const { fromDate, toDate, outletId } = req.query as {
     fromDate?: string; toDate?: string; outletId?: string;
   };

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { db, stockEntriesTable, itemsTable, warehousesTable, outletsTable } from "@workspace/db";
+import { requireModuleView } from "../middleware/permissions";
 import { eq, and, sql } from "drizzle-orm";
 import { CreateStockTransferBody, ListStockQueryParams } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
@@ -68,14 +69,33 @@ router.get("/stock", async (req, res): Promise<void> => {
   res.json(enriched);
 });
 
-router.get("/stock/transfers", async (_req, res): Promise<void> => {
+router.get("/stock/transfers", requireModuleView(["Stock", "Stock Transfers", "HO Transfers", "Location Transfers"]), async (req, res): Promise<void> => {
+  // Optional ?from&to (YYYY-MM-DD, inclusive), ?status and ?limit filters so
+  // heavy consumers (e.g. the Reports Center) don't pull the entire history.
+  // Without params the full list is returned (existing pages unchanged).
+  const from = typeof req.query.from === "string" ? req.query.from : "";
+  const to = typeof req.query.to === "string" ? req.query.to : "";
+  const status = typeof req.query.status === "string" ? req.query.status : "";
+  const limitRaw = Number(req.query.limit);
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 5000) : 0;
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  if ((from && !dateRe.test(from)) || (to && !dateRe.test(to))) {
+    res.status(400).json({ error: "from/to must be YYYY-MM-DD" });
+    return;
+  }
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  if (from) { params.push(from); conds.push(`transfer_date::date >= $${params.length}::date`); }
+  if (to)   { params.push(to);   conds.push(`transfer_date::date <= $${params.length}::date`); }
+  if (status) { params.push(status); conds.push(`status = $${params.length}`); }
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   const [result, branchName] = await Promise.all([
     pool.query(`
       SELECT id, challan_number, from_type, from_id, to_type, to_id, transfer_date,
              line_items, is_interstate, status, notes, created_at,
              approved_by, approved_at, received_line_items, rejection_reason
-      FROM stock_transfers ORDER BY id DESC
-    `),
+      FROM stock_transfers ${where} ORDER BY id DESC ${limit ? `LIMIT ${limit}` : ""}
+    `, params),
     buildBranchMaps(),
   ]);
   const enriched = result.rows.map((r: any) => ({

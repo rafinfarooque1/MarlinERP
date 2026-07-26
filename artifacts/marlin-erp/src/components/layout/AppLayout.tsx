@@ -32,6 +32,7 @@ import {
   Receipt,
   Banknote,
   Layers,
+  FileBarChart2,
 } from 'lucide-react';
 import { useLocationContext } from '@/lib/locationContext';
 import { useTheme } from '@/lib/theme';
@@ -139,8 +140,16 @@ const navigation = [
       { name: 'GST Returns',       href: '/accounts/gst-returns',     module: 'GST Returns'       },
       { name: 'Reconciliation',    href: '/accounts/reconciliation',  module: 'Reconciliation'    },
       { name: 'Cash Balance',      href: '/accounts/cash-in-outlet',  module: 'Cash Balance'      },
-      { name: 'Reports',           href: '/accounts/reports',         module: 'Chart of Accounts' },
     ],
+  },
+  {
+    // Unified Reports Center — replaces the old Accounts → Reports page.
+    // `modules` is an any-of list: shown when the user can view ≥1 category.
+    name: 'Reports',
+    icon: FileBarChart2,
+    href: '/reports',
+    branchGroups: ['warehouse', 'production', null],
+    modules: ['Sales', 'Purchases', 'Stock', 'Production', 'Customers', 'Vendors', 'Chart of Accounts'],
   },
   {
     name: 'Company',
@@ -363,7 +372,15 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       }
 
       // For leaf-level items, check canView directly
-      if (item.href) return true; // Dashboard, always show
+      if (item.href) {
+        // any-of `modules` list (e.g. Reports Center): visible if any is viewable
+        if ('modules' in item && item.modules) {
+          return (item.modules as string[]).some(m =>
+            checkCanView(m, (user as any)?.hierarchyId, userLevel, allPerms as any[]),
+          );
+        }
+        return true; // Dashboard, always show
+      }
 
       // For group items: show if at least one child is accessible (canView)
       if (item.children) {

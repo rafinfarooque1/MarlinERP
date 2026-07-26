@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { db, customersTable, vendorsTable, couponsTable } from "@workspace/db";
+import { requireModuleView } from "../middleware/permissions";
 import { eq } from "drizzle-orm";
 import { pool } from "@workspace/db";
 import {
@@ -324,7 +325,7 @@ router.delete("/vendors/:id", async (req, res): Promise<void> => {
 });
 
 // ── Customer ledger (sales history as Dr/Cr statement) ────────────────────
-router.get("/customers/:id/ledger", async (req, res): Promise<void> => {
+router.get("/customers/:id/ledger", requireModuleView("Customers"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { rows } = await pool.query<any>(
     `SELECT
@@ -389,7 +390,7 @@ router.get("/customers/:id/ledger", async (req, res): Promise<void> => {
 });
 
 // ── Vendor ledger (purchases + payments as Dr/Cr statement) ───────────────
-router.get("/vendors/:id/ledger", async (req, res): Promise<void> => {
+router.get("/vendors/:id/ledger", requireModuleView("Vendors"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
 
   const { rows: purchaseRows } = await pool.query<any>(

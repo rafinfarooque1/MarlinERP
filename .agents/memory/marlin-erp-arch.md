@@ -79,3 +79,5 @@ description: Full stack ERP for Marlin Frozen Fruits — api-server + marlin-erp
 - ItemPrice type from generated code lacks these; use (ip as any).validFrom casts
 
 - Dev-login gotcha: the stored admin hash can drift from DEFAULT_INITIAL_PASSWORD (password-change tests do this). If admin login fails, suspect drift — re-seed the hash from the constant instead of debugging auth; a restart also clears the login rate-limit.
+
+- Web app is served at ROOT paths on the dev domain (previewPath `/`): e2e test plans must use `/login`, `/reports` etc. — NOT `/marlin-erp/...` prefixed URLs (those hit the SPA catch-all 404).

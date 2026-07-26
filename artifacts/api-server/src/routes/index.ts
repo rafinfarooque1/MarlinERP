@@ -23,6 +23,7 @@ import publicInvoicesRouter from "./publicInvoices";
 import pdfGenRouter from "./pdfGen";
 import returnsRouter from "./returns";
 import bomRouter from "./bom";
+import reportsRouter from "./reports";
 const router: IRouter = Router();
 
 router.use(healthRouter);
@@ -49,5 +50,6 @@ router.use(publicInvoicesRouter);
 router.use(pdfGenRouter);
 router.use(returnsRouter);
 router.use(bomRouter);
+router.use(reportsRouter);
 
 export default router;

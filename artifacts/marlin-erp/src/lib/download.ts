@@ -55,9 +55,14 @@ export async function downloadPDFFromEndpoint(
 ): Promise<void> {
   const win = window.open('about:blank', '_blank');
   try {
+    // All /api routes require a Bearer token (same storage key the login flow sets).
+    const token = localStorage.getItem('marlin_auth_token');
     const resp = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       credentials: 'include',
       body: JSON.stringify(data),
     });

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { db, pool, productionsTable, itemsTable } from "@workspace/db";
+import { requireModuleView } from "../middleware/permissions";
 import { eq } from "drizzle-orm";
 import { CreateProductionBody } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
@@ -100,7 +101,7 @@ router.get("/productions", async (_req, res): Promise<void> => {
 
 // ── Production reports (must be registered before /productions/:id) ──────────
 // GET /productions/reports?from=YYYY-MM-DD&to=YYYY-MM-DD
-router.get("/productions/reports", async (req, res): Promise<void> => {
+router.get("/productions/reports", requireModuleView("Production"), async (req, res): Promise<void> => {
   const from = typeof req.query.from === "string" ? req.query.from : "";
   const to = typeof req.query.to === "string" ? req.query.to : "";
   const dateRe = /^\d{4}-\d{2}-\d{2}$/;

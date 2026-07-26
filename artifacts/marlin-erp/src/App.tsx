@@ -59,7 +59,7 @@ import Profile from './pages/company/Profile';
 import AuditLog from './pages/company/AuditLog';
 import Reconciliation from './pages/finance/Reconciliation';
 import CashInOutlet from './pages/finance/CashInOutlet';
-import Reports from './pages/accounts/Reports';
+import ReportsCenter from './pages/reports/ReportsCenter';
 
 import LocationPicker from './pages/sales/LocationPicker';
 import ProfileMe from './pages/profile/ProfileMe';
@@ -178,7 +178,8 @@ function Router() {
 
       <Route path="/accounts/reconciliation"><AuthGuard><Reconciliation /></AuthGuard></Route>
       <Route path="/accounts/cash-in-outlet"><AuthGuard><CashInOutlet /></AuthGuard></Route>
-      <Route path="/accounts/reports"><AuthGuard><Reports /></AuthGuard></Route>
+      <Route path="/accounts/reports"><Redirect to="/reports" /></Route>
+      <Route path="/reports"><AuthGuard><ReportsCenter /></AuthGuard></Route>
 
       <Route path="/profile/me"><AuthGuard><ProfileMe /></AuthGuard></Route>
 
