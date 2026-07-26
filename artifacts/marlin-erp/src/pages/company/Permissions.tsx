@@ -19,7 +19,7 @@ const MODULE_SEGMENTS = [
     groups: [
       {
         title: 'Sales Department',
-        modules: ['Point of Sale', 'Location Stock', 'Location Transfers', 'Location Expenses'],
+        modules: ['Sales Dashboard', 'Point of Sale', 'Location Stock', 'Location Transfers', 'Location Expenses', 'Cash Balance'],
       },
     ],
   },
@@ -45,7 +45,7 @@ const MODULE_SEGMENTS = [
       },
       {
         title: 'Accounts',
-        modules: ['Chart of Accounts', 'Ledger', 'Cash & Bank', 'Expenses', 'GST Summary', 'GST Returns', 'Reconciliation', 'Cash Balance', 'Vouchers', 'Books'],
+        modules: ['Chart of Accounts', 'Ledger', 'Cash & Bank', 'Expenses', 'GST Summary', 'GST Returns', 'Reconciliation', 'Cash Balance', 'Vouchers', 'Books', 'Reports'],
       },
       {
         title: 'Company',
@@ -73,7 +73,7 @@ function defaultAccess(level: number, module: string): boolean {
   if (level === 1) return true; // Top level: full access
 
   // Sales segment modules
-  const salesSegmentModules = ['Point of Sale', 'Location Stock', 'Location Transfers', 'Location Expenses'];
+  const salesSegmentModules = ['Sales Dashboard', 'Point of Sale', 'Location Stock', 'Location Transfers', 'Location Expenses', 'Cash Balance'];
   const productionModules = ['Materials', 'Raw Materials', 'Items', 'Purchases', 'Production', 'Stock Transfers'];
   const inventoryModules = ['Warehouses', 'Outlets', 'Stock', 'HO Transfers', 'Item Prices'];
 

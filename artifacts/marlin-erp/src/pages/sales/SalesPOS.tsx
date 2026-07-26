@@ -20,13 +20,14 @@ export default function SalesPOS() {
 
   // All Locations — show full sales list with no location filter
   if (isAll) {
-    return <Sales />;
+    return <Sales permissionModule="Point of Sale" />;
   }
 
   // Warehouse — show warehouse sales + child outlet sales
   // Specific outlet/warehouse — show only that location
   return (
     <Sales
+      permissionModule="Point of Sale"
       forceLocationType={locationType as 'warehouse' | 'outlet'}
       forceLocationId={locationId!}
       forceLocationName={locationName}

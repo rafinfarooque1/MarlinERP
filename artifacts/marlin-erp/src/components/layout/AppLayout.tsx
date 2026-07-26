@@ -167,7 +167,7 @@ const navigation = [
 ];
 
 const salesNavItems = [
-  { name: 'Dashboard',     icon: LayoutDashboard,  href: '/sales/dashboard',    module: 'Point of Sale'      },
+  { name: 'Dashboard',     icon: LayoutDashboard,  href: '/sales/dashboard',    module: 'Sales Dashboard'    },
   { name: 'Point of Sale', icon: ShoppingCart,     href: '/sales/pos',          module: 'Point of Sale'      },
   { name: 'Stock',         icon: Package,          href: '/sales/stock',        module: 'Location Stock'     },
   { name: 'Transfers',     icon: ArrowLeftRight,   href: '/sales/transfers',    module: 'Location Transfers' },
@@ -410,7 +410,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   );
 
   // ── Sales segment access ────────────────────────────────────────────────────
-  const SALES_MODULES = ['Point of Sale', 'Location Stock', 'Location Transfers', 'Location Expenses', 'Cash Balance'];
+  const SALES_MODULES = ['Sales Dashboard', 'Point of Sale', 'Location Stock', 'Location Transfers', 'Location Expenses', 'Cash Balance'];
   const hasSalesAccess = isAdmin || isLocationEmployee || SALES_MODULES.some(mod => {
     const perm = (allPerms as any[]).find((p: any) => p.hierarchyId === (user as any)?.hierarchyId && p.module === mod);
     return perm ? !!(perm.canView || perm.canAdd || perm.canEdit) : userLevel <= 4;

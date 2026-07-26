@@ -118,6 +118,10 @@ const defaultFormValues: FormValues = {
 // ── Component ──────────────────────────────────────────────────────────────────
 
 interface SalesProps {
+  /** Override the permission module checked on this view. Defaults to 'Sales'.
+   *  Pass 'Point of Sale' when rendering from the POS context so warehouse
+   *  managers with POS permission don't see "Access Denied". */
+  permissionModule?: string;
   /** When set, the POS form pre-selects this location and the list is filtered to it. */
   forceLocationType?: 'warehouse' | 'outlet';
   forceLocationId?: number;
@@ -126,8 +130,8 @@ interface SalesProps {
   forceChildOutletIds?: number[];
 }
 
-export default function Sales({ forceLocationType, forceLocationId, forceLocationName }: SalesProps = {}) {
-  const perm = usePermission('Sales');
+export default function Sales({ forceLocationType, forceLocationId, forceLocationName, permissionModule }: SalesProps = {}) {
+  const perm = usePermission(permissionModule ?? 'Sales');
   const { data: outlets = [] } = useListOutlets();
   const [outletFilter, setOutletFilter] = useState<string>('all');
   const [search, setSearch] = useState('');

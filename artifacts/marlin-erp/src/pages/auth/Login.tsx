@@ -44,7 +44,7 @@ export default function Login() {
         if ((response.employee as any).mustChangePassword) {
           setLocation('/change-password');
         } else {
-          setLocation('/company/profile');
+          setLocation('/profile/me');
         }
       },
       onError: (error: any) => {
