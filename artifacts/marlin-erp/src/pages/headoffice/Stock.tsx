@@ -1,5 +1,5 @@
-import { Fragment, useMemo, useState } from 'react';
-import { useListStock, useListWarehouses, useListOutlets, useListStockBatches, type StockBatch } from '@workspace/api-client-react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
+import { usePaginatedStock, useListWarehouses, useListOutlets, useListStockBatches, type StockBatch } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -26,15 +26,34 @@ export default function Stock() {
   const [branchType, setBranchType] = useState<string>('all');
   const [branchId, setBranchId] = useState<string>('');
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 50;
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
+
+  // Debounce the search box — searching runs on the server now
+  useEffect(() => {
+    const t = setTimeout(() => { setDebouncedSearch(search.trim()); setPage(1); }, 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
   const params: any = {};
   if (branchType !== 'all') params.branchType = branchType;
   if (branchId && branchId !== '0') params.branchId = Number(branchId);
 
-  const { data: stock = [], isLoading } = useListStock(params);
+  const { data: stockPage, isLoading, isFetching } = usePaginatedStock({
+    ...params, page, limit: PAGE_SIZE, q: debouncedSearch || undefined,
+  });
+  const stock = stockPage?.rows ?? [];
+  const totalRows = stockPage?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
+
+  // Clamp page when the result set shrinks (deletes, concurrent changes)
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
   const { data: batches = [] } = useListStockBatches(params);
 
   // Group batches (already FEFO-ordered by the API) per item-location entry
@@ -49,7 +68,8 @@ export default function Stock() {
     return m;
   }, [batches]);
 
-  const filtered = (stock as any[]).filter(s => s.itemName?.toLowerCase().includes(search.toLowerCase()) || s.branchName?.toLowerCase().includes(search.toLowerCase()));
+  // Rows already match the server-side search — no client filtering needed
+  const filtered = stock as any[];
 
   const branchOptions = branchType === 'warehouse' ? warehouses : branchType === 'outlet' ? outlets : [];
 
@@ -83,7 +103,7 @@ export default function Stock() {
               <Search className="w-4 h-4 text-muted-foreground shrink-0" />
               <Input placeholder="Search item or location..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0" />
             </div>
-            <Select value={branchType} onValueChange={v => { setBranchType(v); setBranchId(''); }}>
+            <Select value={branchType} onValueChange={v => { setBranchType(v); setBranchId(''); setPage(1); }}>
               <SelectTrigger className="w-44"><SelectValue placeholder="All Locations" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Locations</SelectItem>
@@ -93,7 +113,7 @@ export default function Stock() {
               </SelectContent>
             </Select>
             {branchOptions.length > 0 && (
-              <Select value={branchId} onValueChange={setBranchId}>
+              <Select value={branchId} onValueChange={v => { setBranchId(v); setPage(1); }}>
                 <SelectTrigger className="w-44"><SelectValue placeholder="All" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="0">All</SelectItem>
@@ -204,10 +224,20 @@ export default function Stock() {
               })}
             </TableBody>
           </Table>
-          {filtered.length > 0 && (
-            <div className="p-3 border-t border-border text-xs text-muted-foreground flex justify-between">
-              <span>{filtered.length} entries · {filtered.reduce((s, r) => s + Number(r.quantity || 0), 0).toLocaleString('en-IN')} units</span>
-              <span className="font-semibold text-foreground">Stock value: {money(totalValue)}</span>
+          {totalRows > 0 && (
+            <div className="p-3 border-t border-border text-xs text-muted-foreground flex flex-wrap items-center justify-between gap-2">
+              <span>
+                Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, totalRows)} of {totalRows} entries
+                {isFetching ? ' · refreshing…' : ''}
+              </span>
+              <div className="flex items-center gap-3">
+                <span className="font-semibold text-foreground">Page stock value: {money(totalValue)}</span>
+                <div className="flex items-center gap-1">
+                  <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Prev</Button>
+                  <span className="px-1">Page {page}/{totalPages}</span>
+                  <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</Button>
+                </div>
+              </div>
             </div>
           )}
         </div>

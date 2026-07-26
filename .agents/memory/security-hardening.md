@@ -30,9 +30,21 @@ description: What was done, decisions made, and constraints to maintain for auth
 
 **Why:** The global requireAuth middleware in app.ts exempts only `/health`, `POST /auth/login`, and `GET /public/invoices/*` (HMAC-tokenized invoice PDFs — see invoice-pdf-links.md). Adding new public endpoints requires adding explicit exemptions there.
 
-## Known remaining gaps (flagged to user, not fixed)
+## Session tokens
 
-- Bearer session tokens are UNSIGNED base64 of `id:...` — requireAuth only parses the employee id, so tokens are forgeable. Fixing = sign with HMAC at login + verify in requireAuth; invalidates all sessions once.
-- No server-side permission scoping: any authenticated employee can call any /api route (permissions enforced client-side only via usePermission). Share-token minting intentionally matches this flat model — don't "fix" one route in isolation.
+**Rule:** Only HMAC-signed v2 tokens (`v2.<b64url payload>.<b64url sig>`, key = SESSION_SECRET) are accepted; the module throws at boot if SESSION_SECRET is unset.
+**Why:** Unsigned/legacy base64 tokens and fallback signing keys are forgeable — both were flagged as critical auth bypasses in review. Users holding an old token just re-login once.
+**How to apply:** Never re-add an unsigned-token acceptance path or a default signing key "for compatibility/dev convenience". Deployments must set SESSION_SECRET or the server refuses to start.
+
+## Server-side write permissions
+
+**Rule:** `requireModuleAction(module, action)` guards write endpoints. Level-1 hierarchy → always allow; no DB row for hierarchy+module → allow (default-open); explicit false → 403.
+**Why:** Client `usePermission` defaults the OPPOSITE way (view-only when no row) — intentional asymmetry; the Permissions page save writes explicit rows for every module, closing the gap after first save.
+**How to apply:** New write endpoints must be wrapped in `requireModuleAction` with a module name matching the Permissions page MODULE_GROUPS exactly (see permissions.md).
+
+## Known gaps (proposed as follow-up tasks, not fixed)
+
+- Tokens carry issuedAt but no TTL check — sessions never expire.
+- Login lockout counters are in-memory: reset on restart, per-instance on autoscale.
 
 **Why:** Running Neon migration scripts requires NODE_PATH=lib/db/node_modules:artifacts/api-server/node_modules because pg is in lib/db and bcryptjs is in api-server. Use a .cjs file (not .mjs) for standalone migration scripts.

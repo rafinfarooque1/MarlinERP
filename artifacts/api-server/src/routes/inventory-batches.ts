@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { pool } from "@workspace/db";
-import { requireModuleView } from "../middleware/permissions";
+import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 import { logActivity } from "../lib/audit";
 import { buildBranchMaps } from "./stock";
 import { consumeBatches, creditBatch, planFEFO, inboundCostForItem } from "../lib/batches";
@@ -213,7 +213,7 @@ router.get("/stock/reorder-report", requireModuleView("Stock"), async (_req, res
 });
 
 // ── Physical stock verification ──────────────────────────────────────────────
-router.post("/stock/verifications", async (req, res): Promise<void> => {
+router.post("/stock/verifications", requireModuleAction("Stock Verification", "add"), async (req, res): Promise<void> => {
   const { branchType, branchId, verifyDate, notes, createdBy, lines } = req.body as {
     branchType?: string; branchId?: number; verifyDate?: string; notes?: string; createdBy?: string;
     lines?: Array<{ itemId: number; countedQty: number; reason?: string }>;

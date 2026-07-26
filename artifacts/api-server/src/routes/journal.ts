@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireModuleAction } from "../middleware/permissions";
 import { pool } from "@workspace/db";
 import { nextVoucherNumber, VOUCHER_TYPE_LABELS } from "../lib/voucherNumber";
 import { logActivity } from "../lib/audit";
@@ -113,7 +114,7 @@ router.get("/accounts/journal-vouchers", async (req, res): Promise<void> => {
   res.json(vouchers.map((v: any) => serializeVoucher(v, linesByVoucher.get(v.id) ?? [])));
 });
 
-router.post("/accounts/journal-vouchers", async (req, res): Promise<void> => {
+router.post("/accounts/journal-vouchers", requireModuleAction("Vouchers", "add"), async (req, res): Promise<void> => {
   const body = (req.body ?? {}) as Record<string, any>;
   const voucherType = String(body.voucherType ?? "journal");
   if (!JV_TYPES.has(voucherType)) {
@@ -257,7 +258,7 @@ router.get("/accounts/journal-vouchers/:id", async (req, res): Promise<void> => 
   res.json(voucher);
 });
 
-router.delete("/accounts/journal-vouchers/:id", async (req, res): Promise<void> => {
+router.delete("/accounts/journal-vouchers/:id", requireModuleAction("Vouchers", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { rows: [v] } = await pool.query(
     `DELETE FROM journal_vouchers WHERE id = $1 RETURNING voucher_number, voucher_type, total_amount`, [id]

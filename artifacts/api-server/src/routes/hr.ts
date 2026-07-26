@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireModuleAction } from "../middleware/permissions";
 import {
   db, pool, hierarchiesTable, employeesTable, payrollTable, attendanceTable,
   leavesTable, warehousesTable, outletsTable, payComponentsTable,
@@ -147,14 +148,14 @@ router.get("/hr/hierarchies", async (_req, res): Promise<void> => {
   res.json(rows);
 });
 
-router.post("/hr/hierarchies", async (req, res): Promise<void> => {
+router.post("/hr/hierarchies", requireModuleAction("Hierarchy", "add"), async (req, res): Promise<void> => {
   const parsed = CreateHierarchyBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const [row] = await db.insert(hierarchiesTable).values(parsed.data).returning();
   res.status(201).json(row);
 });
 
-router.patch("/hr/hierarchies/:id", async (req, res): Promise<void> => {
+router.patch("/hr/hierarchies/:id", requireModuleAction("Hierarchy", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const parsed = UpdateHierarchyBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
@@ -163,7 +164,7 @@ router.patch("/hr/hierarchies/:id", async (req, res): Promise<void> => {
   res.json(row);
 });
 
-router.delete("/hr/hierarchies/:id", async (req, res): Promise<void> => {
+router.delete("/hr/hierarchies/:id", requireModuleAction("Hierarchy", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   await db.delete(hierarchiesTable).where(eq(hierarchiesTable.id, id));
   res.status(204).send();
@@ -184,7 +185,7 @@ router.get("/hr/employees", async (_req, res): Promise<void> => {
   res.json(enriched);
 });
 
-router.post("/hr/employees", async (req, res): Promise<void> => {
+router.post("/hr/employees", requireModuleAction("Employees", "add"), async (req, res): Promise<void> => {
   const parsed = CreateEmployeeBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const [row] = await db.insert(employeesTable).values({
@@ -225,7 +226,7 @@ router.get("/hr/employees/:id", async (req, res): Promise<void> => {
   });
 });
 
-router.patch("/hr/employees/:id", async (req, res): Promise<void> => {
+router.patch("/hr/employees/:id", requireModuleAction("Employees", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const [before] = await db.select().from(employeesTable).where(eq(employeesTable.id, id)).limit(1);
   const parsed = UpdateEmployeeBody.safeParse(req.body);
@@ -255,7 +256,7 @@ router.patch("/hr/employees/:id", async (req, res): Promise<void> => {
   });
 });
 
-router.delete("/hr/employees/:id", async (req, res): Promise<void> => {
+router.delete("/hr/employees/:id", requireModuleAction("Employees", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, id)).limit(1);
   await db.delete(employeesTable).where(eq(employeesTable.id, id));
@@ -293,7 +294,7 @@ router.get("/hr/pay-components/:employeeId", async (req, res): Promise<void> => 
   res.json(row);
 });
 
-router.put("/hr/pay-components/:employeeId", async (req, res): Promise<void> => {
+router.put("/hr/pay-components/:employeeId", requireModuleAction("Payroll", "edit"), async (req, res): Promise<void> => {
   const employeeId = parseInt(req.params.employeeId, 10);
   const { workingDaysPerMonth, allowances, deductions } = req.body;
 
@@ -350,7 +351,7 @@ router.get("/hr/payroll", async (req, res): Promise<void> => {
 });
 
 // Generate payroll for a month — creates or updates records for all employees (or one)
-router.post("/hr/payroll/generate", async (req, res): Promise<void> => {
+router.post("/hr/payroll/generate", requireModuleAction("Payroll", "add"), async (req, res): Promise<void> => {
   const { month, year, employeeId, forceRegenerate = false } = req.body;
   if (!month || !year) { res.status(400).json({ error: "month and year are required" }); return; }
 
@@ -385,12 +386,12 @@ router.post("/hr/payroll/generate", async (req, res): Promise<void> => {
     // Fetch pay components (or use defaults)
     const [pc] = await db.select().from(payComponentsTable).where(eq(payComponentsTable.employeeId, emp.id)).limit(1);
     const workingDays = pc?.workingDaysPerMonth ?? 26;
-    const allowances: PayComp[] = (pc?.allowances as PayComp[]) ?? [
+    const allowances: AllowanceComp[] = (pc?.allowances as AllowanceComp[]) ?? [
       { name: "HRA", type: "percent_of_basic", value: 40, enabled: true },
       { name: "DA", type: "percent_of_basic", value: 10, enabled: true },
       { name: "Travel Allowance", type: "fixed", value: 1000, enabled: true },
     ];
-    const deductions: PayComp[] = (pc?.deductions as PayComp[]) ?? [
+    const deductions: DeductionComp[] = (pc?.deductions as DeductionComp[]) ?? [
       { name: "PF (Employee 12%)", type: "percent_of_basic", value: 12, enabled: true },
       { name: "ESI (0.75%)", type: "percent_of_gross", value: 0.75, enabled: true },
     ];
@@ -441,7 +442,7 @@ router.post("/hr/payroll/generate", async (req, res): Promise<void> => {
   res.json(results);
 });
 
-router.post("/hr/payroll/:id/pay", async (req, res): Promise<void> => {
+router.post("/hr/payroll/:id/pay", requireModuleAction("Payroll", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const today = new Date().toISOString().split("T")[0];
   const [row] = await db.update(payrollTable).set({ isPaid: true, paidDate: today }).where(eq(payrollTable.id, id)).returning();
@@ -492,7 +493,9 @@ router.get("/hr/attendance", async (req, res): Promise<void> => {
         checkOutLat: r.checkOutLat ? Number(r.checkOutLat) : null,
         checkOutLng: r.checkOutLng ? Number(r.checkOutLng) : null,
         status: r.status,
-        hoursWorked: r.hoursWorked ?? null,
+        hoursWorked: r.checkIn && r.checkOut
+          ? round2((r.checkOut.getTime() - r.checkIn.getTime()) / 3_600_000)
+          : null,
       };
     }
     // No record yet — synthetic absent row
@@ -593,7 +596,7 @@ router.post("/hr/leaves", async (req, res): Promise<void> => {
   res.status(201).json({ ...row, employeeName: emp?.name ?? "", approverName: null });
 });
 
-router.post("/hr/leaves/:id/approve", async (req, res): Promise<void> => {
+router.post("/hr/leaves/:id/approve", requireModuleAction("Leave", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const parsed = ApproveLeaveBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
@@ -606,7 +609,7 @@ router.post("/hr/leaves/:id/approve", async (req, res): Promise<void> => {
 });
 
 // ── Password Reset (admin action) ─────────────────────────────────────────────
-router.post("/hr/employees/:id/reset-password", async (req, res): Promise<void> => {
+router.post("/hr/employees/:id/reset-password", requireModuleAction("Employees", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, id)).limit(1);
   if (!emp) { res.status(404).json({ error: "Employee not found" }); return; }

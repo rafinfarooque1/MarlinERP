@@ -57,6 +57,7 @@ import CompanySettings from './pages/company/Settings';
 import Permissions from './pages/company/Permissions';
 import Profile from './pages/company/Profile';
 import AuditLog from './pages/company/AuditLog';
+import LoginHistory from './pages/company/LoginHistory';
 import Reconciliation from './pages/finance/Reconciliation';
 import CashInOutlet from './pages/finance/CashInOutlet';
 import ReportsCenter from './pages/reports/ReportsCenter';
@@ -175,6 +176,7 @@ function Router() {
       <Route path="/company/permissions"><AuthGuard><Permissions /></AuthGuard></Route>
       <Route path="/company/profile"><AuthGuard><Profile /></AuthGuard></Route>
       <Route path="/company/audit"><AuthGuard><AuditLog /></AuthGuard></Route>
+      <Route path="/company/login-history"><AuthGuard><LoginHistory /></AuthGuard></Route>
 
       <Route path="/accounts/reconciliation"><AuthGuard><Reconciliation /></AuthGuard></Route>
       <Route path="/accounts/cash-in-outlet"><AuthGuard><CashInOutlet /></AuthGuard></Route>

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, pool, accountLedgersTable, cashBankAccountsTable, expensesTable, salesTable, purchasesTable, warehousesTable } from "@workspace/db";
-import { requireModuleView } from "../middleware/permissions";
+import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 import { eq, and, sql, gte, lte } from "drizzle-orm";
 import {
   CreateAccountLedgerBody, UpdateAccountLedgerBody,
@@ -9,6 +9,7 @@ import {
 } from "@workspace/api-zod";
 import { nextVoucherNumber, VOUCHER_TYPE_LABELS } from "../lib/voucherNumber";
 import { lineTaxHeads } from "../lib/gst";
+import { logActivity } from "../lib/audit";
 
 const router = Router();
 
@@ -84,7 +85,7 @@ router.get("/accounts/cash-bank-ledgers", async (_req, res): Promise<void> => {
   })));
 });
 
-router.post("/accounts/chart", async (req, res): Promise<void> => {
+router.post("/accounts/chart", requireModuleAction("Chart of Accounts", "add"), async (req, res): Promise<void> => {
   const parsed = CreateAccountLedgerBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const code = (req.body as any).code ?? null;
@@ -108,7 +109,7 @@ router.post("/accounts/chart", async (req, res): Promise<void> => {
   res.status(201).json({ ...row, code, bankDetails, isGroup, parentName, children: [], balance: 0 });
 });
 
-router.patch("/accounts/chart/:id", async (req, res): Promise<void> => {
+router.patch("/accounts/chart/:id", requireModuleAction("Chart of Accounts", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const parsed = UpdateAccountLedgerBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
@@ -129,7 +130,7 @@ router.patch("/accounts/chart/:id", async (req, res): Promise<void> => {
 });
 
 // ── Move account to a different parent (drag-and-drop reparent) ───────────────
-router.patch("/accounts/chart/:id/move", async (req, res): Promise<void> => {
+router.patch("/accounts/chart/:id/move", requireModuleAction("Chart of Accounts", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid id" }); return; }
 
@@ -167,7 +168,7 @@ router.patch("/accounts/chart/:id/move", async (req, res): Promise<void> => {
   res.json({ success: true });
 });
 
-router.delete("/accounts/chart/:id", async (req, res): Promise<void> => {
+router.delete("/accounts/chart/:id", requireModuleAction("Chart of Accounts", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { rows: [row] } = await pool.query(`SELECT is_system_group, code FROM account_ledgers WHERE id = $1`, [id]);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
@@ -218,7 +219,7 @@ router.get("/accounts/payments", async (_req, res): Promise<void> => {
   })));
 });
 
-router.post("/accounts/payments", async (req, res): Promise<void> => {
+router.post("/accounts/payments", requireModuleAction("Payments", "add"), async (req, res): Promise<void> => {
   const { paymentDate, paidFromLedgerId, paidToLedgerId, amount, narration } = req.body as {
     paymentDate: string; paidFromLedgerId: number; paidToLedgerId: number; amount: number; narration?: string;
   };
@@ -242,7 +243,7 @@ router.post("/accounts/payments", async (req, res): Promise<void> => {
   });
 });
 
-router.delete("/accounts/payments/:id", async (req, res): Promise<void> => {
+router.delete("/accounts/payments/:id", requireModuleAction("Payments", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   await pool.query(`DELETE FROM payments WHERE id = $1`, [id]);
   res.status(204).send();
@@ -273,7 +274,7 @@ router.get("/accounts/receipts", async (_req, res): Promise<void> => {
   })));
 });
 
-router.post("/accounts/receipts", async (req, res): Promise<void> => {
+router.post("/accounts/receipts", requireModuleAction("Payments", "add"), async (req, res): Promise<void> => {
   const { receiptDate, receivedFromLedgerId, receivedInLedgerId, amount, narration } = req.body as {
     receiptDate: string; receivedFromLedgerId: number; receivedInLedgerId: number; amount: number; narration?: string;
   };
@@ -297,7 +298,7 @@ router.post("/accounts/receipts", async (req, res): Promise<void> => {
   });
 });
 
-router.delete("/accounts/receipts/:id", async (req, res): Promise<void> => {
+router.delete("/accounts/receipts/:id", requireModuleAction("Payments", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   await pool.query(`DELETE FROM receipts WHERE id = $1`, [id]);
   res.status(204).send();
@@ -428,7 +429,7 @@ router.get("/accounts/cash-bank", async (_req, res): Promise<void> => {
   res.json(rows.map(r => ({ ...r, balance: Number(r.balance) })));
 });
 
-router.post("/accounts/cash-bank", async (req, res): Promise<void> => {
+router.post("/accounts/cash-bank", requireModuleAction("Cash & Bank", "add"), async (req, res): Promise<void> => {
   const parsed = CreateCashBankAccountBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const { openingBalance, ...rest } = parsed.data as typeof parsed.data & { openingBalance?: number };
@@ -501,7 +502,7 @@ router.get("/expenses", async (_req, res): Promise<void> => {
   res.json(all);
 });
 
-router.post("/expenses", async (req, res): Promise<void> => {
+router.post("/expenses", requireModuleAction("Expenses", "add"), async (req, res): Promise<void> => {
   const parsed = CreateExpenseBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const [row] = await db.insert(expensesTable).values({ ...parsed.data, amount: String(parsed.data.amount) }).returning();
@@ -701,7 +702,7 @@ router.get("/accounts/location-expenses", async (req, res): Promise<void> => {
 });
 
 // Create a location-scoped expense (Dr expenseLedger, Cr location cashLedger via payments)
-router.post("/accounts/location-expenses", async (req, res): Promise<void> => {
+router.post("/accounts/location-expenses", requireModuleAction("Location Expenses", "add"), async (req, res): Promise<void> => {
   const { locationType, locationId, expenseLedgerId, amount, expenseDate, description, reference } = req.body as {
     locationType: string; locationId: number; expenseLedgerId: number;
     amount: number; expenseDate: string; description: string; reference?: string;
@@ -733,6 +734,40 @@ router.post("/accounts/location-expenses", async (req, res): Promise<void> => {
     cashLedgerId: r.paid_from_ledger_id, cashLedgerName: pf?.name ?? '',
     amount: Number(r.amount), description: r.narration, createdAt: r.created_at,
   });
+});
+
+// Delete a location expense recorded in error (Phase 7, task #40).
+// Guards: the payment row must actually BE a location expense — paid_from must
+// be a location's cash ledger and paid_to must sit in the Direct/Indirect
+// Expense subtree. Anything else must be deleted from its own page.
+router.delete("/accounts/location-expenses/:id", requireModuleAction("Location Expenses", "delete"), async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid expense id" }); return; }
+
+  const expenseLedgerIds = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
+  const { rows: [row] } = await pool.query(`
+    SELECT p.id, p.voucher_number, p.amount, p.paid_to_ledger_id,
+           pt.name AS expense_name,
+           COALESCE(w.name, o.name) AS location_name
+    FROM payments p
+    LEFT JOIN account_ledgers pt ON pt.id = p.paid_to_ledger_id
+    LEFT JOIN warehouses w ON w.cash_ledger_id = p.paid_from_ledger_id
+    LEFT JOIN outlets    o ON o.cash_ledger_id = p.paid_from_ledger_id
+    WHERE p.id = $1
+  `, [id]);
+  if (!row) { res.status(404).json({ error: "Expense not found" }); return; }
+  if (!row.location_name || !expenseLedgerIds.includes(Number(row.paid_to_ledger_id))) {
+    res.status(400).json({ error: "This voucher is not a location expense. Delete it from Accounts → Vouchers instead." });
+    return;
+  }
+
+  await pool.query(`DELETE FROM payments WHERE id = $1`, [id]);
+  logActivity({
+    action: 'DELETE', module: 'accounts', entityType: 'location-expense', entityId: id,
+    description: `Deleted location expense ${row.voucher_number} — ${row.expense_name ?? 'expense'} ₹${Number(row.amount)} at ${row.location_name}`,
+    user: (req as any).employee?.username ?? 'system',
+  }).catch(() => {});
+  res.json({ ok: true, id });
 });
 
 // ── Financial Statements (Balance Sheet + P&L) ────────────────────────────

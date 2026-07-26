@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireModuleAction } from "../middleware/permissions";
 import { pool } from "@workspace/db";
 import { logActivity } from "../lib/audit";
 import { nextVoucherNumber } from "../lib/voucherNumber";
@@ -181,7 +182,7 @@ router.get("/reconciliation/batches/:id", async (req, res): Promise<void> => {
 });
 
 // ── POST /reconciliation/batches ──────────────────────────────────────────────
-router.post("/reconciliation/batches", async (req, res): Promise<void> => {
+router.post("/reconciliation/batches", requireModuleAction("Reconciliation", "add"), async (req, res): Promise<void> => {
   const {
     salePaymentIds, charges, settlementDate,
     destinationBankLedgerId, externalReference, notes,

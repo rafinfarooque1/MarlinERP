@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireModuleAction } from "../middleware/permissions";
 import { pool } from "@workspace/db";
 import { logActivity } from "../lib/audit";
 import { nextVoucherNumber } from "../lib/voucherNumber";
@@ -148,7 +149,7 @@ router.get("/cash-in-outlet/deposits", async (req, res): Promise<void> => {
 });
 
 // ── POST /cash-in-outlet/deposits ─────────────────────────────────────────────
-router.post("/cash-in-outlet/deposits", async (req, res): Promise<void> => {
+router.post("/cash-in-outlet/deposits", requireModuleAction("Cash Balance", "add"), async (req, res): Promise<void> => {
   const { outletId, warehouseId, amount, depositDate, depositReference, destinationBankLedgerId, notes } = req.body as {
     outletId?: number;
     warehouseId?: number;
@@ -254,7 +255,7 @@ router.post("/cash-in-outlet/deposits", async (req, res): Promise<void> => {
 });
 
 // ── POST /cash-in-outlet/deposits/:id/reconcile ───────────────────────────────
-router.post("/cash-in-outlet/deposits/:id/reconcile", async (req, res): Promise<void> => {
+router.post("/cash-in-outlet/deposits/:id/reconcile", requireModuleAction(["Cash Balance", "Reconciliation"], "edit"), async (req, res): Promise<void> => {
   const depositId = parseInt(req.params.id, 10);
   if (!Number.isFinite(depositId)) { res.status(400).json({ error: "Invalid deposit id" }); return; }
 

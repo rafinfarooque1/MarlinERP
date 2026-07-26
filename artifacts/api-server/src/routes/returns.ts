@@ -10,7 +10,7 @@
 
 import { Router, type IRouter, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
-import { requireModuleView } from "../middleware/permissions";
+import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import { restoreBatches, type BatchBreakdownEntry } from "../lib/batches";
 import { logActivity } from "../lib/audit";
@@ -101,7 +101,7 @@ const userOf = (req: Request): string | null =>
 // ═════════════════════════════════════════════════════════════════════════════
 
 // POST /sales-returns — body: { saleId, returnDate, reason?, lines: [{ lineIndex, quantity }] }
-router.post("/sales-returns", async (req: Request, res: Response) => {
+router.post("/sales-returns", requireModuleAction(["Sales", "Point of Sale"], "add"), async (req: Request, res: Response) => {
   const body = req.body ?? {};
   const saleId = Number(body.saleId);
   const returnDate = body.returnDate;
@@ -437,7 +437,7 @@ router.get("/sales-returns", async (req: Request, res: Response) => {
 // ═════════════════════════════════════════════════════════════════════════════
 
 // POST /purchase-returns — body: { purchaseId, returnDate, reason?, lines: [{ lineIndex, quantity }] }
-router.post("/purchase-returns", async (req: Request, res: Response) => {
+router.post("/purchase-returns", requireModuleAction(["Sales", "Purchases"], "add"), async (req: Request, res: Response) => {
   const body = req.body ?? {};
   const purchaseId = Number(body.purchaseId);
   const returnDate = body.returnDate;

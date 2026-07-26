@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, pool, productionsTable, itemsTable } from "@workspace/db";
-import { requireModuleView } from "../middleware/permissions";
+import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 import { eq } from "drizzle-orm";
 import { CreateProductionBody } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
@@ -237,7 +237,7 @@ router.get("/productions/reports", requireModuleView("Production"), async (req, 
   });
 });
 
-router.post("/productions", async (req, res): Promise<void> => {
+router.post("/productions", requireModuleAction("Production", "add"), async (req, res): Promise<void> => {
   const parsed = CreateProductionBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
@@ -444,7 +444,7 @@ router.get("/productions/:id", async (req, res): Promise<void> => {
 });
 
 // ── Update (metadata only — date and notes) ───────────────────────────────────
-router.patch("/productions/:id", async (req, res): Promise<void> => {
+router.patch("/productions/:id", requireModuleAction("Production", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid production id" }); return; }
   const { productionDate, notes } = req.body as { productionDate?: string; notes?: string };
@@ -460,7 +460,7 @@ router.patch("/productions/:id", async (req, res): Promise<void> => {
 });
 
 // ── Delete (with full stock reversal) ────────────────────────────────────────
-router.delete("/productions/:id", async (req, res): Promise<void> => {
+router.delete("/productions/:id", requireModuleAction("Production", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid production id" }); return; }
   // ── Full reversal in one transaction ─────────────────────────────────────

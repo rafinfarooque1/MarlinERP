@@ -146,24 +146,63 @@ router.get("/dashboard/recent-activity", async (req, res): Promise<void> => {
 
 // ── Analytics endpoints ──────────────────────────────────────────────────────
 
+// Shared sales filter builder (Phase 7): from/to (YYYY-MM-DD) override the
+// legacy `days` window; optional locationType+locationId or
+// warehouseScope=<warehouseId> (warehouse + its child outlets). All conditions
+// use COALESCE because location_type/location_id are raw-migration columns
+// that are null on legacy rows (outlet sales).
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function salesWhere(query: Record<string, unknown>): { conds: string[]; params: unknown[]; error?: string } {
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  const from = typeof query.from === 'string' ? query.from : '';
+  const to = typeof query.to === 'string' ? query.to : '';
+  if ((from && !DATE_RE.test(from)) || (to && !DATE_RE.test(to))) {
+    return { conds, params, error: 'from/to must be YYYY-MM-DD' };
+  }
+  if (from) { params.push(from); conds.push(`s.sale_date >= $${params.length}::date`); }
+  if (to)   { params.push(to);   conds.push(`s.sale_date <= $${params.length}::date`); }
+  if (!from && !to) {
+    const days = Math.min(Math.max(parseInt(String(query.days)) || 30, 1), 365);
+    params.push(days);
+    conds.push(`s.sale_date >= CURRENT_DATE - ($${params.length}::int * INTERVAL '1 day')`);
+  }
+  const lt = query.locationType;
+  const lid = Number(query.locationId);
+  if ((lt === 'warehouse' || lt === 'outlet') && Number.isFinite(lid) && lid > 0) {
+    params.push(lt);  conds.push(`COALESCE(s.location_type, 'outlet') = $${params.length}`);
+    params.push(lid); conds.push(`COALESCE(s.location_id, s.outlet_id) = $${params.length}`);
+  }
+  const ws = Number(query.warehouseScope);
+  if (Number.isFinite(ws) && ws > 0) {
+    params.push(ws);
+    const p = params.length;
+    conds.push(`((COALESCE(s.location_type, 'outlet') = 'warehouse' AND COALESCE(s.location_id, s.outlet_id) = $${p})
+      OR (COALESCE(s.location_type, 'outlet') = 'outlet' AND COALESCE(s.location_id, s.outlet_id) IN (SELECT id FROM outlets WHERE warehouse_id = $${p})))`);
+  }
+  return { conds, params };
+}
+
 router.get("/dashboard/sales-trend", async (req, res): Promise<void> => {
-  const days = Math.min(Math.max(parseInt(req.query.days as string) || 30, 1), 365);
-  const rows = await db.execute(sql`
+  const f = salesWhere(req.query as Record<string, unknown>);
+  if (f.error) { res.status(400).json({ error: f.error }); return; }
+  const { rows } = await pool.query(`
     SELECT
-      sale_date::text            AS date,
-      COALESCE(SUM(total_amount), 0)::float  AS revenue,
-      COUNT(*)::int              AS invoices
-    FROM sales
-    WHERE sale_date >= CURRENT_DATE - (${days}::int * INTERVAL '1 day')
-    GROUP BY sale_date
-    ORDER BY sale_date
-  `);
-  res.json(rows.rows);
+      s.sale_date::text                            AS date,
+      COALESCE(SUM(s.total_amount::numeric), 0)::float AS revenue,
+      COUNT(*)::int                                AS invoices
+    FROM sales s
+    WHERE ${f.conds.join(' AND ')}
+    GROUP BY s.sale_date
+    ORDER BY s.sale_date
+  `, f.params);
+  res.json(rows);
 });
 
 router.get("/dashboard/top-items", async (req, res): Promise<void> => {
-  const days = Math.min(Math.max(parseInt(req.query.days as string) || 30, 1), 365);
-  const rows = await db.execute(sql`
+  const f = salesWhere(req.query as Record<string, unknown>);
+  if (f.error) { res.status(400).json({ error: f.error }); return; }
+  const { rows } = await pool.query(`
     SELECT
       (li->>'itemId')::int                                                        AS item_id,
       COALESCE(i.name, 'Unknown')                                                  AS item_name,
@@ -173,12 +212,39 @@ router.get("/dashboard/top-items", async (req, res): Promise<void> => {
     FROM sales s
     CROSS JOIN LATERAL jsonb_array_elements(s.line_items) AS li
     LEFT JOIN items i ON i.id = (li->>'itemId')::int
-    WHERE s.sale_date >= CURRENT_DATE - (${days}::int * INTERVAL '1 day')
+    WHERE ${f.conds.join(' AND ')}
     GROUP BY (li->>'itemId')::int, i.name
     ORDER BY revenue DESC
     LIMIT 10
-  `);
-  res.json(rows.rows);
+  `, f.params);
+  res.json(rows);
+});
+
+// Per-location sales breakdown for the dashboard (Phase 7). Includes
+// warehouse-located sales correctly (bug #37).
+router.get("/dashboard/sales-by-location", async (req, res): Promise<void> => {
+  const f = salesWhere(req.query as Record<string, unknown>);
+  if (f.error) { res.status(400).json({ error: f.error }); return; }
+  const { rows } = await pool.query(`
+    SELECT COALESCE(s.location_type, 'outlet')  AS location_type,
+           COALESCE(s.location_id, s.outlet_id) AS location_id,
+           COALESCE(w.name, o.name, 'Unknown')  AS location_name,
+           COUNT(*)::int                        AS invoices,
+           COALESCE(SUM(s.total_amount::numeric), 0)::float AS revenue
+    FROM sales s
+    LEFT JOIN warehouses w ON COALESCE(s.location_type, 'outlet') = 'warehouse' AND w.id = COALESCE(s.location_id, s.outlet_id)
+    LEFT JOIN outlets    o ON COALESCE(s.location_type, 'outlet') = 'outlet'    AND o.id = COALESCE(s.location_id, s.outlet_id)
+    WHERE ${f.conds.join(' AND ')}
+    GROUP BY 1, 2, 3
+    ORDER BY revenue DESC
+  `, f.params);
+  res.json(rows.map((r: any) => ({
+    locationType: r.location_type,
+    locationId: Number(r.location_id),
+    locationName: r.location_name,
+    invoices: Number(r.invoices),
+    revenue: Number(r.revenue),
+  })));
 });
 
 router.get("/dashboard/production-trend", async (req, res): Promise<void> => {

@@ -1,8 +1,8 @@
 import { useState, useMemo, useEffect } from 'react';
 import {
-  useListSales, useCreateSale, useListOutlets, useListCustomers, useCreateCustomer,
+  usePaginatedSales, useCreateSale, useListOutlets, useListCustomers, useCreateCustomer,
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
-  getListSalesQueryKey, getListCustomersQueryKey, useListCoupons,
+  getListCustomersQueryKey, useListCoupons,
   customFetch,
   useGetSalePayments, useCreateSalePayment, useUpdateSale,
 } from '@workspace/api-client-react';
@@ -126,21 +126,44 @@ interface SalesProps {
   forceChildOutletIds?: number[];
 }
 
-export default function Sales({ forceLocationType, forceLocationId, forceLocationName, forceChildOutletIds }: SalesProps = {}) {
+export default function Sales({ forceLocationType, forceLocationId, forceLocationName }: SalesProps = {}) {
   const perm = usePermission('Sales');
   const { data: outlets = [] } = useListOutlets();
   const [outletFilter, setOutletFilter] = useState<string>('all');
-  const { data: allSales = [], isLoading } = useListSales(
-    outletFilter !== 'all' ? { outletId: Number(outletFilter) } : undefined
-  );
-  // When a location is forced (Sales segment), filter the list to that location + optional child outlets
-  const forceChildOutletIdSet = new Set(forceChildOutletIds ?? []);
-  const sales = forceLocationType && forceLocationId
-    ? allSales.filter(s =>
-        ((s as any).locationType === forceLocationType && Number((s as any).locationId) === forceLocationId) ||
-        (forceChildOutletIdSet.size > 0 && (s as any).locationType === 'outlet' && forceChildOutletIdSet.has(Number((s as any).locationId)))
-      )
-    : allSales;
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 25;
+
+  // Debounce the search box — invoice/customer search runs server-side
+  useEffect(() => {
+    const t = setTimeout(() => { setDebouncedSearch(search.trim()); setPage(1); }, 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // Server-paginated list. A forced warehouse passes warehouseScope so the
+  // server returns the warehouse plus its child outlets (replaces the old
+  // client-side forceChildOutletIds filtering).
+  const { data: salesPage, isLoading, isFetching } = usePaginatedSales({
+    page,
+    limit: PAGE_SIZE,
+    q: debouncedSearch || undefined,
+    ...(forceLocationType === 'warehouse' && forceLocationId
+      ? { warehouseScope: forceLocationId }
+      : forceLocationType === 'outlet' && forceLocationId
+        ? { locationType: 'outlet' as const, locationId: forceLocationId }
+        : outletFilter !== 'all'
+          ? { locationType: 'outlet' as const, locationId: Number(outletFilter) }
+          : {}),
+  });
+  const sales = salesPage?.rows ?? [];
+  const totalSales = salesPage?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalSales / PAGE_SIZE));
+
+  // Clamp page when the result set shrinks (deletes, concurrent changes)
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
   // When operating inside a specific location (Sales segment), scope customers to that location only
   const { data: customers = [] } = useQuery<any[]>({
     queryKey: ['customers', forceLocationType, forceLocationId],
@@ -150,7 +173,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   });
   const { data: items = [] } = useListItems();
   const { data: companySettings } = useGetCompanySettings();
-  const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'unpaid' | 'partially_paid' | 'paid'>('all');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
@@ -186,6 +208,17 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     return () => { cancelled = true; };
   }, [viewItem, paymentRows]);
   const queryClient = useQueryClient();
+
+  // Refresh every sales-derived view after a write: sales lists (legacy +
+  // paginated), sales summary, dashboard analytics and stock levels.
+  const invalidateSalesData = () =>
+    queryClient.invalidateQueries({
+      predicate: q => {
+        const k = String(q.queryKey[0] ?? '');
+        return k.startsWith('/api/sales') || k.startsWith('/api/dashboard') || k.startsWith('/api/stock');
+      },
+    });
+
   const createMutation = useCreateSale();
   const updateMutation = useUpdateSale();
   const createCustomerMutation = useCreateCustomer();
@@ -236,7 +269,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         : `₹${totalPaying.toLocaleString('en-IN')} via ${validRows[0].method}`;
       toast.success(`Payment collected — ${label}`);
       setViewItem((prev: any) => prev ? { ...prev, paymentStatus: lastResult.newPaymentStatus, amountPaid: lastResult.newAmountPaid, balanceDue: Math.max(0, prev.totalAmount - lastResult.newAmountPaid) } : null);
-      queryClient.invalidateQueries({ queryKey: getListSalesQueryKey() });
+      invalidateSalesData();
       setPaymentRows([{ id: Date.now(), method: 'cash', amount: '', ref: '' }]);
       setShowPaymentForm(false);
     } catch (e: any) {
@@ -369,7 +402,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       updateMutation.mutate({ saleId: editItem.id, data: payload }, {
         onSuccess: (updated: any) => {
           toast.success('Sale updated successfully');
-          queryClient.invalidateQueries({ queryKey: getListSalesQueryKey() });
+          invalidateSalesData();
           // Refresh view sheet if the edited sale is currently open
           if (viewItem?.id === editItem.id) setViewItem({ ...viewItem, ...updated });
           setIsOpen(false);
@@ -383,7 +416,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       createMutation.mutate({ data: payload }, {
         onSuccess: () => {
           toast.success('Sale recorded successfully');
-          queryClient.invalidateQueries({ queryKey: getListSalesQueryKey() });
+          invalidateSalesData();
           setIsOpen(false);
           form.reset(effectiveDefaultValues);
         },
@@ -413,7 +446,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     createMutation.mutate({ data: { ...creditWarning.payload, creditOverride: true } }, {
       onSuccess: () => {
         toast.success('Sale recorded (credit limit overridden)');
-        queryClient.invalidateQueries({ queryKey: getListSalesQueryKey() });
+        invalidateSalesData();
         setCreditWarning(null);
         setIsOpen(false);
         form.reset(effectiveDefaultValues);
@@ -525,19 +558,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     }
   };
 
-  const statusCounts = {
-    all: sales.length,
-    unpaid: sales.filter(s => ((s as any).paymentStatus ?? 'paid') === 'unpaid').length,
-    partially_paid: sales.filter(s => ((s as any).paymentStatus ?? 'paid') === 'partially_paid').length,
-    paid: sales.filter(s => ((s as any).paymentStatus ?? 'paid') === 'paid').length,
-  };
-
-  const filtered = sales
-    .filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter)
-    .filter(s =>
-      s.invoiceNumber?.toLowerCase().includes(search.toLowerCase()) ||
-      s.customerName?.toLowerCase().includes(search.toLowerCase())
-    );
+  // Search runs server-side; the status pills filter the current page locally.
+  const filtered = sales.filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter);
 
   const itemsMap = new Map(items.map(i => [i.id, i]));
 
@@ -586,7 +608,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               <Search className="w-4 h-4 text-muted-foreground" />
               <Input placeholder="Search invoice or customer..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0" />
             </div>
-            <Select value={outletFilter} onValueChange={setOutletFilter}>
+            <Select value={outletFilter} onValueChange={v => { setOutletFilter(v); setPage(1); }}>
               <SelectTrigger className="w-40"><SelectValue placeholder="All Outlets" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Outlets</SelectItem>
@@ -612,7 +634,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     : 'bg-transparent text-muted-foreground border-border hover:border-primary/50 hover:text-foreground'
                 )}
               >
-                {label} ({statusCounts[key]})
+                {label}
               </button>
             ))}
           </div>
@@ -677,10 +699,22 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               ))}
             </TableBody>
           </Table>
-          {filtered.length > 0 && (
-            <div className="p-3 border-t border-border flex justify-between text-sm">
-              <span className="text-muted-foreground">{filtered.length} sales</span>
-              <span className="font-bold text-emerald-500">Total: ₹{filtered.reduce((s, r) => s + Number(r.totalAmount || 0), 0).toLocaleString('en-IN')}</span>
+          {totalSales > 0 && (
+            <div className="p-3 border-t border-border flex flex-wrap items-center justify-between gap-3 text-sm">
+              <span className="text-muted-foreground">
+                Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, totalSales)} of {totalSales} sales
+                {isFetching ? ' · refreshing…' : ''}
+              </span>
+              <div className="flex items-center gap-3">
+                <span className="font-bold text-emerald-500">
+                  Page total: ₹{filtered.reduce((s, r) => s + Number(r.totalAmount || 0), 0).toLocaleString('en-IN')}
+                </span>
+                <div className="flex items-center gap-1">
+                  <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Prev</Button>
+                  <span className="px-1 text-xs text-muted-foreground">Page {page}/{totalPages}</span>
+                  <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</Button>
+                </div>
+              </div>
             </div>
           )}
         </div>

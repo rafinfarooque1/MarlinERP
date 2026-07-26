@@ -8,6 +8,8 @@ export type BodyType<T> = T;
 
 export type AuthTokenGetter = () => Promise<string | null> | string | null;
 
+export type AuthTokenSetter = (token: string) => void;
+
 const NO_BODY_STATUS = new Set([204, 205, 304]);
 const DEFAULT_JSON_ACCEPT = "application/json, application/problem+json";
 
@@ -42,6 +44,18 @@ export function setBaseUrl(url: string | null): void {
  */
 export function setAuthTokenGetter(getter: AuthTokenGetter | null): void {
   _authTokenGetter = getter;
+}
+
+let _authTokenSetter: AuthTokenSetter | null = null;
+
+/**
+ * Register a setter invoked whenever the server sends a refreshed auth token
+ * via the `x-refreshed-token` response header (token rotation, e.g. sliding
+ * session expiry). The app should persist the new token wherever its
+ * AuthTokenGetter reads from. Pass `null` to clear.
+ */
+export function setAuthTokenSetter(setter: AuthTokenSetter | null): void {
+  _authTokenSetter = setter;
 }
 
 function isRequest(input: RequestInfo | URL): input is Request {
@@ -361,6 +375,14 @@ export async function customFetch<T = unknown>(
   const requestInfo = { method, url: resolveUrl(input) };
 
   const response = await fetch(input, { ...init, method, headers });
+
+  // Transparent token rotation: if the server attaches x-refreshed-token
+  // (e.g. sliding session expiry), persist it so subsequent requests use
+  // the newest token. Legacy unsigned tokens are rejected with 401 instead.
+  const refreshedToken = response.headers.get("x-refreshed-token");
+  if (refreshedToken && _authTokenSetter) {
+    try { _authTokenSetter(refreshedToken); } catch { /* persisting is best-effort */ }
+  }
 
   if (!response.ok) {
     const errorData = await parseErrorBody(response, method);

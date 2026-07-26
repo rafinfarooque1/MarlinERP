@@ -37,8 +37,9 @@ import {
 import { useLocationContext } from '@/lib/locationContext';
 import { useTheme } from '@/lib/theme';
 import { Button } from '@/components/ui/button';
-import { useLogout, useGetMe, useChangePassword, useListPermissions, useListHierarchies } from '@workspace/api-client-react';
+import { useLogout, useGetMe, useChangePassword, useListPermissions, useListHierarchies, useQuickSearch } from '@workspace/api-client-react';
 import { Input } from '@/components/ui/input';
+import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -156,10 +157,11 @@ const navigation = [
     icon: Settings,
     // Company group — most items are admin-only (Settings module guards them)
     children: [
-      { name: 'Settings',         href: '/company/settings',     module: 'Settings'     },
-      { name: 'Company Profile',  href: '/company/profile',      module: 'Settings'     },
-      { name: 'Permissions',      href: '/company/permissions',  module: 'Permissions'  },
-      { name: 'Audit Log',        href: '/company/audit',        module: 'Settings'     },
+      { name: 'Settings',         href: '/company/settings',      module: 'Settings'      },
+      { name: 'Company Profile',  href: '/company/profile',       module: 'Settings'      },
+      { name: 'Permissions',      href: '/company/permissions',   module: 'Permissions'   },
+      { name: 'Audit Log',        href: '/company/audit',         module: 'Settings'      },
+      { name: 'Login History',    href: '/company/login-history', module: 'Login History' },
     ],
   },
 ];
@@ -419,6 +421,31 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   // Location-locked employees cannot change their location
   const canChangeLocation = !isLocationEmployee;
 
+  // ── Global quick search (Cmd/Ctrl+K) ────────────────────────────────────────
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQ, setSearchQ] = useState('');
+  const [debouncedQ, setDebouncedQ] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(searchQ), 250);
+    return () => clearTimeout(t);
+  }, [searchQ]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setSearchOpen(o => !o);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  const { data: searchResults, isFetching: searchFetching } = useQuickSearch(searchOpen ? debouncedQ : '');
+  const gotoResult = (href: string) => {
+    setSearchOpen(false);
+    setSearchQ('');
+    setLocation(href);
+  };
+
   // Change-password dialog state
   const [pwOpen, setPwOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
@@ -667,10 +694,16 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 <Menu className="w-5 h-5" />
               </Button>
 
-              <div className="hidden md:flex items-center relative w-64 lg:w-96">
-                <Search className="w-4 h-4 absolute left-3 text-muted-foreground" />
-                <Input placeholder="Search everywhere..." className="pl-9 bg-muted/50 border-transparent focus-visible:bg-transparent" />
-              </div>
+              <button
+                onClick={() => setSearchOpen(true)}
+                className="hidden md:flex items-center gap-2 w-64 lg:w-96 h-9 px-3 rounded-md bg-muted/50 text-sm text-muted-foreground hover:bg-muted transition-colors"
+              >
+                <Search className="w-4 h-4 shrink-0" />
+                <span className="flex-1 text-left">Search everywhere...</span>
+                <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border border-border bg-background px-1.5 font-mono text-[10px] font-medium">
+                  <span className="text-xs">⌘</span>K
+                </kbd>
+              </button>
             </div>
 
             <div className="flex items-center gap-2 lg:gap-4">
@@ -752,6 +785,66 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
         </main>
       </div>
+
+      {/* ── Global Quick Search (Cmd/Ctrl+K) ───────────────────── */}
+      <CommandDialog open={searchOpen} onOpenChange={(o) => { setSearchOpen(o); if (!o) setSearchQ(''); }}>
+        <CommandInput
+          placeholder="Search items, customers, vendors, invoices..."
+          value={searchQ}
+          onValueChange={setSearchQ}
+        />
+        <CommandList>
+          <CommandEmpty>
+            {debouncedQ.trim().length < 2
+              ? 'Type at least 2 characters to search.'
+              : searchFetching ? 'Searching…' : 'No results found.'}
+          </CommandEmpty>
+          {searchResults && searchResults.items.length > 0 && (
+            <CommandGroup heading="Items">
+              {searchResults.items.map(r => (
+                <CommandItem key={`item-${r.id}`} value={`item-${r.id}-${r.title}`} onSelect={() => gotoResult('/production/item-master')}>
+                  <Package className="mr-2 h-4 w-4 text-muted-foreground" />
+                  <span>{r.title}</span>
+                  {r.subtitle && <span className="ml-2 text-xs text-muted-foreground">{r.subtitle}</span>}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+          {searchResults && searchResults.customers.length > 0 && (
+            <CommandGroup heading="Customers">
+              {searchResults.customers.map(r => (
+                <CommandItem key={`cust-${r.id}`} value={`cust-${r.id}-${r.title}`} onSelect={() => gotoResult('/customers')}>
+                  <Users className="mr-2 h-4 w-4 text-muted-foreground" />
+                  <span>{r.title}</span>
+                  {r.subtitle && <span className="ml-2 text-xs text-muted-foreground">{r.subtitle}</span>}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+          {searchResults && searchResults.vendors.length > 0 && (
+            <CommandGroup heading="Vendors">
+              {searchResults.vendors.map(r => (
+                <CommandItem key={`vend-${r.id}`} value={`vend-${r.id}-${r.title}`} onSelect={() => gotoResult('/vendors')}>
+                  <Building2 className="mr-2 h-4 w-4 text-muted-foreground" />
+                  <span>{r.title}</span>
+                  {r.subtitle && <span className="ml-2 text-xs text-muted-foreground">{r.subtitle}</span>}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+          {searchResults && searchResults.sales.length > 0 && (
+            <CommandGroup heading="Sales Invoices">
+              {searchResults.sales.map(r => (
+                <CommandItem key={`sale-${r.id}`} value={`sale-${r.id}-${r.title}`} onSelect={() => gotoResult('/headoffice/sales')}>
+                  <Receipt className="mr-2 h-4 w-4 text-muted-foreground" />
+                  <span>{r.title}</span>
+                  {r.subtitle && <span className="ml-2 text-xs text-muted-foreground">{r.subtitle}</span>}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+        </CommandList>
+      </CommandDialog>
 
       {/* ── Change Password Dialog ─────────────────────────────── */}
       <Dialog open={pwOpen} onOpenChange={setPwOpen}>

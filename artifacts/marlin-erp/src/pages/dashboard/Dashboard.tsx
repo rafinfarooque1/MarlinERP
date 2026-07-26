@@ -3,8 +3,11 @@ import {
   useGetDashboardSummary,
   useGetStockAlerts,
   useGetRecentActivity,
-  useListSales,
+  useGetSalesByLocation,
   useListStock,
+  useListWarehouses,
+  useListOutlets,
+  type SalesAnalyticsFilters,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import {
@@ -13,6 +16,8 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   Activity, AlertTriangle, Box, CreditCard, Users,
   ArrowUpRight, ArrowDownRight, Package, ArrowRightLeft,
@@ -51,39 +56,47 @@ const OUTLET_COLOR    = 'hsl(var(--chart-2))';
 
 export default function Dashboard() {
   const [salesPeriod, setSalesPeriod] = useState<30 | 90>(30);
+  const [fromDate, setFromDate]   = useState('');
+  const [toDate, setToDate]       = useState('');
+  const [locFilter, setLocFilter] = useState('all'); // 'all' | 'w:<id>' | 'o:<id>'
 
   const { data: summary,  isLoading: loadingSummary }  = useGetDashboardSummary();
   const { data: alerts,   isLoading: loadingAlerts }   = useGetStockAlerts();
   const { data: activity, isLoading: loadingActivity } = useGetRecentActivity();
-  const { data: allSales  = [], isLoading: loadingSales } = useListSales();
   const { data: allStock  = [], isLoading: loadingStock } = useListStock({});
+  const { data: warehouses = [] } = useListWarehouses();
+  const { data: outlets = [] }    = useListOutlets();
 
-  // ── Sales by location ──────────────────────────────────────────────────────
-  const cutoffDate = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - salesPeriod);
-    return d;
-  }, [salesPeriod]);
+  // ── Sales by location (server-aggregated, includes warehouse sales) ───────
+  const salesFilters = useMemo<SalesAnalyticsFilters>(() => {
+    const f: SalesAnalyticsFilters = {};
+    if (fromDate) f.from = fromDate;
+    if (toDate)   f.to   = toDate;
+    if (!fromDate && !toDate) f.days = salesPeriod;
+    if (locFilter.startsWith('w:')) {
+      f.warehouseScope = Number(locFilter.slice(2));
+    } else if (locFilter.startsWith('o:')) {
+      f.locationType = 'outlet';
+      f.locationId = Number(locFilter.slice(2));
+    }
+    return f;
+  }, [salesPeriod, fromDate, toDate, locFilter]);
 
-  const periodSales = useMemo(() =>
-    (allSales as any[]).filter(s => s.saleDate && new Date(s.saleDate) >= cutoffDate),
-    [allSales, cutoffDate]
+  const { data: locationRows = [], isLoading: loadingSales } = useGetSalesByLocation(salesFilters);
+
+  const salesByLocation = useMemo(() =>
+    [...locationRows]
+      .map(r => ({ name: r.locationName, type: r.locationType, total: Number(r.revenue), count: Number(r.invoices) }))
+      .sort((a, b) => b.total - a.total),
+    [locationRows]
   );
 
-  const salesByLocation = useMemo(() => {
-    const map = new Map<string, { name: string; type: string; total: number; count: number }>();
-    for (const s of periodSales) {
-      const key  = `${s.locationType}-${s.locationId}`;
-      const name = s.outletName || s.locationName || s.warehouseName || `${s.locationType} #${s.locationId}`;
-      if (!map.has(key)) map.set(key, { name, type: s.locationType ?? 'outlet', total: 0, count: 0 });
-      const grp = map.get(key)!;
-      grp.total += Number(s.totalAmount ?? 0);
-      grp.count += 1;
-    }
-    return [...map.values()].sort((a, b) => b.total - a.total);
-  }, [periodSales]);
+  const totalPeriodSales = salesByLocation.reduce((s, loc) => s + loc.total, 0);
 
-  const totalPeriodSales = periodSales.reduce((s, sale) => s + Number((sale as any).totalAmount ?? 0), 0);
+  const usingCustomRange = !!(fromDate || toDate);
+  const periodLabel = usingCustomRange
+    ? `${fromDate || '…'} → ${toDate || 'today'}`
+    : `last ${salesPeriod} days`;
 
   const salesChartData = salesByLocation.map(loc => ({
     name:     truncate(loc.name, 14),
@@ -195,6 +208,40 @@ export default function Dashboard() {
           />
         </div>
 
+        {/* ── Sales filters (location + date range) ──────────────────────── */}
+        <div className="flex flex-wrap items-center gap-2">
+          <Select value={locFilter} onValueChange={setLocFilter}>
+            <SelectTrigger className="w-56 h-9 bg-card"><SelectValue placeholder="All locations" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All locations</SelectItem>
+              {(warehouses as any[]).length > 0 && (
+                <div className="px-2 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Warehouses (incl. their outlets)
+                </div>
+              )}
+              {(warehouses as any[]).map((w: any) => (
+                <SelectItem key={`w${w.id}`} value={`w:${w.id}`}>{w.name}</SelectItem>
+              ))}
+              {(outlets as any[]).length > 0 && (
+                <div className="px-2 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Outlets
+                </div>
+              )}
+              {(outlets as any[]).map((o: any) => (
+                <SelectItem key={`o${o.id}`} value={`o:${o.id}`}>{o.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="w-[9.5rem] h-9 bg-card" aria-label="From date" />
+          <span className="text-xs text-muted-foreground">to</span>
+          <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-[9.5rem] h-9 bg-card" aria-label="To date" />
+          {usingCustomRange && (
+            <Button variant="ghost" size="sm" className="h-9 text-xs" onClick={() => { setFromDate(''); setToDate(''); }}>
+              Clear dates
+            </Button>
+          )}
+        </div>
+
         {/* ── Sales by Location chart + Top Locations ────────────────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
@@ -208,8 +255,8 @@ export default function Dashboard() {
                     {loadingSales
                       ? 'Loading…'
                       : salesByLocation.length > 0
-                        ? `${fmtRupee(totalPeriodSales)} across ${salesByLocation.length} location${salesByLocation.length !== 1 ? 's' : ''} — last ${salesPeriod} days`
-                        : `No sales in last ${salesPeriod} days`}
+                        ? `${fmtRupee(totalPeriodSales)} across ${salesByLocation.length} location${salesByLocation.length !== 1 ? 's' : ''} — ${periodLabel}`
+                        : `No sales — ${periodLabel}`}
                   </CardDescription>
                 </div>
                 <div className="flex items-center gap-3">
@@ -229,10 +276,10 @@ export default function Dashboard() {
                     {([30, 90] as const).map(d => (
                       <Button
                         key={d}
-                        variant={salesPeriod === d ? 'default' : 'outline'}
+                        variant={!usingCustomRange && salesPeriod === d ? 'default' : 'outline'}
                         size="sm"
                         className="h-7 px-3 text-xs"
-                        onClick={() => setSalesPeriod(d)}
+                        onClick={() => { setFromDate(''); setToDate(''); setSalesPeriod(d); }}
                       >
                         {d}d
                       </Button>
@@ -302,7 +349,7 @@ export default function Dashboard() {
                 <Trophy className="w-5 h-5 text-amber-500" />
                 Top Sale Locations
               </CardTitle>
-              <CardDescription>Ranked by revenue — last {salesPeriod} days</CardDescription>
+              <CardDescription>Ranked by revenue — {periodLabel}</CardDescription>
             </CardHeader>
             <CardContent className="flex-1 overflow-auto">
               {loadingSales ? (

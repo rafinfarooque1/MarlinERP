@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireModuleAction } from "../middleware/permissions";
 import { db, warehousesTable, outletsTable, pool } from "@workspace/db";
 import { eq, count } from "drizzle-orm";
 import {
@@ -138,7 +139,7 @@ router.get("/warehouses", async (_req, res): Promise<void> => {
   res.json(rows.map((r) => ({ ...r, outletCount: countMap.get(r.id) ?? 0, ...ledgerMap.get(r.id) })));
 });
 
-router.post("/warehouses", async (req, res): Promise<void> => {
+router.post("/warehouses", requireModuleAction("Warehouses", "add"), async (req, res): Promise<void> => {
   const parsed = CreateWarehouseBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const [row] = await db.insert(warehousesTable).values(parsed.data).returning();
@@ -161,7 +162,7 @@ router.get("/warehouses/:id", async (req, res): Promise<void> => {
   res.json({ ...row, outletCount: cnt?.cnt ?? 0, cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, purchaseLedgerId: ledgers?.purchase_ledger_id ?? null });
 });
 
-router.patch("/warehouses/:id", async (req, res): Promise<void> => {
+router.patch("/warehouses/:id", requireModuleAction("Warehouses", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const parsed = UpdateWarehouseBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
@@ -180,7 +181,7 @@ router.patch("/warehouses/:id", async (req, res): Promise<void> => {
   res.json({ ...row, outletCount: cnt?.cnt ?? 0, cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, purchaseLedgerId: ledgers?.purchase_ledger_id ?? null });
 });
 
-router.delete("/warehouses/:id", async (req, res): Promise<void> => {
+router.delete("/warehouses/:id", requireModuleAction("Warehouses", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   // Fetch linked ledger IDs
   const { rows: [wh] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null }>(
@@ -207,7 +208,7 @@ router.get("/outlets", async (_req, res): Promise<void> => {
   res.json(rows.map((r) => ({ ...r, warehouseName: wMap.get(r.warehouseId) ?? "", ...ledgerMap.get(r.id) })));
 });
 
-router.post("/outlets", async (req, res): Promise<void> => {
+router.post("/outlets", requireModuleAction("Outlets", "add"), async (req, res): Promise<void> => {
   const parsed = CreateOutletBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const [row] = await db.insert(outletsTable).values(parsed.data).returning();
@@ -231,7 +232,7 @@ router.get("/outlets/:id", async (req, res): Promise<void> => {
   res.json({ ...row, warehouseName: wh?.name ?? "", cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null });
 });
 
-router.patch("/outlets/:id", async (req, res): Promise<void> => {
+router.patch("/outlets/:id", requireModuleAction("Outlets", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const parsed = UpdateOutletBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
@@ -248,7 +249,7 @@ router.patch("/outlets/:id", async (req, res): Promise<void> => {
   res.json({ ...row, warehouseName: wh?.name ?? "", cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null });
 });
 
-router.delete("/outlets/:id", async (req, res): Promise<void> => {
+router.delete("/outlets/:id", requireModuleAction("Outlets", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { rows: [outlet] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null }>(
     `SELECT cash_ledger_id, sales_ledger_id FROM outlets WHERE id = $1`, [id]

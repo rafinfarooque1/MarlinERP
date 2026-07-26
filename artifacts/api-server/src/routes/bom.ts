@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireModuleAction } from "../middleware/permissions";
 import { db, pool, bomTemplatesTable, itemsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logActivity } from "../lib/audit";
@@ -55,7 +56,7 @@ router.get("/bom-templates/item/:itemId", async (req, res): Promise<void> => {
   res.json({ ...row, itemName: item?.name ?? `Item #${itemId}` });
 });
 
-router.post("/bom-templates", async (req, res): Promise<void> => {
+router.post("/bom-templates", requireModuleAction("Production", "add"), async (req, res): Promise<void> => {
   const itemId = Number(req.body?.itemId);
   if (!Number.isInteger(itemId) || itemId <= 0) { res.status(400).json({ error: "itemId required" }); return; }
   const [item] = await db.select().from(itemsTable).where(eq(itemsTable.id, itemId)).limit(1);
@@ -79,7 +80,7 @@ router.post("/bom-templates", async (req, res): Promise<void> => {
   res.status(201).json({ ...row, itemName: item.name });
 });
 
-router.put("/bom-templates/:id", async (req, res): Promise<void> => {
+router.put("/bom-templates/:id", requireModuleAction("Production", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid id" }); return; }
   const [existing] = await db.select().from(bomTemplatesTable).where(eq(bomTemplatesTable.id, id)).limit(1);
@@ -108,7 +109,7 @@ router.put("/bom-templates/:id", async (req, res): Promise<void> => {
   res.json({ ...row, itemName: item?.name ?? `Item #${row.itemId}` });
 });
 
-router.delete("/bom-templates/:id", async (req, res): Promise<void> => {
+router.delete("/bom-templates/:id", requireModuleAction("Production", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid id" }); return; }
   const [existing] = await db.select().from(bomTemplatesTable).where(eq(bomTemplatesTable.id, id)).limit(1);

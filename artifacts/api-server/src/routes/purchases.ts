@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireModuleAction } from "../middleware/permissions";
 import { db, pool, purchasesTable, vendorsTable, materialsTable, rawMaterialsTable, itemsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { CreatePurchaseBody, GetPurchaseParams } from "@workspace/api-zod";
@@ -77,23 +78,74 @@ function enrichLines(lineItems: unknown, maps: NameMaps): any[] {
   }));
 }
 
-router.get("/purchases", async (_req, res): Promise<void> => {
-  const rows = await db.select().from(purchasesTable).orderBy(purchasesTable.id);
-  const vendors = await db.select().from(vendorsTable);
-  const vMap = new Map(vendors.map(v => [v.id, v.name]));
+// GET /purchases — optionally server-paginated (Phase 7). Without `page`/
+// `limit` the legacy full-array response is returned. `q` searches invoice
+// number and vendor name (works in both modes).
+router.get("/purchases", async (req, res): Promise<void> => {
+  const paginated = 'page' in req.query || 'limit' in req.query;
+  const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+
+  if (!paginated && !q) {
+    const rows = await db.select().from(purchasesTable).orderBy(purchasesTable.id);
+    const vendors = await db.select().from(vendorsTable);
+    const vMap = new Map(vendors.map(v => [v.id, v.name]));
+    const nameMaps = await buildNameMaps();
+    res.json(rows.map(r => ({
+      ...r,
+      vendorName: vMap.get(r.vendorId) ?? "",
+      totalAmount: Number(r.totalAmount),
+      taxTotal: Number((r as any).taxTotal ?? 0),
+      discountTotal: Number((r as any).discountTotal ?? 0),
+      roundOff: Number((r as any).roundOff ?? 0),
+      lineItems: enrichLines(r.lineItems, nameMaps),
+    })));
+    return;
+  }
+
+  const { pool } = await import("@workspace/db");
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  if (q) {
+    params.push(`%${q}%`);
+    conds.push(`(p.invoice_number ILIKE $${params.length} OR v.name ILIKE $${params.length})`);
+  }
+  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+  const baseFrom = `FROM purchases p LEFT JOIN vendors v ON v.id = p.vendor_id`;
+
+  const page = Math.max(parseInt(String(req.query.page ?? '1'), 10) || 1, 1);
+  const limit = paginated ? Math.min(Math.max(parseInt(String(req.query.limit ?? '25'), 10) || 25, 1), 200) : 0;
+  const { rows: [t] } = await pool.query(`SELECT COUNT(*)::int AS total ${baseFrom} ${where}`, params);
+  const total = Number(t?.total ?? 0);
+
+  const { rows } = await pool.query(`
+    SELECT p.*, p.purchase_date::text AS purchase_date_str, v.name AS vendor_name
+    ${baseFrom} ${where}
+    ORDER BY p.id DESC${limit ? ` LIMIT ${limit} OFFSET ${(page - 1) * limit}` : ''}
+  `, params);
   const nameMaps = await buildNameMaps();
-  res.json(rows.map(r => ({
-    ...r,
-    vendorName: vMap.get(r.vendorId) ?? "",
-    totalAmount: Number(r.totalAmount),
-    taxTotal: Number((r as any).taxTotal ?? 0),
-    discountTotal: Number((r as any).discountTotal ?? 0),
-    roundOff: Number((r as any).roundOff ?? 0),
-    lineItems: enrichLines(r.lineItems, nameMaps),
-  })));
+  const mapped = rows.map((r: any) => ({
+    id: r.id,
+    vendorId: r.vendor_id,
+    purchaseDate: r.purchase_date_str,
+    invoiceNumber: r.invoice_number,
+    notes: r.notes,
+    createdAt: r.created_at,
+    vendorName: r.vendor_name ?? "",
+    totalAmount: Number(r.total_amount),
+    taxTotal: Number(r.tax_total ?? 0),
+    discountTotal: Number(r.discount_total ?? 0),
+    roundOff: Number(r.round_off ?? 0),
+    lineItems: enrichLines(r.line_items, nameMaps),
+  }));
+
+  if (paginated) {
+    res.json({ total, page, limit, rows: mapped });
+  } else {
+    res.json(mapped);
+  }
 });
 
-router.post("/purchases", async (req, res): Promise<void> => {
+router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, res): Promise<void> => {
   const parsed = CreatePurchaseBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
@@ -178,7 +230,7 @@ router.get("/purchases/:id", async (req, res): Promise<void> => {
   });
 });
 
-router.patch("/purchases/:id", async (req, res): Promise<void> => {
+router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { purchaseDate, invoiceNumber, notes } = req.body as { purchaseDate?: string; invoiceNumber?: string; notes?: string };
   const updateData: Record<string, unknown> = {};
@@ -192,7 +244,7 @@ router.patch("/purchases/:id", async (req, res): Promise<void> => {
   res.json({ ...row, vendorName: vendor?.name ?? "", totalAmount: Number(row.totalAmount), lineItems: row.lineItems ?? [] });
 });
 
-router.delete("/purchases/:id", async (req, res): Promise<void> => {
+router.delete("/purchases/:id", requireModuleAction("Purchases", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const [row] = await db.select().from(purchasesTable).where(eq(purchasesTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }

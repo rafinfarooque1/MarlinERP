@@ -18,9 +18,31 @@ import { LoginBody } from '@workspace/api-zod';
 import { PasswordService } from '../lib/password';
 import { validatePassword } from '../lib/passwordPolicy';
 import { isLoginLocked, recordLoginFailure, clearLoginAttempts } from '../middleware/auth';
+import { signToken, verifyToken } from '../lib/token';
 import { logActivity } from '../lib/audit';
 
 const router = Router();
+
+/** Persist a login attempt row (fire-and-forget — never blocks the response). */
+function recordLoginHistory(entry: {
+  username: string; employeeId?: number | null; success: boolean;
+  ip?: string; userAgent?: string; reason?: string;
+}): void {
+  pool.query(
+    `INSERT INTO login_attempts (username, employee_id, success, ip, user_agent, reason)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [entry.username, entry.employeeId ?? null, entry.success,
+     entry.ip ?? null, (entry.userAgent ?? '').slice(0, 300) || null, entry.reason ?? null],
+  ).catch(() => {});
+}
+
+/** Resolve the employee id from the request's Bearer token, or null. */
+function empIdFromRequest(req: { headers: { authorization?: string } }): number | null {
+  const h = req.headers.authorization;
+  if (!h?.startsWith('Bearer ')) return null;
+  const payload = verifyToken(h.slice(7));
+  return payload?.id ?? null;
+}
 
 // ── Shared helper ─────────────────────────────────────────────────────────────
 /** Build the safe employee payload — NEVER includes password_hash. */
@@ -82,6 +104,8 @@ router.post('/auth/login', async (req, res): Promise<void> => {
   const { username, password } = parsed.data;
   const ip = (req.ip ?? 'unknown').replace('::ffff:', '');
 
+  const userAgent = req.headers['user-agent'] ?? '';
+
   // Rate-limit check before any DB query
   if (isLoginLocked(username)) {
     logActivity({
@@ -89,6 +113,7 @@ router.post('/auth/login', async (req, res): Promise<void> => {
       description: `LOGIN_FAILED: temporarily locked — username '${username}'`,
       user: username, metadata: { ip, reason: 'rate_limited' },
     }).catch(() => {});
+    recordLoginHistory({ username, success: false, ip, userAgent, reason: 'rate_limited' });
     res.status(429).json({ error: 'Too many failed attempts. Please try again in 15 minutes.' });
     return;
   }
@@ -112,11 +137,16 @@ router.post('/auth/login', async (req, res): Promise<void> => {
       description: `LOGIN_FAILED for username '${username}'`,
       user: username, metadata: { ip, locked: nowLocked },
     }).catch(() => {});
+    recordLoginHistory({
+      username, employeeId: emp?.id ?? null, success: false, ip, userAgent,
+      reason: nowLocked ? 'invalid_credentials_locked' : 'invalid_credentials',
+    });
     res.status(401).json({ error: 'Invalid username or password' });
     return;
   }
 
   if (!emp.is_active) {
+    recordLoginHistory({ username, employeeId: emp.id, success: false, ip, userAgent, reason: 'account_deactivated' });
     res.status(403).json({ error: 'Your account has been deactivated. Please contact your administrator.' });
     return;
   }
@@ -129,7 +159,9 @@ router.post('/auth/login', async (req, res): Promise<void> => {
     user: username, metadata: { ip },
   }).catch(() => {});
 
-  const token = Buffer.from(`${emp.id}:${emp.username}`).toString('base64');
+  recordLoginHistory({ username, employeeId: emp.id, success: true, ip, userAgent });
+
+  const token = signToken(emp.id, emp.username);
   const employee = await buildEmployeeResponse(emp);
   res.json({ token, employee });
 });
@@ -149,19 +181,9 @@ router.post('/auth/logout', async (req, res): Promise<void> => {
 router.post('/auth/change-password', async (req, res): Promise<void> => {
   // Resolve the employee from the Bearer token (global requireAuth may have set
   // req.employee, but this route does its own lookup for belt-and-suspenders)
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) {
+  const empId = empIdFromRequest(req);
+  if (empId == null) {
     res.status(401).json({ error: 'Authentication required' });
-    return;
-  }
-  const token = authHeader.slice(7);
-  let empId: number;
-  try {
-    const decoded = Buffer.from(token, 'base64').toString('utf-8');
-    empId = parseInt(decoded.split(':')[0], 10);
-    if (isNaN(empId)) throw new Error('bad token');
-  } catch {
-    res.status(401).json({ error: 'Invalid token' });
     return;
   }
 
@@ -171,7 +193,7 @@ router.post('/auth/change-password', async (req, res): Promise<void> => {
     return;
   }
 
-  const policy = validatePassword(newPassword);
+  const policy = await validatePassword(newPassword);
   if (!policy.valid) {
     res.status(400).json({ error: policy.error });
     return;
@@ -210,17 +232,12 @@ router.post('/auth/change-password', async (req, res): Promise<void> => {
 
 // ── GET /auth/me ──────────────────────────────────────────────────────────────
 router.get('/auth/me', async (req, res): Promise<void> => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) {
+  const empId = empIdFromRequest(req);
+  if (empId == null) {
     res.status(401).json({ error: 'Authentication required' });
     return;
   }
-  const token = authHeader.slice(7);
   try {
-    const decoded = Buffer.from(token, 'base64').toString('utf-8');
-    const empId = parseInt(decoded.split(':')[0], 10);
-    if (isNaN(empId)) throw new Error('bad token');
-
     const { rows } = await pool.query(
       `SELECT id, name, username, email, phone, hierarchy_id, branch_type, branch_id,
               salary, join_date, photo_url, is_active,
@@ -242,16 +259,8 @@ router.get('/auth/me', async (req, res): Promise<void> => {
 
 // ── PATCH /auth/profile — employee updates their own profile ──────────────────
 router.patch('/auth/profile', async (req, res): Promise<void> => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) { res.status(401).json({ error: 'Authentication required' }); return; }
-  const token = authHeader.slice(7);
-  let empId: number;
-  try {
-    empId = parseInt(Buffer.from(token, 'base64').toString('utf-8').split(':')[0], 10);
-    if (isNaN(empId)) throw new Error('bad token');
-  } catch {
-    res.status(401).json({ error: 'Invalid token' }); return;
-  }
+  const empId = empIdFromRequest(req);
+  if (empId == null) { res.status(401).json({ error: 'Authentication required' }); return; }
 
   const { name, phone, email, photoUrl, education, emergencyContact, personalAddress, dateOfBirth, bio } = req.body as Record<string, any>;
 

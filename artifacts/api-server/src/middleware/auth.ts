@@ -11,6 +11,7 @@
  */
 import { Request, Response, NextFunction } from 'express';
 import { pool } from '@workspace/db';
+import { verifyToken } from '../lib/token';
 
 // ── Express type augmentation ────────────────────────────────────────────────
 declare global {
@@ -74,6 +75,18 @@ export function clearLoginAttempts(username: string): void {
   loginAttempts.delete(username);
 }
 
+/** Currently locked usernames with their lock expiry (for the Login History page). */
+export function getActiveLockouts(): Array<{ username: string; lockedUntil: string; failedAttempts: number }> {
+  const now = Date.now();
+  const out: Array<{ username: string; lockedUntil: string; failedAttempts: number }> = [];
+  for (const [username, entry] of loginAttempts) {
+    if (entry.lockedUntil && entry.lockedUntil > now) {
+      out.push({ username, lockedUntil: new Date(entry.lockedUntil).toISOString(), failedAttempts: entry.count });
+    }
+  }
+  return out;
+}
+
 // ── requireAuth middleware ───────────────────────────────────────────────────
 export async function requireAuth(
   req: Request,
@@ -88,10 +101,9 @@ export async function requireAuth(
 
   const token = authHeader.slice(7);
   try {
-    const decoded = Buffer.from(token, 'base64').toString('utf-8');
-    const [idStr] = decoded.split(':');
-    const empId = parseInt(idStr, 10);
-    if (isNaN(empId)) throw new Error('invalid token');
+    const payload = verifyToken(token);
+    if (!payload) throw new Error('invalid token');
+    const empId = payload.id;
 
     const { rows } = await pool.query<{
       id: number;
@@ -120,6 +132,7 @@ export async function requireAuth(
       branchId: emp.branch_id,
       isActive: emp.is_active,
     };
+
     next();
   } catch {
     res.status(401).json({ error: 'Authentication required' });

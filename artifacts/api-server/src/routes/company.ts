@@ -1,9 +1,12 @@
 import { Router } from "express";
 import { db, companySettingsTable, permissionsTable, hierarchiesTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { pool } from "@workspace/db";
 import { SetPermissionBody } from "@workspace/api-zod";
 import { PasswordService } from "../lib/password";
+import { invalidatePolicyCache } from "../lib/passwordPolicy";
+import { getActiveLockouts } from "../middleware/auth";
+import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 
 const router = Router();
 
@@ -28,14 +31,23 @@ function pickCompanyFields(body: Record<string, any>) {
 
 // Extra settings live in raw columns (not in the Drizzle schema): invoice-PDF
 // text fields plus the default production overhead percentage (Phase 5).
-async function extraSettingsFields(id: number): Promise<{ paymentTerms: string | null; invoiceFooter: string | null; productionOverheadPercent: number }> {
+async function extraSettingsFields(id: number): Promise<{
+  paymentTerms: string | null; invoiceFooter: string | null; productionOverheadPercent: number;
+  passwordMinLength: number; passwordRequireUppercase: boolean; passwordRequireNumber: boolean; passwordRequireSpecial: boolean;
+}> {
   const { rows: [r] } = await pool.query<any>(
-    `SELECT payment_terms, invoice_footer, production_overhead_percent FROM company_settings WHERE id = $1`, [id]
+    `SELECT payment_terms, invoice_footer, production_overhead_percent,
+            password_min_length, password_require_uppercase, password_require_number, password_require_special
+     FROM company_settings WHERE id = $1`, [id]
   );
   return {
     paymentTerms: r?.payment_terms ?? null,
     invoiceFooter: r?.invoice_footer ?? null,
     productionOverheadPercent: Number(r?.production_overhead_percent ?? 0),
+    passwordMinLength: Number(r?.password_min_length ?? 8),
+    passwordRequireUppercase: !!r?.password_require_uppercase,
+    passwordRequireNumber: !!r?.password_require_number,
+    passwordRequireSpecial: !!r?.password_require_special,
   };
 }
 
@@ -48,7 +60,7 @@ router.get("/company/settings", async (_req, res): Promise<void> => {
   res.json({ ...row, ...(await extraSettingsFields(row.id)) });
 });
 
-router.patch("/company/settings", async (req, res): Promise<void> => {
+router.patch("/company/settings", requireModuleAction("Settings", "edit"), async (req, res): Promise<void> => {
   const data = pickCompanyFields(req.body);
 
   // paymentTerms / invoiceFooter are handled via raw SQL (columns added by
@@ -73,7 +85,29 @@ router.patch("/company/settings", async (req, res): Promise<void> => {
     overheadUpdate = Math.round(v * 100) / 100;
   }
 
-  if (Object.keys(data).length === 0 && pdfUpdates.length === 0 && overheadUpdate === undefined) { res.status(400).json({ error: "No valid fields to update" }); return; }
+  // Password policy (raw columns) — minLength 6–32, three boolean complexity flags
+  const policyUpdates: Array<[column: string, value: number | boolean]> = [];
+  if ('passwordMinLength' in req.body) {
+    const v = Number((req.body as any).passwordMinLength);
+    if (!Number.isInteger(v) || v < 6 || v > 32) {
+      res.status(400).json({ error: "passwordMinLength must be an integer between 6 and 32" });
+      return;
+    }
+    policyUpdates.push(['password_min_length', v]);
+  }
+  for (const [bodyKey, column] of [
+    ['passwordRequireUppercase', 'password_require_uppercase'],
+    ['passwordRequireNumber', 'password_require_number'],
+    ['passwordRequireSpecial', 'password_require_special'],
+  ] as const) {
+    if (bodyKey in req.body) {
+      const v = (req.body as any)[bodyKey];
+      if (typeof v !== 'boolean') { res.status(400).json({ error: `${bodyKey} must be a boolean` }); return; }
+      policyUpdates.push([column, v]);
+    }
+  }
+
+  if (Object.keys(data).length === 0 && pdfUpdates.length === 0 && overheadUpdate === undefined && policyUpdates.length === 0) { res.status(400).json({ error: "No valid fields to update" }); return; }
 
   const rows = await db.select().from(companySettingsTable).limit(1);
   let row;
@@ -90,7 +124,60 @@ router.patch("/company/settings", async (req, res): Promise<void> => {
   if (overheadUpdate !== undefined) {
     await pool.query(`UPDATE company_settings SET production_overhead_percent = $1 WHERE id = $2`, [overheadUpdate, row.id]);
   }
+  for (const [column, value] of policyUpdates) {
+    await pool.query(`UPDATE company_settings SET ${column} = $1 WHERE id = $2`, [value, row.id]);
+  }
+  if (policyUpdates.length > 0) invalidatePolicyCache();
   res.json({ ...row, ...(await extraSettingsFields(row.id)) });
+});
+
+// ── Login history (Phase 7) ────────────────────────────────────────────────
+// Server-paginated login attempts + live lockout status. Guarded by the
+// 'Login History' module (any-of with Settings so admins keep access even
+// before the new module is saved on the Permissions page).
+router.get("/company/login-history", requireModuleView(["Login History", "Settings"]), async (req, res): Promise<void> => {
+  const page = Math.max(parseInt(String(req.query.page ?? '1'), 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '25'), 10) || 25, 1), 200);
+  const username = typeof req.query.username === 'string' ? req.query.username.trim() : '';
+  const success = typeof req.query.success === 'string' ? req.query.success : '';
+
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  if (username) { params.push(`%${username}%`); conds.push(`username ILIKE $${params.length}`); }
+  if (success === 'true' || success === 'false') { params.push(success === 'true'); conds.push(`success = $${params.length}`); }
+  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+
+  const { rows: [{ total }] } = await pool.query<any>(
+    `SELECT COUNT(*)::int AS total FROM login_attempts ${where}`, params,
+  );
+  const { rows } = await pool.query<any>(
+    `SELECT la.id, la.username, la.employee_id, la.success, la.ip, la.user_agent, la.reason, la.created_at,
+            e.name AS employee_name
+     FROM login_attempts la
+     LEFT JOIN employees e ON e.id = la.employee_id
+     ${where}
+     ORDER BY la.id DESC
+     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, limit, (page - 1) * limit],
+  );
+
+  res.json({
+    total: Number(total ?? 0),
+    page,
+    limit,
+    rows: rows.map((r: any) => ({
+      id: r.id,
+      username: r.username,
+      employeeId: r.employee_id,
+      employeeName: r.employee_name ?? null,
+      success: !!r.success,
+      ip: r.ip,
+      userAgent: r.user_agent,
+      reason: r.reason,
+      createdAt: r.created_at,
+    })),
+    lockedAccounts: getActiveLockouts(),
+  });
 });
 
 // ── Permissions ────────────────────────────────────────────────────────────
@@ -104,12 +191,17 @@ router.get("/company/permissions", async (_req, res): Promise<void> => {
   })));
 });
 
-router.post("/company/permissions", async (req, res): Promise<void> => {
+router.post("/company/permissions", requireModuleAction("Permissions", "edit"), async (req, res): Promise<void> => {
   const parsed = SetPermissionBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
+  // Upsert must match on hierarchy AND module — matching hierarchy alone
+  // would make every module save overwrite the same single row.
   const [existing] = await db.select().from(permissionsTable)
-    .where(eq(permissionsTable.hierarchyId, parsed.data.hierarchyId))
+    .where(and(
+      eq(permissionsTable.hierarchyId, parsed.data.hierarchyId),
+      eq(permissionsTable.module, parsed.data.module),
+    ))
     .limit(1);
 
   let row;
@@ -124,7 +216,7 @@ router.post("/company/permissions", async (req, res): Promise<void> => {
 });
 
 // ── Reset all company data (dangerous — wipes all transactional records) ──────
-router.post("/company/reset", async (_req, res): Promise<void> => {
+router.post("/company/reset", requireModuleAction("Settings", "delete"), async (_req, res): Promise<void> => {
   const TRUNCATE_TABLES = [
     // Payments & reconciliation (most dependent — clear first)
     'sale_payments',

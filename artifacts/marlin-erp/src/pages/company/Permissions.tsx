@@ -1,15 +1,17 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ShieldCheck, Save, Loader2, ChevronUp } from 'lucide-react';
+import { ShieldCheck, Save, Loader2, ChevronUp, Eye, Plus, Pencil, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useListHierarchies, useListPermissions, setPermission } from '@workspace/api-client-react';
 import type { Hierarchy, Permission } from '@workspace/api-client-react';
 
 // Two top-level segments: Sales and Accounts.
-// Each segment has sub-groups; each group has individual module toggles.
+// Each segment has sub-groups; each group has individual module rows with
+// granular View / Add / Edit / Delete toggles.
 const MODULE_SEGMENTS = [
   {
     segment: 'Sales',
@@ -47,13 +49,24 @@ const MODULE_SEGMENTS = [
       },
       {
         title: 'Company',
-        modules: ['Settings', 'Permissions', 'Profile'],
+        modules: ['Settings', 'Permissions', 'Profile', 'Login History'],
       },
     ],
   },
 ];
 
 const ALL_MODULES = MODULE_SEGMENTS.flatMap(s => s.groups.flatMap(g => g.modules));
+
+type ActionKey = 'view' | 'add' | 'edit' | 'del';
+type ModulePerm = Record<ActionKey, boolean>;
+type PermMap = Record<number, Record<string, ModulePerm>>;
+
+const ACTIONS: { key: ActionKey; label: string; icon: React.ElementType }[] = [
+  { key: 'view', label: 'View',   icon: Eye },
+  { key: 'add',  label: 'Add',    icon: Plus },
+  { key: 'edit', label: 'Edit',   icon: Pencil },
+  { key: 'del',  label: 'Delete', icon: Trash2 },
+];
 
 /** Default access based on hierarchy level: level 1 = top authority, higher = more restricted */
 function defaultAccess(level: number, module: string): boolean {
@@ -63,11 +76,10 @@ function defaultAccess(level: number, module: string): boolean {
   const salesSegmentModules = ['Point of Sale', 'Location Stock', 'Location Transfers', 'Location Expenses'];
   const productionModules = ['Materials', 'Raw Materials', 'Items', 'Purchases', 'Production', 'Stock Transfers'];
   const inventoryModules = ['Warehouses', 'Outlets', 'Stock', 'HO Transfers', 'Item Prices'];
-  const salesModules = ['Sales', 'Customers', 'Vendors', 'Coupons'];
 
   if (level === 2) {
     // Manager: everything except company settings & permissions
-    return !['Settings', 'Permissions'].includes(module);
+    return !['Settings', 'Permissions', 'Login History'].includes(module);
   }
   if (level === 3) {
     // Supervisor: sales segment + production + inventory + profile
@@ -81,25 +93,31 @@ function defaultAccess(level: number, module: string): boolean {
   return ['Point of Sale', 'Profile', 'Production', 'Stock', 'Sales', 'Attendance', 'Leave'].includes(module);
 }
 
-/** Build a local perm map from DB records + fill gaps with defaults */
-function buildPermMap(
-  hierarchies: Hierarchy[],
-  dbPerms: Permission[],
-): Record<number, Record<string, boolean>> {
-  const map: Record<number, Record<string, boolean>> = {};
+/** Build a local perm map from DB records + fill gaps with level-based defaults */
+function buildPermMap(hierarchies: Hierarchy[], dbPerms: Permission[]): PermMap {
+  const map: PermMap = {};
   for (const h of hierarchies) {
     map[h.id] = {};
     for (const mod of ALL_MODULES) {
       const dbRow = dbPerms.find(p => p.hierarchyId === h.id && p.module === mod);
       if (dbRow) {
-        map[h.id][mod] = !!(dbRow.canView || dbRow.canAdd || dbRow.canEdit);
+        map[h.id][mod] = {
+          view: dbRow.canView ?? true,
+          add:  dbRow.canAdd ?? false,
+          edit: dbRow.canEdit ?? false,
+          del:  dbRow.canDelete ?? false,
+        };
       } else {
-        map[h.id][mod] = defaultAccess(h.level ?? 99, mod);
+        const allowed = defaultAccess(h.level ?? 99, mod);
+        map[h.id][mod] = { view: allowed, add: allowed, edit: allowed, del: allowed };
       }
     }
   }
   return map;
 }
+
+const allOn  = (p?: ModulePerm) => !!p && p.view && p.add && p.edit && p.del;
+const setAllActions = (value: boolean): ModulePerm => ({ view: value, add: value, edit: value, del: value });
 
 export default function Permissions() {
   const { data: hierarchies = [], isLoading: loadingH } = useListHierarchies();
@@ -114,58 +132,65 @@ export default function Permissions() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const effectiveId = selectedId ?? sortedHierarchies[0]?.id ?? null;
 
-  const [perms, setPerms] = useState<Record<number, Record<string, boolean>>>({});
+  const [perms, setPerms] = useState<PermMap>({});
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Initialise local state once data loads
-  useMemo(() => {
-    if (sortedHierarchies.length > 0 && dbPerms.length >= 0 && Object.keys(perms).length === 0) {
-      setPerms(buildPermMap(sortedHierarchies, dbPerms));
-    }
-  }, [sortedHierarchies, dbPerms]);
+  // Sync local state from the server whenever fresh data arrives, unless the
+  // user has unsaved edits. Waits for BOTH queries so DB rows are never
+  // missed when hierarchies resolve before permissions.
+  useEffect(() => {
+    if (loadingH || loadingP || dirty) return;
+    if (sortedHierarchies.length === 0) return;
+    setPerms(buildPermMap(sortedHierarchies, dbPerms));
+  }, [loadingH, loadingP, dirty, sortedHierarchies, dbPerms]);
 
   const selectedHierarchy = sortedHierarchies.find(h => h.id === effectiveId);
   const isTopLevel = (selectedHierarchy?.level ?? 99) === 1;
 
-  const rolePerms = effectiveId ? (perms[effectiveId] ?? {}) : {};
-  const enabledCount = Object.values(rolePerms).filter(Boolean).length;
+  const rolePerms: Record<string, ModulePerm> = effectiveId ? (perms[effectiveId] ?? {}) : {};
+  const enabledCount = ALL_MODULES.filter(m => rolePerms[m]?.view).length;
   const totalCount = ALL_MODULES.length;
 
-  const toggle = (module: string) => {
+  const updateModule = (module: string, next: ModulePerm) => {
     if (!effectiveId || isTopLevel) return;
     setPerms(prev => ({
       ...prev,
-      [effectiveId]: { ...prev[effectiveId], [module]: !prev[effectiveId]?.[module] },
+      [effectiveId]: { ...prev[effectiveId], [module]: next },
     }));
     setDirty(true);
+  };
+
+  const toggleAction = (module: string, action: ActionKey) => {
+    const cur = rolePerms[module] ?? { view: true, add: false, edit: false, del: false };
+    const next = { ...cur, [action]: !cur[action] };
+    // Consistency: writes imply view; removing view removes writes.
+    if (action === 'view' && !next.view) {
+      next.add = false; next.edit = false; next.del = false;
+    } else if (action !== 'view' && next[action]) {
+      next.view = true;
+    }
+    updateModule(module, next);
   };
 
   const setAll = (value: boolean) => {
     if (!effectiveId || isTopLevel) return;
     setPerms(prev => ({
       ...prev,
-      [effectiveId]: Object.fromEntries(ALL_MODULES.map(m => [m, value])),
+      [effectiveId]: Object.fromEntries(ALL_MODULES.map(m => [m, setAllActions(value)])),
     }));
     setDirty(true);
   };
 
-  /** Toggle all modules in a segment (Sales / Accounts) */
-  const toggleSegment = (modules: string[], value: boolean) => {
+  /** Toggle all modules in a segment or group */
+  const toggleModules = (modules: string[], value: boolean) => {
     if (!effectiveId || isTopLevel) return;
     setPerms(prev => ({
       ...prev,
-      [effectiveId]: { ...prev[effectiveId], ...Object.fromEntries(modules.map(m => [m, value])) },
-    }));
-    setDirty(true);
-  };
-
-  /** Toggle all modules in a group */
-  const toggleGroup = (modules: string[], value: boolean) => {
-    if (!effectiveId || isTopLevel) return;
-    setPerms(prev => ({
-      ...prev,
-      [effectiveId]: { ...prev[effectiveId], ...Object.fromEntries(modules.map(m => [m, value])) },
+      [effectiveId]: {
+        ...prev[effectiveId],
+        ...Object.fromEntries(modules.map(m => [m, setAllActions(value)])),
+      },
     }));
     setDirty(true);
   };
@@ -175,17 +200,18 @@ export default function Permissions() {
     setSaving(true);
     try {
       await Promise.all(
-        ALL_MODULES.map(mod =>
-          setPermission({
+        ALL_MODULES.map(mod => {
+          const p = rolePerms[mod] ?? { view: true, add: false, edit: false, del: false };
+          return setPermission({
             hierarchyId: effectiveId,
             module: mod,
-            canView: !!rolePerms[mod],
-            canAdd: !!rolePerms[mod],
-            canEdit: !!rolePerms[mod],
-            canDelete: !!rolePerms[mod],
-            canDownload: !!rolePerms[mod],
-          }),
-        ),
+            canView: p.view,
+            canAdd: p.add,
+            canEdit: p.edit,
+            canDelete: p.del,
+            canDownload: p.view,
+          });
+        }),
       );
       await refetch();
       setDirty(false);
@@ -201,13 +227,15 @@ export default function Permissions() {
 
   return (
     <AppLayout>
-      <div className="space-y-6 max-w-4xl">
+      <div className="space-y-6 max-w-5xl">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
               <ShieldCheck className="w-6 h-6 text-primary" /> Permissions
             </h1>
-            <p className="text-muted-foreground mt-1">Module access control by hierarchy level</p>
+            <p className="text-muted-foreground mt-1">
+              Granular access control — decide who can view, add, edit, or delete in each module
+            </p>
           </div>
           <Button size="sm" onClick={save} disabled={saving || !dirty || isTopLevel}>
             {saving
@@ -249,7 +277,7 @@ export default function Permissions() {
             <div className="flex items-center justify-between py-2">
               <span className="text-sm text-muted-foreground">
                 <span className="font-medium text-foreground">{selectedHierarchy?.name}</span>
-                {' '}has access to{' '}
+                {' '}can view{' '}
                 <span className="font-bold text-foreground">{enabledCount}</span> of {totalCount} modules
                 {isTopLevel && (
                   <span className="ml-2 text-primary text-xs">(Top level — always full access)</span>
@@ -268,9 +296,7 @@ export default function Permissions() {
             <div className="space-y-6">
               {MODULE_SEGMENTS.map(seg => {
                 const segModules = seg.groups.flatMap(g => g.modules);
-                const segEnabled = segModules.filter(m => rolePerms[m]).length;
-                const segAllOn  = segEnabled === segModules.length;
-                const segAllOff = segEnabled === 0;
+                const segAllOn = segModules.every(m => allOn(rolePerms[m]));
                 return (
                   <div key={seg.segment}>
                     {/* Segment header — with master toggle */}
@@ -278,18 +304,18 @@ export default function Permissions() {
                       <div className="flex items-center gap-2.5">
                         <span className="text-base font-bold text-foreground">{seg.segment}</span>
                         <Badge variant="secondary" className="text-xs font-semibold">
-                          {segEnabled} / {segModules.length}
+                          {segModules.filter(m => rolePerms[m]?.view).length} / {segModules.length}
                         </Badge>
                       </div>
                       <div className="flex-1 h-px bg-border" />
                       <span className="text-xs text-muted-foreground hidden sm:block mr-2">{seg.description}</span>
-                      {/* Master segment switch */}
+                      {/* Master segment switch — grants/revokes everything in the segment */}
                       {!isTopLevel && (
                         <Switch
                           checked={segAllOn}
-                          onCheckedChange={v => toggleSegment(segModules, v)}
+                          onCheckedChange={v => toggleModules(segModules, v)}
                           className="data-[state=checked]:bg-primary"
-                          title={segAllOn ? `Disable all ${seg.segment} modules` : `Enable all ${seg.segment} modules`}
+                          title={segAllOn ? `Revoke all ${seg.segment} access` : `Grant full ${seg.segment} access`}
                         />
                       )}
                     </div>
@@ -297,45 +323,64 @@ export default function Permissions() {
                     {/* Groups under this segment */}
                     <div className="space-y-3 pl-0">
                       {seg.groups.map(group => {
-                        const grpEnabled = group.modules.filter(m => rolePerms[m]).length;
-                        const grpAllOn   = grpEnabled === group.modules.length;
+                        const grpAllOn = group.modules.every(m => allOn(rolePerms[m]));
                         return (
                           <div key={group.title} className="bg-card border border-border rounded-xl overflow-hidden">
-                            <div className="p-3 border-b border-border bg-muted/20 flex items-center justify-between">
+                            <div className="p-3 border-b border-border bg-muted/20 flex items-center justify-between gap-3">
                               <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
                                 {group.title}
                               </h3>
                               <div className="flex items-center gap-3">
                                 <Badge variant="outline" className="text-xs">
-                                  {grpEnabled} / {group.modules.length}
+                                  {group.modules.filter(m => rolePerms[m]?.view).length} / {group.modules.length}
                                 </Badge>
                                 {/* Group-level master toggle */}
                                 {!isTopLevel && (
                                   <Switch
                                     checked={grpAllOn}
-                                    onCheckedChange={v => toggleGroup(group.modules, v)}
-                                    title={grpAllOn ? `Disable all ${group.title}` : `Enable all ${group.title}`}
+                                    onCheckedChange={v => toggleModules(group.modules, v)}
+                                    title={grpAllOn ? `Revoke all ${group.title}` : `Grant full ${group.title}`}
                                   />
                                 )}
                               </div>
                             </div>
-                            <div className="divide-y divide-border/50">
-                              {group.modules.map(mod => (
-                                <div key={mod} className="flex items-center justify-between px-4 py-3 hover:bg-muted/5">
-                                  <span className={`text-sm ${rolePerms[mod] ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
-                                    {mod}
-                                  </span>
-                                  <Switch
-                                    checked={!!rolePerms[mod]}
-                                    onCheckedChange={() =>
-                                      isTopLevel
-                                        ? toast.info('Top-level authority always has full access')
-                                        : toggle(mod)
-                                    }
-                                    disabled={isTopLevel}
-                                  />
-                                </div>
+
+                            {/* Column headers */}
+                            <div className="grid grid-cols-[1fr_repeat(4,3.25rem)] sm:grid-cols-[1fr_repeat(4,4rem)] items-center px-4 py-2 border-b border-border/50 bg-muted/5">
+                              <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Module</span>
+                              {ACTIONS.map(a => (
+                                <span key={a.key} className="text-[11px] uppercase tracking-wider text-muted-foreground text-center flex items-center justify-center gap-1">
+                                  <a.icon className="w-3 h-3" />
+                                  <span className="hidden sm:inline">{a.label}</span>
+                                </span>
                               ))}
+                            </div>
+
+                            <div className="divide-y divide-border/50">
+                              {group.modules.map(mod => {
+                                const p = rolePerms[mod] ?? { view: false, add: false, edit: false, del: false };
+                                return (
+                                  <div key={mod} className="grid grid-cols-[1fr_repeat(4,3.25rem)] sm:grid-cols-[1fr_repeat(4,4rem)] items-center px-4 py-2.5 hover:bg-muted/5">
+                                    <span className={`text-sm truncate pr-2 ${p.view ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
+                                      {mod}
+                                    </span>
+                                    {ACTIONS.map(a => (
+                                      <div key={a.key} className="flex justify-center">
+                                        <Checkbox
+                                          checked={isTopLevel ? true : p[a.key]}
+                                          disabled={isTopLevel}
+                                          onCheckedChange={() =>
+                                            isTopLevel
+                                              ? toast.info('Top-level authority always has full access')
+                                              : toggleAction(mod, a.key)
+                                          }
+                                          aria-label={`${a.label} ${mod}`}
+                                        />
+                                      </div>
+                                    ))}
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
                         );
@@ -345,6 +390,11 @@ export default function Permissions() {
                 );
               })}
             </div>
+
+            <p className="text-xs text-muted-foreground">
+              View controls what appears in the sidebar and on pages. Add, Edit, and Delete are enforced by the
+              server on every action — unchecking them blocks the operation even via the API.
+            </p>
           </>
         )}
       </div>

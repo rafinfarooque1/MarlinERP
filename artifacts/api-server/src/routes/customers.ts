@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, customersTable, vendorsTable, couponsTable } from "@workspace/db";
-import { requireModuleView } from "../middleware/permissions";
+import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 import { eq } from "drizzle-orm";
 import { pool } from "@workspace/db";
 import {
@@ -90,7 +90,7 @@ router.get("/customers", async (req, res): Promise<void> => {
   })));
 });
 
-router.post("/customers", async (req, res): Promise<void> => {
+router.post("/customers", requireModuleAction("Customers", "add"), async (req, res): Promise<void> => {
   const data = pickCustomer(req.body);
   if (!data.name || typeof data.name !== 'string') {
     res.status(400).json({ error: "name is required" });
@@ -137,7 +137,7 @@ router.get("/customers/:id", async (req, res): Promise<void> => {
   res.json({ ...row, ...credit, totalPurchases: Number(row.totalPurchases) });
 });
 
-router.patch("/customers/:id", async (req, res): Promise<void> => {
+router.patch("/customers/:id", requireModuleAction("Customers", "edit"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   const data = pickCustomer(req.body);
@@ -165,7 +165,7 @@ router.patch("/customers/:id", async (req, res): Promise<void> => {
   res.json({ ...row, ...credit, totalPurchases: Number(row.totalPurchases) });
 });
 
-router.delete("/customers/:id", async (req, res): Promise<void> => {
+router.delete("/customers/:id", requireModuleAction("Customers", "delete"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
 
@@ -237,7 +237,7 @@ router.get("/vendors", async (_req, res): Promise<void> => {
   })));
 });
 
-router.post("/vendors", async (req, res): Promise<void> => {
+router.post("/vendors", requireModuleAction("Vendors", "add"), async (req, res): Promise<void> => {
   const data = pickVendor(req.body);
   if (!data.name || typeof data.name !== 'string') {
     res.status(400).json({ error: "name is required" });
@@ -270,7 +270,7 @@ router.get("/vendors/:id", async (req, res): Promise<void> => {
   res.json(row);
 });
 
-router.patch("/vendors/:id", async (req, res): Promise<void> => {
+router.patch("/vendors/:id", requireModuleAction("Vendors", "edit"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   const data = pickVendor(req.body);
@@ -287,7 +287,7 @@ router.patch("/vendors/:id", async (req, res): Promise<void> => {
   res.json(row);
 });
 
-router.delete("/vendors/:id", async (req, res): Promise<void> => {
+router.delete("/vendors/:id", requireModuleAction("Vendors", "delete"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
 
@@ -456,7 +456,7 @@ router.get("/vendors/:id/ledger", requireModuleView("Vendors"), async (req, res)
 });
 
 // ── Record vendor payment ─────────────────────────────────────────────────
-router.post("/vendors/:id/payment", async (req, res): Promise<void> => {
+router.post("/vendors/:id/payment", requireModuleAction(["Vendors", "Payments"], "add"), async (req, res): Promise<void> => {
   const vendorId = parseInt(req.params.id, 10);
   const { date, amount, cashBankLedgerId, narration } = req.body as {
     date: string; amount: number; cashBankLedgerId: number; narration?: string;
@@ -494,7 +494,7 @@ router.get("/coupons", async (_req, res): Promise<void> => {
   res.json(rows.map((r) => ({ ...r, discountValue: Number(r.discountValue) })));
 });
 
-router.post("/coupons", async (req, res): Promise<void> => {
+router.post("/coupons", requireModuleAction("Coupons", "add"), async (req, res): Promise<void> => {
   const parsed = CreateCouponBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const expiryDate = new Date();
@@ -507,7 +507,7 @@ router.post("/coupons", async (req, res): Promise<void> => {
   res.status(201).json({ ...row, discountValue: Number(row.discountValue) });
 });
 
-router.patch("/coupons/:id", async (req, res): Promise<void> => {
+router.patch("/coupons/:id", requireModuleAction("Coupons", "edit"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   const parsed = UpdateCouponBody.safeParse(req.body);
@@ -519,7 +519,7 @@ router.patch("/coupons/:id", async (req, res): Promise<void> => {
   res.json({ ...row, discountValue: Number(row.discountValue) });
 });
 
-router.delete("/coupons/:id", async (req, res): Promise<void> => {
+router.delete("/coupons/:id", requireModuleAction("Coupons", "delete"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   await db.delete(couponsTable).where(eq(couponsTable.id, id));

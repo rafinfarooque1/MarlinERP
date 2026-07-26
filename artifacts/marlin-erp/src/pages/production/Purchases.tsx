@@ -1,6 +1,6 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import {
-  useListPurchases, useCreatePurchase, useListVendors, useListMaterials, useListRawMaterials, useListItems,
+  usePaginatedPurchases, useCreatePurchase, useListVendors, useListMaterials, useListRawMaterials, useListItems,
   getListPurchasesQueryKey, useUpdatePurchase, useDeletePurchase, useGetCompanySettings,
 } from '@workspace/api-client-react';
 import { downloadPurchaseOrderPDF } from '@/lib/pdfUtils';
@@ -74,17 +74,47 @@ function fmt(n: number) { return n.toLocaleString('en-IN', { minimumFractionDigi
 
 export default function Purchases() {
   const perm = usePermission('Purchases');
-  const { data: purchases = [], isLoading } = useListPurchases();
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 25;
+
+  // Debounce the search box — vendor/invoice search runs server-side
+  useEffect(() => {
+    const t = setTimeout(() => { setDebouncedSearch(search.trim()); setPage(1); }, 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const { data: purchasePage, isLoading, isFetching } = usePaginatedPurchases({
+    page, limit: PAGE_SIZE, q: debouncedSearch || undefined,
+  });
+  const purchases = purchasePage?.rows ?? [];
+  const totalPurchases = purchasePage?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalPurchases / PAGE_SIZE));
+
+  // Clamp page when the result set shrinks (deletes, concurrent changes)
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
   const { data: vendors = [] } = useListVendors();
   const { data: materials = [] } = useListMaterials();
   const { data: rawMaterials = [] } = useListRawMaterials();
   const { data: finishedItems = [] } = useListItems();
-  const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
   const [viewItem, setViewItem] = useState<any>(null);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const queryClient = useQueryClient();
+
+  // Purchases change stock levels and dashboard KPIs — refresh them too.
+  const invalidateStockDashboards = () =>
+    queryClient.invalidateQueries({
+      predicate: q => {
+        const k = String(q.queryKey[0] ?? '');
+        return k.startsWith('/api/dashboard') || k.startsWith('/api/stock');
+      },
+    });
+
   const createMutation = useCreatePurchase();
   const updateMutation = useUpdatePurchase();
   const deleteMutation = useDeletePurchase();
@@ -137,6 +167,7 @@ export default function Purchases() {
       onSuccess: () => {
         toast.success('Purchase bill created');
         queryClient.invalidateQueries({ queryKey: getListPurchasesQueryKey() });
+        invalidateStockDashboards();
         setIsOpen(false);
         form.reset({ vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', lineItems: [defaultLine], notes: '' });
       },
@@ -154,15 +185,13 @@ export default function Purchases() {
   const handleDelete = () => {
     if (!deleteTarget) return;
     deleteMutation.mutate(deleteTarget.id, {
-      onSuccess: () => { toast.success(`Bill #${deleteTarget.id} deleted (stock reversed)`); setDeleteTarget(null); },
+      onSuccess: () => { toast.success(`Bill #${deleteTarget.id} deleted (stock reversed)`); invalidateStockDashboards(); setDeleteTarget(null); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Delete failed'),
     });
   };
 
-  const filtered = purchases.filter(p =>
-    p.vendorName?.toLowerCase().includes(search.toLowerCase()) ||
-    p.invoiceNumber?.toLowerCase().includes(search.toLowerCase())
-  );
+  // Rows already match the server-side search — no client filtering needed
+  const filtered = purchases;
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -261,6 +290,19 @@ export default function Purchases() {
               ))}
             </TableBody>
           </Table>
+          {totalPurchases > 0 && (
+            <div className="p-3 border-t border-border flex flex-wrap items-center justify-between gap-2">
+              <span className="text-muted-foreground text-xs">
+                Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, totalPurchases)} of {totalPurchases} bills
+                {isFetching ? ' · refreshing…' : ''}
+              </span>
+              <div className="flex items-center gap-1">
+                <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Prev</Button>
+                <span className="px-1 text-xs text-muted-foreground">Page {page}/{totalPages}</span>
+                <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</Button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

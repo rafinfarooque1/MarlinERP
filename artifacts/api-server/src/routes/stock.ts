@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, stockEntriesTable, itemsTable, warehousesTable, outletsTable } from "@workspace/db";
-import { requireModuleView } from "../middleware/permissions";
+import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 import { eq, and, sql } from "drizzle-orm";
 import { CreateStockTransferBody, ListStockQueryParams } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
@@ -28,37 +28,58 @@ export async function buildBranchMaps() {
   };
 }
 
+// GET /stock — optionally server-paginated (Phase 7). Without `page`/`limit`
+// the legacy full-array response is returned. `q` searches item name; the
+// existing branchType/branchId filters work in both modes.
 router.get("/stock", async (req, res): Promise<void> => {
   const qp = ListStockQueryParams.safeParse(req.query);
+  const paginated = 'page' in req.query || 'limit' in req.query;
+  const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
 
-  // Fetch all three in parallel (items via raw SQL to include reorder/avg-cost columns)
-  const [rows, itemsResult, branchName] = await Promise.all([
-    db.select().from(stockEntriesTable),
-    pool.query(`SELECT id, name, hsn_code, unit, reorder_level, avg_cost, cost FROM items`),
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  if (qp.success && qp.data.branchType) { params.push(qp.data.branchType); conds.push(`se.branch_type = $${params.length}`); }
+  if (qp.success && qp.data.branchId)   { params.push(Number(qp.data.branchId)); conds.push(`se.branch_id = $${params.length}`); }
+  if (q) { params.push(`%${q}%`); conds.push(`i.name ILIKE $${params.length}`); }
+  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+  const baseFrom = `FROM stock_entries se LEFT JOIN items i ON i.id = se.item_id`;
+
+  let total = 0;
+  let page = 1;
+  let limit = 0;
+  if (paginated) {
+    page = Math.max(parseInt(String(req.query.page ?? '1'), 10) || 1, 1);
+    limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '25'), 10) || 25, 1), 200);
+    const { rows: [t] } = await pool.query(`SELECT COUNT(*)::int AS total ${baseFrom} ${where}`, params);
+    total = Number(t?.total ?? 0);
+  }
+
+  const [result, branchName] = await Promise.all([
+    pool.query(`
+      SELECT se.id, se.item_id, se.branch_type, se.branch_id, se.quantity, se.cost_price,
+             i.name AS item_name, i.hsn_code, i.unit, i.reorder_level, i.avg_cost, i.cost
+      ${baseFrom} ${where}
+      ORDER BY ${paginated ? 'i.name ASC NULLS LAST, se.id' : 'se.id'}
+      ${limit ? `LIMIT ${limit} OFFSET ${(page - 1) * limit}` : ''}
+    `, params),
     buildBranchMaps(),
   ]);
-  const iMap = new Map(itemsResult.rows.map((i: any) => [i.id, i]));
 
-  let filtered = rows;
-  if (qp.success && qp.data.branchType) filtered = filtered.filter(r => r.branchType === qp.data.branchType);
-  if (qp.success && qp.data.branchId)   filtered = filtered.filter(r => r.branchId  === Number(qp.data.branchId));
-
-  const enriched = filtered.map(r => {
-    const item = iMap.get(r.itemId);
+  const enriched = result.rows.map((r: any) => {
     const qty = Number(r.quantity);
-    const avgCost = Number(item?.avg_cost ?? 0) > 0 ? Number(item.avg_cost) : Number(item?.cost ?? 0);
-    const reorderLevel = Number(item?.reorder_level ?? 10);
+    const avgCost = Number(r.avg_cost ?? 0) > 0 ? Number(r.avg_cost) : Number(r.cost ?? 0);
+    const reorderLevel = Number(r.reorder_level ?? 10);
     return {
       id: r.id,
-      itemId: r.itemId,
-      itemName: item?.name ?? "",
-      hsnCode: item?.hsn_code ?? "",
-      branchType: r.branchType,
-      branchId: r.branchId,
-      branchName: branchName(r.branchType, r.branchId),
+      itemId: r.item_id,
+      itemName: r.item_name ?? "",
+      hsnCode: r.hsn_code ?? "",
+      branchType: r.branch_type,
+      branchId: r.branch_id,
+      branchName: branchName(r.branch_type, r.branch_id),
       quantity: qty,
-      costPrice: Number(r.costPrice),
-      unit: item?.unit ?? "",
+      costPrice: Number(r.cost_price),
+      unit: r.unit ?? "",
       reorderLevel,
       avgCost,
       stockValue: Math.round(qty * avgCost * 100) / 100,
@@ -66,7 +87,11 @@ router.get("/stock", async (req, res): Promise<void> => {
     };
   });
 
-  res.json(enriched);
+  if (paginated) {
+    res.json({ total, page, limit, rows: enriched });
+  } else {
+    res.json(enriched);
+  }
 });
 
 router.get("/stock/transfers", requireModuleView(["Stock", "Stock Transfers", "HO Transfers", "Location Transfers"]), async (req, res): Promise<void> => {
@@ -121,7 +146,7 @@ router.get("/stock/transfers", requireModuleView(["Stock", "Stock Transfers", "H
   res.json(enriched);
 });
 
-router.post("/stock/transfers", async (req, res): Promise<void> => {
+router.post("/stock/transfers", requireModuleAction(["Stock Transfers", "HO Transfers", "Location Transfers"], "add"), async (req, res): Promise<void> => {
   const parsed = CreateStockTransferBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
@@ -285,7 +310,7 @@ function allocateReceived(breakdown: BatchBreakdownEntry[], receivedQty: number)
 }
 
 // Approve a transfer — receiver verifies physical stock and enters actual received quantities
-router.patch("/stock/transfers/:id/approve", async (req, res): Promise<void> => {
+router.patch("/stock/transfers/:id/approve", requireModuleAction(["Stock Transfers", "HO Transfers", "Location Transfers"], "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { receivedLineItems, approvedBy } = req.body as { receivedLineItems?: Array<{ itemId: number; quantity: number; costPrice?: number }>; approvedBy?: string };
 
@@ -424,7 +449,7 @@ router.patch("/stock/transfers/:id/approve", async (req, res): Promise<void> => 
 });
 
 // Reject a transfer — reverses the source deduction
-router.patch("/stock/transfers/:id/reject", async (req, res): Promise<void> => {
+router.patch("/stock/transfers/:id/reject", requireModuleAction(["Stock Transfers", "HO Transfers", "Location Transfers"], "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { rejectionReason } = req.body as { rejectionReason?: string };
 

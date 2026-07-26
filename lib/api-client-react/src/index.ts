@@ -1,7 +1,7 @@
 export * from "./generated/api";
 export * from "./generated/api.schemas";
-export { setBaseUrl, setAuthTokenGetter, customFetch } from "./custom-fetch";
-export type { AuthTokenGetter } from "./custom-fetch";
+export { setBaseUrl, setAuthTokenGetter, setAuthTokenSetter, customFetch } from "./custom-fetch";
+export type { AuthTokenGetter, AuthTokenSetter } from "./custom-fetch";
 export * from "./analytics";
 export * from "./bom";
 export * from "./production-reports";
@@ -17,5 +17,8 @@ export * from "./location-expenses";
 export * from "./inventory-batches";
 export * from "./returns";
 export * from "./reports";
+export * from "./quick-search";
+export * from "./login-history";
+export * from "./paginated-lists";
 export * from './generated/api';
 export * from './generated/api.schemas';

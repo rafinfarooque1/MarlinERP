@@ -170,6 +170,16 @@ export default function ProductionList() {
     setIsOpen(true);
   };
 
+  // Production changes stock levels and dashboard charts — refresh them so the
+  // dashboard stays accurate without a manual reload.
+  const invalidateStockDashboards = () =>
+    queryClient.invalidateQueries({
+      predicate: q => {
+        const k = String(q.queryKey[0] ?? '');
+        return k.startsWith('/api/dashboard') || k.startsWith('/api/stock');
+      },
+    });
+
   const onSubmit = (data: FormValues) => {
     const payload = {
       ...data,
@@ -179,6 +189,7 @@ export default function ProductionList() {
       onSuccess: () => {
         toast.success('Production batch recorded');
         queryClient.invalidateQueries({ queryKey: getListProductionsQueryKey() });
+        invalidateStockDashboards();
         setIsOpen(false);
         form.reset(defaultValues);
       },
@@ -190,6 +201,7 @@ export default function ProductionList() {
     updateMutation.mutate({ id: editItem.id, data }, {
       onSuccess: () => {
         toast.success('Batch updated');
+        invalidateStockDashboards();
         setEditItem(null);
       },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
@@ -201,6 +213,7 @@ export default function ProductionList() {
     deleteMutation.mutate(deleteTarget.id, {
       onSuccess: () => {
         toast.success(`Batch B-${String(deleteTarget.id).padStart(4, '0')} deleted`);
+        invalidateStockDashboards();
         setDeleteTarget(null);
       },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Delete failed'),

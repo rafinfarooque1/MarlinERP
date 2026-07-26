@@ -26,7 +26,9 @@ app.use(
     },
   }),
 );
-app.use(cors());
+// exposedHeaders: the browser must be able to read x-refreshed-token so the
+// client can transparently upgrade legacy session tokens to signed v2 tokens.
+app.use(cors({ exposedHeaders: ["x-refreshed-token"] }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

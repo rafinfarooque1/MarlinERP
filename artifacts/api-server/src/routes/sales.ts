@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireModuleAction } from "../middleware/permissions";
 import { db, salesTable, outletsTable, customersTable, stockEntriesTable, itemsTable, itemPricesTable, companySettingsTable } from "@workspace/db";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import { CreateSaleBody, GetSaleParams, SetItemPriceBody, ListItemPricesQueryParams } from "@workspace/api-zod";
@@ -53,7 +54,7 @@ router.get("/item-prices", async (req, res): Promise<void> => {
   })));
 });
 
-router.post("/item-prices", async (req, res): Promise<void> => {
+router.post("/item-prices", requireModuleAction("Item Prices", "add"), async (req, res): Promise<void> => {
   const parsed = SetItemPriceBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
@@ -85,23 +86,78 @@ router.post("/item-prices", async (req, res): Promise<void> => {
 
 // ── Sales ──────────────────────────────────────────────────────────────────
 
+// GET /sales — optionally server-paginated (Phase 7).
+// Without `page`/`limit` params the legacy full-array response is returned
+// (backward compatible). With them: envelope { total, page, limit, rows }.
+// Filters (usable in both modes): q (invoice/customer name/phone), from/to
+// (YYYY-MM-DD), locationType+locationId, warehouseScope=<warehouseId>
+// (warehouse itself + its child outlets — replaces client-side filtering),
+// legacy outletId.
 router.get("/sales", async (req, res): Promise<void> => {
   const { pool: pgPool } = await import("@workspace/db");
-  const { rows: rawRows } = await pgPool.query(`SELECT * FROM sales ORDER BY id`);
+  const paginated = 'page' in req.query || 'limit' in req.query;
+  const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  const from = typeof req.query.from === 'string' ? req.query.from : '';
+  const to = typeof req.query.to === 'string' ? req.query.to : '';
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  if ((from && !dateRe.test(from)) || (to && !dateRe.test(to))) {
+    res.status(400).json({ error: "from/to must be YYYY-MM-DD" }); return;
+  }
+
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  if (q) {
+    params.push(`%${q}%`);
+    conds.push(`(s.invoice_number ILIKE $${params.length} OR c.name ILIKE $${params.length} OR c.phone ILIKE $${params.length})`);
+  }
+  if (from) { params.push(from); conds.push(`s.sale_date >= $${params.length}::date`); }
+  if (to)   { params.push(to);   conds.push(`s.sale_date <= $${params.length}::date`); }
+
+  const lt = req.query.locationType;
+  const lid = Number(req.query.locationId);
+  if ((lt === 'warehouse' || lt === 'outlet') && Number.isFinite(lid) && lid > 0) {
+    params.push(lt);  conds.push(`COALESCE(s.location_type, 'outlet') = $${params.length}`);
+    params.push(lid); conds.push(`COALESCE(s.location_id, s.outlet_id) = $${params.length}`);
+  } else if (req.query.outletId) {
+    // Legacy exact filter (kept for existing callers)
+    params.push(Number(req.query.outletId)); conds.push(`s.outlet_id = $${params.length}`);
+  }
+  const ws = Number(req.query.warehouseScope);
+  if (Number.isFinite(ws) && ws > 0) {
+    params.push(ws);
+    const p = params.length;
+    conds.push(`((COALESCE(s.location_type, 'outlet') = 'warehouse' AND COALESCE(s.location_id, s.outlet_id) = $${p})
+      OR (COALESCE(s.location_type, 'outlet') = 'outlet' AND COALESCE(s.location_id, s.outlet_id) IN (SELECT id FROM outlets WHERE warehouse_id = $${p})))`);
+  }
+  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+  const baseFrom = `FROM sales s LEFT JOIN customers c ON c.id = s.customer_id`;
+
+  let total = 0;
+  let page = 1;
+  let limit = 0;
+  let pageSql = '';
+  if (paginated) {
+    page = Math.max(parseInt(String(req.query.page ?? '1'), 10) || 1, 1);
+    limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '25'), 10) || 25, 1), 200);
+    const { rows: [t] } = await pgPool.query(`SELECT COUNT(*)::int AS total ${baseFrom} ${where}`, params);
+    total = Number(t?.total ?? 0);
+    pageSql = ` LIMIT ${limit} OFFSET ${(page - 1) * limit}`;
+  }
+
+  const { rows: rawRows } = await pgPool.query(`
+    SELECT s.*, c.name AS _customer_name, c.phone AS _customer_phone
+    ${baseFrom} ${where}
+    ORDER BY s.id ${paginated ? 'DESC' : ''}${pageSql}
+  `, params);
+
   const outlets = await db.select().from(outletsTable);
-  const customers = await db.select().from(customersTable);
   const { rows: warehouses } = await pgPool.query<{ id: number; name: string; upi_id: string | null }>(
     `SELECT id, name, upi_id FROM warehouses ORDER BY id`
   );
   const oMap = new Map(outlets.map((o) => [o.id, { name: o.name, upiId: (o as any).upiId ?? "" }]));
   const wMap = new Map(warehouses.map((w) => [w.id, { name: w.name, upiId: w.upi_id ?? "" }]));
-  const cMap = new Map(customers.map((c) => [c.id, { name: c.name, phone: c.phone ?? null }]));
 
-  const outletIdFilter = req.query.outletId ? Number(req.query.outletId) : null;
-  const filtered = outletIdFilter ? rawRows.filter((r: any) => r.outlet_id === outletIdFilter) : rawRows;
-
-  res.json(filtered.map((r: any) => {
-    const cust = r.customer_id ? cMap.get(r.customer_id) : null;
+  const mapped = rawRows.map((r: any) => {
     const locationType: string = r.location_type ?? 'outlet';
     const locationId: number = r.location_id ?? r.outlet_id;
     const outlet = oMap.get(r.outlet_id);
@@ -131,13 +187,19 @@ router.get("/sales", async (req, res): Promise<void> => {
       balanceDue: Math.max(0, totalAmount - amountPaid),
       outletName: locationName,
       outletUpiId: locationUpiId,
-      customerName: cust?.name ?? null,
-      customerPhone: cust?.phone ?? null,
+      customerName: r._customer_name ?? null,
+      customerPhone: r._customer_phone ?? null,
     };
-  }));
+  });
+
+  if (paginated) {
+    res.json({ total, page, limit, rows: mapped });
+  } else {
+    res.json(mapped);
+  }
 });
 
-router.post("/sales", async (req, res): Promise<void> => {
+router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), async (req, res): Promise<void> => {
   const parsed = CreateSaleBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
@@ -476,7 +538,7 @@ router.post("/sales", async (req, res): Promise<void> => {
 });
 
 // ── Edit Sale ─────────────────────────────────────────────────────────────────
-router.put("/sales/:id", async (req, res): Promise<void> => {
+router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit"), async (req, res): Promise<void> => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid sale id" }); return; }
 
@@ -676,32 +738,54 @@ router.put("/sales/:id", async (req, res): Promise<void> => {
   });
 });
 
+// Summary totals + per-location breakdown. Raw SQL because location_type /
+// location_id are startup-migration columns invisible to drizzle — the old
+// drizzle version grouped warehouse sales under their fallback outlet_id,
+// losing them from the breakdown (bug #37).
 router.get("/sales/summary", async (_req, res): Promise<void> => {
-  const rows = await db.select().from(salesTable);
+  const { pool: pgPool } = await import("@workspace/db");
+  const { rows } = await pgPool.query(`
+    SELECT COALESCE(s.location_type, 'outlet')   AS location_type,
+           COALESCE(s.location_id, s.outlet_id)  AS location_id,
+           COUNT(*)::int                          AS invoice_count,
+           COALESCE(SUM(s.total_amount::numeric), 0)::float AS sales_amount,
+           COALESCE(SUM(s.tax_total::numeric), 0)::float    AS tax_amount
+    FROM sales s
+    GROUP BY 1, 2
+  `);
   const outlets = await db.select().from(outletsTable);
   const oMap = new Map(outlets.map((o) => [o.id, o.name]));
+  const { rows: warehouses } = await pgPool.query<{ id: number; name: string }>(`SELECT id, name FROM warehouses`);
+  const wMap = new Map(warehouses.map((w) => [w.id, w.name]));
 
-  const totalSales = rows.reduce((s, r) => s + Number(r.totalAmount), 0);
-  const totalTax = rows.reduce((s, r) => s + Number(r.taxTotal), 0);
-
-  const byOutlet = new Map<number, { salesAmount: number; invoiceCount: number }>();
+  let totalSales = 0, totalTax = 0, totalInvoices = 0;
+  const byLocation: Array<{ locationType: string; locationId: number; locationName: string; salesAmount: number; invoiceCount: number }> = [];
   for (const r of rows) {
-    const existing = byOutlet.get(r.outletId) ?? { salesAmount: 0, invoiceCount: 0 };
-    existing.salesAmount += Number(r.totalAmount);
-    existing.invoiceCount += 1;
-    byOutlet.set(r.outletId, existing);
+    totalSales += Number(r.sales_amount);
+    totalTax += Number(r.tax_amount);
+    totalInvoices += Number(r.invoice_count);
+    const locationType = r.location_type as string;
+    const locationId = Number(r.location_id);
+    byLocation.push({
+      locationType,
+      locationId,
+      locationName: (locationType === 'warehouse' ? wMap.get(locationId) : oMap.get(locationId)) ?? "",
+      salesAmount: Number(r.sales_amount),
+      invoiceCount: Number(r.invoice_count),
+    });
   }
+  byLocation.sort((a, b) => b.salesAmount - a.salesAmount);
 
   res.json({
     totalSales,
     totalTax,
-    totalInvoices: rows.length,
-    byOutlet: Array.from(byOutlet.entries()).map(([outletId, d]) => ({
-      outletId,
-      outletName: oMap.get(outletId) ?? "",
-      salesAmount: d.salesAmount,
-      invoiceCount: d.invoiceCount,
-    })),
+    totalInvoices,
+    // Legacy shape: outlet rows only (warehouse sales now correctly excluded
+    // instead of being misattributed to an outlet id)
+    byOutlet: byLocation
+      .filter((l) => l.locationType === 'outlet')
+      .map((l) => ({ outletId: l.locationId, outletName: l.locationName, salesAmount: l.salesAmount, invoiceCount: l.invoiceCount })),
+    byLocation,
   });
 });
 

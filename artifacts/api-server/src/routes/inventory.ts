@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireModuleAction } from "../middleware/permissions";
 import { db, itemsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { GetItemParams, DeleteItemParams } from "@workspace/api-zod";
@@ -39,7 +40,7 @@ router.get("/materials", async (_req, res): Promise<void> => {
   res.json(result.rows.map(fmtMaterial));
 });
 
-router.post("/materials", async (req, res): Promise<void> => {
+router.post("/materials", requireModuleAction("Materials", "add"), async (req, res): Promise<void> => {
   const { name, unit, description, hsnCode, taxRate, cost } = req.body;
   if (!name || !unit) { res.status(400).json({ error: "name and unit are required" }); return; }
   if (slabViolation(taxRate, res)) return;
@@ -57,7 +58,7 @@ router.get("/materials/:id", async (req, res): Promise<void> => {
   res.json(fmtMaterial(result.rows[0]));
 });
 
-router.patch("/materials/:id", async (req, res): Promise<void> => {
+router.patch("/materials/:id", requireModuleAction("Materials", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { name, unit, description, hsnCode, taxRate, cost } = req.body;
   if (slabViolation(taxRate, res)) return;
@@ -78,7 +79,7 @@ router.patch("/materials/:id", async (req, res): Promise<void> => {
   res.json(fmtMaterial(result.rows[0]));
 });
 
-router.delete("/materials/:id", async (req, res): Promise<void> => {
+router.delete("/materials/:id", requireModuleAction("Materials", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   await pool.query(`DELETE FROM materials WHERE id = $1`, [id]);
   res.status(204).send();
@@ -92,7 +93,7 @@ router.get("/raw-materials", async (_req, res): Promise<void> => {
   res.json(result.rows.map(fmtMaterial));
 });
 
-router.post("/raw-materials", async (req, res): Promise<void> => {
+router.post("/raw-materials", requireModuleAction("Raw Materials", "add"), async (req, res): Promise<void> => {
   const { name, unit, description, hsnCode, taxRate, cost } = req.body;
   if (!name || !unit) { res.status(400).json({ error: "name and unit are required" }); return; }
   if (slabViolation(taxRate, res)) return;
@@ -110,7 +111,7 @@ router.get("/raw-materials/:id", async (req, res): Promise<void> => {
   res.json(fmtMaterial(result.rows[0]));
 });
 
-router.patch("/raw-materials/:id", async (req, res): Promise<void> => {
+router.patch("/raw-materials/:id", requireModuleAction("Raw Materials", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { name, unit, description, hsnCode, taxRate, cost } = req.body;
   if (slabViolation(taxRate, res)) return;
@@ -131,7 +132,7 @@ router.patch("/raw-materials/:id", async (req, res): Promise<void> => {
   res.json(fmtMaterial(result.rows[0]));
 });
 
-router.delete("/raw-materials/:id", async (req, res): Promise<void> => {
+router.delete("/raw-materials/:id", requireModuleAction("Raw Materials", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   await pool.query(`DELETE FROM raw_materials WHERE id = $1`, [id]);
   res.status(204).send();
@@ -145,7 +146,7 @@ router.get("/items", async (_req, res): Promise<void> => {
   res.json(result.rows.map(fmtItem));
 });
 
-router.post("/items", async (req, res): Promise<void> => {
+router.post("/items", requireModuleAction("Items", "add"), async (req, res): Promise<void> => {
   const { name, hsnCode, taxRate, unit, description, mrp, cost, reorderLevel } = req.body;
   if (!name || !unit) { res.status(400).json({ error: "name and unit are required" }); return; }
   if (slabViolation(taxRate, res)) return;
@@ -163,7 +164,7 @@ router.get("/items/:id", async (req, res): Promise<void> => {
   res.json(fmtItem(result.rows[0]));
 });
 
-router.patch("/items/:id", async (req, res): Promise<void> => {
+router.patch("/items/:id", requireModuleAction("Items", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { name, hsnCode, taxRate, unit, description, mrp, cost, reorderLevel } = req.body;
   if (slabViolation(taxRate, res)) return;
@@ -188,7 +189,7 @@ router.patch("/items/:id", async (req, res): Promise<void> => {
   res.json(fmtItem(result.rows[0]));
 });
 
-router.delete("/items/:id", async (req, res): Promise<void> => {
+router.delete("/items/:id", requireModuleAction("Items", "delete"), async (req, res): Promise<void> => {
   const { id } = DeleteItemParams.parse(req.params);
   await db.delete(itemsTable).where(eq(itemsTable.id, id));
   res.status(204).send();

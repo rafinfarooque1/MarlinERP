@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { customFetch } from './custom-fetch';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -62,5 +62,15 @@ export function useLocationExpenses(
         { signal }
       ),
     enabled: opts?.enabled !== undefined ? opts.enabled : !!(locationType && locationId > 0),
+  });
+}
+
+/** Delete a location expense recorded in error (Phase 7). */
+export function useDeleteLocationExpense() {
+  return useMutation({
+    mutationFn: (id: number) =>
+      customFetch<{ ok: boolean; id: number }>(`/api/accounts/location-expenses/${id}`, {
+        method: 'DELETE',
+      }),
   });
 }

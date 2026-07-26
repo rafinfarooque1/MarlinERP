@@ -3,8 +3,13 @@ import { useLocation } from 'wouter';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useLocationContext } from '@/lib/locationContext';
-import { customFetch, useListOutlets } from '@workspace/api-client-react';
-import { Receipt, Plus, Calendar, Wallet, AlertCircle, Layers } from 'lucide-react';
+import { customFetch, useListOutlets, useDeleteLocationExpense } from '@workspace/api-client-react';
+import { usePermission } from '@/lib/usePermission';
+import { Receipt, Plus, Calendar, Wallet, AlertCircle, Layers, Trash2, Loader2 } from 'lucide-react';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -37,6 +42,9 @@ export default function SalesExpenses() {
   const queryClient = useQueryClient();
   const [isOpen, setIsOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const perm = usePermission('Location Expenses');
+  const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
+  const deleteMutation = useDeleteLocationExpense();
 
   const { locationType, locationId, locationName } = locationState;
   const isAll       = locationType === 'all';
@@ -151,6 +159,22 @@ export default function SalesExpenses() {
     }
   };
 
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      await deleteMutation.mutateAsync(deleteTarget.id);
+      toast.success('Expense deleted — cash returned to the location ledger');
+      // Refresh both the page queries and any lib-hook consumers
+      queryClient.invalidateQueries({ queryKey: ['location-expenses-all'] });
+      queryClient.invalidateQueries({ queryKey: ['location-expenses'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/accounts/location-expenses'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/accounts/location-expenses/summary'] });
+      setDeleteTarget(null);
+    } catch (err: any) {
+      toast.error(err?.data?.error ?? err?.message ?? 'Failed to delete expense');
+    }
+  };
+
   if (!locationType) return null;
 
   const hasCashLedgerError = !isAll && !isWarehouse && (
@@ -261,6 +285,7 @@ export default function SalesExpenses() {
                       <TableHead className="text-xs">Category</TableHead>
                       <TableHead className="text-xs">Voucher</TableHead>
                       <TableHead className="text-right text-xs">Amount</TableHead>
+                      {perm.canDelete && <TableHead className="w-10" />}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -278,6 +303,18 @@ export default function SalesExpenses() {
                         <TableCell className="text-right font-mono font-bold text-red-500 text-sm">
                           {fmt(Number(e.amount))}
                         </TableCell>
+                        {perm.canDelete && (
+                          <TableCell className="w-10">
+                            <Button
+                              variant="ghost" size="icon"
+                              className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                              title="Delete expense"
+                              onClick={() => setDeleteTarget(e)}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          </TableCell>
+                        )}
                       </TableRow>
                     ))}
                   </TableBody>
@@ -296,18 +333,19 @@ export default function SalesExpenses() {
                   <TableHead>Category</TableHead>
                   <TableHead>Voucher</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
+                  {perm.canDelete && <TableHead className="w-10" />}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {isLoading ? (
                   [...Array(3)].map((_, i) => (
                     <TableRow key={i}>
-                      <TableCell colSpan={5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
+                      <TableCell colSpan={perm.canDelete ? 6 : 5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
                     </TableRow>
                   ))
                 ) : expenses.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center py-16 text-muted-foreground">
+                    <TableCell colSpan={perm.canDelete ? 6 : 5} className="text-center py-16 text-muted-foreground">
                       <Receipt className="w-10 h-10 mx-auto mb-3 opacity-20" />
                       <p>No expenses recorded for {locationName}</p>
                     </TableCell>
@@ -326,6 +364,18 @@ export default function SalesExpenses() {
                     <TableCell className="text-right font-mono font-bold text-red-500">
                       {fmt(Number(e.amount))}
                     </TableCell>
+                    {perm.canDelete && (
+                      <TableCell className="w-10">
+                        <Button
+                          variant="ghost" size="icon"
+                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                          title="Delete expense"
+                          onClick={() => setDeleteTarget(e)}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>
@@ -333,6 +383,41 @@ export default function SalesExpenses() {
           </div>
         )}
       </div>
+
+      {/* Delete confirmation */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-destructive">
+              <Trash2 className="w-5 h-5" /> Delete this expense?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <span className="block">
+                  <span className="font-medium text-foreground">{deleteTarget?.description}</span>
+                  {' — '}
+                  <span className="font-mono font-semibold text-red-500">{deleteTarget ? fmt(Number(deleteTarget.amount)) : ''}</span>
+                </span>
+                <span className="block">
+                  Voucher <span className="font-mono text-primary">{deleteTarget?.voucherNumber}</span> will be
+                  removed and the amount returned to the location's cash ledger. The deletion is recorded in the
+                  audit log. This cannot be undone.
+                </span>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(e) => { e.preventDefault(); confirmDelete(); }}
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Deleting…</> : 'Delete Expense'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Add Expense Dialog — only for specific location */}
       {isSpecific && (

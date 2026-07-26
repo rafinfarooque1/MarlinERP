@@ -775,6 +775,28 @@ async function runMigrations() {
   // One-time: wrap every existing positive stock quantity into an OPENING
   // batch so legacy stock participates in batch views with quantities
   // preserved exactly. Runs after dedup so (item, branch) rows are unique.
+  // Phase 7: login history + configurable password policy (raw columns —
+  // remember: invisible to drizzle db.select(), read/write via raw SQL only)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS login_attempts (
+      id serial PRIMARY KEY,
+      username text NOT NULL,
+      employee_id integer,
+      success boolean NOT NULL,
+      ip text,
+      user_agent text,
+      reason text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_login_attempts_created ON login_attempts(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_login_attempts_username ON login_attempts(username);
+
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS password_min_length integer NOT NULL DEFAULT 8;
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS password_require_uppercase boolean NOT NULL DEFAULT false;
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS password_require_number boolean NOT NULL DEFAULT false;
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS password_require_special boolean NOT NULL DEFAULT false;
+  `);
+
   const { rows: [openingDone] } = await pool.query(
     `SELECT 1 FROM migration_log WHERE name = 'stock_batches_opening_v1'`
   );

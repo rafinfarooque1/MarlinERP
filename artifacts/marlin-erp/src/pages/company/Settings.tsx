@@ -8,7 +8,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Trash2, TriangleAlert, CalendarRange, FileText } from 'lucide-react';
+import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Trash2, TriangleAlert, CalendarRange, FileText, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
 import { customFetch } from '@workspace/api-client-react';
 import { Textarea } from '@/components/ui/textarea';
@@ -356,6 +356,108 @@ function ProductionCostingSection() {
   );
 }
 
+// ─── Security: password policy (server-persisted) ────────────────────────────
+
+const POLICY_TOGGLES = [
+  { key: 'passwordRequireUppercase', label: 'Require an uppercase letter', hint: 'At least one A–Z character' },
+  { key: 'passwordRequireNumber',    label: 'Require a number',            hint: 'At least one 0–9 digit' },
+  { key: 'passwordRequireSpecial',   label: 'Require a special character', hint: 'e.g. ! @ # $ % &' },
+] as const;
+
+function SecuritySection() {
+  const [minLength, setMinLength] = useState('8');
+  const [flags, setFlags] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    customFetch<any>('/api/company/settings')
+      .then(s => {
+        setMinLength(String(Number(s?.passwordMinLength ?? 8) || 8));
+        setFlags({
+          passwordRequireUppercase: !!s?.passwordRequireUppercase,
+          passwordRequireNumber: !!s?.passwordRequireNumber,
+          passwordRequireSpecial: !!s?.passwordRequireSpecial,
+        });
+      })
+      .catch(() => { /* keep defaults */ })
+      .finally(() => setLoading(false));
+  }, []);
+
+  const save = async () => {
+    const v = Number(minLength);
+    if (!Number.isInteger(v) || v < 6 || v > 32) {
+      toast.error('Minimum length must be between 6 and 32');
+      return;
+    }
+    setSaving(true);
+    try {
+      await customFetch('/api/company/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          passwordMinLength: v,
+          passwordRequireUppercase: !!flags.passwordRequireUppercase,
+          passwordRequireNumber: !!flags.passwordRequireNumber,
+          passwordRequireSpecial: !!flags.passwordRequireSpecial,
+        }),
+      });
+      toast.success('Password policy saved — applies when users change their password');
+    } catch (e: any) {
+      toast.error(e?.data?.error || e.message || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <div className="p-4 border-b border-border bg-muted/20 flex items-center gap-3">
+        <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center"><ShieldCheck className="w-4 h-4 text-primary" /></div>
+        <div>
+          <h3 className="font-semibold">Security — Password Policy</h3>
+          <p className="text-xs text-muted-foreground">Rules enforced when employees choose a new password. Admin-issued starter passwords are exempt.</p>
+        </div>
+      </div>
+      {loading ? (
+        <div className="p-6 flex items-center gap-2 text-muted-foreground text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>
+      ) : (
+        <div className="divide-y divide-border">
+          <div className="p-4 flex items-center justify-between gap-4">
+            <div className="flex-1">
+              <label className="text-sm font-medium">Minimum password length</label>
+              <p className="text-xs text-muted-foreground mt-0.5">Between 6 and 32 characters</p>
+            </div>
+            <Input
+              type="number" min={6} max={32}
+              value={minLength}
+              onChange={e => setMinLength(e.target.value)}
+              className="w-28 font-mono"
+            />
+          </div>
+          {POLICY_TOGGLES.map(t => (
+            <div key={t.key} className="p-4 flex items-center justify-between gap-4">
+              <div className="flex-1">
+                <label className="text-sm font-medium">{t.label}</label>
+                <p className="text-xs text-muted-foreground mt-0.5">{t.hint}</p>
+              </div>
+              <Switch
+                checked={!!flags[t.key]}
+                onCheckedChange={v => setFlags(prev => ({ ...prev, [t.key]: v }))}
+              />
+            </div>
+          ))}
+          <div className="p-4 flex justify-end">
+            <Button onClick={save} disabled={saving}>
+              {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> Save Password Policy</>}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Settings() {
   const [values, setValues] = useState<Record<string, any>>(getInitial);
   const [saving, setSaving] = useState(false);
@@ -441,6 +543,9 @@ export default function Settings() {
 
         {/* ── Production costing: default overhead % (server-persisted) ────── */}
         <ProductionCostingSection />
+
+        {/* ── Security: password policy (server-persisted) ─────────────────── */}
+        <SecuritySection />
 
         {/* ── Danger Zone ──────────────────────────────────────────────────── */}
         <div className="border border-destructive/40 rounded-xl overflow-hidden">
