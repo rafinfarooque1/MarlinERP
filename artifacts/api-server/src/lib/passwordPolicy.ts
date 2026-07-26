@@ -37,7 +37,7 @@ const DEFAULT_POLICY: PasswordPolicy = {
  * must_change_password=true, so the (stricter) policy is enforced the moment
  * the employee picks their own password.
  */
-export const DEFAULT_INITIAL_PASSWORD = '1234';
+export const DEFAULT_INITIAL_PASSWORD = 'marlin1458';
 
 let cached: { policy: PasswordPolicy; at: number } | null = null;
 const CACHE_MS = 30_000;

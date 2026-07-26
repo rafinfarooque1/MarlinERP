@@ -32,7 +32,7 @@ export default function Login() {
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
-    defaultValues: { username: 'admin', password: '1234' },
+    defaultValues: { username: 'admin', password: 'marlin1458' },
   });
 
   const onSubmit = (data: LoginFormValues) => {
