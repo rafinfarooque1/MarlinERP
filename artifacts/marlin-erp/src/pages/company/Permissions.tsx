@@ -48,6 +48,10 @@ const MODULE_SEGMENTS = [
         modules: ['Chart of Accounts', 'Ledger', 'Cash & Bank', 'Expenses', 'GST Summary', 'GST Returns', 'Reconciliation', 'Cash Balance', 'Vouchers', 'Books', 'Reports'],
       },
       {
+        title: 'Dashboard',
+        modules: ['Dashboard'],
+      },
+      {
         title: 'Company',
         modules: ['Settings', 'Permissions', 'Profile', 'Login History'],
       },
@@ -82,15 +86,15 @@ function defaultAccess(level: number, module: string): boolean {
     return !['Settings', 'Permissions', 'Login History'].includes(module);
   }
   if (level === 3) {
-    // Supervisor: sales segment + production + inventory + profile
-    return [...salesSegmentModules, ...productionModules, ...inventoryModules, 'Profile'].includes(module);
+    // Supervisor: sales segment + production + inventory + profile + dashboard
+    return [...salesSegmentModules, ...productionModules, ...inventoryModules, 'Dashboard', 'Profile'].includes(module);
   }
   if (level === 4) {
-    // Staff: sales segment + basic production/inventory
-    return [...salesSegmentModules, ...productionModules, 'Stock', 'HO Transfers'].includes(module);
+    // Staff: sales segment + basic production/inventory + dashboard
+    return [...salesSegmentModules, ...productionModules, 'Dashboard', 'Stock', 'HO Transfers'].includes(module);
   }
   // Level 5+: limited access
-  return ['Point of Sale', 'Profile', 'Production', 'Stock', 'Sales', 'Attendance', 'Leave'].includes(module);
+  return ['Point of Sale', 'Profile', 'Production', 'Stock', 'Sales', 'Attendance', 'Leave', 'Dashboard'].includes(module);
 }
 
 /** Build a local perm map from DB records + fill gaps with level-based defaults */

@@ -37,6 +37,7 @@ import {
 import { useLocationContext } from '@/lib/locationContext';
 import { useTheme } from '@/lib/theme';
 import { Button } from '@/components/ui/button';
+import { useQueryClient } from '@tanstack/react-query';
 import { useLogout, useGetMe, useChangePassword, useListPermissions, useListHierarchies, useQuickSearch } from '@workspace/api-client-react';
 import { Input } from '@/components/ui/input';
 import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
@@ -58,6 +59,7 @@ const navigation = [
     name: 'Dashboard',
     icon: LayoutDashboard,
     href: '/',
+    module: 'Dashboard',
     // Only show main Dashboard in Accounts segment for HO/warehouse employees
     // Outlet employees are redirected to Sales segment anyway
     branchGroups: ['warehouse', 'production', null],
@@ -309,6 +311,7 @@ function NavItem({ item, isActive, currentPath, collapsed }: any) {
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation();
+  const queryClient = useQueryClient();
   const logoutMutation = useLogout();
   const { data: user } = useGetMe();
   const { data: allPerms = [] } = useListPermissions();
@@ -381,7 +384,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             checkCanView(m, (user as any)?.hierarchyId, userLevel, allPerms as any[]),
           );
         }
-        return true; // Dashboard, always show
+        // single-module leaf item
+        if ('module' in item && item.module) {
+          return checkCanView(item.module as string, (user as any)?.hierarchyId, userLevel, allPerms as any[]);
+        }
+        return true;
       }
 
       // For group items: show if at least one child is accessible (canView)
@@ -466,6 +473,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const handleLogout = () => {
     localStorage.removeItem('marlin_auth_token');
     localStorage.removeItem('marlin_user');
+    queryClient.clear(); // wipe all cached data so next login loads fresh
     setLocation('/login');
   };
 

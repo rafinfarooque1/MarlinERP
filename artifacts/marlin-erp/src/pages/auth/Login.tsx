@@ -3,6 +3,7 @@ import { useLocation } from 'wouter';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { useQueryClient } from '@tanstack/react-query';
 import { useLogin } from '@workspace/api-client-react';
 import { Factory, Lock, User, Loader2, Eye, EyeOff } from 'lucide-react';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
@@ -21,12 +22,13 @@ export default function Login() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const loginMutation = useLogin();
+  const queryClient = useQueryClient();
   const [showPassword, setShowPassword] = useState(false);
 
   // Already logged in? Redirect
   useEffect(() => {
     if (localStorage.getItem('marlin_auth_token')) {
-      setLocation('/company/profile');
+      setLocation('/profile/me');
     }
   }, []);
 
@@ -38,6 +40,8 @@ export default function Login() {
   const onSubmit = (data: LoginFormValues) => {
     loginMutation.mutate({ data }, {
       onSuccess: (response) => {
+        // Wipe any cached data from a previous session before writing new credentials
+        queryClient.clear();
         // Persist token so every subsequent API call carries Authorization header
         localStorage.setItem('marlin_auth_token', response.token);
         localStorage.setItem('marlin_user', JSON.stringify(response.employee));
