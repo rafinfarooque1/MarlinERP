@@ -7,6 +7,7 @@ export interface ReceivedLineItem {
   itemId: number;
   quantity: number;
   costPrice?: number;
+  materialType?: string;
 }
 
 export function useApproveTransfer() {
@@ -18,7 +19,19 @@ export function useApproveTransfer() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ receivedLineItems, approvedBy }),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: getTransfersQueryKey() }),
+    onSuccess: () => {
+      // Transfers list
+      qc.invalidateQueries({ queryKey: getTransfersQueryKey() });
+      // Live Stock page (paginated) + useListStock (non-paginated)
+      qc.invalidateQueries({ queryKey: ['/api/stock'] });
+      // Batch quantity displays
+      qc.invalidateQueries({ queryKey: ['/api/stock/batches'] });
+      // Materials and raw-materials current_stock
+      qc.invalidateQueries({ queryKey: ['/api/materials'] });
+      qc.invalidateQueries({ queryKey: ['/api/raw-materials'] });
+      // Dashboard stock totals
+      qc.invalidateQueries({ queryKey: ['/api/dashboard'] });
+    },
   });
 }
 

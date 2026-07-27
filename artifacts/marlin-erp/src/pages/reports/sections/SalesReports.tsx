@@ -8,6 +8,7 @@ import {
 } from '@workspace/api-client-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { Building2, Store } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import {
   fmt, num, pdfMoney, fmtDate, titleCase, periodLabel,
@@ -16,6 +17,218 @@ import {
 } from '../shared';
 
 type SalesReport = 'register' | 'byItem' | 'byLocation' | 'discounts' | 'combined';
+
+// ── Hierarchical warehouse→outlet location tree ───────────────────────────────
+type LocRow = {
+  locationType: string; locationId: number; locationName: string;
+  invoices: number; taxable?: number; tax?: number; total?: number;
+  paid?: number; outstanding?: number; revenue?: number;
+};
+
+/**
+ * Renders a two-level warehouse→outlet sales tree.
+ * Each warehouse is a collapsible group header; outlets are indented below;
+ * a subtotal row follows each group.
+ *
+ * compact=true: shows Location / Type / Invoices / Revenue (4 cols — Combined panel)
+ * compact=false: shows all 8 cols — By Location full report
+ */
+function HierarchicalLocationTable({
+  rows, loading, warehouses, outlets, compact = false,
+}: {
+  rows: LocRow[];
+  loading: boolean;
+  warehouses: any[];
+  outlets: any[];
+  compact?: boolean;
+}) {
+  const money = (v?: number) =>
+    v != null && v > 0
+      ? `₹${v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : <span className="text-muted-foreground">—</span>;
+
+  // outlet id → warehouseId
+  const outletWhId = new Map<number, number>(
+    (outlets as any[]).map((o) => [Number(o.id), Number(o.warehouseId)])
+  );
+  // warehouseId → name (fallback for warehouses with no direct sales row)
+  const whNameMap = new Map<number, string>(
+    (warehouses as any[]).map((w) => [Number(w.id), w.name as string])
+  );
+
+  type Group = {
+    warehouseId: number; warehouseName: string;
+    whRow: LocRow | null; outletRows: LocRow[];
+  };
+  const groupMap = new Map<number, Group>();
+  const standalone: LocRow[] = [];
+
+  // Pre-seed every known warehouse so groups appear even with zero direct sales
+  (warehouses as any[]).forEach((w) => {
+    groupMap.set(Number(w.id), {
+      warehouseId: Number(w.id), warehouseName: w.name,
+      whRow: null, outletRows: [],
+    });
+  });
+
+  for (const r of rows) {
+    if (r.locationType === 'warehouse') {
+      const g = groupMap.get(r.locationId) ?? {
+        warehouseId: r.locationId, warehouseName: r.locationName,
+        whRow: null, outletRows: [],
+      };
+      g.whRow = r;
+      groupMap.set(r.locationId, g);
+    } else if (r.locationType === 'outlet') {
+      const whId = outletWhId.get(r.locationId);
+      if (whId != null) {
+        const g = groupMap.get(whId) ?? {
+          warehouseId: whId, warehouseName: whNameMap.get(whId) ?? `Warehouse #${whId}`,
+          whRow: null, outletRows: [],
+        };
+        g.outletRows.push(r);
+        groupMap.set(whId, g);
+      } else {
+        standalone.push(r);
+      }
+    } else {
+      standalone.push(r); // headoffice / production
+    }
+  }
+
+  // Only keep groups that have any data; sort by combined revenue desc
+  const rev = (r: LocRow) => r.revenue ?? r.total ?? 0;
+  const groups = [...groupMap.values()]
+    .filter((g) => g.whRow || g.outletRows.length > 0)
+    .sort((a, b) => {
+      const aT = rev(a.whRow ?? {} as any) + a.outletRows.reduce((s, r) => s + rev(r), 0);
+      const bT = rev(b.whRow ?? {} as any) + b.outletRows.reduce((s, r) => s + rev(r), 0);
+      return bT - aT;
+    });
+
+  if (loading) return <div className="text-center py-8 text-muted-foreground text-sm">Loading…</div>;
+  if (!groups.length && !standalone.length)
+    return <div className="text-center py-8 text-muted-foreground text-sm">No sales in this period</div>;
+
+  const hdrCls = 'text-xs font-medium text-muted-foreground uppercase tracking-wide';
+
+  return (
+    <div className="border border-border rounded-lg overflow-hidden text-sm">
+      {/* ── Column headers ── */}
+      <div className={`grid ${compact ? 'grid-cols-12' : 'grid-cols-12'} bg-muted/50 px-3 py-2 border-b border-border ${hdrCls}`}>
+        <span className="col-span-4">Location</span>
+        <span className="col-span-2">Type</span>
+        <span className="col-span-2 text-center">Invoices</span>
+        {compact ? (
+          <span className="col-span-4 text-right">Revenue</span>
+        ) : (
+          <>
+            <span className="col-span-2 text-right">Taxable</span>
+            <span className="col-span-1 text-right">Tax</span>
+            <span className="col-span-1 text-right">Total</span>
+          </>
+        )}
+      </div>
+
+      {groups.map((g) => {
+        const subInv = (g.whRow?.invoices ?? 0) + g.outletRows.reduce((s, r) => s + r.invoices, 0);
+        const subRev = rev(g.whRow ?? {} as any) + g.outletRows.reduce((s, r) => s + rev(r), 0);
+        const subTaxable = (g.whRow?.taxable ?? 0) + g.outletRows.reduce((s, r) => s + (r.taxable ?? 0), 0);
+        const subTax     = (g.whRow?.tax ?? 0)     + g.outletRows.reduce((s, r) => s + (r.tax ?? 0), 0);
+
+        return (
+          <div key={g.warehouseId} className="border-b border-border last:border-0">
+            {/* ── Warehouse header row ── */}
+            <div className="grid grid-cols-12 px-3 py-2.5 bg-blue-500/5 hover:bg-blue-500/8 items-center">
+              <span className="col-span-4 font-semibold flex items-center gap-2">
+                <Building2 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                {g.warehouseName}
+              </span>
+              <span className="col-span-2"><LocationBadge type="warehouse" /></span>
+              <span className="col-span-2 text-center text-muted-foreground">{g.whRow?.invoices ?? 0}</span>
+              {compact ? (
+                <span className="col-span-4 text-right font-semibold">{money(rev(g.whRow ?? {} as any) || undefined)}</span>
+              ) : (
+                <>
+                  <span className="col-span-2 text-right text-muted-foreground">{money(g.whRow?.taxable)}</span>
+                  <span className="col-span-1 text-right text-muted-foreground">{money(g.whRow?.tax)}</span>
+                  <span className="col-span-1 text-right font-semibold">{money(g.whRow?.total)}</span>
+                </>
+              )}
+            </div>
+
+            {/* ── Outlet rows (indented) ── */}
+            {g.outletRows.map((r) => (
+              <div key={r.locationId} className="grid grid-cols-12 px-3 py-2 bg-background hover:bg-muted/20 border-t border-border/40 items-center">
+                <span className="col-span-4 flex items-center gap-2 pl-5">
+                  <span className="w-px h-4 bg-border/70 shrink-0" />
+                  <Store className="w-3 h-3 text-emerald-600 shrink-0" />
+                  <span className="text-muted-foreground">{r.locationName}</span>
+                </span>
+                <span className="col-span-2"><LocationBadge type="outlet" /></span>
+                <span className="col-span-2 text-center text-muted-foreground">{r.invoices}</span>
+                {compact ? (
+                  <span className="col-span-4 text-right">{money(rev(r) || undefined)}</span>
+                ) : (
+                  <>
+                    <span className="col-span-2 text-right text-muted-foreground">{money(r.taxable)}</span>
+                    <span className="col-span-1 text-right text-muted-foreground">{money(r.tax)}</span>
+                    <span className="col-span-1 text-right">{money(r.total)}</span>
+                  </>
+                )}
+              </div>
+            ))}
+
+            {/* ── Warehouse subtotal ── */}
+            <div className="grid grid-cols-12 px-3 py-2 bg-muted/40 border-t border-border/60 items-center">
+              <span className="col-span-4 pl-5 text-xs font-bold text-muted-foreground uppercase tracking-wide">
+                Total — {g.warehouseName}
+              </span>
+              <span className="col-span-2" />
+              <span className="col-span-2 text-center text-xs font-semibold">{subInv}</span>
+              {compact ? (
+                <span className="col-span-4 text-right font-bold text-primary">
+                  ₹{subRev.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              ) : (
+                <>
+                  <span className="col-span-2 text-right text-xs font-semibold">
+                    {subTaxable > 0 ? `₹${subTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'}
+                  </span>
+                  <span className="col-span-1 text-right text-xs font-semibold">
+                    {subTax > 0 ? `₹${subTax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'}
+                  </span>
+                  <span className="col-span-1 text-right font-bold text-primary">
+                    {subRev > 0 ? `₹${subRev.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'}
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* ── Standalone rows (headoffice / ungrouped outlets) ── */}
+      {standalone.map((r) => (
+        <div key={`${r.locationType}:${r.locationId}`}
+          className="grid grid-cols-12 px-3 py-2.5 border-t border-border hover:bg-muted/20 items-center">
+          <span className="col-span-4 font-medium">{r.locationName}</span>
+          <span className="col-span-2"><LocationBadge type={r.locationType} /></span>
+          <span className="col-span-2 text-center">{r.invoices}</span>
+          {compact ? (
+            <span className="col-span-4 text-right font-semibold">{money(rev(r) || undefined)}</span>
+          ) : (
+            <>
+              <span className="col-span-2 text-right">{money(r.taxable)}</span>
+              <span className="col-span-1 text-right">{money(r.tax)}</span>
+              <span className="col-span-1 text-right font-semibold">{money(r.total)}</span>
+            </>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
@@ -279,18 +492,54 @@ function ByItemReport({ range }: { range: RangeState }) {
 // ── By location ───────────────────────────────────────────────────────────────
 function ByLocationReport({ range }: { range: RangeState }) {
   const { data, isLoading } = useSalesByLocation({ from: range.from || undefined, to: range.to || undefined });
+  const { data: warehouses = [] } = useListWarehouses();
+  const { data: outlets = [] } = useListOutlets();
   const rows = data?.rows ?? [];
   const t = data?.totals;
+
+  // Build flat rows for CSV/PDF exports (warehouse first, then its outlets, then subtotal)
+  const exportRows: typeof rows = [];
+  const outletWhId = new Map<number, number>((outlets as any[]).map((o) => [Number(o.id), Number(o.warehouseId)]));
+  const whNameMap  = new Map<number, string>((warehouses as any[]).map((w) => [Number(w.id), w.name as string]));
+  const grouped = new Map<number, { wh?: (typeof rows)[number]; outlets: (typeof rows)[number][] }>();
+  for (const r of rows) {
+    if (r.locationType === 'warehouse') {
+      const g = grouped.get(r.locationId) ?? { outlets: [] };
+      g.wh = r; grouped.set(r.locationId, g);
+    } else if (r.locationType === 'outlet') {
+      const whId = outletWhId.get(r.locationId);
+      if (whId != null) {
+        const g = grouped.get(whId) ?? { outlets: [] }; g.outlets.push(r); grouped.set(whId, g);
+      } else { exportRows.push(r); }
+    } else { exportRows.push(r); }
+  }
+  (warehouses as any[]).forEach((w) => {
+    const g = grouped.get(Number(w.id));
+    if (!g) return;
+    if (g.wh) exportRows.push(g.wh);
+    exportRows.push(...g.outlets);
+    const subTotal = (g.wh?.total ?? 0) + g.outlets.reduce((s, r) => s + r.total, 0);
+    const subTaxable = (g.wh?.taxable ?? 0) + g.outlets.reduce((s, r) => s + r.taxable, 0);
+    const subTax = (g.wh?.tax ?? 0) + g.outlets.reduce((s, r) => s + r.tax, 0);
+    const subPaid = (g.wh?.paid ?? 0) + g.outlets.reduce((s, r) => s + r.paid, 0);
+    exportRows.push({ locationType: 'subtotal', locationId: Number(w.id),
+      locationName: `TOTAL — ${whNameMap.get(Number(w.id)) ?? w.name}`,
+      invoices: (g.wh?.invoices ?? 0) + g.outlets.reduce((s, r) => s + r.invoices, 0),
+      taxable: subTaxable, tax: subTax, total: subTotal,
+      paid: subPaid, outstanding: subTotal - subPaid });
+  });
 
   return (
     <div className="space-y-4">
       <RangeBar range={range}>
         <ExportButtons
           disabled={isLoading || rows.length === 0}
-          onCSV={() => downloadCSV('sales-by-location.csv', rows.map((r) => ({
-            Location: r.locationName, Type: r.locationType, Invoices: r.invoices,
-            'Taxable (₹)': r.taxable.toFixed(2), 'Tax (₹)': r.tax.toFixed(2), 'Total (₹)': r.total.toFixed(2),
-            'Collected (₹)': r.paid.toFixed(2), 'Outstanding (₹)': r.outstanding.toFixed(2),
+          onCSV={() => downloadCSV('sales-by-location.csv', exportRows.map((r) => ({
+            Location: r.locationName, Type: r.locationType === 'subtotal' ? 'SUBTOTAL' : r.locationType,
+            Invoices: r.invoices,
+            'Taxable (₹)': r.taxable.toFixed(2), 'Tax (₹)': r.tax.toFixed(2),
+            'Total (₹)': r.total.toFixed(2), 'Collected (₹)': r.paid.toFixed(2),
+            'Outstanding (₹)': r.outstanding.toFixed(2),
           })))}
           onPDF={() => exportReportPdf({
             title: 'Sales by Location',
@@ -303,10 +552,10 @@ function ByLocationReport({ range }: { range: RangeState }) {
                 { label: 'Total', align: 'right', width: 1.4 }, { label: 'Collected', align: 'right', width: 1.4 },
                 { label: 'Outstanding', align: 'right', width: 1.4 },
               ],
-              rows: rows.map((r) => [r.locationName, titleCase(r.locationType), r.invoices, pdfMoney(r.taxable),
-                pdfMoney(r.tax), pdfMoney(r.total), pdfMoney(r.paid), pdfMoney(r.outstanding)]),
-              totalsRow: ['TOTAL', '', t?.invoices ?? 0, pdfMoney(t?.taxable), pdfMoney(t?.tax), pdfMoney(t?.total),
-                pdfMoney(t?.paid), pdfMoney(t?.outstanding)],
+              rows: exportRows.map((r) => [r.locationName, titleCase(r.locationType), r.invoices,
+                pdfMoney(r.taxable), pdfMoney(r.tax), pdfMoney(r.total), pdfMoney(r.paid), pdfMoney(r.outstanding)]),
+              totalsRow: ['TOTAL', '', t?.invoices ?? 0, pdfMoney(t?.taxable), pdfMoney(t?.tax),
+                pdfMoney(t?.total), pdfMoney(t?.paid), pdfMoney(t?.outstanding)],
             }],
           })}
         />
@@ -319,20 +568,22 @@ function ByLocationReport({ range }: { range: RangeState }) {
         { label: 'Outstanding', value: fmt(t?.outstanding), tone: 'neg' },
       ]} />
 
-      <RTable
-        cols={[
-          { key: 'locationName', label: 'Location', render: (r) => <span className="font-medium">{r.locationName}</span> },
-          { key: 'locationType', label: 'Type', render: (r) => <LocationBadge type={r.locationType} /> },
-          { key: 'invoices', label: 'Invoices', align: 'center' },
-          { key: 'taxable', label: 'Taxable', align: 'right', render: (r) => fmt(r.taxable) },
-          { key: 'tax', label: 'Tax', align: 'right', render: (r) => fmt(r.tax) },
-          { key: 'total', label: 'Total', align: 'right', render: (r) => <b>{fmt(r.total)}</b> },
-          { key: 'paid', label: 'Collected', align: 'right', render: (r) => <span className="text-emerald-600">{fmt(r.paid)}</span> },
-          { key: 'outstanding', label: 'Outstanding', align: 'right', render: (r) => <span className={r.outstanding > 0 ? 'text-red-500' : ''}>{fmt(r.outstanding)}</span> },
-        ] satisfies Col<(typeof rows)[number]>[]}
-        rows={rows} loading={isLoading} rowKey={(r) => `${r.locationType}:${r.locationId}`}
-        footer={['TOTAL', '', t?.invoices ?? 0, fmt(t?.taxable), fmt(t?.tax), fmt(t?.total), fmt(t?.paid), fmt(t?.outstanding)]}
+      <HierarchicalLocationTable
+        rows={rows} loading={isLoading}
+        warehouses={warehouses as any[]} outlets={outlets as any[]}
       />
+
+      {/* Grand total footer */}
+      {!isLoading && rows.length > 0 && (
+        <div className="grid grid-cols-12 px-3 py-2.5 bg-muted/60 border border-border rounded-lg text-sm font-bold">
+          <span className="col-span-4">GRAND TOTAL</span>
+          <span className="col-span-2" />
+          <span className="col-span-2 text-center">{t?.invoices ?? 0}</span>
+          <span className="col-span-2 text-right">{fmt(t?.taxable)}</span>
+          <span className="col-span-1 text-right">{fmt(t?.tax)}</span>
+          <span className="col-span-1 text-right text-primary">{fmt(t?.total)}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -340,6 +591,8 @@ function ByLocationReport({ range }: { range: RangeState }) {
 // ── Combined sales & stock handout ───────────────────────────────────────────
 function CombinedReport({ range }: { range: RangeState }) {
   const { data, isLoading } = useSalesStockCombined({ from: range.from || undefined, to: range.to || undefined });
+  const { data: warehouses = [] } = useListWarehouses();
+  const { data: outlets = [] } = useListOutlets();
   const s = data?.sales;
 
   const onPDF = () => exportReportPdf({
@@ -398,14 +651,12 @@ function CombinedReport({ range }: { range: RangeState }) {
       <div className="grid lg:grid-cols-2 gap-4">
         <div className="space-y-2">
           <h3 className="text-sm font-semibold text-muted-foreground">Sales by Location</h3>
-          <RTable
-            cols={[
-              { key: 'locationName', label: 'Location', render: (r: any) => <span className="font-medium">{r.locationName}</span> },
-              { key: 'locationType', label: 'Type', render: (r: any) => <LocationBadge type={r.locationType} /> },
-              { key: 'invoices', label: 'Invoices', align: 'center' },
-              { key: 'revenue', label: 'Revenue', align: 'right', render: (r: any) => <b>{fmt(r.revenue)}</b> },
-            ]}
-            rows={data?.salesByLocation ?? []} loading={isLoading} rowKey={(_, i) => i}
+          <HierarchicalLocationTable
+            rows={(data?.salesByLocation ?? []).map((r: any) => ({ ...r, total: r.revenue }))}
+            loading={isLoading}
+            warehouses={warehouses as any[]}
+            outlets={outlets as any[]}
+            compact
           />
         </div>
         <div className="space-y-2">

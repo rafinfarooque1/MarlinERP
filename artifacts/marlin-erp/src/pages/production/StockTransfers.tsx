@@ -167,6 +167,7 @@ function ApproveDialog({
       itemId: li.itemId,
       quantity: received[li.itemId] ?? li.quantity,
       costPrice: li.costPrice ?? 0,
+      materialType: li.materialType ?? 'item',
     }));
     approveMutation.mutate(
       { id: transfer.id, receivedLineItems, approvedBy: 'admin' },
