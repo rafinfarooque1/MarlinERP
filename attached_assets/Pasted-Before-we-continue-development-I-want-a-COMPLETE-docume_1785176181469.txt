@@ -1,0 +1,411 @@
+Before we continue development, I want a COMPLETE documentation of the current ERP.
+
+Do NOT modify any code.
+
+Do NOT implement anything.
+
+Do NOT create any tasks.
+
+This is an ANALYSIS ONLY.
+
+=========================================================
+OBJECTIVE
+=========================================================
+
+Generate a complete technical documentation of the current ERP after all completed tasks.
+
+I want the ACTUAL implementation, not the original plan.
+
+Read the entire project and document everything that currently exists.
+
+=========================================================
+BACKEND DOCUMENTATION
+=========================================================
+
+Document completely:
+
+1. Folder Structure
+
+Show the complete backend folder tree.
+
+2. Architecture
+
+Explain how the backend is organized.
+
+3. Authentication
+
+JWT
+
+Password policy
+
+Login flow
+
+Refresh tokens
+
+Session
+
+Middleware
+
+4. Authorization (RBAC)
+
+Permission architecture
+
+Permission resolver
+
+Permission middleware
+
+Branch scope
+
+Role hierarchy
+
+Employee hierarchy
+
+Data scope
+
+5. Database
+
+List every table.
+
+For every table explain
+
+Purpose
+
+Relationships
+
+Primary Keys
+
+Foreign Keys
+
+Indexes
+
+Business Rules
+
+6. APIs
+
+List every API endpoint.
+
+For each endpoint document
+
+Route
+
+Method
+
+Purpose
+
+Permission
+
+Request
+
+Response
+
+Validation
+
+Business Logic
+
+7. Production
+
+Explain the complete production flow.
+
+8. Inventory
+
+Explain
+
+Stock
+
+Stock Ledger
+
+Transfers
+
+Verification
+
+Batch
+
+FEFO
+
+Item Pricing
+
+Warehouse
+
+Outlet
+
+9. Purchases
+
+Complete workflow.
+
+10. Sales
+
+POS workflow
+
+GST
+
+Discount
+
+Coupon
+
+Payments
+
+Credit
+
+11. Accounts
+
+Explain
+
+Chart of Accounts
+
+Ledger
+
+Journal
+
+Contra
+
+Payments
+
+Receipts
+
+GST
+
+Trial Balance
+
+Cash Book
+
+Bank Book
+
+Day Book
+
+Reconciliation
+
+Cash Balance
+
+Derived postings
+
+12. HR
+
+Hierarchy
+
+Employees
+
+Attendance
+
+Payroll
+
+Leave
+
+13. Reports
+
+Explain every report.
+
+14. Company
+
+Settings
+
+Permissions
+
+Audit
+
+Login History
+
+15. Shared Libraries
+
+Explain every shared helper.
+
+=========================================================
+FRONTEND DOCUMENTATION
+=========================================================
+
+Document completely.
+
+Folder structure.
+
+Navigation.
+
+Routing.
+
+Pages.
+
+Components.
+
+Layouts.
+
+Hooks.
+
+Context.
+
+Permission hook.
+
+Location Context.
+
+API Client.
+
+Module Registry.
+
+Utilities.
+
+State Management.
+
+Query Management.
+
+Forms.
+
+Tables.
+
+Dialogs.
+
+PDF.
+
+Charts.
+
+=========================================================
+NAVIGATION
+=========================================================
+
+Document the final navigation.
+
+Dashboard
+
+Operations
+
+Production
+
+Inventory
+
+Sales (HO)
+
+HR
+
+Accounts
+
+Company
+
+Explain every page.
+
+=========================================================
+PERMISSION SYSTEM
+=========================================================
+
+Explain the entire permission architecture.
+
+How permissions work.
+
+How sidebar is generated.
+
+How pages are protected.
+
+How backend validates permissions.
+
+How APIs validate permissions.
+
+How data scope works.
+
+=========================================================
+BUSINESS WORKFLOW
+=========================================================
+
+Explain complete workflows.
+
+Purchase
+
+Production
+
+Stock
+
+Transfer
+
+Sales
+
+Returns
+
+Payments
+
+Reports
+
+GST
+
+Accounting
+
+=========================================================
+DATA FLOW
+=========================================================
+
+Explain complete data flow.
+
+Frontend
+
+↓
+
+API
+
+↓
+
+Business Logic
+
+↓
+
+Database
+
+↓
+
+Response
+
+=========================================================
+PROJECT STRUCTURE
+=========================================================
+
+Generate complete project tree.
+
+Frontend
+
+Backend
+
+Shared Libraries
+
+=========================================================
+CURRENT LIMITATIONS
+=========================================================
+
+Identify
+
+Current limitations
+
+Missing features
+
+Incomplete modules
+
+Temporary implementations
+
+Technical debt
+
+=========================================================
+OUTPUT FORMAT
+=========================================================
+
+Generate a professional technical documentation.
+
+Use sections.
+
+Tables.
+
+Flow diagrams.
+
+Architecture diagrams.
+
+Module dependency diagrams.
+
+Data flow diagrams.
+
+Navigation diagrams.
+
+Database relationship explanations.
+
+=========================================================
+IMPORTANT
+=========================================================
+
+This is DOCUMENTATION ONLY.
+
+Do NOT modify code.
+
+Do NOT generate tasks.
+
+Do NOT implement anything.
+
+Document ONLY the current implementation exactly as it exists today.
