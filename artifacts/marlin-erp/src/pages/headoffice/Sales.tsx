@@ -1264,11 +1264,28 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 <SheetTitle className="flex items-center gap-2"><Receipt className="w-5 h-5 text-primary" />{viewItem?.invoiceNumber}</SheetTitle>
                 <SheetDescription>{viewItem?.outletName} · {viewItem && new Date(viewItem.saleDate).toLocaleDateString('en-IN')}</SheetDescription>
               </div>
-              {perm.canEdit && viewItem && (
-                <Button variant="outline" size="sm" className="shrink-0 gap-1.5" onClick={() => { setViewItem(null); openEdit(viewItem); }}>
-                  <Pencil className="w-3.5 h-3.5" /> Edit
-                </Button>
-              )}
+              <div className="flex items-center gap-1.5 shrink-0">
+                {perm.canDownload && viewItem && (
+                  <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void handleDownloadPDF(viewItem)} title="Download PDF">
+                    <FileDown className="w-3.5 h-3.5" /> PDF
+                  </Button>
+                )}
+                {viewItem && (viewItem as any).customerPhone && (
+                  <Button
+                    variant="outline" size="sm"
+                    className="gap-1.5 border-[#25D366] text-[#25D366] hover:bg-[#25D366]/10 hover:text-[#128C7E]"
+                    onClick={() => void handleWhatsApp(viewItem)}
+                    title={`Send invoice to ${(viewItem as any).customerPhone} via WhatsApp`}
+                  >
+                    <WhatsAppIcon className="w-3.5 h-3.5" /> WhatsApp
+                  </Button>
+                )}
+                {perm.canEdit && viewItem && (
+                  <Button variant="outline" size="sm" className="gap-1.5" onClick={() => { setViewItem(null); openEdit(viewItem); }}>
+                    <Pencil className="w-3.5 h-3.5" /> Edit
+                  </Button>
+                )}
+              </div>
             </div>
           </SheetHeader>
           {viewItem && (
