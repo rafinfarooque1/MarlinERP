@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   useListStockTransfers, useCreateStockTransfer, useListItems,
   useListRawMaterials, useListMaterials,
@@ -159,6 +159,15 @@ function ApproveDialog({
   });
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
+
+  // Re-initialise received quantities whenever a different transfer is opened
+  useEffect(() => {
+    const init: Record<number, number> = {};
+    (transfer?.lineItems ?? []).forEach((li: any) => { init[li.itemId] = li.quantity; });
+    setReceived(init);
+    setRejectReason('');
+    setShowRejectConfirm(false);
+  }, [transfer?.id]);
 
   if (!transfer) return null;
 
