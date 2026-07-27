@@ -1,0 +1,284 @@
+Review and fix the entire Stock Transfer module based on the audit findings below.
+
+This is not a redesign. Keep the existing workflow and architecture intact.
+
+The stock transfer module must work exactly like a professional ERP (SAP / Tally / Oracle).
+
+====================================================
+1. ITEM NAME & UNIT FIX (CRITICAL)
+====================================================
+
+Currently transfer screens use:
+
+iMap.get(itemId)
+
+This only looks in the Item Master table.
+
+This causes:
+
+• Raw Materials display wrong names
+• Packing Materials display wrong names
+• Units become incorrect
+• "Item #2" appears
+
+Fix:
+
+Build one master lookup using:
+
+item:{id}
+raw_material:{id}
+packing_material:{id}
+
+Every transfer screen, PDF, Receive screen, Details screen and History screen must use:
+
+materialType + itemId
+
+instead of only itemId.
+
+Never lookup only by integer ID.
+
+====================================================
+2. TRANSFER PDF
+====================================================
+
+Do NOT hardcode Head Office.
+
+PDF must display:
+
+Actual From Location
+Actual To Location
+
+according to transfer record.
+
+====================================================
+3. MATERIAL STOCK VALIDATION
+====================================================
+
+Before dispatch:
+
+verify
+
+Packing Material stock
+
+Raw Material stock
+
+SKU stock
+
+all have sufficient quantity.
+
+Never allow negative stock.
+
+If insufficient stock:
+
+Return proper validation error.
+
+Never use GREATEST(0,...).
+
+====================================================
+4. BATCH PICKER
+====================================================
+
+Batch picker currently loads Head Office batches.
+
+Fix:
+
+Load batches from the actual source location.
+
+Examples:
+
+HO -> Warehouse
+Load HO batches.
+
+Warehouse A -> Warehouse B
+Load Warehouse A batches.
+
+Warehouse -> Outlet
+Load Warehouse batches.
+
+Never hardcode Head Office.
+
+====================================================
+5. RECEIVE PROCESS
+====================================================
+
+When destination receives:
+
+Increase destination stock.
+
+Update average cost.
+
+Update batch quantities.
+
+Update inventory value.
+
+Update stock ledger.
+
+Everything must happen inside one transaction.
+
+====================================================
+6. STOCK LEDGER
+====================================================
+
+Ledger must record proper unit.
+
+Do not save blank unit.
+
+Store:
+
+Item name
+
+Type
+
+Unit
+
+Quantity
+
+Cost
+
+Source
+
+Destination
+
+Reference
+
+====================================================
+7. GST LOGIC
+====================================================
+
+Keep this backend rule.
+
+Same GSTIN
+
+Internal transfer
+
+Delivery Challan only
+
+No GST
+
+No Sale
+
+No Purchase
+
+Different GSTIN
+
+If same state
+
+Create Sale
+
+Create Purchase
+
+Apply CGST + SGST
+
+If different state
+
+Create Sale
+
+Create Purchase
+
+Apply IGST
+
+Generate accounting entries.
+
+Generate GST ledger.
+
+Generate invoice.
+
+Generate delivery challan.
+
+====================================================
+8. STOCK SYNCHRONIZATION
+====================================================
+
+Verify every transfer updates:
+
+Production Stock
+
+Inventory Stock
+
+Warehouse Stock
+
+Outlet Stock
+
+Reports
+
+Dashboard
+
+Stock Ledger
+
+Transfer History
+
+Batch Stock
+
+No page should show stale values.
+
+====================================================
+9. LOCATION RULES
+====================================================
+
+Support all flows.
+
+HO -> Warehouse
+
+HO -> Outlet
+
+Warehouse -> Warehouse
+
+Warehouse -> Outlet
+
+Outlet -> Warehouse
+
+Maintain correct source and destination.
+
+====================================================
+10. COMPLETE TEST
+====================================================
+
+Perform a complete audit.
+
+Verify:
+
+✓ Dispatch decreases source stock.
+
+✓ Receive increases destination stock.
+
+✓ Reject restores source stock.
+
+✓ Reports match database.
+
+✓ Dashboard matches inventory.
+
+✓ Batch balances remain correct.
+
+✓ Average cost updates.
+
+✓ Ledger entries created.
+
+✓ GST entries created only when required.
+
+✓ No duplicate stock movement.
+
+✓ No stale cache.
+
+✓ No wrong item names.
+
+✓ No wrong units.
+
+====================================================
+
+Expected Result
+
+The stock transfer module should function exactly like an enterprise ERP.
+
+Every inventory movement, accounting entry, GST transaction, ledger posting, reporting screen and stock balance must remain synchronized.
+
+No placeholder names.
+
+No incorrect units.
+
+No missing stock.
+
+No inconsistent balances.
+
+Do not change UI unnecessarily.
+
+Only fix the implementation while preserving existing functionality.

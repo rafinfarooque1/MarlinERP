@@ -5,7 +5,7 @@ import { eq, and, sql } from "drizzle-orm";
 import { CreateStockTransferBody, ListStockQueryParams } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
 import { pool } from "@workspace/db";
-import { consumeBatches, restoreBatches, creditBatch, validateBatchOverride, type BatchBreakdownEntry } from "../lib/batches";
+import { consumeBatches, restoreBatches, creditBatch, updateAvgCostOnInbound, validateBatchOverride, type BatchBreakdownEntry } from "../lib/batches";
 import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
 import { resolveLocationGst, classifyTransfer, computeTransferGst, createDispatchVoucher, createReceiveVoucher, type TaxType, type GstTotals } from "../lib/gstTransfer";
 import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
@@ -407,23 +407,35 @@ router.post("/stock/transfers", requireModuleAction(["Stock Transfers", "HO Tran
       const materialType: string = (rawLines[i] as any)?.materialType ?? 'item';
 
       if (materialType === 'material') {
-        // Raw Material: deduct from materials.current_stock
+        // Raw Material: check availability then deduct
         const { rows: [mat] } = await client.query(
-          `UPDATE materials SET current_stock = GREATEST(0, current_stock::numeric - $1) WHERE id = $2 RETURNING name, current_stock::numeric AS current_stock`,
-          [li.quantity, li.itemId]
+          `SELECT id, name, unit, current_stock::numeric AS current_stock FROM materials WHERE id = $1 FOR UPDATE`,
+          [li.itemId]
         );
         if (!mat) { await client.query("ROLLBACK"); res.status(400).json({ error: `Raw Material #${li.itemId} not found` }); return; }
+        if (Number(mat.current_stock) + 0.001 < Number(li.quantity)) {
+          await client.query("ROLLBACK");
+          res.status(400).json({ error: `Insufficient stock of ${mat.name} (available ${mat.current_stock}, requested ${li.quantity})` });
+          return;
+        }
+        await client.query(`UPDATE materials SET current_stock = current_stock::numeric - $1, updated_at = now() WHERE id = $2`, [li.quantity, li.itemId]);
         enrichedLines.push({ ...li, materialType, batchBreakdown: [] });
-        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'material', refId: li.itemId, itemName: mat.name ?? '', unit: '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id });
+        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'material', refId: li.itemId, itemName: mat.name ?? '', unit: mat.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id });
       } else if (materialType === 'raw_material') {
-        // Packing Material: deduct from raw_materials.current_stock
+        // Packing Material: check availability then deduct
         const { rows: [rm] } = await client.query(
-          `UPDATE raw_materials SET current_stock = GREATEST(0, current_stock::numeric - $1) WHERE id = $2 RETURNING name, current_stock::numeric AS current_stock`,
-          [li.quantity, li.itemId]
+          `SELECT id, name, unit, current_stock::numeric AS current_stock FROM raw_materials WHERE id = $1 FOR UPDATE`,
+          [li.itemId]
         );
         if (!rm) { await client.query("ROLLBACK"); res.status(400).json({ error: `Packing Material #${li.itemId} not found` }); return; }
+        if (Number(rm.current_stock) + 0.001 < Number(li.quantity)) {
+          await client.query("ROLLBACK");
+          res.status(400).json({ error: `Insufficient stock of ${rm.name} (available ${rm.current_stock}, requested ${li.quantity})` });
+          return;
+        }
+        await client.query(`UPDATE raw_materials SET current_stock = current_stock::numeric - $1, updated_at = now() WHERE id = $2`, [li.quantity, li.itemId]);
         enrichedLines.push({ ...li, materialType, batchBreakdown: [] });
-        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'raw_material', refId: li.itemId, itemName: rm.name ?? '', unit: '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id });
+        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'raw_material', refId: li.itemId, itemName: rm.name ?? '', unit: rm.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id });
       } else {
         // Item (SKU): deduct from stock_entries
         const { rows: [srcExisting] } = await client.query(
@@ -654,6 +666,8 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["Stock Transfe
             unitCost: Number(li.costPrice ?? 0), source: "transfer", sourceId: id,
           });
         }
+        // Update destination average cost (same formula as a regular inbound purchase)
+        await updateAvgCostOnInbound(client, li.itemId, Number(li.quantity), Number(li.costPrice ?? 0));
       }
     }
 
@@ -685,6 +699,21 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["Stock Transfe
     }
 
     await client.query(`UPDATE stock_transfers SET received_line_items = $1, receive_voucher_id = $2 WHERE id = $3`, [JSON.stringify(linesToCredit), receiveVoucherId, id]);
+
+    // ── Stock ledger — inside the transaction so it rolls back with everything ─
+    const approveLedgerLines = (linesToCredit as any[]).filter((l: any) => l.quantity > 0);
+    if (approveLedgerLines.length > 0) {
+      const approveBm   = await buildBranchMaps();
+      const approveMeta = await batchResolveMeta(pool, approveLedgerLines.map((l: any) => ({ materialType: l.materialType ?? 'item', refId: Number(l.itemId) })));
+      const approveDestType = row.to_type === 'headoffice' ? 'warehouse' : row.to_type;
+      const approveDestId   = row.to_type === 'headoffice' ? 0 : Number(row.to_id);
+      await writeStockLedger(client, approveLedgerLines.map((l: any) => {
+        const mt   = l.materialType ?? 'item';
+        const info = approveMeta.get(`${mt}:${l.itemId}`) ?? { name: '', unit: '' };
+        return { txnType: 'transfer_in', materialType: mt, refId: Number(l.itemId), itemName: info.name, unit: info.unit, branchType: approveDestType, branchId: approveDestId, branchName: approveBm(row.to_type, Number(row.to_id)), qtyChange: Number(l.quantity), unitCost: Number(l.costPrice ?? 0), docType: 'stock_transfer', docId: id };
+      }));
+    }
+
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK");
@@ -696,19 +725,6 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["Stock Transfe
   const branchName = await buildBranchMaps();
   const fromName = branchName(row.from_type, row.from_id);
   const toName   = branchName(row.to_type, row.to_id);
-
-  // ── Stock ledger (approve: transfer_in — fire-and-forget) ─────────────────
-  ;(async () => {
-    const effectiveLines = (linesToCredit as any[]).filter((l: any) => l.quantity > 0);
-    const meta = await batchResolveMeta(pool, effectiveLines.map((l: any) => ({ materialType: l.materialType ?? 'item', refId: Number(l.itemId) })));
-    const dT  = row.to_type === 'headoffice' ? 'warehouse' : row.to_type;
-    const dId = row.to_type === 'headoffice' ? 0 : Number(row.to_id);
-    await writeStockLedger(pool, effectiveLines.map((l: any) => {
-      const mt   = l.materialType ?? 'item';
-      const info = meta.get(`${mt}:${l.itemId}`) ?? { name: '', unit: '' };
-      return { txnType: 'transfer_in', materialType: mt, refId: Number(l.itemId), itemName: info.name, unit: info.unit, branchType: dT, branchId: dId, branchName: toName, qtyChange: Number(l.quantity), unitCost: Number(l.costPrice ?? 0), docType: 'stock_transfer', docId: id };
-    }));
-  })().catch((e: any) => console.error('[stock-ledger] approve write failed', e));
 
   logActivity({
     action: "UPDATE", module: "transfers", entityType: "stock_transfer", entityId: id,

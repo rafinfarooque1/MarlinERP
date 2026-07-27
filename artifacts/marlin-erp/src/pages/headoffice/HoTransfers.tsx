@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import {
   useListStockTransfers, useCreateStockTransfer, useListItems,
+  useListRawMaterials, useListMaterials,
   useListWarehouses, useListOutlets, useListStock, getListStockTransfersQueryKey,
   useGetCompanySettings,
 } from '@workspace/api-client-react';
@@ -58,13 +59,11 @@ function StatusBadge({ status }: { status: string }) {
 
 // ── Approve dialog ────────────────────────────────────────────────────────────
 function ApproveDialog({
-  transfer, items, open, onClose,
-}: { transfer: any; items: any[]; open: boolean; onClose: () => void }) {
+  transfer, allItemsMap, open, onClose,
+}: { transfer: any; allItemsMap: Map<string, any>; open: boolean; onClose: () => void }) {
   const approveMutation = useApproveTransfer();
   const rejectMutation  = useRejectTransfer();
   const qc = useQueryClient();
-
-  const iMap = new Map(items.map((i: any) => [i.id, i]));
   // Local state: editable received quantities per line
   const [received, setReceived] = useState<Record<number, number>>(() => {
     const init: Record<number, number> = {};
@@ -147,7 +146,7 @@ function ApproveDialog({
             </div>
             <div className="space-y-2">
               {(transfer.lineItems ?? []).map((li: any) => {
-                const item = iMap.get(li.itemId);
+                const item = allItemsMap.get(`${li.materialType ?? 'item'}:${li.itemId}`);
                 const recvQty = received[li.itemId] ?? li.quantity;
                 const isShort = recvQty < li.quantity;
                 return (
@@ -225,6 +224,8 @@ export default function HoTransfers() {
   const perm = usePermission('HO Transfers');
   const { data: transfers = [], isLoading } = useListStockTransfers();
   const { data: items = [] } = useListItems();
+  const { data: rawMaterials = [] } = useListRawMaterials();
+  const { data: materials = [] } = useListMaterials();
   const { data: companySettings } = useGetCompanySettings();
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
@@ -292,6 +293,11 @@ export default function HoTransfers() {
   };
 
   const iMap = new Map((items as any[]).map((i: any) => [i.id, i]));
+  const allItemsMap = new Map<string, any>([
+    ...(items as any[]).map(i => [`item:${i.id}`, i] as [string, any]),
+    ...(materials as any[]).map(m => [`material:${m.id}`, m] as [string, any]),
+    ...(rawMaterials as any[]).map(m => [`raw_material:${m.id}`, m] as [string, any]),
+  ]);
 
   // Show all transfers — admin can create transfers but ALL require receiver approval
   const hoTransfers = (Array.isArray(transfers) ? transfers : []);
@@ -307,8 +313,8 @@ export default function HoTransfers() {
   const handleDownloadPDF = async (t: any) => {
     const cs = companySettings as any;
     const lineItems = (t.lineItems || []).map((li: any) => {
-      const item = iMap.get(li.itemId);
-      return { name: item?.name ?? `Item #${li.itemId}`, hsnCode: (item as any)?.hsnCode, quantity: li.quantity, unit: item?.unit };
+      const item = allItemsMap.get(`${li.materialType ?? 'item'}:${li.itemId}`);
+      return { name: item?.name ?? `Item #${li.itemId}`, hsnCode: (item as any)?.hsnCode, quantity: li.quantity, unit: item?.unit ?? '' };
     });
     try {
       await downloadPDFFromEndpoint('/api/pdf/challan', {
@@ -556,7 +562,7 @@ export default function HoTransfers() {
       {/* Approve / Reject dialog */}
       <ApproveDialog
         transfer={approveTarget}
-        items={items as any[]}
+        allItemsMap={allItemsMap}
         open={!!approveTarget}
         onClose={() => setApproveTarget(null)}
       />
@@ -587,7 +593,7 @@ export default function HoTransfers() {
               <div>
                 <p className="text-sm font-semibold mb-2">Dispatched Items</p>
                 {(viewItem.lineItems || []).map((li: any, i: number) => {
-                  const item = iMap.get(li.itemId);
+                  const item = allItemsMap.get(`${li.materialType ?? 'item'}:${li.itemId}`);
                   return (
                     <div key={i} className="flex justify-between p-3 bg-muted/20 rounded text-sm mb-2 border border-border">
                       <span className="font-medium">{item?.name ?? `Item #${li.itemId}`}</span>
@@ -601,7 +607,8 @@ export default function HoTransfers() {
                 <div>
                   <p className="text-sm font-semibold mb-2 text-emerald-400">Actually Received</p>
                   {viewItem.receivedLineItems.map((li: any, i: number) => {
-                    const item = iMap.get(li.itemId);
+                    const matType = li.materialType ?? viewItem.lineItems.find((d: any) => d.itemId === li.itemId)?.materialType ?? 'item';
+                    const item = allItemsMap.get(`${matType}:${li.itemId}`);
                     const dispatched = viewItem.lineItems.find((d: any) => d.itemId === li.itemId)?.quantity ?? li.quantity;
                     const isShort = li.quantity < dispatched;
                     return (

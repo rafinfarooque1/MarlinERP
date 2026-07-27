@@ -66,18 +66,19 @@ function StatusBadge({ status }: { status: string }) {
 // ── FEFO batch picker (per transfer line) ─────────────────────────────────────
 type BatchOverride = Array<{ batchId: number; quantity: number }>;
 
-function BatchPicker({ itemId, quantity, unit, override, onChange }: {
+function BatchPicker({ itemId, quantity, unit, fromType, fromId, override, onChange }: {
   itemId: number; quantity: number; unit?: string;
+  fromType: string; fromId: number;
   override?: BatchOverride;
   onChange: (v?: BatchOverride) => void;
 }) {
   const [manual, setManual] = useState(false);
   const { data: suggestion } = useSuggestBatches({
-    branchType: 'headoffice', branchId: 1,
+    branchType: fromType as any, branchId: fromId,
     itemId: itemId > 0 ? itemId : undefined,
     quantity: quantity > 0 ? quantity : undefined,
   });
-  const { data: allBatches = [] } = useListStockBatches({ branchType: 'headoffice', branchId: 1 });
+  const { data: allBatches = [] } = useListStockBatches({ branchType: fromType as any, branchId: fromId });
   if (!itemId || !(quantity > 0)) return null;
   const itemBatches = (allBatches as StockBatch[]).filter(b => b.itemId === itemId);
   if (itemBatches.length === 0) return null;
@@ -145,12 +146,11 @@ function BatchPicker({ itemId, quantity, unit, override, onChange }: {
 
 // ── Approve dialog ────────────────────────────────────────────────────────────
 function ApproveDialog({
-  transfer, items, open, onClose,
-}: { transfer: any; items: any[]; open: boolean; onClose: () => void }) {
+  transfer, allItemsMap, open, onClose,
+}: { transfer: any; allItemsMap: Map<string, any>; open: boolean; onClose: () => void }) {
   const approveMutation = useApproveTransfer();
   const rejectMutation  = useRejectTransfer();
   const qc = useQueryClient();
-  const iMap = new Map(items.map((i: any) => [i.id, i]));
 
   const [received, setReceived] = useState<Record<number, number>>(() => {
     const init: Record<number, number> = {};
@@ -212,7 +212,7 @@ function ApproveDialog({
           <div className="grid grid-cols-2 gap-3 p-4 bg-muted/20 rounded-lg border border-border text-sm">
             <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Challan</p><p className="font-mono font-bold text-primary">{transfer.challanNumber}</p></div>
             <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Date</p><p>{new Date(transfer.transferDate).toLocaleDateString('en-IN')}</p></div>
-            <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Dispatched From</p><p className="font-medium">Head Office</p></div>
+            <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Dispatched From</p><p className="font-medium">{transfer.fromName ?? 'Head Office'}</p></div>
             <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Receiving At</p><p className="font-medium">{transfer.toName}</p></div>
           </div>
 
@@ -223,7 +223,7 @@ function ApproveDialog({
             </div>
             <div className="space-y-2">
               {(transfer.lineItems ?? []).map((li: any) => {
-                const item = iMap.get(li.itemId);
+                const item = allItemsMap.get(`${li.materialType ?? 'item'}:${li.itemId}`);
                 const recvQty = received[li.itemId] ?? li.quantity;
                 const isShort = recvQty < li.quantity;
                 return (
@@ -239,7 +239,7 @@ function ApproveDialog({
                     </div>
                     <div className="col-span-3 text-center">
                       <p className="text-xs text-muted-foreground mb-1">Dispatched</p>
-                      <p className="font-mono font-bold text-sm">{li.quantity}<span className="text-muted-foreground font-normal ml-1 text-xs">{item?.unit}</span></p>
+                      <p className="font-mono font-bold text-sm">{li.quantity}<span className="text-muted-foreground font-normal ml-1 text-xs">{item?.unit ?? ''}</span></p>
                     </div>
                     <div className="col-span-4">
                       <p className="text-xs text-muted-foreground mb-1">Received <span className="text-destructive">*</span></p>
@@ -389,15 +389,15 @@ export default function StockTransfers() {
     const cs = companySettings as any;
     const challanNo = t.challanNumber || `DC-${String(t.id).padStart(4, '0')}`;
     const lineItems = (t.lineItems || []).map((li: any) => {
-      const item = iMap.get(li.itemId);
-      return { name: (item as any)?.name ?? `Item #${li.itemId}`, hsnCode: (item as any)?.hsnCode, quantity: li.quantity, unit: (item as any)?.unit };
+      const item = allItemsMap.get(`${li.materialType ?? 'item'}:${li.itemId}`);
+      return { name: item?.name ?? `Item #${li.itemId}`, hsnCode: (item as any)?.hsnCode, quantity: li.quantity, unit: item?.unit ?? '' };
     });
     try {
       await downloadPDFFromEndpoint('/api/pdf/challan', {
         cs, challanNo,
         date: new Date(t.transferDate).toLocaleDateString('en-IN'),
-        fromName: 'Head Office', fromType: 'Head Office',
-        toName: t.toName || 'Warehouse', toType: t.toType || 'Warehouse',
+        fromName: t.fromName ?? 'Head Office', fromType: t.fromType ?? 'headoffice',
+        toName: t.toName ?? 'Warehouse', toType: t.toType ?? 'warehouse',
         lineItems, isInterstate: t.isInterstate, status: t.status, notes: t.notes,
       }, `${challanNo}.pdf`);
     } catch (e: any) { toast.error(e?.message || 'Failed to generate PDF'); }
@@ -611,6 +611,8 @@ export default function StockTransfers() {
                                 itemId={selItemId}
                                 quantity={Number(form.watch(`lineItems.${i}.quantity`)) || 0}
                                 unit={allItemsMap.get(`item:${selItemId}`)?.unit}
+                                fromType="headoffice"
+                                fromId={1}
                                 override={overrides[i]}
                                 onChange={v => setOverrides(prev => ({ ...prev, [i]: v }))}
                               />
@@ -641,7 +643,7 @@ export default function StockTransfers() {
       {/* Approve / Reject dialog */}
       <ApproveDialog
         transfer={approveTarget}
-        items={items as any[]}
+        allItemsMap={allItemsMap}
         open={!!approveTarget}
         onClose={() => setApproveTarget(null)}
       />
@@ -658,7 +660,7 @@ export default function StockTransfers() {
               <div className="flex justify-center"><StatusBadge status={viewItem.status} /></div>
 
               <div className="grid grid-cols-2 gap-4">
-                {[['Date', new Date(viewItem.transferDate).toLocaleDateString('en-IN')], ['From', 'Head Office'], ['To', viewItem.toName], ['Type', (viewItem as any).transferType === 'interstate' ? 'Interstate Tax Transfer (IGST)' : (viewItem as any).transferType === 'intrastate' ? 'Inter-Branch Sale (CGST+SGST)' : 'Internal Stock Transfer']].map(([k, v]) => (
+                {[['Date', new Date(viewItem.transferDate).toLocaleDateString('en-IN')], ['From', viewItem.fromName ?? 'Head Office'], ['To', viewItem.toName], ['Type', (viewItem as any).transferType === 'interstate' ? 'Interstate Tax Transfer (IGST)' : (viewItem as any).transferType === 'intrastate' ? 'Inter-Branch Sale (CGST+SGST)' : 'Internal Stock Transfer']].map(([k, v]) => (
                   <div key={String(k)} className="flex flex-col gap-1 border-b border-border pb-3">
                     <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                     <span className="font-semibold">{String(v)}</span>
