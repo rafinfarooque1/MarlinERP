@@ -1,0 +1,193 @@
+I want to redesign the ERP navigation and permission architecture.
+
+====================================================
+REMOVE SEGMENTS
+====================================================
+
+Remove the two top navigation segments:
+
+• Sales
+• Accounts
+
+The ERP should have only ONE sidebar.
+
+There should not be separate navigation modes.
+
+====================================================
+UNIFIED SIDEBAR
+====================================================
+
+Generate the sidebar dynamically from moduleRegistry.
+
+Every module shown depends only on:
+
+1. View Permission
+2. Module availability
+
+There should be one unified navigation.
+
+====================================================
+SALES MENU
+====================================================
+
+Branch users should see only
+
+Sales
+
+    Dashboard
+
+    Point of Sale
+
+    Stock
+
+    Transfers
+
+    Expenses
+
+    Cash Balance
+
+Nothing else.
+
+====================================================
+HEAD OFFICE
+====================================================
+
+Head Office can see every module according to permissions.
+
+====================================================
+WAREHOUSE
+====================================================
+
+Warehouse employee
+
+If Sales View permission is enabled
+
+Show
+
+Sales
+
+    Point of Sale
+
+    Stock
+
+    Transfers
+
+    Expenses
+
+    Cash Balance
+
+If Inventory permission is enabled
+
+Show Inventory.
+
+If Accounts permission is enabled
+
+Show Accounts.
+
+Do NOT hide modules because of branch.
+
+Permissions decide visibility.
+
+Backend decides data scope.
+
+====================================================
+OUTLET
+====================================================
+
+Outlet employee
+
+Show modules according to permissions.
+
+Backend automatically filters data.
+
+====================================================
+REMOVE LOCATION PICKER MODE
+====================================================
+
+There should not be a separate Sales application.
+
+There should be only one ERP.
+
+Branch users log into the same ERP.
+
+Sidebar changes according to permissions.
+
+====================================================
+PERMISSION SYSTEM
+====================================================
+
+Every page has
+
+View
+
+Add
+
+Edit
+
+Delete
+
+Download
+
+View controls sidebar visibility.
+
+Add/Edit/Delete control operations.
+
+====================================================
+DATA SCOPE
+====================================================
+
+Head Office
+
+All data.
+
+Warehouse
+
+Assigned warehouse
+
++
+
+Mapped outlets.
+
+Outlet
+
+Assigned outlet only.
+
+Backend automatically filters data.
+
+====================================================
+REMOVE
+====================================================
+
+Remove
+
+Sales Segment
+
+Accounts Segment
+
+Sales-only navigation mode
+
+Duplicate navigation logic
+
+Location-dependent navigation
+
+Everything should use one moduleRegistry.
+
+====================================================
+EXPECTED RESULT
+====================================================
+
+One ERP.
+
+One Sidebar.
+
+One Permission System.
+
+Permissions decide visibility.
+
+Backend decides data scope.
+
+Head Office sees everything.
+
+Warehouse sees warehouse + mapped outlet data.
+
+Outlet sees only outlet data.
