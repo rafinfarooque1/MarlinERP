@@ -74,7 +74,7 @@ function enrichLines(lineItems: unknown, maps: NameMaps): any[] {
     ...li,
     materialName: li.materialName
       || maps[(li.materialType as keyof NameMaps)]?.get(Number(li.materialId))
-      || `${li.materialType === 'raw_material' ? 'Raw material' : li.materialType === 'item' ? 'Item' : 'Material'} #${li.materialId}`,
+      || `${li.materialType === 'raw_material' ? 'Packing Material' : li.materialType === 'item' ? 'Item Name (SKU)' : 'Material'} #${li.materialId}`,
   }));
 }
 

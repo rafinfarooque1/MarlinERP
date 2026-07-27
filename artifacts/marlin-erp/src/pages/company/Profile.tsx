@@ -9,9 +9,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Building2, Save, Loader2, Upload, X, ImageIcon } from 'lucide-react';
+import { Building2, Save, Loader2, Upload, X, ImageIcon, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { INDIAN_STATES } from '@/lib/indianStates';
+import { usePermission } from '@/lib/usePermission';
 
 const LOGO_KEY = 'marlin_company_logo';
 
@@ -35,6 +36,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function Profile() {
+  const perm = usePermission('Settings');
   const { data: profile, isLoading } = useGetCompanySettings();
   const updateMutation = useUpdateCompanySettings();
   const [saved, setSaved] = useState(false);
@@ -112,6 +114,21 @@ export default function Profile() {
     toast.success('Logo removed');
   };
 
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">You don't have permission to view this page.<br />Contact your administrator to request access.</p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
   return (
     <AppLayout>
       <div className="space-y-6 max-w-3xl">

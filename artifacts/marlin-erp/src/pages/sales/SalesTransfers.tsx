@@ -12,7 +12,8 @@ import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { toast } from 'sonner';
-import { ArrowLeftRight, Calendar, Eye, FileDown, PackageCheck, CheckCircle2, XCircle, AlertTriangle, Clock, Download, Plus, Trash2, PackageOpen } from 'lucide-react';
+import { ArrowLeftRight, Calendar, Eye, FileDown, PackageCheck, CheckCircle2, XCircle, AlertTriangle, Clock, Download, Plus, Trash2, PackageOpen, ShieldOff } from 'lucide-react';
+import { usePermission } from '@/lib/usePermission';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -208,6 +209,7 @@ function ApproveDialog({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function SalesTransfers() {
+  const perm = usePermission('Location Transfers');
   const [, navigate] = useLocation();
   const { locationState } = useLocationContext();
 
@@ -330,6 +332,21 @@ export default function SalesTransfers() {
     } catch (e: any) { toast.error(e?.message || 'Failed to generate PDF'); }
   };
 
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">You don't have permission to view this page.<br />Contact your administrator to request access.</p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
   return (
     <AppLayout>
       <div className="space-y-6">

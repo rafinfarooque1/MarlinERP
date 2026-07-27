@@ -62,7 +62,7 @@ export default function ProductionReports() {
       })));
     } else if (tab === 'consumption') {
       downloadCSV(`production-consumption-${from}-to-${to}.csv`, data.consumption.map(c => ({
-        Material: c.materialName, Type: c.materialType === 'raw_material' ? 'Raw' : 'Packaging', Unit: c.unit,
+        Material: c.materialName, Type: c.materialType === 'raw_material' ? 'Packing Material' : 'Material', Unit: c.unit,
         'Consumed Qty': c.consumedQty, 'BOM Expected Qty': c.expectedQty ?? '',
         'Variance Qty': c.varianceQty ?? '', 'Consumed Cost': c.consumedCost ?? '',
       })));
@@ -207,7 +207,7 @@ export default function ProductionReports() {
                 ) : data.consumption.map(c => (
                   <TableRow key={`${c.materialType}-${c.materialId}`} className="hover:bg-muted/10">
                     <TableCell className="font-medium">{c.materialName}</TableCell>
-                    <TableCell><Badge variant="secondary" className="text-xs">{c.materialType === 'raw_material' ? 'Raw' : 'Pkg'}</Badge></TableCell>
+                    <TableCell><Badge variant="secondary" className="text-xs">{c.materialType === 'raw_material' ? 'Packing' : 'Material'}</Badge></TableCell>
                     <TableCell className="text-right font-mono">{qty(c.consumedQty)} {c.unit}</TableCell>
                     <TableCell className="text-right font-mono text-muted-foreground">{c.expectedQty === null ? '—' : `${qty(c.expectedQty)} ${c.unit}`}</TableCell>
                     <TableCell className="text-right">

@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import { useLoginHistory } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { usePermission } from '@/lib/usePermission';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { ShieldCheck, ShieldAlert, Search, ChevronLeft, ChevronRight, Lock } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, Search, ChevronLeft, ChevronRight, Lock, ShieldOff } from 'lucide-react';
 
 const REASON_LABELS: Record<string, string> = {
   invalid_credentials: 'Wrong password',
@@ -25,6 +26,7 @@ function fmtTime(iso: string) {
 }
 
 export default function LoginHistory() {
+  const perm = usePermission('Login History');
   const [page, setPage] = useState(1);
   const [usernameFilter, setUsernameFilter] = useState('');
   const [usernameInput, setUsernameInput] = useState('');
@@ -48,6 +50,21 @@ export default function LoginHistory() {
     setUsernameFilter(usernameInput.trim());
   };
 
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">You don't have permission to view this page.<br />Contact your administrator to request access.</p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
   return (
     <AppLayout>
       <div className="space-y-6 font-sans">

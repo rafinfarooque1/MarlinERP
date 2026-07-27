@@ -18,8 +18,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import {
   ShoppingCart, ArrowLeftRight, Receipt, ChevronDown, ChevronUp,
   TrendingUp, Package, Wallet, CalendarDays, Store, Warehouse,
-  Clock, CheckCircle2, XCircle, ArrowUpRight, Layers,
+  Clock, CheckCircle2, XCircle, ArrowUpRight, Layers, ShieldOff,
 } from 'lucide-react';
+import { usePermission } from '@/lib/usePermission';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -126,6 +127,7 @@ function LocationSection({ type, name, children }: { type: string; name: string;
 type Section = 'sales' | 'transfers' | 'expenses' | null;
 
 export default function SalesDashboard() {
+  const perm = usePermission('Sales Dashboard');
   const [, navigate] = useLocation();
   const { locationState } = useLocationContext();
   const { locationType, locationId, locationName } = locationState;
@@ -249,6 +251,22 @@ export default function SalesDashboard() {
   const expensesByLocation  = useGrouped ? groupByLocation(dayExpenses) : [];
 
   const LocationIcon = isAll ? Layers : (locationType === 'warehouse' ? Warehouse : Store);
+
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">You don't have permission to view this page.<br />Contact your administrator to request access.</p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   if (!locationType) return null;
 

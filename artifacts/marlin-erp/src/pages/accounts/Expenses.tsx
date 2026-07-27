@@ -13,7 +13,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Receipt, Download, Eye, Calendar, MapPin, Building2, ChevronRight, ArrowLeft, LayoutList } from 'lucide-react';
+import { Plus, Search, Receipt, Download, Eye, Calendar, MapPin, Building2, ChevronRight, ArrowLeft, LayoutList, ShieldOff } from 'lucide-react';
+import { usePermission } from '@/lib/usePermission';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -263,6 +264,7 @@ function ByLocationTab() {
 
 // ── Main Expenses page ────────────────────────────────────────────────────────
 export default function Expenses() {
+  const perm = usePermission('Expenses');
   const { data: expenses = [], isLoading } = useListExpenses();
   const { data: accounts = [] } = useListChartOfAccounts();
   const { data: cashBanks = [] } = useListCashBankAccounts();
@@ -300,6 +302,21 @@ export default function Expenses() {
   });
   const total = filtered.reduce((s, e) => s + Number(e.amount || 0), 0);
 
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">You don't have permission to view this page.<br />Contact your administrator to request access.</p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
   return (
     <AppLayout>
       <div className="space-y-6">

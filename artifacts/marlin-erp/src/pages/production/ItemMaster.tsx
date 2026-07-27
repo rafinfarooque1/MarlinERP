@@ -17,7 +17,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Edit2, Trash2, Layers, Download, Eye, ClipboardList } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, Layers, Download, Eye, ClipboardList, ShieldOff } from 'lucide-react';
+import { usePermission } from '@/lib/usePermission';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -64,6 +65,7 @@ type BomFormValues = z.infer<typeof bomSchema>;
 const defaultBomLine = { materialType: 'raw_material' as const, materialId: 0, quantity: 1 };
 
 export default function ItemMaster() {
+  const perm = usePermission('Items');
   const { data: rawMaterials = [], isLoading: rmLoading } = useListRawMaterials();
   const { data: materials = [], isLoading: mLoading } = useListMaterials();
   const { data: items = [], isLoading: iLoading } = useListItems();
@@ -211,6 +213,21 @@ export default function ItemMaster() {
   const isPending = createRM.isPending || updateRM.isPending || createM.isPending || updateM.isPending || createI.isPending || updateI.isPending;
   const bomExisting = bomTarget ? bomByItem.get(bomTarget.id) : null;
 
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">You don't have permission to view this page.<br />Contact your administrator to request access.</p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
   return (
     <AppLayout>
       <div className="space-y-6">
@@ -287,7 +304,7 @@ export default function ItemMaster() {
                 <TableRow key={`${item._type}-${item.id}`} className="hover:bg-muted/10">
                   <TableCell>
                     <Badge variant="outline" className={`text-xs capitalize ${(TYPE_COLORS as any)[item._type] ?? ''}`}>
-                      {item._type === 'raw_material' ? 'Raw' : item._type === 'material' ? 'Material' : 'Item'}
+                      {item._type === 'raw_material' ? 'Packing' : item._type === 'material' ? 'Material' : 'SKU'}
                     </Badge>
                   </TableCell>
                   <TableCell className="font-medium">
@@ -459,7 +476,7 @@ export default function ItemMaster() {
                             <FormItem><FormLabel className="text-xs">Type</FormLabel>
                               <Select onValueChange={f.onChange} value={f.value}>
                                 <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger></FormControl>
-                                <SelectContent><SelectItem value="raw_material">Raw Material</SelectItem><SelectItem value="material">Packaging</SelectItem></SelectContent>
+                                <SelectContent><SelectItem value="raw_material">Packing Material</SelectItem><SelectItem value="material">Material</SelectItem></SelectContent>
                               </Select></FormItem>
                           )} />
                         </div>

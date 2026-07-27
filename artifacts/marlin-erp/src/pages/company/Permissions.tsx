@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { ShieldCheck, Save, Loader2, ChevronUp, Eye, Plus, Pencil, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useListHierarchies, useListPermissions, setPermission } from '@workspace/api-client-react';
+import { usePermission } from '@/lib/usePermission';
 import type { Hierarchy, Permission } from '@workspace/api-client-react';
 
 // Two top-level segments: Sales and Accounts.
@@ -124,6 +125,7 @@ const allOn  = (p?: ModulePerm) => !!p && p.view && p.add && p.edit && p.del;
 const setAllActions = (value: boolean): ModulePerm => ({ view: value, add: value, edit: value, del: value });
 
 export default function Permissions() {
+  const selfPerm = usePermission('Permissions');
   const { data: hierarchies = [], isLoading: loadingH } = useListHierarchies();
   const { data: dbPerms = [], isLoading: loadingP, refetch } = useListPermissions();
 
@@ -229,6 +231,21 @@ export default function Permissions() {
 
   const isLoading = loadingH || loadingP;
 
+  if (!selfPerm.isLoading && !selfPerm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">You don't have permission to view this page.<br />Contact your administrator to request access.</p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
   return (
     <AppLayout>
       <div className="space-y-6 max-w-5xl">

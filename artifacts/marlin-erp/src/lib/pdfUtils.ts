@@ -367,12 +367,12 @@ export function downloadPurchaseOrderPDF(
   const poRows = (po.lineItems || []).map((li: any, i: number) => {
     // Prefer the server-enriched materialName; fall back to client-side maps.
     const fallback = li.materialType === 'raw_material'
-      ? (rawMaterialsMap.get(Number(li.materialId)) || `Raw Mat. #${li.materialId}`)
+      ? (rawMaterialsMap.get(Number(li.materialId)) || `Packing Mat. #${li.materialId}`)
       : li.materialType === 'item'
         ? `Item #${li.materialId}`
         : (materialsMap.get(Number(li.materialId)) || `Material #${li.materialId}`);
     const name = li.materialName || fallback;
-    const typeLabel = li.materialType === 'raw_material' ? 'Raw Mat.' : li.materialType === 'item' ? 'Finished' : 'Packaging';
+    const typeLabel = li.materialType === 'raw_material' ? 'Packing' : li.materialType === 'item' ? 'Item (SKU)' : 'Material';
     const amount = Number(li.quantity) * Number(li.unitCost);
     return [i + 1, typeLabel, esc(name), Number(li.quantity), fmt(li.unitCost), fmt(amount)];
   });
