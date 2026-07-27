@@ -231,6 +231,9 @@ router.get("/vendors", async (_req, res): Promise<void> => {
   `);
   res.json(rows.map((r: any) => ({
     ...r,
+    gstNumber:          r.gst_number ?? null,
+    bankName:           r.bank_name ?? null,
+    accountNumber:      r.account_number ?? null,
     totalPurchased:     Number(r.totalPurchased),
     totalPaid:          Number(r.totalPaid),
     outstandingBalance: Number(r.outstandingBalance),

@@ -74,7 +74,7 @@ export default function ProductionSection() {
           <ExportButtons
             disabled={isLoading || consumption.length === 0}
             onCSV={() => downloadCSV('material-consumption.csv', consumption.map((r) => ({
-              Material: r.materialName, Type: r.materialType === 'raw_material' ? 'Raw Material' : 'Material',
+              Material: r.materialName, Type: r.materialType === 'raw_material' ? 'Packing Material' : 'Material',
               Unit: r.unit, 'Consumed Qty': r.consumedQty, 'Cost (₹)': r.consumedCost?.toFixed(2) ?? '',
               'Expected Qty (BOM)': r.expectedQty ?? '', 'Variance Qty': r.varianceQty ?? '',
             })))}
@@ -86,7 +86,7 @@ export default function ProductionSection() {
                   { label: 'Consumed', align: 'right', width: 1.2 }, { label: 'Cost', align: 'right', width: 1.4 },
                   { label: 'Expected (BOM)', align: 'right', width: 1.3 }, { label: 'Variance', align: 'right', width: 1.1 },
                 ],
-                rows: consumption.map((r) => [r.materialName, r.materialType === 'raw_material' ? 'Raw Material' : 'Material',
+                rows: consumption.map((r) => [r.materialName, r.materialType === 'raw_material' ? 'Packing Material' : 'Material',
                   r.unit, num(r.consumedQty), pdfM(r.consumedCost), r.expectedQty === null ? '-' : num(r.expectedQty),
                   r.varianceQty === null ? '-' : num(r.varianceQty)]),
               }],
@@ -169,7 +169,7 @@ export default function ProductionSection() {
         <RTable
           cols={[
             { key: 'materialName', label: 'Material', render: (r) => <span className="font-medium">{r.materialName}</span> },
-            { key: 'materialType', label: 'Type', render: (r) => (r.materialType === 'raw_material' ? 'Raw Material' : 'Material') },
+            { key: 'materialType', label: 'Type', render: (r) => (r.materialType === 'raw_material' ? 'Packing Material' : 'Material') },
             { key: 'unit', label: 'Unit' },
             { key: 'consumedQty', label: 'Consumed', align: 'right', render: (r) => num(r.consumedQty) },
             { key: 'consumedCost', label: 'Cost', align: 'right', render: (r) => money(r.consumedCost) },

@@ -354,7 +354,7 @@ export default function ProductionList() {
               <div className="grid grid-cols-2 gap-4">
                 <FormField control={form.control} name="itemId" render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Finished Item <span className="text-destructive">*</span></FormLabel>
+                    <FormLabel>Item Name (SKU) <span className="text-destructive">*</span></FormLabel>
                     <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
                       <FormControl><SelectTrigger><SelectValue placeholder="Select item" /></SelectTrigger></FormControl>
                       <SelectContent>{items.map(i => <SelectItem key={i.id} value={String(i.id)}>{i.name}</SelectItem>)}</SelectContent>
@@ -401,7 +401,7 @@ export default function ProductionList() {
                             <FormItem><FormLabel className="text-xs">Type</FormLabel>
                               <Select onValueChange={f.onChange} value={f.value}>
                                 <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger></FormControl>
-                                <SelectContent><SelectItem value="raw_material">Raw Material</SelectItem><SelectItem value="material">Packaging</SelectItem></SelectContent>
+                                <SelectContent><SelectItem value="raw_material">Packing Material</SelectItem><SelectItem value="material">Material</SelectItem></SelectContent>
                               </Select></FormItem>
                           )} />
                         </div>

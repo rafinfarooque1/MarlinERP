@@ -27,9 +27,9 @@ import { useUnits } from '@/lib/useUnits';
 type ItemType = 'raw_material' | 'material' | 'item';
 
 const TYPE_LABELS: Record<ItemType, string> = {
-  raw_material: 'Raw Material',
+  raw_material: 'Packing Material',
   material: 'Material',
-  item: 'Finished Item',
+  item: 'Item Name (SKU)',
 };
 
 const TYPE_COLORS: Record<ItemType, string> = {
@@ -255,9 +255,9 @@ export default function ItemMaster() {
               <SelectTrigger className="w-40"><SelectValue placeholder="All Types" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Types</SelectItem>
-                <SelectItem value="raw_material">Raw Material</SelectItem>
+                <SelectItem value="raw_material">Packing Material</SelectItem>
                 <SelectItem value="material">Material</SelectItem>
-                <SelectItem value="item">Finished Item</SelectItem>
+                <SelectItem value="item">Item Name (SKU)</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -341,9 +341,9 @@ export default function ItemMaster() {
                   <Select onValueChange={v => { field.onChange(v); }} value={field.value} disabled={!!editTarget}>
                     <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
                     <SelectContent>
-                      <SelectItem value="raw_material">Raw Material</SelectItem>
-                      <SelectItem value="material">Material (Semi-processed)</SelectItem>
-                      <SelectItem value="item">Finished Item (SKU)</SelectItem>
+                      <SelectItem value="raw_material">Packing Material</SelectItem>
+                      <SelectItem value="material">Material</SelectItem>
+                      <SelectItem value="item">Item Name (SKU)</SelectItem>
                     </SelectContent>
                   </Select>
                   <FormMessage />

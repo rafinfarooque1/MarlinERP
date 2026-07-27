@@ -94,14 +94,14 @@ export default function RawMaterials() {
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Leaf className="w-6 h-6 text-primary" /> Raw Materials</h1>
+            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Leaf className="w-6 h-6 text-primary" /> Packing Materials</h1>
             <p className="text-muted-foreground mt-1">Fruits & raw ingredients master</p>
           </div>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => downloadCSV('raw-materials.csv', filtered.map(m => ({ Name: m.name, Unit: m.unit, 'Stock': m.currentStock, Description: m.description || '' })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
-            <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Raw Material</Button>
+            <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Packing Material</Button>
           </div>
         </div>
 
@@ -151,7 +151,7 @@ export default function RawMaterials() {
 
       <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditingId(null); form.reset(); } }}>
         <DialogContent className="sm:max-w-md">
-          <DialogHeader><DialogTitle>{editingId ? 'Edit Raw Material' : 'Add Raw Material'}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editingId ? 'Edit Packing Material' : 'Add Packing Material'}</DialogTitle></DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
               <FormField control={form.control} name="name" render={({ field }) => (

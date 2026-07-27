@@ -32,7 +32,8 @@ const vendorSchema = z.object({
   address: z.string().optional(),
   gstNumber: z.string().optional(),
   state: z.string().optional(),
-  bankDetails: z.string().optional(),
+  bankName: z.string().optional(),
+  accountNumber: z.string().optional(),
 });
 type VendorFormValues = z.infer<typeof vendorSchema>;
 
@@ -170,7 +171,7 @@ function VendorSheet({ vendor, onClose, onPay }: { vendor: any; onClose: () => v
               </div>
             </div>
             <Separator />
-            {[['Phone', vendor.phone || '—'], ['Email', vendor.email || '—'], ['State', vendor.state || '—'], ['GSTIN', vendor.gstNumber || '—'], ['Address', vendor.address || '—'], ['Bank Details', vendor.bankDetails || '—']].map(([k, v]) => (
+            {[['Phone', vendor.phone || '—'], ['Email', vendor.email || '—'], ['State', vendor.state || '—'], ['GSTIN', vendor.gstNumber || vendor.gst_number || '—'], ['Address', vendor.address || '—'], ['Bank Name', vendor.bankName || vendor.bank_name || '—'], ['Account Number', vendor.accountNumber || vendor.account_number || '—']].map(([k, v]) => (
               <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
                 <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                 <span className="font-medium">{v}</span>
@@ -304,12 +305,12 @@ export default function Vendors() {
 
   const form = useForm<VendorFormValues>({
     resolver: zodResolver(vendorSchema),
-    defaultValues: { name: '', phone: '', email: '', address: '', gstNumber: '', state: '', bankDetails: '' },
+    defaultValues: { name: '', phone: '', email: '', address: '', gstNumber: '', state: '', bankName: '', accountNumber: '' },
   });
 
   const openEdit = (v: any) => {
     setEditItem(v);
-    form.reset({ name: v.name, phone: v.phone ?? '', email: v.email ?? '', address: v.address ?? '', gstNumber: v.gstNumber ?? '', state: v.state ?? '', bankDetails: v.bankDetails ?? '' });
+    form.reset({ name: v.name, phone: v.phone ?? '', email: v.email ?? '', address: v.address ?? '', gstNumber: v.gstNumber ?? '', state: v.state ?? '', bankName: v.bankName ?? '', accountNumber: v.accountNumber ?? '' });
     setIsOpen(true);
   };
   const closeDialog = () => { setIsOpen(false); setEditItem(null); form.reset(); };
@@ -453,9 +454,14 @@ export default function Vendors() {
               <FormField control={form.control} name="address" render={({ field }) => (
                 <FormItem><FormLabel>Address</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
               )} />
-              <FormField control={form.control} name="bankDetails" render={({ field }) => (
-                <FormItem><FormLabel>Bank Details</FormLabel><FormControl><Textarea rows={2} placeholder="Bank name, account no., IFSC…" {...field} /></FormControl></FormItem>
-              )} />
+              <div className="grid grid-cols-2 gap-4">
+                <FormField control={form.control} name="bankName" render={({ field }) => (
+                  <FormItem><FormLabel>Bank Name</FormLabel><FormControl><Input placeholder="e.g. HDFC Bank" {...field} /></FormControl></FormItem>
+                )} />
+                <FormField control={form.control} name="accountNumber" render={({ field }) => (
+                  <FormItem><FormLabel>Account Number</FormLabel><FormControl><Input placeholder="e.g. 123456789012" className="font-mono" {...field} /></FormControl></FormItem>
+                )} />
+              </div>
               <DialogFooter>
                 <Button variant="outline" type="button" onClick={closeDialog}>Cancel</Button>
                 <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>

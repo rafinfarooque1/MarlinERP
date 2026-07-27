@@ -153,7 +153,7 @@ export default function Items() {
 
       <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditingId(null); form.reset(); } }}>
         <DialogContent className="sm:max-w-lg">
-          <DialogHeader><DialogTitle>{editingId ? 'Edit Item' : 'Add Finished Item'}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editingId ? 'Edit Item' : 'Add Item Name (SKU)'}</DialogTitle></DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
               <FormField control={form.control} name="name" render={({ field }) => (
