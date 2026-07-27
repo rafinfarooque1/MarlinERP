@@ -10,7 +10,6 @@ export type EmployeeInputBranchType = typeof EmployeeInputBranchType[keyof typeo
 
 
 export const EmployeeInputBranchType = {
-  production: 'production',
   headoffice: 'headoffice',
   warehouse: 'warehouse',
   outlet: 'outlet',

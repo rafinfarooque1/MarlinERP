@@ -166,7 +166,6 @@ export default function Attendance() {
             <SelectContent>
               <SelectItem value="all">All Branches</SelectItem>
               <SelectItem value="headoffice">Head Office</SelectItem>
-              <SelectItem value="production">Production</SelectItem>
               <SelectItem value="warehouse">Warehouse</SelectItem>
               <SelectItem value="outlet">Outlet</SelectItem>
             </SelectContent>

@@ -833,6 +833,63 @@ async function runMigrations() {
     await pool.query(`INSERT INTO migration_log (name) VALUES ('stock_batches_opening_v1')`);
     console.log('[migration] stock_batches_opening_v1 applied');
   }
+
+  // One-time: retire the 'production' branch type. Production is a Head Office
+  // department, not a branch — the hierarchy is headoffice | warehouse | outlet.
+  // Employees and stock recorded under 'production' move to Head Office
+  // (branch_id 1). Merge-safe: quantities combine where a headoffice row or
+  // batch already exists (unique indexes on stock_entries/stock_batches).
+  const { rows: [prodBranchDone] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'remove_production_branch_type_v1'`
+  );
+  if (!prodBranchDone) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const emp = await client.query(
+        `UPDATE employees SET branch_type = 'headoffice', branch_id = 1 WHERE branch_type = 'production'`
+      );
+      await client.query(`
+        INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price)
+        SELECT item_id, 'headoffice', 1, SUM(quantity::numeric), MAX(cost_price::numeric)
+        FROM stock_entries WHERE branch_type = 'production'
+        GROUP BY item_id
+        ON CONFLICT (item_id, branch_type, branch_id) DO UPDATE SET
+          quantity = stock_entries.quantity::numeric + EXCLUDED.quantity::numeric,
+          cost_price = GREATEST(stock_entries.cost_price::numeric, EXCLUDED.cost_price::numeric),
+          updated_at = now()
+      `);
+      await client.query(`DELETE FROM stock_entries WHERE branch_type = 'production'`);
+      await client.query(`
+        INSERT INTO stock_batches (item_id, branch_type, branch_id, batch_number, mfg_date, expiry_date,
+                                   quantity, unit_cost, source, source_id)
+        SELECT item_id, 'headoffice', 1, batch_number, MIN(mfg_date), MIN(expiry_date),
+               SUM(quantity::numeric),
+               CASE WHEN SUM(quantity::numeric) > 0
+                    THEN ROUND((SUM(quantity::numeric * unit_cost::numeric) / SUM(quantity::numeric))::numeric, 2)
+                    ELSE MAX(unit_cost::numeric) END,
+               MIN(source), MIN(source_id)
+        FROM stock_batches WHERE branch_type = 'production'
+        GROUP BY item_id, batch_number
+        ON CONFLICT (item_id, branch_type, branch_id, batch_number) DO UPDATE SET
+          quantity = stock_batches.quantity::numeric + EXCLUDED.quantity::numeric,
+          updated_at = now()
+      `);
+      await client.query(`DELETE FROM stock_batches WHERE branch_type = 'production'`);
+      // Historical documents keep resolving to a real branch name
+      await client.query(`UPDATE stock_transfers SET from_type = 'headoffice', from_id = 1 WHERE from_type = 'production'`);
+      await client.query(`UPDATE stock_transfers SET to_type = 'headoffice', to_id = 1 WHERE to_type = 'production'`);
+      await client.query(`UPDATE stock_verifications SET branch_type = 'headoffice', branch_id = 1 WHERE branch_type = 'production'`);
+      await client.query(`INSERT INTO migration_log (name) VALUES ('remove_production_branch_type_v1')`);
+      await client.query('COMMIT');
+      console.log(`[migration] remove_production_branch_type_v1: ${emp.rowCount} employee(s) re-assigned to Head Office; production stock merged into headoffice`);
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
 }
 
 const rawPort = process.env["PORT"];

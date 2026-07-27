@@ -48,8 +48,11 @@ function empIdFromRequest(req: { headers: { authorization?: string } }): number 
 /** Build the safe employee payload — NEVER includes password_hash. */
 async function buildEmployeeResponse(emp: Record<string, any>) {
   const hierarchyId = emp.hierarchyId ?? emp.hierarchy_id;
-  const branchType  = emp.branchType  ?? emp.branch_type;
-  const branchId    = emp.branchId    ?? emp.branch_id;
+  // 'production' was retired as a branch type (Production is a Head Office
+  // department) — normalize any legacy value from old rows or sessions.
+  const rawBranchType = emp.branchType ?? emp.branch_type;
+  const branchType  = rawBranchType === 'production' ? 'headoffice' : rawBranchType;
+  const branchId    = rawBranchType === 'production' ? 1 : (emp.branchId ?? emp.branch_id);
 
   const [hierarchy] = await db
     .select()

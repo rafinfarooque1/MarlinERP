@@ -18,7 +18,7 @@ export const employeesTable = pgTable("employees", {
   email: text("email"),
   phone: text("phone"),
   hierarchyId: integer("hierarchy_id").notNull().references(() => hierarchiesTable.id),
-  branchType: text("branch_type").notNull(), // production, headoffice, warehouse, outlet
+  branchType: text("branch_type").notNull(), // headoffice, warehouse, outlet
   branchId: integer("branch_id").notNull(),
   salary: numeric("salary", { precision: 10, scale: 2 }).notNull().default("0"),
   joinDate: date("join_date", { mode: "string" }).notNull(),

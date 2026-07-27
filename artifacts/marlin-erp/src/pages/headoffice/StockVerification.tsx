@@ -66,8 +66,8 @@ function NewCountTab({ canAdd }: { canAdd: boolean }) {
   const { data: outlets = [] } = useListOutlets();
 
   const branchOptions =
-    branchType === 'production'
-      ? [{ id: 1, name: 'Production Facility' }]
+    branchType === 'headoffice'
+      ? [{ id: 1, name: 'Head Office' }]
       : branchType === 'warehouse'
         ? warehouses
         : branchType === 'outlet'
@@ -147,7 +147,7 @@ function NewCountTab({ canAdd }: { canAdd: boolean }) {
           <Select value={branchType} onValueChange={v => { setBranchType(v); setBranchId(''); }}>
             <SelectTrigger className="w-44"><SelectValue placeholder="Select type" /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="production">Production</SelectItem>
+              <SelectItem value="headoffice">Head Office</SelectItem>
               <SelectItem value="warehouse">Warehouse</SelectItem>
               <SelectItem value="outlet">Outlet</SelectItem>
             </SelectContent>

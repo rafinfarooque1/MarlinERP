@@ -128,7 +128,7 @@ export default function Stock() {
               <SelectTrigger className="w-44"><SelectValue placeholder="All Locations" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Locations</SelectItem>
-                <SelectItem value="production">Production</SelectItem>
+                <SelectItem value="headoffice">Head Office</SelectItem>
                 <SelectItem value="warehouse">Warehouse</SelectItem>
                 <SelectItem value="outlet">Outlet</SelectItem>
               </SelectContent>

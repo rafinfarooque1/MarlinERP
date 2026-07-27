@@ -10,7 +10,7 @@ export type StockEntryBranchType = typeof StockEntryBranchType[keyof typeof Stoc
 
 
 export const StockEntryBranchType = {
-  production: 'production',
+  headoffice: 'headoffice',
   warehouse: 'warehouse',
   outlet: 'outlet',
 } as const;

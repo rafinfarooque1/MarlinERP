@@ -219,8 +219,8 @@ router.post("/stock/verifications", requireModuleAction("Stock Verification", "a
     lines?: Array<{ itemId: number; countedQty: number; reason?: string }>;
   };
 
-  if (!branchType || !["production", "warehouse", "outlet"].includes(branchType)) {
-    res.status(400).json({ error: "branchType must be production, warehouse or outlet" }); return;
+  if (!branchType || !["headoffice", "warehouse", "outlet"].includes(branchType)) {
+    res.status(400).json({ error: "branchType must be headoffice, warehouse or outlet" }); return;
   }
   if (branchId == null || !Number.isFinite(Number(branchId))) {
     res.status(400).json({ error: "branchId is required" }); return;
@@ -275,7 +275,8 @@ router.post("/stock/verifications", requireModuleAction("Stock Verification", "a
           );
         }
         // Keep the parallel-maintained production stock counter in sync
-        if (branchType === "production") {
+        // (finished-goods stock at Head Office, where production lives)
+        if (branchType === "headoffice") {
           await client.query(
             `UPDATE items SET production_stock = GREATEST(0, production_stock::numeric + $1), updated_at = now() WHERE id = $2`,
             [variance, itemId]

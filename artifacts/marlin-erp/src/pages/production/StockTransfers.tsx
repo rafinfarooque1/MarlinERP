@@ -306,7 +306,7 @@ export default function StockTransfers() {
   const queryClient = useQueryClient();
   const createMutation = useCreateStockTransfer();
 
-  const { data: productionStock = [] } = useListStock({ branchType: 'headoffice' as any, branchId: 1 });
+  const { data: productionStock = [] } = useListStock({ branchType: 'headoffice', branchId: 1 });
   const stockMap = new Map<number, number>(productionStock.map(s => [s.itemId!, Number(s.quantity ?? 0)]));
   const availableItems = items.filter(it => (stockMap.get(it.id) ?? 0) > 0);
 
@@ -371,14 +371,14 @@ export default function StockTransfers() {
       await downloadPDFFromEndpoint('/api/pdf/challan', {
         cs, challanNo,
         date: new Date(t.transferDate).toLocaleDateString('en-IN'),
-        fromName: 'Head Office', fromType: 'headoffice',
+        fromName: 'Head Office', fromType: 'Head Office',
         toName: t.toName || 'Warehouse', toType: t.toType || 'Warehouse',
         lineItems, isInterstate: t.isInterstate, status: t.status, notes: t.notes,
       }, `${challanNo}.pdf`);
     } catch (e: any) { toast.error(e?.message || 'Failed to generate PDF'); }
   };
 
-  // Only show production-sourced transfers on this page
+  // Only show head-office dispatches (the production department) on this page
   const productionTransfers = (Array.isArray(transfers) ? transfers : []).filter((t: any) => t.fromType === 'headoffice');
   const searched = productionTransfers.filter((t: any) =>
     t.challanNumber?.toLowerCase().includes(search.toLowerCase()) ||

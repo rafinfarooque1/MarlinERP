@@ -10,7 +10,6 @@ export type EmployeeUpdateBranchType = typeof EmployeeUpdateBranchType[keyof typ
 
 
 export const EmployeeUpdateBranchType = {
-  production: 'production',
   headoffice: 'headoffice',
   warehouse: 'warehouse',
   outlet: 'outlet',

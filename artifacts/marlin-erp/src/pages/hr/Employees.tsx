@@ -227,7 +227,10 @@ export default function Employees() {
     setEditItem(emp);
     editForm.reset({
       name: emp.name, email: emp.email || '', phone: emp.phone || '',
-      hierarchyId: emp.hierarchyId, branchType: emp.branchType, branchId: emp.branchId, salary: Number(emp.salary),
+      hierarchyId: emp.hierarchyId,
+      // Legacy records may still say 'production' — that branch type was retired into Head Office
+      branchType: emp.branchType === 'production' ? 'headoffice' : emp.branchType,
+      branchId: emp.branchId, salary: Number(emp.salary),
     });
   };
 

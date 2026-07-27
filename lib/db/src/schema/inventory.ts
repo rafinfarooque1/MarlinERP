@@ -37,7 +37,7 @@ export const itemsTable = pgTable("items", {
 export const stockEntriesTable = pgTable("stock_entries", {
   id: serial("id").primaryKey(),
   itemId: integer("item_id").notNull().references(() => itemsTable.id),
-  branchType: text("branch_type").notNull(), // production, warehouse, outlet
+  branchType: text("branch_type").notNull(), // headoffice, warehouse, outlet
   branchId: integer("branch_id").notNull(),
   quantity: numeric("quantity", { precision: 10, scale: 3 }).notNull().default("0"),
   costPrice: numeric("cost_price", { precision: 10, scale: 2 }).notNull().default("0"),
@@ -62,7 +62,7 @@ export const itemPricesTable = pgTable("item_prices", {
 export const stockBatchesTable = pgTable("stock_batches", {
   id: serial("id").primaryKey(),
   itemId: integer("item_id").notNull().references(() => itemsTable.id),
-  branchType: text("branch_type").notNull(), // production, warehouse, outlet
+  branchType: text("branch_type").notNull(), // headoffice, warehouse, outlet
   branchId: integer("branch_id").notNull(),
   batchNumber: text("batch_number").notNull(),
   mfgDate: text("mfg_date"),      // YYYY-MM-DD

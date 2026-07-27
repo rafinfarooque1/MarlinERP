@@ -10,7 +10,7 @@ export type ListStockBranchType = typeof ListStockBranchType[keyof typeof ListSt
 
 
 export const ListStockBranchType = {
-  production: 'production',
+  headoffice: 'headoffice',
   warehouse: 'warehouse',
   outlet: 'outlet',
 } as const;

@@ -472,7 +472,7 @@ paths:
       summary: List stock across all branches
       parameters:
         - { name: branchId, in: query, schema: { type: integer } }
-        - { name: branchType, in: query, schema: { type: string, enum: [production, warehouse, outlet] } }
+        - { name: branchType, in: query, schema: { type: string, enum: [headoffice, warehouse, outlet] } }
       responses:
         "200":
           description: Stock list
@@ -1818,7 +1818,7 @@ components:
           type: string
         branchType:
           type: string
-          enum: [production, warehouse, outlet]
+          enum: [headoffice, warehouse, outlet]
         branchId:
           type: integer
         branchName:
@@ -1852,7 +1852,7 @@ components:
           type: string
         fromType:
           type: string
-          enum: [production, warehouse, outlet]
+          enum: [headoffice, warehouse, outlet]
         fromId:
           type: integer
         fromName:
@@ -1884,7 +1884,7 @@ components:
       properties:
         fromType:
           type: string
-          enum: [production, warehouse, outlet]
+          enum: [headoffice, warehouse, outlet]
         fromId:
           type: integer
         toType:
@@ -2185,7 +2185,7 @@ components:
           type: string
         branchType:
           type: string
-          enum: [production, headoffice, warehouse, outlet]
+          enum: [headoffice, warehouse, outlet]
         branchId:
           type: integer
         branchName:
@@ -2215,7 +2215,7 @@ components:
           type: integer
         branchType:
           type: string
-          enum: [production, headoffice, warehouse, outlet]
+          enum: [headoffice, warehouse, outlet]
         branchId:
           type: integer
         salary:
@@ -2236,7 +2236,7 @@ components:
           type: integer
         branchType:
           type: string
-          enum: [production, headoffice, warehouse, outlet]
+          enum: [headoffice, warehouse, outlet]
         branchId:
           type: integer
         salary:

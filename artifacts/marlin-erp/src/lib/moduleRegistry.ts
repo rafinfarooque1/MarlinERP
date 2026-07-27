@@ -87,7 +87,7 @@ export interface ModuleDef {
   /**
    * Branch types that can see these nav entries.
    * Omit  → visible to all branch types.
-   * [null] → HQ (head-office) employees only.
+   * ['headoffice'] → HQ (head-office) employees only.
    */
   branchGroups?: BranchGroup[];
 

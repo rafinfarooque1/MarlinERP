@@ -10,7 +10,7 @@ export type StockTransferFromType = typeof StockTransferFromType[keyof typeof St
 
 
 export const StockTransferFromType = {
-  production: 'production',
+  headoffice: 'headoffice',
   warehouse: 'warehouse',
   outlet: 'outlet',
 } as const;

@@ -18,7 +18,6 @@ export type EmployeeBranchType = typeof EmployeeBranchType[keyof typeof Employee
 
 
 export const EmployeeBranchType = {
-  production: 'production',
   headoffice: 'headoffice',
   warehouse: 'warehouse',
   outlet: 'outlet',
@@ -237,7 +236,7 @@ export type StockEntryBranchType = typeof StockEntryBranchType[keyof typeof Stoc
 
 
 export const StockEntryBranchType = {
-  production: 'production',
+  headoffice: 'headoffice',
   warehouse: 'warehouse',
   outlet: 'outlet',
 } as const;
@@ -266,7 +265,7 @@ export type StockTransferFromType = typeof StockTransferFromType[keyof typeof St
 
 
 export const StockTransferFromType = {
-  production: 'production',
+  headoffice: 'headoffice',
   warehouse: 'warehouse',
   outlet: 'outlet',
 } as const;
@@ -311,7 +310,7 @@ export type StockTransferInputFromType = typeof StockTransferInputFromType[keyof
 
 
 export const StockTransferInputFromType = {
-  production: 'production',
+  headoffice: 'headoffice',
   warehouse: 'warehouse',
   outlet: 'outlet',
 } as const;
@@ -490,7 +489,6 @@ export type EmployeeInputBranchType = typeof EmployeeInputBranchType[keyof typeo
 
 
 export const EmployeeInputBranchType = {
-  production: 'production',
   headoffice: 'headoffice',
   warehouse: 'warehouse',
   outlet: 'outlet',
@@ -512,7 +510,6 @@ export type EmployeeUpdateBranchType = typeof EmployeeUpdateBranchType[keyof typ
 
 
 export const EmployeeUpdateBranchType = {
-  production: 'production',
   headoffice: 'headoffice',
   warehouse: 'warehouse',
   outlet: 'outlet',
@@ -977,7 +974,7 @@ export type ListStockBranchType = typeof ListStockBranchType[keyof typeof ListSt
 
 
 export const ListStockBranchType = {
-  production: 'production',
+  headoffice: 'headoffice',
   warehouse: 'warehouse',
   outlet: 'outlet',
 } as const;
