@@ -213,8 +213,7 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     key: 'Cash Balance', permGroup: 'Operations',
     navGroup: 'Operations',
     navEntries: [
-      { name: 'Cash Balance', href: '/sales/cash-balance' },
-      { name: 'Cash In Outlets', href: '/accounts/cash-in-outlet' },
+      { name: 'Cash Balance', href: '/accounts/cash-in-outlet' },
     ],
     icon: Banknote,
   },
