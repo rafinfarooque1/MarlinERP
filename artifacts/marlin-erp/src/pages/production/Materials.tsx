@@ -29,7 +29,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function Materials() {
-  const perm = usePermission('Units');
+  const perm = usePermission('Materials');
   const { data: materials = [], isLoading } = useListMaterials();
   const { units } = useUnits();
   const [search, setSearch] = useState('');

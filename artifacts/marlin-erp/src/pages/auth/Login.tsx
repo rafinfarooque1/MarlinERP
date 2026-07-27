@@ -10,6 +10,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
+import { useTheme } from '@/lib/theme';
 
 const loginSchema = z.object({
   username: z.string().min(1, 'Username is required'),
@@ -23,6 +24,7 @@ export default function Login() {
   const { toast } = useToast();
   const loginMutation = useLogin();
   const queryClient = useQueryClient();
+  const { setTheme } = useTheme();
   const [showPassword, setShowPassword] = useState(false);
 
   // Already logged in? Redirect
@@ -40,6 +42,8 @@ export default function Login() {
   const onSubmit = (data: LoginFormValues) => {
     loginMutation.mutate({ data }, {
       onSuccess: (response) => {
+        // Owner preference: every login starts in light mode (toggle still available)
+        setTheme('light');
         // Wipe any cached data from a previous session before writing new credentials
         queryClient.clear();
         // Persist token so every subsequent API call carries Authorization header

@@ -54,6 +54,7 @@ import {
   SALES_SEGMENT_MODULE_KEYS,
   type SidebarNavItem,
 } from '@/lib/moduleRegistry';
+import { canViewModule as checkCanView } from '@/lib/usePermission';
 
 const LOGO_KEY = 'marlin_company_logo';
 
@@ -81,21 +82,6 @@ const navigation: SidebarNavItem[] = [
 const salesNavItems = getSalesNavItems();
 
 // ─── Permission helpers ───────────────────────────────────────────────────────
-
-/** Returns true if the current user can view this module.
- *  Mirrors the logic in usePermission.ts — if no DB row exists, default is canView=true. */
-function checkCanView(
-  module: string | undefined,
-  hierarchyId: number | undefined,
-  level: number,
-  perms: any[],
-): boolean {
-  if (!module) return true;           // no module restriction
-  if (level === 1) return true;       // level 1 = admin = full access always
-  const perm = perms.find((p: any) => p.hierarchyId === hierarchyId && p.module === module);
-  if (!perm) return true;             // no explicit row → default view-only (canView: true)
-  return perm.canView ?? true;
-}
 
 // ─── PasswordInput ────────────────────────────────────────────────────────────
 
@@ -322,10 +308,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   );
 
   // ── Sales segment access ────────────────────────────────────────────────────
-  const hasSalesAccess = isAdmin || isLocationEmployee || SALES_SEGMENT_MODULE_KEYS.some(mod => {
-    const perm = (allPerms as any[]).find((p: any) => p.hierarchyId === (user as any)?.hierarchyId && p.module === mod);
-    return perm ? !!(perm.canView || perm.canAdd || perm.canEdit) : userLevel <= 4;
-  });
+  // Same shared rule as every other nav check (canViewModule): a module with no
+  // saved permission row defaults to viewable — no hardcoded level fallbacks.
+  const hasSalesAccess = isAdmin || isLocationEmployee || SALES_SEGMENT_MODULE_KEYS.some(mod =>
+    checkCanView(mod, (user as any)?.hierarchyId, userLevel, allPerms as any[])
+  );
 
   // Outlet employees only see Sales segment — hide the Accounts switcher button
   const showAccountsSegment = !isOutletEmployee;

@@ -90,30 +90,7 @@ export interface ModuleDef {
    * ['headoffice'] → HQ (head-office) employees only.
    */
   branchGroups?: BranchGroup[];
-
-  // ── Default access ──────────────────────────────────────────────────────────
-  /**
-   * Default access for this module at a given hierarchy level when no explicit
-   * DB row exists. Level 1 always returns true (enforced upstream); this
-   * function is only called for levels 2+.
-   */
-  defaultAccess: (level: number) => boolean;
 }
-
-// ── Default access factories ──────────────────────────────────────────────────
-
-/** Level 1 only — effectively admin-only (level 1 handled upstream as always-true) */
-const adminOnly = (_l: number) => false;
-/** Level ≤ 2 — manager and above */
-const upToL2 = (l: number) => l <= 2;
-/** Level ≤ 3 — supervisor and above */
-const upToL3 = (l: number) => l <= 3;
-/** Level ≤ 4 — staff and above */
-const upToL4 = (l: number) => l <= 4;
-/** All levels — e.g. Point of Sale, Production batches, Stock */
-const always = (_l: number) => true;
-/** Manager (L2) and basic staff (L5+) — e.g. HO Sales orders, Attendance, Leave */
-const l2AndL5plus = (l: number) => l <= 2 || l >= 5;
 
 // ── Sidebar section metadata ──────────────────────────────────────────────────
 
@@ -164,35 +141,30 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navGroup: '__sales__',
     navEntries: [{ name: 'Dashboard', href: '/sales/dashboard' }],
     icon: LayoutDashboard,
-    defaultAccess: upToL4,
   },
   {
     key: 'Point of Sale', permSegment: 'Sales', permGroup: 'Sales Department',
     navGroup: '__sales__',
     navEntries: [{ name: 'Point of Sale', href: '/sales/pos' }],
     icon: ShoppingCart,
-    defaultAccess: always,
   },
   {
     key: 'Location Stock', permSegment: 'Sales', permGroup: 'Sales Department',
     navGroup: '__sales__',
     navEntries: [{ name: 'Stock', href: '/sales/stock' }],
     icon: Package,
-    defaultAccess: upToL4,
   },
   {
     key: 'Location Transfers', permSegment: 'Sales', permGroup: 'Sales Department',
     navGroup: '__sales__',
     navEntries: [{ name: 'Transfers', href: '/sales/transfers' }],
     icon: ArrowLeftRight,
-    defaultAccess: upToL4,
   },
   {
     key: 'Location Expenses', permSegment: 'Sales', permGroup: 'Sales Department',
     navGroup: '__sales__',
     navEntries: [{ name: 'Expenses', href: '/sales/expenses' }],
     icon: Receipt,
-    defaultAccess: upToL4,
   },
   {
     key: 'Cash Balance', permSegment: 'Sales', permGroup: 'Sales Department',
@@ -203,7 +175,6 @@ export const MODULE_REGISTRY: ModuleDef[] = [
       { name: 'Cash Balance', href: '/accounts/cash-in-outlet', navGroup: 'Accounts' },
     ],
     icon: Banknote,
-    defaultAccess: upToL4,
   },
 
   // ── Production (Head Office department — permission-gated, not branch-gated) ─
@@ -212,14 +183,24 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navGroup: 'Production',
     navEntries: [{ name: 'Units', href: '/production/units' }],
     branchGroups: ['headoffice'],
-    defaultAccess: upToL4,
+  },
+  {
+    key: 'Materials', permSegment: 'Accounts', permGroup: 'Production',
+    navGroup: 'Production',
+    navEntries: [{ name: 'Materials', href: '/production/materials' }],
+    branchGroups: ['headoffice'],
+  },
+  {
+    key: 'Raw Materials', permSegment: 'Accounts', permGroup: 'Production',
+    navGroup: 'Production',
+    navEntries: [{ name: 'Raw Materials', href: '/production/raw-materials' }],
+    branchGroups: ['headoffice'],
   },
   {
     key: 'Items', permSegment: 'Accounts', permGroup: 'Production',
     navGroup: 'Production',
     navEntries: [{ name: 'Item Master', href: '/production/item-master' }],
     branchGroups: ['headoffice'],
-    defaultAccess: upToL4,
   },
   {
     key: 'Production', permSegment: 'Accounts', permGroup: 'Production',
@@ -229,21 +210,18 @@ export const MODULE_REGISTRY: ModuleDef[] = [
       { name: 'Reports', href: '/production/reports' },
     ],
     branchGroups: ['headoffice'],
-    defaultAccess: always,
   },
   {
     key: 'Stock Transfers', permSegment: 'Accounts', permGroup: 'Production',
     navGroup: 'Production',
     navEntries: [{ name: 'Stock Transfers', href: '/production/stock-transfer' }],
     branchGroups: ['headoffice'],
-    defaultAccess: upToL4,
   },
   {
     key: 'Purchases', permSegment: 'Accounts', permGroup: 'Production',
     navGroup: 'Production',
     navEntries: [{ name: 'Purchases', href: '/production/purchase' }],
     branchGroups: ['headoffice'],
-    defaultAccess: upToL4,
   },
 
   // ── Inventory ─────────────────────────────────────────────────────────────
@@ -252,49 +230,42 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navGroup: 'Inventory',
     navEntries: [{ name: 'Stock', href: '/headoffice/stock' }],
     branchGroups: ['headoffice', 'warehouse'],
-    defaultAccess: always,
   },
   {
     key: 'Inventory Reports', permSegment: 'Accounts', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [{ name: 'Reports', href: '/headoffice/inventory-reports' }],
     branchGroups: ['headoffice', 'warehouse'],
-    defaultAccess: upToL3,
   },
   {
     key: 'Stock Verification', permSegment: 'Accounts', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [{ name: 'Verification', href: '/headoffice/stock-verification' }],
     branchGroups: ['headoffice', 'warehouse'],
-    defaultAccess: upToL3,
   },
   {
     key: 'HO Transfers', permSegment: 'Accounts', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [{ name: 'Transfers', href: '/headoffice/transfers' }],
     branchGroups: ['headoffice', 'warehouse'],
-    defaultAccess: upToL4,
   },
   {
     key: 'Warehouses', permSegment: 'Accounts', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [{ name: 'Warehouses', href: '/headoffice/warehouses' }],
     branchGroups: ['headoffice', 'warehouse'],
-    defaultAccess: upToL3,
   },
   {
     key: 'Outlets', permSegment: 'Accounts', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [{ name: 'Outlets', href: '/headoffice/outlets' }],
     branchGroups: ['headoffice', 'warehouse'],
-    defaultAccess: upToL3,
   },
   {
     key: 'Item Prices', permSegment: 'Accounts', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [{ name: 'Item Prices', href: '/headoffice/item-price' }],
     branchGroups: ['headoffice', 'warehouse'],
-    defaultAccess: upToL3,
   },
 
   // ── Sales (HO) ────────────────────────────────────────────────────────────
@@ -307,28 +278,24 @@ export const MODULE_REGISTRY: ModuleDef[] = [
       { name: 'Outstanding', href: '/outstanding' },
     ],
     branchGroups: ['headoffice', 'warehouse'],
-    defaultAccess: l2AndL5plus,
   },
   {
     key: 'Customers', permSegment: 'Accounts', permGroup: 'Sales (HO)',
     navGroup: 'Sales (HO)',
     navEntries: [{ name: 'Customers', href: '/customers' }],
     branchGroups: ['headoffice', 'warehouse'],
-    defaultAccess: upToL2,
   },
   {
     key: 'Vendors', permSegment: 'Accounts', permGroup: 'Sales (HO)',
     navGroup: 'Sales (HO)',
     navEntries: [{ name: 'Vendors', href: '/vendors' }],
     branchGroups: ['headoffice', 'warehouse'],
-    defaultAccess: upToL2,
   },
   {
     key: 'Coupons', permSegment: 'Accounts', permGroup: 'Sales (HO)',
     navGroup: 'Sales (HO)',
     navEntries: [{ name: 'Coupons', href: '/coupons' }],
     branchGroups: ['headoffice', 'warehouse'],
-    defaultAccess: upToL2,
   },
 
   // ── HR (Head Office only — permission-gated) ──────────────────────────────
@@ -337,35 +304,30 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navGroup: 'HR',
     navEntries: [{ name: 'Employees', href: '/hr/employees' }],
     branchGroups: ['headoffice'],
-    defaultAccess: upToL2,
   },
   {
     key: 'Attendance', permSegment: 'Accounts', permGroup: 'HR',
     navGroup: 'HR',
     navEntries: [{ name: 'Attendance', href: '/hr/attendance' }],
     branchGroups: ['headoffice'],
-    defaultAccess: l2AndL5plus,
   },
   {
     key: 'Leave', permSegment: 'Accounts', permGroup: 'HR',
     navGroup: 'HR',
     navEntries: [{ name: 'Leave', href: '/hr/leave' }],
     branchGroups: ['headoffice'],
-    defaultAccess: l2AndL5plus,
   },
   {
     key: 'Payroll', permSegment: 'Accounts', permGroup: 'HR',
     navGroup: 'HR',
     navEntries: [{ name: 'Payroll', href: '/hr/payroll' }],
     branchGroups: ['headoffice'],
-    defaultAccess: upToL2,
   },
   {
     key: 'Hierarchy', permSegment: 'Accounts', permGroup: 'HR',
     navGroup: 'HR',
     navEntries: [{ name: 'Hierarchy', href: '/hr/hierarchy' }],
     branchGroups: ['headoffice'],
-    defaultAccess: upToL2,
   },
 
   // ── Accounts ──────────────────────────────────────────────────────────────
@@ -374,14 +336,12 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navGroup: 'Accounts',
     navEntries: [{ name: 'Chart of Accounts', href: '/accounts/chart' }],
     branchGroups: ['headoffice'],
-    defaultAccess: upToL2,
   },
   {
     key: 'Ledger', permSegment: 'Accounts', permGroup: 'Accounts',
     navGroup: 'Accounts',
     navEntries: [{ name: 'Ledger', href: '/accounts/ledger' }],
     branchGroups: ['headoffice'],
-    defaultAccess: upToL2,
   },
   {
     key: 'Payments', permSegment: 'Accounts', permGroup: 'Accounts',
@@ -391,7 +351,12 @@ export const MODULE_REGISTRY: ModuleDef[] = [
       { name: 'Receipts', href: '/accounts/receipts' },
     ],
     branchGroups: ['headoffice'],
-    defaultAccess: upToL2,
+  },
+  {
+    key: 'Cash & Bank', permSegment: 'Accounts', permGroup: 'Accounts',
+    navGroup: 'Accounts',
+    navEntries: [{ name: 'Cash & Bank', href: '/accounts/cash-bank' }],
+    branchGroups: ['headoffice'],
   },
   {
     key: 'Vouchers', permSegment: 'Accounts', permGroup: 'Accounts',
@@ -402,7 +367,6 @@ export const MODULE_REGISTRY: ModuleDef[] = [
       { name: 'Credit/Debit Notes', href: '/accounts/notes' },
     ],
     branchGroups: ['headoffice'],
-    defaultAccess: upToL2,
   },
   {
     key: 'Books', permSegment: 'Accounts', permGroup: 'Accounts',
@@ -414,42 +378,36 @@ export const MODULE_REGISTRY: ModuleDef[] = [
       { name: 'Trial Balance', href: '/accounts/trial-balance' },
     ],
     branchGroups: ['headoffice'],
-    defaultAccess: upToL2,
   },
   {
     key: 'Expenses', permSegment: 'Accounts', permGroup: 'Accounts',
     navGroup: 'Accounts',
     navEntries: [{ name: 'Expenses', href: '/accounts/expenses' }],
     branchGroups: ['headoffice'],
-    defaultAccess: upToL2,
   },
   {
     key: 'GST Summary', permSegment: 'Accounts', permGroup: 'Accounts',
     navGroup: 'Accounts',
     navEntries: [{ name: 'GST Summary', href: '/accounts/gst' }],
     branchGroups: ['headoffice'],
-    defaultAccess: upToL2,
   },
   {
     key: 'GST Returns', permSegment: 'Accounts', permGroup: 'Accounts',
     navGroup: 'Accounts',
     navEntries: [{ name: 'GST Returns', href: '/accounts/gst-returns' }],
     branchGroups: ['headoffice'],
-    defaultAccess: upToL2,
   },
   {
     key: 'Reconciliation', permSegment: 'Accounts', permGroup: 'Accounts',
     navGroup: 'Accounts',
     navEntries: [{ name: 'Reconciliation', href: '/accounts/reconciliation' }],
     branchGroups: ['headoffice'],
-    defaultAccess: upToL2,
   },
   {
     key: 'Reports', permSegment: 'Accounts', permGroup: 'Accounts',
     navGroup: 'Accounts',
     navEntries: [{ name: 'Reports', href: '/reports/sales', matchPrefix: '/reports' }],
     branchGroups: ['headoffice'],
-    defaultAccess: upToL2,
   },
 
   // ── Dashboard (standalone top-level in accounts sidebar) ─────────────────
@@ -459,7 +417,6 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navEntries: [{ name: 'Dashboard', href: '/' }],
     icon: LayoutDashboard,
     branchGroups: ['headoffice', 'warehouse'],
-    defaultAccess: always,
   },
 
   // ── Company ───────────────────────────────────────────────────────────────
@@ -471,19 +428,16 @@ export const MODULE_REGISTRY: ModuleDef[] = [
       { name: 'Company Profile', href: '/company/profile' },
       { name: 'Audit Log',       href: '/company/audit' },
     ],
-    defaultAccess: adminOnly,
   },
   {
     key: 'Permissions', permSegment: 'Accounts', permGroup: 'Company',
     navGroup: 'Company',
     navEntries: [{ name: 'Permissions', href: '/company/permissions' }],
-    defaultAccess: adminOnly,
   },
   {
     key: 'Login History', permSegment: 'Accounts', permGroup: 'Company',
     navGroup: 'Company',
     navEntries: [{ name: 'Login History', href: '/company/login-history' }],
-    defaultAccess: adminOnly,
   },
 ];
 
@@ -491,16 +445,6 @@ export const MODULE_REGISTRY: ModuleDef[] = [
 
 /** All unique permission keys in registry order (used by Permissions page) */
 export const ALL_MODULE_KEYS: string[] = MODULE_REGISTRY.map(m => m.key);
-
-/**
- * Default access for a module at a given hierarchy level.
- * Level 1 always returns true (enforced upstream).
- */
-export function getDefaultAccess(level: number, moduleKey: string): boolean {
-  if (level === 1) return true;
-  const mod = MODULE_REGISTRY.find(m => m.key === moduleKey);
-  return mod ? mod.defaultAccess(level) : false;
-}
 
 // ── Permissions page segment structure ───────────────────────────────────────
 

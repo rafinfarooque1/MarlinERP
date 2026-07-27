@@ -8,7 +8,7 @@ import { ShieldCheck, ShieldOff, Save, Loader2, ChevronUp, Eye, Plus, Pencil, Tr
 import { toast } from 'sonner';
 import { useListHierarchies, useListPermissions, setPermission } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
-import { getPermissionSegments, ALL_MODULE_KEYS, getDefaultAccess } from '@/lib/moduleRegistry';
+import { getPermissionSegments, ALL_MODULE_KEYS } from '@/lib/moduleRegistry';
 import type { Hierarchy, Permission } from '@workspace/api-client-react';
 
 // Module list and group structure derived from the central module registry.
@@ -27,10 +27,9 @@ const ACTIONS: { key: ActionKey; label: string; icon: React.ElementType }[] = [
   { key: 'del',  label: 'Delete', icon: Trash2 },
 ];
 
-// Default access is defined per-module in src/lib/moduleRegistry.ts (defaultAccess field).
-// getDefaultAccess() looks up the right rule for each module key.
-
-/** Build a local perm map from DB records + fill gaps with level-based defaults */
+/** Build a local perm map from DB records. Roles with no saved row show the
+ *  enforced runtime default — view-only — exactly what usePermission() and the
+ *  API guards apply (see src/lib/usePermission.ts DEFAULT_VIEW_ONLY). */
 function buildPermMap(hierarchies: Hierarchy[], dbPerms: Permission[]): PermMap {
   const map: PermMap = {};
   for (const h of hierarchies) {
@@ -45,8 +44,8 @@ function buildPermMap(hierarchies: Hierarchy[], dbPerms: Permission[]): PermMap 
           del:  dbRow.canDelete ?? false,
         };
       } else {
-        const allowed = getDefaultAccess(h.level ?? 99, mod);
-        map[h.id][mod] = { view: allowed, add: allowed, edit: allowed, del: allowed };
+        // No saved row → what's actually enforced: viewable, no write actions.
+        map[h.id][mod] = { view: true, add: false, edit: false, del: false };
       }
     }
   }
@@ -147,6 +146,8 @@ export default function Permissions() {
             canAdd: p.add,
             canEdit: p.edit,
             canDelete: p.del,
+            // Download (PDF/export buttons) intentionally follows View access —
+            // there is no separate Download toggle in this UI.
             canDownload: p.view,
           });
         }),
@@ -187,7 +188,8 @@ export default function Permissions() {
               <ShieldCheck className="w-6 h-6 text-primary" /> Permissions
             </h1>
             <p className="text-muted-foreground mt-1">
-              Granular access control — decide who can view, add, edit, or delete in each module
+              Granular access control — decide who can view, add, edit, or delete in each module.
+              Download and PDF buttons follow View access.
             </p>
           </div>
           <Button size="sm" onClick={save} disabled={saving || !dirty || isTopLevel}>

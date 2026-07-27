@@ -7,8 +7,10 @@
  *   • row with can_view=false  → 403
  *
  * Accepts one module name or an any-of list (for endpoints shared by several
- * UI surfaces, e.g. /stock/transfers). Module names must match the Permissions
- * page MODULE_GROUPS exactly.
+ * UI surfaces, e.g. /stock/transfers). Module names must EXACTLY match a `key`
+ * in the frontend module registry (marlin-erp src/lib/moduleRegistry.ts) —
+ * that registry drives the Permissions page, so a name missing from it can
+ * never receive a DB row and the guard would silently default-allow forever.
  */
 import { RequestHandler } from "express";
 import { pool } from "@workspace/db";

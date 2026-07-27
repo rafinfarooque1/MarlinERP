@@ -1,12 +1,13 @@
 'use client';
 
-import { useTheme } from 'next-themes';
+import { useTheme } from '@/lib/theme';
 import { Toaster as Sonner } from 'sonner';
 
 type ToasterProps = React.ComponentProps<typeof Sonner>;
 
 const Toaster = ({ ...props }: ToasterProps) => {
-  const { theme = 'system' } = useTheme();
+  // Follow the app's own theme context (not the OS theme) so toasts match the UI
+  const { theme } = useTheme();
 
   return (
     <Sonner
