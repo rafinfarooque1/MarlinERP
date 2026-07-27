@@ -54,7 +54,7 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
 }
 
 export default function CashBalance() {
-  const perm = usePermission('Cash Balance');
+  const perm = usePermission('Accounts Cash Balance');
   const [tab, setTab] = useState<'balances' | 'deposits'>('balances');
 
   if (!perm.isLoading && !perm.canView) {

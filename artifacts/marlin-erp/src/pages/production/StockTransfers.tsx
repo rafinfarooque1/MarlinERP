@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   useListStockTransfers, useCreateStockTransfer, useListItems,
+  useListRawMaterials, useListMaterials,
   useListWarehouses, useListStock, getListStockTransfersQueryKey, useGetCompanySettings,
   useSuggestBatches, useListStockBatches, type StockBatch,
 } from '@workspace/api-client-react';
@@ -32,12 +33,19 @@ const schema = z.object({
   toWarehouseId: z.coerce.number().min(1, 'Destination required'),
   transferDate: z.string().min(1, 'Date required'),
   lineItems: z.array(z.object({
+    materialType: z.enum(['item', 'material', 'raw_material']).default('item'),
     itemId: z.coerce.number().min(1, 'Select item'),
     quantity: z.coerce.number().min(1, 'Qty > 0'),
   })).min(1, 'Add at least one item'),
   notes: z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
+
+const MAT_TYPE_LABELS: Record<string, string> = {
+  item: 'Item Name (SKU)',
+  material: 'Raw Material',
+  raw_material: 'Packing Material',
+};
 
 // ── Status badge ──────────────────────────────────────────────────────────────
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
@@ -296,6 +304,8 @@ export default function StockTransfers() {
   const perm = usePermission('Stock Transfers');
   const { data: transfers = [], isLoading } = useListStockTransfers();
   const { data: items = [] } = useListItems();
+  const { data: rawMaterials = [] } = useListRawMaterials();
+  const { data: materials = [] } = useListMaterials();
   const { data: warehouses = [] } = useListWarehouses();
   const { data: companySettings } = useGetCompanySettings();
   const [search, setSearch] = useState('');
@@ -307,12 +317,22 @@ export default function StockTransfers() {
   const createMutation = useCreateStockTransfer();
 
   const { data: productionStock = [] } = useListStock({ branchType: 'headoffice', branchId: 1 });
-  const stockMap = new Map<number, number>(productionStock.map(s => [s.itemId!, Number(s.quantity ?? 0)]));
-  const availableItems = items.filter(it => (stockMap.get(it.id) ?? 0) > 0);
+  // Composite key: `${materialType}:${id}` → available qty
+  const stockMap = new Map<string, number>([
+    ...productionStock.map(s => [`item:${s.itemId}`, Number(s.quantity ?? 0)] as [string, number]),
+    ...(rawMaterials as any[]).filter(m => Number(m.currentStock) > 0).map(m => [`raw_material:${m.id}`, Number(m.currentStock)] as [string, number]),
+    ...(materials as any[]).filter(m => Number(m.currentStock) > 0).map(m => [`material:${m.id}`, Number(m.currentStock)] as [string, number]),
+  ]);
+  type AvailItem = { id: number; name: string; unit: string; materialType: 'item' | 'material' | 'raw_material'; availQty: number };
+  const availableItems: AvailItem[] = [
+    ...(items as any[]).filter(it => (stockMap.get(`item:${it.id}`) ?? 0) > 0).map(it => ({ id: it.id, name: it.name, unit: it.unit, materialType: 'item' as const, availQty: stockMap.get(`item:${it.id}`) ?? 0 })),
+    ...(materials as any[]).filter(m => (stockMap.get(`material:${m.id}`) ?? 0) > 0).map(m => ({ id: m.id, name: m.name, unit: m.unit, materialType: 'material' as const, availQty: stockMap.get(`material:${m.id}`) ?? 0 })),
+    ...(rawMaterials as any[]).filter(m => (stockMap.get(`raw_material:${m.id}`) ?? 0) > 0).map(m => ({ id: m.id, name: m.name, unit: m.unit, materialType: 'raw_material' as const, availQty: stockMap.get(`raw_material:${m.id}`) ?? 0 })),
+  ];
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { toWarehouseId: 0, transferDate: new Date().toISOString().split('T')[0], lineItems: [{ itemId: 0, quantity: 1 }], notes: '' },
+    defaultValues: { toWarehouseId: 0, transferDate: new Date().toISOString().split('T')[0], lineItems: [{ materialType: 'item' as const, itemId: 0, quantity: 1 }], notes: '' },
   });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
 
@@ -359,6 +379,11 @@ export default function StockTransfers() {
   };
 
   const iMap = new Map((items as any[]).map(i => [i.id, i]));
+  const allItemsMap = new Map<string, any>([
+    ...(items as any[]).map(i => [`item:${i.id}`, i] as [string, any]),
+    ...(materials as any[]).map(m => [`material:${m.id}`, m] as [string, any]),
+    ...(rawMaterials as any[]).map(m => [`raw_material:${m.id}`, m] as [string, any]),
+  ]);
 
   const handleDownloadPDF = async (t: any) => {
     const cs = companySettings as any;
@@ -414,7 +439,7 @@ export default function StockTransfers() {
               </Button>
             )}
             {perm.canAdd && (
-              <Button onClick={() => { form.reset({ toWarehouseId: 0, transferDate: new Date().toISOString().split('T')[0], lineItems: [{ itemId: 0, quantity: 1 }], notes: '' }); setOverrides({}); setIsOpen(true); }}>
+              <Button onClick={() => { form.reset({ toWarehouseId: 0, transferDate: new Date().toISOString().split('T')[0], lineItems: [{ materialType: 'item' as const, itemId: 0, quantity: 1 }], notes: '' }); setOverrides({}); setIsOpen(true); }}>
                 <Plus className="w-4 h-4 mr-2" /> New Transfer
               </Button>
             )}
@@ -479,7 +504,7 @@ export default function StockTransfers() {
                     <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(t.transferDate).toLocaleDateString('en-IN')}</div>
                   </TableCell>
                   <TableCell className="font-medium">{t.toName}</TableCell>
-                  <TableCell><Badge variant="secondary">{t.lineItems?.length || 0} SKUs</Badge></TableCell>
+                  <TableCell><Badge variant="secondary">{t.lineItems?.length || 0} item{t.lineItems?.length !== 1 ? 's' : ''}</Badge></TableCell>
                   <TableCell><StatusBadge status={t.status} /></TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
@@ -534,24 +559,38 @@ export default function StockTransfers() {
                   <>
                     <div className="flex justify-between items-center mb-3">
                       <p className="font-semibold text-sm">Items to Transfer <span className="text-xs text-muted-foreground font-normal ml-1">({availableItems.length} in stock)</span></p>
-                      <Button type="button" variant="outline" size="sm" onClick={() => append({ itemId: 0, quantity: 1 })}><Plus className="w-3 h-3 mr-1" /> Add SKU</Button>
+                      <Button type="button" variant="outline" size="sm" onClick={() => append({ materialType: 'item' as const, itemId: 0, quantity: 1 })}><Plus className="w-3 h-3 mr-1" /> Add Line</Button>
                     </div>
                     <div className="space-y-2">
                       {fields.map((field, i) => {
+                        const selMatType = (form.watch(`lineItems.${i}.materialType`) ?? 'item') as 'item' | 'material' | 'raw_material';
                         const selItemId = form.watch(`lineItems.${i}.itemId`);
-                        const availQty = stockMap.get(selItemId) ?? 0;
+                        const availQty = stockMap.get(`${selMatType}:${selItemId}`) ?? 0;
+                        const typeOpts = availableItems.filter(it => it.materialType === selMatType);
                         return (
                           <div key={field.id} className="grid grid-cols-11 gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border">
-                            <div className="col-span-7">
+                            <div className="col-span-3">
+                              <FormField control={form.control} name={`lineItems.${i}.materialType`} render={({ field: f }) => (
+                                <FormItem><FormLabel className="text-xs">Type</FormLabel>
+                                  <Select onValueChange={v => { f.onChange(v); form.setValue(`lineItems.${i}.itemId`, 0 as any); setOverrides(prev => ({ ...prev, [i]: undefined })); }} value={f.value ?? 'item'}>
+                                    <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger></FormControl>
+                                    <SelectContent>
+                                      <SelectItem value="item">Item Name (SKU)</SelectItem>
+                                      <SelectItem value="material">Raw Material</SelectItem>
+                                      <SelectItem value="raw_material">Packing Material</SelectItem>
+                                    </SelectContent>
+                                  </Select></FormItem>
+                              )} />
+                            </div>
+                            <div className="col-span-4">
                               <FormField control={form.control} name={`lineItems.${i}.itemId`} render={({ field: f }) => (
                                 <FormItem><FormLabel className="text-xs">Item</FormLabel>
                                   <Select onValueChange={v => { f.onChange(Number(v)); setOverrides(prev => ({ ...prev, [i]: undefined })); }} value={f.value ? String(f.value) : ''}>
-                                    <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select item" /></SelectTrigger></FormControl>
+                                    <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger></FormControl>
                                     <SelectContent>
-                                      {availableItems.map(it => {
-                                        const avail = stockMap.get(it.id) ?? 0;
-                                        return <SelectItem key={it.id} value={String(it.id)}>{it.name} — {avail} {it.unit} avail</SelectItem>;
-                                      })}
+                                      {typeOpts.map(it => (
+                                        <SelectItem key={it.id} value={String(it.id)}>{it.name} — {it.availQty} {it.unit} avail</SelectItem>
+                                      ))}
                                     </SelectContent>
                                   </Select></FormItem>
                               )} />
@@ -567,13 +606,15 @@ export default function StockTransfers() {
                             <div className="col-span-1 pb-1 flex justify-end">
                               <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => removeLine(i)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
                             </div>
-                            <BatchPicker
-                              itemId={selItemId}
-                              quantity={Number(form.watch(`lineItems.${i}.quantity`)) || 0}
-                              unit={(iMap.get(selItemId) as any)?.unit}
-                              override={overrides[i]}
-                              onChange={v => setOverrides(prev => ({ ...prev, [i]: v }))}
-                            />
+                            {selMatType === 'item' && (
+                              <BatchPicker
+                                itemId={selItemId}
+                                quantity={Number(form.watch(`lineItems.${i}.quantity`)) || 0}
+                                unit={allItemsMap.get(`item:${selItemId}`)?.unit}
+                                override={overrides[i]}
+                                onChange={v => setOverrides(prev => ({ ...prev, [i]: v }))}
+                              />
+                            )}
                           </div>
                         );
                       })}
@@ -629,12 +670,16 @@ export default function StockTransfers() {
                 <p className="text-sm font-semibold mb-2">Dispatched Items</p>
                 <div className="space-y-2">
                   {(viewItem.lineItems || []).map((li: any, i: number) => {
-                    const item = iMap.get(li.itemId);
+                    const matType = li.materialType || 'item';
+                    const item = allItemsMap.get(`${matType}:${li.itemId}`);
                     return (
                       <div key={i} className="p-3 bg-muted/20 rounded-lg text-sm border border-border">
-                        <div className="flex justify-between">
-                          <span className="font-medium">{item?.name ?? `Item #${li.itemId}`}</span>
-                          <span className="font-bold font-mono">{li.quantity} {item?.unit ?? ''}</span>
+                        <div className="flex justify-between items-start gap-2">
+                          <div>
+                            <Badge variant="outline" className="text-[10px] mb-1">{MAT_TYPE_LABELS[matType] ?? matType}</Badge>
+                            <p className="font-medium">{item?.name ?? `#${li.itemId}`}</p>
+                          </div>
+                          <span className="font-bold font-mono whitespace-nowrap">{li.quantity} {item?.unit ?? ''}</span>
                         </div>
                         {Array.isArray(li.batchBreakdown) && li.batchBreakdown.length > 0 && (
                           <div className="flex flex-wrap gap-1 mt-2">
@@ -655,12 +700,13 @@ export default function StockTransfers() {
                 <div>
                   <p className="text-sm font-semibold mb-2 text-emerald-400">Actually Received</p>
                   {viewItem.receivedLineItems.map((li: any, i: number) => {
-                    const item = iMap.get(li.itemId);
+                    const matType = li.materialType || viewItem.lineItems.find((d: any) => d.itemId === li.itemId)?.materialType || 'item';
+                    const item = allItemsMap.get(`${matType}:${li.itemId}`);
                     const dispatched = viewItem.lineItems.find((d: any) => d.itemId === li.itemId)?.quantity ?? li.quantity;
                     const isShort = li.quantity < dispatched;
                     return (
                       <div key={i} className={`flex justify-between p-3 rounded-lg text-sm mb-2 border ${isShort ? 'border-amber-500/40 bg-amber-500/5' : 'bg-muted/20 border-border'}`}>
-                        <span className="font-medium">{item?.name ?? `Item #${li.itemId}`}</span>
+                        <span className="font-medium">{item?.name ?? `#${li.itemId}`}</span>
                         <span className={`font-bold font-mono ${isShort ? 'text-amber-400' : ''}`}>{li.quantity} {item?.unit ?? ''}{isShort ? ` (${dispatched - li.quantity} short)` : ''}</span>
                       </div>
                     );

@@ -414,7 +414,7 @@ router.get("/reports/purchases-by-material", requireModuleView("Purchases"), asy
     [range.from, range.to],
   );
   const maps = await materialNameMaps();
-  const typeLabel: Record<string, string> = { material: "Material", raw_material: "Packing Material", item: "Item Name (SKU)" };
+  const typeLabel: Record<string, string> = { material: "Raw Material", raw_material: "Packing Material", item: "Item Name (SKU)" };
   const list = rows.map((r: any) => {
     const info = maps[String(r.material_type)]?.get(Number(r.material_id));
     return {

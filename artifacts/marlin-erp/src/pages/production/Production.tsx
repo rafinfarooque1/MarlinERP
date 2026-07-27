@@ -51,7 +51,9 @@ const editSchema = z.object({
 });
 type EditFormValues = z.infer<typeof editSchema>;
 
-const defaultLine = { materialType: 'raw_material' as const, materialId: 0, usedQuantity: 1 };
+const defaultRawLine = { materialType: 'material' as const, materialId: 0, usedQuantity: 1 };
+const defaultPackLine = { materialType: 'raw_material' as const, materialId: 0, usedQuantity: 1 };
+const defaultLine = defaultRawLine;
 const defaultValues: FormValues = {
   itemId: 0,
   producedQuantity: 1,
@@ -321,7 +323,19 @@ export default function ProductionList() {
                     if (days <= 30) return <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">{new Date(e).toLocaleDateString('en-IN')} · {days}d</Badge>;
                     return <span className="text-xs text-muted-foreground">{new Date(e).toLocaleDateString('en-IN')}</span>;
                   })()}</TableCell>
-                  <TableCell><Badge variant="secondary">{p.materialUsed?.length || 0} materials</Badge></TableCell>
+                  <TableCell>
+                    <div className="flex flex-col gap-0.5">
+                      {(() => {
+                        const rm = (p.materialUsed || []).filter((m: any) => m.materialType === 'material').length;
+                        const pm = (p.materialUsed || []).filter((m: any) => m.materialType === 'raw_material').length;
+                        return <>
+                          {rm > 0 && <Badge variant="secondary" className="text-[10px] font-normal">{rm} raw mat.</Badge>}
+                          {pm > 0 && <Badge variant="outline" className="text-[10px] font-normal">{pm} packing</Badge>}
+                          {rm === 0 && pm === 0 && <Badge variant="secondary" className="text-[10px]">{p.materialUsed?.length || 0}</Badge>}
+                        </>;
+                      })()}
+                    </div>
+                  </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(p)}><Eye className="w-4 h-4" /></Button>
@@ -378,53 +392,89 @@ export default function ProductionList() {
                 )} />
               </div>
 
-              <div>
-                <div className="flex justify-between items-center mb-3">
+              <div className="space-y-4">
+                {/* ── Header with BOM loader ── */}
+                <div className="flex justify-between items-center">
                   <p className="font-semibold text-sm">Materials Consumed</p>
-                  <div className="flex gap-2">
-                    {bomTemplate && bomTemplate.lines?.length > 0 && (
-                      <Button type="button" variant="outline" size="sm" onClick={loadFromBom} title="Fill lines from the item's BOM template scaled to output">
-                        <ClipboardList className="w-3 h-3 mr-1" /> Load from BOM
-                      </Button>
+                  {bomTemplate && bomTemplate.lines?.length > 0 && (
+                    <Button type="button" variant="outline" size="sm" onClick={loadFromBom} title="Fill lines from the item's BOM template scaled to output">
+                      <ClipboardList className="w-3 h-3 mr-1" /> Load from BOM
+                    </Button>
+                  )}
+                </div>
+
+                {/* ── Raw Material Consumed ── */}
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <p className="text-sm font-medium text-muted-foreground">Raw Material Consumed</p>
+                    <Button type="button" variant="outline" size="sm" onClick={() => append(defaultRawLine)}><Plus className="w-3 h-3 mr-1" /> Add</Button>
+                  </div>
+                  <div className="space-y-2">
+                    {fields.map((field, i) => {
+                      if ((wMaterials[i]?.materialType ?? 'material') !== 'material') return null;
+                      return (
+                        <div key={field.id} className="grid grid-cols-8 gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border">
+                          <div className="col-span-5">
+                            <FormField control={form.control} name={`materialUsed.${i}.materialId`} render={({ field: f }) => (
+                              <FormItem><FormLabel className="text-xs">Raw Material</FormLabel>
+                                <Select onValueChange={v => f.onChange(Number(v))} value={f.value ? String(f.value) : ''}>
+                                  <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger></FormControl>
+                                  <SelectContent>{(materials as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}</SelectContent>
+                                </Select><FormMessage /></FormItem>
+                            )} />
+                          </div>
+                          <div className="col-span-2">
+                            <FormField control={form.control} name={`materialUsed.${i}.usedQuantity`} render={({ field: f }) => (
+                              <FormItem><FormLabel className="text-xs">Qty</FormLabel><FormControl><Input type="number" step="0.01" className="h-8 text-xs" {...f} /></FormControl></FormItem>
+                            )} />
+                          </div>
+                          <div className="col-span-1 pb-1 flex justify-end">
+                            <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(i)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {fields.every((_, i) => (wMaterials[i]?.materialType ?? 'material') !== 'material') && (
+                      <p className="text-xs text-muted-foreground text-center py-2 border border-dashed rounded-lg">No raw materials — click Add above</p>
                     )}
-                    <Button type="button" variant="outline" size="sm" onClick={() => append(defaultLine)}><Plus className="w-3 h-3 mr-1" /> Add</Button>
                   </div>
                 </div>
-                <div className="space-y-2">
-                  {fields.map((field, i) => {
-                    const matType = form.watch(`materialUsed.${i}.materialType`);
-                    const opts = matType === 'raw_material' ? rawMaterials : materials;
-                    return (
-                      <div key={field.id} className="grid grid-cols-11 gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border">
-                        <div className="col-span-3">
-                          <FormField control={form.control} name={`materialUsed.${i}.materialType`} render={({ field: f }) => (
-                            <FormItem><FormLabel className="text-xs">Type</FormLabel>
-                              <Select onValueChange={f.onChange} value={f.value}>
-                                <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger></FormControl>
-                                <SelectContent><SelectItem value="raw_material">Packing Material</SelectItem><SelectItem value="material">Material</SelectItem></SelectContent>
-                              </Select></FormItem>
-                          )} />
+
+                {/* ── Packing Material Consumed ── */}
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <p className="text-sm font-medium text-muted-foreground">Packing Material Consumed</p>
+                    <Button type="button" variant="outline" size="sm" onClick={() => append(defaultPackLine)}><Plus className="w-3 h-3 mr-1" /> Add</Button>
+                  </div>
+                  <div className="space-y-2">
+                    {fields.map((field, i) => {
+                      if ((wMaterials[i]?.materialType ?? 'material') !== 'raw_material') return null;
+                      return (
+                        <div key={field.id} className="grid grid-cols-8 gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border">
+                          <div className="col-span-5">
+                            <FormField control={form.control} name={`materialUsed.${i}.materialId`} render={({ field: f }) => (
+                              <FormItem><FormLabel className="text-xs">Packing Material</FormLabel>
+                                <Select onValueChange={v => f.onChange(Number(v))} value={f.value ? String(f.value) : ''}>
+                                  <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger></FormControl>
+                                  <SelectContent>{(rawMaterials as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}</SelectContent>
+                                </Select><FormMessage /></FormItem>
+                            )} />
+                          </div>
+                          <div className="col-span-2">
+                            <FormField control={form.control} name={`materialUsed.${i}.usedQuantity`} render={({ field: f }) => (
+                              <FormItem><FormLabel className="text-xs">Qty</FormLabel><FormControl><Input type="number" step="0.01" className="h-8 text-xs" {...f} /></FormControl></FormItem>
+                            )} />
+                          </div>
+                          <div className="col-span-1 pb-1 flex justify-end">
+                            <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(i)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
+                          </div>
                         </div>
-                        <div className="col-span-5">
-                          <FormField control={form.control} name={`materialUsed.${i}.materialId`} render={({ field: f }) => (
-                            <FormItem><FormLabel className="text-xs">Material</FormLabel>
-                              <Select onValueChange={v => f.onChange(Number(v))} value={f.value ? String(f.value) : ''}>
-                                <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger></FormControl>
-                                <SelectContent>{(opts as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}</SelectContent>
-                              </Select></FormItem>
-                          )} />
-                        </div>
-                        <div className="col-span-2">
-                          <FormField control={form.control} name={`materialUsed.${i}.usedQuantity`} render={({ field: f }) => (
-                            <FormItem><FormLabel className="text-xs">Qty</FormLabel><FormControl><Input type="number" step="0.01" className="h-8 text-xs" {...f} /></FormControl></FormItem>
-                          )} />
-                        </div>
-                        <div className="col-span-1 pb-1 flex justify-end">
-                          <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(i)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                    {fields.every((_, i) => (wMaterials[i]?.materialType ?? 'material') !== 'raw_material') && (
+                      <p className="text-xs text-muted-foreground text-center py-2 border border-dashed rounded-lg">No packing materials — click Add above</p>
+                    )}
+                  </div>
                 </div>
 
                 {/* BOM over-consumption warning (non-blocking) */}
@@ -600,23 +650,27 @@ export default function ProductionList() {
                 )}
               </div>
 
-              <div>
-                <p className="text-sm font-semibold mb-2">Materials Consumed</p>
-                <div className="space-y-2">
-                  {(viewItem.materialUsed || []).map((m: any, i: number) => (
-                    <div key={i} className="flex justify-between items-center p-3 bg-muted/20 rounded-lg text-sm">
-                      <div>
-                        <Badge variant="secondary" className="text-xs mr-2">{m.materialType === 'raw_material' ? 'Raw' : 'Pkg'}</Badge>
-                        {m.materialName ?? matName(m.materialType, m.materialId)}
-                      </div>
-                      <div className="text-right">
-                        <span className="font-bold">{fmtQty(Number(m.usedQuantity))} {m.unit || 'units'}</span>
-                        {m.lineCost != null && <span className="block text-xs text-muted-foreground font-mono">{inr(Number(m.lineCost))}{m.unitCost != null ? ` @ ${inr(Number(m.unitCost))}` : ''}</span>}
-                      </div>
+              {/* Materials consumed — grouped by type */}
+              {(['material', 'raw_material'] as const).map(mType => {
+                const typeLines = (viewItem.materialUsed || []).filter((m: any) => m.materialType === mType);
+                if (typeLines.length === 0) return null;
+                return (
+                  <div key={mType}>
+                    <p className="text-sm font-semibold mb-2">{mType === 'material' ? 'Raw Material Consumed' : 'Packing Material Consumed'}</p>
+                    <div className="space-y-2">
+                      {typeLines.map((m: any, i: number) => (
+                        <div key={i} className="flex justify-between items-center p-3 bg-muted/20 rounded-lg text-sm">
+                          <span className="font-medium">{m.materialName ?? matName(m.materialType, m.materialId)}</span>
+                          <div className="text-right">
+                            <span className="font-bold">{fmtQty(Number(m.usedQuantity))} {m.unit || 'units'}</span>
+                            {m.lineCost != null && <span className="block text-xs text-muted-foreground font-mono">{inr(Number(m.lineCost))}{m.unitCost != null ? ` @ ${inr(Number(m.unitCost))}` : ''}</span>}
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              </div>
+                  </div>
+                );
+              })}
 
               {/* Wastage */}
               {Number((viewItem as any).wastageQty) > 0 && (

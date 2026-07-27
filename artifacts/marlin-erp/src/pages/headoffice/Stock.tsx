@@ -150,7 +150,7 @@ export default function Stock() {
                 <TableHead className="w-8" />
                 <TableHead>Item</TableHead>
                 <TableHead>Location</TableHead>
-                <TableHead>Type</TableHead>
+                <TableHead>Item Type</TableHead>
                 <TableHead className="text-right">Quantity</TableHead>
                 <TableHead className="text-right">Value</TableHead>
                 <TableHead className="text-right">Status</TableHead>
@@ -180,7 +180,7 @@ export default function Stock() {
                       </TableCell>
                       <TableCell className="font-semibold">{s.itemName}</TableCell>
                       <TableCell className="text-muted-foreground">{s.branchName}</TableCell>
-                      <TableCell><Badge variant="outline" className="text-xs capitalize">{s.branchType}</Badge></TableCell>
+                      <TableCell><Badge variant="outline" className="text-xs text-emerald-500 border-emerald-500/30">Item Name (SKU)</Badge></TableCell>
                       <TableCell className={`text-right font-mono font-bold ${low ? 'text-red-500' : 'text-emerald-500'}`}>
                         {Number(s.quantity).toLocaleString('en-IN')} <span className="text-xs font-normal text-muted-foreground">{s.unit}</span>
                       </TableCell>

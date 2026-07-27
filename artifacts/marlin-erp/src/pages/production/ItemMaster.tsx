@@ -29,7 +29,7 @@ type ItemType = 'raw_material' | 'material' | 'item';
 
 const TYPE_LABELS: Record<ItemType, string> = {
   raw_material: 'Packing Material',
-  material: 'Material',
+  material: 'Raw Material',
   item: 'Item Name (SKU)',
 };
 
@@ -234,7 +234,7 @@ export default function ItemMaster() {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Layers className="w-6 h-6 text-primary" /> Item Master</h1>
-            <p className="text-muted-foreground mt-1">All raw materials, materials and finished items in one place</p>
+            <p className="text-muted-foreground mt-1">All packing materials, raw materials and Item Name (SKU) in one place</p>
           </div>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => downloadCSV('items.csv', filtered.map(i => ({
@@ -273,7 +273,7 @@ export default function ItemMaster() {
               <SelectContent>
                 <SelectItem value="all">All Types</SelectItem>
                 <SelectItem value="raw_material">Packing Material</SelectItem>
-                <SelectItem value="material">Material</SelectItem>
+                <SelectItem value="material">Raw Material</SelectItem>
                 <SelectItem value="item">Item Name (SKU)</SelectItem>
               </SelectContent>
             </Select>
@@ -303,8 +303,8 @@ export default function ItemMaster() {
               ) : filtered.map(item => (
                 <TableRow key={`${item._type}-${item.id}`} className="hover:bg-muted/10">
                   <TableCell>
-                    <Badge variant="outline" className={`text-xs capitalize ${(TYPE_COLORS as any)[item._type] ?? ''}`}>
-                      {item._type === 'raw_material' ? 'Packing' : item._type === 'material' ? 'Material' : 'SKU'}
+                    <Badge variant="outline" className={`text-xs ${(TYPE_COLORS as any)[item._type] ?? ''}`}>
+                      {item._type === 'raw_material' ? 'Packing Material' : item._type === 'material' ? 'Raw Material' : 'Item Name (SKU)'}
                     </Badge>
                   </TableCell>
                   <TableCell className="font-medium">
@@ -359,7 +359,7 @@ export default function ItemMaster() {
                     <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
                     <SelectContent>
                       <SelectItem value="raw_material">Packing Material</SelectItem>
-                      <SelectItem value="material">Material</SelectItem>
+                      <SelectItem value="material">Raw Material</SelectItem>
                       <SelectItem value="item">Item Name (SKU)</SelectItem>
                     </SelectContent>
                   </Select>
@@ -462,7 +462,7 @@ export default function ItemMaster() {
             <form onSubmit={bomForm.handleSubmit(onBomSubmit)} className="space-y-5">
               <div>
                 <div className="flex justify-between items-center mb-3">
-                  <p className="font-semibold text-sm">Materials per unit</p>
+                  <p className="font-semibold text-sm">Materials per unit produced</p>
                   <Button type="button" variant="outline" size="sm" onClick={() => appendBomLine(defaultBomLine)}><Plus className="w-3 h-3 mr-1" /> Add</Button>
                 </div>
                 <div className="space-y-2">
@@ -476,13 +476,13 @@ export default function ItemMaster() {
                             <FormItem><FormLabel className="text-xs">Type</FormLabel>
                               <Select onValueChange={f.onChange} value={f.value}>
                                 <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger></FormControl>
-                                <SelectContent><SelectItem value="raw_material">Packing Material</SelectItem><SelectItem value="material">Material</SelectItem></SelectContent>
+                                <SelectContent><SelectItem value="raw_material">Packing Material</SelectItem><SelectItem value="material">Raw Material</SelectItem></SelectContent>
                               </Select></FormItem>
                           )} />
                         </div>
                         <div className="col-span-5">
                           <FormField control={bomForm.control} name={`lines.${i}.materialId`} render={({ field: f }) => (
-                            <FormItem><FormLabel className="text-xs">Material</FormLabel>
+                            <FormItem><FormLabel className="text-xs">{matType === 'raw_material' ? 'Packing Material' : 'Raw Material'}</FormLabel>
                               <Select onValueChange={v => f.onChange(Number(v))} value={f.value ? String(f.value) : ''}>
                                 <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger></FormControl>
                                 <SelectContent>{(opts as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}</SelectContent>
@@ -573,7 +573,7 @@ export default function ItemMaster() {
                   <div className="flex justify-between py-2 border-b border-border items-center">
                     <span className="text-muted-foreground">BOM Template</span>
                     {bomByItem.has(viewItem.id)
-                      ? <Badge variant="outline" className="text-xs bg-primary/5 text-primary border-primary/30">{(bomByItem.get(viewItem.id) as any).lines?.length ?? 0} materials / unit</Badge>
+                      ? <Badge variant="outline" className="text-xs bg-primary/5 text-primary border-primary/30">{(bomByItem.get(viewItem.id) as any).lines?.length ?? 0} inputs / unit</Badge>
                       : <span className="text-muted-foreground text-xs">Not set</span>}
                   </div>
                 )}

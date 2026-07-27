@@ -1,0 +1,146 @@
+Update the Production → Item Master module.
+
+Do NOT change the naming convention.
+
+The system should use only these three names everywhere:
+
+1. Packing Material
+2. Raw Material
+3. Item Name (SKU)
+
+Remove every occurrence of:
+- Material
+- Materials
+- SKU only
+- Finished Goods
+- Product
+- Item Type (Material)
+
+Replace them with the correct names above.
+
+---------------------------------------
+
+Update the Add New Item popup.
+
+The Item Type dropdown should contain ONLY:
+
+• Packing Material
+• Raw Material
+• Item Name (SKU)
+
+No other options should exist.
+
+---------------------------------------
+
+Update the dashboard cards.
+
+Current cards:
+
+Packing Material
+Material
+Item Name (SKU)
+
+Change them to:
+
+Packing Material
+Raw Material
+Item Name (SKU)
+
+---------------------------------------
+
+Update all tables.
+
+The Type column should display only:
+
+Packing Material
+Raw Material
+Item Name (SKU)
+
+---------------------------------------
+
+Update all filters.
+
+Type filter should contain only:
+
+All Types
+Packing Material
+Raw Material
+Item Name (SKU)
+
+---------------------------------------
+
+Update all search results.
+
+Whenever an item is searched, its type should display as:
+
+Packing Material
+Raw Material
+Item Name (SKU)
+
+---------------------------------------
+
+Update Production Batch.
+
+Materials Consumed should become:
+
+Raw Material Consumed
+Packing Material Consumed
+
+Both sections should allow multiple rows.
+
+Raw Material dropdown should show only Raw Material items.
+
+Packing Material dropdown should show only Packing Material items.
+
+Only available stock should be shown.
+
+---------------------------------------
+
+Item Name (SKU) should only be used as the finished product created from production.
+
+Raw Materials and Packing Materials must never appear as Item Name (SKU).
+
+---------------------------------------
+
+Update Stock Transfer.
+
+Allow transfer of all three inventory types:
+
+• Packing Material
+• Raw Material
+• Item Name (SKU)
+
+Maintain quantity, batch, cost, manufacturing date, expiry date, and location during transfer.
+
+---------------------------------------
+
+Update Inventory → Stock.
+
+Add a Type column displaying only:
+
+Packing Material
+Raw Material
+Item Name (SKU)
+
+Display:
+
+• Type
+• Item Name
+• Unit
+• Available Stock
+• Location
+• Batch
+• Cost
+• Stock Value
+
+---------------------------------------
+
+Throughout the entire ERP, standardize the terminology.
+
+Use only these names everywhere:
+
+✔ Packing Material
+✔ Raw Material
+✔ Item Name (SKU)
+
+There should be no references anywhere in the system to "Material", "Finished Goods", or any other inconsistent naming.

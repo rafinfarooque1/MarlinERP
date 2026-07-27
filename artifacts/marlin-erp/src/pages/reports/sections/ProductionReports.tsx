@@ -86,7 +86,7 @@ export default function ProductionSection() {
                   { label: 'Consumed', align: 'right', width: 1.2 }, { label: 'Cost', align: 'right', width: 1.4 },
                   { label: 'Expected (BOM)', align: 'right', width: 1.3 }, { label: 'Variance', align: 'right', width: 1.1 },
                 ],
-                rows: consumption.map((r) => [r.materialName, r.materialType === 'raw_material' ? 'Packing Material' : 'Material',
+                rows: consumption.map((r) => [r.materialName, r.materialType === 'raw_material' ? 'Packing Material' : 'Raw Material',
                   r.unit, num(r.consumedQty), pdfM(r.consumedCost), r.expectedQty === null ? '-' : num(r.expectedQty),
                   r.varianceQty === null ? '-' : num(r.varianceQty)]),
               }],

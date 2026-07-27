@@ -374,9 +374,9 @@ export default function Purchases() {
                           <Select onValueChange={v => form.setValue(`lineItems.${index}.materialType`, v as any)} value={form.watch(`lineItems.${index}.materialType`)}>
                             <SelectTrigger className="w-[90px] text-xs h-8"><SelectValue /></SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="raw_material">Packing</SelectItem>
-                              <SelectItem value="material">Material</SelectItem>
-                              <SelectItem value="item">Item (SKU)</SelectItem>
+                              <SelectItem value="raw_material">Packing Material</SelectItem>
+                              <SelectItem value="material">Raw Material</SelectItem>
+                              <SelectItem value="item">Item Name (SKU)</SelectItem>
                             </SelectContent>
                           </Select>
                           <Select onValueChange={v => form.setValue(`lineItems.${index}.materialId`, Number(v))} value={form.watch(`lineItems.${index}.materialId`) ? String(form.watch(`lineItems.${index}.materialId`)) : ''}>

@@ -170,8 +170,14 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navGroup: '__sales__',
     navEntries: [
       { name: 'Cash Balance', href: '/sales/cash-balance' },
-      // Also appears in the Accounts sidebar section (same permission key)
-      { name: 'Cash Balance', href: '/accounts/cash-in-outlet', navGroup: 'Accounts' },
+    ],
+    icon: Banknote,
+  },
+  {
+    key: 'Accounts Cash Balance', permSegment: 'Accounts', permGroup: 'Accounts',
+    navGroup: 'Accounts',
+    navEntries: [
+      { name: 'Cash Balance', href: '/accounts/cash-in-outlet' },
     ],
     icon: Banknote,
   },

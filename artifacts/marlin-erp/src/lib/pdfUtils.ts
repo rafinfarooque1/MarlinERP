@@ -372,7 +372,7 @@ export function downloadPurchaseOrderPDF(
         ? `Item #${li.materialId}`
         : (materialsMap.get(Number(li.materialId)) || `Material #${li.materialId}`);
     const name = li.materialName || fallback;
-    const typeLabel = li.materialType === 'raw_material' ? 'Packing' : li.materialType === 'item' ? 'Item (SKU)' : 'Material';
+    const typeLabel = li.materialType === 'raw_material' ? 'Packing Material' : li.materialType === 'item' ? 'Item Name (SKU)' : 'Raw Material';
     const amount = Number(li.quantity) * Number(li.unitCost);
     return [i + 1, typeLabel, esc(name), Number(li.quantity), fmt(li.unitCost), fmt(amount)];
   });

@@ -237,32 +237,51 @@ router.post("/stock/transfers", requireModuleAction(["Stock Transfers", "HO Tran
     // the same batches at the destination and rejection can restore exactly.
     for (let i = 0; i < lineItems.length; i++) {
       const li = lineItems[i];
-      const { rows: [srcExisting] } = await client.query(
-        `SELECT id, quantity::numeric AS quantity FROM stock_entries WHERE item_id = $1 AND branch_type = $2 AND branch_id = $3 LIMIT 1 FOR UPDATE`,
-        [li.itemId, parsed.data.fromType, parsed.data.fromId]
-      );
-      // Source must actually hold the goods — otherwise approval would credit
-      // the destination with stock that never existed anywhere.
-      if (!srcExisting || Number(srcExisting.quantity) + 0.001 < Number(li.quantity)) {
-        await client.query("ROLLBACK");
-        const { rows: [it] } = await pool.query(`SELECT name FROM items WHERE id = $1`, [li.itemId]);
-        const itemName = it?.name ?? `Item #${li.itemId}`;
-        const available = srcExisting ? Number(srcExisting.quantity) : 0;
-        res.status(400).json({ error: `Insufficient stock of ${itemName} at the source location (available ${available}, requested ${li.quantity})` });
-        return;
+      const materialType: string = (rawLines[i] as any)?.materialType ?? 'item';
+
+      if (materialType === 'material') {
+        // Raw Material: deduct from materials.current_stock
+        const { rows: [mat] } = await client.query(
+          `UPDATE materials SET current_stock = GREATEST(0, current_stock::numeric - $1) WHERE id = $2 RETURNING name, current_stock::numeric AS current_stock`,
+          [li.quantity, li.itemId]
+        );
+        if (!mat) { await client.query("ROLLBACK"); res.status(400).json({ error: `Raw Material #${li.itemId} not found` }); return; }
+        enrichedLines.push({ ...li, materialType, batchBreakdown: [] });
+      } else if (materialType === 'raw_material') {
+        // Packing Material: deduct from raw_materials.current_stock
+        const { rows: [rm] } = await client.query(
+          `UPDATE raw_materials SET current_stock = GREATEST(0, current_stock::numeric - $1) WHERE id = $2 RETURNING name, current_stock::numeric AS current_stock`,
+          [li.quantity, li.itemId]
+        );
+        if (!rm) { await client.query("ROLLBACK"); res.status(400).json({ error: `Packing Material #${li.itemId} not found` }); return; }
+        enrichedLines.push({ ...li, materialType, batchBreakdown: [] });
+      } else {
+        // Item (SKU): deduct from stock_entries
+        const { rows: [srcExisting] } = await client.query(
+          `SELECT id, quantity::numeric AS quantity FROM stock_entries WHERE item_id = $1 AND branch_type = $2 AND branch_id = $3 LIMIT 1 FOR UPDATE`,
+          [li.itemId, parsed.data.fromType, parsed.data.fromId]
+        );
+        if (!srcExisting || Number(srcExisting.quantity) + 0.001 < Number(li.quantity)) {
+          await client.query("ROLLBACK");
+          const { rows: [it] } = await pool.query(`SELECT name FROM items WHERE id = $1`, [li.itemId]);
+          const itemName = it?.name ?? `Item #${li.itemId}`;
+          const available = srcExisting ? Number(srcExisting.quantity) : 0;
+          res.status(400).json({ error: `Insufficient stock of ${itemName} at the source location (available ${available}, requested ${li.quantity})` });
+          return;
+        }
+        await client.query(
+          `UPDATE stock_entries SET quantity = quantity::numeric - $1, updated_at = now() WHERE id = $2`,
+          [li.quantity, srcExisting.id]
+        );
+        const batchBreakdown = await consumeBatches(client, {
+          itemId: li.itemId,
+          branchType: parsed.data.fromType,
+          branchId: parsed.data.fromId,
+          quantity: li.quantity,
+          override: rawLines[i]?.batchOverride,
+        });
+        enrichedLines.push({ ...li, materialType: 'item', batchBreakdown });
       }
-      await client.query(
-        `UPDATE stock_entries SET quantity = quantity::numeric - $1, updated_at = now() WHERE id = $2`,
-        [li.quantity, srcExisting.id]
-      );
-      const batchBreakdown = await consumeBatches(client, {
-        itemId: li.itemId,
-        branchType: parsed.data.fromType,
-        branchId: parsed.data.fromId,
-        quantity: li.quantity,
-        override: rawLines[i]?.batchOverride,
-      });
-      enrichedLines.push({ ...li, batchBreakdown });
     }
     await client.query(`UPDATE stock_transfers SET line_items = $1 WHERE id = $2`, [JSON.stringify(enrichedLines), row.id]);
     // NOTE: destination stock is NOT updated here — only on approval
@@ -322,7 +341,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["Stock Transfe
 
   const client = await pool.connect();
   let row: any;
-  let linesToCredit: Array<{ itemId: number; quantity: number; costPrice: number }>;
+  let linesToCredit: Array<{ itemId: number; quantity: number; costPrice: number; materialType?: string }>;
   try {
     await client.query("BEGIN");
 
@@ -343,7 +362,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["Stock Transfe
       return;
     }
 
-    const dispatchedLines = (row.line_items ?? []) as Array<{ itemId: number; quantity: number; costPrice?: number; batchBreakdown?: BatchBreakdownEntry[] }>;
+    const dispatchedLines = (row.line_items ?? []) as Array<{ itemId: number; quantity: number; costPrice?: number; batchBreakdown?: BatchBreakdownEntry[]; materialType?: string }>;
 
     // Received lines may only confirm (or short-receive) what was dispatched —
     // never new items, never more than dispatched, and cost always comes from
@@ -355,7 +374,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["Stock Transfe
         return;
       }
       const seen = new Set<number>();
-      const validated: Array<{ itemId: number; quantity: number; costPrice: number }> = [];
+      const validated: Array<{ itemId: number; quantity: number; costPrice: number; materialType?: string }> = [];
       for (const li of receivedLineItems) {
         const itemId = Number(li?.itemId);
         const qty = Number(li?.quantity);
@@ -381,54 +400,63 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["Stock Transfe
           res.status(400).json({ error: `Received quantity for item ${itemId} (${qty}) exceeds dispatched quantity (${d.quantity})` });
           return;
         }
-        validated.push({ itemId, quantity: qty, costPrice: Number(d.costPrice ?? 0) });
+        validated.push({ itemId, quantity: qty, costPrice: Number(d.costPrice ?? 0), materialType: d.materialType ?? 'item' });
       }
       linesToCredit = validated;
     } else {
-      linesToCredit = dispatchedLines.map(d => ({ itemId: Number(d.itemId), quantity: Number(d.quantity), costPrice: Number(d.costPrice ?? 0) }));
+      linesToCredit = dispatchedLines.map(d => ({ itemId: Number(d.itemId), quantity: Number(d.quantity), costPrice: Number(d.costPrice ?? 0), materialType: d.materialType ?? 'item' }));
     }
 
     const destType = row.to_type === "headoffice" ? "warehouse" : row.to_type;
     const destId   = row.to_type === "headoffice" ? 0 : row.to_id;
 
-    // Credit destination with received quantities (stock entry + batches)
+    // Credit destination with received quantities
     for (const li of linesToCredit) {
       if (!li.quantity || li.quantity <= 0) continue;
-      const { rows: [dstExisting] } = await client.query(
-        `SELECT id FROM stock_entries WHERE item_id = $1 AND branch_type = $2 AND branch_id = $3 LIMIT 1 FOR UPDATE`,
-        [li.itemId, destType, destId]
-      );
-      if (dstExisting) {
-        await client.query(
-          `UPDATE stock_entries SET quantity = quantity::numeric + $1, cost_price = $2, updated_at = now() WHERE id = $3`,
-          [li.quantity, String(li.costPrice ?? 0), dstExisting.id]
-        );
-      } else {
-        await client.query(
-          `INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price) VALUES ($1,$2,$3,$4,$5)`,
-          [li.itemId, destType, destId, li.quantity, String(li.costPrice ?? 0)]
-        );
-      }
+      const matType = li.materialType ?? 'item';
 
-      // Batches travel with the goods: same batch numbers/dates arrive at the
-      // destination. Legacy transfers without a breakdown get a challan batch.
-      const dispatched = dispatchedLines.find(d => Number(d.itemId) === Number(li.itemId));
-      const breakdown = dispatched?.batchBreakdown ?? [];
-      if (breakdown.length > 0) {
-        const allocation = allocateReceived(breakdown, Number(li.quantity));
-        for (const b of allocation) {
+      if (matType === 'material') {
+        // Raw Material: credit to materials.current_stock
+        await client.query(`UPDATE materials SET current_stock = current_stock::numeric + $1 WHERE id = $2`, [li.quantity, li.itemId]);
+      } else if (matType === 'raw_material') {
+        // Packing Material: credit to raw_materials.current_stock
+        await client.query(`UPDATE raw_materials SET current_stock = current_stock::numeric + $1 WHERE id = $2`, [li.quantity, li.itemId]);
+      } else {
+        // Item (SKU): credit stock_entries + batches
+        const { rows: [dstExisting] } = await client.query(
+          `SELECT id FROM stock_entries WHERE item_id = $1 AND branch_type = $2 AND branch_id = $3 LIMIT 1 FOR UPDATE`,
+          [li.itemId, destType, destId]
+        );
+        if (dstExisting) {
+          await client.query(
+            `UPDATE stock_entries SET quantity = quantity::numeric + $1, cost_price = $2, updated_at = now() WHERE id = $3`,
+            [li.quantity, String(li.costPrice ?? 0), dstExisting.id]
+          );
+        } else {
+          await client.query(
+            `INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price) VALUES ($1,$2,$3,$4,$5)`,
+            [li.itemId, destType, destId, li.quantity, String(li.costPrice ?? 0)]
+          );
+        }
+        // Batches travel with the goods
+        const dispatched = dispatchedLines.find(d => Number(d.itemId) === Number(li.itemId));
+        const breakdown = dispatched?.batchBreakdown ?? [];
+        if (breakdown.length > 0) {
+          const allocation = allocateReceived(breakdown, Number(li.quantity));
+          for (const b of allocation) {
+            await creditBatch(client, {
+              itemId: li.itemId, branchType: destType, branchId: destId,
+              batchNumber: b.batchNumber, mfgDate: b.mfgDate, expiryDate: b.expiryDate,
+              quantity: b.quantity, unitCost: b.unitCost, source: "transfer", sourceId: id,
+            });
+          }
+        } else {
           await creditBatch(client, {
             itemId: li.itemId, branchType: destType, branchId: destId,
-            batchNumber: b.batchNumber, mfgDate: b.mfgDate, expiryDate: b.expiryDate,
-            quantity: b.quantity, unitCost: b.unitCost, source: "transfer", sourceId: id,
+            batchNumber: `TRF-${row.challan_number}`, quantity: Number(li.quantity),
+            unitCost: Number(li.costPrice ?? 0), source: "transfer", sourceId: id,
           });
         }
-      } else {
-        await creditBatch(client, {
-          itemId: li.itemId, branchType: destType, branchId: destId,
-          batchNumber: `TRF-${row.challan_number}`, quantity: Number(li.quantity),
-          unitCost: Number(li.costPrice ?? 0), source: "transfer", sourceId: id,
-        });
       }
     }
 
@@ -480,28 +508,35 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction(["Stock Transfer
       return;
     }
 
-    const lineItems = row.line_items as Array<{ itemId: number; quantity: number; batchBreakdown?: BatchBreakdownEntry[] }>;
+    const lineItems = row.line_items as Array<{ itemId: number; quantity: number; batchBreakdown?: BatchBreakdownEntry[]; materialType?: string }>;
 
     // Reverse source deduction (goods returned)
     for (const li of lineItems) {
-      const { rows: [srcExisting] } = await client.query(
-        `SELECT id FROM stock_entries WHERE item_id = $1 AND branch_type = $2 AND branch_id = $3 LIMIT 1 FOR UPDATE`,
-        [li.itemId, row.from_type, row.from_id]
-      );
-      if (srcExisting) {
-        await client.query(
-          `UPDATE stock_entries SET quantity = quantity::numeric + $1, updated_at = now() WHERE id = $2`,
-          [li.quantity, srcExisting.id]
-        );
-      } else {
-        await client.query(
-          `INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price) VALUES ($1,$2,$3,$4,'0')`,
-          [li.itemId, row.from_type, row.from_id, li.quantity]
-        );
-      }
+      const matType = li.materialType ?? 'item';
 
-      // Restore exactly the batches that were consumed at dispatch
-      await restoreBatches(client, li.itemId, row.from_type, row.from_id, li.batchBreakdown, "transfer", id);
+      if (matType === 'material') {
+        await client.query(`UPDATE materials SET current_stock = current_stock::numeric + $1 WHERE id = $2`, [li.quantity, li.itemId]);
+      } else if (matType === 'raw_material') {
+        await client.query(`UPDATE raw_materials SET current_stock = current_stock::numeric + $1 WHERE id = $2`, [li.quantity, li.itemId]);
+      } else {
+        const { rows: [srcExisting] } = await client.query(
+          `SELECT id FROM stock_entries WHERE item_id = $1 AND branch_type = $2 AND branch_id = $3 LIMIT 1 FOR UPDATE`,
+          [li.itemId, row.from_type, row.from_id]
+        );
+        if (srcExisting) {
+          await client.query(
+            `UPDATE stock_entries SET quantity = quantity::numeric + $1, updated_at = now() WHERE id = $2`,
+            [li.quantity, srcExisting.id]
+          );
+        } else {
+          await client.query(
+            `INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price) VALUES ($1,$2,$3,$4,'0')`,
+            [li.itemId, row.from_type, row.from_id, li.quantity]
+          );
+        }
+        // Restore exactly the batches that were consumed at dispatch
+        await restoreBatches(client, li.itemId, row.from_type, row.from_id, li.batchBreakdown, "transfer", id);
+      }
     }
 
     await client.query("COMMIT");
