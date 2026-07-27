@@ -156,7 +156,7 @@ export const MODULE_REGISTRY: ModuleDef[] = [
   {
     key: 'Location Transfers', permSegment: 'Sales', permGroup: 'Sales Department',
     navGroup: '__sales__',
-    navEntries: [{ name: 'Transfers', href: '/sales/transfers' }],
+    navEntries: [{ name: 'Transfers', href: '/transfers' }],
     icon: ArrowLeftRight,
   },
   {
@@ -204,7 +204,7 @@ export const MODULE_REGISTRY: ModuleDef[] = [
   {
     key: 'Stock Transfers', permSegment: 'Accounts', permGroup: 'Production',
     navGroup: 'Production',
-    navEntries: [{ name: 'Stock Transfers', href: '/production/stock-transfer' }],
+    navEntries: [{ name: 'Transfers', href: '/transfers' }],
   },
   {
     key: 'Purchases', permSegment: 'Accounts', permGroup: 'Production',
@@ -236,7 +236,7 @@ export const MODULE_REGISTRY: ModuleDef[] = [
   {
     key: 'HO Transfers', permSegment: 'Accounts', permGroup: 'Inventory',
     navGroup: 'Inventory',
-    navEntries: [{ name: 'Transfers', href: '/headoffice/transfers' }],
+    navEntries: [{ name: 'Transfers', href: '/transfers' }],
   },
   {
     key: 'Warehouses', permSegment: 'Accounts', permGroup: 'Inventory',

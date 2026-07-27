@@ -13,14 +13,13 @@ import Items from './pages/production/Items';
 import Purchases from './pages/production/Purchases';
 import ProductionList from './pages/production/Production';
 import ProductionReports from './pages/production/ProductionReports';
-import StockTransfers from './pages/production/StockTransfers';
+import Transfers from './pages/Transfers';
 
 import Warehouses from './pages/headoffice/Warehouses';
 import Outlets from './pages/headoffice/Outlets';
 import Stock from './pages/headoffice/Stock';
 import InventoryReports from './pages/headoffice/InventoryReports';
 import StockVerification from './pages/headoffice/StockVerification';
-import HoTransfers from './pages/headoffice/HoTransfers';
 import ItemPrices from './pages/headoffice/ItemPrices';
 import Sales from './pages/headoffice/Sales';
 import StockLedger from './pages/headoffice/StockLedger';
@@ -65,7 +64,7 @@ import ReportsCenter from './pages/reports/ReportsCenter';
 import LocationPicker from './pages/sales/LocationPicker';
 import ProfileMe from './pages/profile/ProfileMe';
 import SalesStock from './pages/sales/SalesStock';
-import SalesTransfers from './pages/sales/SalesTransfers';
+
 import SalesPOS from './pages/sales/SalesPOS';
 import SalesExpenses from './pages/sales/SalesExpenses';
 import SalesCashBalance from './pages/sales/SalesCashBalance';
@@ -130,7 +129,12 @@ function Router() {
       <Route path="/production/purchase"><AuthGuard><Purchases /></AuthGuard></Route>
       <Route path="/production/production"><AuthGuard><ProductionList /></AuthGuard></Route>
       <Route path="/production/reports"><AuthGuard><ProductionReports /></AuthGuard></Route>
-      <Route path="/production/stock-transfer"><AuthGuard><StockTransfers /></AuthGuard></Route>
+      {/* Unified transfers page — all roles */}
+      <Route path="/transfers"><AuthGuard><Transfers /></AuthGuard></Route>
+      {/* Legacy redirects so any bookmarks / old links still work */}
+      <Route path="/production/stock-transfer"><Redirect to="/transfers" /></Route>
+      <Route path="/headoffice/transfers"><Redirect to="/transfers" /></Route>
+      <Route path="/sales/transfers"><AuthGuard><Transfers /></AuthGuard></Route>
 
       <Route path="/headoffice/warehouses"><AuthGuard><Warehouses /></AuthGuard></Route>
       <Route path="/headoffice/outlets"><AuthGuard><Outlets /></AuthGuard></Route>
@@ -138,7 +142,6 @@ function Router() {
       <Route path="/headoffice/inventory-reports"><AuthGuard><InventoryReports /></AuthGuard></Route>
       <Route path="/headoffice/stock-verification"><AuthGuard><StockVerification /></AuthGuard></Route>
       <Route path="/headoffice/stock-ledger"><AuthGuard><StockLedger /></AuthGuard></Route>
-      <Route path="/headoffice/transfers"><AuthGuard><HoTransfers /></AuthGuard></Route>
       <Route path="/headoffice/item-price"><AuthGuard><ItemPrices /></AuthGuard></Route>
       <Route path="/headoffice/sales"><AuthGuard><Sales /></AuthGuard></Route>
 
@@ -190,7 +193,7 @@ function Router() {
       <Route path="/sales"><AuthGuard><LocationPicker /></AuthGuard></Route>
       <Route path="/sales/dashboard"><AuthGuard><SalesDashboard /></AuthGuard></Route>
       <Route path="/sales/stock"><AuthGuard><SalesStock /></AuthGuard></Route>
-      <Route path="/sales/transfers"><AuthGuard><SalesTransfers /></AuthGuard></Route>
+
       <Route path="/sales/pos"><AuthGuard><SalesPOS /></AuthGuard></Route>
       <Route path="/sales/expenses"><AuthGuard><SalesExpenses /></AuthGuard></Route>
       <Route path="/sales/cash-balance"><AuthGuard><SalesCashBalance /></AuthGuard></Route>

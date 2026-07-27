@@ -271,6 +271,17 @@ router.get("/stock/transfers", requireModuleView(["Stock", "Stock Transfers", "H
   if (from) { params.push(from); conds.push(`transfer_date::date >= $${params.length}::date`); }
   if (to)   { params.push(to);   conds.push(`transfer_date::date <= $${params.length}::date`); }
   if (status) { params.push(status); conds.push(`status = $${params.length}`); }
+
+  // Non-headoffice employees only see transfers involving their own branch
+  const emp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  if (emp && emp.branchType !== "headoffice" && emp.branchId) {
+    params.push(emp.branchType);
+    const btIdx = params.length;
+    params.push(Number(emp.branchId));
+    const biIdx = params.length;
+    conds.push(`((from_type = $${btIdx} AND from_id = $${biIdx}) OR (to_type = $${btIdx} AND to_id = $${biIdx}))`);
+  }
+
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   const [result, branchName] = await Promise.all([
     pool.query(`
