@@ -381,7 +381,7 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
     // Production stock entry (atomic upsert on uq_stock_entries_item_branch)
     await client.query(
       `INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price)
-       VALUES ($1, 'production', 1, $2, '0')
+       VALUES ($1, 'headoffice', 1, $2, '0')
        ON CONFLICT (item_id, branch_type, branch_id)
        DO UPDATE SET quantity = stock_entries.quantity::numeric + EXCLUDED.quantity::numeric, updated_at = now()`,
       [parsed.data.itemId, produced]
@@ -393,7 +393,7 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
     // so the average is never dragged to zero.
     const unitCost = costPerUnit > 0 ? costPerUnit : await inboundCostForItem(client, parsed.data.itemId);
     await creditBatch(client, {
-      itemId: parsed.data.itemId, branchType: "production", branchId: 1,
+      itemId: parsed.data.itemId, branchType: "headoffice", branchId: 1,
       batchNumber, mfgDate, expiryDate,
       quantity: produced, unitCost,
       source: "production", sourceId: rowId,
@@ -505,14 +505,14 @@ router.delete("/productions/:id", requireModuleAction("Production", "delete"), a
     );
     await client.query(
       `UPDATE stock_entries SET quantity = GREATEST(0, quantity::numeric - $1), updated_at = now()
-       WHERE item_id = $2 AND branch_type = 'production' AND branch_id = 1`,
+       WHERE item_id = $2 AND branch_type = 'headoffice' AND branch_id = 1`,
       [qty, itemId]
     );
 
     // Reverse this production's own batch (floored — it may be partly consumed)
     await client.query(
       `UPDATE stock_batches SET quantity = GREATEST(0, quantity - $1), updated_at = now()
-       WHERE item_id = $2 AND branch_type = 'production' AND branch_id = 1 AND batch_number = $3`,
+       WHERE item_id = $2 AND branch_type = 'headoffice' AND branch_id = 1 AND batch_number = $3`,
       [qty, itemId, delBatchNumber]
     );
 

@@ -528,7 +528,7 @@ router.post("/purchase-returns", requireModuleAction(["Sales", "Purchases"], "ad
       } else {
         // Finished item bought into production stock
         const { rows: [se] } = await client.query(
-          `SELECT id, quantity FROM stock_entries WHERE item_id = $1 AND branch_type = 'production' AND branch_id = 1 FOR UPDATE`,
+          `SELECT id, quantity FROM stock_entries WHERE item_id = $1 AND branch_type = 'headoffice' AND branch_id = 1 FOR UPDATE`,
           [materialId]
         );
         const avail = se ? Number(se.quantity) : 0;
@@ -542,7 +542,7 @@ router.post("/purchase-returns", requireModuleAction(["Sales", "Purchases"], "ad
         const batchNumber = li.batchNumber || `PUR-${purchaseId}`;
         await client.query(
           `UPDATE stock_batches SET quantity = GREATEST(0, quantity::numeric - $1), updated_at = now()
-           WHERE item_id = $2 AND branch_type = 'production' AND branch_id = 1 AND batch_number = $3`,
+           WHERE item_id = $2 AND branch_type = 'headoffice' AND branch_id = 1 AND batch_number = $3`,
           [rq, materialId, batchNumber]
         );
       }

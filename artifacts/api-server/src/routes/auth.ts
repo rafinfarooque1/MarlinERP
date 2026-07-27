@@ -64,8 +64,6 @@ async function buildEmployeeResponse(emp: Record<string, any>) {
   } else if (branchType === 'outlet') {
     const [o] = await db.select().from(outletsTable).where(eq(outletsTable.id, branchId)).limit(1);
     branchName = o?.name ?? 'Outlet';
-  } else if (branchType === 'production') {
-    branchName = 'Production Unit';
   }
 
   return {

@@ -65,11 +65,11 @@ function BatchPicker({ itemId, quantity, unit, override, onChange }: {
 }) {
   const [manual, setManual] = useState(false);
   const { data: suggestion } = useSuggestBatches({
-    branchType: 'production', branchId: 1,
+    branchType: 'headoffice', branchId: 1,
     itemId: itemId > 0 ? itemId : undefined,
     quantity: quantity > 0 ? quantity : undefined,
   });
-  const { data: allBatches = [] } = useListStockBatches({ branchType: 'production', branchId: 1 });
+  const { data: allBatches = [] } = useListStockBatches({ branchType: 'headoffice', branchId: 1 });
   if (!itemId || !(quantity > 0)) return null;
   const itemBatches = (allBatches as StockBatch[]).filter(b => b.itemId === itemId);
   if (itemBatches.length === 0) return null;
@@ -204,7 +204,7 @@ function ApproveDialog({
           <div className="grid grid-cols-2 gap-3 p-4 bg-muted/20 rounded-lg border border-border text-sm">
             <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Challan</p><p className="font-mono font-bold text-primary">{transfer.challanNumber}</p></div>
             <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Date</p><p>{new Date(transfer.transferDate).toLocaleDateString('en-IN')}</p></div>
-            <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Dispatched From</p><p className="font-medium">Production Unit</p></div>
+            <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Dispatched From</p><p className="font-medium">Head Office</p></div>
             <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Receiving At</p><p className="font-medium">{transfer.toName}</p></div>
           </div>
 
@@ -274,7 +274,7 @@ function ApproveDialog({
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-destructive"><XCircle className="w-5 h-5" />Reject Transfer</DialogTitle>
-            <DialogDescription>Stock will be returned to Production Unit. This cannot be undone.</DialogDescription>
+            <DialogDescription>Stock will be returned to Head Office. This cannot be undone.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <Textarea rows={3} placeholder="Reason for rejection (e.g. damaged goods, wrong items)…" value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
@@ -306,7 +306,7 @@ export default function StockTransfers() {
   const queryClient = useQueryClient();
   const createMutation = useCreateStockTransfer();
 
-  const { data: productionStock = [] } = useListStock({ branchType: 'production' as any, branchId: 1 });
+  const { data: productionStock = [] } = useListStock({ branchType: 'headoffice' as any, branchId: 1 });
   const stockMap = new Map<number, number>(productionStock.map(s => [s.itemId!, Number(s.quantity ?? 0)]));
   const availableItems = items.filter(it => (stockMap.get(it.id) ?? 0) > 0);
 
@@ -347,7 +347,7 @@ export default function StockTransfers() {
         }
       }
     }
-    createMutation.mutate({ data: { ...data, lineItems, fromType: 'production', fromId: 1, toType: 'warehouse', toId: data.toWarehouseId } as any }, {
+    createMutation.mutate({ data: { ...data, lineItems, fromType: 'headoffice', fromId: 1, toType: 'warehouse', toId: data.toWarehouseId } as any }, {
       onSuccess: () => {
         toast.success('Transfer dispatched — warehouse must approve to receive stock');
         queryClient.invalidateQueries({ queryKey: getListStockTransfersQueryKey() });
@@ -371,7 +371,7 @@ export default function StockTransfers() {
       await downloadPDFFromEndpoint('/api/pdf/challan', {
         cs, challanNo,
         date: new Date(t.transferDate).toLocaleDateString('en-IN'),
-        fromName: 'Production Unit', fromType: 'Production',
+        fromName: 'Head Office', fromType: 'headoffice',
         toName: t.toName || 'Warehouse', toType: t.toType || 'Warehouse',
         lineItems, isInterstate: t.isInterstate, status: t.status, notes: t.notes,
       }, `${challanNo}.pdf`);
@@ -379,7 +379,7 @@ export default function StockTransfers() {
   };
 
   // Only show production-sourced transfers on this page
-  const productionTransfers = (Array.isArray(transfers) ? transfers : []).filter((t: any) => t.fromType === 'production');
+  const productionTransfers = (Array.isArray(transfers) ? transfers : []).filter((t: any) => t.fromType === 'headoffice');
   const searched = productionTransfers.filter((t: any) =>
     t.challanNumber?.toLowerCase().includes(search.toLowerCase()) ||
     t.toName?.toLowerCase().includes(search.toLowerCase())
@@ -617,7 +617,7 @@ export default function StockTransfers() {
               <div className="flex justify-center"><StatusBadge status={viewItem.status} /></div>
 
               <div className="grid grid-cols-2 gap-4">
-                {[['Date', new Date(viewItem.transferDate).toLocaleDateString('en-IN')], ['From', 'Production Unit'], ['To', viewItem.toName], ['Type', viewItem.isInterstate ? 'Interstate' : 'Intra-state']].map(([k, v]) => (
+                {[['Date', new Date(viewItem.transferDate).toLocaleDateString('en-IN')], ['From', 'Head Office'], ['To', viewItem.toName], ['Type', viewItem.isInterstate ? 'Interstate' : 'Intra-state']].map(([k, v]) => (
                   <div key={String(k)} className="flex flex-col gap-1 border-b border-border pb-3">
                     <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                     <span className="font-semibold">{String(v)}</span>

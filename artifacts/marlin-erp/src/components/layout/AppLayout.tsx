@@ -229,7 +229,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const isSalesSegment = location.startsWith('/sales');
 
   // ── User branch info ────────────────────────────────────────────────────────
-  const userBranchType = (user as any)?.branchType as 'warehouse' | 'outlet' | 'production' | null | undefined;
+  const userBranchType = (user as any)?.branchType as 'headoffice' | 'warehouse' | 'outlet' | undefined;
   const userBranchId   = (user as any)?.branchId   as number | null | undefined;
   const userBranchName = (user as any)?.branchName as string | undefined;
 
@@ -277,7 +277,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
       // branchGroups: if defined, the item is only shown for listed branch types
       if ('branchGroups' in item && item.branchGroups) {
-        const allowed = (item.branchGroups as (string | null)[]).includes(userBranchType ?? null);
+        const allowed = (item.branchGroups as string[]).includes(userBranchType ?? 'headoffice');
         if (!allowed) return false;
       }
 

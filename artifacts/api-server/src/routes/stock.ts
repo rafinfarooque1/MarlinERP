@@ -20,7 +20,6 @@ export async function buildBranchMaps() {
   const wMap = new Map(warehouses.map(w => [w.id, w.name]));
   const oMap = new Map(outlets.map(o => [o.id, o.name]));
   return (type: string, id: number): string => {
-    if (type === "production") return "Production Unit";
     if (type === "headoffice") return "Head Office";
     if (type === "warehouse") return wMap.get(id) ?? `Warehouse #${id}`;
     if (type === "outlet") return oMap.get(id) ?? `Outlet #${id}`;

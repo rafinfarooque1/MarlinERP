@@ -27,22 +27,23 @@ function parseRange(req: { query: Record<string, unknown> }): { from: string; to
   return { from, to };
 }
 
-// ── Location name maps (outlet / warehouse / production) ────────────────────
+// ── Location name maps (headoffice / outlet / warehouse) ────────────────────
 type LocMaps = Record<string, Map<number, string>>;
 async function locationMaps(): Promise<LocMaps> {
-  const [o, w, p] = await Promise.all([
+  const [o, w] = await Promise.all([
     pool.query<any>(`SELECT id, name FROM outlets`),
     pool.query<any>(`SELECT id, name FROM warehouses`),
-    pool.query<any>(`SELECT id, name FROM production_units`).catch(() => ({ rows: [] as any[] })),
   ]);
   return {
     outlet: new Map(o.rows.map((r: any) => [Number(r.id), String(r.name)])),
     warehouse: new Map(w.rows.map((r: any) => [Number(r.id), String(r.name)])),
-    production: new Map(p.rows.map((r: any) => [Number(r.id), String(r.name)])),
+    headoffice: new Map([[1, "Head Office"]]),
   };
 }
 function locName(maps: LocMaps, type: string, id: number): string {
-  const t = type === "production_unit" ? "production" : type;
+  // Legacy rows stored as 'production' → treat as headoffice
+  const t = (type === "production" || type === "production_unit") ? "headoffice" : type;
+  if (t === "headoffice") return "Head Office";
   return maps[t]?.get(id) ?? `${type} #${id}`;
 }
 
@@ -68,8 +69,8 @@ router.get("/reports/sales-register", requireModuleView("Sales"), async (req, re
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
   const locationType = typeof req.query.locationType === "string" ? req.query.locationType : "";
   const locationId = typeof req.query.locationId === "string" ? parseInt(req.query.locationId, 10) : 0;
-  if (locationType && !["outlet", "warehouse", "production"].includes(locationType)) {
-    res.status(400).json({ error: "locationType must be outlet, warehouse or production" }); return;
+  if (locationType && !["outlet", "warehouse", "headoffice"].includes(locationType)) {
+    res.status(400).json({ error: "locationType must be outlet, warehouse or headoffice" }); return;
   }
 
   const { rows } = await pool.query<any>(
@@ -220,8 +221,8 @@ router.get("/reports/discounts", requireModuleView("Sales"), async (req, res): P
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
   const locationType = typeof req.query.locationType === "string" ? req.query.locationType : "";
   const locationId = typeof req.query.locationId === "string" ? parseInt(req.query.locationId, 10) : 0;
-  if (locationType && !["outlet", "warehouse", "production"].includes(locationType)) {
-    res.status(400).json({ error: "locationType must be outlet, warehouse or production" }); return;
+  if (locationType && !["outlet", "warehouse", "headoffice"].includes(locationType)) {
+    res.status(400).json({ error: "locationType must be outlet, warehouse or headoffice" }); return;
   }
   const args = [range.from, range.to, locationType, Number.isFinite(locationId) ? locationId : 0];
 

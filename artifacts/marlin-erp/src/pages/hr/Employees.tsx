@@ -32,7 +32,7 @@ const schema = z.object({
   email: z.string().email().optional().or(z.literal('')),
   phone: z.string().optional(),
   hierarchyId: z.coerce.number().min(1, 'Role required'),
-  branchType: z.enum(['production', 'headoffice', 'warehouse', 'outlet']),
+  branchType: z.enum(['headoffice', 'warehouse', 'outlet']),
   branchId: z.coerce.number().min(0),
   salary: z.coerce.number().min(0),
   joinDate: z.string().min(1, 'Join date required'),
@@ -44,7 +44,7 @@ const editSchema = z.object({
   email: z.string().email().optional().or(z.literal('')),
   phone: z.string().optional(),
   hierarchyId: z.coerce.number().min(1, 'Role required'),
-  branchType: z.enum(['production', 'headoffice', 'warehouse', 'outlet']),
+  branchType: z.enum(['headoffice', 'warehouse', 'outlet']),
   branchId: z.coerce.number().min(0),
   salary: z.coerce.number().min(0),
 });
@@ -332,7 +332,6 @@ export default function Employees() {
             <SelectContent>
               <SelectItem value="all">All Branches</SelectItem>
               <SelectItem value="headoffice">Head Office</SelectItem>
-              <SelectItem value="production">Production</SelectItem>
               <SelectItem value="warehouse">Warehouse</SelectItem>
               <SelectItem value="outlet">Outlet</SelectItem>
             </SelectContent>
@@ -503,7 +502,6 @@ export default function Employees() {
                       <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
                       <SelectContent>
                         <SelectItem value="headoffice">Head Office</SelectItem>
-                        <SelectItem value="production">Production Unit</SelectItem>
                         <SelectItem value="warehouse">Warehouse</SelectItem>
                         <SelectItem value="outlet">Retail Outlet</SelectItem>
                       </SelectContent>
@@ -511,7 +509,7 @@ export default function Employees() {
                 )} />
                 <FormField control={editForm.control} name="branchId" render={({ field }) => (
                   <FormItem><FormLabel>Specific Location</FormLabel>
-                    {(watchEditBranchType === 'headoffice' || watchEditBranchType === 'production') ? (
+                    {watchEditBranchType === 'headoffice' ? (
                       <Select value="0" onValueChange={() => field.onChange(0)}>
                         <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
                         <SelectContent><SelectItem value="0">Central Hub</SelectItem></SelectContent>
@@ -602,7 +600,6 @@ export default function Employees() {
                       <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
                       <SelectContent>
                         <SelectItem value="headoffice">Head Office</SelectItem>
-                        <SelectItem value="production">Production Unit</SelectItem>
                         <SelectItem value="warehouse">Warehouse</SelectItem>
                         <SelectItem value="outlet">Retail Outlet</SelectItem>
                       </SelectContent>
@@ -610,7 +607,7 @@ export default function Employees() {
                 )} />
                 <FormField control={form.control} name="branchId" render={({ field }) => (
                   <FormItem><FormLabel>Specific Location</FormLabel>
-                    {(watchBranchType === 'headoffice' || watchBranchType === 'production') ? (
+                    {watchBranchType === 'headoffice' ? (
                       <Select value="0" onValueChange={() => field.onChange(0)}>
                         <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
                         <SelectContent><SelectItem value="0">Central Hub</SelectItem></SelectContent>

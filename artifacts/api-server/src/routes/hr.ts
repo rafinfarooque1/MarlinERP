@@ -20,7 +20,6 @@ const router = Router();
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 async function getBranchName(branchType: string, branchId: number): Promise<string> {
-  if (branchType === "production") return "Production Unit";
   if (branchType === "headoffice") return "Head Office";
   if (branchType === "warehouse") {
     const [w] = await db.select().from(warehousesTable).where(eq(warehousesTable.id, branchId)).limit(1);

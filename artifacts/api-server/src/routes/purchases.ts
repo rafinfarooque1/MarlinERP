@@ -181,7 +181,7 @@ router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, r
       // inbound batch.
       await pool.query(
         `INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price)
-         VALUES ($1, 'production', 1, $2, $3)
+         VALUES ($1, 'headoffice', 1, $2, $3)
          ON CONFLICT (item_id, branch_type, branch_id) DO UPDATE SET
            quantity = stock_entries.quantity::numeric + EXCLUDED.quantity::numeric,
            cost_price = EXCLUDED.cost_price,
@@ -190,7 +190,7 @@ router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, r
       );
       await updateAvgCostOnInbound(pool, li.materialId, li.quantity, li.unitCost);
       await creditBatch(pool, {
-        itemId: li.materialId, branchType: "production", branchId: 1,
+        itemId: li.materialId, branchType: "headoffice", branchId: 1,
         batchNumber: li.batchNumber || `PUR-${row.id}`,
         mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
         quantity: li.quantity, unitCost: li.unitCost,
@@ -259,12 +259,12 @@ router.delete("/purchases/:id", requireModuleAction("Purchases", "delete"), asyn
       // Reverse the stock-entry credit and the inbound batch (floored)
       await pool.query(
         `UPDATE stock_entries SET quantity = GREATEST(0, quantity::numeric - $1), updated_at = now()
-         WHERE item_id = $2 AND branch_type = 'production' AND branch_id = 1`,
+         WHERE item_id = $2 AND branch_type = 'headoffice' AND branch_id = 1`,
         [li.quantity, li.materialId]
       );
       await pool.query(
         `UPDATE stock_batches SET quantity = GREATEST(0, quantity - $1), updated_at = now()
-         WHERE item_id = $2 AND branch_type = 'production' AND branch_id = 1 AND batch_number = $3`,
+         WHERE item_id = $2 AND branch_type = 'headoffice' AND branch_id = 1 AND batch_number = $3`,
         [li.quantity, li.materialId, li.batchNumber || `PUR-${id}`]
       );
     }

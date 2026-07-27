@@ -799,6 +799,22 @@ async function runMigrations() {
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS general_settings jsonb;
   `);
 
+  // One-time migration: re-home all 'production' branch_type records to 'headoffice'.
+  // Production is a department of Head Office, not a separate branch.
+  const { rows: [prodMigDone] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'remove_production_branch_v1'`
+  );
+  if (!prodMigDone) {
+    await pool.query(`
+      UPDATE employees     SET branch_type = 'headoffice' WHERE branch_type = 'production';
+      UPDATE stock_entries SET branch_type = 'headoffice' WHERE branch_type = 'production';
+      UPDATE stock_batches SET branch_type = 'headoffice' WHERE branch_type = 'production';
+      UPDATE stock_transfers SET from_type = 'headoffice' WHERE from_type = 'production';
+    `);
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('remove_production_branch_v1')`);
+    console.log('[migration] remove_production_branch_v1 applied — production branch re-homed to headoffice');
+  }
+
   const { rows: [openingDone] } = await pool.query(
     `SELECT 1 FROM migration_log WHERE name = 'stock_batches_opening_v1'`
   );

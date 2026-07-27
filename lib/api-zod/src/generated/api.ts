@@ -34,7 +34,7 @@ export const LoginResponse = zod.object({
   "phone": zod.string().nullish(),
   "hierarchyId": zod.number(),
   "hierarchyName": zod.string().optional(),
-  "branchType": zod.enum(['production', 'headoffice', 'warehouse', 'outlet']),
+  "branchType": zod.enum(['headoffice', 'warehouse', 'outlet']),
   "branchId": zod.number(),
   "branchName": zod.string().optional(),
   "salary": zod.number().optional(),
@@ -73,7 +73,7 @@ export const GetMeResponse = zod.object({
   "phone": zod.string().nullish(),
   "hierarchyId": zod.number(),
   "hierarchyName": zod.string().optional(),
-  "branchType": zod.enum(['production', 'headoffice', 'warehouse', 'outlet']),
+  "branchType": zod.enum(['headoffice', 'warehouse', 'outlet']),
   "branchId": zod.number(),
   "branchName": zod.string().optional(),
   "salary": zod.number().optional(),
@@ -529,7 +529,7 @@ export const GetProductionResponse = zod.object({
  */
 export const ListStockQueryParams = zod.object({
   "branchId": zod.coerce.number().optional(),
-  "branchType": zod.enum(['production', 'warehouse', 'outlet']).optional()
+  "branchType": zod.enum(['headoffice', 'warehouse', 'outlet']).optional()
 })
 
 export const ListStockResponseItem = zod.object({
@@ -537,7 +537,7 @@ export const ListStockResponseItem = zod.object({
   "itemId": zod.number().optional(),
   "itemName": zod.string().optional(),
   "hsnCode": zod.string().optional(),
-  "branchType": zod.enum(['production', 'warehouse', 'outlet']).optional(),
+  "branchType": zod.enum(['headoffice', 'warehouse', 'outlet']).optional(),
   "branchId": zod.number().optional(),
   "branchName": zod.string().optional(),
   "quantity": zod.number().optional(),
@@ -557,7 +557,7 @@ export const listStockTransfersResponseLineItemsItemQuantityExclusiveMin = 0;
 export const ListStockTransfersResponseItem = zod.object({
   "id": zod.number(),
   "challanNumber": zod.string().optional(),
-  "fromType": zod.enum(['production', 'warehouse', 'outlet']),
+  "fromType": zod.enum(['headoffice', 'warehouse', 'outlet']),
   "fromId": zod.number(),
   "fromName": zod.string().optional(),
   "toType": zod.enum(['headoffice', 'warehouse', 'outlet']),
@@ -584,7 +584,7 @@ export const createStockTransferBodyLineItemsItemQuantityExclusiveMin = 0;
 
 
 export const CreateStockTransferBody = zod.object({
-  "fromType": zod.enum(['production', 'warehouse', 'outlet']),
+  "fromType": zod.enum(['headoffice', 'warehouse', 'outlet']),
   "fromId": zod.number(),
   "toType": zod.enum(['headoffice', 'warehouse', 'outlet']),
   "toId": zod.number(),
@@ -604,7 +604,7 @@ export const createStockTransferResponseLineItemsItemQuantityExclusiveMin = 0;
 export const CreateStockTransferResponse = zod.object({
   "id": zod.number(),
   "challanNumber": zod.string().optional(),
-  "fromType": zod.enum(['production', 'warehouse', 'outlet']),
+  "fromType": zod.enum(['headoffice', 'warehouse', 'outlet']),
   "fromId": zod.number(),
   "fromName": zod.string().optional(),
   "toType": zod.enum(['headoffice', 'warehouse', 'outlet']),
@@ -633,7 +633,7 @@ export const getStockTransferResponseLineItemsItemQuantityExclusiveMin = 0;
 export const GetStockTransferResponse = zod.object({
   "id": zod.number(),
   "challanNumber": zod.string().optional(),
-  "fromType": zod.enum(['production', 'warehouse', 'outlet']),
+  "fromType": zod.enum(['headoffice', 'warehouse', 'outlet']),
   "fromId": zod.number(),
   "fromName": zod.string().optional(),
   "toType": zod.enum(['headoffice', 'warehouse', 'outlet']),
@@ -1054,7 +1054,7 @@ export const ListEmployeesResponseItem = zod.object({
   "phone": zod.string().nullish(),
   "hierarchyId": zod.number(),
   "hierarchyName": zod.string().optional(),
-  "branchType": zod.enum(['production', 'headoffice', 'warehouse', 'outlet']),
+  "branchType": zod.enum(['headoffice', 'warehouse', 'outlet']),
   "branchId": zod.number(),
   "branchName": zod.string().optional(),
   "salary": zod.number().optional(),
@@ -1074,7 +1074,7 @@ export const CreateEmployeeBody = zod.object({
   "email": zod.string().optional(),
   "phone": zod.string().optional(),
   "hierarchyId": zod.number(),
-  "branchType": zod.enum(['production', 'headoffice', 'warehouse', 'outlet']),
+  "branchType": zod.enum(['headoffice', 'warehouse', 'outlet']),
   "branchId": zod.number(),
   "salary": zod.number(),
   "joinDate": zod.string()
@@ -1088,7 +1088,7 @@ export const CreateEmployeeResponse = zod.object({
   "phone": zod.string().nullish(),
   "hierarchyId": zod.number(),
   "hierarchyName": zod.string().optional(),
-  "branchType": zod.enum(['production', 'headoffice', 'warehouse', 'outlet']),
+  "branchType": zod.enum(['headoffice', 'warehouse', 'outlet']),
   "branchId": zod.number(),
   "branchName": zod.string().optional(),
   "salary": zod.number().optional(),
@@ -1110,7 +1110,7 @@ export const GetEmployeeResponse = zod.object({
   "phone": zod.string().nullish(),
   "hierarchyId": zod.number(),
   "hierarchyName": zod.string().optional(),
-  "branchType": zod.enum(['production', 'headoffice', 'warehouse', 'outlet']),
+  "branchType": zod.enum(['headoffice', 'warehouse', 'outlet']),
   "branchId": zod.number(),
   "branchName": zod.string().optional(),
   "salary": zod.number().optional(),
@@ -1129,7 +1129,7 @@ export const UpdateEmployeeBody = zod.object({
   "email": zod.string().optional(),
   "phone": zod.string().optional(),
   "hierarchyId": zod.number().optional(),
-  "branchType": zod.enum(['production', 'headoffice', 'warehouse', 'outlet']).optional(),
+  "branchType": zod.enum(['headoffice', 'warehouse', 'outlet']).optional(),
   "branchId": zod.number().optional(),
   "salary": zod.number().optional(),
   "isActive": zod.boolean().optional(),
@@ -1144,7 +1144,7 @@ export const UpdateEmployeeResponse = zod.object({
   "phone": zod.string().nullish(),
   "hierarchyId": zod.number(),
   "hierarchyName": zod.string().optional(),
-  "branchType": zod.enum(['production', 'headoffice', 'warehouse', 'outlet']),
+  "branchType": zod.enum(['headoffice', 'warehouse', 'outlet']),
   "branchId": zod.number(),
   "branchName": zod.string().optional(),
   "salary": zod.number().optional(),
