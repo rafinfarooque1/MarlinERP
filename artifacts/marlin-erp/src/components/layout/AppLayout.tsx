@@ -47,128 +47,38 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
+import {
+  MODULE_REGISTRY,
+  getAccountsNavGroups,
+  getSalesNavItems,
+  SALES_SEGMENT_MODULE_KEYS,
+  type SidebarNavItem,
+} from '@/lib/moduleRegistry';
 
 const LOGO_KEY = 'marlin_company_logo';
 
-// ─── Navigation definition ────────────────────────────────────────────────────
-// Each child has a `module` key matching the Permissions page MODULE_GROUPS.
-// The `branchGroups` array lists which branchTypes can see this section.
-// Omitting `branchGroups` = visible to all (incl. HO employees).
-const navigation = [
-  {
-    name: 'Dashboard',
-    icon: LayoutDashboard,
-    href: '/',
-    module: 'Dashboard',
-    // Only show main Dashboard in Accounts segment for HO/warehouse employees
-    // Outlet employees are redirected to Sales segment anyway
-    branchGroups: ['warehouse', 'production', null],
-  },
-  {
-    name: 'My Profile',
-    icon: User,
-    href: '/profile/me',
-    // Always visible — every employee can access their own profile
-  },
-  {
-    name: 'Production',
-    icon: Factory,
-    // Warehouses + HO can see Production; outlets cannot
-    branchGroups: ['warehouse', 'production', null],
-    children: [
-      { name: 'Units',           href: '/production/units',          module: 'Units'           },
-      { name: 'Item Master',     href: '/production/item-master',    module: 'Items'           },
-      { name: 'Batches',         href: '/production/production',     module: 'Production'      },
-      { name: 'Reports',         href: '/production/reports',        module: 'Production'      },
-      { name: 'Stock Transfers', href: '/production/stock-transfer', module: 'Stock Transfers' },
-      { name: 'Purchases',       href: '/production/purchase',       module: 'Purchases'       },
-    ],
-  },
-  {
-    name: 'Inventory',
-    icon: Building2,
-    branchGroups: ['warehouse', 'production', null],
-    children: [
-      { name: 'Stock',        href: '/headoffice/stock',              module: 'Stock'              },
-      { name: 'Reports',      href: '/headoffice/inventory-reports',  module: 'Inventory Reports'  },
-      { name: 'Verification', href: '/headoffice/stock-verification', module: 'Stock Verification' },
-      { name: 'Transfers',   href: '/headoffice/transfers',   module: 'HO Transfers' },
-      { name: 'Warehouses',  href: '/headoffice/warehouses',  module: 'Warehouses'   },
-      { name: 'Outlets',     href: '/headoffice/outlets',     module: 'Outlets'      },
-      { name: 'Item Prices', href: '/headoffice/item-price',  module: 'Item Prices'  },
-    ],
-  },
-  {
-    name: 'Sales',
-    icon: Calculator,
-    branchGroups: ['warehouse', null],
-    children: [
-      { name: 'Orders',      href: '/headoffice/sales', module: 'Sales'     },
-      { name: 'Returns',     href: '/returns',          module: 'Sales'     },
-      { name: 'Outstanding', href: '/outstanding',      module: 'Sales'     },
-      { name: 'Customers',   href: '/customers',        module: 'Customers' },
-      { name: 'Vendors',     href: '/vendors',          module: 'Vendors'   },
-      { name: 'Coupons',     href: '/coupons',          module: 'Coupons'   },
-    ],
-  },
-  {
-    name: 'HR',
-    icon: Users,
-    branchGroups: [null], // HO only
-    children: [
-      { name: 'Employees',  href: '/hr/employees',  module: 'Employees'  },
-      { name: 'Attendance', href: '/hr/attendance', module: 'Attendance' },
-      { name: 'Leave',      href: '/hr/leave',      module: 'Leave'      },
-      { name: 'Payroll',    href: '/hr/payroll',    module: 'Payroll'    },
-      { name: 'Hierarchy',  href: '/hr/hierarchy',  module: 'Hierarchy'  },
-    ],
-  },
-  {
-    name: 'Accounts',
-    icon: UsersRound,
-    branchGroups: [null], // HO only
-    children: [
-      { name: 'Chart of Accounts', href: '/accounts/chart',           module: 'Chart of Accounts' },
-      { name: 'Ledger',            href: '/accounts/ledger',          module: 'Ledger'            },
-      { name: 'Payments',          href: '/accounts/payments',        module: 'Payments'          },
-      { name: 'Receipts',          href: '/accounts/receipts',        module: 'Payments'          },
-      { name: 'Journal',           href: '/accounts/journal',         module: 'Vouchers'          },
-      { name: 'Contra',            href: '/accounts/contra',          module: 'Vouchers'          },
-      { name: 'Credit/Debit Notes', href: '/accounts/notes',          module: 'Vouchers'          },
-      { name: 'Day Book',          href: '/accounts/day-book',        module: 'Books'             },
-      { name: 'Cash Book',         href: '/accounts/cash-book',       module: 'Books'             },
-      { name: 'Bank Book',         href: '/accounts/bank-book',       module: 'Books'             },
-      { name: 'Trial Balance',     href: '/accounts/trial-balance',   module: 'Books'             },
-      { name: 'Expenses',          href: '/accounts/expenses',        module: 'Expenses'          },
-      { name: 'GST Summary',       href: '/accounts/gst',             module: 'GST Summary'       },
-      { name: 'GST Returns',       href: '/accounts/gst-returns',     module: 'GST Returns'       },
-      { name: 'Reconciliation',    href: '/accounts/reconciliation',  module: 'Reconciliation'    },
-      { name: 'Cash Balance',      href: '/accounts/cash-in-outlet',  module: 'Cash Balance'      },
-      { name: 'Reports',           href: '/reports/sales', matchPrefix: '/reports', module: 'Reports' },
-    ],
-  },
-  {
-    name: 'Company',
-    icon: Settings,
-    // Company group — most items are admin-only (Settings module guards them)
-    children: [
-      { name: 'Settings',         href: '/company/settings',      module: 'Settings'      },
-      { name: 'Company Profile',  href: '/company/profile',       module: 'Settings'      },
-      { name: 'Permissions',      href: '/company/permissions',   module: 'Permissions'   },
-      { name: 'Audit Log',        href: '/company/audit',         module: 'Settings'      },
-      { name: 'Login History',    href: '/company/login-history', module: 'Login History' },
-    ],
-  },
+// ─── Navigation — derived from module registry ────────────────────────────────
+// To add, rename, or reorder modules edit src/lib/moduleRegistry.ts only.
+// AppLayout and the Permissions page update automatically from that file.
+
+const _standaloneNavItems = MODULE_REGISTRY
+  .filter(m => m.navGroup === '__standalone__')
+  .map(m => ({
+    name:         m.navEntries[0].name,
+    icon:         m.icon!,
+    href:         m.navEntries[0].href,
+    module:       m.key,
+    branchGroups: m.branchGroups,
+  }));
+
+const navigation: SidebarNavItem[] = [
+  ..._standaloneNavItems,
+  // My Profile is always visible and has no permission key
+  { name: 'My Profile', icon: User, href: '/profile/me' },
+  ...getAccountsNavGroups(),
 ];
 
-const salesNavItems = [
-  { name: 'Dashboard',     icon: LayoutDashboard,  href: '/sales/dashboard',    module: 'Sales Dashboard'    },
-  { name: 'Point of Sale', icon: ShoppingCart,     href: '/sales/pos',          module: 'Point of Sale'      },
-  { name: 'Stock',         icon: Package,          href: '/sales/stock',        module: 'Location Stock'     },
-  { name: 'Transfers',     icon: ArrowLeftRight,   href: '/sales/transfers',    module: 'Location Transfers' },
-  { name: 'Expenses',      icon: Receipt,          href: '/sales/expenses',     module: 'Location Expenses'  },
-  { name: 'Cash Balance',  icon: Banknote,         href: '/sales/cash-balance', module: 'Cash Balance'       },
-];
+const salesNavItems = getSalesNavItems();
 
 // ─── Permission helpers ───────────────────────────────────────────────────────
 
@@ -412,8 +322,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   );
 
   // ── Sales segment access ────────────────────────────────────────────────────
-  const SALES_MODULES = ['Sales Dashboard', 'Point of Sale', 'Location Stock', 'Location Transfers', 'Location Expenses', 'Cash Balance'];
-  const hasSalesAccess = isAdmin || isLocationEmployee || SALES_MODULES.some(mod => {
+  const hasSalesAccess = isAdmin || isLocationEmployee || SALES_SEGMENT_MODULE_KEYS.some(mod => {
     const perm = (allPerms as any[]).find((p: any) => p.hierarchyId === (user as any)?.hierarchyId && p.module === mod);
     return perm ? !!(perm.canView || perm.canAdd || perm.canEdit) : userLevel <= 4;
   });

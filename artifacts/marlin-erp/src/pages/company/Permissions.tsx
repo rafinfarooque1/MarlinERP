@@ -4,63 +4,17 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ShieldCheck, Save, Loader2, ChevronUp, Eye, Plus, Pencil, Trash2 } from 'lucide-react';
+import { ShieldCheck, ShieldOff, Save, Loader2, ChevronUp, Eye, Plus, Pencil, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useListHierarchies, useListPermissions, setPermission } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
+import { getPermissionSegments, ALL_MODULE_KEYS, getDefaultAccess } from '@/lib/moduleRegistry';
 import type { Hierarchy, Permission } from '@workspace/api-client-react';
 
-// Two top-level segments: Sales and Accounts.
-// Each segment has sub-groups; each group has individual module rows with
-// granular View / Add / Edit / Delete toggles.
-const MODULE_SEGMENTS = [
-  {
-    segment: 'Sales',
-    description: 'Point-of-sale operations at warehouses and outlets',
-    groups: [
-      {
-        title: 'Sales Department',
-        modules: ['Sales Dashboard', 'Point of Sale', 'Location Stock', 'Location Transfers', 'Location Expenses', 'Cash Balance'],
-      },
-    ],
-  },
-  {
-    segment: 'Accounts',
-    description: 'Back-office: production, inventory, finance, HR and company settings',
-    groups: [
-      {
-        title: 'Production',
-        modules: ['Units', 'Items', 'Purchases', 'Production', 'Stock Transfers'],
-      },
-      {
-        title: 'Inventory',
-        modules: ['Warehouses', 'Outlets', 'Stock', 'Inventory Reports', 'Stock Verification', 'HO Transfers', 'Item Prices'],
-      },
-      {
-        title: 'Sales (HO)',
-        modules: ['Sales', 'Customers', 'Vendors', 'Coupons'],
-      },
-      {
-        title: 'HR',
-        modules: ['Hierarchy', 'Employees', 'Payroll', 'Attendance', 'Leave'],
-      },
-      {
-        title: 'Accounts',
-        modules: ['Chart of Accounts', 'Ledger', 'Payments', 'Expenses', 'GST Summary', 'GST Returns', 'Reconciliation', 'Cash Balance', 'Vouchers', 'Books', 'Reports'],
-      },
-      {
-        title: 'Dashboard',
-        modules: ['Dashboard'],
-      },
-      {
-        title: 'Company',
-        modules: ['Settings', 'Permissions', 'Login History'],
-      },
-    ],
-  },
-];
-
-const ALL_MODULES = MODULE_SEGMENTS.flatMap(s => s.groups.flatMap(g => g.modules));
+// Module list and group structure derived from the central module registry.
+// To add, rename, or reorder modules edit src/lib/moduleRegistry.ts only.
+const MODULE_SEGMENTS = getPermissionSegments();
+const ALL_MODULES = ALL_MODULE_KEYS;
 
 type ActionKey = 'view' | 'add' | 'edit' | 'del';
 type ModulePerm = Record<ActionKey, boolean>;
@@ -73,30 +27,8 @@ const ACTIONS: { key: ActionKey; label: string; icon: React.ElementType }[] = [
   { key: 'del',  label: 'Delete', icon: Trash2 },
 ];
 
-/** Default access based on hierarchy level: level 1 = top authority, higher = more restricted */
-function defaultAccess(level: number, module: string): boolean {
-  if (level === 1) return true; // Top level: full access
-
-  // Sales segment modules
-  const salesSegmentModules = ['Sales Dashboard', 'Point of Sale', 'Location Stock', 'Location Transfers', 'Location Expenses', 'Cash Balance'];
-  const productionModules = ['Units', 'Items', 'Purchases', 'Production', 'Stock Transfers'];
-  const inventoryModules = ['Warehouses', 'Outlets', 'Stock', 'HO Transfers', 'Item Prices'];
-
-  if (level === 2) {
-    // Manager: everything except company settings & permissions
-    return !['Settings', 'Permissions', 'Login History'].includes(module);
-  }
-  if (level === 3) {
-    // Supervisor: sales segment + production + inventory + profile + dashboard
-    return [...salesSegmentModules, ...productionModules, ...inventoryModules, 'Dashboard', 'Profile'].includes(module);
-  }
-  if (level === 4) {
-    // Staff: sales segment + basic production/inventory + dashboard
-    return [...salesSegmentModules, ...productionModules, 'Dashboard', 'Stock', 'HO Transfers'].includes(module);
-  }
-  // Level 5+: limited access
-  return ['Point of Sale', 'Profile', 'Production', 'Stock', 'Sales', 'Attendance', 'Leave', 'Dashboard'].includes(module);
-}
+// Default access is defined per-module in src/lib/moduleRegistry.ts (defaultAccess field).
+// getDefaultAccess() looks up the right rule for each module key.
 
 /** Build a local perm map from DB records + fill gaps with level-based defaults */
 function buildPermMap(hierarchies: Hierarchy[], dbPerms: Permission[]): PermMap {
@@ -113,7 +45,7 @@ function buildPermMap(hierarchies: Hierarchy[], dbPerms: Permission[]): PermMap 
           del:  dbRow.canDelete ?? false,
         };
       } else {
-        const allowed = defaultAccess(h.level ?? 99, mod);
+        const allowed = getDefaultAccess(h.level ?? 99, mod);
         map[h.id][mod] = { view: allowed, add: allowed, edit: allowed, del: allowed };
       }
     }

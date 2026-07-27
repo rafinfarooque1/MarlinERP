@@ -1,0 +1,93 @@
+I found a design inconsistency in the ERP that needs to be corrected.
+
+Currently, the sidebar navigation menu and the Company → Permissions module contain different module lists.
+
+For example:
+
+Sidebar:
+- Production
+  - Units
+  - Item Master
+  - Batches
+  - Reports
+  - Stock Transfers
+  - Purchases
+
+Permissions:
+- Production
+  - Units
+  - Items
+  - Purchases
+  - Production
+  - Stock Transfers
+
+There are similar differences in Inventory, Sales, Accounts, HR, Company, and other modules.
+
+This is not acceptable because the permission system should be the single source of truth.
+
+I want the sidebar navigation and the permission system to be fully synchronized.
+
+Requirements:
+
+1. The module list displayed in the sidebar must exactly match the module list defined in Company → Permissions.
+
+2. Every sidebar item must have a corresponding permission entry.
+
+3. Every permission entry must have a corresponding sidebar item (unless it is intentionally hidden as a background/system module).
+
+4. The sidebar must be generated dynamically from the permission configuration instead of maintaining a separate hard-coded menu.
+
+5. If a user does not have View permission for a module, that module must not appear in the sidebar.
+
+6. Add/Edit/Delete permissions should control only the actions inside the page, not whether the page appears.
+
+7. View permission controls sidebar visibility.
+
+8. The module names must be identical everywhere:
+   - Sidebar
+   - Permission page
+   - API permission keys
+   - Backend authorization
+   - Audit logs
+
+9. There must never be duplicate module definitions.
+
+10. If a module is renamed, it should automatically update everywhere without requiring changes in multiple files.
+
+11. Use one centralized module registry (or configuration) that defines:
+    - Module ID
+    - Display Name
+    - Icon
+    - Parent Module
+    - Route
+    - Sidebar Order
+    - Permission Key
+    - Default Visibility
+
+12. The sidebar should be generated from this centralized registry.
+
+13. The Permissions page should also be generated from the same registry.
+
+14. Backend authorization should use the same permission keys from this registry.
+
+15. The system must have only one source of truth for all modules.
+
+Before making any changes:
+
+- Analyze the current sidebar structure.
+- Analyze the current permission structure.
+- Identify all mismatches.
+- Show me a comparison table:
+  - Sidebar Module
+  - Permission Module
+  - Status (Match / Missing / Duplicate / Rename Required)
+
+Then propose the best architecture to synchronize them.
+
+Do not remove any functionality.
+
+Do not change business logic.
+
+Do not change routes unless necessary.
+
+Refactor only the navigation and permission architecture so that the sidebar and permission system are always synchronized from one centralized module definition.
