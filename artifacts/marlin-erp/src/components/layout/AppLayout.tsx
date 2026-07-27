@@ -143,20 +143,7 @@ const navigation = [
       { name: 'GST Returns',       href: '/accounts/gst-returns',     module: 'GST Returns'       },
       { name: 'Reconciliation',    href: '/accounts/reconciliation',  module: 'Reconciliation'    },
       { name: 'Cash Balance',      href: '/accounts/cash-in-outlet',  module: 'Cash Balance'      },
-    ],
-  },
-  {
-    name: 'Reports',
-    icon: FileBarChart2,
-    branchGroups: ['warehouse', 'production', null],
-    children: [
-      { name: 'Sales',         href: '/reports/sales',        module: 'Sales'             },
-      { name: 'Purchases',     href: '/reports/purchases',    module: 'Purchases'         },
-      { name: 'Inventory',     href: '/reports/inventory',    module: 'Stock'             },
-      { name: 'Production',    href: '/reports/production',   module: 'Production'        },
-      { name: 'Parties',       href: '/reports/parties',      module: 'Customers'         },
-      { name: 'Financial',     href: '/reports/financial',    module: 'Chart of Accounts' },
-      { name: 'Profitability', href: '/reports/profitability',module: 'Chart of Accounts' },
+      { name: 'Reports',           href: '/reports/sales', matchPrefix: '/reports', module: 'Reports' },
     ],
   },
   {
@@ -295,7 +282,9 @@ function NavItem({ item, isActive, currentPath, collapsed }: any) {
       {isOpen && (
         <div className="pl-9 space-y-1">
           {item.children.map((child: any) => {
-            const isChildActive = currentPath === child.href;
+            const isChildActive = child.matchPrefix
+              ? currentPath.startsWith(child.matchPrefix)
+              : currentPath === child.href;
             return (
               <Link 
                 key={child.href} 
