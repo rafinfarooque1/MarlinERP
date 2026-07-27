@@ -214,7 +214,7 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navGroup: 'Operations',
     navEntries: [
       { name: 'Cash Balance', href: '/sales/cash-balance' },
-      { name: 'Cash Balance', href: '/accounts/cash-in-outlet', navGroup: 'Accounts' },
+      { name: 'Cash In Outlets', href: '/accounts/cash-in-outlet' },
     ],
     icon: Banknote,
   },
@@ -251,14 +251,14 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     key: 'Stock', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [
-      { name: 'Stock', href: '/headoffice/stock', navGroup: 'Operations' },
+      { name: 'Stock Transfers', href: '/headoffice/stock', navGroup: 'Operations' },
     ],
     icon: Package,
   },
   {
     key: 'Stock Ledger', permGroup: 'Inventory',
     navGroup: 'Inventory',
-    navEntries: [{ name: 'Ledger', href: '/headoffice/stock-ledger' }],
+    navEntries: [{ name: 'Stock Ledger', href: '/headoffice/stock-ledger' }],
   },
   {
     key: 'Inventory Reports', permGroup: 'Inventory',
@@ -347,7 +347,7 @@ export const MODULE_REGISTRY: ModuleDef[] = [
   {
     key: 'Ledger', permGroup: 'Accounts',
     navGroup: 'Accounts',
-    navEntries: [{ name: 'Ledger', href: '/accounts/ledger' }],
+    navEntries: [{ name: 'Ledger Statement', href: '/accounts/ledger' }],
   },
   {
     key: 'Payments', permGroup: 'Accounts',
