@@ -165,11 +165,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       ? { warehouseScope: forceLocationId }
       : forceLocationType === 'outlet' && forceLocationId
         ? { locationType: 'outlet' as const, locationId: forceLocationId }
-        : locFilterType === 'warehouse' && locFilterId
-          ? { warehouseScope: locFilterId }
-          : locFilterType === 'outlet' && locFilterId
-            ? { locationType: 'outlet' as const, locationId: locFilterId }
-            : {}),
+        : locFilterType === 'headoffice'
+          ? { branchType: 'headoffice' as const, branchId: 1 }
+          : locFilterType === 'warehouse' && locFilterId
+            ? { warehouseScope: locFilterId }
+            : locFilterType === 'outlet' && locFilterId
+              ? { locationType: 'outlet' as const, locationId: locFilterId }
+              : {}),
   });
   const sales = salesPage?.rows ?? [];
   const totalSales = salesPage?.total ?? 0;

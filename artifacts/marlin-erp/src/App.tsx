@@ -47,6 +47,7 @@ import ReceiptPage from './pages/accounts/Receipt';
 import Journal from './pages/accounts/Journal';
 import Contra from './pages/accounts/Contra';
 import Notes from './pages/accounts/Notes';
+import Vouchers from './pages/accounts/Vouchers';
 import DayBook from './pages/accounts/DayBook';
 import CashBankBook from './pages/accounts/CashBankBook';
 import TrialBalance from './pages/accounts/TrialBalance';
@@ -161,6 +162,7 @@ function Router() {
       <Route path="/accounts/ledger"><AuthGuard><Ledger /></AuthGuard></Route>
       <Route path="/accounts/cash-bank"><AuthGuard><CashBank /></AuthGuard></Route>
       <Route path="/accounts/expenses"><AuthGuard><Expenses /></AuthGuard></Route>
+      <Route path="/accounts/vouchers"><AuthGuard><Vouchers /></AuthGuard></Route>
       <Route path="/accounts/payments"><AuthGuard><Payment /></AuthGuard></Route>
       <Route path="/accounts/receipts"><AuthGuard><ReceiptPage /></AuthGuard></Route>
       <Route path="/accounts/journal"><AuthGuard><Journal /></AuthGuard></Route>

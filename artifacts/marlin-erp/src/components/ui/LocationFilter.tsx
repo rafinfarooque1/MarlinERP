@@ -1,78 +1,117 @@
 /**
- * LocationFilter — reusable warehouse / outlet picker
+ * Two-step LocationFilter
  *
- * value format:  'all' | 'warehouse:<id>' | 'outlet:<id>'
+ * Step 1 — branch type:  All | Head Office | Warehouse | Outlet
+ * Step 2 — specific loc: All [type] | <name> …  (only shown for Warehouse/Outlet)
+ *
+ * value format:
+ *   'all'            — every location
+ *   'headoffice'     — head-office only
+ *   'warehouse:all'  — all warehouses
+ *   'warehouse:<id>' — specific warehouse
+ *   'outlet:all'     — all outlets
+ *   'outlet:<id>'    — specific outlet
  */
-import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useListWarehouses, useListOutlets } from '@workspace/api-client-react';
-import { MapPin } from 'lucide-react';
+import { Building2, Warehouse, Store } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface LocationFilterProps {
   value: string;
   onChange: (v: string) => void;
-  placeholder?: string;
   className?: string;
-  /** When true, shows only outlets that belong to the given warehouseId */
+  /** When provided, only outlets belonging to this warehouseId appear in the outlet list */
   warehouseId?: number;
 }
 
-export function LocationFilter({
-  value, onChange,
-  placeholder = 'All Locations',
-  className,
-  warehouseId,
-}: LocationFilterProps) {
-  const { data: warehouses = [] } = useListWarehouses();
-  const { data: outlets    = [] } = useListOutlets();
+export function LocationFilter({ value, onChange, className, warehouseId }: LocationFilterProps) {
+  const { data: wh = [] } = useListWarehouses();
+  const { data: ol = [] } = useListOutlets();
 
-  const visibleWarehouses = warehouses as any[];
-  const visibleOutlets    = warehouseId
-    ? (outlets as any[]).filter(o => Number(o.warehouseId) === warehouseId)
-    : (outlets as any[]);
+  const warehouses = wh as any[];
+  const outlets    = warehouseId
+    ? (ol as any[]).filter(o => Number(o.warehouseId) === warehouseId)
+    : (ol as any[]);
+
+  // ── Parse current value ──────────────────────────────────────────────────
+  const parsedType: 'all' | 'headoffice' | 'warehouse' | 'outlet' =
+    value === 'headoffice'           ? 'headoffice'
+    : value?.startsWith('warehouse:') ? 'warehouse'
+    : value?.startsWith('outlet:')    ? 'outlet'
+    : 'all';
+
+  const parsedId = value?.includes(':') ? value.split(':')[1] : 'all';
+
+  // ── Type icon ────────────────────────────────────────────────────────────
+  const TypeIcon =
+    parsedType === 'warehouse' ? Warehouse
+    : parsedType === 'outlet'  ? Store
+    : Building2;
+
+  // ── Handlers ─────────────────────────────────────────────────────────────
+  const handleTypeChange = (t: string) => {
+    if (t === 'all')        { onChange('all');           return; }
+    if (t === 'headoffice') { onChange('headoffice');    return; }
+    if (t === 'warehouse')  { onChange('warehouse:all'); return; }
+    if (t === 'outlet')     { onChange('outlet:all');    return; }
+  };
+
+  const handleIdChange = (id: string) => {
+    onChange(`${parsedType}:${id}`);
+  };
 
   return (
-    <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className={cn('h-8 text-sm gap-1.5 min-w-[170px]', className)}>
-        <MapPin className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-        <SelectValue placeholder={placeholder} />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="all">All Locations</SelectItem>
+    <div className={cn('flex gap-1.5 items-center', className)}>
+      {/* ── Step 1: branch type ─────────────────────────────────────────── */}
+      <Select value={parsedType} onValueChange={handleTypeChange}>
+        <SelectTrigger className="h-8 text-sm gap-1.5 min-w-[140px]">
+          <TypeIcon className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All</SelectItem>
+          <SelectItem value="headoffice">Head Office</SelectItem>
+          <SelectItem value="warehouse">Warehouse</SelectItem>
+          <SelectItem value="outlet">Outlet</SelectItem>
+        </SelectContent>
+      </Select>
 
-        {visibleWarehouses.length > 0 && (
-          <SelectGroup>
-            <SelectLabel className="text-[10px] uppercase tracking-wide text-muted-foreground px-2 py-1">
-              Warehouses
-            </SelectLabel>
-            {visibleWarehouses.map((w: any) => (
-              <SelectItem key={`warehouse:${w.id}`} value={`warehouse:${w.id}`}>
-                {w.name}
+      {/* ── Step 2: specific location (only for warehouse / outlet) ──────── */}
+      {(parsedType === 'warehouse' || parsedType === 'outlet') && (
+        <Select value={parsedId} onValueChange={handleIdChange}>
+          <SelectTrigger className="h-8 text-sm min-w-[180px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">
+              All {parsedType === 'warehouse' ? 'Warehouses' : 'Outlets'}
+            </SelectItem>
+            {(parsedType === 'warehouse' ? warehouses : outlets).map((loc: any) => (
+              <SelectItem key={loc.id} value={String(loc.id)}>
+                {loc.name}
               </SelectItem>
             ))}
-          </SelectGroup>
-        )}
-
-        {visibleOutlets.length > 0 && (
-          <SelectGroup>
-            <SelectLabel className="text-[10px] uppercase tracking-wide text-muted-foreground px-2 py-1">
-              Outlets
-            </SelectLabel>
-            {visibleOutlets.map((o: any) => (
-              <SelectItem key={`outlet:${o.id}`} value={`outlet:${o.id}`}>
-                {o.name}
-              </SelectItem>
-            ))}
-          </SelectGroup>
-        )}
-      </SelectContent>
-    </Select>
+          </SelectContent>
+        </Select>
+      )}
+    </div>
   );
 }
 
-/** Parse a LocationFilter value string into { type, id } */
-export function parseLocationFilter(v: string): { type: 'all' | 'warehouse' | 'outlet'; id: number | null } {
-  if (!v || v === 'all') return { type: 'all', id: null };
+// ── parseLocationFilter ────────────────────────────────────────────────────
+export type ParsedLocationType = 'all' | 'headoffice' | 'warehouse' | 'outlet';
+
+export interface ParsedLocation {
+  type: ParsedLocationType;
+  /** null means "all of this type" (e.g. warehouse:all → type='warehouse', id=null) */
+  id: number | null;
+}
+
+export function parseLocationFilter(v: string): ParsedLocation {
+  if (!v || v === 'all')      return { type: 'all',        id: null };
+  if (v === 'headoffice')     return { type: 'headoffice', id: null };
   const [type, idStr] = v.split(':');
-  return { type: type as 'warehouse' | 'outlet', id: Number(idStr) };
+  const id = idStr && idStr !== 'all' ? Number(idStr) : null;
+  return { type: type as 'warehouse' | 'outlet', id };
 }

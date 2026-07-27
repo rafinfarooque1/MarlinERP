@@ -115,6 +115,61 @@ export const PERM_GROUP_ORDER: string[] = [
   'Operations', 'Production', 'Inventory', 'Sales', 'HR', 'Accounts', 'Dashboard', 'Company',
 ];
 
+/** One row in the permissions table — maps to a nav link the user can see */
+export interface PermNavRow {
+  moduleKey: string;
+  /** Primary label — the nav-link name shown in the sidebar */
+  displayName: string;
+  /** Secondary line when one permission key controls multiple pages e.g. "Day Book · Cash Book · …" */
+  subLabel?: string;
+}
+
+/** One section in the permissions table — mirrors a sidebar section */
+export interface PermNavSection {
+  name: string;
+  icon: LucideIcon;
+  rows: PermNavRow[];
+}
+
+/**
+ * Returns the permissions-page structure derived entirely from the sidebar nav.
+ * Sections = sidebar sections; rows = nav link names.
+ * One permission key may control multiple nav links (e.g. "Books" → Day Book, Cash Book, …).
+ */
+export function getPermNavSections(): PermNavSection[] {
+  const sections: PermNavSection[] = [];
+
+  // ── 1. Standalone items (Dashboard) ────────────────────────────────────────
+  const standaloneRows: PermNavRow[] = MODULE_REGISTRY
+    .filter(m => m.navGroup === '__standalone__' && m.navEntries.length > 0)
+    .map(m => ({ moduleKey: m.key, displayName: m.navEntries[0].name }));
+
+  if (standaloneRows.length > 0) {
+    sections.push({ name: 'General', icon: LayoutDashboard, rows: standaloneRows });
+  }
+
+  // ── 2. Sidebar-grouped sections ─────────────────────────────────────────────
+  for (const group of getNavGroups()) {
+    // Deduplicate by module key; collect all nav-entry names per key.
+    const moduleMap = new Map<string, string[]>();
+    for (const child of group.children ?? []) {
+      if (!moduleMap.has(child.module)) moduleMap.set(child.module, []);
+      moduleMap.get(child.module)!.push(child.name);
+    }
+
+    const rows: PermNavRow[] = Array.from(moduleMap.entries()).map(([moduleKey, names]) => ({
+      moduleKey,
+      // Single entry → show its nav link name. Multiple → show module key as label.
+      displayName: names.length === 1 ? names[0] : moduleKey,
+      subLabel: names.length > 1 ? names.join(' · ') : undefined,
+    }));
+
+    sections.push({ name: group.name, icon: group.icon, rows });
+  }
+
+  return sections;
+}
+
 // ── Module registry ───────────────────────────────────────────────────────────
 
 export const MODULE_REGISTRY: ModuleDef[] = [
@@ -308,11 +363,7 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     key: 'Vouchers', permGroup: 'Accounts',
     navGroup: 'Accounts',
     navEntries: [
-      { name: 'Payments',           href: '/accounts/payments' },
-      { name: 'Receipts',           href: '/accounts/receipts' },
-      { name: 'Journal',            href: '/accounts/journal' },
-      { name: 'Contra',             href: '/accounts/contra' },
-      { name: 'Credit/Debit Notes', href: '/accounts/notes' },
+      { name: 'Vouchers', href: '/accounts/vouchers' },
     ],
   },
   {

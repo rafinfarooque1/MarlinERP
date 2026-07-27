@@ -394,10 +394,14 @@ export default function Transfers() {
     t.toName?.toLowerCase().includes(search.toLowerCase())
   );
   const { type: locFType, id: locFId } = parseLocationFilter(filterLoc);
-  const locFiltered = locFType === 'all' ? searched : searched.filter((t: any) =>
-    (t.fromType === locFType && Number(t.fromId) === locFId) ||
-    (t.toType   === locFType && Number(t.toId)   === locFId)
-  );
+  const locFiltered = locFType === 'all' ? searched : locFId === null
+    // warehouse:all or outlet:all — filter by type only
+    ? searched.filter((t: any) => t.fromType === locFType || t.toType === locFType)
+    // specific location
+    : searched.filter((t: any) =>
+        (t.fromType === locFType && Number(t.fromId) === locFId) ||
+        (t.toType   === locFType && Number(t.toId)   === locFId)
+      );
   const filtered = tab === 'all' ? locFiltered : locFiltered.filter((t: any) => t.status === tab);
   const pendingCount = list.filter((t: any) => t.status === 'in_transit').length;
 
