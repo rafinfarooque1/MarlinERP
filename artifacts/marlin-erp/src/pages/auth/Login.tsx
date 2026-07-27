@@ -36,7 +36,7 @@ export default function Login() {
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
-    defaultValues: { username: 'admin', password: 'marlin1458' },
+    defaultValues: { username: '', password: '' },
   });
 
   const onSubmit = (data: LoginFormValues) => {
@@ -82,7 +82,7 @@ export default function Login() {
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md relative z-10">
         <div className="bg-card py-8 px-4 shadow-xl shadow-black/40 sm:rounded-xl sm:px-10 border border-border">
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6" autoComplete="off">
               <FormField control={form.control} name="username" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Username</FormLabel>
@@ -106,7 +106,7 @@ export default function Login() {
                         type={showPassword ? 'text' : 'password'}
                         placeholder="••••••••"
                         className="pl-10 pr-10 bg-background/50"
-                        autoComplete="current-password"
+                        autoComplete="new-password"
                         {...field}
                       />
                       <button
