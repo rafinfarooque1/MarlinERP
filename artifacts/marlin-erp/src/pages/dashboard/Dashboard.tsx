@@ -10,6 +10,8 @@ import {
   type SalesAnalyticsFilters,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { usePermission } from '@/lib/usePermission';
+import { ShieldOff } from 'lucide-react';
 import {
   Card, CardContent, CardHeader, CardTitle, CardDescription,
 } from '@/components/ui/card';
@@ -55,6 +57,7 @@ const OUTLET_COLOR    = 'hsl(var(--chart-2))';
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
+  const dashPerm = usePermission('Dashboard');
   const [salesPeriod, setSalesPeriod] = useState<30 | 90>(30);
   const [fromDate, setFromDate]   = useState('');
   const [toDate, setToDate]       = useState('');
@@ -123,6 +126,26 @@ export default function Dashboard() {
   }, [allStock]);
 
   const maxStockQty = highStockItems[0]?.total ?? 1;
+
+  // Permission gate — block direct URL access too
+  if (!dashPerm.isLoading && !dashPerm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">
+              You don't have permission to view the Dashboard.<br />
+              Contact your administrator to request access.
+            </p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout>

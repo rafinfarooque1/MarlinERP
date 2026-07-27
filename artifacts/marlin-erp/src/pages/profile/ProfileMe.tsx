@@ -15,7 +15,7 @@ import { toast } from 'sonner';
 import {
   User, Mail, Phone, MapPin, Calendar, BookOpen,
   PhoneCall, Pencil, Save, X, Plus, Trash2,
-  Building2, BadgeCheck, Loader2, Camera,
+  Building2, BadgeCheck, Loader2, Camera, Briefcase,
 } from 'lucide-react';
 
 interface EducationEntry {
@@ -23,6 +23,14 @@ interface EducationEntry {
   institution: string;
   year: string;
   field?: string;
+}
+
+interface WorkExperienceEntry {
+  company: string;
+  role: string;
+  from: string;
+  to: string;       // empty = "Present"
+  description?: string;
 }
 
 interface EmergencyContact {
@@ -78,6 +86,7 @@ export default function ProfileMe() {
   const [personalAddress, setPersonalAddress] = useState('');
   const [photoUrl,        setPhotoUrl]        = useState('');
   const [education,       setEducation]       = useState<EducationEntry[]>([]);
+  const [workExp,         setWorkExp]         = useState<WorkExperienceEntry[]>([]);
   const [emergency,       setEmergency]       = useState<EmergencyContact>({ name: '', relation: '', phone: '' });
 
   // Initialise form from user data
@@ -92,6 +101,7 @@ export default function ProfileMe() {
     setPersonalAddress(u.personalAddress ?? '');
     setPhotoUrl(u.photoUrl ?? '');
     setEducation(Array.isArray(u.education) ? u.education : []);
+    setWorkExp(Array.isArray(u.workExperience) ? u.workExperience : []);
     setEmergency(u.emergencyContact ?? { name: '', relation: '', phone: '' });
   }, [user]);
 
@@ -115,6 +125,7 @@ export default function ProfileMe() {
           personalAddress,
           photoUrl,
           education,
+          workExperience: workExp,
           emergencyContact: emergency.name ? emergency : null,
         }),
       });
@@ -135,6 +146,7 @@ export default function ProfileMe() {
       setName(u.name ?? ''); setPhone(u.phone ?? ''); setEmail(u.email ?? '');
       setBio(u.bio ?? ''); setDob(u.dateOfBirth ?? ''); setPersonalAddress(u.personalAddress ?? '');
       setPhotoUrl(u.photoUrl ?? ''); setEducation(Array.isArray(u.education) ? u.education : []);
+      setWorkExp(Array.isArray(u.workExperience) ? u.workExperience : []);
       setEmergency(u.emergencyContact ?? { name: '', relation: '', phone: '' });
     }
     setEditing(false);
@@ -145,6 +157,12 @@ export default function ProfileMe() {
   const updateEdu = (i: number, key: keyof EducationEntry, val: string) =>
     setEducation(prev => prev.map((e, idx) => idx === i ? { ...e, [key]: val } : e));
   const removeEdu = (i: number) => setEducation(prev => prev.filter((_, idx) => idx !== i));
+
+  // Work experience helpers
+  const addExp = () => setWorkExp(prev => [...prev, { company: '', role: '', from: '', to: '', description: '' }]);
+  const updateExp = (i: number, key: keyof WorkExperienceEntry, val: string) =>
+    setWorkExp(prev => prev.map((e, idx) => idx === i ? { ...e, [key]: val } : e));
+  const removeExp = (i: number) => setWorkExp(prev => prev.filter((_, idx) => idx !== i));
 
   const u = user as any;
 
@@ -333,6 +351,99 @@ export default function ProfileMe() {
                     <div>
                       <p className="text-sm font-medium">{edu.degree}{edu.field ? ` — ${edu.field}` : ''}</p>
                       <p className="text-xs text-muted-foreground">{edu.institution}{edu.year ? `, ${edu.year}` : ''}</p>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </Section>
+
+        {/* ── Work Experience ── */}
+        <Section title="Work Experience" icon={Briefcase}>
+          {editing ? (
+            <div className="space-y-3">
+              {workExp.map((exp, i) => (
+                <div key={i} className="grid grid-cols-2 gap-2 p-3 rounded-lg border border-border bg-muted/20 relative">
+                  <button
+                    type="button"
+                    onClick={() => removeExp(i)}
+                    className="absolute top-2 right-2 text-muted-foreground hover:text-destructive transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                  <div className="col-span-2 space-y-1">
+                    <Label className="text-xs">Company / Organisation</Label>
+                    <input
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      value={exp.company}
+                      onChange={e => updateExp(i, 'company', e.target.value)}
+                      placeholder="e.g. ABC Traders"
+                    />
+                  </div>
+                  <div className="col-span-2 space-y-1">
+                    <Label className="text-xs">Job Title / Role</Label>
+                    <input
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      value={exp.role}
+                      onChange={e => updateExp(i, 'role', e.target.value)}
+                      placeholder="e.g. Sales Manager"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">From (Year)</Label>
+                    <input
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      value={exp.from}
+                      onChange={e => updateExp(i, 'from', e.target.value)}
+                      placeholder="e.g. 2019"
+                      maxLength={4}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">To (Year or leave blank for Present)</Label>
+                    <input
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      value={exp.to}
+                      onChange={e => updateExp(i, 'to', e.target.value)}
+                      placeholder="e.g. 2022 or blank = Present"
+                      maxLength={4}
+                    />
+                  </div>
+                  <div className="col-span-2 space-y-1">
+                    <Label className="text-xs">Description (optional)</Label>
+                    <Textarea
+                      value={exp.description ?? ''}
+                      onChange={e => updateExp(i, 'description', e.target.value)}
+                      placeholder="Key responsibilities or achievements…"
+                      rows={2}
+                    />
+                  </div>
+                </div>
+              ))}
+              <Button type="button" variant="outline" size="sm" onClick={addExp} className="gap-1.5">
+                <Plus className="w-3.5 h-3.5" /> Add Experience
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {(u?.workExperience as WorkExperienceEntry[] ?? []).length === 0 ? (
+                <p className="text-sm text-muted-foreground italic">No work experience added.</p>
+              ) : (
+                (u?.workExperience as WorkExperienceEntry[]).map((exp, i) => (
+                  <div key={i} className="flex items-start gap-3 py-2">
+                    <div className="w-8 h-8 rounded-md bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
+                      <Briefcase className="w-4 h-4 text-primary" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium">{exp.role}</p>
+                      <p className="text-xs text-muted-foreground">{exp.company}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {exp.from}{exp.from ? ' – ' : ''}{exp.to || (exp.from ? 'Present' : '')}
+                      </p>
+                      {exp.description && (
+                        <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{exp.description}</p>
+                      )}
                     </div>
                   </div>
                 ))

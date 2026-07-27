@@ -86,6 +86,7 @@ async function buildEmployeeResponse(emp: Record<string, any>) {
     mustChangePassword: emp.mustChangePassword ?? emp.must_change_password ?? false,
     // Personal profile fields
     education:        emp.education ?? [],
+    workExperience:   emp.work_experience ?? [],
     emergencyContact: emp.emergency_contact ?? null,
     personalAddress:  emp.personal_address ?? null,
     dateOfBirth:      emp.date_of_birth ?? null,
@@ -243,6 +244,7 @@ router.get('/auth/me', async (req, res): Promise<void> => {
               salary, join_date, photo_url, is_active,
               COALESCE(must_change_password, false) AS must_change_password,
               COALESCE(education, '[]'::jsonb) AS education,
+              COALESCE(work_experience, '[]'::jsonb) AS work_experience,
               emergency_contact, personal_address, date_of_birth, bio
        FROM employees WHERE id = $1 LIMIT 1`,
       [empId],
@@ -262,7 +264,7 @@ router.patch('/auth/profile', async (req, res): Promise<void> => {
   const empId = empIdFromRequest(req);
   if (empId == null) { res.status(401).json({ error: 'Authentication required' }); return; }
 
-  const { name, phone, email, photoUrl, education, emergencyContact, personalAddress, dateOfBirth, bio } = req.body as Record<string, any>;
+  const { name, phone, email, photoUrl, education, workExperience, emergencyContact, personalAddress, dateOfBirth, bio } = req.body as Record<string, any>;
 
   const sets: string[] = [];
   const vals: any[] = [];
@@ -272,7 +274,8 @@ router.patch('/auth/profile', async (req, res): Promise<void> => {
   if (phone          !== undefined) add('phone', phone);
   if (email          !== undefined) add('email', email);
   if (photoUrl       !== undefined) add('photo_url', photoUrl);
-  if (education      !== undefined) add('education', JSON.stringify(education));
+  if (education        !== undefined) add('education', JSON.stringify(education));
+  if (workExperience   !== undefined) add('work_experience', JSON.stringify(workExperience));
   if (emergencyContact !== undefined) add('emergency_contact', JSON.stringify(emergencyContact));
   if (personalAddress !== undefined) add('personal_address', personalAddress);
   if (dateOfBirth    !== undefined) add('date_of_birth', dateOfBirth);
@@ -287,6 +290,7 @@ router.patch('/auth/profile', async (req, res): Promise<void> => {
                salary, join_date, photo_url, is_active,
                COALESCE(must_change_password, false) AS must_change_password,
                COALESCE(education, '[]'::jsonb) AS education,
+               COALESCE(work_experience, '[]'::jsonb) AS work_experience,
                emergency_contact, personal_address, date_of_birth, bio`,
     vals,
   );

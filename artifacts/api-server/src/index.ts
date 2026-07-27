@@ -77,6 +77,7 @@ async function runMigrations() {
   // Ensure must_change_password column exists (idempotent)
   await pool.query(`
     ALTER TABLE employees ADD COLUMN IF NOT EXISTS must_change_password boolean NOT NULL DEFAULT false;
+    ALTER TABLE employees ADD COLUMN IF NOT EXISTS work_experience jsonb DEFAULT '[]'::jsonb;
   `);
 
   // Migrate admin: set securely hashed marlin1458 password and force change on first login.
