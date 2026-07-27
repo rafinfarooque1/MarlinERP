@@ -30,7 +30,7 @@ const MODULE_SEGMENTS = [
     groups: [
       {
         title: 'Production',
-        modules: ['Materials', 'Raw Materials', 'Items', 'Purchases', 'Production', 'Stock Transfers'],
+        modules: ['Units', 'Items', 'Purchases', 'Production', 'Stock Transfers'],
       },
       {
         title: 'Inventory',
@@ -38,7 +38,7 @@ const MODULE_SEGMENTS = [
       },
       {
         title: 'Sales (HO)',
-        modules: ['Sales', 'Customers', 'Vendors', 'Coupons', 'Payments'],
+        modules: ['Sales', 'Customers', 'Vendors', 'Coupons'],
       },
       {
         title: 'HR',
@@ -46,7 +46,7 @@ const MODULE_SEGMENTS = [
       },
       {
         title: 'Accounts',
-        modules: ['Chart of Accounts', 'Ledger', 'Cash & Bank', 'Expenses', 'GST Summary', 'GST Returns', 'Reconciliation', 'Cash Balance', 'Vouchers', 'Books', 'Reports'],
+        modules: ['Chart of Accounts', 'Ledger', 'Payments', 'Expenses', 'GST Summary', 'GST Returns', 'Reconciliation', 'Cash Balance', 'Vouchers', 'Books', 'Reports'],
       },
       {
         title: 'Dashboard',
@@ -54,7 +54,7 @@ const MODULE_SEGMENTS = [
       },
       {
         title: 'Company',
-        modules: ['Settings', 'Permissions', 'Profile', 'Login History'],
+        modules: ['Settings', 'Permissions', 'Login History'],
       },
     ],
   },
@@ -79,7 +79,7 @@ function defaultAccess(level: number, module: string): boolean {
 
   // Sales segment modules
   const salesSegmentModules = ['Sales Dashboard', 'Point of Sale', 'Location Stock', 'Location Transfers', 'Location Expenses', 'Cash Balance'];
-  const productionModules = ['Materials', 'Raw Materials', 'Items', 'Purchases', 'Production', 'Stock Transfers'];
+  const productionModules = ['Units', 'Items', 'Purchases', 'Production', 'Stock Transfers'];
   const inventoryModules = ['Warehouses', 'Outlets', 'Stock', 'HO Transfers', 'Item Prices'];
 
   if (level === 2) {

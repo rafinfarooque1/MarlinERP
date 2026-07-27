@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 import { usePermission } from '@/lib/usePermission';
 
 export default function Units() {
-  const perm = usePermission('Materials');
+  const perm = usePermission('Units');
   const { units, addUnit, removeUnit } = useUnits();
   const [newUnit, setNewUnit] = useState('');
 

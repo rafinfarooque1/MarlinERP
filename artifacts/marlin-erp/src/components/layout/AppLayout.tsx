@@ -76,7 +76,7 @@ const navigation = [
     // Warehouses + HO can see Production; outlets cannot
     branchGroups: ['warehouse', 'production', null],
     children: [
-      { name: 'Units',           href: '/production/units',          module: 'Materials'       },
+      { name: 'Units',           href: '/production/units',          module: 'Units'           },
       { name: 'Item Master',     href: '/production/item-master',    module: 'Items'           },
       { name: 'Batches',         href: '/production/production',     module: 'Production'      },
       { name: 'Reports',         href: '/production/reports',        module: 'Production'      },
