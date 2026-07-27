@@ -29,6 +29,7 @@ import Employees from './pages/hr/Employees';
 import Payroll from './pages/hr/Payroll';
 import Attendance from './pages/hr/Attendance';
 import Leave from './pages/hr/Leave';
+import Advances from './pages/hr/Advances';
 
 import Customers from './pages/customers/Customers';
 import Vendors from './pages/customers/Vendors';
@@ -151,6 +152,7 @@ function Router() {
       <Route path="/hr/payroll"><AuthGuard><Payroll /></AuthGuard></Route>
       <Route path="/hr/attendance"><AuthGuard><Attendance /></AuthGuard></Route>
       <Route path="/hr/leave"><AuthGuard><Leave /></AuthGuard></Route>
+      <Route path="/hr/advances"><AuthGuard><Advances /></AuthGuard></Route>
 
       <Route path="/customers"><AuthGuard><Customers /></AuthGuard></Route>
       <Route path="/vendors"><AuthGuard><Vendors /></AuthGuard></Route>

@@ -894,6 +894,13 @@ async function runMigrations() {
   }
 }
 
+// ── Run core migrations first so all tables exist before the top-level awaits ──
+try {
+  await runMigrations();
+} catch (err) {
+  logger.warn({ err }, "Migration warning (non-fatal)");
+}
+
 // ── GST-aware transfer columns ────────────────────────────────────────────────
 await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS transfer_type     TEXT DEFAULT 'internal'`);
 await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS from_gstin        TEXT`);
@@ -1084,15 +1091,7 @@ if (!rawPort) throw new Error("PORT environment variable is required but was not
 const port = Number(rawPort);
 if (Number.isNaN(port) || port <= 0) throw new Error(`Invalid PORT value: "${rawPort}"`);
 
-(async () => {
-  try {
-    await runMigrations();
-  } catch (err) {
-    logger.warn({ err }, "Migration warning (non-fatal)");
-  }
-
-  app.listen(port, (err) => {
-    if (err) { logger.error({ err }, "Error listening on port"); process.exit(1); }
-    logger.info({ port }, "Server listening");
-  });
-})();
+app.listen(port, (err) => {
+  if (err) { logger.error({ err }, "Error listening on port"); process.exit(1); }
+  logger.info({ port }, "Server listening");
+});

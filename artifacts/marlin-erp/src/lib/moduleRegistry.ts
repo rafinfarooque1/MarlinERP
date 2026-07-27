@@ -329,7 +329,7 @@ export const MODULE_REGISTRY: ModuleDef[] = [
   {
     key: 'Payroll', permGroup: 'HR',
     navGroup: 'HR',
-    navEntries: [{ name: 'Payroll', href: '/hr/payroll' }],
+    navEntries: [{ name: 'Payroll', href: '/hr/payroll' }, { name: 'Advances', href: '/hr/advances' }],
   },
   {
     key: 'Hierarchy', permGroup: 'HR',
