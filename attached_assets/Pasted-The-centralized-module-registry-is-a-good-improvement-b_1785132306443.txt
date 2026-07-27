@@ -1,0 +1,227 @@
+The centralized module registry is a good improvement, but I want to change the permission architecture.
+
+Currently, some permission entries represent groups while the sidebar represents individual pages.
+
+I do NOT want grouped permissions.
+
+I want the Permission page to exactly match the Sidebar.
+
+The Permission page must become a mirror of the Sidebar.
+
+Every page that appears in the sidebar must have its own permission entry.
+
+Example:
+
+Production
+    Units
+    Item Master
+    Batches
+    Reports
+    Stock Transfers
+    Purchases
+
+The Permission page must display exactly:
+
+Production
+    Units
+    Item Master
+    Batches
+    Reports
+    Stock Transfers
+    Purchases
+
+NOT
+
+Production
+    Units
+    Items
+    Production
+    Stock Transfers
+    Purchases
+
+Likewise,
+
+Inventory
+
+Sidebar
+
+Stock
+Reports
+Verification
+Transfers
+Warehouses
+Outlets
+Item Prices
+
+Permissions must show exactly those seven pages.
+
+NOT
+
+Inventory Reports
+Stock Verification
+HO Transfers
+
+The names must be identical.
+
+--------------------------------
+
+Sales (HO)
+
+Sidebar
+
+Orders
+Returns
+Outstanding
+Customers
+Vendors
+Coupons
+
+Permissions must show exactly
+
+Orders
+Returns
+Outstanding
+Customers
+Vendors
+Coupons
+
+NOT
+
+Sales
+
+--------------------------------
+
+Accounts
+
+Sidebar
+
+Chart of Accounts
+Ledger
+Payments
+Receipts
+Journal
+Contra
+Credit / Debit Notes
+Day Book
+Cash Book
+Bank Book
+Trial Balance
+GST Summary
+GST Returns
+Reconciliation
+Cash Balance
+Reports
+
+Permissions must show every one of these individually.
+
+There should NOT be a grouped permission called:
+
+Books
+Vouchers
+Payments
+
+Instead every page gets its own permission.
+
+--------------------------------
+
+Company
+
+Sidebar
+
+Settings
+Company Profile
+Permissions
+Audit Log
+Login History
+
+Permissions must display exactly these five pages.
+
+Settings should NOT control Company Profile or Audit Log.
+
+Each page must have its own permission.
+
+--------------------------------
+
+HR
+
+Sidebar
+
+Employees
+Attendance
+Leave
+Payroll
+Hierarchy
+
+Permissions must display exactly these five pages.
+
+--------------------------------
+
+General Rules
+
+1. Sidebar and Permission page must contain exactly the same modules in the same order.
+
+2. Names must be identical.
+
+3. Parent sections must be identical.
+
+4. Every sidebar page must have one unique permission key.
+
+5. Every permission key must control only one page.
+
+6. Never let one permission control multiple pages.
+
+7. Every page must have its own:
+   - View
+   - Add
+   - Edit
+   - Delete
+
+8. View controls sidebar visibility.
+
+9. Add/Edit/Delete control only operations inside that page.
+
+10. The Sidebar must still be generated from the centralized module registry.
+
+11. The Permission page must also be generated from the same registry.
+
+12. The registry should define one object per page, not one object per permission group.
+
+13. Parent groups (Production, Inventory, Sales, HR, Accounts, Company) are only visual categories and should not be permission keys.
+
+14. Do not hardcode anything in AppLayout or Permissions.
+
+15. The module registry must be the only source of truth.
+
+--------------------------------
+
+Before implementing:
+
+Generate a comparison table.
+
+Column 1:
+Current Sidebar
+
+Column 2:
+Current Permissions
+
+Column 3:
+Required Permissions
+
+Column 4:
+Status
+
+After I approve the comparison, refactor the registry so every sidebar page has an identical permission entry.
+
+The final result should be:
+
+Sidebar = Permission page
+
+100% identical in:
+
+• Module names
+• Order
+• Parent sections
+• Permission keys
+• Visibility behavior
+
+No grouped permissions should remain.
