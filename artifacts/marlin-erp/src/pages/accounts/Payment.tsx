@@ -27,7 +27,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function Payment() {
-  const perm = usePermission('Accounts');
+  const perm = usePermission('Payments');
   const { data: payments = [], isLoading } = useListPayments();
   const { data: allAccounts = [] } = useListAccountsFlat();
   const { data: cashBankAccounts = [] } = useCashBankLedgersFlat();

@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
-import { Search, DollarSign, Download, Eye, CheckCircle, Zap, RefreshCw, FileDown } from 'lucide-react';
+import { Search, DollarSign, Download, Eye, CheckCircle, Zap, RefreshCw, FileDown, ShieldOff } from 'lucide-react';
 import { downloadPayslipPDF } from '@/lib/pdfUtils';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
@@ -18,10 +18,12 @@ import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { usePermission } from '@/lib/usePermission';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 export default function Payroll() {
+  const perm = usePermission('Payroll');
   const now = new Date();
   const [year, setYear] = useState(String(now.getFullYear()));
   const [month, setMonth] = useState(String(now.getMonth() + 1));
@@ -86,6 +88,25 @@ export default function Payroll() {
   const totalPending = filtered.filter((p: any) => !p.isPaid).reduce((s: number, p: any) => s + Number(p.netPay || 0), 0);
   const years = Array.from({ length: 5 }, (_, i) => String(now.getFullYear() - i));
   const monthLabel = `${MONTHS[Number(month)-1]} ${year}`;
+
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">
+              You don't have permission to view this page.<br />
+              Contact your administrator to request access.
+            </p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout>

@@ -177,7 +177,7 @@ export default function Purchases() {
 
   const onEditSubmit = (data: EditFormValues) => {
     updateMutation.mutate({ id: editItem.id, data }, {
-      onSuccess: () => { toast.success('Purchase bill updated'); setEditItem(null); },
+      onSuccess: () => { toast.success('Purchase bill updated'); queryClient.invalidateQueries({ queryKey: getListPurchasesQueryKey() }); setEditItem(null); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
   };
@@ -185,7 +185,7 @@ export default function Purchases() {
   const handleDelete = () => {
     if (!deleteTarget) return;
     deleteMutation.mutate(deleteTarget.id, {
-      onSuccess: () => { toast.success(`Bill #${deleteTarget.id} deleted (stock reversed)`); invalidateStockDashboards(); setDeleteTarget(null); },
+      onSuccess: () => { toast.success(`Bill #${deleteTarget.id} deleted (stock reversed)`); queryClient.invalidateQueries({ queryKey: getListPurchasesQueryKey() }); invalidateStockDashboards(); setDeleteTarget(null); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Delete failed'),
     });
   };

@@ -5,9 +5,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Search, BarChart3, Download, AlertTriangle, ChevronRight, ChevronDown, Layers } from 'lucide-react';
+import { Search, BarChart3, Download, AlertTriangle, ChevronRight, ChevronDown, Layers, ShieldOff } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
+import { usePermission } from '@/lib/usePermission';
 
 const money = (n: number) => `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const dateIN = (d: string | null) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
@@ -23,6 +24,7 @@ function ExpiryBadge({ batch }: { batch: StockBatch }) {
 }
 
 export default function Stock() {
+  const perm = usePermission('Stock');
   const [branchType, setBranchType] = useState<string>('all');
   const [branchId, setBranchId] = useState<string>('');
   const [search, setSearch] = useState('');
@@ -80,6 +82,25 @@ export default function Stock() {
   });
 
   const totalValue = filtered.reduce((s, r) => s + Number(r.stockValue || 0), 0);
+
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">
+              You don't have permission to view this page.<br />
+              Contact your administrator to request access.
+            </p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout>

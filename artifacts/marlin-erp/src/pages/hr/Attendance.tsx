@@ -5,11 +5,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Search, Clock, Download, LogIn, LogOut, MapPin, Loader2 } from 'lucide-react';
+import { Search, Clock, Download, LogIn, LogOut, MapPin, Loader2, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
+import { usePermission } from '@/lib/usePermission';
 
 function getLocation(): Promise<{ lat: number; lng: number } | null> {
   return new Promise((resolve) => {
@@ -40,6 +41,7 @@ function MapLink({ lat, lng, label }: { lat: number | null; lng: number | null; 
 }
 
 export default function Attendance() {
+  const perm = usePermission('Attendance');
   const today = new Date().toISOString().split('T')[0];
   const [date, setDate] = useState(today);
   const [search, setSearch] = useState('');
@@ -95,6 +97,25 @@ export default function Attendance() {
     const matchBranchLoc = branchLocId === 'all' || String(branch?.branchId) === branchLocId;
     return matchSearch && matchBranchType && matchBranchLoc;
   });
+
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">
+              You don't have permission to view this page.<br />
+              Contact your administrator to request access.
+            </p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout>

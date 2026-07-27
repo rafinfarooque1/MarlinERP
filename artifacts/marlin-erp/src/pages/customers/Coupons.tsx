@@ -11,11 +11,12 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Ticket, Download, Eye } from 'lucide-react';
+import { Plus, Search, Ticket, Download, Eye, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
+import { usePermission } from '@/lib/usePermission';
 
 const schema = z.object({
   code: z.string().min(1, 'Code required'),
@@ -29,6 +30,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function Coupons() {
+  const perm = usePermission('Coupons');
   const { data: coupons = [], isLoading } = useListCoupons();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -52,6 +54,25 @@ export default function Coupons() {
   const now = new Date();
   const isActive = (c: any) => new Date(c.validFrom ?? c.expiryDate) <= now && new Date(c.validTo ?? c.expiryDate) >= now && (c.usageCount || c.usedCount || 0) < (c.maxUses || 999);
   const filtered = coupons.filter(c => c.code.toLowerCase().includes(search.toLowerCase()));
+
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">
+              You don't have permission to view this page.<br />
+              Contact your administrator to request access.
+            </p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout>

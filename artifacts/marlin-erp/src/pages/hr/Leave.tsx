@@ -12,11 +12,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, CalendarOff, Download, Eye, CheckCircle, XCircle } from 'lucide-react';
+import { Plus, Search, CalendarOff, Download, Eye, CheckCircle, XCircle, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
+import { usePermission } from '@/lib/usePermission';
 
 const schema = z.object({
   employeeId: z.coerce.number().min(1, 'Employee required'),
@@ -28,6 +29,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function Leave() {
+  const perm = usePermission('Leave');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const { data: leaves = [], isLoading } = useListLeaves(statusFilter !== 'all' ? { status: statusFilter as any } : undefined);
   const [search, setSearch] = useState('');
@@ -75,6 +77,25 @@ export default function Leave() {
     const matchBranchLoc = branchLocId === 'all' || String(branch?.branchId) === branchLocId;
     return matchSearch && matchBranchType && matchBranchLoc;
   });
+
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">
+              You don't have permission to view this page.<br />
+              Contact your administrator to request access.
+            </p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout>

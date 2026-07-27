@@ -16,12 +16,13 @@ import { Badge } from '@/components/ui/badge';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Truck, Download, Eye, BookOpen, Pencil, IndianRupee, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
+import { Plus, Search, Truck, Download, Eye, BookOpen, Pencil, IndianRupee, ArrowUpRight, ArrowDownLeft, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { INDIAN_STATES } from '@/lib/indianStates';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { usePermission } from '@/lib/usePermission';
 
 // ── Schemas ───────────────────────────────────────────────────────────────────
 const vendorSchema = z.object({
@@ -290,6 +291,7 @@ function PaymentDialog({ vendor, onClose }: { vendor: any; onClose: () => void }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function Vendors() {
+  const perm = usePermission('Vendors');
   const { data: vendors = [], isLoading } = useListVendors();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -330,6 +332,25 @@ export default function Vendors() {
     v.name.toLowerCase().includes(search.toLowerCase()) ||
     v.phone?.includes(search)
   );
+
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">
+              You don't have permission to view this page.<br />
+              Contact your administrator to request access.
+            </p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout>

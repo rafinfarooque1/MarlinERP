@@ -9,8 +9,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
-import { Building2, CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, Plus, ChevronDown, ChevronRight, Package, Lock, Trash2, ScrollText, ArrowUpRight, ArrowDownLeft, FolderPlus, Folder } from 'lucide-react';
+import { Building2, CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, Plus, ChevronDown, ChevronRight, Package, Lock, Trash2, ScrollText, ArrowUpRight, ArrowDownLeft, FolderPlus, Folder, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
+import { usePermission } from '@/lib/usePermission';
 
 /* ── types ──────────────────────────────────────────────────────────────────── */
 type ALType = 'asset' | 'liability' | 'income' | 'expense' | 'equity';
@@ -645,6 +646,7 @@ const PERIODS = [
 
 /* ── main ─────────────────────────────────────────────────────────────────────── */
 export default function ChartOfAccounts() {
+  const perm = usePermission('Chart of Accounts');
   const [period, setPeriod]       = useState('all');
   const [customFrom, setFrom]     = useState('');
   const [customTo, setTo]         = useState('');
@@ -719,6 +721,25 @@ export default function ChartOfAccounts() {
   const exp = fs?.profitAndLoss?.expenses;
   const inc = fs?.profitAndLoss?.incomes;
   const outlets = fs?.filters?.outlets ?? [];
+
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">
+              You don't have permission to view this page.<br />
+              Contact your administrator to request access.
+            </p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout>

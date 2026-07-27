@@ -76,8 +76,8 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 1,
-      staleTime: 60_000,          // serve cached data for 60s before background refresh
-      gcTime: 10 * 60_000,        // keep unused data in cache for 10min
+      staleTime: 0,               // always consider cached data stale → refetch on every mount/invalidation
+      gcTime: 5 * 60_000,         // keep unused data in memory for 5 min (GC only)
       refetchOnWindowFocus: false, // don't re-fetch just because user switches tabs
       refetchOnReconnect: false,   // don't blast the server on reconnect
     },

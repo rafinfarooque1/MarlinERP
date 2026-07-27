@@ -19,13 +19,14 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import {
   Plus, Search, ArrowRightLeft, Download, Eye, Trash2, FileDown, Calendar,
-  PackageOpen, CheckCircle2, XCircle, Clock, AlertTriangle, PackageCheck,
+  PackageOpen, CheckCircle2, XCircle, Clock, AlertTriangle, PackageCheck, ShieldOff,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { usePermission } from '@/lib/usePermission';
 
 // ── New Transfer form schema ──────────────────────────────────────────────────
 const schema = z.object({
@@ -215,6 +216,7 @@ function ApproveDialog({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function HoTransfers() {
+  const perm = usePermission('HO Transfers');
   const { data: transfers = [], isLoading } = useListStockTransfers();
   const { data: items = [] } = useListItems();
   const { data: companySettings } = useGetCompanySettings();
@@ -315,6 +317,25 @@ export default function HoTransfers() {
   };
 
   const sourceSelected = watchFromId > 0;
+
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">
+              You don't have permission to view this page.<br />
+              Contact your administrator to request access.
+            </p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout>

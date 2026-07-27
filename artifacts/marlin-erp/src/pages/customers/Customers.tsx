@@ -13,12 +13,13 @@ import { Separator } from '@/components/ui/separator';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, UserCheck, Download, Eye, BookOpen, Pencil } from 'lucide-react';
+import { Plus, Search, UserCheck, Download, Eye, BookOpen, Pencil, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { INDIAN_STATES } from '@/lib/indianStates';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { usePermission } from '@/lib/usePermission';
 
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
@@ -116,6 +117,7 @@ function CustomerLedger({ customerId }: { customerId: number }) {
 }
 
 export default function Customers() {
+  const perm = usePermission('Customers');
   const { data: customers = [], isLoading } = useListCustomers();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -155,6 +157,25 @@ export default function Customers() {
     c.phone?.includes(search) ||
     c.email?.toLowerCase().includes(search.toLowerCase())
   );
+
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">
+              You don't have permission to view this page.<br />
+              Contact your administrator to request access.
+            </p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout>

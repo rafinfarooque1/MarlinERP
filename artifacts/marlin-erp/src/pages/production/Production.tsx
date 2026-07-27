@@ -201,6 +201,7 @@ export default function ProductionList() {
     updateMutation.mutate({ id: editItem.id, data }, {
       onSuccess: () => {
         toast.success('Batch updated');
+        queryClient.invalidateQueries({ queryKey: getListProductionsQueryKey() });
         invalidateStockDashboards();
         setEditItem(null);
       },
@@ -213,6 +214,7 @@ export default function ProductionList() {
     deleteMutation.mutate(deleteTarget.id, {
       onSuccess: () => {
         toast.success(`Batch B-${String(deleteTarget.id).padStart(4, '0')} deleted`);
+        queryClient.invalidateQueries({ queryKey: getListProductionsQueryKey() });
         invalidateStockDashboards();
         setDeleteTarget(null);
       },

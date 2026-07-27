@@ -5,11 +5,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Receipt, Download, TrendingUp, TrendingDown, Info } from 'lucide-react';
+import { Receipt, Download, TrendingUp, TrendingDown, Info, ShieldOff } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { usePermission } from '@/lib/usePermission';
 
 export default function GstSummary() {
+  const perm = usePermission('GST Summary');
   const now = new Date();
   const [fromDate, setFromDate] = useState(`${now.getFullYear()}-04-01`);
   const [toDate, setToDate] = useState(now.toISOString().split('T')[0]);
@@ -25,6 +27,25 @@ export default function GstSummary() {
   const netGst = totalOutputTax - totalInputTax;
 
   const fmt = (n: number) => `₹${Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  if (!perm.isLoading && !perm.canView) {
+    return (
+      <AppLayout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
+            <ShieldOff className="w-8 h-8 text-destructive" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Access Denied</h2>
+            <p className="text-muted-foreground mt-1 text-sm">
+              You don't have permission to view this page.<br />
+              Contact your administrator to request access.
+            </p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout>
