@@ -229,7 +229,9 @@ async function downloadBundle(platform, timestamp) {
     'expo-router',
     'entry',
   );
-  const bundlePath = path.relative(workspaceRoot, entryPath);
+  // Metro is started with cwd=projectRoot, so bundle paths must be relative
+  // to projectRoot — not the workspace root.
+  const bundlePath = path.relative(projectRoot, entryPath);
   const url = new URL(`http://localhost:8081/${bundlePath}.bundle`);
   url.searchParams.set('platform', platform);
   url.searchParams.set('dev', 'false');
