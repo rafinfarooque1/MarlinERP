@@ -132,8 +132,10 @@ export const MODULE_REGISTRY: ModuleDef[] = [
   {
     key: 'Location Stock', permGroup: 'Operations',
     navGroup: 'Operations',
-    navEntries: [{ name: 'Stock', href: '/sales/stock' }],
-    icon: Package,
+    // navEntries intentionally empty — stock access is provided through the
+    // 'Stock' module below, which appears in both Operations and Inventory.
+    // This key is kept for backward-compatible permission rows.
+    navEntries: [],
   },
   {
     // HO Transfers sits in the Inventory permGroup (admin concern)
@@ -154,9 +156,14 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     icon: Receipt,
   },
   {
+    // Appears in Operations (branch cash) AND Accounts (HO aggregate view) —
+    // same pattern as HO Transfers. One "Cash Balance" entry per section.
     key: 'Cash Balance', permGroup: 'Operations',
     navGroup: 'Operations',
-    navEntries: [{ name: 'Cash Balance', href: '/sales/cash-balance' }],
+    navEntries: [
+      { name: 'Cash Balance', href: '/sales/cash-balance' },
+      { name: 'Cash Balance', href: '/accounts/cash-in-outlet', navGroup: 'Accounts' },
+    ],
     icon: Banknote,
   },
 
@@ -187,9 +194,15 @@ export const MODULE_REGISTRY: ModuleDef[] = [
 
   // ── Inventory ─────────────────────────────────────────────────────────────
   {
+    // Appears in Operations (branch view) AND Inventory (HO view) —
+    // same pattern as HO Transfers. One "Stock" entry per section.
     key: 'Stock', permGroup: 'Inventory',
     navGroup: 'Inventory',
-    navEntries: [{ name: 'Stock', href: '/headoffice/stock' }],
+    navEntries: [
+      { name: 'Stock', href: '/sales/stock',      navGroup: 'Operations' },
+      { name: 'Stock', href: '/headoffice/stock' },
+    ],
+    icon: Package,
   },
   {
     key: 'Stock Ledger', permGroup: 'Inventory',
@@ -339,12 +352,13 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navEntries: [{ name: 'Reconciliation', href: '/accounts/reconciliation' }],
   },
   {
-    // HO aggregate view of cash across all outlets — distinct from the
-    // branch-level 'Cash Balance' in Operations.
+    // 'Cash Balance' in Operations now covers both the branch view (/sales/cash-balance)
+    // and the HO aggregate view (/accounts/cash-in-outlet), following the HO Transfers
+    // pattern. This module key is kept for backward-compatible permission rows only;
+    // its nav entry is intentionally empty to avoid a duplicate "Cash in Outlet" in Accounts.
     key: 'Accounts Cash Balance', permGroup: 'Accounts',
     navGroup: 'Accounts',
-    navEntries: [{ name: 'Cash in Outlet', href: '/accounts/cash-in-outlet' }],
-    icon: Banknote,
+    navEntries: [],
   },
   {
     key: 'Reports', permGroup: 'Accounts',
