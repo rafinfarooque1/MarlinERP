@@ -5,7 +5,7 @@
  * Categories are permission-gated with the same module names as the
  * Permissions page: users only see categories whose module they can view.
  */
-import { useState } from 'react';
+import { useLocation } from 'wouter';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
 import {
@@ -33,7 +33,9 @@ const CATEGORIES: { value: Category; label: string; icon: typeof ShoppingCart }[
 ];
 
 export default function ReportsCenter() {
-  const [cat, setCat] = useState<Category>('sales');
+  const [location, setLocation] = useLocation();
+  // Derive active category from URL path: /reports/:cat
+  const catFromUrl = location.split('/')[2] as Category | undefined;
 
   // Category → module gating (module names must match the Permissions page)
   const sales = usePermission('Sales');
@@ -56,8 +58,9 @@ export default function ReportsCenter() {
   const isLoading = sales.isLoading || accounts.isLoading;
 
   const visibleCats = CATEGORIES.filter((c) => visible[c.value]);
-  // If the selected category is not permitted, fall back to the first allowed one
-  const active: Category | undefined = visible[cat] ? cat : visibleCats[0]?.value;
+  // Drive active category from URL; fall back to first permitted category
+  const active: Category | undefined =
+    catFromUrl && visible[catFromUrl] ? catFromUrl : visibleCats[0]?.value;
 
   return (
     <AppLayout>
@@ -86,7 +89,7 @@ export default function ReportsCenter() {
                 return (
                   <button
                     key={c.value}
-                    onClick={() => setCat(c.value)}
+                    onClick={() => setLocation('/reports/' + c.value)}
                     className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors ${
                       isActive
                         ? 'bg-primary text-primary-foreground shadow-sm'

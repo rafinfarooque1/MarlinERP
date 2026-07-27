@@ -180,8 +180,9 @@ function Router() {
 
       <Route path="/accounts/reconciliation"><AuthGuard><Reconciliation /></AuthGuard></Route>
       <Route path="/accounts/cash-in-outlet"><AuthGuard><CashInOutlet /></AuthGuard></Route>
-      <Route path="/accounts/reports"><Redirect to="/reports" /></Route>
-      <Route path="/reports"><AuthGuard><ReportsCenter /></AuthGuard></Route>
+      <Route path="/accounts/reports"><Redirect to="/reports/sales" /></Route>
+      <Route path="/reports"><Redirect to="/reports/sales" /></Route>
+      <Route path="/reports/:cat"><AuthGuard><ReportsCenter /></AuthGuard></Route>
 
       <Route path="/profile/me"><AuthGuard><ProfileMe /></AuthGuard></Route>
 

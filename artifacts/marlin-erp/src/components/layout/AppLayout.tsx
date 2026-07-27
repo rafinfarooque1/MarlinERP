@@ -146,13 +146,18 @@ const navigation = [
     ],
   },
   {
-    // Unified Reports Center — replaces the old Accounts → Reports page.
-    // `modules` is an any-of list: shown when the user can view ≥1 category.
     name: 'Reports',
     icon: FileBarChart2,
-    href: '/reports',
     branchGroups: ['warehouse', 'production', null],
-    modules: ['Sales', 'Purchases', 'Stock', 'Production', 'Customers', 'Vendors', 'Chart of Accounts'],
+    children: [
+      { name: 'Sales',         href: '/reports/sales',        module: 'Sales'             },
+      { name: 'Purchases',     href: '/reports/purchases',    module: 'Purchases'         },
+      { name: 'Inventory',     href: '/reports/inventory',    module: 'Stock'             },
+      { name: 'Production',    href: '/reports/production',   module: 'Production'        },
+      { name: 'Parties',       href: '/reports/parties',      module: 'Customers'         },
+      { name: 'Financial',     href: '/reports/financial',    module: 'Chart of Accounts' },
+      { name: 'Profitability', href: '/reports/profitability',module: 'Chart of Accounts' },
+    ],
   },
   {
     name: 'Company',
