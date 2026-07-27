@@ -19,13 +19,15 @@ import { Separator } from '@/components/ui/separator';
 import {
   Plus, Search, Trash2, ChevronDown, ChevronRight, Download, AlertTriangle,
   ArrowUpLeft, ArrowDownRight, BookOpen, ArrowLeftRight, FileMinus2, FilePlus2,
-  ReceiptText,
+  ReceiptText, FileDown,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { downloadCSV } from '@/lib/download';
+import { useGetCompanySettings } from '@workspace/api-client-react';
+import { downloadVoucherPDF } from '@/lib/pdfUtils';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const inr = (n: number) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
@@ -416,6 +418,8 @@ export default function Vouchers() {
 
   const isLoading = l1 || l2 || l3 || l4 || l5 || l6;
 
+  const { data: cs } = useGetCompanySettings();
+
   const [search, setSearch]       = useState('');
   const [typeFilter, setTypeFilter] = useState<VoucherType | 'all'>('all');
   const [expanded, setExpanded]   = useState<string | null>(null);
@@ -592,7 +596,7 @@ export default function Vouchers() {
                 <TableHead>Description</TableHead>
                 <TableHead>Narration</TableHead>
                 <TableHead className="text-right">Amount</TableHead>
-                {canDel && <TableHead className="w-10" />}
+                <TableHead className="w-16" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -642,23 +646,33 @@ export default function Vouchers() {
                       <TableCell className={`text-right font-mono font-semibold text-sm ${TYPE_META[row.type].color}`}>
                         {inr(row.amount)}
                       </TableCell>
-                      {canDel && (
-                        <TableCell onClick={e => e.stopPropagation()}>
+                      <TableCell onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center gap-0.5 justify-end">
                           <Button
                             variant="ghost" size="icon"
-                            className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                            onClick={() => setDeleteRow(row)}
+                            className="h-7 w-7 text-muted-foreground hover:text-primary"
+                            title="Download PDF"
+                            onClick={() => downloadVoucherPDF(row, cs)}
                           >
-                            <Trash2 className="h-3.5 w-3.5" />
+                            <FileDown className="h-3.5 w-3.5" />
                           </Button>
-                        </TableCell>
-                      )}
+                          {canDel && (
+                            <Button
+                              variant="ghost" size="icon"
+                              className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                              onClick={() => setDeleteRow(row)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                        </div>
+                      </TableCell>
                     </TableRow>
 
                     {/* Expanded JV lines */}
                     {isExpanded && jvLines.length > 0 && (
                       <TableRow className="bg-muted/5 hover:bg-muted/5">
-                        <TableCell colSpan={canDel ? 8 : 7} className="py-0">
+                        <TableCell colSpan={8} className="py-0">
                           <div className="px-8 py-3">
                             <table className="w-full text-xs">
                               <thead>

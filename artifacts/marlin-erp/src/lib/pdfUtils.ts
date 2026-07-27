@@ -314,6 +314,267 @@ export function downloadPayslipPDF(p: any, companySettings?: any) {
   doc.save(`Payslip-${safeName}-${p.year}-${String(p.month).padStart(2, '0')}.pdf`);
 }
 
+// ── Voucher (Journal / Contra / Credit Note / Debit Note / Payment / Receipt) ─
+
+const VOUCHER_TITLES: Record<string, string> = {
+  journal:     'JOURNAL VOUCHER',
+  contra:      'CONTRA VOUCHER',
+  credit_note: 'CREDIT NOTE',
+  debit_note:  'DEBIT NOTE',
+  payment:     'PAYMENT VOUCHER',
+  receipt:     'RECEIPT VOUCHER',
+};
+
+export function downloadVoucherPDF(row: {
+  voucherNumber: string;
+  type: string;
+  date: string;
+  description: string;
+  narration?: string;
+  amount: number;
+  raw: any;
+}, companySettings?: any) {
+  const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
+  const cs  = companySettings ?? {};
+  const title = VOUCHER_TITLES[row.type] ?? 'VOUCHER';
+  let y = drawHeader(doc, cs, title);
+
+  // ── Voucher info box ──────────────────────────────────────────────────────
+  const infoH = 18;
+  setFill(doc, LIGHT);
+  setDraw(doc, [200, 200, 200]);
+  doc.setLineWidth(0.2);
+  doc.rect(MARGIN, y, CONTENT_W, infoH, 'FD');
+
+  const colW = CONTENT_W / 2;
+  const left:  [string, string][] = [
+    ['Voucher No.', esc(row.voucherNumber)],
+    ['Date',        esc(row.date)],
+  ];
+  const right: [string, string][] = [
+    ['Type',   title],
+    ['Amount', fmt(row.amount)],
+  ];
+
+  doc.setFontSize(8);
+  for (let i = 0; i < left.length; i++) {
+    const iy = y + 5 + i * 6;
+    doc.setFont('helvetica', 'normal'); setColor(doc, MUTED);
+    doc.text(left[i][0] + ':', MARGIN + 3, iy);
+    doc.setFont('helvetica', 'bold'); setColor(doc, DARK);
+    doc.text(left[i][1], MARGIN + 28, iy);
+  }
+  for (let i = 0; i < right.length; i++) {
+    const iy = y + 5 + i * 6;
+    doc.setFont('helvetica', 'normal'); setColor(doc, MUTED);
+    doc.text(right[i][0] + ':', MARGIN + colW + 3, iy);
+    doc.setFont('helvetica', 'bold');
+    setColor(doc, i === 1 ? TEAL : DARK);
+    doc.text(right[i][1], MARGIN + colW + 28, iy);
+  }
+  y += infoH + 5;
+
+  // ── Accounting entries ────────────────────────────────────────────────────
+  const isJV = !['payment', 'receipt'].includes(row.type);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  setColor(doc, TEAL);
+  doc.text('ACCOUNTING ENTRIES', MARGIN, y);
+  y += 4;
+
+  if (isJV) {
+    const jvLines: any[] = row.raw?.lines ?? [];
+    const tableRows = jvLines.map((l: any) => [
+      esc(l.ledgerName || `Ledger #${l.ledgerId}`),
+      Number(l.debit)  > 0 ? fmt(l.debit)  : '—',
+      Number(l.credit) > 0 ? fmt(l.credit) : '—',
+    ]);
+    const drTotal = jvLines.reduce((s: number, l: any) => s + Number(l.debit  || 0), 0);
+    const crTotal = jvLines.reduce((s: number, l: any) => s + Number(l.credit || 0), 0);
+    tableRows.push(['', fmt(drTotal), fmt(crTotal)]);
+    y = drawTable(doc, y, [
+      { header: 'Account / Ledger', width: 130 },
+      { header: 'Debit (Dr)',        width: 30, align: 'right' },
+      { header: 'Credit (Cr)',       width: 20, align: 'right' },
+    ], tableRows);
+  } else {
+    // Payment / Receipt: show From → To
+    const raw = row.raw;
+    const isPayment = row.type === 'payment';
+    const fromName = isPayment ? (raw.paidFromName   || '—') : (raw.receivedFromName || '—');
+    const toName   = isPayment ? (raw.paidToName     || '—') : (raw.receivedInName   || '—');
+    y = drawTable(doc, y, [
+      { header: 'Account / Ledger', width: 120 },
+      { header: 'Role',              width: 30, align: 'center' },
+      { header: 'Amount',            width: 30, align: 'right' },
+    ], [
+      [esc(fromName), isPayment ? 'Paid From' : 'Received From', fmt(row.amount)],
+      [esc(toName),   isPayment ? 'Paid To'   : 'Received In',   fmt(row.amount)],
+    ]);
+  }
+  y += 5;
+
+  // ── Amount box ────────────────────────────────────────────────────────────
+  setFill(doc, TEAL);
+  doc.roundedRect(MARGIN, y, CONTENT_W, 12, 3, 3, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  setColor(doc, WHITE);
+  doc.text('AMOUNT', MARGIN + 5, y + 8);
+  doc.setFontSize(14);
+  doc.text(fmt(row.amount), PAGE_W - MARGIN - 5, y + 8, { align: 'right' });
+  y += 18;
+
+  // ── Narration ─────────────────────────────────────────────────────────────
+  const narration = row.narration || row.description || '';
+  if (narration) {
+    setFill(doc, LIGHT);
+    setDraw(doc, [200, 200, 200]);
+    doc.setLineWidth(0.2);
+    const lines = doc.splitTextToSize(esc(narration), CONTENT_W - 6);
+    const boxH  = Math.max(10, lines.length * 4.5 + 4);
+    doc.rect(MARGIN, y, CONTENT_W, boxH, 'FD');
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(8);
+    setColor(doc, MUTED);
+    doc.text('Narration:', MARGIN + 3, y + 4);
+    doc.setFont('helvetica', 'normal');
+    setColor(doc, DARK);
+    doc.text(lines, MARGIN + 3, y + 8.5);
+    y += boxH + 6;
+  }
+
+  // ── Signature lines ───────────────────────────────────────────────────────
+  const sigY = Math.max(y + 10, PAGE_H - 42);
+  setDraw(doc, [150, 150, 150]);
+  doc.setLineWidth(0.3);
+  doc.line(MARGIN, sigY, MARGIN + 60, sigY);
+  doc.line(PAGE_W - MARGIN - 60, sigY, PAGE_W - MARGIN, sigY);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  setColor(doc, MUTED);
+  doc.text('Prepared by', MARGIN, sigY + 4);
+  doc.text('Authorised Signatory', PAGE_W - MARGIN, sigY + 4, { align: 'right' });
+
+  drawFooter(doc, 'This is a computer-generated voucher.');
+  const safeNum = row.voucherNumber.replace(/[^a-zA-Z0-9-]/g, '_');
+  doc.save(`${safeNum}.pdf`);
+}
+
+// ── Employee Advance Voucher ───────────────────────────────────────────────────
+
+export function downloadAdvancePDF(advance: {
+  id: number;
+  employeeName: string;
+  amount: number;
+  date: string;
+  note?: string | null;
+  isDeducted: boolean;
+}, companySettings?: any) {
+  const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
+  const cs  = companySettings ?? {};
+  let y = drawHeader(doc, cs, 'ADVANCE VOUCHER');
+
+  // ── Info box ──────────────────────────────────────────────────────────────
+  const infoH = 24;
+  setFill(doc, LIGHT);
+  setDraw(doc, [200, 200, 200]);
+  doc.setLineWidth(0.2);
+  doc.rect(MARGIN, y, CONTENT_W, infoH, 'FD');
+
+  const colW  = CONTENT_W / 2;
+  const left:  [string, string][] = [
+    ['Employee', esc(advance.employeeName)],
+    ['Date',     esc(advance.date)],
+    ['Ref No.',  `ADV-${String(advance.id).padStart(4, '0')}`],
+  ];
+  const right: [string, string][] = [
+    ['Amount',  fmt(advance.amount)],
+    ['Status',  advance.isDeducted ? 'Recovered from Payroll' : 'Pending Recovery'],
+  ];
+
+  doc.setFontSize(8);
+  for (let i = 0; i < left.length; i++) {
+    const iy = y + 5 + i * 6;
+    doc.setFont('helvetica', 'normal'); setColor(doc, MUTED);
+    doc.text(left[i][0] + ':', MARGIN + 3, iy);
+    doc.setFont('helvetica', 'bold'); setColor(doc, DARK);
+    doc.text(left[i][1], MARGIN + 28, iy);
+  }
+  for (let i = 0; i < right.length; i++) {
+    const iy = y + 5 + i * 6;
+    doc.setFont('helvetica', 'normal'); setColor(doc, MUTED);
+    doc.text(right[i][0] + ':', MARGIN + colW + 3, iy);
+    doc.setFont('helvetica', 'bold');
+    setColor(doc, i === 0 ? TEAL : (advance.isDeducted ? GREEN : RED));
+    doc.text(right[i][1], MARGIN + colW + 28, iy);
+  }
+  y += infoH + 5;
+
+  // ── Accounting entry note ──────────────────────────────────────────────────
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  setColor(doc, TEAL);
+  doc.text('ACCOUNTING ENTRY', MARGIN, y);
+  y += 4;
+
+  y = drawTable(doc, y, [
+    { header: 'Account',  width: 120 },
+    { header: 'Role',     width: 30, align: 'center' },
+    { header: 'Amount',   width: 30, align: 'right' },
+  ], [
+    [`Advance — ${esc(advance.employeeName)}`, 'Debit (Dr)', fmt(advance.amount)],
+    ['Cash',                                    'Credit (Cr)', fmt(advance.amount)],
+  ]);
+  y += 5;
+
+  // ── Amount box ────────────────────────────────────────────────────────────
+  setFill(doc, TEAL);
+  doc.roundedRect(MARGIN, y, CONTENT_W, 12, 3, 3, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  setColor(doc, WHITE);
+  doc.text('ADVANCE AMOUNT', MARGIN + 5, y + 8);
+  doc.setFontSize(14);
+  doc.text(fmt(advance.amount), PAGE_W - MARGIN - 5, y + 8, { align: 'right' });
+  y += 18;
+
+  // ── Note ──────────────────────────────────────────────────────────────────
+  if (advance.note) {
+    setFill(doc, LIGHT);
+    setDraw(doc, [200, 200, 200]);
+    doc.setLineWidth(0.2);
+    const noteLines = doc.splitTextToSize(esc(advance.note), CONTENT_W - 6);
+    const boxH = Math.max(10, noteLines.length * 4.5 + 4);
+    doc.rect(MARGIN, y, CONTENT_W, boxH, 'FD');
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(8);
+    setColor(doc, MUTED);
+    doc.text('Reason / Note:', MARGIN + 3, y + 4);
+    doc.setFont('helvetica', 'normal');
+    setColor(doc, DARK);
+    doc.text(noteLines, MARGIN + 3, y + 8.5);
+    y += boxH + 6;
+  }
+
+  // ── Signature lines ───────────────────────────────────────────────────────
+  const sigY = Math.max(y + 10, PAGE_H - 42);
+  setDraw(doc, [150, 150, 150]);
+  doc.setLineWidth(0.3);
+  doc.line(MARGIN, sigY, MARGIN + 60, sigY);
+  doc.line(PAGE_W - MARGIN - 60, sigY, PAGE_W - MARGIN, sigY);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  setColor(doc, MUTED);
+  doc.text('Authorised Signatory', MARGIN, sigY + 4);
+  doc.text("Employee's Signature", PAGE_W - MARGIN, sigY + 4, { align: 'right' });
+
+  drawFooter(doc, 'This is a computer-generated advance voucher.');
+  const safeName = esc(advance.employeeName).replace(/[^a-zA-Z0-9-]/g, '_');
+  doc.save(`Advance-${safeName}-${advance.date}.pdf`);
+}
+
 // ── Purchase Order ────────────────────────────────────────────────────────────
 
 export function downloadPurchaseOrderPDF(

@@ -322,6 +322,12 @@ router.delete("/hr/employees/:id", requireModuleAction("Employees", "delete"), a
 
 router.get("/hr/pay-components/:employeeId", async (req, res): Promise<void> => {
   const employeeId = parseInt(req.params.employeeId, 10);
+  // Non-headoffice employees may only read their own pay structure
+  const scopeEmp = (req as any).employee as { id: number; branchType: string } | undefined;
+  if (scopeEmp && scopeEmp.branchType !== 'headoffice' && scopeEmp.id !== employeeId) {
+    res.status(403).json({ error: "You can only view your own pay structure." });
+    return;
+  }
   const [row] = await db.select().from(payComponentsTable).where(eq(payComponentsTable.employeeId, employeeId)).limit(1);
   if (!row) {
     // Return sensible defaults if no pay structure has been configured
@@ -921,6 +927,12 @@ router.get("/hr/attendance", async (req, res): Promise<void> => {
 router.post("/hr/attendance/check-in", async (req, res): Promise<void> => {
   const parsed = CheckInBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+  // Non-headoffice employees may only check in for themselves
+  const scopeEmpCI = (req as any).employee as { id: number; branchType: string } | undefined;
+  if (scopeEmpCI && scopeEmpCI.branchType !== 'headoffice' && parsed.data.employeeId !== scopeEmpCI.id) {
+    res.status(403).json({ error: "You can only check in for yourself." });
+    return;
+  }
   const today = new Date().toISOString().split("T")[0];
   const [existing] = await db.select().from(attendanceTable)
     .where(and(eq(attendanceTable.employeeId, parsed.data.employeeId), eq(attendanceTable.date, today)))
@@ -950,6 +962,12 @@ router.post("/hr/attendance/check-in", async (req, res): Promise<void> => {
 router.post("/hr/attendance/check-out", async (req, res): Promise<void> => {
   const parsed = CheckOutBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+  // Non-headoffice employees may only check out for themselves
+  const scopeEmpCO = (req as any).employee as { id: number; branchType: string } | undefined;
+  if (scopeEmpCO && scopeEmpCO.branchType !== 'headoffice' && parsed.data.employeeId !== scopeEmpCO.id) {
+    res.status(403).json({ error: "You can only check out for yourself." });
+    return;
+  }
   const today = new Date().toISOString().split("T")[0];
   const [existing] = await db.select().from(attendanceTable)
     .where(and(eq(attendanceTable.employeeId, parsed.data.employeeId), eq(attendanceTable.date, today)))

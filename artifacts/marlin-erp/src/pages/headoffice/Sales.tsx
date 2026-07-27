@@ -565,18 +565,52 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       const cs      = companySettings as any;
       const company = cs?.companyName ?? cs?.name ?? 'Marlin Frozen Fruits';
       const date    = new Date(sale.saleDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-      const total   = Number(sale.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+      const inr     = (n: number) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+
+      // ── Bill detail lines ────────────────────────────────────────────────
+      const lineItems: any[] = (sale as any).lineItems ?? [];
+      const itemLines = lineItems.map((li: any, i: number) => {
+        const name    = li.itemName || itemsMap.get(li.itemId)?.name || `Item #${li.itemId}`;
+        const qty     = Number(li.quantity);
+        const rate    = Number(li.unitPrice);
+        const disc    = Number(li.discount ?? 0);
+        const lineAmt = qty * rate - disc;
+        const discPart = disc > 0 ? ` - ${inr(disc)} disc` : '';
+        return `  ${i + 1}. ${name}\n     ${qty} × ${inr(rate)}${discPart} = *${inr(lineAmt)}*`;
+      });
+
+      const subtotal    = Number((sale as any).subtotal ?? 0);
+      const taxTotal    = Number((sale as any).taxTotal ?? 0);
+      const discTotal   = Number((sale as any).discountTotal ?? 0);
+      const itemDiscAmt = lineItems.reduce((s: number, li: any) => s + Number(li.discount ?? 0), 0);
+      const grandTotal  = Number(sale.totalAmount);
+
+      const totalsLines: string[] = [];
+      if (itemDiscAmt > 0) totalsLines.push(`  Item discounts: -${inr(itemDiscAmt)}`);
+      totalsLines.push(`  Subtotal: ${inr(subtotal)}`);
+      if (taxTotal > 0) totalsLines.push(`  GST: ${inr(taxTotal)}`);
+      if (discTotal > 0) totalsLines.push(`  Bill discount${(sale as any).couponCode ? ` (${(sale as any).couponCode})` : ''}: -${inr(discTotal)}`);
+      totalsLines.push(`  *Total: ${inr(grandTotal)}*`);
+
+      const payMode = (sale as any).paymentMode;
+      const payStatus = (sale as any).paymentStatus;
+      const payLine = payMode ? `  Payment: ${String(payMode).toUpperCase()}${payStatus === 'credit' ? ' (Credit)' : ''}` : '';
 
       const message = [
         `Dear ${sale.customerName || 'Customer'},`,
         ``,
-        `Thank you for your purchase! 🙏`,
+        `Thank you for your purchase from *${sale.outletName || company}*! 🙏`,
         ``,
         `*Invoice No:* ${sale.invoiceNumber}`,
         `*Date:* ${date}`,
-        `*Amount:* ₹${total}`,
         ``,
-        `View / download your invoice PDF here:`,
+        `*Bill Details:*`,
+        ...itemLines,
+        ``,
+        ...totalsLines,
+        ...(payLine ? [payLine] : []),
+        ``,
+        `📄 View / download invoice PDF:`,
         pdfUrl,
         ``,
         `— ${sale.outletName || company}`,
@@ -640,7 +674,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         {/* Sales Table */}
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex flex-wrap gap-3 bg-muted/20">
-            <div className="flex items-center gap-2 flex-1 min-w-[180px]">
+            <div className="flex items-center gap-2 w-64">
               <Search className="w-4 h-4 text-muted-foreground" />
               <Input placeholder="Search invoice or customer..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0" />
             </div>

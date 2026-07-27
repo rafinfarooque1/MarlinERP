@@ -156,14 +156,13 @@ function PayDialog({ item, onClose }: { item: EnrichedPayrollRecord; onClose: ()
 
 // ── Payslip detail sheet ───────────────────────────────────────────────────
 function PayslipSheet({
-  item, onClose, isAdmin, onApprove, onPay, onEdit,
+  item, onClose, isAdmin, onApprove, onPay,
 }: {
   item: EnrichedPayrollRecord;
   onClose: () => void;
   isAdmin: boolean;
   onApprove: () => void;
   onPay: () => void;
-  onEdit: () => void;
 }) {
   const totalNet = (item.netPay ?? 0) + (item.extraAmount ?? 0);
   const cs = useGetCompanySettings();
@@ -188,16 +187,10 @@ function PayslipSheet({
         {isAdmin && (
           <div className="flex gap-2 flex-wrap mt-4">
             {item.status === 'draft' && (
-              <>
-                <Button size="sm" variant="outline" onClick={onEdit}><Pencil className="h-3 w-3 mr-1" />Edit</Button>
-                <Button size="sm" onClick={onApprove}><CheckCircle className="h-3 w-3 mr-1" />Approve</Button>
-              </>
+              <Button size="sm" onClick={onApprove}><CheckCircle className="h-3 w-3 mr-1" />Approve</Button>
             )}
             {item.status === 'approved' && (
-              <>
-                <Button size="sm" variant="outline" onClick={onEdit}><Pencil className="h-3 w-3 mr-1" />Edit</Button>
-                <Button size="sm" onClick={onPay}><DollarSign className="h-3 w-3 mr-1" />Pay Salary</Button>
-              </>
+              <Button size="sm" onClick={onPay}><DollarSign className="h-3 w-3 mr-1" />Pay Salary</Button>
             )}
             {item.status === 'approved' && (item.paidAmount ?? 0) > 0 && (item.paidAmount ?? 0) < totalNet - 0.005 && (
               <Button size="sm" onClick={onPay}><Wallet className="h-3 w-3 mr-1" />Pay Remaining</Button>
@@ -425,7 +418,6 @@ export default function Payroll() {
   const [month, setMonth] = useState(String(now.getMonth() + 1));
   const [search, setSearch]   = useState('');
   const [viewItem, setViewItem] = useState<EnrichedPayrollRecord | null>(null);
-  const [editItem, setEditItem] = useState<EnrichedPayrollRecord | null>(null);
   const [payItem, setPayItem]   = useState<EnrichedPayrollRecord | null>(null);
   const [generating, setGenerating] = useState(false);
   const [branchTypeFilter, setBranchTypeFilter] = useState<string>('all');
@@ -636,11 +628,6 @@ export default function Payroll() {
                         <Eye className="h-4 w-4" />
                       </Button>
                       {isAdmin && p.status === 'draft' && perm.canEdit && (
-                        <Button size="sm" variant="ghost" onClick={() => { setEditItem(p); setViewItem(null); }} title="Edit">
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                      )}
-                      {isAdmin && p.status === 'draft' && perm.canEdit && (
                         <Button size="sm" variant="ghost" className="text-blue-600" onClick={() => handleApprove(p)} title="Approve">
                           <CheckCircle className="h-4 w-4" />
                         </Button>
@@ -675,12 +662,10 @@ export default function Payroll() {
           isAdmin={isAdmin}
           onApprove={() => handleApprove(viewItem)}
           onPay={() => { setPayItem(viewItem); setViewItem(null); }}
-          onEdit={() => { setEditItem(viewItem); setViewItem(null); }}
         />
       )}
 
       {/* Dialogs */}
-      {editItem && <EditDialog item={editItem} onClose={() => setEditItem(null)} />}
       {payItem && <PayDialog item={payItem} onClose={() => setPayItem(null)} />}
     </AppLayout>
   );

@@ -3,6 +3,7 @@ import { requireModuleAction } from "../middleware/permissions";
 import { pool } from "@workspace/db";
 import { logActivity } from "../lib/audit";
 import { nextVoucherNumber } from "../lib/voucherNumber";
+import { getUserDataScope } from "../lib/dataScope";
 
 const router = Router();
 
@@ -24,10 +25,17 @@ async function getLedgerBalance(client: any, ledgerId: number): Promise<number> 
 }
 
 // ── GET /cash-in-outlet ───────────────────────────────────────────────────────
-// Returns cash balances for ALL locations (outlets + warehouses).
-// Each entry includes locationType/locationId/locationName for display,
-// plus legacy outletId/outletName (null for warehouses) for deposit compat.
-router.get("/cash-in-outlet", async (_req, res): Promise<void> => {
+// Returns cash balances scoped to the requesting employee's location.
+// Head-office sees all; warehouse sees their own + child outlets; outlet sees only itself.
+router.get("/cash-in-outlet", async (req, res): Promise<void> => {
+  const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  let allowedOutletIds: number[] | null = null;   // null = unrestricted
+  let allowedWarehouseIds: number[] | null = null;
+  if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
+    const scope = await getUserDataScope(scopeEmp);
+    allowedOutletIds = scope.outletIds;
+    allowedWarehouseIds = scope.warehouseIds;
+  }
   const result: any[] = [];
 
   // ── Outlets ────────────────────────────────────────────────────────────────
@@ -35,6 +43,8 @@ router.get("/cash-in-outlet", async (_req, res): Promise<void> => {
     `SELECT id, name, warehouse_id FROM outlets ORDER BY name`
   );
   for (const outlet of outlets) {
+    // Skip outlets outside the caller's scope
+    if (allowedOutletIds !== null && !allowedOutletIds.includes(Number(outlet.id))) continue;
     const cashCode = `OUTLET-CASH-${outlet.id}`;
     const { rows: [ledger] } = await pool.query(
       `SELECT id FROM account_ledgers WHERE code = $1`, [cashCode]
@@ -68,6 +78,8 @@ router.get("/cash-in-outlet", async (_req, res): Promise<void> => {
     `SELECT id, name FROM warehouses ORDER BY name`
   );
   for (const wh of warehouses) {
+    // Skip warehouses outside the caller's scope
+    if (allowedWarehouseIds !== null && !allowedWarehouseIds.includes(Number(wh.id))) continue;
     const cashCode = `WH-CASH-${wh.id}`;
     const { rows: [ledger] } = await pool.query(
       `SELECT id FROM account_ledgers WHERE code = $1`, [cashCode]
@@ -107,6 +119,31 @@ router.get("/cash-in-outlet/deposits", async (req, res): Promise<void> => {
 
   if (status)   { params.push(status);         conds.push(`cd.status = $${params.length}`); }
   if (outletId) { params.push(Number(outletId)); conds.push(`cd.outlet_id = $${params.length}`); }
+
+  // Location scoping: non-headoffice employees only see deposits for their own locations
+  const scopeDep = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  if (scopeDep && scopeDep.branchType !== 'headoffice') {
+    const scope = await getUserDataScope(scopeDep);
+    if (scope.outletIds.length > 0 && scope.warehouseIds.length === 0) {
+      // Outlet employee — only their outlet's deposits
+      params.push(scope.outletIds);
+      conds.push(`(cd.outlet_id = ANY($${params.length}::int[]) AND cd.warehouse_id IS NULL)`);
+    } else if (scope.warehouseIds.length > 0) {
+      // Warehouse employee — their warehouse deposits + child outlet deposits
+      const subConds: string[] = [];
+      params.push(scope.warehouseIds);
+      subConds.push(`cd.warehouse_id = ANY($${params.length}::int[])`);
+      if (scope.outletIds.length > 0) {
+        params.push(scope.outletIds);
+        subConds.push(`cd.outlet_id = ANY($${params.length}::int[])`);
+      }
+      conds.push(`(${subConds.join(' OR ')})`);
+    } else {
+      // No accessible locations → return empty
+      res.json([]);
+      return;
+    }
+  }
 
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
 

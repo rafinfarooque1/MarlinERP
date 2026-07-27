@@ -36,6 +36,20 @@ interface FinancialStatements {
 const fmt = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(n);
 
+/** Inline balance tag — always renders, shows Dr/Cr suffix with colour. */
+function BalTag({ balance, size = 'sm' }: { balance: number; size?: 'sm' | 'xs' }) {
+  const fs  = size === 'sm' ? 'text-[12px]' : 'text-[11px]';
+  const tag = size === 'sm' ? 'text-[10px]' : 'text-[9px]';
+  if (balance === 0)
+    return <span className={`${fs} font-mono tabular-nums text-muted-foreground/35 shrink-0`}>—</span>;
+  const dr = balance > 0;
+  return (
+    <span className={`${fs} font-mono tabular-nums shrink-0 ${dr ? 'text-blue-500 dark:text-blue-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+      {fmt(Math.abs(balance))}<span className={`${tag} ml-0.5 opacity-70`}>{dr ? 'Dr' : 'Cr'}</span>
+    </span>
+  );
+}
+
 function computeDateRange(period: string, from: string, to: string) {
   const today = new Date();
   const iso = (d: Date) => d.toISOString().split('T')[0];
@@ -407,7 +421,7 @@ function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename, onV
             </span>
           )}
 
-          {balance > 0 && <span className="text-[11px] font-mono tabular-nums text-muted-foreground shrink-0">{fmt(balance)}</span>}
+          <BalTag balance={node.balance} />
 
           {!isSystem && (
             <button onClick={() => onDelete?.(node.id, node.name)}
@@ -465,7 +479,7 @@ function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename, onV
           </span>
         )}
 
-        {balance > 0 && <span className="text-[11px] font-mono tabular-nums text-muted-foreground shrink-0">{fmt(balance)}</span>}
+        <BalTag balance={node.balance} size="xs" />
 
         {node.children.length === 0 && (
           <button onClick={() => onViewStatement?.(node)}
@@ -534,10 +548,12 @@ function GroupBlock({ group, onCreated, onBankAdd, onDelete, onRename, onViewSta
         onDrop={(e) => { e.preventDefault(); setDropOver(false); const id = Number(e.dataTransfer.getData('text/plain')); if (id && group.id) onMove?.(id, group.id); }}
       >
         <span className="flex-1 text-xs font-bold text-foreground/70 uppercase tracking-wide">{group.name}</span>
-        {dropOver && <span className="text-[10px] text-blue-400 font-medium">Drop here</span>}
-        {group.total > 0 && !dropOver && (
-          <span className="text-xs font-mono font-semibold tabular-nums text-foreground/60">{fmt(group.total)}</span>
-        )}
+        {dropOver
+          ? <span className="text-[10px] text-blue-400 font-medium">Drop here</span>
+          : <span className="text-xs font-mono font-semibold tabular-nums text-foreground/60">
+              {group.total === 0 ? '—' : fmt(group.total)}
+            </span>
+        }
       </div>
 
       {/* Ledgers and sub-groups under this group */}

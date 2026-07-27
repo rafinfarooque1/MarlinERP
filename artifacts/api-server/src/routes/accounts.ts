@@ -887,6 +887,8 @@ router.get("/accounts/financial-statements", requireModuleView("Chart of Account
   const serializeNode = (node: any): any => ({
     id: node.id, name: node.name, type: node.type,
     parentId: node.parentId, code: node.code,
+    isGroup: node.isGroup ?? false,
+    isSystemGroup: node.isSystemGroup ?? false,
     balance: Math.round(node.balance * 100) / 100,
     children: node.children.map(serializeNode),
   });

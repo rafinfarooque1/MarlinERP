@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useListAdvances, useAddAdvance, useListEmployees } from '@workspace/api-client-react';
+import { useListAdvances, useAddAdvance, useListEmployees, useGetCompanySettings } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -10,9 +10,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { ShieldOff, Plus, Search, Wallet, Clock, CheckCircle2, Loader2, IndianRupee } from 'lucide-react';
+import { ShieldOff, Plus, Search, Wallet, Clock, CheckCircle2, Loader2, IndianRupee, FileDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
+import { downloadAdvancePDF } from '@/lib/pdfUtils';
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(n);
@@ -121,6 +122,7 @@ function NewAdvanceDialog({ onClose }: { onClose: () => void }) {
 export default function Advances() {
   const perm = usePermission('Payroll');
   const { data: advances = [], isLoading } = useListAdvances();
+  const { data: cs } = useGetCompanySettings();
   const list = advances as any[];
 
   const [search,    setSearch]    = useState('');
@@ -261,6 +263,7 @@ export default function Advances() {
                   <TableHead className="text-right">Amount</TableHead>
                   <TableHead>Note</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead className="w-10" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -280,6 +283,23 @@ export default function Advances() {
                           <Clock className="w-3 h-3 mr-1" /> Pending
                         </Badge>
                       )}
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        variant="ghost" size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-primary"
+                        title="Download PDF"
+                        onClick={() => downloadAdvancePDF({
+                          id: a.id,
+                          employeeName: a.employeeName,
+                          amount: a.amount,
+                          date: a.date?.split('T')[0] ?? a.date,
+                          note: a.note,
+                          isDeducted: a.isDeducted,
+                        }, cs)}
+                      >
+                        <FileDown className="h-3.5 w-3.5" />
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))}
