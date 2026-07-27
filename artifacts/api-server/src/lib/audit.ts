@@ -6,7 +6,7 @@
  */
 import { db, activityLogTable } from "@workspace/db";
 
-export type AuditAction = "CREATE" | "UPDATE" | "DELETE";
+export type AuditAction = "CREATE" | "UPDATE" | "DELETE" | "PERMISSION_DENIED";
 
 export interface AuditOptions {
   action: AuditAction;

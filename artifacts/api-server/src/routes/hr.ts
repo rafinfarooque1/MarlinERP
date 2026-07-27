@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { requireModuleAction } from "../middleware/permissions";
+import { requireModuleAction, requireModuleView } from "../middleware/permissions";
+import { nextVoucherNumber } from "../lib/voucherNumber";
 import {
   db, pool, hierarchiesTable, employeesTable, payrollTable, attendanceTable,
   leavesTable, warehousesTable, outletsTable, payComponentsTable,
@@ -171,7 +172,7 @@ router.delete("/hr/hierarchies/:id", requireModuleAction("Hierarchy", "delete"),
 });
 
 // ── Employees ─────────────────────────────────────────────────────────────
-router.get("/hr/employees", async (req, res): Promise<void> => {
+router.get("/hr/employees", requireModuleView("Employees"), async (req, res): Promise<void> => {
   const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
 
   const scopeParams: unknown[] = [];
@@ -231,7 +232,7 @@ router.post("/hr/employees", requireModuleAction("Employees", "add"), async (req
   });
 });
 
-router.get("/hr/employees/:id", async (req, res): Promise<void> => {
+router.get("/hr/employees/:id", requireModuleView("Employees"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const [row] = await db.select().from(employeesTable).where(eq(employeesTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
@@ -349,7 +350,7 @@ router.put("/hr/pay-components/:employeeId", requireModuleAction("Payroll", "edi
 
 // ── Payroll ───────────────────────────────────────────────────────────────
 
-router.get("/hr/payroll", async (req, res): Promise<void> => {
+router.get("/hr/payroll", requireModuleView("Payroll"), async (req, res): Promise<void> => {
   const qp = ListPayrollQueryParams.safeParse(req.query);
   const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
 
@@ -487,6 +488,79 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("Payroll", "edit"), async
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, row.employeeId)).limit(1);
 
+  // ── Accounting entry: Dr Salary Expense / Cr Cash ─────────────────────────
+  // Find or auto-provision the Salary Expense ledger (STD-SALARY-EXP).
+  // Find the Cash ledger (STD-CASH) for the credit side.
+  try {
+    let salaryExpenseLedgerId: number | null = null;
+    const { rows: [salRow] } = await pool.query(
+      `SELECT id FROM account_ledgers WHERE code = 'STD-SALARY-EXP' LIMIT 1`
+    );
+    if (salRow) {
+      salaryExpenseLedgerId = salRow.id;
+    } else {
+      // Auto-provision under Indirect Expenses if the group exists
+      const { rows: [indExp] } = await pool.query(
+        `SELECT id FROM account_ledgers WHERE code = 'STD-INDIRECT-EXP' LIMIT 1`
+      );
+      const { rows: [created] } = await pool.query(
+        `INSERT INTO account_ledgers (name, type, code, is_group, is_system_group, parent_id, description)
+         VALUES ('Salary Expense', 'expense', 'STD-SALARY-EXP', false, false, $1,
+                 'Employee salary and payroll expenses')
+         ON CONFLICT DO NOTHING
+         RETURNING id`,
+        [indExp?.id ?? null]
+      );
+      if (created) salaryExpenseLedgerId = created.id;
+      else {
+        // If ON CONFLICT suppressed the insert, fetch the existing row
+        const { rows: [existing] } = await pool.query(
+          `SELECT id FROM account_ledgers WHERE code = 'STD-SALARY-EXP' LIMIT 1`
+        );
+        if (existing) salaryExpenseLedgerId = existing.id;
+      }
+    }
+
+    const { rows: [cashRow] } = await pool.query(
+      `SELECT id FROM account_ledgers WHERE code = 'STD-CASH' LIMIT 1`
+    );
+    const cashLedgerId: number | null = cashRow?.id ?? null;
+
+    const netPay = Number(row.netPay ?? 0);
+    if (salaryExpenseLedgerId && cashLedgerId && netPay > 0.004) {
+      const monthStr = String(row.month).padStart(2, "0");
+      const narration = `Salary — ${emp?.name ?? `Employee #${row.employeeId}`} — ${monthStr}/${row.year}`;
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const voucherNumber = await nextVoucherNumber(client, "journal", today);
+        const { rows: [jv] } = await client.query(
+          `INSERT INTO journal_vouchers
+             (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by)
+           VALUES ('journal', $1, $2, $3, $4, $5)
+           RETURNING id`,
+          [voucherNumber, today, narration, netPay.toFixed(2), req.employee?.username ?? "system"]
+        );
+        await client.query(
+          `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit)
+           VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)`,
+          [jv.id, salaryExpenseLedgerId, netPay.toFixed(2), cashLedgerId]
+        );
+        await client.query("COMMIT");
+      } catch (journalErr) {
+        await client.query("ROLLBACK").catch(() => {});
+        // Journal entry failure is non-fatal for the payroll marking operation;
+        // log it so the accountant can manually post if needed.
+        console.warn("[payroll/pay] Failed to create journal entry:", journalErr);
+      } finally {
+        client.release();
+      }
+    }
+  } catch (acctErr) {
+    // Non-fatal: payroll is already marked paid; accounting can be corrected manually.
+    console.warn("[payroll/pay] Accounting entry error:", acctErr);
+  }
+
   logActivity({
     action: "UPDATE", module: "payroll", entityType: "payroll", entityId: row.id,
     description: `Payroll marked paid for ${emp?.name ?? `Employee #${row.employeeId}`} — ${row.month}/${row.year} — ₹${Number(row.netPay ?? 0).toLocaleString("en-IN")}`,
@@ -614,7 +688,7 @@ router.post("/hr/attendance/check-out", async (req, res): Promise<void> => {
 });
 
 // ── Leave ─────────────────────────────────────────────────────────────────
-router.get("/hr/leaves", async (req, res): Promise<void> => {
+router.get("/hr/leaves", requireModuleView("Leave"), async (req, res): Promise<void> => {
   const qp = ListLeavesQueryParams.safeParse(req.query);
   let rows = await db.select().from(leavesTable).orderBy(leavesTable.id);
   if (qp.success) {

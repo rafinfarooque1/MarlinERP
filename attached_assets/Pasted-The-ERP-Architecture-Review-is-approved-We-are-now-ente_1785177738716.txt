@@ -1,0 +1,366 @@
+The ERP Architecture Review is approved.
+
+We are now entering Phase 1: ERP Foundation Stabilization.
+
+Do NOT add any new business modules.
+
+Do NOT redesign the UI.
+
+Do NOT change workflows unless required to fix an architectural issue.
+
+The objective is to make the existing ERP stable, secure, scalable, and enterprise-ready before adding new features.
+
+=========================================================
+PHASE 1 OBJECTIVE
+=========================================================
+
+Review the completed ERP Architecture Review and implement ONLY the Critical and High priority architectural improvements.
+
+Do not implement Medium or Low priority items unless they are required by another change.
+
+Maintain backward compatibility.
+
+Do not break existing APIs or workflows.
+
+=========================================================
+1. RBAC & PERMISSION SYSTEM (HIGHEST PRIORITY)
+=========================================================
+
+The Permission system must become the single source of truth.
+
+Permission controls:
+
+• Module visibility
+• View
+• Add
+• Edit
+• Delete
+• Download
+
+Branch never controls module visibility.
+
+Branch only controls DATA.
+
+Required behavior:
+
+Head Office
+→ Can see every permitted module.
+→ Can access all company data.
+
+Warehouse
+→ Can see every module allowed by permission.
+→ Can access ONLY:
+   • Assigned warehouse
+   • Mapped outlets
+
+Outlet
+→ Can see every module allowed by permission.
+→ Can access ONLY:
+   • Assigned outlet
+
+Module Visibility Rules
+
+View = ON
+→ Module visible.
+
+View = OFF
+→ Module hidden.
+
+No hardcoded sidebar logic.
+
+No branch-based hiding.
+
+Backend must enforce the same permission rules.
+
+Every GET endpoint must validate View permission.
+
+Every POST endpoint must validate Add.
+
+Every PATCH endpoint must validate Edit.
+
+Every DELETE endpoint must validate Delete.
+
+Permission checks must exist on frontend and backend.
+
+Frontend only hides UI.
+
+Backend always enforces security.
+
+=========================================================
+2. DATA SCOPE
+=========================================================
+
+Create one centralized Data Scope service.
+
+Every API must obtain data through this service.
+
+Rules:
+
+Head Office
+
+→ All records
+
+Warehouse
+
+→ Warehouse
+→ Mapped outlets
+
+Outlet
+
+→ Assigned outlet only
+
+Never trust frontend location IDs.
+
+Backend determines scope from authenticated employee.
+
+Reports
+
+Inventory
+
+Accounts
+
+HR
+
+Sales
+
+Production
+
+Dashboard
+
+Everything must use the same scope service.
+
+=========================================================
+3. ACCOUNTING FOUNDATION
+=========================================================
+
+Complete the accounting engine.
+
+Implement:
+
+Opening Balances
+
+Profit & Loss
+
+Balance Sheet
+
+Retained Earnings
+
+Financial Year
+
+Opening Entry
+
+Closing Entry
+
+Opening Trial Balance
+
+Balance validation
+
+Every Journal must satisfy:
+
+Debit Total = Credit Total
+
+or reject the transaction.
+
+=========================================================
+4. INVENTORY INTEGRITY
+=========================================================
+
+Prevent:
+
+Negative stock
+
+Duplicate stock rows
+
+Broken batch balances
+
+All inventory operations must run inside database transactions.
+
+Ensure:
+
+Stock
+
+Batch
+
+Ledger
+
+always remain synchronized.
+
+=========================================================
+5. DATABASE INTEGRITY
+=========================================================
+
+Implement:
+
+Foreign Keys
+
+Indexes
+
+Proper date/time types
+
+Database constraints
+
+Migration history
+
+Versioned migrations
+
+Remove schema evolution from startup.
+
+=========================================================
+6. API IMPROVEMENTS
+=========================================================
+
+Implement:
+
+Standard response format
+
+Standard error format
+
+Request validation
+
+Transaction helper
+
+Health check
+
+Consistent pagination
+
+=========================================================
+7. SECURITY
+=========================================================
+
+Implement:
+
+Default Deny permissions
+
+Permission validation on every endpoint
+
+Token invalidation for inactive employees
+
+Public invoice expiry
+
+Audit permission failures
+
+Audit unauthorized access attempts
+
+=========================================================
+8. HR
+=========================================================
+
+Payroll must generate accounting entries.
+
+Salary Expense
+
+Salary Payable
+
+Leave Balance
+
+Payroll Journal
+
+Employee Cost Allocation
+
+=========================================================
+9. SALES
+=========================================================
+
+Implement:
+
+Credit check during sale edit
+
+Credit Note instead of invoice deletion
+
+GST adjustment for returns
+
+=========================================================
+10. STOCK
+=========================================================
+
+Implement:
+
+Negative stock prevention
+
+Transfer validation
+
+Batch validation
+
+Expiry validation
+
+=========================================================
+11. BUSINESS RULES
+=========================================================
+
+Do NOT change:
+
+Production workflow
+
+Warehouse workflow
+
+Outlet workflow
+
+Transfer workflow
+
+GST workflow
+
+Purchase workflow
+
+unless required for integrity.
+
+=========================================================
+12. IMPLEMENTATION RULES
+=========================================================
+
+Implement in small phases.
+
+Each phase must compile successfully.
+
+Run TypeScript checks after every phase.
+
+Run database migration safely.
+
+Never leave the ERP in a broken state.
+
+=========================================================
+13. FINAL VERIFICATION
+=========================================================
+
+After implementation generate a report.
+
+For every item show:
+
+Status
+
+PASS
+
+FAIL
+
+Files modified
+
+Reason
+
+Risk
+
+Testing performed
+
+Do not consider this phase complete until every Critical and High priority item from the Architecture Review has been addressed.
+
+=========================================================
+IMPORTANT
+=========================================================
+
+This is a stabilization phase.
+
+Focus on architecture quality.
+
+Focus on security.
+
+Focus on accounting correctness.
+
+Focus on data integrity.
+
+Focus on scalability.
+
+Do NOT add new features.
+
+Do NOT redesign the ERP.
+
+Do NOT change business logic unless required for architectural correctness.
+
+The goal is to make this ERP production-ready and enterprise-grade while preserving existing workflows.

@@ -9,6 +9,8 @@
  * Legacy unsigned `base64(id:username)` tokens are REJECTED: they carry no
  * signature, so anyone who can guess an employee id could forge one. Users
  * holding a legacy token get a 401 and simply log in again once.
+ *
+ * Token max-age is 8 hours by default; override with TOKEN_MAX_AGE_HOURS env.
  */
 import { createHmac, timingSafeEqual } from 'crypto';
 
@@ -20,6 +22,10 @@ if (!KEY) {
     '[token] SESSION_SECRET is not set — refusing to start without a session-token signing key.',
   );
 }
+
+/** Token max-age in milliseconds. Default: 8 hours. */
+const TOKEN_MAX_AGE_MS =
+  parseInt(process.env.TOKEN_MAX_AGE_HOURS ?? '8', 10) * 60 * 60 * 1000;
 
 const b64url = (buf: Buffer): string =>
   buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -33,6 +39,8 @@ const hmac = (payload: string): string =>
 export interface TokenPayload {
   id: number;
   username: string;
+  /** Unix timestamp (ms) when the token was issued. */
+  issuedAt: number;
 }
 
 /** Issue a signed v2 session token. */
@@ -41,7 +49,13 @@ export function signToken(id: number, username: string): string {
   return `v2.${payload}.${hmac(payload)}`;
 }
 
-/** Verify a signed v2 bearer token. Any other format returns null. */
+/**
+ * Verify a signed v2 bearer token.
+ * Returns null when:
+ *   • format is wrong or signature fails
+ *   • token has no issuedAt timestamp
+ *   • token is older than TOKEN_MAX_AGE_MS (default 8 hours)
+ */
 export function verifyToken(token: string): TokenPayload | null {
   if (!token || !token.startsWith('v2.')) return null;
 
@@ -52,9 +66,29 @@ export function verifyToken(token: string): TokenPayload | null {
   const a = Buffer.from(sig);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+
   const decoded = fromB64url(payload).toString('utf-8');
-  const [idStr, username] = decoded.split(':');
+  // payload format: "id:username:issuedAtMs"
+  // Username may contain colons (e.g. email addresses), so split on the
+  // first and last colon only to isolate id and timestamp.
+  const firstColon = decoded.indexOf(':');
+  const lastColon = decoded.lastIndexOf(':');
+  if (firstColon === -1 || lastColon <= firstColon) return null;
+
+  const idStr = decoded.slice(0, firstColon);
+  const username = decoded.slice(firstColon + 1, lastColon);
+  const issuedAtStr = decoded.slice(lastColon + 1);
+
   const id = parseInt(idStr, 10);
-  if (!Number.isFinite(id) || !username) return null;
-  return { id, username };
+  const issuedAt = parseInt(issuedAtStr, 10);
+
+  if (!Number.isFinite(id) || id <= 0 || !username) return null;
+
+  // Reject tokens that carry no issue timestamp (format pre-dates v2).
+  if (!Number.isFinite(issuedAt)) return null;
+
+  // Reject expired tokens.
+  if (Date.now() - issuedAt > TOKEN_MAX_AGE_MS) return null;
+
+  return { id, username, issuedAt };
 }

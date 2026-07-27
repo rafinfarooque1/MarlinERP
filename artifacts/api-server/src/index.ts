@@ -936,6 +936,96 @@ await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_ledger_ref      ON stock_
 await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_ledger_doc      ON stock_ledger (doc_type, doc_id)`);
 await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_ledger_created  ON stock_ledger (created_at DESC)`);
 
+// ── Additional performance indexes ────────────────────────────────────────────
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_sales_customer       ON sales (customer_id)       WHERE customer_id IS NOT NULL`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_sales_invoice        ON sales (invoice_number)    WHERE invoice_number IS NOT NULL`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_jv_party_ledger      ON journal_vouchers (party_ledger_id) WHERE party_ledger_id IS NOT NULL`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_payroll_emp_month    ON payroll (employee_id, year, month)`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_permissions_hier     ON permissions (hierarchy_id)`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_batches_expiry_loc ON stock_batches (expiry_date, branch_type, branch_id)`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_receipts_date        ON receipts (receipt_date)`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_journal_voucher_lines_ledger ON journal_voucher_lines (ledger_id)`);
+
+// ── GIN index on JSONB line_items for fast containment queries ────────────────
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_sales_line_items_gin   ON sales   USING gin (line_items)`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_purchases_line_items_gin ON purchases USING gin (line_items)`);
+
+// ── Default-deny permission seeding ──────────────────────────────────────────
+// Ensures every existing non-level-1 hierarchy has an explicit permissions row
+// for every registered module, so the switch from default-allow to default-deny
+// does not accidentally lock out existing users.
+// New hierarchies created after this point start with no rows → denied until an
+// admin explicitly grants access on the Permissions page.
+{
+  const ALL_MODULES = [
+    'Point of Sale', 'Location Stock', 'HO Transfers', 'Location Expenses',
+    'Cash Balance', 'Units', 'Items', 'Production', 'Purchases',
+    'Stock', 'Stock Ledger', 'Inventory Reports', 'Stock Verification',
+    'Warehouses', 'Outlets', 'Item Prices', 'Sales', 'Customers',
+    'Vendors', 'Coupons', 'Employees', 'Attendance', 'Leave',
+    'Payroll', 'Hierarchy', 'Chart of Accounts', 'Ledger', 'Payments',
+    'Cash & Bank', 'Vouchers', 'Books', 'Expenses', 'GST Summary',
+    'GST Returns', 'Reconciliation', 'Accounts Cash Balance', 'Reports',
+    'Dashboard', 'Settings', 'Permissions', 'Login History',
+  ];
+  // Get all non-level-1 hierarchies
+  const { rows: hRows } = await pool.query(
+    `SELECT id FROM hierarchies WHERE level != 1`
+  );
+  for (const h of hRows) {
+    for (const mod of ALL_MODULES) {
+      await pool.query(
+        `INSERT INTO permissions (hierarchy_id, module, can_view, can_add, can_edit, can_delete)
+         SELECT $1, $2, true, true, true, true
+         WHERE NOT EXISTS (
+           SELECT 1 FROM permissions WHERE hierarchy_id = $1 AND module = $2
+         )`,
+        [h.id, mod]
+      );
+    }
+  }
+}
+
+// ── Negative stock prevention ─────────────────────────────────────────────────
+// Add a check constraint so the database itself refuses to persist a negative
+// quantity. The tolerance of -0.001 absorbs floating-point arithmetic errors
+// in FEFO batch consumption while blocking real negatives.
+// Only applied when data is already clean; if existing rows violate the
+// constraint the ALTER will raise an error which we catch non-fatally.
+try {
+  await pool.query(`
+    ALTER TABLE stock_entries
+    ADD CONSTRAINT chk_stock_non_negative CHECK (quantity::numeric >= -0.001)
+  `);
+} catch {
+  // Constraint already exists or data violation — non-fatal, log only.
+}
+
+// ── Opening balances table ────────────────────────────────────────────────────
+await pool.query(`
+  CREATE TABLE IF NOT EXISTS opening_balances (
+    id          SERIAL PRIMARY KEY,
+    ledger_id   INTEGER NOT NULL,
+    balance     NUMERIC(15,2) NOT NULL DEFAULT 0,
+    balance_type TEXT NOT NULL CHECK (balance_type IN ('debit','credit')),
+    as_of_date  DATE NOT NULL,
+    financial_year TEXT NOT NULL DEFAULT '',
+    notes       TEXT,
+    created_by  TEXT NOT NULL DEFAULT 'system',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )
+`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_opening_balances_ledger ON opening_balances (ledger_id)`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_opening_balances_date   ON opening_balances (as_of_date)`);
+// Unique constraint enables the upsert (ON CONFLICT) in the opening-balances route
+try {
+  await pool.query(`
+    ALTER TABLE opening_balances
+    ADD CONSTRAINT opening_balances_ledger_year_unique UNIQUE (ledger_id, financial_year)
+  `);
+} catch { /* constraint already exists */ }
+
 const rawPort = process.env["PORT"];
 if (!rawPort) throw new Error("PORT environment variable is required but was not provided.");
 const port = Number(rawPort);

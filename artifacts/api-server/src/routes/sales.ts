@@ -676,6 +676,63 @@ router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit")
   const discountTotal = Math.round(rawDiscountTotal * 100) / 100;
   const totalAmount = subtotal + taxTotal - discountTotal;
 
+  // ── Credit limit check on edit ────────────────────────────────────────────
+  // Mirror of the POST credit-limit guard so edits can't silently bypass it.
+  const newPaymentModeForCredit = parsed.data.paymentMode ?? 'cash';
+  const isEditCreditControlled = !!parsed.data.customerId && newPaymentModeForCredit === 'credit';
+
+  if (isEditCreditControlled) {
+    const editCustomerId = parsed.data.customerId!;
+    const { rows: [editCC] } = await pgPool.query<{ credit_limit: string }>(
+      `SELECT COALESCE(credit_limit, 0)::numeric AS credit_limit FROM customers WHERE id = $1`,
+      [editCustomerId]
+    );
+    const editCreditLimit = Number(editCC?.credit_limit ?? 0);
+    if (editCreditLimit > 0) {
+      // Outstanding = all credit sales for customer (excluding this sale, which
+      // we are replacing) minus all sale_payments collected for this customer.
+      const { rows: [ous] } = await pgPool.query<{ outstanding: string }>(
+        `SELECT GREATEST(
+           COALESCE((SELECT SUM(total_amount::numeric) FROM sales
+                     WHERE customer_id = $1 AND payment_mode = 'credit' AND id != $2), 0)
+           -
+           COALESCE((SELECT SUM(sp.amount::numeric) FROM sale_payments sp
+                     JOIN sales s ON s.id = sp.sale_id WHERE s.customer_id = $1), 0)
+         , 0)::numeric AS outstanding`,
+        [editCustomerId, id]
+      );
+      const currentOutstanding = Number(ous?.outstanding ?? 0);
+      const projectedOutstanding = currentOutstanding + totalAmount;
+
+      if (projectedOutstanding > editCreditLimit + 0.009) {
+        const editOverrideRequested = (req.body as any).creditOverride === true;
+        if (editOverrideRequested) {
+          const { rows: [ep] } = await pgPool.query<{ can_edit: boolean }>(
+            `SELECT can_edit FROM permissions WHERE hierarchy_id = $1 AND module = 'Sales' LIMIT 1`,
+            [req.employee!.hierarchyId]
+          );
+          const overrideAllowed = ep?.can_edit === true;
+          if (!overrideAllowed) {
+            res.status(403).json({
+              error: 'You are not authorized to override the credit limit. Ask a manager with Sales edit permission.',
+              code: 'CREDIT_LIMIT_OVERRIDE_DENIED',
+            });
+            return;
+          }
+        } else {
+          res.status(422).json({
+            error: `Credit limit exceeded: current outstanding ₹${currentOutstanding.toFixed(2)} plus this sale of ₹${totalAmount.toFixed(2)} exceeds the credit limit of ₹${editCreditLimit.toFixed(2)}.`,
+            code: 'CREDIT_LIMIT_EXCEEDED',
+            creditLimit: editCreditLimit,
+            currentOutstanding,
+            projectedOutstanding,
+          });
+          return;
+        }
+      }
+    }
+  }
+
   // Reverse old stock deductions
   const oldLineItems = (existingRaw.line_items ?? []) as Array<{ itemId: number; quantity: number; batchBreakdown?: any[] }>;
   for (const li of oldLineItems) {

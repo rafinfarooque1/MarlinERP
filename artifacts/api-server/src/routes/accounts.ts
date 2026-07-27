@@ -195,7 +195,7 @@ router.delete("/accounts/chart/:id", requireModuleAction("Chart of Accounts", "d
 });
 
 // ── Payments ──────────────────────────────────────────────────────────────
-router.get("/accounts/payments", async (_req, res): Promise<void> => {
+router.get("/accounts/payments", requireModuleView("Payments"), async (_req, res): Promise<void> => {
   const result = await pool.query(`
     SELECT p.*, 
       pf.name AS paid_from_name,
@@ -250,7 +250,7 @@ router.delete("/accounts/payments/:id", requireModuleAction("Payments", "delete"
 });
 
 // ── Receipts ──────────────────────────────────────────────────────────────
-router.get("/accounts/receipts", async (_req, res): Promise<void> => {
+router.get("/accounts/receipts", requireModuleView("Payments"), async (_req, res): Promise<void> => {
   const result = await pool.query(`
     SELECT r.*,
       rf.name AS received_from_name,
@@ -305,7 +305,7 @@ router.delete("/accounts/receipts/:id", requireModuleAction("Payments", "delete"
 });
 
 // ── Ledger Statement ──────────────────────────────────────────────────────
-router.get("/accounts/ledger-statement", async (req, res): Promise<void> => {
+router.get("/accounts/ledger-statement", requireModuleView("Ledger"), async (req, res): Promise<void> => {
   const qp = GetLedgerStatementQueryParams.safeParse(req.query);
   if (!qp.success) { res.status(400).json({ error: qp.error.message }); return; }
 
@@ -424,7 +424,7 @@ router.get("/accounts/ledger-statement", async (req, res): Promise<void> => {
 });
 
 // ── Cash & Bank (kept for backward compat) ────────────────────────────────
-router.get("/accounts/cash-bank", async (_req, res): Promise<void> => {
+router.get("/accounts/cash-bank", requireModuleView("Cash & Bank"), async (_req, res): Promise<void> => {
   const rows = await db.select().from(cashBankAccountsTable).orderBy(cashBankAccountsTable.id);
   res.json(rows.map(r => ({ ...r, balance: Number(r.balance) })));
 });
@@ -1124,7 +1124,7 @@ router.get("/accounts/ledger/:id/statement", async (req, res): Promise<void> => 
 });
 
 // ── GST Summary ───────────────────────────────────────────────────────────
-router.get("/gst/summary", async (req, res): Promise<void> => {
+router.get("/gst/summary", requireModuleView(["GST Summary", "GST Returns"]), async (req, res): Promise<void> => {
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
 
   let allSales = await db.select().from(salesTable).orderBy(salesTable.saleDate);
@@ -1220,4 +1220,99 @@ router.get("/gst/summary", async (req, res): Promise<void> => {
   });
 });
 
+// ── Opening Balances ───────────────────────────────────────────────────────
+// Opening balances allow the COA to reflect historical account positions so
+// the Trial Balance, P&L and Balance Sheet are accurate from day one.
+
+router.get("/accounts/opening-balances", requireModuleView("Chart of Accounts"), async (_req, res): Promise<void> => {
+  const { rows } = await pool.query(`
+    SELECT ob.id, ob.ledger_id, ob.balance::float AS balance, ob.balance_type,
+           ob.as_of_date, ob.financial_year, ob.notes, ob.created_by, ob.created_at, ob.updated_at,
+           al.name AS ledger_name, al.code AS ledger_code, al.type AS ledger_type
+    FROM opening_balances ob
+    JOIN account_ledgers al ON al.id = ob.ledger_id
+    ORDER BY ob.as_of_date DESC, al.name
+  `);
+  res.json(rows.map((r: any) => ({
+    id: r.id,
+    ledgerId: r.ledger_id,
+    ledgerName: r.ledger_name,
+    ledgerCode: r.ledger_code,
+    ledgerType: r.ledger_type,
+    balance: Number(r.balance),
+    balanceType: r.balance_type,
+    asOfDate: r.as_of_date instanceof Date ? r.as_of_date.toISOString().slice(0, 10) : String(r.as_of_date).slice(0, 10),
+    financialYear: r.financial_year,
+    notes: r.notes ?? null,
+    createdBy: r.created_by,
+    createdAt: r.created_at,
+  })));
+});
+
+router.post("/accounts/opening-balances", requireModuleAction("Chart of Accounts", "add"), async (req, res): Promise<void> => {
+  const body = req.body as any;
+  const ledgerId = Number(body.ledgerId);
+  const balance = Number(body.balance);
+  const balanceType = String(body.balanceType ?? "debit");
+  const asOfDate = String(body.asOfDate ?? "").slice(0, 10);
+  const financialYear = String(body.financialYear ?? "").trim();
+  const notes = body.notes ? String(body.notes).trim() || null : null;
+
+  if (!Number.isFinite(ledgerId) || ledgerId <= 0) {
+    res.status(400).json({ error: "ledgerId is required" }); return;
+  }
+  if (!Number.isFinite(balance) || balance < 0) {
+    res.status(400).json({ error: "balance must be a non-negative number" }); return;
+  }
+  if (!["debit", "credit"].includes(balanceType)) {
+    res.status(400).json({ error: "balanceType must be 'debit' or 'credit'" }); return;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) {
+    res.status(400).json({ error: "asOfDate (YYYY-MM-DD) is required" }); return;
+  }
+
+  // Verify ledger exists and is postable (not a group)
+  const { rows: [ledger] } = await pool.query(
+    `SELECT id, name, is_group, is_system_group FROM account_ledgers WHERE id = $1`, [ledgerId]
+  );
+  if (!ledger) { res.status(404).json({ error: "Ledger not found" }); return; }
+  if (ledger.is_group || ledger.is_system_group) {
+    res.status(400).json({ error: `"${ledger.name}" is a group ledger — post opening balances to specific ledgers under it` }); return;
+  }
+
+  // Upsert: one opening balance record per ledger per financial year
+  const { rows: [row] } = await pool.query(`
+    INSERT INTO opening_balances (ledger_id, balance, balance_type, as_of_date, financial_year, notes, created_by, updated_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    ON CONFLICT (ledger_id, financial_year)
+    DO UPDATE SET balance = EXCLUDED.balance, balance_type = EXCLUDED.balance_type,
+                  as_of_date = EXCLUDED.as_of_date, notes = EXCLUDED.notes,
+                  updated_at = NOW()
+    RETURNING *
+  `, [ledgerId, balance.toFixed(2), balanceType, asOfDate, financialYear,
+      notes, req.employee?.username ?? "system"]);
+
+  logActivity({
+    action: "CREATE", module: "accounts", entityType: "opening_balance", entityId: row.id,
+    description: `Opening balance set for ${ledger.name} — ₹${balance.toFixed(2)} ${balanceType}`,
+    metadata: { after: { ledgerId, balance, balanceType, asOfDate, financialYear } },
+  }).catch(() => {});
+
+  res.status(201).json({ id: row.id, ledgerId, balance, balanceType, asOfDate, financialYear, notes });
+});
+
+router.delete("/accounts/opening-balances/:id", requireModuleAction("Chart of Accounts", "delete"), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const { rows: [deleted] } = await pool.query(
+    `DELETE FROM opening_balances WHERE id = $1 RETURNING ledger_id`, [id]
+  );
+  if (!deleted) { res.status(404).json({ error: "Opening balance not found" }); return; }
+  logActivity({
+    action: "DELETE", module: "accounts", entityType: "opening_balance", entityId: id,
+    description: `Opening balance deleted for ledger ${deleted.ledger_id}`,
+  }).catch(() => {});
+  res.status(204).send();
+});
+
 export default router;
+

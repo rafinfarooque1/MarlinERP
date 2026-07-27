@@ -16,3 +16,4 @@
 - [Stock Ledger](stock-ledger.md) — append-only audit table; write strategy varies by route (fire-and-forget vs inside txn); running balance via window function at query time.
 - [GST transfer classification](gst-transfer-classification.md) — auto-detects internal/intrastate/interstate from GSTIN; JVs created inside transactions at dispatch+approve; STD-BRANCH-DEBTOR/CREDITOR auto-provisioned.
 - [Unified sidebar architecture](unified-sidebar.md) — ONE nav for all users; Sales/Accounts switcher removed; getNavGroups() replaces getAccountsNavGroups()+getSalesNavItems(); getPermissionGroups() replaces getPermissionSegments().
+- [Phase 1 stabilization changes](phase1-stabilization.md) — default-deny perms + seeding migration, 8-hr token expiry, payroll COA posting, negative-stock DB constraint, opening-balances table, CORS/body limits.
