@@ -1,0 +1,295 @@
+The Permission module is NOT working correctly.
+
+Current issue:
+
+Even when View permission is enabled for a hierarchy, that module/section is sometimes not visible in the sidebar.
+
+Some modules work.
+Some modules do not.
+
+I do NOT want individual fixes.
+
+I want a COMPLETE Permission System Audit and Repair.
+
+=========================================================
+OBJECTIVE
+=========================================================
+
+Verify the complete permission architecture from end to end.
+
+The final result must ensure:
+
+✔ If View permission = ON → Module is visible.
+✔ If View permission = OFF → Module is hidden.
+✔ Add/Edit/Delete/Download work correctly.
+✔ Backend enforces the same permissions.
+✔ Sidebar, Permissions page, Backend, Registry and Database all use the same permission key.
+
+=========================================================
+STEP 1 - VERIFY MODULE REGISTRY
+=========================================================
+
+For every module verify:
+
+- Module ID
+- Permission Key
+- Display Name
+- Sidebar Name
+- Route
+- Parent Section
+- Branch Types
+
+Find:
+
+- Missing modules
+- Duplicate modules
+- Wrong permission keys
+- Old legacy keys
+- Name mismatches
+
+=========================================================
+STEP 2 - VERIFY SIDEBAR
+=========================================================
+
+For every sidebar item verify:
+
+- Is it generated from moduleRegistry?
+- Does it use canView()?
+- Is it hidden only when View permission is OFF?
+- Is there any hardcoded visibility?
+- Is there any hierarchy bypass?
+- Is there any old permission logic?
+
+Remove ALL hardcoded permission checks.
+
+Sidebar must depend ONLY on:
+
+Module Registry
++
+Permission Resolver
+
+=========================================================
+STEP 3 - VERIFY PERMISSION PAGE
+=========================================================
+
+Verify that every module in moduleRegistry appears on the Permission page.
+
+No missing modules.
+
+No extra modules.
+
+Sidebar
+
+=
+
+Permission Page
+
+100% identical.
+
+=========================================================
+STEP 4 - VERIFY DATABASE
+=========================================================
+
+Verify:
+
+permissions table
+
+Every module should have a matching permission key.
+
+Find:
+
+- Missing rows
+- Invalid module names
+- Legacy module names
+- Duplicate module names
+
+Generate a report.
+
+=========================================================
+STEP 5 - VERIFY FRONTEND
+=========================================================
+
+Search entire frontend.
+
+Find every usage of:
+
+usePermission()
+
+canView()
+
+canAdd()
+
+canEdit()
+
+canDelete()
+
+Find pages NOT using permission checks.
+
+Fix all of them.
+
+=========================================================
+STEP 6 - VERIFY BACKEND
+=========================================================
+
+Search every API.
+
+Verify every endpoint uses:
+
+requireModuleView()
+
+or
+
+requireModuleAction()
+
+Find endpoints without permission middleware.
+
+Generate report.
+
+=========================================================
+STEP 7 - VERIFY VIEW PERMISSION
+=========================================================
+
+For every module test:
+
+View = ON
+
+Module must appear.
+
+View = OFF
+
+Module must disappear.
+
+If not,
+
+find the reason.
+
+=========================================================
+STEP 8 - VERIFY WRITE PERMISSIONS
+=========================================================
+
+For every module test:
+
+Add
+
+Edit
+
+Delete
+
+Download
+
+Ensure backend blocks unauthorized requests.
+
+=========================================================
+STEP 9 - VERIFY BRANCH FILTER
+=========================================================
+
+Branch Types
+
+headoffice
+
+warehouse
+
+outlet
+
+Verify:
+
+Head Office
+
+Warehouse
+
+Outlet
+
+Each only sees authorized data.
+
+Permissions control module access.
+
+Branch controls data visibility.
+
+=========================================================
+STEP 10 - VERIFY HIERARCHIES
+=========================================================
+
+Create test users.
+
+Level 1
+
+Level 2
+
+Level 3
+
+Warehouse
+
+Outlet
+
+Verify every permission combination.
+
+=========================================================
+STEP 11 - REMOVE ALL LEGACY LOGIC
+=========================================================
+
+Search entire project.
+
+Remove:
+
+Hardcoded permission names
+
+Legacy permission keys
+
+Old module names
+
+Duplicate permission checks
+
+Multiple sources of truth
+
+Everything must come from moduleRegistry.
+
+=========================================================
+STEP 12 - GENERATE REPORT
+=========================================================
+
+For every module provide:
+
+Module
+
+Sidebar
+
+Permission Page
+
+Database
+
+Frontend
+
+Backend
+
+Status
+
+PASS
+
+or
+
+FAIL
+
+=========================================================
+DO NOT PATCH INDIVIDUAL MODULES.
+
+Find the ROOT CAUSE.
+
+Fix the entire permission architecture.
+
+The system must behave like SAP, Microsoft Dynamics, Oracle ERP, or Tally ERP.
+
+Permission ON = Module Visible.
+
+Permission OFF = Module Hidden.
+
+No exceptions.
+
+No hardcoded logic.
+
+No legacy permission names.
+
+No duplicate permission keys.
+
+No mismatched module names.
+
+Everything must use one centralized permission architecture.
