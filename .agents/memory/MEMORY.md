@@ -17,3 +17,4 @@
 - [GST transfer classification](gst-transfer-classification.md) — auto-detects internal/intrastate/interstate from GSTIN; JVs created inside transactions at dispatch+approve; STD-BRANCH-DEBTOR/CREDITOR auto-provisioned.
 - [Unified sidebar architecture](unified-sidebar.md) — ONE nav for all users; Sales/Accounts switcher removed; getNavGroups() replaces getAccountsNavGroups()+getSalesNavItems(); getPermissionGroups() replaces getPermissionSegments().
 - [Phase 1 stabilization changes](phase1-stabilization.md) — default-deny perms + seeding migration, 8-hr token expiry, payroll COA posting, negative-stock DB constraint, opening-balances table, CORS/body limits.
+- [Phase 1 QA findings](phase1-qa-findings.md) — 3 bugs found+fixed in QA: health bypass path, incomplete seeding list, frontend default-allow. All Phase 1 items verified with test evidence.

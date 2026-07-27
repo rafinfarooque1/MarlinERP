@@ -64,7 +64,7 @@ app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 // the login endpoint, and tokenized public invoice links (secured by their
 // own HMAC-signed, time-limited tokens).
 app.use("/api", (req, res, next) => {
-  if (req.path === "/health") { next(); return; }
+  if (req.path === "/health" || req.path === "/healthz") { next(); return; }
   if (req.path === "/auth/login" && req.method === "POST") { next(); return; }
   if (req.method === "GET" && req.path.startsWith("/public/invoices/")) { next(); return; }
   requireAuth(req, res, next);

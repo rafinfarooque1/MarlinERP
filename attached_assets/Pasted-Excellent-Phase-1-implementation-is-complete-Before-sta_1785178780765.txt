@@ -1,0 +1,257 @@
+Excellent.
+
+Phase 1 implementation is complete.
+
+Before starting Phase 2,
+
+I want a COMPLETE verification of every Phase 1 change.
+
+This is a QUALITY ASSURANCE phase.
+
+Do NOT add any new features.
+
+Do NOT refactor.
+
+Do NOT redesign.
+
+Only verify.
+
+=========================================================
+VERIFY EVERYTHING IMPLEMENTED
+=========================================================
+
+Review every change made during Phase 1.
+
+Verify:
+
+✓ Works correctly
+
+✓ No regressions
+
+✓ No broken APIs
+
+✓ No broken frontend pages
+
+✓ No broken permissions
+
+✓ No broken accounting
+
+=========================================================
+RBAC
+=========================================================
+
+Verify
+
+View
+
+Add
+
+Edit
+
+Delete
+
+Download
+
+for every module.
+
+Verify
+
+Head Office
+
+Warehouse
+
+Outlet
+
+=========================================================
+SIDEBAR
+=========================================================
+
+Verify
+
+View ON
+
+Module visible.
+
+View OFF
+
+Module hidden.
+
+No duplicate modules.
+
+No missing modules.
+
+=========================================================
+BACKEND
+=========================================================
+
+Verify every endpoint.
+
+GET
+
+POST
+
+PUT
+
+PATCH
+
+DELETE
+
+Permission middleware.
+
+Branch scope.
+
+=========================================================
+DATA SCOPE
+=========================================================
+
+Head Office
+
+All records.
+
+Warehouse
+
+Assigned warehouse
+
++
+
+Mapped outlets.
+
+Outlet
+
+Assigned outlet only.
+
+Verify
+
+Inventory
+
+Sales
+
+HR
+
+Accounts
+
+Reports
+
+Customers
+
+Vendors
+
+Cash Balance
+
+Transfers
+
+=========================================================
+ACCOUNTING
+=========================================================
+
+Verify
+
+Opening Balances
+
+Trial Balance
+
+Profit & Loss
+
+Balance Sheet
+
+Journal
+
+Payments
+
+Receipts
+
+Payroll Journal
+
+Credit Limit
+
+GST
+
+=========================================================
+DATABASE
+=========================================================
+
+Verify
+
+Indexes
+
+Constraints
+
+Opening Balances
+
+Negative Stock
+
+Migrations
+
+=========================================================
+SECURITY
+=========================================================
+
+Verify
+
+JWT
+
+Token Expiry
+
+Inactive Employee
+
+Permission Denied Audit
+
+Request Limits
+
+CORS
+
+=========================================================
+FRONTEND
+=========================================================
+
+Verify
+
+Navigation
+
+Permission Page
+
+Sidebar
+
+Forms
+
+Dialogs
+
+API Calls
+
+Loading
+
+Errors
+
+=========================================================
+TESTING
+=========================================================
+
+Create test users.
+
+Head Office
+
+Warehouse
+
+Outlet
+
+Run complete tests.
+
+=========================================================
+OUTPUT
+=========================================================
+
+Generate a report.
+
+PASS
+
+FAIL
+
+For every implemented feature.
+
+Do not continue to Phase 2 until every item passes.
+
+If anything fails,
+
+fix it first.
+
+The ERP foundation must be completely stable before adding new functionality.

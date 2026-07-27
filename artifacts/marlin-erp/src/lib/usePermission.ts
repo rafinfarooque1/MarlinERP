@@ -29,12 +29,13 @@ const FULL_ACCESS: PermissionSet = {
   isLoading: false,
 };
 
-const DEFAULT_VIEW_ONLY: PermissionSet = {
-  canView: true,
+/** Shown while permissions are loading — treated as denied so nothing flashes. */
+const DEFAULT_DENY: PermissionSet = {
+  canView: false,
   canAdd: false,
   canEdit: false,
   canDelete: false,
-  canDownload: true,
+  canDownload: false,
   isLoading: false,
 };
 
@@ -46,8 +47,9 @@ const DEFAULT_VIEW_ONLY: PermissionSet = {
  *
  * Rules:
  *   • level 1 hierarchy → full access, always
- *   • no DB row         → view-only default (view ✓, writes ✗, download ✓)
- *   • row present       → exactly what the row says
+ *   • no DB row         → deny (matches backend default-deny; seeding migration
+ *                         ensures all existing hierarchies have explicit rows)
+ *   • row present       → exactly what the row says (nulls default to deny)
  *
  * `module` must be a `key` from MODULE_REGISTRY (src/lib/moduleRegistry.ts).
  * A name that is not in the registry never appears on the Permissions page,
@@ -65,14 +67,15 @@ export function resolvePermissions(
     p => p.hierarchyId === hierarchyId && p.module === module,
   );
 
-  if (!perm) return DEFAULT_VIEW_ONLY;
+  // No row → default-deny, matching the backend permission middleware.
+  if (!perm) return DEFAULT_DENY;
 
   return {
-    canView: perm.canView ?? true,
+    canView: perm.canView ?? false,
     canAdd: perm.canAdd ?? false,
     canEdit: perm.canEdit ?? false,
     canDelete: perm.canDelete ?? false,
-    canDownload: perm.canDownload ?? true,
+    canDownload: perm.canDownload ?? false,
     isLoading: false,
   };
 }
@@ -107,7 +110,7 @@ export function usePermission(module: string): PermissionSet {
     return { ...FULL_ACCESS, isLoading: true };
   }
 
-  if (!user) return { ...DEFAULT_VIEW_ONLY, isLoading: false };
+  if (!user) return { ...DEFAULT_DENY, isLoading: false };
 
   const userHierarchy = hierarchies.find(h => h.id === user.hierarchyId);
   const level = userHierarchy?.level ?? 99;

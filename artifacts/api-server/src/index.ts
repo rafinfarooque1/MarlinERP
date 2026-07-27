@@ -967,6 +967,9 @@ await pool.query(`CREATE INDEX IF NOT EXISTS idx_purchases_line_items_gin ON pur
     'Cash & Bank', 'Vouchers', 'Books', 'Expenses', 'GST Summary',
     'GST Returns', 'Reconciliation', 'Accounts Cash Balance', 'Reports',
     'Dashboard', 'Settings', 'Permissions', 'Login History',
+    // Additional modules used in backend guards
+    'Materials', 'Raw Materials', 'Stock Transfers', 'Location Transfers',
+    'Sales Dashboard', 'Profile',
   ];
   // Get all non-level-1 hierarchies
   const { rows: hRows } = await pool.query(
@@ -984,6 +987,19 @@ await pool.query(`CREATE INDEX IF NOT EXISTS idx_purchases_line_items_gin ON pur
       );
     }
   }
+  // Dynamic pass: also fill any gaps for modules that have rows for some
+  // hierarchies but not others (catches future module additions automatically).
+  await pool.query(`
+    INSERT INTO permissions (hierarchy_id, module, can_view, can_add, can_edit, can_delete)
+    SELECT h.id, all_mods.module, true, true, true, true
+    FROM hierarchies h
+    CROSS JOIN (SELECT DISTINCT module FROM permissions) all_mods
+    WHERE h.level != 1
+    AND NOT EXISTS (
+      SELECT 1 FROM permissions p
+      WHERE p.hierarchy_id = h.id AND p.module = all_mods.module
+    )
+  `);
 }
 
 // ── Negative stock prevention ─────────────────────────────────────────────────
