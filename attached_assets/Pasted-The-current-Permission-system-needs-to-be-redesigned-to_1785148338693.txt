@@ -1,0 +1,401 @@
+The current Permission system needs to be redesigned to follow enterprise ERP standards.
+
+The business rule is very clear.
+
+====================================================
+PERMISSION RULE
+====================================================
+
+Permissions decide ONLY:
+
+• Whether a module is visible.
+• Whether the employee can
+
+- View
+- Add
+- Edit
+- Delete
+- Download (if applicable)
+
+Nothing else.
+
+====================================================
+SIDEBAR RULE
+====================================================
+
+If View permission = ON
+
+→ Show the module in the sidebar.
+
+If View permission = OFF
+
+→ Hide the module completely.
+
+No other logic should hide the module.
+
+Remove every hardcoded sidebar visibility rule.
+
+Remove branch-based sidebar hiding.
+
+The Sidebar must depend ONLY on:
+
+Module Registry
++
+Permission Resolver
+
+====================================================
+DATA ACCESS RULE
+====================================================
+
+Permissions DO NOT decide data.
+
+Permissions decide module access only.
+
+Data visibility depends ONLY on employee branch assignment.
+
+====================================================
+BRANCH DATA RULE
+====================================================
+
+There are only three branch types.
+
+• Head Office
+• Warehouse
+• Outlet
+
+====================================================
+HEAD OFFICE
+====================================================
+
+Can see ALL data.
+
+Including
+
+• Production
+• Purchases
+• Inventory
+• Sales
+• HR
+• Accounts
+• Reports
+• Customers
+• Vendors
+• Cash
+• All Warehouses
+• All Outlets
+
+====================================================
+WAREHOUSE
+====================================================
+
+Can see ONLY
+
+• Assigned Warehouse
+
+PLUS
+
+• All Outlets mapped to that warehouse
+
+Cannot see
+
+• Other Warehouses
+
+• Other Warehouse Sales
+
+• Other Warehouse Stock
+
+• Other Warehouse Cash
+
+• Other Warehouse Employees
+
+• Other Warehouse Customers
+
+• Other Warehouse Vendors
+
+====================================================
+OUTLET
+====================================================
+
+Can see ONLY
+
+Assigned Outlet.
+
+Cannot see
+
+• Warehouse
+
+• Other Outlets
+
+• Head Office
+
+====================================================
+BACKEND RULE
+====================================================
+
+Every API must verify
+
+1. Permission
+
+2. Branch Scope
+
+Permission decides
+
+Can access module
+
+Branch decides
+
+Which records are returned.
+
+Never trust
+
+warehouseId
+
+outletId
+
+locationId
+
+coming from frontend.
+
+Server must determine scope automatically.
+
+====================================================
+MODULE BEHAVIOUR
+====================================================
+
+Example
+
+Inventory View = ON
+
+Warehouse Employee
+
+→ Inventory module visible
+
+Backend returns
+
+Warehouse Stock
+
++
+
+Mapped Outlet Stock
+
+Only.
+
+----------------------------------------------------
+
+Accounts View = ON
+
+Warehouse Employee
+
+→ Accounts module visible
+
+Backend returns
+
+Warehouse Accounts
+
++
+
+Mapped Outlet Accounts
+
+Only.
+
+----------------------------------------------------
+
+HR View = ON
+
+Warehouse Employee
+
+→ HR module visible
+
+Backend returns
+
+Employees
+
+belonging to
+
+Assigned Warehouse
+
++
+
+Mapped Outlets
+
+Only.
+
+----------------------------------------------------
+
+Sales View = ON
+
+Warehouse Employee
+
+→ Sales module visible
+
+Backend returns
+
+Warehouse Sales
+
++
+
+Mapped Outlet Sales
+
+Only.
+
+----------------------------------------------------
+
+Production View = ON
+
+Head Office Employee
+
+→ Production module visible
+
+Backend returns
+
+All Production.
+
+====================================================
+PERMISSION PAGE
+====================================================
+
+Every module should have
+
+View
+
+Add
+
+Edit
+
+Delete
+
+Download (optional)
+
+The Permission page controls ONLY these actions.
+
+====================================================
+MODULE REGISTRY
+====================================================
+
+The registry is the single source of truth.
+
+Every module defines
+
+Module ID
+
+Display Name
+
+Permission Key
+
+Route
+
+Parent Section
+
+Sidebar Name
+
+Backend Permission Key
+
+No duplicate keys.
+
+No legacy keys.
+
+====================================================
+DATABASE
+====================================================
+
+Permission table stores
+
+Hierarchy
+
+Module
+
+View
+
+Add
+
+Edit
+
+Delete
+
+Download
+
+Nothing else.
+
+====================================================
+AUDIT
+====================================================
+
+Log
+
+Permission Denied
+
+Branch Scope Violation
+
+Permission Changes
+
+Login
+
+Logout
+
+====================================================
+FINAL TEST
+====================================================
+
+Create test users.
+
+1. Head Office
+
+Verify
+
+Can access all modules according to permissions.
+
+Can see all data.
+
+----------------------------------------------------
+
+2. Warehouse
+
+Verify
+
+Modules appear according to View permission.
+
+All pages only show
+
+Assigned Warehouse
+
++
+
+Mapped Outlets.
+
+----------------------------------------------------
+
+3. Outlet
+
+Verify
+
+Modules appear according to View permission.
+
+All pages show ONLY
+
+Assigned Outlet data.
+
+====================================================
+EXPECTED RESULT
+====================================================
+
+✓ View ON → Module visible
+
+✓ View OFF → Module hidden
+
+✓ Add/Edit/Delete enforced
+
+✓ Backend enforces permissions
+
+✓ Backend filters data by branch
+
+✓ Head Office sees all data
+
+✓ Warehouse sees only own warehouse + mapped outlets
+
+✓ Outlet sees only own outlet
+
+✓ No frontend security filtering
+
+✓ No hardcoded permission logic
+
+✓ One centralized RBAC architecture
