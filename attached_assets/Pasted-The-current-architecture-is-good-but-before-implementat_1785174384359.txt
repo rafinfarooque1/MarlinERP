@@ -1,0 +1,548 @@
+The current architecture is good, but before implementation I want to redesign it to follow enterprise ERP standards.
+
+This is an architectural revision.
+
+Do NOT start coding until this plan is updated.
+
+=========================================================
+OBJECTIVE
+=========================================================
+
+I want ONE ERP.
+
+NOT
+
+Sales ERP
+
++
+
+Accounts ERP
+
+Remove the Sales / Accounts segment switcher completely.
+
+There should be only ONE unified sidebar.
+
+The sidebar should dynamically change according to permissions.
+
+=========================================================
+UNIFIED SIDEBAR
+=========================================================
+
+Dashboard
+
+Operations
+
+Production
+
+Inventory
+
+Sales (HO)
+
+HR
+
+Accounts
+
+Company
+
+Dashboard should remain a standalone first menu.
+
+Operations should be the first expandable group.
+
+=========================================================
+OPERATIONS GROUP
+=========================================================
+
+Operations should contain only
+
+• Dashboard
+• Point of Sale
+• Stock
+• Transfers
+• Expenses
+• Cash Balance
+
+No duplicate pages.
+
+Transfers should still use the existing Transfers page.
+
+Cash Balance should use one page only.
+
+=========================================================
+REMOVE
+=========================================================
+
+Remove
+
+Sales Segment
+
+Accounts Segment
+
+Sales-only sidebar
+
+Dual navigation
+
+Separate sidebar rendering
+
+Separate permission tabs
+
+Everything should use one unified navigation.
+
+=========================================================
+PERMISSION PAGE
+=========================================================
+
+Permission page should become ONE page.
+
+No tabs.
+
+Groups should be
+
+Operations
+
+Production
+
+Inventory
+
+Sales (HO)
+
+HR
+
+Accounts
+
+Company
+
+Every page should have
+
+View
+
+Add
+
+Edit
+
+Delete
+
+Download
+
+No grouped permissions.
+
+Every page should have its own permission.
+
+Example
+
+Operations
+
+Dashboard
+
+Point of Sale
+
+Stock
+
+Transfers
+
+Expenses
+
+Cash Balance
+
+Each one gets
+
+View
+
+Add
+
+Edit
+
+Delete
+
+Download
+
+=========================================================
+PERMISSION RULE
+=========================================================
+
+Permissions ONLY decide
+
+Module Visibility
+
+Allowed Actions
+
+Nothing else.
+
+If View is ON
+
+Show module.
+
+If View is OFF
+
+Hide module.
+
+No branch logic should hide modules.
+
+No hardcoded sidebar logic.
+
+No duplicate visibility logic.
+
+Sidebar must depend ONLY on
+
+moduleRegistry
+
++
+
+Permission Resolver
+
+=========================================================
+DATA ACCESS
+=========================================================
+
+Permissions decide
+
+WHO CAN OPEN A MODULE
+
+Branch decides
+
+WHAT DATA IS RETURNED
+
+These two concepts must never be mixed.
+
+=========================================================
+BRANCH TYPES
+=========================================================
+
+Only
+
+Head Office
+
+Warehouse
+
+Outlet
+
+No Production branch.
+
+Production belongs to Head Office.
+
+=========================================================
+HEAD OFFICE
+=========================================================
+
+Can see
+
+All data
+
+All warehouses
+
+All outlets
+
+=========================================================
+WAREHOUSE
+=========================================================
+
+Can see only
+
+Assigned Warehouse
+
++
+
+Mapped Outlets
+
+Only
+
+Cannot see
+
+Other Warehouses
+
+=========================================================
+OUTLET
+=========================================================
+
+Can see only
+
+Assigned Outlet
+
+=========================================================
+BACKEND
+=========================================================
+
+Every API must verify
+
+Permission
+
+AND
+
+Branch Scope
+
+Never trust
+
+warehouseId
+
+outletId
+
+locationId
+
+coming from frontend.
+
+Backend determines scope automatically.
+
+=========================================================
+LOCATION FILTER
+=========================================================
+
+Create one reusable helper
+
+getUserDataScope(employee)
+
+Returns
+
+Head Office
+
+All Locations
+
+Warehouse
+
+Assigned Warehouse
+
++
+
+Mapped Outlets
+
+Outlet
+
+Assigned Outlet
+
+Every module should use this helper.
+
+Inventory
+
+Sales
+
+Accounts
+
+HR
+
+Reports
+
+Customers
+
+Vendors
+
+Expenses
+
+Cash Balance
+
+Transfers
+
+Everything.
+
+=========================================================
+MODULE REGISTRY
+=========================================================
+
+moduleRegistry becomes the ONLY source of truth.
+
+Every module defines
+
+Module ID
+
+Display Name
+
+Permission Key
+
+Route
+
+Sidebar Group
+
+Icon
+
+Allowed Branch Types
+
+Backend Permission Key
+
+No duplicate module definitions.
+
+No duplicate permission keys.
+
+=========================================================
+NO DUPLICATE PAGES
+=========================================================
+
+Cash Balance
+
+One page
+
+One route
+
+One permission key
+
+Transfers
+
+One page
+
+One route
+
+One permission key
+
+Reports
+
+One report center
+
+No duplicate pages.
+
+=========================================================
+AUTHORIZATION FLOW
+=========================================================
+
+Login
+
+↓
+
+Authentication
+
+↓
+
+Hierarchy
+
+↓
+
+Permission Resolver
+
+↓
+
+Generate Sidebar
+
+↓
+
+Open Module
+
+↓
+
+Backend Permission Check
+
+↓
+
+Branch Scope Filter
+
+↓
+
+Return Authorized Data
+
+=========================================================
+TESTING
+=========================================================
+
+Create test users
+
+Head Office
+
+Warehouse
+
+Outlet
+
+Verify
+
+Dashboard
+
+Operations
+
+Production
+
+Inventory
+
+Sales (HO)
+
+HR
+
+Accounts
+
+Company
+
+For every module verify
+
+View ON
+
+Visible
+
+View OFF
+
+Hidden
+
+Add
+
+Edit
+
+Delete
+
+Download
+
+Backend Permission
+
+Branch Scope
+
+Everything must pass.
+
+=========================================================
+DO NOT BREAK
+=========================================================
+
+Do NOT modify
+
+Business Logic
+
+GST Logic
+
+Accounting Logic
+
+Inventory Logic
+
+Production Logic
+
+Invoice Formats
+
+Reports
+
+Only redesign
+
+Navigation
+
+Permissions
+
+RBAC
+
+Branch Scope
+
+Sidebar
+
+Permission Page
+
+Architecture
+
+=========================================================
+EXPECTED RESULT
+=========================================================
+
+✔ One ERP
+
+✔ One Sidebar
+
+✔ One Permission System
+
+✔ One Module Registry
+
+✔ One RBAC System
+
+✔ Permissions decide visibility
+
+✔ Backend decides data scope
+
+✔ Head Office sees all data
+
+✔ Warehouse sees assigned warehouse + mapped outlets
+
+✔ Outlet sees assigned outlet only
+
+✔ No duplicate pages
+
+✔ No duplicate routes
+
+✔ No duplicate permission keys
+
+✔ No duplicate navigation
+
+Before implementation, update the implementation plan to reflect these architecture changes. Do not start coding until the revised plan is complete.

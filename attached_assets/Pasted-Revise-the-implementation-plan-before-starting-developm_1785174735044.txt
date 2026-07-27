@@ -1,0 +1,311 @@
+Revise the implementation plan before starting development.
+
+The current plan only changes the sidebar UI.
+
+I want the implementation to redesign the complete Navigation + Permission + RBAC architecture.
+
+=========================================================
+PRIMARY OBJECTIVE
+=========================================================
+
+Build ONE unified ERP.
+
+There should NOT be separate Sales and Accounts navigation.
+
+Remove the Sales / Accounts switcher completely.
+
+Create ONE dynamic sidebar.
+
+=========================================================
+SIDEBAR
+=========================================================
+
+The sidebar should be:
+
+Dashboard
+
+Operations
+    Dashboard
+    Point of Sale
+    Stock
+    Transfers
+    Expenses
+    Cash Balance
+
+Production
+    Units
+    Item Master
+    Batches
+    Reports
+    Purchases
+
+Inventory
+    Stock
+    Ledger
+    Reports
+    Verification
+    Transfers
+    Warehouses
+    Outlets
+    Item Prices
+
+Sales (HO)
+    Orders
+    Returns
+    Outstanding
+    Customers
+    Vendors
+    Coupons
+
+HR
+    Hierarchy
+    Employees
+    Attendance
+    Leave
+    Payroll
+
+Accounts
+    Chart of Accounts
+    Ledger
+    Payments
+    Receipts
+    Expenses
+    Journal
+    Contra
+    Debit / Credit Notes
+    GST Summary
+    GST Returns
+    Trial Balance
+    Day Book
+    Cash Book
+    Bank Book
+    Cash Balance
+    Reconciliation
+
+Company
+    Settings
+    Permissions
+    Company Profile
+    Audit Log
+    Login History
+
+=========================================================
+PERMISSION SYSTEM
+=========================================================
+
+Permissions decide ONLY:
+
+• Module visibility
+• View
+• Add
+• Edit
+• Delete
+• Download
+
+If View = ON
+
+→ Module must appear.
+
+If View = OFF
+
+→ Module must disappear.
+
+There should never be a situation where View is ON but the module is hidden.
+
+Remove every hardcoded visibility rule.
+
+Sidebar must use only:
+
+moduleRegistry
++
+Permission Resolver
+
+=========================================================
+BRANCH TYPES
+=========================================================
+
+There are only three branch types:
+
+• Head Office
+• Warehouse
+• Outlet
+
+Production is NOT a branch.
+
+Production belongs to Head Office.
+
+=========================================================
+DATA ACCESS
+=========================================================
+
+Permissions decide WHICH MODULES a user can open.
+
+Branch assignment decides WHICH DATA is returned.
+
+Head Office
+
+→ Can see all data.
+
+Warehouse
+
+→ Can see only:
+
+Assigned Warehouse
+
++
+
+Mapped Outlets.
+
+Outlet
+
+→ Can see only:
+
+Assigned Outlet.
+
+=========================================================
+BACKEND
+=========================================================
+
+Every API must enforce:
+
+1. Permission
+
+2. Branch Scope
+
+Never trust warehouseId, outletId, or locationId sent from the frontend.
+
+The backend must determine the allowed data automatically.
+
+Create one reusable helper for branch data scope and use it across all modules.
+
+=========================================================
+UNIFIED PAGES
+=========================================================
+
+Transfers
+
+One page
+
+One route
+
+One permission key
+
+Cash Balance
+
+One page
+
+One route
+
+One permission key
+
+Reports
+
+One report center
+
+No duplicate modules.
+
+=========================================================
+PERMISSION PAGE
+=========================================================
+
+Remove the two-tab layout.
+
+Display one permission page grouped as:
+
+Operations
+
+Production
+
+Inventory
+
+Sales (HO)
+
+HR
+
+Accounts
+
+Company
+
+Every page has:
+
+View
+
+Add
+
+Edit
+
+Delete
+
+Download
+
+No grouped permissions.
+
+Every page has its own permission row.
+
+=========================================================
+DO NOT CHANGE
+=========================================================
+
+Do not modify:
+
+Business logic
+
+GST logic
+
+Accounting logic
+
+Inventory logic
+
+Production logic
+
+Invoice formats
+
+Reports
+
+Only redesign:
+
+Navigation
+
+Permissions
+
+RBAC
+
+Sidebar
+
+Permission page
+
+Branch data access
+
+=========================================================
+FINAL VERIFICATION
+=========================================================
+
+After implementation verify with test users:
+
+Head Office
+
+Warehouse
+
+Outlet
+
+Confirm:
+
+✓ View ON = Module visible
+
+✓ View OFF = Module hidden
+
+✓ Add/Edit/Delete enforced
+
+✓ Head Office sees all data
+
+✓ Warehouse sees only assigned warehouse + mapped outlets
+
+✓ Outlet sees only assigned outlet
+
+✓ No duplicate routes
+
+✓ No duplicate permission keys
+
+✓ One unified sidebar
+
+Update the implementation plan first. Do not start building until the revised plan reflects these requirements.

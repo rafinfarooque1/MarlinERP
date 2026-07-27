@@ -23,7 +23,6 @@ import {
   Eye,
   EyeOff,
   ShoppingCart,
-  BookOpen,
   Warehouse,
   Store,
   Package,
@@ -49,9 +48,7 @@ import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
 import {
   MODULE_REGISTRY,
-  getAccountsNavGroups,
-  getSalesNavItems,
-  SALES_SEGMENT_MODULE_KEYS,
+  getNavGroups,
   type SidebarNavItem,
 } from '@/lib/moduleRegistry';
 import { canViewModule as checkCanView } from '@/lib/usePermission';
@@ -75,10 +72,8 @@ const navigation: SidebarNavItem[] = [
   ..._standaloneNavItems,
   // My Profile is always visible and has no permission key
   { name: 'My Profile', icon: User, href: '/profile/me' },
-  ...getAccountsNavGroups(),
+  ...getNavGroups(),
 ];
-
-const salesNavItems = getSalesNavItems();
 
 // ─── Permission helpers ───────────────────────────────────────────────────────
 
@@ -211,7 +206,6 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [logo, setLogo] = useState<string | null>(() => localStorage.getItem(LOGO_KEY));
   const { locationState, setLocation: setLocContext } = useLocationContext();
-  const isSalesSegment = location.startsWith('/sales');
 
   // ── User branch info ────────────────────────────────────────────────────────
   const userBranchType = (user as any)?.branchType as 'headoffice' | 'warehouse' | 'outlet' | undefined;
@@ -285,21 +279,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     })
     .filter(item => !item.children || item.children.length > 0);
 
-  // ── Permission-filtered sales nav ───────────────────────────────────────────
-  const filteredSalesNavItems = salesNavItems.filter(item =>
-    isAdmin || checkCanView(item.module, (user as any)?.hierarchyId, userLevel, allPerms as any[])
-  );
-
-  // ── Sales segment access ────────────────────────────────────────────────────
-  // Same shared rule as every other nav check (canViewModule): a module with no
-  // saved permission row defaults to viewable — no hardcoded level fallbacks.
-  const hasSalesAccess = isAdmin || SALES_SEGMENT_MODULE_KEYS.some(mod =>
-    checkCanView(mod, (user as any)?.hierarchyId, userLevel, allPerms as any[])
-  );
-
-  // All employees may access the Accounts segment if they have permissions granted
-  const showAccountsSegment = true;
-  // Location-locked employees cannot change their location
+  // Location-locked employees cannot change their location context
   const canChangeLocation = !isLocationEmployee;
 
   // ── Global quick search (Cmd/Ctrl+K) ────────────────────────────────────────
@@ -404,7 +384,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           {/* Logo row */}
           <div className="h-16 flex items-center justify-between px-4 border-b border-border shrink-0">
             {!collapsed && (
-              <Link href={isOutletEmployee ? '/sales/pos' : '/'} className="flex items-center h-10 max-w-[160px]">
+              <Link href="/" className="flex items-center h-10 max-w-[160px]">
                 <img src={logo || '/marlin-logo.jpeg'} alt="Marlin Frozen Fruits" className="h-full w-full object-contain object-left" />
               </Link>
             )}
@@ -430,125 +410,58 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             </button>
           </div>
 
-          {/* Segment switcher — only when both segments are accessible */}
-          {!collapsed && hasSalesAccess && showAccountsSegment && (
-            <div className="px-3 pt-3 pb-1 shrink-0">
-              <div className="flex gap-1 p-1 bg-muted/50 rounded-lg">
-                <button
-                  onClick={() => setLocation('/sales')}
-                  className={`flex-1 flex items-center justify-center gap-1.5 text-xs py-1.5 rounded-md font-semibold transition-colors ${isSalesSegment ? 'bg-card shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-                >
-                  <ShoppingCart className="w-3 h-3" /> Sales
-                </button>
-                <button
-                  onClick={() => setLocation('/')}
-                  className={`flex-1 flex items-center justify-center gap-1.5 text-xs py-1.5 rounded-md font-semibold transition-colors ${!isSalesSegment ? 'bg-card shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-                >
-                  <BookOpen className="w-3 h-3" /> Accounts
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Outlet employee: show "Sales" label (no switcher) */}
-          {!collapsed && isOutletEmployee && (
-            <div className="px-3 pt-3 pb-1 shrink-0">
-              <div className="flex gap-1 p-1 bg-muted/50 rounded-lg">
-                <div className="flex-1 flex items-center justify-center gap-1.5 text-xs py-1.5 rounded-md font-semibold bg-card shadow text-foreground">
-                  <ShoppingCart className="w-3 h-3" /> Sales
+          {/* Nav items — unified, permission-filtered for all users */}
+          <div className={`flex-1 overflow-y-auto py-4 space-y-1 ${collapsed ? 'px-[14px]' : 'px-3'}`}>
+            {/* Active location indicator — shown whenever a location context is set */}
+            {locationState.locationId && !collapsed && (
+              <div className="mb-3 px-2 py-2 bg-muted/30 rounded-lg">
+                <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">
+                  {locationState.locationType === 'all' ? 'Viewing' : 'Selling from'}
+                </p>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {locationState.locationType === 'warehouse'
+                      ? <Warehouse className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                      : locationState.locationType === 'outlet'
+                      ? <Store className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                      : <Layers className="w-3.5 h-3.5 text-primary shrink-0" />}
+                    <span className="text-sm font-semibold truncate">{locationState.locationName}</span>
+                  </div>
+                  {canChangeLocation && (
+                    <Link href="/sales" className="text-[10px] text-primary hover:underline shrink-0">change</Link>
+                  )}
                 </div>
               </div>
-            </div>
-          )}
-
-          {/* Nav items */}
-          <div className={`flex-1 overflow-y-auto py-4 space-y-1 ${collapsed ? 'px-[14px]' : 'px-3'}`}>
-            {isSalesSegment || isOutletEmployee ? (
-              /* ── Sales segment sidebar ── */
-              <>
-                {locationState.locationType ? (
-                  <>
-                    {/* Current location header */}
-                    {!collapsed && (
-                      <div className="mb-3 px-2 py-2 bg-muted/30 rounded-lg">
-                        <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">
-                          {locationState.locationType === 'all' ? 'Viewing' : 'Selling from'}
-                        </p>
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 min-w-0">
-                            {locationState.locationType === 'warehouse'
-                              ? <Warehouse className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                              : locationState.locationType === 'outlet'
-                              ? <Store className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                              : <Layers className="w-3.5 h-3.5 text-primary shrink-0" />}
-                            <span className="text-sm font-semibold truncate">{locationState.locationName}</span>
-                          </div>
-                          {/* Only non-location-locked users can change their location */}
-                          {canChangeLocation && (
-                            <Link href="/sales" className="text-[10px] text-primary hover:underline shrink-0">change</Link>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                    {/* Sales sub-nav (permission filtered) */}
-                    {filteredSalesNavItems.map(item => {
-                      const isActive = location === item.href;
-                      if (collapsed) {
-                        return (
-                          <Tooltip key={item.href}>
-                            <TooltipTrigger asChild>
-                              <Link href={item.href} className={`flex items-center justify-center w-10 h-10 rounded-md transition-colors ${isActive ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>
-                                <item.icon className="w-5 h-5 shrink-0" />
-                              </Link>
-                            </TooltipTrigger>
-                            <TooltipContent side="right">{item.name}</TooltipContent>
-                          </Tooltip>
-                        );
-                      }
-                      return (
-                        <Link key={item.href} href={item.href} className={`flex items-center gap-3 px-3 py-2 rounded-md transition-colors text-sm font-medium ${isActive ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>
-                          <item.icon className="w-4 h-4 shrink-0" />
-                          {item.name}
-                        </Link>
-                      );
-                    })}
-                  </>
-                ) : (
-                  /* No location selected */
-                  !collapsed ? (
-                    <Link href="/sales" className={`flex items-center gap-3 px-3 py-2 rounded-md transition-colors text-sm font-medium ${location === '/sales' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}>
-                      <MapPin className="w-4 h-4 shrink-0" />
-                      Choose Location
-                    </Link>
-                  ) : (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Link href="/sales" className="flex items-center justify-center w-10 h-10 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
-                          <MapPin className="w-5 h-5" />
-                        </Link>
-                      </TooltipTrigger>
-                      <TooltipContent side="right">Choose Location</TooltipContent>
-                    </Tooltip>
-                  )
-                )}
-              </>
-            ) : (
-              /* ── Accounts segment sidebar (permission + branch filtered) ── */
-              filteredNavigation.map((item) => {
-                const isActive = item.href
-                  ? location === item.href
-                  : item.children?.some((c: any) => location.startsWith(c.href));
-                return (
-                  <NavItem
-                    key={item.name}
-                    item={item}
-                    isActive={!!isActive}
-                    currentPath={location}
-                    collapsed={collapsed}
-                  />
-                );
-              })
             )}
+            {/* Collapsed location dot — visible when sidebar is narrow */}
+            {locationState.locationId && collapsed && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Link href="/sales" className="flex items-center justify-center w-10 h-10 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
+                    <MapPin className="w-5 h-5" />
+                  </Link>
+                </TooltipTrigger>
+                <TooltipContent side="right">{locationState.locationName || 'Change location'}</TooltipContent>
+              </Tooltip>
+            )}
+
+            {/* Unified nav groups */}
+            {filteredNavigation.map((item) => {
+              const isActive = item.href
+                ? location === item.href
+                : item.children?.some((c: any) =>
+                    c.matchPrefix ? location.startsWith(c.matchPrefix) : location === c.href
+                  );
+              return (
+                <NavItem
+                  key={item.name}
+                  item={item}
+                  isActive={!!isActive}
+                  currentPath={location}
+                  collapsed={collapsed}
+                />
+              );
+            })}
           </div>
         </aside>
 
@@ -633,14 +546,12 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                     <KeyRound className="mr-2 h-4 w-4" />
                     Change Password
                   </DropdownMenuItem>
-                  {showAccountsSegment && (
-                    <DropdownMenuItem asChild>
-                      <Link href="/company/settings" className="cursor-pointer w-full flex items-center">
-                        <Settings className="mr-2 h-4 w-4" />
-                        Settings
-                      </Link>
-                    </DropdownMenuItem>
-                  )}
+                  <DropdownMenuItem asChild>
+                    <Link href="/company/settings" className="cursor-pointer w-full flex items-center">
+                      <Settings className="mr-2 h-4 w-4" />
+                      Settings
+                    </Link>
+                  </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleLogout} className="text-destructive cursor-pointer">
                     <LogOut className="mr-2 h-4 w-4" />

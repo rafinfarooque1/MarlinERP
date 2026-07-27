@@ -8,12 +8,12 @@ import { ShieldCheck, ShieldOff, Save, Loader2, ChevronUp, Eye, Plus, Pencil, Tr
 import { toast } from 'sonner';
 import { useListHierarchies, useListPermissions, setPermission } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
-import { getPermissionSegments, ALL_MODULE_KEYS } from '@/lib/moduleRegistry';
+import { getPermissionGroups, ALL_MODULE_KEYS } from '@/lib/moduleRegistry';
 import type { Hierarchy, Permission } from '@workspace/api-client-react';
 
 // Module list and group structure derived from the central module registry.
 // To add, rename, or reorder modules edit src/lib/moduleRegistry.ts only.
-const MODULE_SEGMENTS = getPermissionSegments();
+const MODULE_GROUPS = getPermissionGroups();
 const ALL_MODULES = ALL_MODULE_KEYS;
 
 type ActionKey = 'view' | 'add' | 'edit' | 'del';
@@ -247,96 +247,63 @@ export default function Permissions() {
               )}
             </div>
 
-            {/* Module grid — two top-level segments: Sales and Accounts */}
-            <div className="space-y-6">
-              {MODULE_SEGMENTS.map(seg => {
-                const segModules = seg.groups.flatMap(g => g.modules);
-                const segAllOn = segModules.every(m => allOn(rolePerms[m]));
+            {/* Module grid — unified, one group per card */}
+            <div className="space-y-3">
+              {MODULE_GROUPS.map(group => {
+                const grpAllOn = group.modules.every(m => allOn(rolePerms[m]));
                 return (
-                  <div key={seg.segment}>
-                    {/* Segment header — with master toggle */}
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className="flex items-center gap-2.5">
-                        <span className="text-base font-bold text-foreground">{seg.segment}</span>
-                        <Badge variant="secondary" className="text-xs font-semibold">
-                          {segModules.filter(m => rolePerms[m]?.view).length} / {segModules.length}
+                  <div key={group.title} className="bg-card border border-border rounded-xl overflow-hidden">
+                    <div className="p-3 border-b border-border bg-muted/20 flex items-center justify-between gap-3">
+                      <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                        {group.title}
+                      </h3>
+                      <div className="flex items-center gap-3">
+                        <Badge variant="outline" className="text-xs">
+                          {group.modules.filter(m => rolePerms[m]?.view).length} / {group.modules.length}
                         </Badge>
+                        {!isTopLevel && (
+                          <Switch
+                            checked={grpAllOn}
+                            onCheckedChange={v => toggleModules(group.modules, v)}
+                            title={grpAllOn ? `Revoke all ${group.title}` : `Grant full ${group.title}`}
+                          />
+                        )}
                       </div>
-                      <div className="flex-1 h-px bg-border" />
-                      <span className="text-xs text-muted-foreground hidden sm:block mr-2">{seg.description}</span>
-                      {/* Master segment switch — grants/revokes everything in the segment */}
-                      {!isTopLevel && (
-                        <Switch
-                          checked={segAllOn}
-                          onCheckedChange={v => toggleModules(segModules, v)}
-                          className="data-[state=checked]:bg-primary"
-                          title={segAllOn ? `Revoke all ${seg.segment} access` : `Grant full ${seg.segment} access`}
-                        />
-                      )}
                     </div>
 
-                    {/* Groups under this segment */}
-                    <div className="space-y-3 pl-0">
-                      {seg.groups.map(group => {
-                        const grpAllOn = group.modules.every(m => allOn(rolePerms[m]));
+                    {/* Column headers */}
+                    <div className="grid grid-cols-[1fr_repeat(4,3.25rem)] sm:grid-cols-[1fr_repeat(4,4rem)] items-center px-4 py-2 border-b border-border/50 bg-muted/5">
+                      <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Module</span>
+                      {ACTIONS.map(a => (
+                        <span key={a.key} className="text-[11px] uppercase tracking-wider text-muted-foreground text-center flex items-center justify-center gap-1">
+                          <a.icon className="w-3 h-3" />
+                          <span className="hidden sm:inline">{a.label}</span>
+                        </span>
+                      ))}
+                    </div>
+
+                    <div className="divide-y divide-border/50">
+                      {group.modules.map(mod => {
+                        const p = rolePerms[mod] ?? { view: false, add: false, edit: false, del: false };
                         return (
-                          <div key={group.title} className="bg-card border border-border rounded-xl overflow-hidden">
-                            <div className="p-3 border-b border-border bg-muted/20 flex items-center justify-between gap-3">
-                              <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                                {group.title}
-                              </h3>
-                              <div className="flex items-center gap-3">
-                                <Badge variant="outline" className="text-xs">
-                                  {group.modules.filter(m => rolePerms[m]?.view).length} / {group.modules.length}
-                                </Badge>
-                                {/* Group-level master toggle */}
-                                {!isTopLevel && (
-                                  <Switch
-                                    checked={grpAllOn}
-                                    onCheckedChange={v => toggleModules(group.modules, v)}
-                                    title={grpAllOn ? `Revoke all ${group.title}` : `Grant full ${group.title}`}
-                                  />
-                                )}
+                          <div key={mod} className="grid grid-cols-[1fr_repeat(4,3.25rem)] sm:grid-cols-[1fr_repeat(4,4rem)] items-center px-4 py-2.5 hover:bg-muted/5">
+                            <span className={`text-sm truncate pr-2 ${p.view ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
+                              {mod}
+                            </span>
+                            {ACTIONS.map(a => (
+                              <div key={a.key} className="flex justify-center">
+                                <Checkbox
+                                  checked={isTopLevel ? true : p[a.key]}
+                                  disabled={isTopLevel}
+                                  onCheckedChange={() =>
+                                    isTopLevel
+                                      ? toast.info('Top-level authority always has full access')
+                                      : toggleAction(mod, a.key)
+                                  }
+                                  aria-label={`${a.label} ${mod}`}
+                                />
                               </div>
-                            </div>
-
-                            {/* Column headers */}
-                            <div className="grid grid-cols-[1fr_repeat(4,3.25rem)] sm:grid-cols-[1fr_repeat(4,4rem)] items-center px-4 py-2 border-b border-border/50 bg-muted/5">
-                              <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Module</span>
-                              {ACTIONS.map(a => (
-                                <span key={a.key} className="text-[11px] uppercase tracking-wider text-muted-foreground text-center flex items-center justify-center gap-1">
-                                  <a.icon className="w-3 h-3" />
-                                  <span className="hidden sm:inline">{a.label}</span>
-                                </span>
-                              ))}
-                            </div>
-
-                            <div className="divide-y divide-border/50">
-                              {group.modules.map(mod => {
-                                const p = rolePerms[mod] ?? { view: false, add: false, edit: false, del: false };
-                                return (
-                                  <div key={mod} className="grid grid-cols-[1fr_repeat(4,3.25rem)] sm:grid-cols-[1fr_repeat(4,4rem)] items-center px-4 py-2.5 hover:bg-muted/5">
-                                    <span className={`text-sm truncate pr-2 ${p.view ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
-                                      {mod}
-                                    </span>
-                                    {ACTIONS.map(a => (
-                                      <div key={a.key} className="flex justify-center">
-                                        <Checkbox
-                                          checked={isTopLevel ? true : p[a.key]}
-                                          disabled={isTopLevel}
-                                          onCheckedChange={() =>
-                                            isTopLevel
-                                              ? toast.info('Top-level authority always has full access')
-                                              : toggleAction(mod, a.key)
-                                          }
-                                          aria-label={`${a.label} ${mod}`}
-                                        />
-                                      </div>
-                                    ))}
-                                  </div>
-                                );
-                              })}
-                            </div>
+                            ))}
                           </div>
                         );
                       })}
