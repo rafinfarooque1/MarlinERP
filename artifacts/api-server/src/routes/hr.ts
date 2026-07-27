@@ -813,6 +813,46 @@ router.post("/hr/advances", requireModuleAction("Payroll", "add"), async (req, r
 
 // ── Attendance ────────────────────────────────────────────────────────────
 router.get("/hr/attendance", async (req, res): Promise<void> => {
+  const scopeEmp = (req as any).employee as { id: number; branchType: string } | undefined;
+
+  // ── Month-range mode: ?year=YYYY&month=M returns all records for the month ──
+  const yearParam = req.query.year ? Number(req.query.year) : null;
+  const monthParam = req.query.month ? Number(req.query.month) : null;
+
+  if (yearParam && monthParam && !isNaN(yearParam) && !isNaN(monthParam)) {
+    const padM = String(monthParam).padStart(2, '0');
+    const startDate = `${yearParam}-${padM}-01`;
+    const lastDay = new Date(yearParam, monthParam, 0).getDate();
+    const endDate = `${yearParam}-${padM}-${String(lastDay).padStart(2, '0')}`;
+
+    // Scope: non-headoffice employees only see their own records
+    const rows = await db.select().from(attendanceTable).where(
+      scopeEmp && scopeEmp.branchType !== 'headoffice'
+        ? and(gte(attendanceTable.date, startDate), lte(attendanceTable.date, endDate), eq(attendanceTable.employeeId, scopeEmp.id))
+        : and(gte(attendanceTable.date, startDate), lte(attendanceTable.date, endDate))
+    );
+
+    const result = rows.map((r) => ({
+      id: r.id,
+      employeeId: r.employeeId,
+      date: typeof r.date === 'string' ? r.date : (r.date as any).toISOString().split('T')[0],
+      checkIn: r.checkIn?.toISOString() ?? null,
+      checkOut: r.checkOut?.toISOString() ?? null,
+      checkInLat: r.checkInLat ? Number(r.checkInLat) : null,
+      checkInLng: r.checkInLng ? Number(r.checkInLng) : null,
+      checkOutLat: r.checkOutLat ? Number(r.checkOutLat) : null,
+      checkOutLng: r.checkOutLng ? Number(r.checkOutLng) : null,
+      status: r.status ?? 'absent',
+      hoursWorked: r.checkIn && r.checkOut
+        ? round2((r.checkOut.getTime() - r.checkIn.getTime()) / 3_600_000)
+        : null,
+    }));
+
+    res.json(result);
+    return;
+  }
+
+  // ── Single-date mode (legacy / manager view) ─────────────────────────────
   const qp = ListAttendanceQueryParams.safeParse(req.query);
   const targetDate = (qp.success && qp.data.date) ? qp.data.date : new Date().toISOString().split("T")[0];
   const filterEmployeeId = qp.success && qp.data.employeeId ? Number(qp.data.employeeId) : null;
@@ -822,7 +862,6 @@ router.get("/hr/attendance", async (req, res): Promise<void> => {
   if (filterEmployeeId) allEmployees = allEmployees.filter((e) => e.id === filterEmployeeId);
 
   // Non-headoffice employees only see their own attendance row
-  const scopeEmp = (req as any).employee as { id: number; branchType: string } | undefined;
   if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
     allEmployees = allEmployees.filter((e) => e.id === scopeEmp.id);
   }
@@ -951,6 +990,14 @@ router.get("/hr/leaves", requireModuleView("Leave"), async (req, res): Promise<v
 router.post("/hr/leaves", async (req, res): Promise<void> => {
   const parsed = ApplyLeaveBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  // Security: non-headoffice employees may only apply leave for themselves
+  const scopeEmp = (req as any).employee as { id: number; branchType: string } | undefined;
+  if (scopeEmp && scopeEmp.branchType !== 'headoffice' && parsed.data.employeeId !== scopeEmp.id) {
+    res.status(403).json({ error: "You can only apply leave for yourself." });
+    return;
+  }
+
   const [row] = await db.insert(leavesTable).values({ ...parsed.data, status: "pending" }).returning();
 
   // Sync leave days into attendance table as status = 'leave'

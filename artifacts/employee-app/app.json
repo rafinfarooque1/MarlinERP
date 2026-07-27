@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "Marlin Employee",
+    "slug": "employee-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "employee-app",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#f4f6f8"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.marlin.employeeapp"
+    },
+    "android": {
+      "package": "com.marlin.employeeapp"
+    },
+    "web": {
+      "favicon": "./assets/images/icon.png"
+    },
+    "plugins": [
+      [
+        "expo-router",
+        {
+          "origin": "https://replit.com/"
+        }
+      ],
+      "expo-font",
+      "expo-web-browser"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
