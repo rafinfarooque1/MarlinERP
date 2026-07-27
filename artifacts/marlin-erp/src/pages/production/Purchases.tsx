@@ -49,13 +49,6 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
-const editSchema = z.object({
-  purchaseDate: z.string().min(1),
-  invoiceNumber: z.string().optional(),
-  notes: z.string().optional(),
-});
-type EditFormValues = z.infer<typeof editSchema>;
-
 const defaultLine = { materialType: 'raw_material' as const, materialId: 0, hsnCode: '', quantity: 1, unitCost: 0, discount: 0, gstRate: 5, taxType: 'intra' as const, batchNumber: '', mfgDate: '', expiryDate: '' };
 
 function calcLine(q: number, rate: number, disc: number, gst: number, taxType: string) {
@@ -101,7 +94,7 @@ export default function Purchases() {
   const { data: rawMaterials = [] } = useListRawMaterials();
   const { data: finishedItems = [] } = useListItems();
   const [isOpen, setIsOpen] = useState(false);
-  const [editItem, setEditItem] = useState<any>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [viewItem, setViewItem] = useState<any>(null);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const queryClient = useQueryClient();
@@ -143,8 +136,6 @@ export default function Purchases() {
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
   const watchLines = form.watch('lineItems');
 
-  const editForm = useForm<EditFormValues>({ resolver: zodResolver(editSchema), defaultValues: { purchaseDate: '', invoiceNumber: '', notes: '' } });
-
   // Bill summary
   const billSummary = watchLines.reduce((acc, li) => {
     const calc = calcLine(Number(li.quantity) || 0, Number(li.unitCost) || 0, Number(li.discount) || 0, Number(li.gstRate) || 0, li.taxType);
@@ -162,24 +153,33 @@ export default function Purchases() {
   const roundOff = Math.round(rawTotal) - rawTotal;
   const grandTotal = Math.round(rawTotal);
 
-  const onSubmit = (data: FormValues) => {
-    createMutation.mutate({ data: data as any }, {
-      onSuccess: () => {
-        toast.success('Purchase bill created');
-        queryClient.invalidateQueries({ queryKey: getListPurchasesQueryKey() });
-        invalidateStockDashboards();
-        setIsOpen(false);
-        form.reset({ vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', lineItems: [defaultLine], notes: '' });
-      },
-      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
-    });
-  };
+  const resetForm = () => form.reset({ vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', lineItems: [defaultLine], notes: '' });
 
-  const onEditSubmit = (data: EditFormValues) => {
-    updateMutation.mutate({ id: editItem.id, data }, {
-      onSuccess: () => { toast.success('Purchase bill updated'); queryClient.invalidateQueries({ queryKey: getListPurchasesQueryKey() }); setEditItem(null); },
-      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
-    });
+  const onSubmit = (data: FormValues) => {
+    if (editingId !== null) {
+      updateMutation.mutate({ id: editingId, data: data as any }, {
+        onSuccess: () => {
+          toast.success('Purchase bill updated');
+          queryClient.invalidateQueries({ queryKey: getListPurchasesQueryKey() });
+          invalidateStockDashboards();
+          setIsOpen(false);
+          setEditingId(null);
+          resetForm();
+        },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+      });
+    } else {
+      createMutation.mutate({ data: data as any }, {
+        onSuccess: () => {
+          toast.success('Purchase bill created');
+          queryClient.invalidateQueries({ queryKey: getListPurchasesQueryKey() });
+          invalidateStockDashboards();
+          setIsOpen(false);
+          resetForm();
+        },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+      });
+    }
   };
 
   const handleDelete = () => {
@@ -275,7 +275,29 @@ export default function Purchases() {
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(p)}><Eye className="w-4 h-4" /></Button>
                       {perm.canEdit && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => { setEditItem(p); editForm.reset({ purchaseDate: p.purchaseDate, invoiceNumber: p.invoiceNumber || '', notes: (p as any).notes || '' }); }}>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => {
+                          setEditingId(p.id);
+                          form.reset({
+                            vendorId: p.vendorId,
+                            purchaseDate: (p.purchaseDate ?? '').substring(0, 10) || new Date().toISOString().split('T')[0],
+                            invoiceNumber: p.invoiceNumber || '',
+                            notes: (p as any).notes || '',
+                            lineItems: ((p.lineItems as any[]) || []).map((li: any) => ({
+                              materialType: li.materialType || 'raw_material',
+                              materialId: li.materialId,
+                              hsnCode: li.hsnCode || '',
+                              quantity: Number(li.quantity),
+                              unitCost: Number(li.unitCost),
+                              discount: Number(li.discount || 0),
+                              gstRate: Number(li.gstRate || 0),
+                              taxType: li.taxType || 'intra',
+                              batchNumber: li.batchNumber || '',
+                              mfgDate: li.mfgDate || '',
+                              expiryDate: li.expiryDate || '',
+                            })),
+                          });
+                          setIsOpen(true);
+                        }}>
                           <Edit2 className="w-4 h-4" />
                         </Button>
                       )}
@@ -306,11 +328,13 @@ export default function Purchases() {
         </div>
       </div>
 
-      {/* ── New Purchase Bill Dialog ── */}
-      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) form.reset(); }}>
+      {/* ── New / Edit Purchase Bill Dialog ── */}
+      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditingId(null); resetForm(); } }}>
         <DialogContent className="sm:max-w-5xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>New Purchase Bill</DialogTitle>
+            <DialogTitle>
+              {editingId !== null ? `Edit Purchase Bill #${String(editingId).padStart(4, '0')}` : 'New Purchase Bill'}
+            </DialogTitle>
             <DialogDescription>Enter purchase details with HSN, GST rate and discount per item</DialogDescription>
           </DialogHeader>
           <Form {...form}>
@@ -427,8 +451,10 @@ export default function Purchases() {
               </div>
 
               <DialogFooter>
-                <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
-                <Button type="submit" disabled={createMutation.isPending}>{createMutation.isPending ? 'Saving…' : 'Save Purchase Bill'}</Button>
+                <Button variant="outline" type="button" onClick={() => { setIsOpen(false); setEditingId(null); resetForm(); }}>Cancel</Button>
+                <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
+                  {(createMutation.isPending || updateMutation.isPending) ? 'Saving…' : editingId !== null ? 'Save Changes' : 'Save Purchase Bill'}
+                </Button>
               </DialogFooter>
             </form>
           </Form>
@@ -515,30 +541,6 @@ export default function Purchases() {
           )}
         </SheetContent>
       </Sheet>
-
-      {/* ── Edit Dialog ── */}
-      <Dialog open={!!editItem} onOpenChange={v => !v && setEditItem(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader><DialogTitle>Edit Purchase Bill #{editItem?.id}</DialogTitle></DialogHeader>
-          <Form {...editForm}>
-            <form onSubmit={editForm.handleSubmit(onEditSubmit)} className="space-y-4 pt-2">
-              <FormField control={editForm.control} name="purchaseDate" render={({ field }) => (
-                <FormItem><FormLabel>Date</FormLabel><FormControl><Input type="date" {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={editForm.control} name="invoiceNumber" render={({ field }) => (
-                <FormItem><FormLabel>Invoice Ref</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={editForm.control} name="notes" render={({ field }) => (
-                <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
-              )} />
-              <DialogFooter>
-                <Button variant="outline" type="button" onClick={() => setEditItem(null)}>Cancel</Button>
-                <Button type="submit" disabled={updateMutation.isPending}>{updateMutation.isPending ? 'Saving…' : 'Save Changes'}</Button>
-              </DialogFooter>
-            </form>
-          </Form>
-        </DialogContent>
-      </Dialog>
 
       {/* ── Delete Confirm ── */}
       <Dialog open={!!deleteTarget} onOpenChange={v => !v && setDeleteTarget(null)}>

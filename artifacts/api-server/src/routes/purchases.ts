@@ -232,7 +232,119 @@ router.get("/purchases/:id", async (req, res): Promise<void> => {
 
 router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
-  const { purchaseDate, invoiceNumber, notes } = req.body as { purchaseDate?: string; invoiceNumber?: string; notes?: string };
+  const [current] = await db.select().from(purchasesTable).where(eq(purchasesTable.id, id)).limit(1);
+  if (!current) { res.status(404).json({ error: "Not found" }); return; }
+
+  const { purchaseDate, invoiceNumber, notes, vendorId, lineItems } = req.body as {
+    purchaseDate?: string; invoiceNumber?: string; notes?: string;
+    vendorId?: number; lineItems?: any[];
+  };
+
+  if (lineItems !== undefined) {
+    // ── Full edit: reverse old stock, validate new lines, apply new stock ──
+    const oldLines = (current.lineItems ?? []) as Array<{
+      materialType: string; materialId: number; quantity: number; batchNumber?: string | null;
+    }>;
+
+    // 1. Reverse stock from the old lines (mirror of the delete handler)
+    for (const li of oldLines) {
+      if (li.materialType === "material") {
+        await db.update(materialsTable)
+          .set({ currentStock: sql`GREATEST(0, ${materialsTable.currentStock}::numeric - ${li.quantity})` })
+          .where(eq(materialsTable.id, li.materialId));
+      } else if (li.materialType === "raw_material") {
+        await db.update(rawMaterialsTable)
+          .set({ currentStock: sql`GREATEST(0, ${rawMaterialsTable.currentStock}::numeric - ${li.quantity})` })
+          .where(eq(rawMaterialsTable.id, li.materialId));
+      } else if (li.materialType === "item") {
+        await db.update(itemsTable)
+          .set({ productionStock: sql`GREATEST(0, ${itemsTable.productionStock}::numeric - ${li.quantity})` })
+          .where(eq(itemsTable.id, li.materialId));
+        await pool.query(
+          `UPDATE stock_entries SET quantity = GREATEST(0, quantity::numeric - $1), updated_at = now()
+           WHERE item_id = $2 AND branch_type = 'headoffice' AND branch_id = 1`,
+          [li.quantity, li.materialId],
+        );
+        await pool.query(
+          `UPDATE stock_batches SET quantity = GREATEST(0, quantity - $1), updated_at = now()
+           WHERE item_id = $2 AND branch_type = 'headoffice' AND branch_id = 1 AND batch_number = $3`,
+          [li.quantity, li.materialId, li.batchNumber || `PUR-${id}`],
+        );
+      }
+    }
+
+    // 2. Validate GST slabs on incoming lines
+    for (const li of lineItems) {
+      if (!isValidGstSlab(li.gstRate ?? 0)) {
+        res.status(400).json({ error: gstSlabErrorMessage(li.gstRate) }); return;
+      }
+    }
+
+    // 3. Calculate and enrich the new lines
+    const { enriched, subtotal, discountTotal, taxTotal, roundOff, totalAmount } = calcLineItems(lineItems);
+
+    // 4. Apply stock for the new lines (mirror of the create handler)
+    for (const li of enriched) {
+      if (li.materialType === "material") {
+        await db.update(materialsTable)
+          .set({ currentStock: sql`${materialsTable.currentStock}::numeric + ${li.quantity}` })
+          .where(eq(materialsTable.id, li.materialId));
+      } else if (li.materialType === "raw_material") {
+        await db.update(rawMaterialsTable)
+          .set({ currentStock: sql`${rawMaterialsTable.currentStock}::numeric + ${li.quantity}` })
+          .where(eq(rawMaterialsTable.id, li.materialId));
+      } else if (li.materialType === "item") {
+        await db.update(itemsTable)
+          .set({ productionStock: sql`${itemsTable.productionStock}::numeric + ${li.quantity}` })
+          .where(eq(itemsTable.id, li.materialId));
+        await pool.query(
+          `INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price)
+           VALUES ($1, 'headoffice', 1, $2, $3)
+           ON CONFLICT (item_id, branch_type, branch_id) DO UPDATE SET
+             quantity = stock_entries.quantity::numeric + EXCLUDED.quantity::numeric,
+             cost_price = EXCLUDED.cost_price,
+             updated_at = now()`,
+          [li.materialId, li.quantity, li.unitCost],
+        );
+        await updateAvgCostOnInbound(pool, li.materialId, li.quantity, li.unitCost);
+        await creditBatch(pool, {
+          itemId: li.materialId, branchType: "headoffice", branchId: 1,
+          batchNumber: li.batchNumber || `PUR-${id}`,
+          mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
+          quantity: li.quantity, unitCost: li.unitCost,
+          source: "purchase", sourceId: id,
+        });
+      }
+    }
+
+    // 5. Persist the updated record
+    const [row] = await db.update(purchasesTable).set({
+      vendorId: vendorId ?? current.vendorId,
+      purchaseDate: purchaseDate ?? current.purchaseDate,
+      invoiceNumber: invoiceNumber !== undefined ? invoiceNumber : current.invoiceNumber,
+      notes: notes !== undefined ? notes : current.notes,
+      lineItems: enriched,
+      totalAmount: String(totalAmount),
+    }).where(eq(purchasesTable.id, id)).returning();
+
+    await db.execute(sql`UPDATE purchases SET tax_total = ${taxTotal}, discount_total = ${discountTotal}, round_off = ${roundOff} WHERE id = ${id}`);
+
+    logActivity({
+      action: "UPDATE", module: "purchases", entityType: "purchase", entityId: id,
+      description: `Purchase Bill #${id} fully edited — ₹${totalAmount.toFixed(2)}`,
+      metadata: { before: { totalAmount: Number(current.totalAmount) }, after: { totalAmount, lineCount: enriched.length } },
+    }).catch(() => {});
+
+    const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, row.vendorId)).limit(1);
+    res.json({
+      ...row, vendorName: vendor?.name ?? "",
+      totalAmount, taxTotal, discountTotal, roundOff,
+      lineItems: enrichLines(enriched, await buildNameMaps()),
+    });
+    return;
+  }
+
+  // ── Metadata-only edit (date / invoice ref / notes, no line changes) ──
   const updateData: Record<string, unknown> = {};
   if (purchaseDate !== undefined) updateData.purchaseDate = purchaseDate;
   if (invoiceNumber !== undefined) updateData.invoiceNumber = invoiceNumber;
