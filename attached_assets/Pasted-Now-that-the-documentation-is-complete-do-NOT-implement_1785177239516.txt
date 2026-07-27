@@ -1,0 +1,280 @@
+Now that the documentation is complete, do NOT implement anything yet.
+
+I want a complete architectural review of the current ERP.
+
+Use ONLY the two generated documents:
+
+- docs/technical-architecture.md
+- docs/business-processes.md
+
+Read both documents completely before responding.
+
+=========================================================
+OBJECTIVE
+=========================================================
+
+Review the ERP as if you are an ERP Solution Architect.
+
+Do NOT modify code.
+
+Do NOT create tasks.
+
+Do NOT implement anything.
+
+Analyze the architecture only.
+
+=========================================================
+REVIEW THE FOLLOWING
+=========================================================
+
+1. Overall Architecture
+
+Review
+
+Frontend
+
+Backend
+
+Database
+
+API
+
+RBAC
+
+Authentication
+
+Navigation
+
+Shared Libraries
+
+Folder Structure
+
+Scalability
+
+Maintainability
+
+=========================================================
+BUSINESS WORKFLOW
+=========================================================
+
+Review every business flow.
+
+Purchase
+
+Production
+
+Inventory
+
+Transfer
+
+Warehouse
+
+Outlet
+
+Sales
+
+Returns
+
+Accounts
+
+GST
+
+HR
+
+Reports
+
+Find any missing workflow.
+
+=========================================================
+ACCOUNTING
+=========================================================
+
+Review
+
+Chart of Accounts
+
+Ledger
+
+Journal
+
+Contra
+
+Payments
+
+Receipts
+
+GST
+
+Trial Balance
+
+Cash Book
+
+Bank Book
+
+Reconciliation
+
+Profit & Loss
+
+Balance Sheet
+
+Derived Postings
+
+Verify they follow professional accounting principles.
+
+=========================================================
+INVENTORY
+=========================================================
+
+Review
+
+Stock
+
+Batch
+
+FEFO
+
+Transfers
+
+Verification
+
+Warehouse
+
+Outlet
+
+Production
+
+Inventory valuation
+
+Find any gaps.
+
+=========================================================
+PERMISSIONS
+=========================================================
+
+Review
+
+Module Registry
+
+Permission System
+
+Sidebar
+
+RBAC
+
+Branch Scope
+
+API Protection
+
+Hierarchy
+
+Find architectural weaknesses.
+
+=========================================================
+DATABASE
+=========================================================
+
+Review
+
+Relationships
+
+Normalization
+
+Indexes
+
+Constraints
+
+Performance
+
+Auditability
+
+=========================================================
+SECURITY
+=========================================================
+
+Review
+
+Authentication
+
+Authorization
+
+Permission Enforcement
+
+Branch Filtering
+
+Audit Logs
+
+Sensitive Data
+
+API Security
+
+=========================================================
+SCALABILITY
+=========================================================
+
+Review whether the ERP can scale to
+
+10 Warehouses
+
+100 Warehouses
+
+500 Outlets
+
+Thousands of Customers
+
+Millions of Transactions
+
+=========================================================
+REPORTS
+=========================================================
+
+Review
+
+Business Reports
+
+Accounting Reports
+
+Inventory Reports
+
+Sales Reports
+
+HR Reports
+
+GST Reports
+
+=========================================================
+OUTPUT
+=========================================================
+
+For every area provide:
+
+Current Design
+
+Strengths
+
+Weaknesses
+
+Missing Features
+
+Recommended Improvements
+
+Priority
+
+Critical
+
+High
+
+Medium
+
+Low
+
+=========================================================
+IMPORTANT
+=========================================================
+
+Do NOT implement.
+
+Do NOT create tasks.
+
+Do NOT suggest code.
+
+Produce only a professional ERP Architecture Review based on the current implementation documented in the two files.
