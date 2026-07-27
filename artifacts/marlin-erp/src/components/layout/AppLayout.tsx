@@ -434,23 +434,13 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           {/* Logo row */}
           <div className="h-16 flex items-center justify-between px-4 border-b border-border shrink-0">
             {!collapsed && (
-              logo ? (
-                <Link href={isOutletEmployee ? '/sales/pos' : '/'} className="flex items-center h-10 max-w-[160px]">
-                  <img src={logo} alt="Company logo" className="h-full w-full object-contain object-left" />
-                </Link>
-              ) : (
-                <h1 className="text-xl font-bold font-sans tracking-tight text-primary select-none">
-                  MARLIN<span className="text-foreground">ERP</span>
-                </h1>
-              )
+              <Link href={isOutletEmployee ? '/sales/pos' : '/'} className="flex items-center h-10 max-w-[160px]">
+                <img src={logo || '/marlin-logo.jpeg'} alt="Marlin Frozen Fruits" className="h-full w-full object-contain object-left" />
+              </Link>
             )}
             {collapsed && (
               <div className="w-full flex justify-center">
-                {logo ? (
-                  <img src={logo} alt="Logo" className="w-8 h-8 object-contain" />
-                ) : (
-                  <span className="text-lg font-bold text-primary select-none">M</span>
-                )}
+                <img src={logo || '/marlin-logo.jpeg'} alt="Logo" className="w-8 h-8 object-contain" />
               </div>
             )}
 

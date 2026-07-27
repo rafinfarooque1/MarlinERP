@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
 import { useLogin } from '@workspace/api-client-react';
-import { Factory, Lock, User, Loader2, Eye, EyeOff } from 'lucide-react';
+import { Lock, User, Loader2, Eye, EyeOff } from 'lucide-react';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -68,13 +68,8 @@ export default function Login() {
 
       <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10">
         <div className="flex justify-center mb-6">
-          <div className="h-16 w-16 bg-primary/10 rounded-2xl flex items-center justify-center border border-primary/20 shadow-lg shadow-primary/10">
-            <Factory className="w-8 h-8 text-primary" />
-          </div>
+          <img src="/marlin-logo.jpeg" alt="Marlin Frozen Fruits" className="h-20 object-contain" />
         </div>
-        <h2 className="mt-2 text-center text-3xl font-bold tracking-tight text-foreground font-sans">
-          Marlin Frozen Fruits
-        </h2>
         <p className="mt-2 text-center text-sm text-muted-foreground font-mono tracking-widest uppercase">
           Operations Terminal
         </p>
