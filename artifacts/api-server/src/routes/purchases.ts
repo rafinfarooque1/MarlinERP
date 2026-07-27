@@ -170,9 +170,28 @@ router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, r
   // Update stock for each line item
   for (const li of enriched) {
     if (li.materialType === "material") {
-      await db.update(materialsTable).set({ currentStock: sql`${materialsTable.currentStock}::numeric + ${li.quantity}` }).where(eq(materialsTable.id, li.materialId));
+      // Atomically update current_stock AND roll weighted-average cost (avg_cost is a raw-migration column)
+      await pool.query(
+        `UPDATE materials SET
+           avg_cost = ROUND(
+             (current_stock::numeric * COALESCE(avg_cost, 0)::numeric + $2::numeric * $3::numeric)
+             / NULLIF(current_stock::numeric + $2::numeric, 0),
+           4),
+           current_stock = current_stock::numeric + $2::numeric
+         WHERE id = $1`,
+        [li.materialId, li.quantity, li.unitCost]
+      );
     } else if (li.materialType === "raw_material") {
-      await db.update(rawMaterialsTable).set({ currentStock: sql`${rawMaterialsTable.currentStock}::numeric + ${li.quantity}` }).where(eq(rawMaterialsTable.id, li.materialId));
+      await pool.query(
+        `UPDATE raw_materials SET
+           avg_cost = ROUND(
+             (current_stock::numeric * COALESCE(avg_cost, 0)::numeric + $2::numeric * $3::numeric)
+             / NULLIF(current_stock::numeric + $2::numeric, 0),
+           4),
+           current_stock = current_stock::numeric + $2::numeric
+         WHERE id = $1`,
+        [li.materialId, li.quantity, li.unitCost]
+      );
     } else if (li.materialType === "item") {
       await db.update(itemsTable).set({ productionStock: sql`${itemsTable.productionStock}::numeric + ${li.quantity}` }).where(eq(itemsTable.id, li.materialId));
       // Purchased finished goods arrive at the production unit: keep the
@@ -286,13 +305,27 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
     // 4. Apply stock for the new lines (mirror of the create handler)
     for (const li of enriched) {
       if (li.materialType === "material") {
-        await db.update(materialsTable)
-          .set({ currentStock: sql`${materialsTable.currentStock}::numeric + ${li.quantity}` })
-          .where(eq(materialsTable.id, li.materialId));
+        await pool.query(
+          `UPDATE materials SET
+             avg_cost = ROUND(
+               (current_stock::numeric * COALESCE(avg_cost, 0)::numeric + $2::numeric * $3::numeric)
+               / NULLIF(current_stock::numeric + $2::numeric, 0),
+             4),
+             current_stock = current_stock::numeric + $2::numeric
+           WHERE id = $1`,
+          [li.materialId, li.quantity, li.unitCost]
+        );
       } else if (li.materialType === "raw_material") {
-        await db.update(rawMaterialsTable)
-          .set({ currentStock: sql`${rawMaterialsTable.currentStock}::numeric + ${li.quantity}` })
-          .where(eq(rawMaterialsTable.id, li.materialId));
+        await pool.query(
+          `UPDATE raw_materials SET
+             avg_cost = ROUND(
+               (current_stock::numeric * COALESCE(avg_cost, 0)::numeric + $2::numeric * $3::numeric)
+               / NULLIF(current_stock::numeric + $2::numeric, 0),
+             4),
+             current_stock = current_stock::numeric + $2::numeric
+           WHERE id = $1`,
+          [li.materialId, li.quantity, li.unitCost]
+        );
       } else if (li.materialType === "item") {
         await db.update(itemsTable)
           .set({ productionStock: sql`${itemsTable.productionStock}::numeric + ${li.quantity}` })

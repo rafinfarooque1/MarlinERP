@@ -28,27 +28,105 @@ export async function buildBranchMaps() {
   };
 }
 
-// GET /stock — optionally server-paginated (Phase 7). Without `page`/`limit`
-// the legacy full-array response is returned. `q` searches item name; the
-// existing branchType/branchId filters work in both modes.
+// GET /stock — server-paginated. Unions Item (SKU) from stock_entries,
+// Raw Material from materials table, and Packing Material from raw_materials table.
+// Optional query params: branchType, branchId, q (search), materialType (item|material|raw_material)
 router.get("/stock", async (req, res): Promise<void> => {
   const qp = ListStockQueryParams.safeParse(req.query);
   const paginated = 'page' in req.query || 'limit' in req.query;
   const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  const matTypeFilter = typeof req.query.materialType === 'string' ? req.query.materialType.trim() : '';
 
+  // All conditions are applied to the outer query over the UNION CTE alias `u`
   const conds: string[] = [];
   const params: unknown[] = [];
-  if (qp.success && qp.data.branchType) { params.push(qp.data.branchType); conds.push(`se.branch_type = $${params.length}`); }
-  if (qp.success && qp.data.branchId)   { params.push(Number(qp.data.branchId)); conds.push(`se.branch_id = $${params.length}`); }
-  if (q) { params.push(`%${q}%`); conds.push(`i.name ILIKE $${params.length}`); }
-  // ── Server-side data scope: enforce branch visibility ─────────────────────
+
+  if (qp.success && qp.data.branchType) {
+    params.push(qp.data.branchType);
+    conds.push(`u.branch_type = $${params.length}`);
+  }
+  if (qp.success && qp.data.branchId) {
+    params.push(Number(qp.data.branchId));
+    conds.push(`u.branch_id = $${params.length}`);
+  }
+  if (q) {
+    params.push(`%${q}%`);
+    conds.push(`u.item_name ILIKE $${params.length}`);
+  }
+  if (matTypeFilter && ['item', 'material', 'raw_material'].includes(matTypeFilter)) {
+    params.push(matTypeFilter);
+    conds.push(`u.material_type = $${params.length}`);
+  }
+
+  // Non-headoffice employees: scope to their branch items only (materials are HO-global)
   const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
   if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
     const scope = await getUserDataScope(scopeEmp);
-    conds.push(scopeBranchWhere(scope, params, 'se'));
+    conds.push(`u.material_type = 'item'`);
+    conds.push(scopeBranchWhere(scope, params, 'u'));
   }
+
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
-  const baseFrom = `FROM stock_entries se LEFT JOIN items i ON i.id = se.item_id`;
+
+  // UNION CTE: items (stock_entries) + raw materials + packing materials
+  const cte = `
+    WITH u AS (
+      SELECT
+        se.id                                   AS entry_id,
+        se.item_id                              AS ref_id,
+        'item'                                  AS material_type,
+        COALESCE(i.name, '')                    AS item_name,
+        COALESCE(i.unit, '')                    AS unit,
+        COALESCE(i.hsn_code, '')                AS hsn_code,
+        COALESCE(i.reorder_level, 10)::numeric  AS reorder_level,
+        COALESCE(i.avg_cost, 0)::numeric        AS avg_cost,
+        COALESCE(i.cost, 0)::numeric            AS cost,
+        se.branch_type,
+        se.branch_id::int,
+        se.quantity::numeric                    AS quantity,
+        se.cost_price::numeric                  AS cost_price
+      FROM stock_entries se
+      LEFT JOIN items i ON i.id = se.item_id
+
+      UNION ALL
+
+      SELECT
+        NULL                AS entry_id,
+        m.id                AS ref_id,
+        'material'          AS material_type,
+        m.name              AS item_name,
+        COALESCE(m.unit, '') AS unit,
+        ''                  AS hsn_code,
+        0::numeric          AS reorder_level,
+        COALESCE(m.avg_cost, 0)::numeric AS avg_cost,
+        COALESCE(m.cost,     0)::numeric AS cost,
+        'headoffice'        AS branch_type,
+        0                   AS branch_id,
+        m.current_stock::numeric AS quantity,
+        0::numeric          AS cost_price
+      FROM materials m
+      WHERE m.current_stock::numeric > 0
+
+      UNION ALL
+
+      SELECT
+        NULL                  AS entry_id,
+        rm.id                 AS ref_id,
+        'raw_material'        AS material_type,
+        rm.name               AS item_name,
+        COALESCE(rm.unit, '') AS unit,
+        ''                    AS hsn_code,
+        0::numeric            AS reorder_level,
+        COALESCE(rm.avg_cost, 0)::numeric AS avg_cost,
+        COALESCE(rm.cost,     0)::numeric AS cost,
+        'headoffice'          AS branch_type,
+        0                     AS branch_id,
+        rm.current_stock::numeric AS quantity,
+        0::numeric            AS cost_price
+      FROM raw_materials rm
+      WHERE rm.current_stock::numeric > 0
+    )
+  `;
 
   let total = 0;
   let page = 1;
@@ -56,40 +134,45 @@ router.get("/stock", async (req, res): Promise<void> => {
   if (paginated) {
     page = Math.max(parseInt(String(req.query.page ?? '1'), 10) || 1, 1);
     limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '25'), 10) || 25, 1), 200);
-    const { rows: [t] } = await pool.query(`SELECT COUNT(*)::int AS total ${baseFrom} ${where}`, params);
+    const { rows: [t] } = await pool.query(
+      `${cte} SELECT COUNT(*)::int AS total FROM u ${where}`, params
+    );
     total = Number(t?.total ?? 0);
   }
 
   const [result, branchName] = await Promise.all([
-    pool.query(`
-      SELECT se.id, se.item_id, se.branch_type, se.branch_id, se.quantity, se.cost_price,
-             i.name AS item_name, i.hsn_code, i.unit, i.reorder_level, i.avg_cost, i.cost
-      ${baseFrom} ${where}
-      ORDER BY ${paginated ? 'i.name ASC NULLS LAST, se.id' : 'se.id'}
-      ${limit ? `LIMIT ${limit} OFFSET ${(page - 1) * limit}` : ''}
-    `, params),
+    pool.query(
+      `${cte}
+       SELECT entry_id, ref_id, material_type, item_name, unit, hsn_code,
+              reorder_level, avg_cost, cost, branch_type, branch_id, quantity, cost_price
+       FROM u ${where}
+       ORDER BY ${paginated ? 'item_name ASC NULLS LAST, ref_id' : 'ref_id'}
+       ${limit ? `LIMIT ${limit} OFFSET ${(page - 1) * limit}` : ''}`,
+      params
+    ),
     buildBranchMaps(),
   ]);
 
   const enriched = result.rows.map((r: any) => {
-    const qty = Number(r.quantity);
-    const avgCost = Number(r.avg_cost ?? 0) > 0 ? Number(r.avg_cost) : Number(r.cost ?? 0);
+    const qty      = Number(r.quantity);
+    const avgCost  = Number(r.avg_cost ?? 0) > 0 ? Number(r.avg_cost) : Number(r.cost ?? 0);
     const reorderLevel = Number(r.reorder_level ?? 10);
     return {
-      id: r.id,
-      itemId: r.item_id,
-      itemName: r.item_name ?? "",
-      hsnCode: r.hsn_code ?? "",
-      branchType: r.branch_type,
-      branchId: r.branch_id,
-      branchName: branchName(r.branch_type, r.branch_id),
-      quantity: qty,
-      costPrice: Number(r.cost_price),
-      unit: r.unit ?? "",
+      id:           r.entry_id,
+      itemId:       r.ref_id,
+      materialType: r.material_type,
+      itemName:     r.item_name ?? "",
+      hsnCode:      r.hsn_code ?? "",
+      branchType:   r.branch_type,
+      branchId:     r.branch_id,
+      branchName:   branchName(r.branch_type, r.branch_id),
+      quantity:     qty,
+      costPrice:    Number(r.cost_price),
+      unit:         r.unit ?? "",
       reorderLevel,
       avgCost,
-      stockValue: Math.round(qty * avgCost * 100) / 100,
-      lowStock: qty < reorderLevel,
+      stockValue:   Math.round(qty * avgCost * 100) / 100,
+      lowStock:     r.material_type === 'item' && qty < reorderLevel,
     };
   });
 

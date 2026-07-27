@@ -20,6 +20,8 @@ async function runMigrations() {
     ALTER TABLE items ADD COLUMN IF NOT EXISTS cost numeric(10,2) NOT NULL DEFAULT 0;
     ALTER TABLE materials ADD COLUMN IF NOT EXISTS cost numeric(10,2) NOT NULL DEFAULT 0;
     ALTER TABLE raw_materials ADD COLUMN IF NOT EXISTS cost numeric(10,2) NOT NULL DEFAULT 0;
+    ALTER TABLE materials ADD COLUMN IF NOT EXISTS avg_cost numeric(12,4) NOT NULL DEFAULT 0;
+    ALTER TABLE raw_materials ADD COLUMN IF NOT EXISTS avg_cost numeric(12,4) NOT NULL DEFAULT 0;
     ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS approved_by text;
     ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS approved_at timestamptz;
     ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS received_line_items jsonb DEFAULT '[]'::jsonb;
