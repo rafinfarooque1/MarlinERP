@@ -189,16 +189,6 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navEntries: [{ name: 'Units', href: '/production/units' }],
   },
   {
-    key: 'Materials', permSegment: 'Accounts', permGroup: 'Production',
-    navGroup: 'Production',
-    navEntries: [{ name: 'Materials', href: '/production/materials' }],
-  },
-  {
-    key: 'Raw Materials', permSegment: 'Accounts', permGroup: 'Production',
-    navGroup: 'Production',
-    navEntries: [{ name: 'Raw Materials', href: '/production/raw-materials' }],
-  },
-  {
     key: 'Items', permSegment: 'Accounts', permGroup: 'Production',
     navGroup: 'Production',
     navEntries: [{ name: 'Item Master', href: '/production/item-master' }],
