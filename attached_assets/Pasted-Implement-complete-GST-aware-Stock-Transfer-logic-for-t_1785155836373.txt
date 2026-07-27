@@ -1,0 +1,364 @@
+Implement complete GST-aware Stock Transfer logic for the Marlin Frozen Fruits ERP.
+
+This is a backend business rule and accounting rule. It must automatically determine whether a transfer is only a stock movement or a taxable sale/purchase based on GST registration.
+
+=========================================================
+BUSINESS RULE
+=========================================================
+
+Every location (Head Office, Warehouse, Outlet) must have its own GST registration.
+
+Each location must store:
+
+• GSTIN
+• State
+• State Code
+• GST Registration Status
+• Company Name
+• Branch Name
+
+The system must compare the GSTIN and State Code of the source and destination before processing a transfer.
+
+=========================================================
+RULE 1
+SAME GST REGISTRATION
+=========================================================
+
+Examples
+
+Head Office Karnataka
+↓
+
+Warehouse Bangalore
+
+GSTIN is same
+
+OR
+
+Warehouse Bangalore
+↓
+
+Warehouse Mysore
+
+GSTIN is same
+
+Then:
+
+Treat this as INTERNAL STOCK TRANSFER ONLY.
+
+Do NOT create:
+
+• Sales Invoice
+• Purchase Invoice
+• GST Liability
+• Output GST
+• Input GST
+• E-Way Bill (unless legally required by value/distance)
+
+Only create:
+
+• Delivery Challan
+• Stock Transfer Note
+• Inventory Movement
+
+Accounting Entry
+
+Dr Inventory - Destination Location
+
+Cr Inventory - Source Location
+
+There should be NO effect on:
+
+Profit & Loss
+
+GST Return
+
+Sales Register
+
+Purchase Register
+
+GSTR-1
+
+GSTR-3B
+
+Only inventory quantities change.
+
+=========================================================
+RULE 2
+DIFFERENT GST REGISTRATION
+=========================================================
+
+Examples
+
+Head Office Karnataka
+↓
+
+Warehouse Chennai
+
+Different GSTIN
+
+OR
+
+Warehouse Karnataka
+↓
+
+Warehouse Kerala
+
+Different GSTIN
+
+OR
+
+Warehouse Karnataka
+↓
+
+Warehouse Hyderabad
+
+Different GSTIN
+
+Then this is NOT a normal stock transfer.
+
+Backend must automatically treat this as:
+
+Inter-Branch Sale and Purchase.
+
+Automatically create:
+
+1. Tax Invoice
+
+2. Purchase Invoice
+
+3. Delivery Challan
+
+4. Stock Movement
+
+5. Inventory Movement
+
+6. Sales Ledger Entry
+
+7. Purchase Ledger Entry
+
+8. GST Entries
+
+9. E-Way Bill reference (optional module)
+
+=========================================================
+GST LOGIC
+=========================================================
+
+If GSTIN is different
+
+Interstate
+
+Charge:
+
+IGST
+
+If GSTIN is different but state is same (separate registrations)
+
+Charge GST according to Indian GST law for separate taxable persons.
+
+GST amount must be calculated automatically using the Item GST Rate.
+
+=========================================================
+ACCOUNTING ENTRIES
+=========================================================
+
+Source Branch
+
+Dr Inter Branch Debtor
+
+Cr Sales
+
+Cr Output GST
+
+Destination Branch
+
+Dr Inventory
+
+Dr Input GST
+
+Cr Inter Branch Creditor
+
+=========================================================
+INVENTORY
+=========================================================
+
+Regardless of GST treatment
+
+Inventory must always
+
+Reduce stock from source
+
+Increase stock in destination
+
+Maintain
+
+Batch
+
+Lot
+
+MFG Date
+
+Expiry Date
+
+FIFO
+
+Average Cost
+
+Stock Valuation
+
+=========================================================
+AUTO DETECTION
+=========================================================
+
+The user should NEVER manually choose whether it is Sale or Transfer.
+
+System must automatically compare:
+
+Source GSTIN
+
+Destination GSTIN
+
+Source State Code
+
+Destination State Code
+
+Then decide:
+
+IF GSTIN SAME
+
+→ Internal Stock Transfer
+
+IF GSTIN DIFFERENT
+
+→ Sale + Purchase
+
+=========================================================
+UI
+=========================================================
+
+User always clicks
+
+"Stock Transfer"
+
+Backend decides the transaction type automatically.
+
+Display
+
+Transfer Type
+
+Internal Stock Transfer
+
+or
+
+Interstate Tax Transfer
+
+or
+
+Inter-Branch Sale
+
+The user should clearly see why GST was or was not applied.
+
+=========================================================
+REPORTS
+=========================================================
+
+Internal Transfer
+
+Show only in
+
+Inventory Reports
+
+Stock Movement
+
+Transfer Reports
+
+Do NOT show in
+
+Sales Reports
+
+Purchase Reports
+
+GST Reports
+
+Taxable Transfer
+
+Show in
+
+Sales Register
+
+Purchase Register
+
+GST Summary
+
+GSTR-1
+
+GSTR-3B
+
+Inventory Reports
+
+Ledger
+
+Profit Reports
+
+=========================================================
+VALIDATION
+=========================================================
+
+Before completing the transfer, validate:
+
+✓ Source has sufficient stock.
+
+✓ Source GSTIN exists.
+
+✓ Destination GSTIN exists.
+
+✓ Item has GST rate.
+
+✓ Item has HSN code.
+
+✓ Batch exists.
+
+✓ Quantity available.
+
+If validation fails, stop the transfer.
+
+=========================================================
+AUDIT
+=========================================================
+
+Maintain a complete audit trail containing:
+
+Transfer Number
+
+Transfer Type
+
+Source Location
+
+Destination Location
+
+Source GSTIN
+
+Destination GSTIN
+
+GST Applied (Yes/No)
+
+Tax Type (IGST / CGST+SGST / None)
+
+Invoice Number (if applicable)
+
+Delivery Challan Number
+
+User
+
+Date & Time
+
+Approval History
+
+=========================================================
+IMPORTANT
+=========================================================
+
+The system must fully comply with Indian GST law for branch transfers.
+
+The entire decision must be automatic in the backend. Users should only initiate a Stock Transfer; the ERP determines whether it is a simple inventory transfer or a taxable inter-branch sale/purchase based on GST registrations.

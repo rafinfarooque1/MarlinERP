@@ -658,7 +658,7 @@ export default function StockTransfers() {
               <div className="flex justify-center"><StatusBadge status={viewItem.status} /></div>
 
               <div className="grid grid-cols-2 gap-4">
-                {[['Date', new Date(viewItem.transferDate).toLocaleDateString('en-IN')], ['From', 'Head Office'], ['To', viewItem.toName], ['Type', viewItem.isInterstate ? 'Interstate' : 'Intra-state']].map(([k, v]) => (
+                {[['Date', new Date(viewItem.transferDate).toLocaleDateString('en-IN')], ['From', 'Head Office'], ['To', viewItem.toName], ['Type', (viewItem as any).transferType === 'interstate' ? 'Interstate Tax Transfer (IGST)' : (viewItem as any).transferType === 'intrastate' ? 'Inter-Branch Sale (CGST+SGST)' : 'Internal Stock Transfer']].map(([k, v]) => (
                   <div key={String(k)} className="flex flex-col gap-1 border-b border-border pb-3">
                     <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                     <span className="font-semibold">{String(v)}</span>

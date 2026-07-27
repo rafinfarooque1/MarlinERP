@@ -6,6 +6,7 @@ import { CreatePurchaseBody, GetPurchaseParams } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
 import { isValidGstSlab, gstSlabErrorMessage } from "../lib/gst";
 import { creditBatch, updateAvgCostOnInbound } from "../lib/batches";
+import { writeStockLedger } from "../lib/stockLedger";
 
 const router = Router();
 
@@ -218,6 +219,15 @@ router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, r
     }
   }
 
+  // ── Stock ledger (purchase inbound) ─────────────────────────────────────────
+  writeStockLedger(pool, (enriched as any[]).map(li => ({
+    txnType: 'purchase', materialType: li.materialType ?? 'item',
+    refId: li.materialId, itemName: li.materialName ?? '', unit: '',
+    branchType: 'headoffice', branchId: li.materialType === 'item' ? 1 : 0, branchName: 'Head Office',
+    qtyChange: Number(li.quantity), unitCost: Number(li.unitCost ?? 0),
+    docType: 'purchase', docId: row.id,
+  }))).catch((e: any) => console.error('[stock-ledger] purchase create failed', e));
+
   // Patch tax/discount/roundoff columns
   await db.execute(sql`UPDATE purchases SET tax_total = ${taxTotal}, discount_total = ${discountTotal}, round_off = ${roundOff} WHERE id = ${row.id}`);
 
@@ -292,6 +302,16 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
       }
     }
 
+    // ── Stock ledger (purchase edit reversal) ────────────────────────────────
+    writeStockLedger(pool, (oldLines as any[]).map(li => ({
+      txnType: 'purchase_reversal', materialType: li.materialType ?? 'item',
+      refId: li.materialId, itemName: '', unit: '',
+      branchType: 'headoffice', branchId: li.materialType === 'item' ? 1 : 0, branchName: 'Head Office',
+      qtyChange: -Number(li.quantity), unitCost: 0,
+      docType: 'purchase', docId: id,
+      notes: 'Purchase edit — old lines reversed',
+    }))).catch((e: any) => console.error('[stock-ledger] purchase edit reversal failed', e));
+
     // 2. Validate GST slabs on incoming lines
     for (const li of lineItems) {
       if (!isValidGstSlab(li.gstRate ?? 0)) {
@@ -349,6 +369,16 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
         });
       }
     }
+
+    // ── Stock ledger (purchase edit re-apply) ────────────────────────────────
+    writeStockLedger(pool, (enriched as any[]).map(li => ({
+      txnType: 'purchase', materialType: li.materialType ?? 'item',
+      refId: li.materialId, itemName: li.materialName ?? '', unit: '',
+      branchType: 'headoffice', branchId: li.materialType === 'item' ? 1 : 0, branchName: 'Head Office',
+      qtyChange: Number(li.quantity), unitCost: Number(li.unitCost ?? 0),
+      docType: 'purchase', docId: id,
+      notes: 'Purchase edit — new lines applied',
+    }))).catch((e: any) => console.error('[stock-ledger] purchase edit re-apply failed', e));
 
     // 5. Persist the updated record
     const [row] = await db.update(purchasesTable).set({
@@ -414,6 +444,14 @@ router.delete("/purchases/:id", requireModuleAction("Purchases", "delete"), asyn
       );
     }
   }
+  writeStockLedger(pool, lineItems.map(li => ({
+    txnType: 'purchase_reversal', materialType: li.materialType ?? 'item',
+    refId: li.materialId, itemName: '', unit: '',
+    branchType: 'headoffice', branchId: li.materialType === 'item' ? 1 : 0, branchName: 'Head Office',
+    qtyChange: -Number(li.quantity), unitCost: 0,
+    docType: 'purchase', docId: id,
+    notes: 'Purchase deleted — stock reversed',
+  }))).catch((e: any) => console.error('[stock-ledger] purchase delete failed', e));
   await db.delete(purchasesTable).where(eq(purchasesTable.id, id));
   logActivity({
     action: "DELETE", module: "purchases", entityType: "purchase", entityId: id,

@@ -6,6 +6,8 @@ import { CreateStockTransferBody, ListStockQueryParams } from "@workspace/api-zo
 import { logActivity } from "../lib/audit";
 import { pool } from "@workspace/db";
 import { consumeBatches, restoreBatches, creditBatch, validateBatchOverride, type BatchBreakdownEntry } from "../lib/batches";
+import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
+import { resolveLocationGst, classifyTransfer, computeTransferGst, createDispatchVoucher, createReceiveVoucher, type TaxType, type GstTotals } from "../lib/gstTransfer";
 import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
 
 const router = Router();
@@ -183,6 +185,73 @@ router.get("/stock", async (req, res): Promise<void> => {
   }
 });
 
+router.get("/stock/ledger", requireModuleView(["Stock", "Inventory Reports"]), async (req, res): Promise<void> => {
+  const page  = Math.max(1, parseInt(String(req.query.page  ?? 1), 10));
+  const limit = Math.max(1, Math.min(500, parseInt(String(req.query.limit ?? 50), 10)));
+  const offset = (page - 1) * limit;
+  const q            = typeof req.query.q            === 'string' ? req.query.q.trim()     : '';
+  const from         = typeof req.query.from         === 'string' ? req.query.from         : '';
+  const to           = typeof req.query.to           === 'string' ? req.query.to           : '';
+  const materialType = typeof req.query.materialType === 'string' ? req.query.materialType : '';
+  const txnType      = typeof req.query.txnType      === 'string' ? req.query.txnType      : '';
+
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  const p = () => `$${params.length}`;
+
+  if (q)            { params.push(`%${q}%`);    conds.push(`sl.item_name ILIKE ${p()}`); }
+  if (from)         { params.push(from);          conds.push(`sl.created_at::date >= ${p()}::date`); }
+  if (to)           { params.push(to);            conds.push(`sl.created_at::date <= ${p()}::date`); }
+  if (materialType) { params.push(materialType);  conds.push(`sl.material_type = ${p()}`); }
+  if (txnType)      { params.push(txnType);       conds.push(`sl.txn_type = ${p()}`); }
+
+  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+
+  // Running balance computed over ALL history for each item/branch via window function.
+  // The outer WHERE then filters to the requested criteria.
+  const baseQuery = `
+    WITH ranked AS (
+      SELECT
+        sl.*,
+        SUM(sl.qty_change) OVER (
+          PARTITION BY sl.material_type, sl.ref_id, sl.branch_type, sl.branch_id
+          ORDER BY sl.created_at, sl.id
+          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS running_balance
+      FROM stock_ledger sl
+    )
+    SELECT * FROM ranked
+    ${where}
+  `;
+
+  const [countRes, rowsRes] = await Promise.all([
+    pool.query(`SELECT COUNT(*) AS total FROM (${baseQuery}) AS c`, params),
+    pool.query(`${baseQuery} ORDER BY created_at DESC, id DESC LIMIT ${limit} OFFSET ${offset}`, params),
+  ]);
+
+  const total = parseInt(countRes.rows[0]?.total ?? '0', 10);
+  const rows = rowsRes.rows.map((r: any) => ({
+    id:             Number(r.id),
+    txnType:        r.txn_type,
+    materialType:   r.material_type,
+    refId:          Number(r.ref_id),
+    itemName:       r.item_name,
+    unit:           r.unit,
+    branchType:     r.branch_type,
+    branchId:       Number(r.branch_id),
+    branchName:     r.branch_name,
+    qtyChange:      Number(r.qty_change),
+    runningBalance: Number(r.running_balance),
+    unitCost:       Number(r.unit_cost),
+    docType:        r.doc_type,
+    docId:          r.doc_id ? Number(r.doc_id) : null,
+    notes:          r.notes ?? null,
+    createdAt:      r.created_at,
+  }));
+
+  res.json({ total, page, limit, rows });
+});
+
 router.get("/stock/transfers", requireModuleView(["Stock", "Stock Transfers", "HO Transfers", "Location Transfers"]), async (req, res): Promise<void> => {
   // Optional ?from&to (YYYY-MM-DD, inclusive), ?status and ?limit filters so
   // heavy consumers (e.g. the Reports Center) don't pull the entire history.
@@ -207,7 +276,9 @@ router.get("/stock/transfers", requireModuleView(["Stock", "Stock Transfers", "H
     pool.query(`
       SELECT id, challan_number, from_type, from_id, to_type, to_id, transfer_date,
              line_items, is_interstate, status, notes, created_at,
-             approved_by, approved_at, received_line_items, rejection_reason
+             approved_by, approved_at, received_line_items, rejection_reason,
+             transfer_type, from_gstin, to_gstin, tax_type,
+             transfer_value, gst_amount
       FROM stock_transfers ${where} ORDER BY id DESC ${limit ? `LIMIT ${limit}` : ""}
     `, params),
     buildBranchMaps(),
@@ -229,6 +300,12 @@ router.get("/stock/transfers", requireModuleView(["Stock", "Stock Transfers", "H
     approvedAt: r.approved_at,
     receivedLineItems: r.received_line_items ?? [],
     rejectionReason: r.rejection_reason,
+    transferType: r.transfer_type ?? 'internal',
+    fromGstin: r.from_gstin ?? null,
+    toGstin: r.to_gstin ?? null,
+    taxType: r.tax_type ?? 'none',
+    transferValue: r.transfer_value != null ? Number(r.transfer_value) : null,
+    gstAmount: r.gst_amount != null ? Number(r.gst_amount) : null,
     fromName: branchName(r.from_type, r.from_id),
     toName: branchName(r.to_type, r.to_id),
   }));
@@ -256,13 +333,12 @@ router.post("/stock/transfers", requireModuleAction(["Stock Transfers", "HO Tran
   }
   const challanNumber = `CHN-${Date.now()}`;
 
-  // Determine if interstate
-  let isInterstate = false;
-  if (parsed.data.fromType === "warehouse" && parsed.data.toType === "warehouse") {
-    const [from] = await db.select().from(warehousesTable).where(eq(warehousesTable.id, parsed.data.fromId)).limit(1);
-    const [to] = await db.select().from(warehousesTable).where(eq(warehousesTable.id, parsed.data.toId)).limit(1);
-    if (from && to && from.state !== to.state) isInterstate = true;
-  }
+  // GST-aware transfer classification — compare source + destination GSTINs
+  const [fromGst, toGst] = await Promise.all([
+    resolveLocationGst(pool, parsed.data.fromType, parsed.data.fromId),
+    resolveLocationGst(pool, parsed.data.toType, parsed.data.toId),
+  ]);
+  const { transferType, taxType, isInterstate } = classifyTransfer(fromGst, toGst);
 
   // All stock effects happen in ONE transaction: manual batch picks are
   // validated server-side (ownership + availability + exact total), the source
@@ -272,7 +348,9 @@ router.post("/stock/transfers", requireModuleAction(["Stock Transfers", "HO Tran
   // schema default and everything runs on the same client.
   const client = await pool.connect();
   let row: any;
+  const branchFn = await buildBranchMaps();
   const enrichedLines: any[] = [];
+  const dispatchLedgerEntries: any[] = [];
   try {
     await client.query("BEGIN");
 
@@ -300,9 +378,11 @@ router.post("/stock/transfers", requireModuleAction(["Stock Transfers", "HO Tran
 
     const insertResult = await client.query(
       `INSERT INTO stock_transfers
-         (challan_number, from_type, from_id, to_type, to_id, transfer_date, line_items, is_interstate, status, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'in_transit',$9)
-       RETURNING id, challan_number, from_type, from_id, to_type, to_id, transfer_date, line_items, is_interstate, status, notes, created_at`,
+         (challan_number, from_type, from_id, to_type, to_id, transfer_date, line_items, is_interstate, status, notes,
+          transfer_type, from_gstin, to_gstin, tax_type)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'in_transit',$9,$10,$11,$12,$13)
+       RETURNING id, challan_number, from_type, from_id, to_type, to_id, transfer_date, line_items, is_interstate, status, notes, created_at,
+                 transfer_type, from_gstin, to_gstin, tax_type`,
       [
         challanNumber,
         parsed.data.fromType, parsed.data.fromId,
@@ -311,6 +391,10 @@ router.post("/stock/transfers", requireModuleAction(["Stock Transfers", "HO Tran
         JSON.stringify(lineItems),
         isInterstate,
         parsed.data.notes ?? null,
+        transferType,
+        fromGst.gstin ?? null,
+        toGst.gstin ?? null,
+        taxType,
       ]
     );
     row = insertResult.rows[0];
@@ -330,6 +414,7 @@ router.post("/stock/transfers", requireModuleAction(["Stock Transfers", "HO Tran
         );
         if (!mat) { await client.query("ROLLBACK"); res.status(400).json({ error: `Raw Material #${li.itemId} not found` }); return; }
         enrichedLines.push({ ...li, materialType, batchBreakdown: [] });
+        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'material', refId: li.itemId, itemName: mat.name ?? '', unit: '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id });
       } else if (materialType === 'raw_material') {
         // Packing Material: deduct from raw_materials.current_stock
         const { rows: [rm] } = await client.query(
@@ -338,6 +423,7 @@ router.post("/stock/transfers", requireModuleAction(["Stock Transfers", "HO Tran
         );
         if (!rm) { await client.query("ROLLBACK"); res.status(400).json({ error: `Packing Material #${li.itemId} not found` }); return; }
         enrichedLines.push({ ...li, materialType, batchBreakdown: [] });
+        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'raw_material', refId: li.itemId, itemName: rm.name ?? '', unit: '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id });
       } else {
         // Item (SKU): deduct from stock_entries
         const { rows: [srcExisting] } = await client.query(
@@ -364,8 +450,36 @@ router.post("/stock/transfers", requireModuleAction(["Stock Transfers", "HO Tran
           override: rawLines[i]?.batchOverride,
         });
         enrichedLines.push({ ...li, materialType: 'item', batchBreakdown });
+        const { rows: [itemMeta] } = await pool.query(`SELECT name, unit FROM items WHERE id = $1`, [li.itemId]);
+        dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'item', refId: li.itemId, itemName: itemMeta?.name ?? '', unit: itemMeta?.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id });
       }
     }
+    await writeStockLedger(client, dispatchLedgerEntries);
+
+    // Taxable inter-branch transfer: create source-side accounting JV inside the transaction
+    if (transferType !== 'internal') {
+      const itemLines = enrichedLines.filter((l: any) => (l.materialType ?? 'item') === 'item');
+      if (itemLines.length > 0) {
+        const gst = await computeTransferGst(pool, itemLines.map((l: any) => ({ itemId: l.itemId, quantity: l.quantity, costPrice: l.costPrice ?? 0 })), taxType);
+        if (gst.taxableValue > 0) {
+          const dispatchVoucherId = await createDispatchVoucher({
+            client,
+            challanNumber,
+            transferDate: parsed.data.transferDate,
+            fromLocation: fromGst,
+            gst,
+            taxType,
+            narration: `Inter-branch transfer ${challanNumber}: ${fromGst.name} → ${toGst.name}`,
+            createdBy: null,
+          });
+          await client.query(
+            `UPDATE stock_transfers SET transfer_value = $1, gst_amount = $2, dispatch_voucher_id = $3 WHERE id = $4`,
+            [gst.taxableValue, gst.totalGst, dispatchVoucherId, row.id],
+          );
+        }
+      }
+    }
+
     await client.query(`UPDATE stock_transfers SET line_items = $1 WHERE id = $2`, [JSON.stringify(enrichedLines), row.id]);
     // NOTE: destination stock is NOT updated here — only on approval
     await client.query("COMMIT");
@@ -376,9 +490,8 @@ router.post("/stock/transfers", requireModuleAction(["Stock Transfers", "HO Tran
     client.release();
   }
 
-  const branchName = await buildBranchMaps();
-  const fromName = branchName(row.from_type, row.from_id);
-  const toName   = branchName(row.to_type,   row.to_id);
+  const fromName = branchFn(row.from_type, row.from_id);
+  const toName   = branchFn(row.to_type,   row.to_id);
 
   logActivity({
     action: "CREATE", module: "transfers", entityType: "stock_transfer", entityId: row.id,
@@ -433,7 +546,8 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["Stock Transfe
     const claim = await client.query(
       `UPDATE stock_transfers SET status = 'completed', approved_by = $1, approved_at = now()
        WHERE id = $2 AND status = 'in_transit'
-       RETURNING id, from_type, from_id, to_type, to_id, line_items, challan_number`,
+       RETURNING id, from_type, from_id, to_type, to_id, line_items, challan_number,
+                 transfer_type, tax_type, transfer_date, transfer_value, gst_amount`,
       [approvedBy || 'admin', id]
     );
     row = claim.rows[0];
@@ -543,7 +657,34 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["Stock Transfe
       }
     }
 
-    await client.query(`UPDATE stock_transfers SET received_line_items = $1 WHERE id = $2`, [JSON.stringify(linesToCredit), id]);
+    // Taxable inter-branch transfer: create destination-side accounting JV inside the transaction
+    let receiveVoucherId: number | null = null;
+    if (row.transfer_type && row.transfer_type !== 'internal' && Number(row.transfer_value ?? 0) > 0) {
+      const toLocGst = await resolveLocationGst(pool, row.to_type, Number(row.to_id));
+      const gstAmt = Number(row.gst_amount ?? 0);
+      const storedGst: GstTotals = {
+        taxableValue: Number(row.transfer_value),
+        cgst:  row.tax_type === 'cgst_sgst' ? gstAmt / 2 : 0,
+        sgst:  row.tax_type === 'cgst_sgst' ? gstAmt / 2 : 0,
+        igst:  row.tax_type === 'igst'       ? gstAmt     : 0,
+        totalGst: gstAmt,
+        totalWithGst: Number(row.transfer_value) + gstAmt,
+      };
+      receiveVoucherId = await createReceiveVoucher({
+        client,
+        challanNumber: row.challan_number,
+        transferDate: row.transfer_date
+          ? new Date(row.transfer_date).toISOString().slice(0, 10)
+          : new Date().toISOString().slice(0, 10),
+        toLocation: toLocGst,
+        gst: storedGst,
+        taxType: (row.tax_type ?? 'none') as TaxType,
+        narration: `Inter-branch transfer ${row.challan_number} — received at ${toLocGst.name}`,
+        createdBy: approvedBy ?? null,
+      });
+    }
+
+    await client.query(`UPDATE stock_transfers SET received_line_items = $1, receive_voucher_id = $2 WHERE id = $3`, [JSON.stringify(linesToCredit), receiveVoucherId, id]);
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK");
@@ -555,6 +696,19 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["Stock Transfe
   const branchName = await buildBranchMaps();
   const fromName = branchName(row.from_type, row.from_id);
   const toName   = branchName(row.to_type, row.to_id);
+
+  // ── Stock ledger (approve: transfer_in — fire-and-forget) ─────────────────
+  ;(async () => {
+    const effectiveLines = (linesToCredit as any[]).filter((l: any) => l.quantity > 0);
+    const meta = await batchResolveMeta(pool, effectiveLines.map((l: any) => ({ materialType: l.materialType ?? 'item', refId: Number(l.itemId) })));
+    const dT  = row.to_type === 'headoffice' ? 'warehouse' : row.to_type;
+    const dId = row.to_type === 'headoffice' ? 0 : Number(row.to_id);
+    await writeStockLedger(pool, effectiveLines.map((l: any) => {
+      const mt   = l.materialType ?? 'item';
+      const info = meta.get(`${mt}:${l.itemId}`) ?? { name: '', unit: '' };
+      return { txnType: 'transfer_in', materialType: mt, refId: Number(l.itemId), itemName: info.name, unit: info.unit, branchType: dT, branchId: dId, branchName: toName, qtyChange: Number(l.quantity), unitCost: Number(l.costPrice ?? 0), docType: 'stock_transfer', docId: id };
+    }));
+  })().catch((e: any) => console.error('[stock-ledger] approve write failed', e));
 
   logActivity({
     action: "UPDATE", module: "transfers", entityType: "stock_transfer", entityId: id,
@@ -632,6 +786,18 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction(["Stock Transfer
 
   const branchName = await buildBranchMaps();
   const fromName = branchName(row.from_type, row.from_id);
+
+  // ── Stock ledger (reject: stock returned to source — fire-and-forget) ──────
+  ;(async () => {
+    const rLines = (row.line_items as any[]) ?? [];
+    const meta = await batchResolveMeta(pool, rLines.map((l: any) => ({ materialType: l.materialType ?? 'item', refId: Number(l.itemId) })));
+    await writeStockLedger(pool, rLines.map((l: any) => {
+      const mt   = l.materialType ?? 'item';
+      const info = meta.get(`${mt}:${l.itemId}`) ?? { name: '', unit: '' };
+      return { txnType: 'transfer_in', materialType: mt, refId: Number(l.itemId), itemName: info.name, unit: info.unit, branchType: row.from_type, branchId: Number(row.from_id), branchName: fromName, qtyChange: Number(l.quantity), unitCost: Number(l.costPrice ?? 0), docType: 'stock_transfer', docId: id, notes: 'Transfer rejected — stock returned to source' };
+    }));
+  })().catch((e: any) => console.error('[stock-ledger] reject write failed', e));
+
   logActivity({
     action: "UPDATE", module: "transfers", entityType: "stock_transfer", entityId: id,
     description: `Transfer ${row.challan_number} rejected — stock reversed to ${fromName}`,
@@ -671,6 +837,12 @@ router.get("/stock/transfers/:id", async (req, res): Promise<void> => {
     approvedAt: r.approved_at,
     receivedLineItems: r.received_line_items ?? [],
     rejectionReason: r.rejection_reason,
+    transferType: r.transfer_type ?? 'internal',
+    fromGstin: r.from_gstin ?? null,
+    toGstin: r.to_gstin ?? null,
+    taxType: r.tax_type ?? 'none',
+    transferValue: r.transfer_value != null ? Number(r.transfer_value) : null,
+    gstAmount: r.gst_amount != null ? Number(r.gst_amount) : null,
     fromName: branchName(r.from_type, r.from_id),
     toName: branchName(r.to_type, r.to_id),
   });

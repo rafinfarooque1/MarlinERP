@@ -894,6 +894,48 @@ async function runMigrations() {
   }
 }
 
+// ── GST-aware transfer columns ────────────────────────────────────────────────
+await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS transfer_type     TEXT DEFAULT 'internal'`);
+await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS from_gstin        TEXT`);
+await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS to_gstin          TEXT`);
+await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS tax_type          TEXT DEFAULT 'none'`);
+await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS transfer_value    NUMERIC(14,2)`);
+await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS gst_amount        NUMERIC(14,2)`);
+await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS dispatch_voucher_id INTEGER`);
+await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS receive_voucher_id  INTEGER`);
+
+// ── Outlet GST fields ─────────────────────────────────────────────────────────
+await pool.query(`ALTER TABLE outlets ADD COLUMN IF NOT EXISTS gstin       TEXT`);
+await pool.query(`ALTER TABLE outlets ADD COLUMN IF NOT EXISTS state       TEXT`);
+await pool.query(`ALTER TABLE outlets ADD COLUMN IF NOT EXISTS state_code  TEXT`);
+
+// ── Warehouse state code ──────────────────────────────────────────────────────
+await pool.query(`ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS state_code TEXT`);
+
+// ── stock_ledger table ───────────────────────────────────────────────────────
+await pool.query(`
+  CREATE TABLE IF NOT EXISTS stock_ledger (
+    id          BIGSERIAL PRIMARY KEY,
+    txn_type    TEXT NOT NULL,
+    material_type TEXT NOT NULL,
+    ref_id      INTEGER NOT NULL,
+    item_name   TEXT NOT NULL DEFAULT '',
+    unit        TEXT NOT NULL DEFAULT '',
+    branch_type TEXT NOT NULL DEFAULT '',
+    branch_id   INTEGER NOT NULL DEFAULT 0,
+    branch_name TEXT NOT NULL DEFAULT '',
+    qty_change  NUMERIC(14,4) NOT NULL,
+    unit_cost   NUMERIC(14,4) NOT NULL DEFAULT 0,
+    doc_type    TEXT NOT NULL,
+    doc_id      INTEGER,
+    notes       TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )
+`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_ledger_ref      ON stock_ledger (material_type, ref_id, created_at)`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_ledger_doc      ON stock_ledger (doc_type, doc_id)`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_ledger_created  ON stock_ledger (created_at DESC)`);
+
 const rawPort = process.env["PORT"];
 if (!rawPort) throw new Error("PORT environment variable is required but was not provided.");
 const port = Number(rawPort);

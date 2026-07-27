@@ -1,0 +1,345 @@
+Before making any code changes, perform a complete analysis of the Stock Transfer module from frontend to backend.
+
+I want you to understand and document the entire workflow before modifying anything.
+
+=====================================================
+1. DATABASE STRUCTURE
+=====================================================
+
+Show all database tables involved in stock transfers.
+
+Include relationships between:
+
+- Stock Transfers
+- Stock Transfer Items
+- Inventory
+- Inventory Ledger
+- Batch Master
+- Item Master (SKU)
+- Raw Material
+- Packing Material
+- Warehouses
+- Outlets
+- Head Office
+- Locations
+- GST
+- Accounts
+- Users
+
+Explain how these tables are connected.
+
+=====================================================
+2. STOCK FLOW
+=====================================================
+
+Explain exactly what happens when:
+
+Head Office
+↓
+
+Warehouse
+
+Warehouse
+↓
+
+Warehouse
+
+Warehouse
+↓
+
+Outlet
+
+Head Office
+↓
+
+Outlet
+
+Explain every database update.
+
+=====================================================
+3. COMPLETE PROCESS
+=====================================================
+
+Explain every backend step.
+
+Create Transfer
+
+↓
+
+Reserve Stock
+
+↓
+
+Dispatch
+
+↓
+
+Create Delivery Challan
+
+↓
+
+Transit
+
+↓
+
+Receive
+
+↓
+
+Inventory Update
+
+↓
+
+Inventory Ledger
+
+↓
+
+Batch Update
+
+↓
+
+Cost Update
+
+↓
+
+Accounting Entry
+
+↓
+
+GST Posting
+
+Explain where each step happens.
+
+=====================================================
+4. INVENTORY UPDATE
+=====================================================
+
+Show which functions update:
+
+Source Stock
+
+Destination Stock
+
+Batch Quantity
+
+Available Stock
+
+Reserved Stock
+
+Average Cost
+
+FIFO Cost
+
+Inventory Ledger
+
+=====================================================
+5. RECEIVE PROCESS
+=====================================================
+
+Explain exactly what happens when the warehouse clicks:
+
+Receive
+
+Which APIs execute?
+
+Which services run?
+
+Which tables update?
+
+Which validations run?
+
+=====================================================
+6. ITEM MAPPING
+=====================================================
+
+Explain how transferred items are loaded.
+
+Currently I found this issue:
+
+Head Office shows
+
+Mango Pulp
+
+Mango Pulp Slice
+
+Warehouse shows
+
+Frozen Avocado Slice
+
+Item #2
+
+Find exactly why this happens.
+
+Do not guess.
+
+Trace the backend and frontend.
+
+Find the root cause.
+
+=====================================================
+7. UNIT MAPPING
+=====================================================
+
+Find why units change.
+
+Example
+
+Head Office
+
+24 kg
+
+Warehouse
+
+24 pkt
+
+Units must always come from Item Master.
+
+Trace the unit mapping.
+
+=====================================================
+8. STOCK UPDATE
+=====================================================
+
+Verify whether stock updates correctly after Receive.
+
+Check
+
+Source Inventory
+
+Destination Inventory
+
+Inventory Ledger
+
+FIFO
+
+Batch
+
+Average Cost
+
+Location Stock
+
+=====================================================
+9. TRANSFER TYPES
+=====================================================
+
+Verify support for
+
+Head Office → Warehouse
+
+Warehouse → Warehouse
+
+Warehouse → Outlet
+
+Head Office → Outlet
+
+Interstate
+
+Intrastate
+
+Different GSTIN
+
+Same GSTIN
+
+=====================================================
+10. ACCOUNTING
+=====================================================
+
+Verify whether stock transfer creates:
+
+Inventory Journal
+
+Sales Entry
+
+Purchase Entry
+
+GST Entry
+
+Only when required.
+
+=====================================================
+11. GST
+=====================================================
+
+Verify backend rules.
+
+Same GST
+
+Internal Stock Transfer
+
+No GST
+
+Different GST
+
+Sale + Purchase
+
+IGST / CGST / SGST
+
+=====================================================
+12. VALIDATIONS
+=====================================================
+
+Verify validation before dispatch.
+
+Available stock
+
+Batch exists
+
+Warehouse exists
+
+Destination exists
+
+HSN exists
+
+GST exists
+
+Unit exists
+
+=====================================================
+13. REPORTS
+=====================================================
+
+Verify that transferred quantities appear correctly in
+
+Inventory
+
+Warehouse Stock
+
+Location Stock
+
+Transfer History
+
+Inventory Ledger
+
+Reports
+
+=====================================================
+14. BUG ANALYSIS
+=====================================================
+
+Identify every bug in the current Stock Transfer module.
+
+For each bug explain:
+
+Root Cause
+
+Affected Files
+
+Affected APIs
+
+Affected Database Tables
+
+Recommended Fix
+
+Priority
+
+=====================================================
+15. DO NOT MODIFY CODE YET
+=====================================================
+
+Do NOT change any code.
+
+Only analyze.
+
+Only after completing the full analysis, provide a detailed report.
+
+After I approve the report, then implement the fixes in the correct order without breaking existing functionality.

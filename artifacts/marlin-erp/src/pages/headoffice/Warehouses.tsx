@@ -21,6 +21,7 @@ import { usePermission } from '@/lib/usePermission';
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
   state: z.string().min(1, 'State required'),
+  stateCode: z.string().optional(),
   gstNumber: z.string().optional(),
   address: z.string().optional(),
   contactPerson: z.string().optional(),
@@ -41,10 +42,10 @@ export default function Warehouses() {
   const updateMutation = useUpdateWarehouse();
   const deleteMutation = useDeleteWarehouse();
 
-  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', state: '', gstNumber: '', address: '', contactPerson: '', phone: '', upiId: '' } });
+  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', state: '', stateCode: '', gstNumber: '', address: '', contactPerson: '', phone: '', upiId: '' } });
 
-  const openAdd = () => { setEditingId(null); form.reset({ name: '', state: '', gstNumber: '', address: '', contactPerson: '', phone: '', upiId: '' }); setIsOpen(true); };
-  const openEdit = (w: any) => { setEditingId(w.id); form.reset({ name: w.name, state: w.state, gstNumber: w.gstNumber || '', address: w.address || '', contactPerson: w.contactPerson || '', phone: w.phone || '', upiId: (w as any).upiId || '' }); setIsOpen(true); };
+  const openAdd = () => { setEditingId(null); form.reset({ name: '', state: '', stateCode: '', gstNumber: '', address: '', contactPerson: '', phone: '', upiId: '' }); setIsOpen(true); };
+  const openEdit = (w: any) => { setEditingId(w.id); form.reset({ name: w.name, state: w.state, stateCode: (w as any).stateCode || '', gstNumber: w.gstNumber || '', address: w.address || '', contactPerson: w.contactPerson || '', phone: w.phone || '', upiId: (w as any).upiId || '' }); setIsOpen(true); };
 
   const onSubmit = (data: FormValues) => {
     const opts = {
@@ -157,8 +158,11 @@ export default function Warehouses() {
                 <FormField control={form.control} name="state" render={({ field }) => (
                   <FormItem><FormLabel>State <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="Karnataka" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
+                <FormField control={form.control} name="stateCode" render={({ field }) => (
+                  <FormItem><FormLabel>State Code <span className="text-xs text-muted-foreground font-normal">(2-digit GST code)</span></FormLabel><FormControl><Input placeholder="29" maxLength={2} className="font-mono" {...field} /></FormControl><FormMessage /></FormItem>
+                )} />
                 <FormField control={form.control} name="gstNumber" render={({ field }) => (
-                  <FormItem><FormLabel>GST Number</FormLabel><FormControl><Input placeholder="29XXXXX" className="font-mono" {...field} /></FormControl><FormMessage /></FormItem>
+                  <FormItem className="col-span-2"><FormLabel>GST Number</FormLabel><FormControl><Input placeholder="29AAAAA0000A1ZZ" className="font-mono uppercase" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="contactPerson" render={({ field }) => (
                   <FormItem><FormLabel>Contact Person</FormLabel><FormControl><Input placeholder="Name" {...field} /></FormControl></FormItem>
@@ -190,7 +194,7 @@ export default function Warehouses() {
           </SheetHeader>
           {viewItem && (
             <div className="mt-6 space-y-4">
-              {[['State', viewItem.state], ['GST Number', viewItem.gstNumber || '—'], ['UPI ID', (viewItem as any).upiId || '—'], ['Contact Person', viewItem.contactPerson || '—'], ['Phone', viewItem.phone || '—'], ['Address', viewItem.address || '—']].map(([k, v]) => (
+              {[['State', viewItem.state], ['State Code', (viewItem as any).stateCode || '—'], ['GST Number', viewItem.gstNumber || '—'], ['UPI ID', (viewItem as any).upiId || '—'], ['Contact Person', viewItem.contactPerson || '—'], ['Phone', viewItem.phone || '—'], ['Address', viewItem.address || '—']].map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
                   <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                   <span className="font-medium">{v}</span>

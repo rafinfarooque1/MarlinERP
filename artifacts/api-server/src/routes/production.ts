@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { CreateProductionBody } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
 import { creditBatch, updateAvgCostOnInbound, inboundCostForItem } from "../lib/batches";
+import { writeStockLedger } from "../lib/stockLedger";
 
 // ── Phase 5: batch costing & wastage ─────────────────────────────────────────
 // Every new batch snapshots, at save time:
@@ -400,6 +401,38 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
     });
     await updateAvgCostOnInbound(client, parsed.data.itemId, produced, unitCost);
 
+    // ── Stock ledger ──────────────────────────────────────────────────────────
+    await writeStockLedger(client, [
+      ...materialUsed.map(mat => ({
+        txnType: 'production_consumption',
+        materialType: mat.materialType,
+        refId: mat.materialId,
+        itemName: mat.materialName ?? '',
+        unit: mat.unit ?? '',
+        branchType: 'headoffice',
+        branchId: 0,
+        branchName: 'Head Office',
+        qtyChange: -Number(mat.usedQuantity),
+        unitCost: Number(mat.unitCost ?? 0),
+        docType: 'production',
+        docId: rowId,
+      })),
+      {
+        txnType: 'production_output',
+        materialType: 'item',
+        refId: parsed.data.itemId,
+        itemName: itemRow.name,
+        unit: (itemRow as any).unit ?? '',
+        branchType: 'headoffice',
+        branchId: 1,
+        branchName: 'Head Office',
+        qtyChange: produced,
+        unitCost,
+        docType: 'production',
+        docId: rowId,
+      },
+    ]);
+
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
@@ -484,6 +517,7 @@ router.delete("/productions/:id", requireModuleAction("Production", "delete"), a
     qty = Number(row.produced_quantity);
     itemId = Number(row.item_id);
     const delBatchNumber = row.batch_number || defaultBatchNumber(id);
+    const { rows: [delItemInfo] } = await client.query(`SELECT name, unit FROM items WHERE id = $1`, [itemId]);
 
     await client.query(`SELECT pg_advisory_xact_lock(hashtext('production-stock'), $1)`, [itemId]);
 
@@ -515,6 +549,40 @@ router.delete("/productions/:id", requireModuleAction("Production", "delete"), a
        WHERE item_id = $2 AND branch_type = 'headoffice' AND branch_id = 1 AND batch_number = $3`,
       [qty, itemId, delBatchNumber]
     );
+
+    // ── Stock ledger (production delete reversals) ────────────────────────────
+    await writeStockLedger(client, [
+      ...(materialUsed as any[]).map(mat => ({
+        txnType: 'production_consumption',
+        materialType: mat.materialType,
+        refId: mat.materialId,
+        itemName: mat.materialName ?? '',
+        unit: mat.unit ?? '',
+        branchType: 'headoffice',
+        branchId: 0,
+        branchName: 'Head Office',
+        qtyChange: Number(mat.usedQuantity),
+        unitCost: Number(mat.unitCost ?? 0),
+        docType: 'production',
+        docId: id,
+        notes: 'Production deleted — consumption reversed',
+      })),
+      {
+        txnType: 'production_output',
+        materialType: 'item',
+        refId: itemId,
+        itemName: delItemInfo?.name ?? '',
+        unit: delItemInfo?.unit ?? '',
+        branchType: 'headoffice',
+        branchId: 1,
+        branchName: 'Head Office',
+        qtyChange: -qty,
+        unitCost: 0,
+        docType: 'production',
+        docId: id,
+        notes: 'Production deleted — output reversed',
+      },
+    ]);
 
     await client.query(`DELETE FROM productions WHERE id = $1`, [id]);
     await client.query("COMMIT");

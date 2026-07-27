@@ -18,6 +18,7 @@ export * from "./inventory-batches";
 export * from "./returns";
 export * from "./reports";
 export * from "./quick-search";
+export * from "./stock-ledger";
 export * from "./login-history";
 export * from "./paginated-lists";
 export * from './generated/api';

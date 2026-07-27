@@ -1,0 +1,377 @@
+Perform a complete end-to-end audit of the Inventory, Production, Purchase, Sales, and Stock Transfer modules.
+
+Do not assume anything is working correctly. Verify every inventory transaction from database to UI.
+
+====================================================
+
+1. STOCK TRANSFER VERIFICATION
+
+Verify that every approved stock transfer performs ALL of the following:
+
+✓ Reduce stock from source location.
+
+✓ Increase stock in destination location.
+
+✓ Update live inventory.
+
+✓ Update warehouse inventory.
+
+✓ Update head office inventory.
+
+✓ Update outlet inventory (if destination is outlet).
+
+✓ Update stock valuation.
+
+✓ Update average cost.
+
+✓ Preserve batch number.
+
+✓ Preserve manufacturing date.
+
+✓ Preserve expiry date.
+
+✓ Preserve unit.
+
+✓ Preserve HSN.
+
+✓ Preserve item type.
+
+====================================================
+
+2. INVENTORY MOVEMENT
+
+Every stock movement must create an Inventory Movement record.
+
+Movement Types
+
+Purchase
+
+Production
+
+Transfer Out
+
+Transfer In
+
+Sales
+
+Sales Return
+
+Purchase Return
+
+Stock Adjustment
+
+Opening Stock
+
+Production Consumption
+
+Production Output
+
+Verify every transaction writes movement history.
+
+====================================================
+
+3. LIVE STOCK
+
+Verify Live Stock screen.
+
+After any transaction:
+
+Purchase
+
+↓
+
+Stock increases.
+
+Production
+
+↓
+
+Raw Material decreases.
+
+Packing Material decreases.
+
+Finished Goods increase.
+
+Transfer
+
+↓
+
+Source decreases.
+
+Destination increases.
+
+Sales
+
+↓
+
+Stock decreases.
+
+Sales Return
+
+↓
+
+Stock increases.
+
+Everything must update immediately.
+
+====================================================
+
+4. LOCATION STOCK
+
+Verify inventory is maintained separately for:
+
+Production
+
+Head Office
+
+Warehouse
+
+Outlet
+
+Never combine stock.
+
+Each location must have independent quantity.
+
+====================================================
+
+5. TRANSFER LOGIC
+
+Verify
+
+Head Office → Warehouse
+
+Warehouse → Warehouse
+
+Warehouse → Outlet
+
+Production → Head Office
+
+All correctly update stock.
+
+====================================================
+
+6. TRANSFER STATUS
+
+Pending
+
+No inventory movement.
+
+Approved
+
+Inventory updates immediately.
+
+Rejected
+
+No stock movement.
+
+Cancelled
+
+Rollback inventory.
+
+====================================================
+
+7. AVAILABLE STOCK
+
+Every dropdown should show available stock only.
+
+Never allow transferring more than available stock.
+
+====================================================
+
+8. PRODUCTION
+
+Verify
+
+Raw Material stock decreases.
+
+Packing Material decreases.
+
+Finished Goods increase.
+
+Batch cost updates.
+
+Average cost updates.
+
+====================================================
+
+9. PURCHASE
+
+Purchase must
+
+Increase stock.
+
+Update average cost.
+
+Update valuation.
+
+Update supplier ledger.
+
+====================================================
+
+10. SALES
+
+Sales Invoice
+
+Decrease stock.
+
+Update inventory.
+
+Update customer ledger.
+
+Sales Return
+
+Increase stock.
+
+====================================================
+
+11. STOCK SCREEN
+
+Inventory → Stock
+
+Verify every column
+
+Item Name
+
+Item Type
+
+Location
+
+Available Stock
+
+Reserved Stock
+
+Batch
+
+MFG Date
+
+Expiry
+
+Average Cost
+
+Stock Value
+
+Status
+
+All values must come from the database.
+
+====================================================
+
+12. DASHBOARD
+
+Verify dashboard values update automatically.
+
+Stock Value
+
+Low Stock
+
+Total Inventory
+
+Production
+
+Sales
+
+Transfers
+
+====================================================
+
+13. DATABASE AUDIT
+
+Trace every transaction.
+
+Purchase
+
+↓
+
+Inventory Movement
+
+↓
+
+Stock Table
+
+↓
+
+Location Stock
+
+↓
+
+Batch Stock
+
+↓
+
+Stock Ledger
+
+↓
+
+Dashboard
+
+Verify every step.
+
+====================================================
+
+14. ACCOUNTING
+
+If inventory is integrated with accounts, verify:
+
+Purchase
+
+Dr Inventory
+
+Cr Vendor
+
+Sales
+
+Dr Customer
+
+Cr Sales
+
+Dr COGS
+
+Cr Inventory
+
+Transfer
+
+No P&L impact.
+
+Only location movement.
+
+====================================================
+
+15. AUTOMATED TESTING
+
+Run complete integration tests.
+
+Test
+
+Purchase
+
+Production
+
+Transfer
+
+Warehouse Receipt
+
+Sales
+
+Sales Return
+
+Purchase Return
+
+Stock Adjustment
+
+Opening Stock
+
+Verify stock after every step.
+
+====================================================
+
+16. FIX ALL BUGS
+
+Identify every inventory inconsistency.
+
+Fix every broken inventory update.
+
+Ensure there is only ONE source of truth for stock.
+
+Every module must read and write to the same inventory tables.
+
+Do not finish until every inventory transaction updates correctly in the database, Live Stock page, Production, Warehouse, Head Office, Outlet, Dashboard, and Reports.

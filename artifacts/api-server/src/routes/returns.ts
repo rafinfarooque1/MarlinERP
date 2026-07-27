@@ -14,6 +14,7 @@ import { requireModuleView, requireModuleAction } from "../middleware/permission
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import { restoreBatches, type BatchBreakdownEntry } from "../lib/batches";
 import { logActivity } from "../lib/audit";
+import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
 
 const router: IRouter = Router();
 
@@ -355,6 +356,15 @@ router.post("/sales-returns", requireModuleAction(["Sales", "Point of Sale"], "a
       }
     }
 
+    // ── Stock ledger (sales return — fire-and-forget) ─────────────────────────
+    ;(async () => {
+      const meta = await batchResolveMeta(pool, retLines.map(rl => ({ materialType: 'item', refId: rl.itemId })));
+      await writeStockLedger(pool, retLines.map(rl => {
+        const info = meta.get(`item:${rl.itemId}`) ?? { name: (rl as any).itemName ?? '', unit: '' };
+        return { txnType: 'sales_return', materialType: 'item', refId: rl.itemId, itemName: info.name, unit: info.unit, branchType: locationType, branchId: locationId, branchName: '', qtyChange: Number(rl.quantity), unitCost: 0, docType: 'sales_return', docId: ret.id };
+      }));
+    })().catch((e: any) => console.error('[stock-ledger] sales return write failed', e));
+
     await client.query("COMMIT");
 
     logActivity({
@@ -622,6 +632,17 @@ router.post("/purchase-returns", requireModuleAction(["Sales", "Purchases"], "ad
       [returnNumber, purchaseId, purchase.vendor_id, returnDate, JSON.stringify(retLines),
        subtotal, taxTotal, totalAmount, dnId, reason, userOf(req)]
     );
+
+    // ── Stock ledger (purchase return — fire-and-forget) ──────────────────────
+    ;(async () => {
+      await writeStockLedger(pool, retLines.map((rl: any) => ({
+        txnType: 'purchase_return', materialType: rl.materialType ?? 'material',
+        refId: rl.materialId, itemName: rl.materialName ?? '', unit: '',
+        branchType: 'headoffice', branchId: rl.materialType === 'item' ? 1 : 0, branchName: 'Head Office',
+        qtyChange: -Number(rl.quantity), unitCost: Number(rl.unitCost ?? 0),
+        docType: 'purchase_return', docId: ret.id,
+      })));
+    })().catch((e: any) => console.error('[stock-ledger] purchase return write failed', e));
 
     await client.query("COMMIT");
 

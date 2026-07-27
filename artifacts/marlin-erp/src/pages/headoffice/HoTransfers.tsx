@@ -130,7 +130,13 @@ function ApproveDialog({
             <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Date</p><p>{new Date(transfer.transferDate).toLocaleDateString('en-IN')}</p></div>
             <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Dispatched From</p><p className="font-medium">{transfer.fromName}<span className="text-muted-foreground capitalize ml-1">({transfer.fromType})</span></p></div>
             <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Receiving At</p><p className="font-medium">{transfer.toName}<span className="text-muted-foreground capitalize ml-1">({transfer.toType})</span></p></div>
-            {transfer.isInterstate && <div className="col-span-2"><Badge variant="outline" className="text-amber-400 border-amber-400/40 text-xs">Interstate Transfer</Badge></div>}
+            <div className="col-span-2">
+              {(transfer as any).transferType === 'interstate'
+                ? <Badge variant="outline" className="text-orange-400 border-orange-400/40 text-xs">Interstate Tax Transfer (IGST)</Badge>
+                : (transfer as any).transferType === 'intrastate'
+                  ? <Badge variant="outline" className="text-yellow-500 border-yellow-500/40 text-xs">Inter-Branch Sale (CGST+SGST)</Badge>
+                  : <Badge variant="outline" className="text-blue-400 border-blue-400/40 text-xs">Internal Stock Transfer</Badge>}
+            </div>
           </div>
 
           {/* Line items — editable received qty */}

@@ -132,10 +132,10 @@ router.get("/warehouses", async (_req, res): Promise<void> => {
     .groupBy(outletsTable.warehouseId);
   const countMap = new Map(outletCounts.map((o) => [o.warehouseId, o.cnt]));
   // Fetch ledger IDs via raw query (columns not in Drizzle schema)
-  const { rows: raw } = await pool.query<{ id: number; cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null }>(
-    `SELECT id, cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses ORDER BY id`
+  const { rows: raw } = await pool.query<{ id: number; cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null; state_code: string | null }>(
+    `SELECT id, cash_ledger_id, sales_ledger_id, purchase_ledger_id, COALESCE(state_code,'') AS state_code FROM warehouses ORDER BY id`
   );
-  const ledgerMap = new Map(raw.map(r => [r.id, { cashLedgerId: r.cash_ledger_id, salesLedgerId: r.sales_ledger_id, purchaseLedgerId: r.purchase_ledger_id }]));
+  const ledgerMap = new Map(raw.map(r => [r.id, { cashLedgerId: r.cash_ledger_id, salesLedgerId: r.sales_ledger_id, purchaseLedgerId: r.purchase_ledger_id, stateCode: r.state_code ?? '' }]));
   res.json(rows.map((r) => ({ ...r, outletCount: countMap.get(r.id) ?? 0, ...ledgerMap.get(r.id) })));
 });
 
@@ -143,12 +143,15 @@ router.post("/warehouses", requireModuleAction("Warehouses", "add"), async (req,
   const parsed = CreateWarehouseBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const [row] = await db.insert(warehousesTable).values(parsed.data).returning();
+  // Save state_code (raw column not in Drizzle schema)
+  const scNew = (req.body as any)?.stateCode ?? null;
+  if (scNew !== null) await pool.query(`UPDATE warehouses SET state_code = $1 WHERE id = $2`, [scNew || null, row.id]);
   // Auto-provision ledgers (non-fatal if CoA groups not ready)
   try { await provisionWarehouseLedgers(row.id, row.name); } catch (e) { console.warn('[branches] warehouse ledger provision failed:', e); }
-  const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null }>(
-    `SELECT cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses WHERE id = $1`, [row.id]
+  const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null; state_code: string | null }>(
+    `SELECT cash_ledger_id, sales_ledger_id, purchase_ledger_id, COALESCE(state_code,'') AS state_code FROM warehouses WHERE id = $1`, [row.id]
   );
-  res.status(201).json({ ...row, outletCount: 0, cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, purchaseLedgerId: ledgers?.purchase_ledger_id ?? null });
+  res.status(201).json({ ...row, outletCount: 0, cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, purchaseLedgerId: ledgers?.purchase_ledger_id ?? null, stateCode: ledgers?.state_code ?? '' });
 });
 
 router.get("/warehouses/:id", async (req, res): Promise<void> => {
@@ -156,10 +159,10 @@ router.get("/warehouses/:id", async (req, res): Promise<void> => {
   const [row] = await db.select().from(warehousesTable).where(eq(warehousesTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const [cnt] = await db.select({ cnt: count() }).from(outletsTable).where(eq(outletsTable.warehouseId, id));
-  const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null }>(
-    `SELECT cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses WHERE id = $1`, [id]
+  const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null; state_code: string | null }>(
+    `SELECT cash_ledger_id, sales_ledger_id, purchase_ledger_id, COALESCE(state_code,'') AS state_code FROM warehouses WHERE id = $1`, [id]
   );
-  res.json({ ...row, outletCount: cnt?.cnt ?? 0, cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, purchaseLedgerId: ledgers?.purchase_ledger_id ?? null });
+  res.json({ ...row, outletCount: cnt?.cnt ?? 0, cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, purchaseLedgerId: ledgers?.purchase_ledger_id ?? null, stateCode: ledgers?.state_code ?? '' });
 });
 
 router.patch("/warehouses/:id", requireModuleAction("Warehouses", "edit"), async (req, res): Promise<void> => {
@@ -170,15 +173,18 @@ router.patch("/warehouses/:id", requireModuleAction("Warehouses", "edit"), async
   const { rows: [before] } = await pool.query<{ name: string }>(`SELECT name FROM warehouses WHERE id = $1`, [id]);
   const [row] = await db.update(warehousesTable).set(parsed.data).where(eq(warehousesTable.id, id)).returning();
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
+  // Update state_code (raw column not in Drizzle schema)
+  const scUpd = (req.body as any)?.stateCode;
+  if (scUpd !== undefined) await pool.query(`UPDATE warehouses SET state_code = $1 WHERE id = $2`, [scUpd || null, id]);
   // Sync ledger display names if name changed
   if (before && parsed.data.name && parsed.data.name !== before.name) {
     try { await syncWarehouseLedgerNames(id, row.name); } catch (e) { console.warn('[branches] ledger name sync failed:', e); }
   }
   const [cnt] = await db.select({ cnt: count() }).from(outletsTable).where(eq(outletsTable.warehouseId, id));
-  const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null }>(
-    `SELECT cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses WHERE id = $1`, [id]
+  const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null; state_code: string | null }>(
+    `SELECT cash_ledger_id, sales_ledger_id, purchase_ledger_id, COALESCE(state_code,'') AS state_code FROM warehouses WHERE id = $1`, [id]
   );
-  res.json({ ...row, outletCount: cnt?.cnt ?? 0, cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, purchaseLedgerId: ledgers?.purchase_ledger_id ?? null });
+  res.json({ ...row, outletCount: cnt?.cnt ?? 0, cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, purchaseLedgerId: ledgers?.purchase_ledger_id ?? null, stateCode: ledgers?.state_code ?? '' });
 });
 
 router.delete("/warehouses/:id", requireModuleAction("Warehouses", "delete"), async (req, res): Promise<void> => {
@@ -201,10 +207,10 @@ router.get("/outlets", async (_req, res): Promise<void> => {
   const rows = await db.select().from(outletsTable).orderBy(outletsTable.id);
   const warehouses = await db.select().from(warehousesTable);
   const wMap = new Map(warehouses.map((w) => [w.id, w.name]));
-  const { rows: raw } = await pool.query<{ id: number; cash_ledger_id: number | null; sales_ledger_id: number | null }>(
-    `SELECT id, cash_ledger_id, sales_ledger_id FROM outlets ORDER BY id`
+  const { rows: raw } = await pool.query<{ id: number; cash_ledger_id: number | null; sales_ledger_id: number | null; gstin: string | null; state: string | null; state_code: string | null }>(
+    `SELECT id, cash_ledger_id, sales_ledger_id, COALESCE(gstin,'') AS gstin, COALESCE(state,'') AS state, COALESCE(state_code,'') AS state_code FROM outlets ORDER BY id`
   );
-  const ledgerMap = new Map(raw.map(r => [r.id, { cashLedgerId: r.cash_ledger_id, salesLedgerId: r.sales_ledger_id }]));
+  const ledgerMap = new Map(raw.map(r => [r.id, { cashLedgerId: r.cash_ledger_id, salesLedgerId: r.sales_ledger_id, gstin: r.gstin ?? '', state: r.state ?? '', stateCode: r.state_code ?? '' }]));
   res.json(rows.map((r) => ({ ...r, warehouseName: wMap.get(r.warehouseId) ?? "", ...ledgerMap.get(r.id) })));
 });
 
@@ -215,10 +221,13 @@ router.post("/outlets", requireModuleAction("Outlets", "add"), async (req, res):
   const [wh] = await db.select().from(warehousesTable).where(eq(warehousesTable.id, row.warehouseId)).limit(1);
   // Auto-provision ledgers
   try { await provisionOutletLedgers(row.id, row.name); } catch (e) { console.warn('[branches] outlet ledger provision failed:', e); }
-  const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null }>(
-    `SELECT cash_ledger_id, sales_ledger_id FROM outlets WHERE id = $1`, [row.id]
+  // Save GST fields (raw columns not in Drizzle schema)
+  const { gstin: gNew = null, state: stNew = null, stateCode: scO = null } = req.body as any;
+  await pool.query(`UPDATE outlets SET gstin = $1, state = $2, state_code = $3 WHERE id = $4`, [gNew || null, stNew || null, scO || null, row.id]);
+  const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; gstin: string | null; state: string | null; state_code: string | null }>(
+    `SELECT cash_ledger_id, sales_ledger_id, COALESCE(gstin,'') AS gstin, COALESCE(state,'') AS state, COALESCE(state_code,'') AS state_code FROM outlets WHERE id = $1`, [row.id]
   );
-  res.status(201).json({ ...row, warehouseName: wh?.name ?? "", cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null });
+  res.status(201).json({ ...row, warehouseName: wh?.name ?? "", cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, gstin: ledgers?.gstin ?? '', state: ledgers?.state ?? '', stateCode: ledgers?.state_code ?? '' });
 });
 
 router.get("/outlets/:id", async (req, res): Promise<void> => {
@@ -226,10 +235,10 @@ router.get("/outlets/:id", async (req, res): Promise<void> => {
   const [row] = await db.select().from(outletsTable).where(eq(outletsTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const [wh] = await db.select().from(warehousesTable).where(eq(warehousesTable.id, row.warehouseId)).limit(1);
-  const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null }>(
-    `SELECT cash_ledger_id, sales_ledger_id FROM outlets WHERE id = $1`, [id]
+  const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; gstin: string | null; state: string | null; state_code: string | null }>(
+    `SELECT cash_ledger_id, sales_ledger_id, COALESCE(gstin,'') AS gstin, COALESCE(state,'') AS state, COALESCE(state_code,'') AS state_code FROM outlets WHERE id = $1`, [id]
   );
-  res.json({ ...row, warehouseName: wh?.name ?? "", cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null });
+  res.json({ ...row, warehouseName: wh?.name ?? "", cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, gstin: ledgers?.gstin ?? '', state: ledgers?.state ?? '', stateCode: ledgers?.state_code ?? '' });
 });
 
 router.patch("/outlets/:id", requireModuleAction("Outlets", "edit"), async (req, res): Promise<void> => {
@@ -242,11 +251,17 @@ router.patch("/outlets/:id", requireModuleAction("Outlets", "edit"), async (req,
   if (before && parsed.data.name && parsed.data.name !== before.name) {
     try { await syncOutletLedgerNames(id, row.name); } catch (e) { console.warn('[branches] outlet ledger name sync failed:', e); }
   }
+  // Update GST fields (raw columns not in Drizzle schema)
+  const { gstin: gUpd, state: stUpd, stateCode: scUpd } = req.body as any;
+  if (gUpd !== undefined || stUpd !== undefined || scUpd !== undefined) {
+    await pool.query(`UPDATE outlets SET gstin = COALESCE($1, gstin), state = COALESCE($2, state), state_code = COALESCE($3, state_code) WHERE id = $4`,
+      [gUpd ?? null, stUpd ?? null, scUpd ?? null, id]);
+  }
   const [wh] = await db.select().from(warehousesTable).where(eq(warehousesTable.id, row.warehouseId)).limit(1);
-  const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null }>(
-    `SELECT cash_ledger_id, sales_ledger_id FROM outlets WHERE id = $1`, [id]
+  const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; gstin: string | null; state: string | null; state_code: string | null }>(
+    `SELECT cash_ledger_id, sales_ledger_id, COALESCE(gstin,'') AS gstin, COALESCE(state,'') AS state, COALESCE(state_code,'') AS state_code FROM outlets WHERE id = $1`, [id]
   );
-  res.json({ ...row, warehouseName: wh?.name ?? "", cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null });
+  res.json({ ...row, warehouseName: wh?.name ?? "", cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, gstin: ledgers?.gstin ?? '', state: ledgers?.state ?? '', stateCode: ledgers?.state_code ?? '' });
 });
 
 router.delete("/outlets/:id", requireModuleAction("Outlets", "delete"), async (req, res): Promise<void> => {

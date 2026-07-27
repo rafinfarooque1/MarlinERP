@@ -13,3 +13,5 @@
 - [Sales settlement & discounts](sales-settlement.md) — cash/upi/card settle at creation; only 'credit' is credit-controlled; dues = total−paid; line discounts net into GST pre-tax, discount_total = bill-level coupon ONLY (post-tax).
 - [RBAC & branch scoping](rbac-branch-scoping.md) — branch_type 'headoffice' is a string, not null; backend default-ALLOWS missing perm rows; most GETs unguarded, scoping is client-side.
 - [Sales location gate](location-context-gate.md) — /sales/* pages render blank (null) in fresh sessions until a location is picked at /sales; not a crash — navigate via the picker in tests.
+- [Stock Ledger](stock-ledger.md) — append-only audit table; write strategy varies by route (fire-and-forget vs inside txn); running balance via window function at query time.
+- [GST transfer classification](gst-transfer-classification.md) — auto-detects internal/intrastate/interstate from GSTIN; JVs created inside transactions at dispatch+approve; STD-BRANCH-DEBTOR/CREDITOR auto-provisioned.

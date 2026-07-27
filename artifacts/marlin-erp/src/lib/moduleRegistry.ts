@@ -219,6 +219,11 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navEntries: [{ name: 'Stock', href: '/headoffice/stock' }],
   },
   {
+    key: 'Stock Ledger', permSegment: 'Accounts', permGroup: 'Inventory',
+    navGroup: 'Inventory',
+    navEntries: [{ name: 'Ledger', href: '/headoffice/stock-ledger' }],
+  },
+  {
     key: 'Inventory Reports', permSegment: 'Accounts', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [{ name: 'Reports', href: '/headoffice/inventory-reports' }],

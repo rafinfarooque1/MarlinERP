@@ -78,6 +78,7 @@ export interface PaginatedListParams {
 export interface PaginatedStockParams extends PaginatedListParams {
   branchType?: 'warehouse' | 'outlet';
   branchId?: number;
+  materialType?: 'item' | 'material' | 'raw_material';
 }
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
@@ -128,6 +129,7 @@ export function usePaginatedStock(params?: PaginatedStockParams) {
   if (params?.q) qs.set('q', params.q);
   if (params?.branchType) qs.set('branchType', params.branchType);
   if (params?.branchId) qs.set('branchId', String(params.branchId));
+  if (params?.materialType) qs.set('materialType', params.materialType);
   const key = qs.toString();
   return useQuery({
     queryKey: ['/api/stock', 'paginated', key] as const,

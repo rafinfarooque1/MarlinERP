@@ -21,6 +21,9 @@ import { usePermission } from '@/lib/usePermission';
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
   warehouseId: z.coerce.number().min(1, 'Warehouse required'),
+  gstin: z.string().optional(),
+  state: z.string().optional(),
+  stateCode: z.string().optional(),
   address: z.string().optional(),
   contactPerson: z.string().optional(),
   phone: z.string().optional(),
@@ -41,10 +44,10 @@ export default function Outlets() {
   const updateMutation = useUpdateOutlet();
   const deleteMutation = useDeleteOutlet();
 
-  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', warehouseId: 0, address: '', contactPerson: '', phone: '', upiId: '' } });
+  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', warehouseId: 0, gstin: '', state: '', stateCode: '', address: '', contactPerson: '', phone: '', upiId: '' } });
 
-  const openAdd = () => { setEditingId(null); form.reset({ name: '', warehouseId: 0, address: '', contactPerson: '', phone: '', upiId: '' }); setIsOpen(true); };
-  const openEdit = (o: any) => { setEditingId(o.id); form.reset({ name: o.name, warehouseId: o.warehouseId, address: o.address || '', contactPerson: o.contactPerson || '', phone: o.phone || '', upiId: (o as any).upiId || '' }); setIsOpen(true); };
+  const openAdd = () => { setEditingId(null); form.reset({ name: '', warehouseId: 0, gstin: '', state: '', stateCode: '', address: '', contactPerson: '', phone: '', upiId: '' }); setIsOpen(true); };
+  const openEdit = (o: any) => { setEditingId(o.id); form.reset({ name: o.name, warehouseId: o.warehouseId, gstin: (o as any).gstin || '', state: (o as any).state || '', stateCode: (o as any).stateCode || '', address: o.address || '', contactPerson: o.contactPerson || '', phone: o.phone || '', upiId: (o as any).upiId || '' }); setIsOpen(true); };
 
   const onSubmit = (data: FormValues) => {
     const opts = {
@@ -159,6 +162,17 @@ export default function Outlets() {
                   </Select><FormMessage /></FormItem>
               )} />
               <div className="grid grid-cols-2 gap-4">
+                <FormField control={form.control} name="state" render={({ field }) => (
+                  <FormItem><FormLabel>State</FormLabel><FormControl><Input placeholder="Karnataka" {...field} /></FormControl></FormItem>
+                )} />
+                <FormField control={form.control} name="stateCode" render={({ field }) => (
+                  <FormItem><FormLabel>State Code</FormLabel><FormControl><Input placeholder="29" maxLength={2} className="font-mono" {...field} /></FormControl></FormItem>
+                )} />
+              </div>
+              <FormField control={form.control} name="gstin" render={({ field }) => (
+                <FormItem><FormLabel>GSTIN <span className="text-xs text-muted-foreground font-normal">(required for taxable branch transfers)</span></FormLabel><FormControl><Input placeholder="29AAAAA0000A1ZZ" className="font-mono uppercase" {...field} /></FormControl><FormMessage /></FormItem>
+              )} />
+              <div className="grid grid-cols-2 gap-4">
                 <FormField control={form.control} name="contactPerson" render={({ field }) => (
                   <FormItem><FormLabel>Contact Person</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
                 )} />
@@ -189,7 +203,7 @@ export default function Outlets() {
           </SheetHeader>
           {viewItem && (
             <div className="mt-6 space-y-4">
-              {[['Parent Warehouse', viewItem.warehouseName], ['UPI ID', (viewItem as any).upiId || '—'], ['Contact', viewItem.contactPerson || '—'], ['Phone', viewItem.phone || '—'], ['Address', viewItem.address || '—']].map(([k, v]) => (
+              {[['Parent Warehouse', viewItem.warehouseName], ['GSTIN', (viewItem as any).gstin || '—'], ['State', (viewItem as any).state || '—'], ['State Code', (viewItem as any).stateCode || '—'], ['UPI ID', (viewItem as any).upiId || '—'], ['Contact', viewItem.contactPerson || '—'], ['Phone', viewItem.phone || '—'], ['Address', viewItem.address || '—']].map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
                   <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                   <span className="font-medium">{v}</span>
