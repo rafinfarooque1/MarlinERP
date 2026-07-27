@@ -796,6 +796,7 @@ async function runMigrations() {
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS password_require_uppercase boolean NOT NULL DEFAULT false;
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS password_require_number boolean NOT NULL DEFAULT false;
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS password_require_special boolean NOT NULL DEFAULT false;
+    ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS general_settings jsonb;
   `);
 
   const { rows: [openingDone] } = await pool.query(

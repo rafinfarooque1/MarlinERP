@@ -61,10 +61,12 @@ interface GstBreakdown {
 }
 
 // GST is INCLUSIVE in MRP. Back-calculate taxable from gross.
+// `discount` is a flat ₹ amount off this line's gross (MRP × qty); GST is
+// back-calculated from the discounted gross — matches the backend exactly.
 function computeLineGst(
-  qty: number, price: number, taxRate: number, isInterState: boolean
+  qty: number, price: number, taxRate: number, isInterState: boolean, discount = 0
 ): GstBreakdown {
-  const lineGross = qty * price; // MRP × qty (inclusive)
+  const lineGross = Math.max(0, qty * price - discount); // MRP × qty − discount (inclusive)
   const lineSubtotal = taxRate > 0
     ? Math.round(lineGross / (1 + taxRate / 100) * 100) / 100
     : lineGross; // taxable (ex-GST)
@@ -82,13 +84,17 @@ const saleLineSchema = z.object({
   itemId:    z.coerce.number().min(1, 'Item required'),
   quantity:  z.coerce.number().min(1, 'Qty ≥ 1'),
   unitPrice: z.coerce.number().min(0, 'Price required'),
+  discount:  z.coerce.number().min(0, 'Discount ≥ 0').optional(),
+}).refine(li => (li.discount ?? 0) <= li.quantity * li.unitPrice, {
+  message: 'Discount exceeds line amount',
+  path: ['discount'],
 });
 const schema = z.object({
   locationType: z.enum(['outlet', 'warehouse']).default('outlet'),
   locationId: z.coerce.number().min(1, 'Location required'),
   customerId: z.coerce.number().optional(),
   saleDate: z.string().min(1, 'Date required'),
-  paymentMode: z.enum(['cash', 'upi', 'card', 'credit']).default('cash'),
+  paymentMode: z.enum(['cash', 'credit']).default('cash'),
   couponCode: z.string().optional(),
   lineItems: z.array(saleLineSchema).min(1, 'Add at least one item'),
 });
@@ -112,7 +118,7 @@ const defaultFormValues: FormValues = {
   saleDate: new Date().toISOString().split('T')[0],
   paymentMode: 'cash',
   couponCode: '',
-  lineItems: [{ itemId: 0, quantity: 1, unitPrice: 0 }],
+  lineItems: [{ itemId: 0, quantity: 1, unitPrice: 0, discount: 0 }],
 };
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -237,12 +243,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       locationId: sale.locationId ?? sale.outletId ?? 0,
       customerId: sale.customerId ?? undefined,
       saleDate: sale.saleDate,
-      paymentMode: (['cash', 'upi', 'card', 'credit'].includes(sale.paymentMode) ? sale.paymentMode : 'cash') as FormValues['paymentMode'],
+      paymentMode: (['cash', 'credit'].includes(sale.paymentMode) ? sale.paymentMode : 'cash') as FormValues['paymentMode'],
       couponCode: sale.couponCode ?? '',
       lineItems: (sale.lineItems ?? []).map((li: any) => ({
         itemId: li.itemId,
         quantity: li.quantity,
         unitPrice: li.unitPrice,
+        discount: Number(li.discount ?? 0),
       })),
     });
     setIsOpen(true);
@@ -347,30 +354,45 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     return c;
   }, [coupons, watchCouponCode]);
 
+  // Edit mode: while the coupon code is unchanged, preserve the sale's STORED
+  // bill discount instead of re-deriving it from the live coupon list — the
+  // coupon may have expired or changed since the sale was created, and
+  // re-deriving would silently rewrite the agreed invoice total.
+  const preservedBillDiscount = useMemo(() => {
+    if (!editItem) return null;
+    const orig = String((editItem as any).couponCode ?? '').trim().toUpperCase();
+    if (orig !== watchCouponCode) return null; // coupon changed → re-derive live
+    return Math.max(0, Number((editItem as any).discountTotal ?? 0));
+  }, [editItem, watchCouponCode]);
+
   // Compute aggregated GST totals for the cart (inclusive GST — MRP already includes tax)
   const computeCartTotals = () => {
-    let grossTotal = 0, subtotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0, taxTotal = 0;
+    let grossTotal = 0, subtotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0, taxTotal = 0, itemDiscountTotal = 0;
     fields.forEach((_, i) => {
       const itemId = form.watch(`lineItems.${i}.itemId`);
       const qty    = form.watch(`lineItems.${i}.quantity`);
       const price  = Number(form.watch(`lineItems.${i}.unitPrice`) ?? 0);
+      const disc   = Math.max(0, Number(form.watch(`lineItems.${i}.discount`) ?? 0));
       if (!itemId || price <= 0) return;
       const taxRate = Number((getItem(itemId) as any)?.taxRate ?? 0);
-      const gst     = computeLineGst(qty, price, taxRate, isInterState);
-      grossTotal += gst.lineGross;
+      const gst     = computeLineGst(qty, price, taxRate, isInterState, disc);
+      grossTotal += gst.lineGross;            // net of item discount (inclusive)
+      itemDiscountTotal += Math.min(disc, qty * price);
       subtotal   += gst.lineSubtotal;
       cgstTotal  += gst.cgst;
       sgstTotal  += gst.sgst;
       igstTotal  += gst.igst;
       taxTotal   += gst.taxAmount;
     });
-    const grandTotal = grossTotal; // MRP × qty totals — inclusive
-    const discountAmount = appliedCoupon
-      ? appliedCoupon.discountType === 'percentage'
-        ? Math.round(grandTotal * Number(appliedCoupon.discountValue) / 100 * 100) / 100
-        : Math.min(Number(appliedCoupon.discountValue), grandTotal)
-      : 0;
-    return { grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, grandTotal, discountAmount, finalAmount: grandTotal - discountAmount };
+    const grandTotal = grossTotal; // MRP × qty − item discounts — inclusive
+    const discountAmount = preservedBillDiscount !== null
+      ? Math.min(preservedBillDiscount, grandTotal)
+      : appliedCoupon
+        ? appliedCoupon.discountType === 'percentage'
+          ? Math.round(grandTotal * Number(appliedCoupon.discountValue) / 100 * 100) / 100
+          : Math.min(Number(appliedCoupon.discountValue), grandTotal)
+        : 0;
+    return { grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, itemDiscountTotal, grandTotal, discountAmount, finalAmount: grandTotal - discountAmount };
   };
 
   const totals = computeCartTotals();
@@ -386,7 +408,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       itemId: li.itemId,
       quantity: li.quantity,
       unitPrice: Number(li.unitPrice),
-      discount: 0,
+      discount: Math.max(0, Number(li.discount ?? 0)),
       taxAmount: 0, // backend recomputes authoritatively
     }));
     const { discountAmount } = computeCartTotals();
@@ -592,7 +614,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               <Button variant="outline" size="sm" onClick={() => downloadCSV('sales.csv', filtered.map(s => ({
                 Invoice: s.invoiceNumber, Date: s.saleDate, Outlet: s.outletName,
                 Customer: s.customerName || 'Walk-in', Payment: s.paymentMode,
-                Subtotal: s.subtotal, Tax: s.taxTotal, Total: s.totalAmount,
+                Subtotal: s.subtotal, Tax: s.taxTotal,
+                Discount: (Number((s as any).discountTotal ?? 0)
+                  + (((s as any).lineItems as any[]) ?? []).reduce((acc: number, li: any) => acc + Number(li?.discount ?? 0), 0)).toFixed(2),
+                Total: s.totalAmount,
               })))}>
                 <Download className="w-4 h-4 mr-2" /> Export
               </Button>
@@ -651,15 +676,16 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 <TableHead>Customer</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Tax</TableHead>
+                <TableHead className="text-right">Discount</TableHead>
                 <TableHead className="text-right">Total</TableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(4)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
+                <TableRow><TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
                   <Receipt className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No sales recorded yet</p>
                 </TableCell></TableRow>
               ) : filtered.map(sale => (
@@ -680,6 +706,15 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs text-muted-foreground">
                     {Number(sale.taxTotal) > 0 ? `₹${Number(sale.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-xs">
+                    {(() => {
+                      const d = Number((sale as any).discountTotal ?? 0)
+                        + (((sale as any).lineItems as any[]) ?? []).reduce((s: number, li: any) => s + Number(li?.discount ?? 0), 0);
+                      return d > 0
+                        ? <span className="text-amber-600">₹{d.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        : <span className="text-muted-foreground">—</span>;
+                    })()}
                   </TableCell>
                   <TableCell className="text-right">
                     <p className="font-mono font-bold text-emerald-500">₹{Number(sale.totalAmount).toLocaleString('en-IN')}</p>
@@ -825,8 +860,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       <FormControl><SelectTrigger><SelectValue placeholder="Select mode" /></SelectTrigger></FormControl>
                       <SelectContent>
                         <SelectItem value="cash">💵 Cash</SelectItem>
-                        <SelectItem value="upi">📱 UPI</SelectItem>
-                        <SelectItem value="card">💳 Card</SelectItem>
                         <SelectItem value="credit">🕒 Credit (pay later)</SelectItem>
                       </SelectContent>
                     </Select>
@@ -863,10 +896,17 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     </div>
                   )}
                   {watchCouponCode && !appliedCoupon && (
-                    <div className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-destructive/10 border border-destructive/20 text-destructive text-sm">
-                      <AlertTriangle className="w-3.5 h-3.5" />
-                      Invalid / expired
-                    </div>
+                    preservedBillDiscount !== null && preservedBillDiscount > 0 ? (
+                      <div className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-600 text-sm">
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        Coupon no longer active — keeping the original ₹{preservedBillDiscount.toLocaleString('en-IN')} discount
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5 px-3 py-2 rounded-md bg-destructive/10 border border-destructive/20 text-destructive text-sm">
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        Invalid / expired
+                      </div>
+                    )
                   )}
                 </div>
               </div>
@@ -885,7 +925,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   <>
                     <div className="flex justify-between items-center mb-3">
                       <p className="font-semibold">Cart Items <span className="text-xs text-muted-foreground font-normal ml-1">({availableItems.length} in stock)</span></p>
-                      <Button type="button" variant="outline" size="sm" onClick={() => append({ itemId: 0, quantity: 1, unitPrice: 0 })}>
+                      <Button type="button" variant="outline" size="sm" onClick={() => append({ itemId: 0, quantity: 1, unitPrice: 0, discount: 0 })}>
                         <Plus className="w-3 h-3 mr-1" /> Add Item
                       </Button>
                     </div>
@@ -896,8 +936,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         const unitPrice = Number(form.watch(`lineItems.${index}.unitPrice`) ?? 0);
                         const availQty = getAvailableQty(itemId);
                         const taxRate  = Number((getItem(itemId) as any)?.taxRate ?? 0);
-                        const gst      = computeLineGst(qty, unitPrice, taxRate, isInterState);
-                        const lineTotal = gst.lineGross; // MRP × qty (inclusive of GST)
+                        const disc     = Math.max(0, Number(form.watch(`lineItems.${index}.discount`) ?? 0));
+                        const gst      = computeLineGst(qty, unitPrice, taxRate, isInterState, disc);
+                        const lineTotal = gst.lineGross; // MRP × qty − discount (inclusive of GST)
 
                         return (
                           <div key={field.id} className="p-3 bg-muted/20 rounded-lg border border-border space-y-2">
@@ -933,9 +974,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                               </FormItem>
                             )} />
 
-                            {/* Row 2: Qty + MRP display (read-only) + Line total */}
+                            {/* Row 2: Qty + MRP display (read-only) + Discount + Line total */}
                             <div className="grid grid-cols-12 gap-2 items-end">
-                              <div className="col-span-4">
+                              <div className="col-span-2">
                                 <FormField control={form.control} name={`lineItems.${index}.quantity`} render={({ field: f }) => (
                                   <FormItem>
                                     <FormLabel className="text-xs">Qty {itemId > 0 && <span className="text-muted-foreground">(max {availQty})</span>}</FormLabel>
@@ -945,7 +986,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                               </div>
 
                               {/* MRP — read-only, set in Item Master */}
-                              <div className="col-span-4">
+                              <div className="col-span-3">
                                 <p className="text-xs font-medium mb-1.5 text-foreground/80">
                                   MRP (₹) <span className="text-[10px] text-muted-foreground font-normal">from Item Master</span>
                                 </p>
@@ -960,6 +1001,27 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                 </div>
                               </div>
 
+                              {/* Line discount — flat ₹ off this line's MRP total */}
+                              <div className="col-span-3">
+                                <FormField control={form.control} name={`lineItems.${index}.discount`} render={({ field: f }) => (
+                                  <FormItem>
+                                    <FormLabel className="text-xs">Discount (₹)</FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        type="number" min={0} step="0.01"
+                                        max={itemId > 0 ? qty * unitPrice : undefined}
+                                        disabled={!itemId || unitPrice <= 0}
+                                        placeholder="0"
+                                        className="h-8 text-xs"
+                                        {...f}
+                                        value={(f.value as any) ?? ''}
+                                      />
+                                    </FormControl>
+                                    <FormMessage className="text-[10px]" />
+                                  </FormItem>
+                                )} />
+                              </div>
+
                               <div className="col-span-3 text-right pb-0.5 space-y-0.5">
                                 {itemId > 0 ? (
                                   unitPrice > 0 ? (
@@ -971,6 +1033,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                         </p>
                                       )}
                                       {taxRate === 0 && <p className="text-xs text-muted-foreground/50">No GST</p>}
+                                      {disc > 0 && (
+                                        <p className="text-xs text-emerald-600 font-medium">Disc −₹{Math.min(disc, qty * unitPrice).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                                      )}
                                       <p className="font-mono font-bold text-primary text-sm">₹{lineTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
                                     </>
                                   ) : (
@@ -1001,6 +1066,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       Invoice Summary
                     </div>
                     <div className="px-3 py-2 space-y-1.5">
+                      {/* Item discounts — already netted into the figures below */}
+                      {totals.itemDiscountTotal > 0 && (
+                        <div className="flex justify-between text-emerald-600 font-medium">
+                          <span>Item Discounts (off MRP)</span>
+                          <span className="font-mono">−₹{totals.itemDiscountTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      )}
                       {/* Subtotal */}
                       <div className="flex justify-between text-muted-foreground">
                         <span>Taxable Amount</span>
@@ -1051,12 +1123,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       <Separator className="my-1" />
 
                       {/* Coupon discount line */}
-                      {totals.discountAmount > 0 && appliedCoupon && (
+                      {totals.discountAmount > 0 && (appliedCoupon || preservedBillDiscount !== null) && (
                         <div className="flex justify-between text-emerald-600 font-medium">
                           <span className="flex items-center gap-1">
                             <Check className="w-3.5 h-3.5" />
-                            Coupon <span className="font-mono text-xs ml-1">{watchCouponCode}</span>
-                            {appliedCoupon.discountType === 'percentage' && <span className="text-xs text-muted-foreground ml-1">({appliedCoupon.discountValue}%)</span>}
+                            {watchCouponCode ? <>Coupon <span className="font-mono text-xs ml-1">{watchCouponCode}</span></> : 'Bill Discount'}
+                            {appliedCoupon?.discountType === 'percentage' && <span className="text-xs text-muted-foreground ml-1">({appliedCoupon.discountValue}%)</span>}
+                            {!appliedCoupon && preservedBillDiscount !== null && preservedBillDiscount > 0 && <span className="text-xs text-muted-foreground ml-1">(original)</span>}
                           </span>
                           <span className="font-mono">−₹{totals.discountAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                         </div>
@@ -1189,7 +1262,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                           <Badge variant="secondary" className="text-xs">{li.taxRate ?? 0}% GST</Badge>
                         </div>
                         <div className="mt-2 flex justify-between text-xs text-muted-foreground">
-                          <span>{li.quantity} × ₹{Number(li.unitPrice).toFixed(2)}</span>
+                          <span>
+                            {li.quantity} × ₹{Number(li.unitPrice).toFixed(2)}
+                            {Number(li.discount ?? 0) > 0 && (
+                              <span className="text-emerald-600"> − ₹{Number(li.discount).toFixed(2)} disc</span>
+                            )}
+                          </span>
                           <span>Taxable: ₹{Number(lineSubtotal).toFixed(2)}</span>
                         </div>
                         {(li.taxAmount ?? 0) > 0 && (
@@ -1206,6 +1284,15 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
 
               {/* Totals */}
               <div className="p-3 bg-muted/30 rounded-lg space-y-1.5 text-sm">
+                {(() => {
+                  const itemDisc = ((viewItem.lineItems as any[]) ?? []).reduce((s: number, li: any) => s + Number(li?.discount ?? 0), 0);
+                  return itemDisc > 0 ? (
+                    <div className="flex justify-between text-emerald-600">
+                      <span>Item Discounts (off MRP)</span>
+                      <span className="font-mono">−₹{itemDisc.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    </div>
+                  ) : null;
+                })()}
                 <div className="flex justify-between text-muted-foreground">
                   <span>Subtotal</span>
                   <span className="font-mono">₹{Number(viewItem.subtotal ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
@@ -1214,6 +1301,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   <div className="flex justify-between text-amber-600">
                     <span>Total Tax</span>
                     <span className="font-mono">₹{Number(viewItem.taxTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                {Number(viewItem.discountTotal ?? 0) > 0 && (
+                  <div className="flex justify-between text-emerald-600">
+                    <span>Bill Discount{viewItem.couponCode ? ` (${viewItem.couponCode})` : ''}</span>
+                    <span className="font-mono">−₹{Number(viewItem.discountTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                   </div>
                 )}
                 <Separator />

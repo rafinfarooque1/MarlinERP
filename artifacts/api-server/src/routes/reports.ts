@@ -210,6 +210,97 @@ router.get("/reports/sales-by-location", requireModuleView("Sales"), async (req,
   res.json({ rows: list, totals });
 });
 
+// ── Discount report — one row per discounted invoice ────────────────────────
+// itemDiscount = Σ line_items[].discount (₹ off line gross, already netted
+// into subtotal/tax at sale time); billDiscount = discount_total (bill-level
+// coupon, subtracted after tax). gross = subtotal + tax + itemDiscount, i.e.
+// what the customer would have paid at full MRP.
+router.get("/reports/discounts", requireModuleView("Sales"), async (req, res): Promise<void> => {
+  const range = parseRange(req as any);
+  if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
+  const locationType = typeof req.query.locationType === "string" ? req.query.locationType : "";
+  const locationId = typeof req.query.locationId === "string" ? parseInt(req.query.locationId, 10) : 0;
+  if (locationType && !["outlet", "warehouse", "production"].includes(locationType)) {
+    res.status(400).json({ error: "locationType must be outlet, warehouse or production" }); return;
+  }
+  const args = [range.from, range.to, locationType, Number.isFinite(locationId) ? locationId : 0];
+
+  const { rows } = await pool.query<any>(
+    `SELECT s.id, s.invoice_number, to_char(s.sale_date,'YYYY-MM-DD') AS sale_date,
+            COALESCE(s.location_type,'outlet') AS location_type,
+            COALESCE(s.location_id, s.outlet_id) AS location_id,
+            c.name AS customer_name, s.coupon_code,
+            COALESCE(s.payment_mode,'cash') AS payment_mode,
+            COALESCE(s.subtotal,0) AS subtotal,
+            COALESCE(s.tax_total,0) AS tax_total,
+            COALESCE(s.discount_total,0) AS bill_discount,
+            d.item_discount,
+            s.total_amount
+     FROM sales s
+     LEFT JOIN customers c ON c.id = s.customer_id
+     CROSS JOIN LATERAL (
+       SELECT COALESCE(SUM(COALESCE((li->>'discount')::numeric, 0)), 0) AS item_discount
+       FROM jsonb_array_elements(COALESCE(s.line_items, '[]'::jsonb)) AS li
+     ) d
+     WHERE ($1 = '' OR s.sale_date >= $1::date)
+       AND ($2 = '' OR s.sale_date <= $2::date)
+       AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
+       AND ($4 = 0 OR COALESCE(s.location_id, s.outlet_id) = $4)
+       AND (d.item_discount > 0 OR COALESCE(s.discount_total,0) > 0)
+     ORDER BY s.sale_date, s.id`,
+    args,
+  );
+
+  // All invoices in the same range/location so the UI can show "X of Y".
+  const { rows: [cnt] } = await pool.query<any>(
+    `SELECT COUNT(*) AS n FROM sales s
+     WHERE ($1 = '' OR s.sale_date >= $1::date)
+       AND ($2 = '' OR s.sale_date <= $2::date)
+       AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
+       AND ($4 = 0 OR COALESCE(s.location_id, s.outlet_id) = $4)`,
+    args,
+  );
+
+  const maps = await locationMaps();
+  const list = rows.map((r: any) => {
+    const itemDiscount = Number(r.item_discount);
+    const billDiscount = Number(r.bill_discount);
+    const totalDiscount = itemDiscount + billDiscount;
+    const gross = Number(r.subtotal) + Number(r.tax_total) + itemDiscount;
+    return {
+      id: Number(r.id),
+      invoiceNumber: r.invoice_number ?? `#${r.id}`,
+      date: r.sale_date,
+      locationType: r.location_type,
+      locationId: Number(r.location_id),
+      locationName: locName(maps, r.location_type, Number(r.location_id)),
+      customerName: r.customer_name ?? "Walk-in",
+      couponCode: r.coupon_code ?? "",
+      paymentMode: r.payment_mode,
+      gross: r2(gross),
+      itemDiscount: r2(itemDiscount),
+      billDiscount: r2(billDiscount),
+      totalDiscount: r2(totalDiscount),
+      net: r2(Number(r.total_amount)),
+      discountPct: gross > 0 ? r2((totalDiscount / gross) * 100) : 0,
+    };
+  });
+
+  const sumGross = list.reduce((s, r) => s + r.gross, 0);
+  const sumDiscount = list.reduce((s, r) => s + r.totalDiscount, 0);
+  const totals = {
+    invoices: list.length,
+    allInvoices: Number(cnt?.n ?? 0),
+    gross: r2(sumGross),
+    itemDiscount: r2(list.reduce((s, r) => s + r.itemDiscount, 0)),
+    billDiscount: r2(list.reduce((s, r) => s + r.billDiscount, 0)),
+    totalDiscount: r2(sumDiscount),
+    net: r2(list.reduce((s, r) => s + r.net, 0)),
+    discountPct: sumGross > 0 ? r2((sumDiscount / sumGross) * 100) : 0,
+  };
+  res.json({ rows: list, totals });
+});
+
 // ═════════════════════════════════════════════════════════════════════════════
 // PURCHASES
 // ═════════════════════════════════════════════════════════════════════════════

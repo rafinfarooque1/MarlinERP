@@ -4,7 +4,7 @@
 import { useState } from 'react';
 import {
   useSalesRegister, useSalesByItem, useSalesByLocation, useSalesStockCombined,
-  useListOutlets, useListWarehouses,
+  useDiscountReport, useListOutlets, useListWarehouses,
 } from '@workspace/api-client-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
@@ -15,7 +15,7 @@ import {
   type RangeState, type Col,
 } from '../shared';
 
-type SalesReport = 'register' | 'byItem' | 'byLocation' | 'combined';
+type SalesReport = 'register' | 'byItem' | 'byLocation' | 'discounts' | 'combined';
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
@@ -117,6 +117,104 @@ function RegisterReport({ range }: { range: RangeState }) {
       <RTable
         cols={cols} rows={rows} loading={isLoading} rowKey={(r) => r.id}
         footer={['TOTAL', '', '', '', '', fmt(t?.subtotal), fmt(t?.tax), fmt(t?.total), fmt(t?.paid), fmt(t?.balance), '']}
+      />
+    </div>
+  );
+}
+
+// ── Discounts ─────────────────────────────────────────────────────────────────
+function DiscountsReport({ range }: { range: RangeState }) {
+  const [loc, setLoc] = useState('all');
+  const { data: outlets = [] } = useListOutlets();
+  const { data: warehouses = [] } = useListWarehouses();
+
+  const [locationType, locationIdStr] = loc === 'all' ? ['', ''] : loc.split(':');
+  const { data, isLoading } = useDiscountReport({
+    from: range.from || undefined,
+    to: range.to || undefined,
+    locationType: locationType || undefined,
+    locationId: locationIdStr ? Number(locationIdStr) : undefined,
+  });
+  const rows = data?.rows ?? [];
+  const t = data?.totals;
+  const locLabel = loc === 'all'
+    ? 'All locations'
+    : [...(outlets as any[]).map((o) => ({ v: `outlet:${o.id}`, n: o.name })),
+       ...(warehouses as any[]).map((w) => ({ v: `warehouse:${w.id}`, n: w.name }))].find((x) => x.v === loc)?.n ?? loc;
+
+  const cols: Col<(typeof rows)[number]>[] = [
+    { key: 'invoiceNumber', label: 'Invoice', render: (r) => <span className="font-mono text-xs text-primary font-bold">{r.invoiceNumber}</span> },
+    { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
+    { key: 'locationName', label: 'Location' },
+    { key: 'customerName', label: 'Customer' },
+    { key: 'couponCode', label: 'Coupon', render: (r) => r.couponCode
+      ? <Badge className="text-[10px] font-mono bg-violet-500/10 text-violet-600 border-violet-500/20">{r.couponCode}</Badge>
+      : <span className="text-muted-foreground">—</span> },
+    { key: 'gross', label: 'Gross', align: 'right', render: (r) => fmt(r.gross) },
+    { key: 'itemDiscount', label: 'Item Disc.', align: 'right', render: (r) => r.itemDiscount > 0 ? <span className="text-amber-600">{fmt(r.itemDiscount)}</span> : <span className="text-muted-foreground">—</span> },
+    { key: 'billDiscount', label: 'Bill Disc.', align: 'right', render: (r) => r.billDiscount > 0 ? <span className="text-amber-600">{fmt(r.billDiscount)}</span> : <span className="text-muted-foreground">—</span> },
+    { key: 'totalDiscount', label: 'Total Disc.', align: 'right', render: (r) => <b className="text-red-500">{fmt(r.totalDiscount)}</b> },
+    { key: 'discountPct', label: 'Disc. %', align: 'right', render: (r) => <span className="text-xs text-muted-foreground">{r.discountPct.toFixed(1)}%</span> },
+    { key: 'net', label: 'Net Billed', align: 'right', render: (r) => <b>{fmt(r.net)}</b> },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <RangeBar range={range}>
+        <Select value={loc} onValueChange={setLoc}>
+          <SelectTrigger className="h-8 text-xs w-52"><SelectValue placeholder="All locations" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All locations</SelectItem>
+            {(outlets as any[]).map((o) => <SelectItem key={`o${o.id}`} value={`outlet:${o.id}`}>{o.name} (Outlet)</SelectItem>)}
+            {(warehouses as any[]).map((w) => <SelectItem key={`w${w.id}`} value={`warehouse:${w.id}`}>{w.name} (Warehouse)</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <ExportButtons
+          disabled={isLoading || rows.length === 0}
+          onCSV={() => downloadCSV('discount-report.csv', rows.map((r) => ({
+            Invoice: r.invoiceNumber, Date: r.date, Location: r.locationName, Customer: r.customerName,
+            Coupon: r.couponCode || '', 'Gross (₹)': r.gross.toFixed(2),
+            'Item Discount (₹)': r.itemDiscount.toFixed(2), 'Bill Discount (₹)': r.billDiscount.toFixed(2),
+            'Total Discount (₹)': r.totalDiscount.toFixed(2), 'Discount %': r.discountPct.toFixed(1),
+            'Net Billed (₹)': r.net.toFixed(2),
+          })))}
+          onPDF={() => exportReportPdf({
+            title: 'Discount Report',
+            subtitle: `Period: ${periodLabel(range.from, range.to)}   |   Location: ${locLabel}`,
+            metaRows: [
+              ['Period', periodLabel(range.from, range.to)], ['Location', locLabel],
+              ['Discounted Invoices', `${t?.invoices ?? 0} of ${t?.allInvoices ?? 0}`],
+              ['Total Discount', pdfMoney(t?.totalDiscount)],
+            ],
+            orientation: 'landscape',
+            sections: [{
+              columns: [
+                { label: 'Invoice', width: 1.5 }, { label: 'Date' }, { label: 'Location', width: 1.4 },
+                { label: 'Customer', width: 1.4 }, { label: 'Coupon' },
+                { label: 'Gross', align: 'right', width: 1.2 }, { label: 'Item Disc.', align: 'right', width: 1.1 },
+                { label: 'Bill Disc.', align: 'right', width: 1.1 }, { label: 'Total Disc.', align: 'right', width: 1.2 },
+                { label: 'Disc. %', align: 'right' }, { label: 'Net', align: 'right', width: 1.2 },
+              ],
+              rows: rows.map((r) => [r.invoiceNumber, fmtDate(r.date), r.locationName, r.customerName,
+                r.couponCode || '—', pdfMoney(r.gross), pdfMoney(r.itemDiscount), pdfMoney(r.billDiscount),
+                pdfMoney(r.totalDiscount), `${r.discountPct.toFixed(1)}%`, pdfMoney(r.net)]),
+              totalsRow: ['TOTAL', '', '', '', '', pdfMoney(t?.gross), pdfMoney(t?.itemDiscount),
+                pdfMoney(t?.billDiscount), pdfMoney(t?.totalDiscount), `${(t?.discountPct ?? 0).toFixed(1)}%`, pdfMoney(t?.net)],
+            }],
+          })}
+        />
+      </RangeBar>
+
+      <SummaryCards cards={[
+        { label: 'Discounted Invoices', value: `${t?.invoices ?? 0} of ${t?.allInvoices ?? 0}` },
+        { label: 'Item Discounts', value: fmt(t?.itemDiscount) },
+        { label: 'Bill / Coupon Discounts', value: fmt(t?.billDiscount) },
+        { label: `Total Discount${t?.discountPct ? ` (${t.discountPct.toFixed(1)}%)` : ''}`, value: fmt(t?.totalDiscount), tone: 'neg' },
+      ]} />
+
+      <RTable
+        cols={cols} rows={rows} loading={isLoading} rowKey={(r) => r.id}
+        footer={['TOTAL', '', '', '', '', fmt(t?.gross), fmt(t?.itemDiscount), fmt(t?.billDiscount), fmt(t?.totalDiscount), '', fmt(t?.net)]}
       />
     </div>
   );
@@ -353,6 +451,7 @@ export default function SalesSection() {
           { value: 'register', label: 'Sales Register' },
           { value: 'byItem', label: 'By Item' },
           { value: 'byLocation', label: 'By Location' },
+          { value: 'discounts', label: 'Discounts' },
           { value: 'combined', label: 'Sales & Stock Summary' },
         ]}
         value={report} onChange={setReport}
@@ -360,6 +459,7 @@ export default function SalesSection() {
       {report === 'register' && <RegisterReport range={range} />}
       {report === 'byItem' && <ByItemReport range={range} />}
       {report === 'byLocation' && <ByLocationReport range={range} />}
+      {report === 'discounts' && <DiscountsReport range={range} />}
       {report === 'combined' && <CombinedReport range={range} />}
     </div>
   );

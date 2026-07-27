@@ -70,6 +70,42 @@ export interface SalesByLocationResponse {
   totals: { invoices: number; taxable: number; tax: number; total: number; paid: number; outstanding: number };
 }
 
+export interface DiscountReportRow {
+  id: number;
+  invoiceNumber: string;
+  date: string;
+  locationType: string;
+  locationId: number;
+  locationName: string;
+  customerName: string;
+  couponCode: string;
+  paymentMode: string;
+  /** Pre-discount value (subtotal + tax + item discounts). */
+  gross: number;
+  /** Σ per-line ₹ discounts (netted into taxable at sale time). */
+  itemDiscount: number;
+  /** Bill-level (coupon) discount subtracted after tax. */
+  billDiscount: number;
+  totalDiscount: number;
+  /** Final invoice total. */
+  net: number;
+  discountPct: number;
+}
+
+export interface DiscountReportResponse {
+  rows: DiscountReportRow[];
+  totals: {
+    invoices: number;
+    allInvoices: number;
+    gross: number;
+    itemDiscount: number;
+    billDiscount: number;
+    totalDiscount: number;
+    net: number;
+    discountPct: number;
+  };
+}
+
 export interface PurchaseRegisterRow {
   id: number;
   billNumber: string;
@@ -180,6 +216,14 @@ export function useSalesByLocation(params: DateRangeParams = {}) {
   return useQuery({
     queryKey: ['/api/reports/sales-by-location', qs],
     queryFn: () => customFetch<SalesByLocationResponse>(`/api/reports/sales-by-location${qs}`),
+  });
+}
+
+export function useDiscountReport(params: DateRangeParams & { locationType?: string; locationId?: number } = {}) {
+  const qs = buildQs({ ...params });
+  return useQuery({
+    queryKey: ['/api/reports/discounts', qs],
+    queryFn: () => customFetch<DiscountReportResponse>(`/api/reports/discounts${qs}`),
   });
 }
 

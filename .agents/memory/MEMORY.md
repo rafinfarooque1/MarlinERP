@@ -10,4 +10,6 @@
 - [Inventory batch layer](inventory-batches.md) — additive lot layer over stock_entries (qty truth); FEFO clamped consumption, shortfall = "Untracked"; zod strips unknown keys so optional passthrough fields read from raw body.
 - [pg query gotchas](pg-gotchas.md) — date columns return JS Date (never string-compare vs YYYY-MM-DD); creates return 201; check-then-insert guards need one txn + pg_advisory_xact_lock.
 - [Codegen staleness trap](codegen-staleness.md) — regenerating api-zod can flip stale-optional fields to required; diff generated output and verify UI forms send them after codegen.
-- [Sales settlement semantics](sales-settlement.md) — cash/upi/card settle at creation (paid); only 'credit' mode is credit-controlled; dues = total−amount_paid everywhere; backfills go after their DDL + migration_log guard.
+- [Sales settlement & discounts](sales-settlement.md) — cash/upi/card settle at creation; only 'credit' is credit-controlled; dues = total−paid; line discounts net into GST pre-tax, discount_total = bill-level coupon ONLY (post-tax).
+- [RBAC & branch scoping](rbac-branch-scoping.md) — branch_type 'headoffice' is a string, not null; backend default-ALLOWS missing perm rows; most GETs unguarded, scoping is client-side.
+- [Sales location gate](location-context-gate.md) — /sales/* pages render blank (null) in fresh sessions until a location is picked at /sales; not a crash — navigate via the picker in tests.

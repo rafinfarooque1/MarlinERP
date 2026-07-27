@@ -209,6 +209,22 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
     itemId: number; quantity: number; unitPrice: number; discount: number; taxAmount: number;
   }>;
 
+  // ── Validate per-line discounts ───────────────────────────────────────────
+  // A line discount is ₹ off that line's gross (MRP × qty) and must never
+  // exceed it — GST is back-calculated from the discounted gross.
+  for (const li of rawLineItems) {
+    const d = Number(li.discount ?? 0);
+    const lineAmount = li.quantity * (li.unitPrice ?? 0);
+    if (!Number.isFinite(d) || d < 0) {
+      res.status(400).json({ error: `Line discount must be a non-negative amount (item ${li.itemId})` });
+      return;
+    }
+    if (d > lineAmount + 0.004) {
+      res.status(400).json({ error: `Line discount ₹${d.toFixed(2)} cannot exceed the line amount ₹${lineAmount.toFixed(2)} (item ${li.itemId})` });
+      return;
+    }
+  }
+
   // ── Determine location (warehouse or outlet) ──────────────────────────────
   const rawBody = req.body as any;
   const locationType: 'outlet' | 'warehouse' = rawBody.locationType === 'warehouse' ? 'warehouse' : 'outlet';
@@ -306,7 +322,20 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
 
   const subtotal = lineItems.reduce((s, li) => s + li.lineSubtotal, 0);
   const taxTotal = lineItems.reduce((s, li) => s + li.taxAmount, 0);
-  const discountTotal = (parsed.data as any).discountTotal ?? lineItems.reduce((s, li) => s + li.discount, 0);
+  // Bill-level (coupon) discount ONLY. Per-line discounts are already netted
+  // into lineSubtotal/taxAmount above — adding them here would double-count.
+  // CreateSaleBody strips unknown keys, so read the raw body (same pattern as
+  // locationType/locationId).
+  const rawDiscountTotal = Number(rawBody.discountTotal ?? 0);
+  if (!Number.isFinite(rawDiscountTotal) || rawDiscountTotal < 0) {
+    res.status(400).json({ error: 'discountTotal must be a non-negative amount' });
+    return;
+  }
+  if (rawDiscountTotal > subtotal + taxTotal + 0.004) {
+    res.status(400).json({ error: 'Bill discount cannot exceed the invoice amount' });
+    return;
+  }
+  const discountTotal = Math.round(rawDiscountTotal * 100) / 100;
   const totalAmount = subtotal + taxTotal - discountTotal;
 
   // ── Credit control + atomic sale insert ───────────────────────────────────
@@ -563,6 +592,20 @@ router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit")
     itemId: number; quantity: number; unitPrice: number; discount: number; taxAmount: number;
   }>;
 
+  // ── Validate per-line discounts (same rule as creation) ──────────────────
+  for (const li of rawLineItems) {
+    const d = Number(li.discount ?? 0);
+    const lineAmount = li.quantity * (li.unitPrice ?? 0);
+    if (!Number.isFinite(d) || d < 0) {
+      res.status(400).json({ error: `Line discount must be a non-negative amount (item ${li.itemId})` });
+      return;
+    }
+    if (d > lineAmount + 0.004) {
+      res.status(400).json({ error: `Line discount ₹${d.toFixed(2)} cannot exceed the line amount ₹${lineAmount.toFixed(2)} (item ${li.itemId})` });
+      return;
+    }
+  }
+
   // ── Determine new location ────────────────────────────────────────────────
   const rawBody = req.body as any;
   const newLocationType: 'outlet' | 'warehouse' = rawBody.locationType === 'warehouse' ? 'warehouse' : 'outlet';
@@ -613,7 +656,17 @@ router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit")
 
   const subtotal = lineItems.reduce((s, li) => s + li.lineSubtotal, 0);
   const taxTotal = lineItems.reduce((s, li) => s + li.taxAmount, 0);
-  const discountTotal = (parsed.data as any).discountTotal ?? lineItems.reduce((s, li) => s + li.discount, 0);
+  // Bill-level (coupon) discount ONLY — see POST handler for the semantics.
+  const rawDiscountTotal = Number(rawBody.discountTotal ?? 0);
+  if (!Number.isFinite(rawDiscountTotal) || rawDiscountTotal < 0) {
+    res.status(400).json({ error: 'discountTotal must be a non-negative amount' });
+    return;
+  }
+  if (rawDiscountTotal > subtotal + taxTotal + 0.004) {
+    res.status(400).json({ error: 'Bill discount cannot exceed the invoice amount' });
+    return;
+  }
+  const discountTotal = Math.round(rawDiscountTotal * 100) / 100;
   const totalAmount = subtotal + taxTotal - discountTotal;
 
   // Reverse old stock deductions

@@ -34,10 +34,12 @@ function pickCompanyFields(body: Record<string, any>) {
 async function extraSettingsFields(id: number): Promise<{
   paymentTerms: string | null; invoiceFooter: string | null; productionOverheadPercent: number;
   passwordMinLength: number; passwordRequireUppercase: boolean; passwordRequireNumber: boolean; passwordRequireSpecial: boolean;
+  generalSettings: Record<string, any> | null;
 }> {
   const { rows: [r] } = await pool.query<any>(
     `SELECT payment_terms, invoice_footer, production_overhead_percent,
-            password_min_length, password_require_uppercase, password_require_number, password_require_special
+            password_min_length, password_require_uppercase, password_require_number, password_require_special,
+            general_settings
      FROM company_settings WHERE id = $1`, [id]
   );
   return {
@@ -48,6 +50,7 @@ async function extraSettingsFields(id: number): Promise<{
     passwordRequireUppercase: !!r?.password_require_uppercase,
     passwordRequireNumber: !!r?.password_require_number,
     passwordRequireSpecial: !!r?.password_require_special,
+    generalSettings: r?.general_settings ?? null,
   };
 }
 
@@ -72,6 +75,17 @@ router.patch("/company/settings", requireModuleAction("Settings", "edit"), async
       if (v !== null && typeof v !== 'string') { res.status(400).json({ error: `${bodyKey} must be a string or null` }); return; }
       pdfUpdates.push([column, typeof v === 'string' && v.trim() ? v.trim() : null]);
     }
+  }
+
+  // General settings blob (raw JSONB column — stores Invoice & Billing,
+  // Payroll, Notifications, Regional panel values from the Settings page).
+  let generalSettingsUpdate: Record<string, any> | undefined;
+  if ('generalSettings' in req.body) {
+    const v = (req.body as any).generalSettings;
+    if (v !== null && (typeof v !== 'object' || Array.isArray(v))) {
+      res.status(400).json({ error: 'generalSettings must be an object or null' }); return;
+    }
+    generalSettingsUpdate = v ?? {};
   }
 
   // Default production overhead % (raw column, numeric 0–100)
@@ -107,7 +121,7 @@ router.patch("/company/settings", requireModuleAction("Settings", "edit"), async
     }
   }
 
-  if (Object.keys(data).length === 0 && pdfUpdates.length === 0 && overheadUpdate === undefined && policyUpdates.length === 0) { res.status(400).json({ error: "No valid fields to update" }); return; }
+  if (Object.keys(data).length === 0 && pdfUpdates.length === 0 && overheadUpdate === undefined && policyUpdates.length === 0 && generalSettingsUpdate === undefined) { res.status(400).json({ error: "No valid fields to update" }); return; }
 
   const rows = await db.select().from(companySettingsTable).limit(1);
   let row;
@@ -128,6 +142,9 @@ router.patch("/company/settings", requireModuleAction("Settings", "edit"), async
     await pool.query(`UPDATE company_settings SET ${column} = $1 WHERE id = $2`, [value, row.id]);
   }
   if (policyUpdates.length > 0) invalidatePolicyCache();
+  if (generalSettingsUpdate !== undefined) {
+    await pool.query(`UPDATE company_settings SET general_settings = $1 WHERE id = $2`, [JSON.stringify(generalSettingsUpdate), row.id]);
+  }
   res.json({ ...row, ...(await extraSettingsFields(row.id)) });
 });
 

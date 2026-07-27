@@ -76,9 +76,7 @@ const SETTING_GROUPS: SettingGroup[] = [
   },
 ];
 
-function getInitial() {
-  const saved = localStorage.getItem('marlin_settings');
-  if (saved) return JSON.parse(saved);
+function getDefaults() {
   const init: Record<string, any> = {};
   SETTING_GROUPS.forEach(g => g.settings.forEach(s => (init[s.key] = s.defaultValue)));
   return init;
@@ -461,19 +459,41 @@ function SecuritySection() {
 
 export default function Settings() {
   const perm = usePermission('Settings');
-  const [values, setValues] = useState<Record<string, any>>(getInitial);
+  const [values, setValues] = useState<Record<string, any>>(getDefaults);
+  const [loadingGeneral, setLoadingGeneral] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetting, setResetting] = useState(false);
+
+  // Load general settings from the server on mount
+  useEffect(() => {
+    customFetch<any>('/api/company/settings')
+      .then(s => {
+        const stored = s?.generalSettings;
+        if (stored && typeof stored === 'object') {
+          setValues(prev => ({ ...prev, ...stored }));
+        }
+      })
+      .catch(() => { /* keep defaults */ })
+      .finally(() => setLoadingGeneral(false));
+  }, []);
 
   const set = (key: string, val: any) => setValues(prev => ({ ...prev, [key]: val }));
 
   const save = async () => {
     setSaving(true);
-    await new Promise(r => setTimeout(r, 600));
-    localStorage.setItem('marlin_settings', JSON.stringify(values));
-    setSaving(false);
-    toast.success('Settings saved');
+    try {
+      await customFetch('/api/company/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ generalSettings: values }),
+      });
+      toast.success('Settings saved');
+    } catch (e: any) {
+      toast.error(e?.data?.error || e.message || 'Failed to save settings');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleReset = async () => {
@@ -521,33 +541,37 @@ export default function Settings() {
                 <p className="text-xs text-muted-foreground">{group.description}</p>
               </div>
             </div>
-            <div className="divide-y divide-border">
-              {group.settings.map(setting => (
-                <div key={setting.key} className="p-4 flex items-center justify-between gap-4">
-                  <label className="text-sm font-medium flex-1">{setting.label}</label>
-                  {setting.type === 'toggle' && (
-                    <Switch checked={!!values[setting.key]} onCheckedChange={v => set(setting.key, v)} />
-                  )}
-                  {setting.type === 'text' && (
-                    <Input value={values[setting.key] || ''} onChange={e => set(setting.key, e.target.value)} className="w-40" />
-                  )}
-                  {setting.type === 'number' && (
-                    <Input type="number" value={values[setting.key] || 0} onChange={e => set(setting.key, Number(e.target.value))} className="w-28 font-mono" />
-                  )}
-                  {setting.type === 'select' && (
-                    <Select value={String(values[setting.key])} onValueChange={v => set(setting.key, v)}>
-                      <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
-                      <SelectContent>{setting.options?.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}</SelectContent>
-                    </Select>
-                  )}
-                </div>
-              ))}
-            </div>
+            {loadingGeneral ? (
+              <div className="p-6 flex items-center gap-2 text-muted-foreground text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>
+            ) : (
+              <div className="divide-y divide-border">
+                {group.settings.map(setting => (
+                  <div key={setting.key} className="p-4 flex items-center justify-between gap-4">
+                    <label className="text-sm font-medium flex-1">{setting.label}</label>
+                    {setting.type === 'toggle' && (
+                      <Switch checked={!!values[setting.key]} onCheckedChange={v => set(setting.key, v)} />
+                    )}
+                    {setting.type === 'text' && (
+                      <Input value={values[setting.key] || ''} onChange={e => set(setting.key, e.target.value)} className="w-40" />
+                    )}
+                    {setting.type === 'number' && (
+                      <Input type="number" value={values[setting.key] || 0} onChange={e => set(setting.key, Number(e.target.value))} className="w-28 font-mono" />
+                    )}
+                    {setting.type === 'select' && (
+                      <Select value={String(values[setting.key])} onValueChange={v => set(setting.key, v)}>
+                        <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
+                        <SelectContent>{setting.options?.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}</SelectContent>
+                      </Select>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ))}
 
         <div className="flex justify-end">
-          <Button size="lg" onClick={save} disabled={saving}>
+          <Button size="lg" onClick={save} disabled={saving || loadingGeneral}>
             {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> Save Settings</>}
           </Button>
         </div>

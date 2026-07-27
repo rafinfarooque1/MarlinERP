@@ -1,0 +1,439 @@
+I want to redesign the Permission and Data Access architecture to follow a professional ERP standard.
+
+The current implementation has several problems.
+
+1. Some modules do not appear in the sidebar even though View permission is enabled (example: HR).
+2. Cash Balance appears in multiple places and should have only one permission.
+3. Permissions and data filtering are mixed together.
+4. Users can receive module permission, but branch-level data visibility is not consistently enforced.
+
+I want a professional Role-Based Access Control (RBAC) + Branch Data Access architecture.
+
+==================================================
+PERMISSION RULES
+==================================================
+
+Permissions determine ONLY whether a user can access a page.
+
+Branch assignment determines WHICH DATA is visible.
+
+Never mix these two concepts.
+
+Example:
+
+Permission = HR View
+Branch = Warehouse Bangalore
+
+Result:
+
+User can open HR pages.
+User can only see employees belonging to Warehouse Bangalore (or whatever business rules allow).
+
+==================================================
+SIDEBAR RULE
+==================================================
+
+If View permission is ON
+
+→ Show the module in the sidebar.
+
+If View permission is OFF
+
+→ Hide the module completely.
+
+This rule must work for every module.
+
+Current issue:
+
+HR permission is ON but HR does not appear.
+
+Investigate and fix the root cause.
+
+==================================================
+DATA ACCESS RULE
+==================================================
+
+Permissions never decide data scope.
+
+Branch assignment decides data scope.
+
+Example:
+
+Head Office User
+
+Can see:
+- All Warehouses
+- All Outlets
+- All Employees
+- All Customers
+- All Vendors
+- All Sales
+- All Purchases
+- All Cash
+- All Reports
+
+--------------------------------------------------
+
+Warehouse User
+
+Can see ONLY
+
+Assigned Warehouse
+
+PLUS
+
+All Outlets mapped to that Warehouse
+
+Cannot see:
+
+Other Warehouses
+
+Other Warehouse Cash
+
+Other Warehouse Sales
+
+Other Warehouse Employees
+
+Other Warehouse Reports
+
+Other Warehouse Expenses
+
+Other Warehouse Stock
+
+==================================================
+
+Outlet User
+
+Can see ONLY
+
+Assigned Outlet
+
+Cannot see
+
+Warehouse totals
+
+Other Outlets
+
+Other Warehouse
+
+==================================================
+MODULE BEHAVIOUR
+==================================================
+
+Production
+
+Warehouse User
+
+Can see only
+
+Production records of their warehouse.
+
+Head Office
+
+Can see all.
+
+--------------------------------------------------
+
+Inventory
+
+Warehouse User
+
+Can see
+
+Warehouse stock
+
+Warehouse transfers
+
+Mapped outlet stock
+
+Mapped outlet transfers
+
+Cannot see other warehouse inventory.
+
+--------------------------------------------------
+
+Sales
+
+Warehouse User
+
+Can see
+
+Warehouse sales
+
+Mapped outlet sales
+
+Returns
+
+Outstanding
+
+Customers
+
+Coupons
+
+Only for their warehouse.
+
+--------------------------------------------------
+
+Accounts
+
+Warehouse User
+
+If Accounts permission is enabled
+
+Can see only
+
+Warehouse accounting
+
+Mapped outlet accounting
+
+Cash
+
+Receipts
+
+Payments
+
+Reports
+
+Ledger entries
+
+Only related to their warehouse.
+
+Cannot see
+
+Other warehouse accounts.
+
+--------------------------------------------------
+
+Cash Balance
+
+This should exist as ONE MODULE only.
+
+Do not duplicate it.
+
+Permission
+
+Cash Balance
+
+If enabled
+
+Warehouse User
+
+Can see
+
+Warehouse Cash
+
+Mapped Outlet Cash
+
+Cannot see
+
+Other Warehouse Cash
+
+Head Office
+
+Can see
+
+All Cash
+
+--------------------------------------------------
+
+HR
+
+Warehouse User
+
+Can see
+
+Employees belonging to
+
+Assigned Warehouse
+
+Mapped Outlets
+
+Cannot see
+
+Employees from other warehouses.
+
+--------------------------------------------------
+
+Customers
+
+Warehouse User
+
+Can see customers created under
+
+Warehouse
+
+Mapped Outlets
+
+--------------------------------------------------
+
+Vendors
+
+Warehouse User
+
+Can see vendors related to
+
+Warehouse
+
+--------------------------------------------------
+
+Reports
+
+Warehouse User
+
+Can generate reports
+
+ONLY for
+
+Assigned Warehouse
+
+Mapped Outlets
+
+==================================================
+PERMISSION STRUCTURE
+==================================================
+
+Permissions only control
+
+View
+
+Add
+
+Edit
+
+Delete
+
+Nothing else.
+
+Data filtering must happen separately.
+
+==================================================
+BRANCH FILTER
+==================================================
+
+Every query must automatically apply
+
+Branch Filter
+
+Outlet Filter
+
+based on logged-in user.
+
+Never rely on frontend filtering.
+
+Filtering must happen on the server.
+
+==================================================
+MODULE REGISTRY
+==================================================
+
+Every module should define
+
+Module ID
+
+Module Name
+
+Route
+
+Permission Key
+
+Allowed Branch Types
+
+Required Permission
+
+Data Scope
+
+Example
+
+Accounts → Cash Balance
+
+Permission Key
+
+accounts.cashBalance
+
+Allowed Branch
+
+Head Office
+
+Warehouse
+
+Outlet
+
+Data Scope
+
+Head Office
+
+All Cash
+
+Warehouse
+
+Warehouse Cash
+
+Mapped Outlet Cash
+
+Outlet
+
+Only Outlet Cash
+
+==================================================
+AUDIT
+==================================================
+
+Log
+
+Permission Denied
+
+Hidden Module
+
+Unauthorized Access
+
+==================================================
+ANALYSIS REQUIRED
+==================================================
+
+Before making changes
+
+Analyze
+
+1. Why HR is not appearing although permission is enabled.
+
+2. Why Cash Balance exists twice.
+
+3. Which modules are missing branch filtering.
+
+4. Which API endpoints are not enforcing branch filtering.
+
+5. Which pages only filter in the frontend.
+
+6. Which backend queries need branch-level filtering.
+
+7. Which modules currently violate RBAC.
+
+Generate a report first.
+
+Do not start implementing until the analysis is complete.
+
+The final architecture should ensure:
+
+✔ Permissions control module visibility and allowed actions only.
+
+✔ Branch assignment controls data visibility only.
+
+✔ Every API enforces branch filtering.
+
+✔ Every page automatically shows only authorized records.
+
+✔ Sidebar always matches permissions.
+
+✔ Head Office sees everything.
+
+✔ Warehouse sees only its warehouse and mapped outlets.
+
+✔ Outlet sees only its own outlet.
+
+✔ No duplicate permission modules.
+
+✔ Cash Balance exists only once.
+
+✔ HR visibility issue is fixed.
+
+✔ The system follows enterprise ERP RBAC architecture similar to SAP, Oracle, Microsoft Dynamics, or Tally with centralized authorization and server-side data filtering.
