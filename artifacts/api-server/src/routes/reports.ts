@@ -73,6 +73,16 @@ router.get("/reports/sales-register", requireModuleView("Sales"), async (req, re
     res.status(400).json({ error: "locationType must be outlet, warehouse or headoffice" }); return;
   }
 
+  // Build params array and apply server-side scope for non-HO users
+  const { getUserDataScope: getScope, scopeSalesWhere: salesScope } = await import("../lib/dataScope");
+  const rparams: unknown[] = [range.from, range.to, locationType, Number.isFinite(locationId) ? locationId : 0];
+  let scopeCond = "TRUE";
+  const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  if (scopeEmp && scopeEmp.branchType !== "headoffice") {
+    const scope = await getScope(scopeEmp);
+    scopeCond = salesScope(scope, rparams);
+  }
+
   const { rows } = await pool.query<any>(
     `SELECT s.id, s.invoice_number, to_char(s.sale_date,'YYYY-MM-DD') AS sale_date,
             COALESCE(s.location_type,'outlet') AS location_type,
@@ -89,8 +99,9 @@ router.get("/reports/sales-register", requireModuleView("Sales"), async (req, re
        AND ($2 = '' OR s.sale_date <= $2::date)
        AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
        AND ($4 = 0 OR COALESCE(s.location_id, s.outlet_id) = $4)
+       AND (${scopeCond})
      ORDER BY s.sale_date, s.id`,
-    [range.from, range.to, locationType, Number.isFinite(locationId) ? locationId : 0],
+    rparams,
   );
   const maps = await locationMaps();
 

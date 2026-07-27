@@ -4,6 +4,7 @@ import { requireModuleView, requireModuleAction } from "../middleware/permission
 import { logActivity } from "../lib/audit";
 import { buildBranchMaps } from "./stock";
 import { consumeBatches, creditBatch, planFEFO, inboundCostForItem } from "../lib/batches";
+import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
 
 const router = Router();
 
@@ -27,6 +28,12 @@ router.get("/stock/batches", async (req, res): Promise<void> => {
   if (branchType) { params.push(branchType); conds.push(`sb.branch_type = $${params.length}`); }
   if (branchId != null && branchId !== "") { params.push(Number(branchId)); conds.push(`sb.branch_id = $${params.length}`); }
   if (itemId) { params.push(Number(itemId)); conds.push(`sb.item_id = $${params.length}`); }
+  // ── Server-side data scope ─────────────────────────────────────────────────
+  const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
+    const scope = await getUserDataScope(scopeEmp);
+    conds.push(scopeBranchWhere(scope, params, 'sb'));
+  }
 
   const [result, branchName] = await Promise.all([
     pool.query(

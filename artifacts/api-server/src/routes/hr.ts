@@ -8,6 +8,7 @@ import { PasswordService } from '../lib/password';
 import { DEFAULT_INITIAL_PASSWORD } from '../lib/passwordPolicy';
 import { eq, and, gte, lte, sql } from "drizzle-orm";
 import { logActivity } from "../lib/audit";
+import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
 import {
   CreateHierarchyBody, UpdateHierarchyBody, DeleteHierarchyParams,
   CreateEmployeeBody, UpdateEmployeeBody, GetEmployeeParams, DeleteEmployeeParams,
@@ -170,11 +171,30 @@ router.delete("/hr/hierarchies/:id", requireModuleAction("Hierarchy", "delete"),
 });
 
 // ── Employees ─────────────────────────────────────────────────────────────
-router.get("/hr/employees", async (_req, res): Promise<void> => {
-  const rows = await db.select().from(employeesTable).orderBy(employeesTable.id);
-  const hierarchies = await db.select().from(hierarchiesTable);
+router.get("/hr/employees", async (req, res): Promise<void> => {
+  const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+
+  const scopeParams: unknown[] = [];
+  let scopeCond = 'TRUE';
+  if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
+    const scope = await getUserDataScope(scopeEmp);
+    scopeCond = scopeBranchWhere(scope, scopeParams, 'e');
+  }
+
+  const [{ rows }, hierarchies] = await Promise.all([
+    pool.query(
+      `SELECT e.id, e.name, e.username, e.email, e.phone,
+              e.hierarchy_id AS "hierarchyId", e.branch_type AS "branchType", e.branch_id AS "branchId",
+              e.salary, e.join_date AS "joinDate", e.photo_url AS "photoUrl",
+              e.is_active AS "isActive", e.must_change_password AS "mustChangePassword"
+       FROM employees e WHERE ${scopeCond} ORDER BY e.id`,
+      scopeParams,
+    ),
+    db.select().from(hierarchiesTable),
+  ]);
+
   const hMap = new Map(hierarchies.map((h) => [h.id, h.name]));
-  const enriched = await Promise.all(rows.map(async (e) => ({
+  const enriched = await Promise.all((rows as any[]).map(async (e) => ({
     id: e.id, name: e.name, username: e.username, email: e.email ?? null, phone: e.phone ?? null,
     hierarchyId: e.hierarchyId, hierarchyName: hMap.get(e.hierarchyId) ?? "",
     branchType: e.branchType, branchId: e.branchId,
@@ -331,11 +351,30 @@ router.put("/hr/pay-components/:employeeId", requireModuleAction("Payroll", "edi
 
 router.get("/hr/payroll", async (req, res): Promise<void> => {
   const qp = ListPayrollQueryParams.safeParse(req.query);
+  const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+
+  // Resolve which employee IDs are in scope for non-HO users
+  let scopedEmpIds: Set<number> | null = null;
+  if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
+    const scope = await getUserDataScope(scopeEmp);
+    const scopeParams: unknown[] = [];
+    const scopeCond = scopeBranchWhere(scope, scopeParams, 'e');
+    const { rows: empRows } = await pool.query(
+      `SELECT id FROM employees e WHERE ${scopeCond}`,
+      scopeParams,
+    );
+    scopedEmpIds = new Set((empRows as any[]).map((r) => Number(r.id)));
+  }
+
   let rows = await db.select().from(payrollTable).orderBy(payrollTable.id);
   if (qp.success) {
     if (qp.data.year) rows = rows.filter((r) => r.year === Number(qp.data.year));
     if (qp.data.month) rows = rows.filter((r) => r.month === Number(qp.data.month));
   }
+  if (scopedEmpIds !== null) {
+    rows = rows.filter((r) => scopedEmpIds!.has(r.employeeId));
+  }
+
   const employees = await db.select().from(employeesTable);
   const eMap = new Map(employees.map((e) => [e.id, e]));
   const enriched = await Promise.all(rows.map(async (r) => {

@@ -7,6 +7,7 @@ import { logActivity } from "../lib/audit";
 import { createInvoiceShareToken } from "../lib/shareToken";
 import { pool } from "@workspace/db";
 import { consumeBatches, restoreBatches } from "../lib/batches";
+import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 
 const router = Router();
 
@@ -128,6 +129,12 @@ router.get("/sales", async (req, res): Promise<void> => {
     const p = params.length;
     conds.push(`((COALESCE(s.location_type, 'outlet') = 'warehouse' AND COALESCE(s.location_id, s.outlet_id) = $${p})
       OR (COALESCE(s.location_type, 'outlet') = 'outlet' AND COALESCE(s.location_id, s.outlet_id) IN (SELECT id FROM outlets WHERE warehouse_id = $${p})))`);
+  }
+  // ── Server-side data scope: enforce branch visibility ─────────────────────
+  const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
+    const scope = await getUserDataScope(scopeEmp);
+    conds.push(scopeSalesWhere(scope, params));
   }
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
   const baseFrom = `FROM sales s LEFT JOIN customers c ON c.id = s.customer_id`;

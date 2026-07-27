@@ -65,11 +65,10 @@ const LOGO_KEY = 'marlin_company_logo';
 const _standaloneNavItems = MODULE_REGISTRY
   .filter(m => m.navGroup === '__standalone__')
   .map(m => ({
-    name:         m.navEntries[0].name,
-    icon:         m.icon!,
-    href:         m.navEntries[0].href,
-    module:       m.key,
-    branchGroups: m.branchGroups,
+    name:   m.navEntries[0].name,
+    icon:   m.icon!,
+    href:   m.navEntries[0].href,
+    module: m.key,
   }));
 
 const navigation: SidebarNavItem[] = [
@@ -245,27 +244,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, userBranchType, userBranchId]);
 
-  // ── Redirect outlet employees to Sales segment ──────────────────────────────
-  useEffect(() => {
-    if (!user) return;
-    if (!isOutletEmployee) return;
-    // If they somehow landed on an Accounts segment page, push them to Sales
-    if (!location.startsWith('/sales') && location !== '/change-password' && location !== '/login') {
-      setLocation('/sales/pos');
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, isOutletEmployee, location]);
 
   // ── Permission-filtered navigation ─────────────────────────────────────────
   const filteredNavigation = navigation
     .filter(item => {
       if (isAdmin) return true; // Level 1 always sees everything
-
-      // branchGroups: if defined, the item is only shown for listed branch types
-      if ('branchGroups' in item && item.branchGroups) {
-        const allowed = (item.branchGroups as string[]).includes(userBranchType ?? 'headoffice');
-        if (!allowed) return false;
-      }
 
       // For leaf-level items, check canView directly
       if (item.href) {
@@ -310,12 +293,12 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   // ── Sales segment access ────────────────────────────────────────────────────
   // Same shared rule as every other nav check (canViewModule): a module with no
   // saved permission row defaults to viewable — no hardcoded level fallbacks.
-  const hasSalesAccess = isAdmin || isLocationEmployee || SALES_SEGMENT_MODULE_KEYS.some(mod =>
+  const hasSalesAccess = isAdmin || SALES_SEGMENT_MODULE_KEYS.some(mod =>
     checkCanView(mod, (user as any)?.hierarchyId, userLevel, allPerms as any[])
   );
 
-  // Outlet employees only see Sales segment — hide the Accounts switcher button
-  const showAccountsSegment = !isOutletEmployee;
+  // All employees may access the Accounts segment if they have permissions granted
+  const showAccountsSegment = true;
   // Location-locked employees cannot change their location
   const canChangeLocation = !isLocationEmployee;
 

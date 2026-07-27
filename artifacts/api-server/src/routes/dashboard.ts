@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db, pool, itemsTable, salesTable, stockEntriesTable, employeesTable, stockTransfersTable, attendanceTable, leavesTable, productionsTable, expensesTable } from "@workspace/db";
 import { count, sum, eq, sql, inArray } from "drizzle-orm";
+import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 
 const router = Router();
 
@@ -186,6 +187,11 @@ function salesWhere(query: Record<string, unknown>): { conds: string[]; params: 
 router.get("/dashboard/sales-trend", async (req, res): Promise<void> => {
   const f = salesWhere(req.query as Record<string, unknown>);
   if (f.error) { res.status(400).json({ error: f.error }); return; }
+  const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
+    const scope = await getUserDataScope(scopeEmp);
+    f.conds.push(scopeSalesWhere(scope, f.params));
+  }
   const { rows } = await pool.query(`
     SELECT
       s.sale_date::text                            AS date,
@@ -202,6 +208,11 @@ router.get("/dashboard/sales-trend", async (req, res): Promise<void> => {
 router.get("/dashboard/top-items", async (req, res): Promise<void> => {
   const f = salesWhere(req.query as Record<string, unknown>);
   if (f.error) { res.status(400).json({ error: f.error }); return; }
+  const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
+    const scope = await getUserDataScope(scopeEmp);
+    f.conds.push(scopeSalesWhere(scope, f.params));
+  }
   const { rows } = await pool.query(`
     SELECT
       (li->>'itemId')::int                                                        AS item_id,
@@ -225,6 +236,11 @@ router.get("/dashboard/top-items", async (req, res): Promise<void> => {
 router.get("/dashboard/sales-by-location", async (req, res): Promise<void> => {
   const f = salesWhere(req.query as Record<string, unknown>);
   if (f.error) { res.status(400).json({ error: f.error }); return; }
+  const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
+    const scope = await getUserDataScope(scopeEmp);
+    f.conds.push(scopeSalesWhere(scope, f.params));
+  }
   const { rows } = await pool.query(`
     SELECT COALESCE(s.location_type, 'outlet')  AS location_type,
            COALESCE(s.location_id, s.outlet_id) AS location_id,

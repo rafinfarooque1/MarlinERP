@@ -6,6 +6,7 @@ import { CreateStockTransferBody, ListStockQueryParams } from "@workspace/api-zo
 import { logActivity } from "../lib/audit";
 import { pool } from "@workspace/db";
 import { consumeBatches, restoreBatches, creditBatch, validateBatchOverride, type BatchBreakdownEntry } from "../lib/batches";
+import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
 
 const router = Router();
 
@@ -40,6 +41,12 @@ router.get("/stock", async (req, res): Promise<void> => {
   if (qp.success && qp.data.branchType) { params.push(qp.data.branchType); conds.push(`se.branch_type = $${params.length}`); }
   if (qp.success && qp.data.branchId)   { params.push(Number(qp.data.branchId)); conds.push(`se.branch_id = $${params.length}`); }
   if (q) { params.push(`%${q}%`); conds.push(`i.name ILIKE $${params.length}`); }
+  // ── Server-side data scope: enforce branch visibility ─────────────────────
+  const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
+    const scope = await getUserDataScope(scopeEmp);
+    conds.push(scopeBranchWhere(scope, params, 'se'));
+  }
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
   const baseFrom = `FROM stock_entries se LEFT JOIN items i ON i.id = se.item_id`;
 

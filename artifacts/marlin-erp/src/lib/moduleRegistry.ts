@@ -13,6 +13,14 @@
  *                     NOTE: changing a key invalidates existing DB permission rows
  *                     for that module; run a migration if needed.
  * To reorder sidebar: adjust the position within MODULE_REGISTRY.
+ *
+ * BRANCH SCOPING NOTE:
+ * `branchGroups` has been intentionally removed from this registry.
+ * Module visibility is now controlled ONLY by granted permissions (View = ON/OFF).
+ * Data scoping (which records a user can see) is enforced server-side via
+ * `getUserDataScope()` in the API server, based on the employee's branch_type
+ * and branch_id. Admins grant access via the Permissions page; branch type
+ * no longer vetoes any nav item.
  */
 
 import type { LucideIcon } from 'lucide-react';
@@ -33,7 +41,6 @@ import {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type BranchGroup = 'headoffice' | 'warehouse' | 'outlet';
 export type PermSegment = 'Sales' | 'Accounts';
 
 /**
@@ -84,32 +91,24 @@ export interface ModuleDef {
    * Grouped accounts items use their section icon (defined in NAV_GROUP_META).
    */
   icon?: LucideIcon;
-  /**
-   * Branch types that can see these nav entries.
-   * Omit  → visible to all branch types.
-   * ['headoffice'] → HQ (head-office) employees only.
-   */
-  branchGroups?: BranchGroup[];
 }
 
 // ── Sidebar section metadata ──────────────────────────────────────────────────
 
 export interface NavGroupMeta {
   icon: LucideIcon;
-  /** Omit for sections visible to all branch types */
-  branchGroups?: BranchGroup[];
 }
 
 /**
- * Metadata (icon + branch visibility) for each named accounts-segment sidebar
- * section. Order here controls the order sections appear in the sidebar.
+ * Metadata (icon) for each named accounts-segment sidebar section.
+ * Order here controls the order sections appear in the sidebar.
  */
 export const NAV_GROUP_META: Record<string, NavGroupMeta> = {
-  'Production': { icon: Factory,    branchGroups: ['headoffice'] },
-  'Inventory':  { icon: Building2,  branchGroups: ['headoffice', 'warehouse'] },
-  'Sales (HO)': { icon: Calculator, branchGroups: ['headoffice', 'warehouse'] },
-  'HR':         { icon: Users,      branchGroups: ['headoffice'] },
-  'Accounts':   { icon: UsersRound, branchGroups: ['headoffice'] },
+  'Production': { icon: Factory },
+  'Inventory':  { icon: Building2 },
+  'Sales (HO)': { icon: Calculator },
+  'HR':         { icon: Users },
+  'Accounts':   { icon: UsersRound },
   'Company':    { icon: Settings },
 };
 
@@ -177,30 +176,26 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     icon: Banknote,
   },
 
-  // ── Production (Head Office department — permission-gated, not branch-gated) ─
+  // ── Production (permission-gated; no branch restriction in sidebar) ─────────
   {
     key: 'Units', permSegment: 'Accounts', permGroup: 'Production',
     navGroup: 'Production',
     navEntries: [{ name: 'Units', href: '/production/units' }],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'Materials', permSegment: 'Accounts', permGroup: 'Production',
     navGroup: 'Production',
     navEntries: [{ name: 'Materials', href: '/production/materials' }],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'Raw Materials', permSegment: 'Accounts', permGroup: 'Production',
     navGroup: 'Production',
     navEntries: [{ name: 'Raw Materials', href: '/production/raw-materials' }],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'Items', permSegment: 'Accounts', permGroup: 'Production',
     navGroup: 'Production',
     navEntries: [{ name: 'Item Master', href: '/production/item-master' }],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'Production', permSegment: 'Accounts', permGroup: 'Production',
@@ -209,19 +204,16 @@ export const MODULE_REGISTRY: ModuleDef[] = [
       { name: 'Batches', href: '/production/production' },
       { name: 'Reports', href: '/production/reports' },
     ],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'Stock Transfers', permSegment: 'Accounts', permGroup: 'Production',
     navGroup: 'Production',
     navEntries: [{ name: 'Stock Transfers', href: '/production/stock-transfer' }],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'Purchases', permSegment: 'Accounts', permGroup: 'Production',
     navGroup: 'Production',
     navEntries: [{ name: 'Purchases', href: '/production/purchase' }],
-    branchGroups: ['headoffice'],
   },
 
   // ── Inventory ─────────────────────────────────────────────────────────────
@@ -229,43 +221,36 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     key: 'Stock', permSegment: 'Accounts', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [{ name: 'Stock', href: '/headoffice/stock' }],
-    branchGroups: ['headoffice', 'warehouse'],
   },
   {
     key: 'Inventory Reports', permSegment: 'Accounts', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [{ name: 'Reports', href: '/headoffice/inventory-reports' }],
-    branchGroups: ['headoffice', 'warehouse'],
   },
   {
     key: 'Stock Verification', permSegment: 'Accounts', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [{ name: 'Verification', href: '/headoffice/stock-verification' }],
-    branchGroups: ['headoffice', 'warehouse'],
   },
   {
     key: 'HO Transfers', permSegment: 'Accounts', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [{ name: 'Transfers', href: '/headoffice/transfers' }],
-    branchGroups: ['headoffice', 'warehouse'],
   },
   {
     key: 'Warehouses', permSegment: 'Accounts', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [{ name: 'Warehouses', href: '/headoffice/warehouses' }],
-    branchGroups: ['headoffice', 'warehouse'],
   },
   {
     key: 'Outlets', permSegment: 'Accounts', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [{ name: 'Outlets', href: '/headoffice/outlets' }],
-    branchGroups: ['headoffice', 'warehouse'],
   },
   {
     key: 'Item Prices', permSegment: 'Accounts', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [{ name: 'Item Prices', href: '/headoffice/item-price' }],
-    branchGroups: ['headoffice', 'warehouse'],
   },
 
   // ── Sales (HO) ────────────────────────────────────────────────────────────
@@ -277,57 +262,48 @@ export const MODULE_REGISTRY: ModuleDef[] = [
       { name: 'Returns',     href: '/returns' },
       { name: 'Outstanding', href: '/outstanding' },
     ],
-    branchGroups: ['headoffice', 'warehouse'],
   },
   {
     key: 'Customers', permSegment: 'Accounts', permGroup: 'Sales (HO)',
     navGroup: 'Sales (HO)',
     navEntries: [{ name: 'Customers', href: '/customers' }],
-    branchGroups: ['headoffice', 'warehouse'],
   },
   {
     key: 'Vendors', permSegment: 'Accounts', permGroup: 'Sales (HO)',
     navGroup: 'Sales (HO)',
     navEntries: [{ name: 'Vendors', href: '/vendors' }],
-    branchGroups: ['headoffice', 'warehouse'],
   },
   {
     key: 'Coupons', permSegment: 'Accounts', permGroup: 'Sales (HO)',
     navGroup: 'Sales (HO)',
     navEntries: [{ name: 'Coupons', href: '/coupons' }],
-    branchGroups: ['headoffice', 'warehouse'],
   },
 
-  // ── HR (Head Office only — permission-gated) ──────────────────────────────
+  // ── HR (permission-gated; admins can grant to any employee) ──────────────
   {
     key: 'Employees', permSegment: 'Accounts', permGroup: 'HR',
     navGroup: 'HR',
     navEntries: [{ name: 'Employees', href: '/hr/employees' }],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'Attendance', permSegment: 'Accounts', permGroup: 'HR',
     navGroup: 'HR',
     navEntries: [{ name: 'Attendance', href: '/hr/attendance' }],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'Leave', permSegment: 'Accounts', permGroup: 'HR',
     navGroup: 'HR',
     navEntries: [{ name: 'Leave', href: '/hr/leave' }],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'Payroll', permSegment: 'Accounts', permGroup: 'HR',
     navGroup: 'HR',
     navEntries: [{ name: 'Payroll', href: '/hr/payroll' }],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'Hierarchy', permSegment: 'Accounts', permGroup: 'HR',
     navGroup: 'HR',
     navEntries: [{ name: 'Hierarchy', href: '/hr/hierarchy' }],
-    branchGroups: ['headoffice'],
   },
 
   // ── Accounts ──────────────────────────────────────────────────────────────
@@ -335,13 +311,11 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     key: 'Chart of Accounts', permSegment: 'Accounts', permGroup: 'Accounts',
     navGroup: 'Accounts',
     navEntries: [{ name: 'Chart of Accounts', href: '/accounts/chart' }],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'Ledger', permSegment: 'Accounts', permGroup: 'Accounts',
     navGroup: 'Accounts',
     navEntries: [{ name: 'Ledger', href: '/accounts/ledger' }],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'Payments', permSegment: 'Accounts', permGroup: 'Accounts',
@@ -350,13 +324,11 @@ export const MODULE_REGISTRY: ModuleDef[] = [
       { name: 'Payments', href: '/accounts/payments' },
       { name: 'Receipts', href: '/accounts/receipts' },
     ],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'Cash & Bank', permSegment: 'Accounts', permGroup: 'Accounts',
     navGroup: 'Accounts',
     navEntries: [{ name: 'Cash & Bank', href: '/accounts/cash-bank' }],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'Vouchers', permSegment: 'Accounts', permGroup: 'Accounts',
@@ -366,7 +338,6 @@ export const MODULE_REGISTRY: ModuleDef[] = [
       { name: 'Contra',             href: '/accounts/contra' },
       { name: 'Credit/Debit Notes', href: '/accounts/notes' },
     ],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'Books', permSegment: 'Accounts', permGroup: 'Accounts',
@@ -377,37 +348,31 @@ export const MODULE_REGISTRY: ModuleDef[] = [
       { name: 'Bank Book',     href: '/accounts/bank-book' },
       { name: 'Trial Balance', href: '/accounts/trial-balance' },
     ],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'Expenses', permSegment: 'Accounts', permGroup: 'Accounts',
     navGroup: 'Accounts',
     navEntries: [{ name: 'Expenses', href: '/accounts/expenses' }],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'GST Summary', permSegment: 'Accounts', permGroup: 'Accounts',
     navGroup: 'Accounts',
     navEntries: [{ name: 'GST Summary', href: '/accounts/gst' }],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'GST Returns', permSegment: 'Accounts', permGroup: 'Accounts',
     navGroup: 'Accounts',
     navEntries: [{ name: 'GST Returns', href: '/accounts/gst-returns' }],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'Reconciliation', permSegment: 'Accounts', permGroup: 'Accounts',
     navGroup: 'Accounts',
     navEntries: [{ name: 'Reconciliation', href: '/accounts/reconciliation' }],
-    branchGroups: ['headoffice'],
   },
   {
     key: 'Reports', permSegment: 'Accounts', permGroup: 'Accounts',
     navGroup: 'Accounts',
     navEntries: [{ name: 'Reports', href: '/reports/sales', matchPrefix: '/reports' }],
-    branchGroups: ['headoffice'],
   },
 
   // ── Dashboard (standalone top-level in accounts sidebar) ─────────────────
@@ -416,7 +381,6 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navGroup: '__standalone__',
     navEntries: [{ name: 'Dashboard', href: '/' }],
     icon: LayoutDashboard,
-    branchGroups: ['headoffice', 'warehouse'],
   },
 
   // ── Company ───────────────────────────────────────────────────────────────
@@ -527,7 +491,6 @@ export interface AccountsNavChildDef {
 export interface SidebarNavItem {
   name: string;
   icon: LucideIcon;
-  branchGroups?: BranchGroup[];
   /** Present for standalone (leaf) nav items */
   href?: string;
   /** Permission key for standalone items */
@@ -563,10 +526,9 @@ export function getAccountsNavGroups(): AccountsNavGroupDef[] {
 
   return NAV_GROUP_ORDER
     .map(groupName => ({
-      name:         groupName,
-      icon:         NAV_GROUP_META[groupName].icon,
-      branchGroups: NAV_GROUP_META[groupName].branchGroups,
-      children:     groupMap.get(groupName) ?? [],
+      name:     groupName,
+      icon:     NAV_GROUP_META[groupName].icon,
+      children: groupMap.get(groupName) ?? [],
     }))
     .filter(g => g.children.length > 0);
 }
