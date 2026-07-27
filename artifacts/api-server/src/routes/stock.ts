@@ -252,7 +252,7 @@ router.get("/stock/ledger", requireModuleView(["Stock", "Inventory Reports"]), a
   res.json({ total, page, limit, rows });
 });
 
-router.get("/stock/transfers", requireModuleView(["Stock", "Stock Transfers", "HO Transfers", "Location Transfers"]), async (req, res): Promise<void> => {
+router.get("/stock/transfers", requireModuleView(["HO Transfers"]), async (req, res): Promise<void> => {
   // Optional ?from&to (YYYY-MM-DD, inclusive), ?status and ?limit filters so
   // heavy consumers (e.g. the Reports Center) don't pull the entire history.
   // Without params the full list is returned (existing pages unchanged).
@@ -323,7 +323,7 @@ router.get("/stock/transfers", requireModuleView(["Stock", "Stock Transfers", "H
   res.json(enriched);
 });
 
-router.post("/stock/transfers", requireModuleAction(["Stock Transfers", "HO Transfers", "Location Transfers"], "add"), async (req, res): Promise<void> => {
+router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), async (req, res): Promise<void> => {
   const parsed = CreateStockTransferBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
@@ -554,7 +554,7 @@ function allocateReceived(breakdown: BatchBreakdownEntry[], receivedQty: number)
 }
 
 // Approve a transfer — receiver verifies physical stock and enters actual received quantities
-router.patch("/stock/transfers/:id/approve", requireModuleAction(["Stock Transfers", "HO Transfers", "Location Transfers"], "edit"), async (req, res): Promise<void> => {
+router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"], "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { receivedLineItems, approvedBy } = req.body as { receivedLineItems?: Array<{ itemId: number; quantity: number; costPrice?: number }>; approvedBy?: string };
 
@@ -747,7 +747,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["Stock Transfe
 });
 
 // Reject a transfer — reverses the source deduction
-router.patch("/stock/transfers/:id/reject", requireModuleAction(["Stock Transfers", "HO Transfers", "Location Transfers"], "edit"), async (req, res): Promise<void> => {
+router.patch("/stock/transfers/:id/reject", requireModuleAction(["HO Transfers"], "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { rejectionReason } = req.body as { rejectionReason?: string };
 

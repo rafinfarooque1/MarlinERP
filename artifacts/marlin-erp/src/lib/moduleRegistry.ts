@@ -153,12 +153,7 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navEntries: [{ name: 'Stock', href: '/sales/stock' }],
     icon: Package,
   },
-  {
-    key: 'Location Transfers', permSegment: 'Sales', permGroup: 'Sales Department',
-    navGroup: '__sales__',
-    navEntries: [{ name: 'Transfers', href: '/transfers' }],
-    icon: ArrowLeftRight,
-  },
+
   {
     key: 'Location Expenses', permSegment: 'Sales', permGroup: 'Sales Department',
     navGroup: '__sales__',
@@ -201,11 +196,7 @@ export const MODULE_REGISTRY: ModuleDef[] = [
       { name: 'Reports', href: '/production/reports' },
     ],
   },
-  {
-    key: 'Stock Transfers', permSegment: 'Accounts', permGroup: 'Production',
-    navGroup: 'Production',
-    navEntries: [{ name: 'Transfers', href: '/transfers' }],
-  },
+
   {
     key: 'Purchases', permSegment: 'Accounts', permGroup: 'Production',
     navGroup: 'Production',

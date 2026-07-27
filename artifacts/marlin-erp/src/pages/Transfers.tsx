@@ -345,14 +345,12 @@ function ApproveDialog({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function Transfers() {
-  // Permissions — any of the three modules grants access
-  const permST = usePermission('Stock Transfers');
-  const permHO = usePermission('HO Transfers');
-  const permLT = usePermission('Location Transfers');
-  const permLoading = permST.isLoading || permHO.isLoading || permLT.isLoading;
-  const canView = permST.canView || permHO.canView || permLT.canView;
-  const canAdd  = permST.canAdd  || permHO.canAdd  || permLT.canAdd;
-  const canDownload = permST.canDownload || permHO.canDownload || permLT.canDownload;
+  // Single permission module controls all transfer access
+  const perm = usePermission('HO Transfers');
+  const permLoading = perm.isLoading;
+  const canView     = perm.canView;
+  const canAdd      = perm.canAdd;
+  const canDownload = perm.canDownload;
 
   // User identity
   const { data: user } = useGetMe();
