@@ -51,6 +51,8 @@ const SETTING_GROUPS: SettingGroup[] = [
       { key: 'pfEnabled', label: 'Enable PF Deduction', type: 'toggle', defaultValue: true },
       { key: 'esicEnabled', label: 'Enable ESIC Deduction', type: 'toggle', defaultValue: false },
       { key: 'pfRate', label: 'PF Rate (%)', type: 'number', defaultValue: 12 },
+      { key: 'fullDayHours', label: 'Full-Day Work Hours', type: 'number', defaultValue: 9 },
+      { key: 'halfDayHours', label: 'Half-Day Work Hours', type: 'number', defaultValue: 4.5 },
     ],
   },
   {

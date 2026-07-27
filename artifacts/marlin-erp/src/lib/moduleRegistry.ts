@@ -97,7 +97,7 @@ export const NAV_GROUP_META: Record<string, NavGroupMeta> = {
   'Operations': { icon: Store },
   'Production': { icon: Factory },
   'Inventory':  { icon: Building2 },
-  'Sales (HO)': { icon: Calculator },
+  'Sales': { icon: Calculator },
   'HR':         { icon: Users },
   'Accounts':   { icon: UsersRound },
   'Company':    { icon: Settings },
@@ -105,14 +105,14 @@ export const NAV_GROUP_META: Record<string, NavGroupMeta> = {
 
 /** Sidebar section display order */
 export const NAV_GROUP_ORDER = [
-  'Operations', 'Production', 'Inventory', 'Sales (HO)', 'HR', 'Accounts', 'Company',
+  'Operations', 'Production', 'Inventory', 'Sales', 'HR', 'Accounts', 'Company',
 ] as const;
 
 // ── Permissions page metadata ─────────────────────────────────────────────────
 
 /** Display order of groups on the Permissions page */
 export const PERM_GROUP_ORDER: string[] = [
-  'Operations', 'Production', 'Inventory', 'Sales (HO)', 'HR', 'Accounts', 'Dashboard', 'Company',
+  'Operations', 'Production', 'Inventory', 'Sales', 'HR', 'Accounts', 'Dashboard', 'Company',
 ];
 
 // ── Module registry ───────────────────────────────────────────────────────────
@@ -145,7 +145,6 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navGroup: 'Operations',
     navEntries: [
       { name: 'Transfers', href: '/transfers' },               // Operations sidebar
-      { name: 'Transfers', href: '/transfers', navGroup: 'Inventory' }, // Inventory sidebar
     ],
     icon: ArrowLeftRight,
   },
@@ -156,8 +155,6 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     icon: Receipt,
   },
   {
-    // Appears in Operations (branch cash) AND Accounts (HO aggregate view) —
-    // same pattern as HO Transfers. One "Cash Balance" entry per section.
     key: 'Cash Balance', permGroup: 'Operations',
     navGroup: 'Operations',
     navEntries: [
@@ -170,12 +167,12 @@ export const MODULE_REGISTRY: ModuleDef[] = [
   // ── Production ─────────────────────────────────────────────────────────────
   {
     key: 'Units', permGroup: 'Production',
-    navGroup: 'Production',
+    navGroup: 'Item Master',
     navEntries: [{ name: 'Units', href: '/production/units' }],
   },
   {
     key: 'Items', permGroup: 'Production',
-    navGroup: 'Production',
+    navGroup: 'Item Master',
     navEntries: [{ name: 'Item Master', href: '/production/item-master' }],
   },
   {
@@ -199,8 +196,7 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     key: 'Stock', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [
-      { name: 'Stock', href: '/sales/stock',      navGroup: 'Operations' },
-      { name: 'Stock', href: '/headoffice/stock' },
+      { name: 'Stock', href: '/headoffice/stock', navGroup: 'Operations' },
     ],
     icon: Package,
   },
@@ -235,29 +231,28 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navEntries: [{ name: 'Item Prices', href: '/headoffice/item-price' }],
   },
 
-  // ── Sales (HO) ────────────────────────────────────────────────────────────
+  // ── Sales ─────────────────────────────────────────────────────────────────
   {
-    key: 'Sales', permGroup: 'Sales (HO)',
-    navGroup: 'Sales (HO)',
+    key: 'Sales', permGroup: 'Sales',
+    navGroup: 'Sales',
     navEntries: [
-      { name: 'Orders',      href: '/headoffice/sales' },
       { name: 'Returns',     href: '/returns' },
       { name: 'Outstanding', href: '/outstanding' },
     ],
   },
   {
-    key: 'Customers', permGroup: 'Sales (HO)',
-    navGroup: 'Sales (HO)',
+    key: 'Customers', permGroup: 'Sales',
+    navGroup: 'Operations',
     navEntries: [{ name: 'Customers', href: '/customers' }],
   },
   {
-    key: 'Vendors', permGroup: 'Sales (HO)',
-    navGroup: 'Sales (HO)',
+    key: 'Vendors', permGroup: 'Production',
+    navGroup: 'Production',
     navEntries: [{ name: 'Vendors', href: '/vendors' }],
   },
   {
-    key: 'Coupons', permGroup: 'Sales (HO)',
-    navGroup: 'Sales (HO)',
+    key: 'Coupons', permGroup: 'Sales',
+    navGroup: 'Sales',
     navEntries: [{ name: 'Coupons', href: '/coupons' }],
   },
 
@@ -275,7 +270,7 @@ export const MODULE_REGISTRY: ModuleDef[] = [
   {
     key: 'Leave', permGroup: 'HR',
     navGroup: 'HR',
-    navEntries: [{ name: 'Leave', href: '/hr/leave' }],
+    navEntries: [],  // Leave management is accessed from Attendance page
   },
   {
     key: 'Payroll', permGroup: 'HR',
@@ -302,10 +297,7 @@ export const MODULE_REGISTRY: ModuleDef[] = [
   {
     key: 'Payments', permGroup: 'Accounts',
     navGroup: 'Accounts',
-    navEntries: [
-      { name: 'Payments', href: '/accounts/payments' },
-      { name: 'Receipts', href: '/accounts/receipts' },
-    ],
+    navEntries: [],
   },
   {
     key: 'Cash & Bank', permGroup: 'Accounts',
@@ -316,6 +308,8 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     key: 'Vouchers', permGroup: 'Accounts',
     navGroup: 'Accounts',
     navEntries: [
+      { name: 'Payments',           href: '/accounts/payments' },
+      { name: 'Receipts',           href: '/accounts/receipts' },
       { name: 'Journal',            href: '/accounts/journal' },
       { name: 'Contra',             href: '/accounts/contra' },
       { name: 'Credit/Debit Notes', href: '/accounts/notes' },

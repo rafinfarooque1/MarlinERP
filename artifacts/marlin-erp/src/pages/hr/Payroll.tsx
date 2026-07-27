@@ -1,380 +1,687 @@
 import { useState, useMemo } from 'react';
 import {
   useListEnrichedPayroll, useGeneratePayroll, getEnrichedPayrollQueryKey,
-  getListPayrollQueryKey, useMarkPayrollPaid, useGetCompanySettings,
-  useListEmployees, useListWarehouses, useListOutlets,
+  useEditPayroll, useApprovePayroll, usePayPayroll,
+  useListAdvances, useAddAdvance,
+  useGetCompanySettings, useListEmployees, useListWarehouses, useListOutlets,
+  EnrichedPayrollRecord,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
-import { Search, DollarSign, Download, Eye, CheckCircle, Zap, RefreshCw, FileDown, ShieldOff } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import {
+  DollarSign, Download, Eye, CheckCircle, Zap, RefreshCw, FileDown,
+  ShieldOff, Pencil, PlusCircle, ChevronDown, ChevronUp, Wallet,
+} from 'lucide-react';
 import { downloadPayslipPDF } from '@/lib/pdfUtils';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
-import { Badge } from '@/components/ui/badge';
-import { Separator } from '@/components/ui/separator';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { usePermission } from '@/lib/usePermission';
+import { useGetMe } from '@workspace/api-client-react';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
+function statusBadge(status: string, paidAmt: number, netPay: number) {
+  if (status === 'paid') return <Badge className="bg-emerald-500 text-white">Paid</Badge>;
+  if (status === 'approved' && paidAmt > 0 && paidAmt < netPay - 0.005)
+    return <Badge className="bg-yellow-500 text-white">Partial</Badge>;
+  if (status === 'approved') return <Badge className="bg-blue-500 text-white">Approved</Badge>;
+  return <Badge variant="outline">Draft</Badge>;
+}
+
+function fmt(n: number) {
+  return `₹${Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+// ── Edit Extra Amount dialog ───────────────────────────────────────────────
+function EditDialog({ item, onClose }: { item: EnrichedPayrollRecord; onClose: () => void }) {
+  const [amount, setAmount] = useState(String(item.extraAmount ?? 0));
+  const [note, setNote]     = useState(item.extraNote ?? '');
+  const qc = useQueryClient();
+  const now = new Date();
+  const mutation = useEditPayroll();
+
+  const save = () => {
+    mutation.mutate({ id: item.id, extraAmount: Number(amount), extraNote: note }, {
+      onSuccess: () => {
+        toast.success('Payroll updated');
+        qc.invalidateQueries({ queryKey: getEnrichedPayrollQueryKey({ year: item.year, month: item.month }) });
+        onClose();
+      },
+      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+    });
+  };
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Edit Payroll — {item.employeeName}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-1">
+            <Label>Additional Amount (₹)</Label>
+            <Input type="number" min={0} value={amount} onChange={e => setAmount(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label>Note</Label>
+            <Textarea value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Performance bonus, Arrears…" rows={2} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={save} disabled={mutation.isPending}>Save</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Pay dialog ─────────────────────────────────────────────────────────────
+function PayDialog({ item, onClose }: { item: EnrichedPayrollRecord; onClose: () => void }) {
+  const totalNet  = (item.netPay ?? 0) + (item.extraAmount ?? 0);
+  const remaining = Math.max(0, totalNet - (item.paidAmount ?? 0));
+  const [amount, setAmount] = useState(String(remaining.toFixed(2)));
+  const [mode, setMode]     = useState<string>('cash');
+  const qc = useQueryClient();
+  const mutation = usePayPayroll();
+
+  const pay = () => {
+    mutation.mutate({ id: item.id, amount: Number(amount), paymentMode: mode }, {
+      onSuccess: (res) => {
+        toast.success(res.status === 'paid' ? 'Salary paid' : 'Partial payment recorded');
+        qc.invalidateQueries({ queryKey: getEnrichedPayrollQueryKey({ year: item.year, month: item.month }) });
+        onClose();
+      },
+      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+    });
+  };
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Pay Salary — {item.employeeName}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-2 text-sm">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Net Pay</span>
+            <span className="font-medium">{fmt(totalNet)}</span>
+          </div>
+          {(item.paidAmount ?? 0) > 0 && (
+            <div className="flex justify-between text-emerald-600">
+              <span>Already Paid</span>
+              <span>{fmt(item.paidAmount ?? 0)}</span>
+            </div>
+          )}
+          <div className="flex justify-between font-semibold">
+            <span>Remaining</span>
+            <span>{fmt(remaining)}</span>
+          </div>
+          <Separator />
+          <div className="space-y-1">
+            <Label>Amount to Pay (₹)</Label>
+            <Input type="number" min={0} max={remaining} value={amount} onChange={e => setAmount(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label>Payment Mode</Label>
+            <Select value={mode} onValueChange={setMode}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="cash">Cash</SelectItem>
+                <SelectItem value="bank">Bank Transfer</SelectItem>
+                <SelectItem value="upi">UPI</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={pay} disabled={mutation.isPending || Number(amount) <= 0}>Pay</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Payslip detail sheet ───────────────────────────────────────────────────
+function PayslipSheet({
+  item, onClose, isAdmin, onApprove, onPay, onEdit,
+}: {
+  item: EnrichedPayrollRecord;
+  onClose: () => void;
+  isAdmin: boolean;
+  onApprove: () => void;
+  onPay: () => void;
+  onEdit: () => void;
+}) {
+  const totalNet = (item.netPay ?? 0) + (item.extraAmount ?? 0);
+  const cs = useGetCompanySettings();
+  const handleDownload = () => {
+    downloadPayslipPDF(item as any, cs.data as any);
+    toast.success('PDF downloaded');
+  };
+
+  return (
+    <Sheet open onOpenChange={onClose}>
+      <SheetContent className="sm:max-w-xl overflow-y-auto">
+        <SheetHeader>
+          <SheetTitle className="flex items-center gap-2">
+            <Avatar className="h-8 w-8"><AvatarFallback>{(item.employeeName || '?').charAt(0)}</AvatarFallback></Avatar>
+            {item.employeeName}
+            <span className="ml-1">{statusBadge(item.status, item.paidAmount ?? 0, totalNet)}</span>
+          </SheetTitle>
+          <SheetDescription>{MONTHS[(item.month ?? 1) - 1]} {item.year} — {item.branchName || '—'}</SheetDescription>
+        </SheetHeader>
+
+        {/* Action buttons (admin) */}
+        {isAdmin && (
+          <div className="flex gap-2 flex-wrap mt-4">
+            {item.status === 'draft' && (
+              <>
+                <Button size="sm" variant="outline" onClick={onEdit}><Pencil className="h-3 w-3 mr-1" />Edit</Button>
+                <Button size="sm" onClick={onApprove}><CheckCircle className="h-3 w-3 mr-1" />Approve</Button>
+              </>
+            )}
+            {item.status === 'approved' && (
+              <>
+                <Button size="sm" variant="outline" onClick={onEdit}><Pencil className="h-3 w-3 mr-1" />Edit</Button>
+                <Button size="sm" onClick={onPay}><DollarSign className="h-3 w-3 mr-1" />Pay Salary</Button>
+              </>
+            )}
+            {item.status === 'approved' && (item.paidAmount ?? 0) > 0 && (item.paidAmount ?? 0) < totalNet - 0.005 && (
+              <Button size="sm" onClick={onPay}><Wallet className="h-3 w-3 mr-1" />Pay Remaining</Button>
+            )}
+            <Button size="sm" variant="outline" onClick={handleDownload}><FileDown className="h-3 w-3 mr-1" />PDF</Button>
+          </div>
+        )}
+        {!isAdmin && (
+          <Button size="sm" variant="outline" className="mt-4" onClick={handleDownload}><FileDown className="h-3 w-3 mr-1" />Download Payslip</Button>
+        )}
+
+        <Separator className="my-4" />
+
+        {/* Attendance */}
+        <div className="grid grid-cols-3 gap-3 text-sm mb-4">
+          <div className="rounded-lg bg-muted/50 p-3 text-center">
+            <p className="text-xs text-muted-foreground">Working Days</p>
+            <p className="font-semibold text-base">{item.workingDays}</p>
+          </div>
+          <div className="rounded-lg bg-muted/50 p-3 text-center">
+            <p className="text-xs text-muted-foreground">Present</p>
+            <p className="font-semibold text-base">{Number(item.presentDays ?? 0).toFixed(1)}</p>
+          </div>
+          <div className="rounded-lg bg-muted/50 p-3 text-center">
+            <p className="text-xs text-muted-foreground">LOP Days</p>
+            <p className="font-semibold text-base text-red-600">{Number(item.lopDays ?? 0).toFixed(1)}</p>
+          </div>
+        </div>
+
+        {/* Earnings */}
+        <div className="space-y-1 mb-4">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Earnings</p>
+          <div className="rounded-lg border divide-y text-sm">
+            <div className="flex justify-between px-3 py-2"><span>Basic Salary</span><span>{fmt(item.baseSalary)}</span></div>
+            {(item.lopDeduction ?? 0) > 0 && (
+              <div className="flex justify-between px-3 py-2 text-red-600">
+                <span>LOP Deduction ({Number(item.lopDays).toFixed(1)} days)</span>
+                <span>−{fmt(item.lopDeduction)}</span>
+              </div>
+            )}
+            {(item.allowancesBreakdown ?? []).map((a: any) => (
+              <div key={a.name} className="flex justify-between px-3 py-2"><span>{a.name}</span><span>{fmt(a.amount)}</span></div>
+            ))}
+            {(item.extraAmount ?? 0) > 0 && (
+              <div className="flex justify-between px-3 py-2 text-emerald-700">
+                <span>{item.extraNote || 'Additional Amount'}</span>
+                <span>{fmt(item.extraAmount)}</span>
+              </div>
+            )}
+            <div className="flex justify-between px-3 py-2 font-semibold bg-muted/30">
+              <span>Gross Pay</span><span>{fmt((item.grossPay ?? 0) + (item.extraAmount ?? 0))}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Deductions */}
+        {((item.deductionsBreakdown ?? []).length > 0 || (item.advanceDeduction ?? 0) > 0) && (
+          <div className="space-y-1 mb-4">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Deductions</p>
+            <div className="rounded-lg border divide-y text-sm">
+              {(item.deductionsBreakdown ?? []).map((d: any) => (
+                <div key={d.name} className="flex justify-between px-3 py-2"><span>{d.name}</span><span>{fmt(d.amount)}</span></div>
+              ))}
+              {(item.advanceDeduction ?? 0) > 0 && (
+                <div className="flex justify-between px-3 py-2 text-amber-700">
+                  <span>Advance Recovery</span><span>{fmt(item.advanceDeduction)}</span>
+                </div>
+              )}
+              <div className="flex justify-between px-3 py-2 font-semibold bg-muted/30">
+                <span>Total Deductions</span><span>{fmt((item.deductions ?? 0) + (item.advanceDeduction ?? 0))}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Net Pay */}
+        <div className="rounded-lg bg-teal-600 text-white px-4 py-3 flex justify-between items-center">
+          <span className="font-semibold">Net Pay</span>
+          <span className="text-xl font-bold">{fmt(totalNet)}</span>
+        </div>
+        {(item.paidAmount ?? 0) > 0 && (
+          <div className="text-xs text-muted-foreground mt-1 flex justify-between px-1">
+            <span>Paid: {fmt(item.paidAmount ?? 0)} via {item.paymentMode ?? '—'}</span>
+            {(item.paidAmount ?? 0) < totalNet - 0.005 && <span className="text-amber-600">Balance: {fmt(totalNet - (item.paidAmount ?? 0))}</span>}
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+// ── New Advance dialog (with employee picker) ─────────────────────────────
+function NewAdvanceDialog({ employees, onClose }: { employees: any[]; onClose: () => void }) {
+  const [empId, setEmpId]   = useState(employees[0]?.id ? String(employees[0].id) : '');
+  const [amount, setAmount] = useState('');
+  const [note, setNote]     = useState('');
+  const [date, setDate]     = useState(new Date().toISOString().split('T')[0]);
+  const qc = useQueryClient();
+  const mutation = useAddAdvance();
+
+  const save = () => {
+    if (!empId) { toast.error('Select an employee'); return; }
+    if (!amount || Number(amount) <= 0) { toast.error('Enter a valid amount'); return; }
+    mutation.mutate({ employeeId: Number(empId), amount: Number(amount), date, note: note || undefined }, {
+      onSuccess: () => {
+        toast.success('Advance recorded');
+        qc.invalidateQueries({ queryKey: ['/api/hr/advances'] });
+        onClose();
+      },
+      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+    });
+  };
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Record Employee Advance</DialogTitle></DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-1">
+            <Label>Employee</Label>
+            <Select value={empId} onValueChange={setEmpId}>
+              <SelectTrigger><SelectValue placeholder="Select employee" /></SelectTrigger>
+              <SelectContent>
+                {employees.map((e: any) => <SelectItem key={e.id} value={String(e.id)}>{e.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label>Amount (₹)</Label>
+            <Input type="number" min={0} value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" />
+          </div>
+          <div className="space-y-1">
+            <Label>Date</Label>
+            <Input type="date" value={date} onChange={e => setDate(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label>Note</Label>
+            <Textarea value={note} onChange={e => setNote(e.target.value)} placeholder="Reason for advance…" rows={2} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={save} disabled={mutation.isPending}>Record</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Advances section ───────────────────────────────────────────────────────
+function AdvancesSection({ isAdmin, employees }: { isAdmin: boolean; employees: any[] }) {
+  const { data: advances = [] } = useListAdvances();
+  const [advOpen, setAdvOpen] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+
+  const shown = showAll ? advances as any[] : (advances as any[]).slice(0, 5);
+
+  return (
+    <div className="mt-8">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h2 className="font-semibold text-sm">Employee Advances</h2>
+          <p className="text-xs text-muted-foreground">Cash advances disbursed; auto-deducted during payroll generation</p>
+        </div>
+        {isAdmin && (
+          <Button size="sm" variant="outline" onClick={() => setAdvOpen(true)}>
+            <PlusCircle className="h-4 w-4 mr-1" />New Advance
+          </Button>
+        )}
+      </div>
+
+      {(advances as any[]).length === 0 ? (
+        <p className="text-sm text-muted-foreground py-4 text-center">No advances recorded</p>
+      ) : (
+        <>
+          <div className="rounded-lg border overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Employee</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Amount</TableHead>
+                  <TableHead>Note</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {shown.map((a: any) => (
+                  <TableRow key={a.id}>
+                    <TableCell className="font-medium">{a.employeeName}</TableCell>
+                    <TableCell className="text-muted-foreground">{a.date?.split?.('T')[0] ?? a.date}</TableCell>
+                    <TableCell>{fmt(a.amount)}</TableCell>
+                    <TableCell className="text-muted-foreground">{a.note ?? '—'}</TableCell>
+                    <TableCell>
+                      {a.isDeducted
+                        ? <Badge className="bg-emerald-500 text-white text-xs">Deducted</Badge>
+                        : <Badge variant="outline" className="text-xs">Pending</Badge>}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          {(advances as any[]).length > 5 && (
+            <Button variant="ghost" size="sm" className="mt-1" onClick={() => setShowAll(s => !s)}>
+              {showAll ? <><ChevronUp className="h-3 w-3 mr-1" />Show less</> : <><ChevronDown className="h-3 w-3 mr-1" />Show all ({(advances as any[]).length})</>}
+            </Button>
+          )}
+        </>
+      )}
+
+      {advOpen && <NewAdvanceDialog employees={employees} onClose={() => setAdvOpen(false)} />}
+    </div>
+  );
+}
+
+// ── Main Payroll page ──────────────────────────────────────────────────────
 export default function Payroll() {
   const perm = usePermission('Payroll');
+  const { data: me } = useGetMe();
+  const isAdmin = (me as any)?.branchType === 'headoffice';
+
   const now = new Date();
-  const [year, setYear] = useState(String(now.getFullYear()));
+  const [year, setYear]   = useState(String(now.getFullYear()));
   const [month, setMonth] = useState(String(now.getMonth() + 1));
-  const [search, setSearch] = useState('');
-  const [viewItem, setViewItem] = useState<any>(null);
+  const [search, setSearch]   = useState('');
+  const [viewItem, setViewItem] = useState<EnrichedPayrollRecord | null>(null);
+  const [editItem, setEditItem] = useState<EnrichedPayrollRecord | null>(null);
+  const [payItem, setPayItem]   = useState<EnrichedPayrollRecord | null>(null);
   const [generating, setGenerating] = useState(false);
   const [branchTypeFilter, setBranchTypeFilter] = useState<string>('all');
-  const [branchLocId, setBranchLocId] = useState<string>('all');
 
   const { data: payroll = [], isLoading } = useListEnrichedPayroll({ year: Number(year), month: Number(month) });
-  const { data: companySettings } = useGetCompanySettings();
   const { data: employees = [] } = useListEmployees();
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
-  const queryClient = useQueryClient();
-  const markPaidMutation = useMarkPayrollPaid();
+  const qc = useQueryClient();
   const generateMutation = useGeneratePayroll();
+  const approveMutation  = useApprovePayroll();
 
-  const empBranchMap = useMemo(() => {
-    const m = new Map<number, { branchType: string; branchId: number }>();
-    for (const e of employees as any[]) m.set(e.id, { branchType: e.branchType, branchId: e.branchId });
-    return m;
-  }, [employees]);
+  const handleGenerate = (forceRegenerate = false) => {
+    setGenerating(true);
+    generateMutation.mutate({ month: Number(month), year: Number(year), forceRegenerate }, {
+      onSuccess: (data) => {
+        toast.success(`Generated payroll for ${data.length} employee(s)`);
+        qc.invalidateQueries({ queryKey: getEnrichedPayrollQueryKey({ year: Number(year), month: Number(month) }) });
+        setGenerating(false);
+      },
+      onError: (e: any) => { toast.error(e?.message || 'Failed to generate payroll'); setGenerating(false); },
+    });
+  };
 
-  const handleMarkPaid = (id: number, name: string) => {
-    if (!confirm(`Mark payroll as paid for ${name}?`)) return;
-    markPaidMutation.mutate({ id }, {
+  const handleApprove = (item: EnrichedPayrollRecord) => {
+    approveMutation.mutate({ id: item.id }, {
       onSuccess: () => {
-        toast.success('Marked as paid');
-        queryClient.invalidateQueries({ queryKey: getEnrichedPayrollQueryKey({ year: Number(year), month: Number(month) }) });
-        queryClient.invalidateQueries({ queryKey: getListPayrollQueryKey() });
+        toast.success(`Approved payroll for ${item.employeeName}`);
+        qc.invalidateQueries({ queryKey: getEnrichedPayrollQueryKey({ year: Number(year), month: Number(month) }) });
         setViewItem(null);
       },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
   };
 
-  const handleGenerate = (forceRegenerate = false) => {
-    setGenerating(true);
-    generateMutation.mutate(
-      { month: Number(month), year: Number(year), forceRegenerate },
-      {
-        onSuccess: (data) => {
-          toast.success(`Generated payroll for ${data.length} employee(s)`);
-          queryClient.invalidateQueries({ queryKey: getEnrichedPayrollQueryKey({ year: Number(year), month: Number(month) }) });
-          queryClient.invalidateQueries({ queryKey: getListPayrollQueryKey() });
-          setGenerating(false);
-        },
-        onError: (e: any) => { toast.error(e?.message || 'Failed to generate payroll'); setGenerating(false); },
+  // Build branch list for filter
+  const branchOptions = useMemo(() => {
+    const wOpts = (warehouses as any[]).map((w: any) => ({ label: w.name, value: `warehouse-${w.id}` }));
+    const oOpts = (outlets as any[]).map((o: any) => ({ label: o.name, value: `outlet-${o.id}` }));
+    return [{ label: 'Headoffice', value: 'headoffice' }, ...wOpts, ...oOpts];
+  }, [warehouses, outlets]);
+
+  const filtered = useMemo(() => {
+    let list = payroll as EnrichedPayrollRecord[];
+    if (search) list = list.filter(p => p.employeeName?.toLowerCase().includes(search.toLowerCase()));
+    if (branchTypeFilter !== 'all') {
+      if (branchTypeFilter === 'headoffice') list = list.filter(p => p.branchName === 'Headoffice' || !p.branchName);
+      else {
+        const [bt, bid] = branchTypeFilter.split('-');
+        list = list.filter(p => {
+          const emp = (employees as any[]).find((e: any) => e.id === p.employeeId);
+          return emp?.branchType === bt && String(emp?.branchId) === bid;
+        });
       }
-    );
-  };
+    }
+    return list;
+  }, [payroll, search, branchTypeFilter, employees]);
 
-  const filtered = (payroll as any[]).filter(p => {
-    const matchSearch = p.employeeName?.toLowerCase().includes(search.toLowerCase());
-    const branch = empBranchMap.get(p.employeeId);
-    const matchBranchType = branchTypeFilter === 'all' || branch?.branchType === branchTypeFilter;
-    const matchBranchLoc = branchLocId === 'all' || String(branch?.branchId) === branchLocId;
-    return matchSearch && matchBranchType && matchBranchLoc;
-  });
-  const totalPaid = filtered.filter((p: any) => p.isPaid).reduce((s: number, p: any) => s + Number(p.netPay || 0), 0);
-  const totalPending = filtered.filter((p: any) => !p.isPaid).reduce((s: number, p: any) => s + Number(p.netPay || 0), 0);
-  const years = Array.from({ length: 5 }, (_, i) => String(now.getFullYear() - i));
-  const monthLabel = `${MONTHS[Number(month)-1]} ${year}`;
+  const totals = useMemo(() => filtered.reduce((acc, p) => ({
+    net: acc.net + (p.netPay ?? 0) + (p.extraAmount ?? 0),
+    paid: acc.paid + (p.paidAmount ?? 0),
+    count: acc.count + 1,
+  }), { net: 0, paid: 0, count: 0 }), [filtered]);
 
-  if (!perm.isLoading && !perm.canView) {
+  if (!perm.canView) {
     return (
       <AppLayout>
-        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center">
-          <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
-            <ShieldOff className="w-8 h-8 text-destructive" />
-          </div>
-          <div>
-            <h2 className="text-xl font-bold">Access Denied</h2>
-            <p className="text-muted-foreground mt-1 text-sm">
-              You don't have permission to view this page.<br />
-              Contact your administrator to request access.
-            </p>
-          </div>
+        <div className="flex flex-col items-center justify-center h-64 text-muted-foreground gap-2">
+          <ShieldOff className="h-10 w-10" /><p>You don't have permission to view payroll.</p>
         </div>
       </AppLayout>
     );
   }
 
+  const handleExport = () => {
+    const rows = filtered.map(p => ({
+      Employee: p.employeeName, Branch: p.branchName, Month: MONTHS[(p.month ?? 1) - 1],
+      Year: p.year, 'Working Days': p.workingDays, 'Present Days': p.presentDays,
+      'LOP Days': p.lopDays, 'Basic Salary': p.baseSalary, 'Gross Pay': p.grossPay,
+      Allowances: p.allowancesTotal, Deductions: p.deductions,
+      'Advance Deduction': p.advanceDeduction ?? 0,
+      'Extra Amount': p.extraAmount ?? 0,
+      'Net Pay': (p.netPay ?? 0) + (p.extraAmount ?? 0),
+      Status: p.status, 'Paid Amount': p.paidAmount ?? 0, 'Payment Mode': p.paymentMode ?? '',
+    }));
+    downloadCSV(`payroll-${year}-${month}.csv`, rows);
+    toast.success('Exported');
+  };
+
   return (
     <AppLayout>
-      <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><DollarSign className="w-6 h-6 text-primary" /> Payroll</h1>
-            <p className="text-muted-foreground mt-1">Monthly salary computation with allowances, deductions & LOP</p>
-          </div>
-          <div className="flex gap-2 flex-wrap justify-end">
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('payroll.csv', filtered.map(p => ({
-              Employee: p.employeeName, Month: monthLabel,
-              'Basic Salary': p.baseSalary, 'LOP Days': p.lopDays, 'LOP Deduction': p.lopDeduction,
-              'Gross Pay': p.grossPay, Allowances: p.allowancesTotal, Deductions: p.deductions,
-              'Net Pay': p.netPay, Paid: p.isPaid ? 'Yes' : 'No',
-            })))}>
-              <Download className="w-4 h-4 mr-2" /> Export
-            </Button>
-            {payroll.length > 0 && (
-              <Button variant="outline" size="sm" onClick={() => handleGenerate(true)} disabled={generating}>
-                <RefreshCw className={`w-4 h-4 mr-2 ${generating ? 'animate-spin' : ''}`} /> Recalculate
-              </Button>
-            )}
-            <Button size="sm" onClick={() => handleGenerate(false)} disabled={generating}>
-              <Zap className="w-4 h-4 mr-2" /> {payroll.length === 0 ? 'Generate Payroll' : 'Run for New Employees'}
-            </Button>
-          </div>
-        </div>
-
-        {/* Summary Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="bg-card border border-border rounded-xl p-4">
-            <p className="text-xs text-muted-foreground uppercase tracking-wider">Paid</p>
-            <p className="text-2xl font-bold text-emerald-500 font-mono mt-1">₹{totalPaid.toLocaleString('en-IN')}</p>
-            <p className="text-xs text-muted-foreground">{filtered.filter(p => p.isPaid).length} employees</p>
-          </div>
-          <div className="bg-card border border-border rounded-xl p-4">
-            <p className="text-xs text-muted-foreground uppercase tracking-wider">Pending</p>
-            <p className="text-2xl font-bold text-amber-500 font-mono mt-1">₹{totalPending.toLocaleString('en-IN')}</p>
-            <p className="text-xs text-muted-foreground">{filtered.filter(p => !p.isPaid).length} employees</p>
-          </div>
-          <div className="bg-card border border-border rounded-xl p-4">
-            <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Payroll</p>
-            <p className="text-2xl font-bold text-primary font-mono mt-1">₹{(totalPaid + totalPending).toLocaleString('en-IN')}</p>
-            <p className="text-xs text-muted-foreground">{filtered.length} employees</p>
-          </div>
-        </div>
-
-        {/* Branch filter */}
-        <div className="flex flex-wrap gap-2 items-center">
-          <Select value={branchTypeFilter} onValueChange={v => { setBranchTypeFilter(v); setBranchLocId('all'); }}>
-            <SelectTrigger className="h-7 w-38 text-xs"><SelectValue placeholder="All Branches" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Branches</SelectItem>
-              <SelectItem value="headoffice">Head Office</SelectItem>
-              <SelectItem value="warehouse">Warehouse</SelectItem>
-              <SelectItem value="outlet">Outlet</SelectItem>
-            </SelectContent>
-          </Select>
-          {branchTypeFilter === 'warehouse' && (
-            <Select value={branchLocId} onValueChange={setBranchLocId}>
-              <SelectTrigger className="h-7 w-44 text-xs"><SelectValue placeholder="All Warehouses" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Warehouses</SelectItem>
-                {(warehouses as any[]).map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          )}
-          {branchTypeFilter === 'outlet' && (
-            <Select value={branchLocId} onValueChange={setBranchLocId}>
-              <SelectTrigger className="h-7 w-44 text-xs"><SelectValue placeholder="All Outlets" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Outlets</SelectItem>
-                {(outlets as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          )}
-        </div>
-
-        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border flex flex-wrap gap-3 bg-muted/20">
-            <div className="flex items-center gap-2 flex-1 min-w-[160px]">
-              <Search className="w-4 h-4 text-muted-foreground" />
-              <Input placeholder="Search employee..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0" />
-            </div>
+      {/* Header controls */}
+      <div className="flex flex-col gap-4 mb-6">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            {/* Month / Year selectors */}
             <Select value={month} onValueChange={setMonth}>
               <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
-              <SelectContent>{MONTHS.map((m, i) => <SelectItem key={i} value={String(i+1)}>{m}</SelectItem>)}</SelectContent>
+              <SelectContent>
+                {MONTHS.map((m, i) => <SelectItem key={i} value={String(i + 1)}>{m}</SelectItem>)}
+              </SelectContent>
             </Select>
             <Select value={year} onValueChange={setYear}>
               <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
-              <SelectContent>{years.map(y => <SelectItem key={y} value={y}>{y}</SelectItem>)}</SelectContent>
+              <SelectContent>
+                {[now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1].map(y =>
+                  <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                )}
+              </SelectContent>
             </Select>
+            {isAdmin && (
+              <Select value={branchTypeFilter} onValueChange={setBranchTypeFilter}>
+                <SelectTrigger className="w-40"><SelectValue placeholder="All branches" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Branches</SelectItem>
+                  {branchOptions.map(b => <SelectItem key={b.value} value={b.value}>{b.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            )}
+            <Input
+              placeholder="Search employee…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-48"
+            />
           </div>
-
-          {payroll.length === 0 && !isLoading ? (
-            <div className="py-16 text-center space-y-4">
-              <DollarSign className="w-12 h-12 mx-auto text-muted-foreground/30" />
-              <p className="text-muted-foreground">No payroll for {monthLabel}</p>
-              <Button onClick={() => handleGenerate(false)} disabled={generating}>
-                <Zap className="w-4 h-4 mr-2" /> Generate Payroll for {monthLabel}
-              </Button>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-muted/10">
-                  <TableHead>Employee</TableHead>
-                  <TableHead className="text-right">Basic</TableHead>
-                  <TableHead className="text-center text-xs">LOP</TableHead>
-                  <TableHead className="text-right">Gross</TableHead>
-                  <TableHead className="text-right text-emerald-600">Allowances</TableHead>
-                  <TableHead className="text-right text-red-500">Deductions</TableHead>
-                  <TableHead className="text-right font-bold">Net Pay</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {isLoading ? [...Array(4)].map((_, i) => (
-                  <TableRow key={i}><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-                )) : filtered.map(p => (
-                  <TableRow key={p.id} className="hover:bg-muted/10">
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Avatar className="h-7 w-7"><AvatarFallback className="bg-primary/10 text-primary text-xs font-bold">{p.employeeName?.charAt(0)}</AvatarFallback></Avatar>
-                        <div>
-                          <div className="font-semibold text-sm">{p.employeeName}</div>
-                          <div className="text-xs text-muted-foreground">{p.branchName}</div>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-sm">₹{Number(p.baseSalary || 0).toLocaleString('en-IN')}</TableCell>
-                    <TableCell className="text-center">
-                      {p.lopDays > 0
-                        ? <Badge variant="outline" className="text-red-500 border-red-500/30 text-xs">{p.lopDays}d</Badge>
-                        : <span className="text-muted-foreground text-xs">—</span>}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-sm">₹{Number(p.grossPay || 0).toLocaleString('en-IN')}</TableCell>
-                    <TableCell className="text-right font-mono text-sm text-emerald-500">+₹{Number(p.allowancesTotal || 0).toLocaleString('en-IN')}</TableCell>
-                    <TableCell className="text-right font-mono text-sm text-red-500">-₹{Number(p.deductions || 0).toLocaleString('en-IN')}</TableCell>
-                    <TableCell className="text-right font-mono font-bold text-primary">₹{Number(p.netPay || 0).toLocaleString('en-IN')}</TableCell>
-                    <TableCell>
-                      <Badge variant={p.isPaid ? 'default' : 'outline'} className={p.isPaid ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'text-amber-500 border-amber-500/30'}>
-                        {p.isPaid ? 'Paid' : 'Pending'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(p)} title="View"><Eye className="w-4 h-4" /></Button>
-                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => downloadPayslipPDF(p, companySettings)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>
-                        {!p.isPaid && (
-                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-500" onClick={() => handleMarkPaid(p.id, p.employeeName || '')} title="Mark as Paid"><CheckCircle className="w-4 h-4" /></Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+          <div className="flex gap-2 flex-wrap">
+            {isAdmin && perm.canAdd && (
+              <>
+                <Button variant="outline" size="sm" onClick={() => handleGenerate(false)} disabled={generating}>
+                  <Zap className="h-4 w-4 mr-1" />{generating ? 'Generating…' : 'Generate'}
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => handleGenerate(true)} disabled={generating}>
+                  <RefreshCw className="h-4 w-4 mr-1" />Regenerate
+                </Button>
+              </>
+            )}
+            <Button variant="outline" size="sm" onClick={handleExport}>
+              <Download className="h-4 w-4 mr-1" />Export
+            </Button>
+          </div>
         </div>
+
+        {/* Summary strip */}
+        {filtered.length > 0 && (
+          <div className="grid grid-cols-3 gap-3 text-sm">
+            <div className="rounded-lg border bg-card p-3">
+              <p className="text-xs text-muted-foreground">Total Employees</p>
+              <p className="font-semibold text-xl">{totals.count}</p>
+            </div>
+            <div className="rounded-lg border bg-card p-3">
+              <p className="text-xs text-muted-foreground">Total Net Pay</p>
+              <p className="font-semibold text-xl">{fmt(totals.net)}</p>
+            </div>
+            <div className="rounded-lg border bg-card p-3">
+              <p className="text-xs text-muted-foreground">Total Paid</p>
+              <p className="font-semibold text-xl">{fmt(totals.paid)}</p>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Payslip Detail Sheet */}
-      <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
-        <SheetContent className="overflow-y-auto sm:max-w-md">
-          <SheetHeader>
-            <SheetTitle className="flex items-center gap-3">
-              <Avatar className="h-9 w-9"><AvatarFallback className="bg-primary/10 text-primary font-bold">{viewItem?.employeeName?.charAt(0)}</AvatarFallback></Avatar>
-              {viewItem?.employeeName}
-            </SheetTitle>
-            <SheetDescription>{monthLabel} · {viewItem?.branchName}</SheetDescription>
-          </SheetHeader>
-
-          {viewItem && (
-            <div className="mt-6 space-y-5">
-              {/* Attendance summary */}
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <div className="bg-muted/20 rounded-lg p-2">
-                  <p className="text-xs text-muted-foreground">Working Days</p>
-                  <p className="font-bold text-lg">{viewItem.workingDays}</p>
-                </div>
-                <div className="bg-muted/20 rounded-lg p-2">
-                  <p className="text-xs text-muted-foreground">Present</p>
-                  <p className="font-bold text-lg text-emerald-500">{viewItem.presentDays}</p>
-                </div>
-                <div className="bg-muted/20 rounded-lg p-2">
-                  <p className="text-xs text-muted-foreground">LOP Days</p>
-                  <p className={`font-bold text-lg ${viewItem.lopDays > 0 ? 'text-red-500' : 'text-muted-foreground'}`}>{viewItem.lopDays}</p>
-                </div>
-              </div>
-
-              {/* Earnings */}
-              <div>
-                <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Earnings</p>
-                <div className="space-y-1 text-sm">
-                  <div className="flex justify-between">
-                    <span>Basic Salary</span>
-                    <span className="font-mono">₹{Number(viewItem.baseSalary).toLocaleString('en-IN')}</span>
-                  </div>
-                  {viewItem.lopDays > 0 && (
-                    <div className="flex justify-between text-red-500">
-                      <span>Less: LOP ({viewItem.lopDays} days)</span>
-                      <span className="font-mono">-₹{Number(viewItem.lopDeduction).toFixed(2)}</span>
+      {/* Payroll table */}
+      <div className="rounded-lg border overflow-hidden">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Employee</TableHead>
+              {isAdmin && <TableHead>Branch</TableHead>}
+              <TableHead className="text-center">Days</TableHead>
+              <TableHead className="text-right">Gross Pay</TableHead>
+              <TableHead className="text-right">Deductions</TableHead>
+              {isAdmin && <TableHead className="text-right">Net Pay</TableHead>}
+              <TableHead>Status</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              <TableRow><TableCell colSpan={8} className="text-center py-12 text-muted-foreground">Loading…</TableCell></TableRow>
+            ) : filtered.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
+                  No payroll records. {isAdmin && <button className="underline text-primary" onClick={() => handleGenerate()}>Generate now</button>}
+                </TableCell>
+              </TableRow>
+            ) : filtered.map((p) => {
+              const totalNet = (p.netPay ?? 0) + (p.extraAmount ?? 0);
+              const totalDed = (p.deductions ?? 0) + (p.advanceDeduction ?? 0);
+              return (
+                <TableRow key={p.id} className="cursor-pointer hover:bg-muted/30" onClick={() => setViewItem(p)}>
+                  <TableCell className="font-medium">{p.employeeName}</TableCell>
+                  {isAdmin && <TableCell className="text-muted-foreground text-xs">{p.branchName || '—'}</TableCell>}
+                  <TableCell className="text-center text-sm">
+                    <span className="text-emerald-600">{Number(p.presentDays ?? 0).toFixed(1)}</span>
+                    <span className="text-muted-foreground">/{p.workingDays}</span>
+                    {(p.lopDays ?? 0) > 0 && <span className="text-red-500 ml-1">({Number(p.lopDays).toFixed(1)} LOP)</span>}
+                  </TableCell>
+                  <TableCell className="text-right">{fmt((p.grossPay ?? 0) + (p.extraAmount ?? 0))}</TableCell>
+                  <TableCell className="text-right text-red-600">{totalDed > 0 ? fmt(totalDed) : '—'}</TableCell>
+                  {isAdmin && <TableCell className="text-right font-semibold">{fmt(totalNet)}</TableCell>}
+                  <TableCell onClick={e => e.stopPropagation()}>
+                    {statusBadge(p.status, p.paidAmount ?? 0, totalNet)}
+                  </TableCell>
+                  <TableCell className="text-right" onClick={e => e.stopPropagation()}>
+                    <div className="flex gap-1 justify-end">
+                      <Button size="sm" variant="ghost" onClick={() => setViewItem(p)} title="View">
+                        <Eye className="h-4 w-4" />
+                      </Button>
+                      {isAdmin && p.status === 'draft' && perm.canEdit && (
+                        <Button size="sm" variant="ghost" onClick={() => { setEditItem(p); setViewItem(null); }} title="Edit">
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {isAdmin && p.status === 'draft' && perm.canEdit && (
+                        <Button size="sm" variant="ghost" className="text-blue-600" onClick={() => handleApprove(p)} title="Approve">
+                          <CheckCircle className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {isAdmin && p.status === 'approved' && perm.canEdit && (
+                        <Button size="sm" variant="ghost" className="text-emerald-600" onClick={() => setPayItem(p)} title="Pay">
+                          <DollarSign className="h-4 w-4" />
+                        </Button>
+                      )}
+                      <Button size="sm" variant="ghost" onClick={() => { downloadPayslipPDF(p as any, undefined); toast.success('PDF downloaded'); }} title="Download PDF">
+                        <FileDown className="h-4 w-4" />
+                      </Button>
                     </div>
-                  )}
-                  {(viewItem.allowancesBreakdown || []).map((a: any, i: number) => (
-                    <div key={i} className="flex justify-between text-emerald-600">
-                      <span>{a.name}</span>
-                      <span className="font-mono">+₹{Number(a.amount).toFixed(2)}</span>
-                    </div>
-                  ))}
-                  <Separator className="my-1" />
-                  <div className="flex justify-between font-semibold">
-                    <span>Gross Pay</span>
-                    <span className="font-mono">₹{Number(viewItem.grossPay).toLocaleString('en-IN')}</span>
-                  </div>
-                </div>
-              </div>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
 
-              {/* Deductions */}
-              {(viewItem.deductionsBreakdown || []).length > 0 && (
-                <div>
-                  <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Deductions</p>
-                  <div className="space-y-1 text-sm">
-                    {(viewItem.deductionsBreakdown || []).map((d: any, i: number) => (
-                      <div key={i} className="flex justify-between text-red-500">
-                        <span>{d.name}</span>
-                        <span className="font-mono">-₹{Number(d.amount).toFixed(2)}</span>
-                      </div>
-                    ))}
-                    <Separator className="my-1" />
-                    <div className="flex justify-between font-semibold text-red-500">
-                      <span>Total Deductions</span>
-                      <span className="font-mono">-₹{Number(viewItem.deductions).toFixed(2)}</span>
-                    </div>
-                  </div>
-                </div>
-              )}
+      {/* Advances section (admin only) */}
+      {isAdmin && (
+        <AdvancesSection isAdmin={isAdmin} employees={employees as any[]} />
+      )}
 
-              {/* Net Pay */}
-              <div className="p-4 bg-primary/5 rounded-xl border border-primary/20">
-                <div className="flex justify-between items-center">
-                  <span className="font-bold text-base">Net Pay</span>
-                  <span className="font-mono font-bold text-xl text-primary">₹{Number(viewItem.netPay).toLocaleString('en-IN')}</span>
-                </div>
-                <div className="flex justify-between items-center mt-1">
-                  <Badge variant={viewItem.isPaid ? 'default' : 'outline'} className={viewItem.isPaid ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20 mt-1' : 'text-amber-500 border-amber-500/30 mt-1'}>
-                    {viewItem.isPaid ? `Paid${viewItem.paidDate ? ' · ' + new Date(viewItem.paidDate).toLocaleDateString('en-IN') : ''}` : 'Pending'}
-                  </Badge>
-                </div>
-              </div>
+      {/* Detail sheet */}
+      {viewItem && (
+        <PayslipSheet
+          item={viewItem}
+          onClose={() => setViewItem(null)}
+          isAdmin={isAdmin}
+          onApprove={() => handleApprove(viewItem)}
+          onPay={() => { setPayItem(viewItem); setViewItem(null); }}
+          onEdit={() => { setEditItem(viewItem); setViewItem(null); }}
+        />
+      )}
 
-              <div className="flex gap-2 flex-wrap">
-                <Button variant="outline" className="flex-1" onClick={() => downloadPayslipPDF(viewItem, companySettings)}>
-                  <FileDown className="w-4 h-4 mr-2" /> Download PDF
-                </Button>
-                {!viewItem.isPaid && (
-                  <Button className="w-full" onClick={() => handleMarkPaid(viewItem.id, viewItem.employeeName || '')}>
-                    <CheckCircle className="w-4 h-4 mr-2" /> Mark Paid
-                  </Button>
-                )}
-              </div>
-            </div>
-          )}
-        </SheetContent>
-      </Sheet>
+      {/* Dialogs */}
+      {editItem && <EditDialog item={editItem} onClose={() => setEditItem(null)} />}
+      {payItem && <PayDialog item={payItem} onClose={() => setPayItem(null)} />}
     </AppLayout>
   );
 }

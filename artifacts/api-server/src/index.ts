@@ -1017,6 +1017,43 @@ try {
   // Constraint already exists or data violation — non-fatal, log only.
 }
 
+// ── Payroll workflow + Employee advances ──────────────────────────────────────
+await pool.query(`
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS status         TEXT NOT NULL DEFAULT 'draft';
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS approved_at    TIMESTAMPTZ;
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS extra_amount   NUMERIC(10,2) NOT NULL DEFAULT 0;
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS extra_note     TEXT;
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS paid_amount    NUMERIC(10,2) NOT NULL DEFAULT 0;
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS payment_mode       TEXT;
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS advance_deduction  NUMERIC(10,2) NOT NULL DEFAULT 0;
+
+  CREATE TABLE IF NOT EXISTS employee_advances (
+    id              SERIAL PRIMARY KEY,
+    employee_id     INTEGER NOT NULL REFERENCES employees(id),
+    amount          NUMERIC(10,2) NOT NULL,
+    date            DATE NOT NULL DEFAULT CURRENT_DATE,
+    note            TEXT,
+    is_deducted     BOOLEAN NOT NULL DEFAULT FALSE,
+    deducted_payroll_id INTEGER,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_advances_employee ON employee_advances (employee_id);
+
+  ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS general_settings JSONB;
+`);
+// One-time: back-fill status for records created before this column existed
+{
+  const { rows: [payStatusDone] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'payroll_status_backfill_v1'`
+  );
+  if (!payStatusDone) {
+    await pool.query(`UPDATE payroll SET status = 'paid'     WHERE is_paid = TRUE  AND status = 'draft'`);
+    await pool.query(`UPDATE payroll SET status = 'approved' WHERE is_paid = FALSE AND status = 'draft' AND net_pay::numeric > 0`);
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('payroll_status_backfill_v1')`);
+    console.log('[migration] payroll_status_backfill_v1 applied');
+  }
+}
+
 // ── Opening balances table ────────────────────────────────────────────────────
 await pool.query(`
   CREATE TABLE IF NOT EXISTS opening_balances (

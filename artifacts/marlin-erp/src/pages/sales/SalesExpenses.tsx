@@ -3,9 +3,9 @@ import { useLocation } from 'wouter';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useLocationContext } from '@/lib/locationContext';
-import { customFetch, useListOutlets, useDeleteLocationExpense } from '@workspace/api-client-react';
+import { customFetch, useListOutlets, useDeleteLocationExpense, useGetCashInOutlet } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
-import { Receipt, Plus, Calendar, Wallet, AlertCircle, Layers, Trash2, Loader2, ShieldOff } from 'lucide-react';
+import { Receipt, Plus, Calendar, Wallet, AlertCircle, Layers, Trash2, Loader2, ShieldOff, AlertTriangle } from 'lucide-react';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -50,6 +50,13 @@ export default function SalesExpenses() {
   const isAll       = locationType === 'all';
   const isWarehouse = locationType === 'warehouse' && !!locationId && !isAll;
   const isSpecific  = !isAll && !!locationType && !!locationId;
+
+  // Cash balance for the current specific location (used to cap expense amount)
+  const { data: allCashBalances = [] } = useGetCashInOutlet();
+  const locationCash = isSpecific
+    ? (allCashBalances as any[]).find(b => b.locationType === locationType && b.locationId === locationId)
+    : null;
+  const availableCash: number = locationCash ? Number(locationCash.availableBalance ?? 0) : 0;
 
   // Redirect only if nothing is selected
   useEffect(() => {
@@ -127,6 +134,10 @@ export default function SalesExpenses() {
     resolver: zodResolver(schema),
     defaultValues: { expenseLedgerId: 0, description: '', amount: 0, expenseDate: TODAY, reference: '' },
   });
+
+  const watchAmount = form.watch('amount');
+  const amountNum   = Number(watchAmount) || 0;
+  const overBalance = isSpecific && !!locationCash && amountNum > availableCash + 0.001;
 
   const openAdd = () => {
     form.reset({ expenseLedgerId: 0, description: '', amount: 0, expenseDate: TODAY, reference: '' });
@@ -454,12 +465,17 @@ export default function SalesExpenses() {
             <Form {...form}>
               <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
 
+                {/* Cash source + available balance */}
                 <div className="space-y-1.5">
-                  <p className="text-sm font-medium">Paid From</p>
+                  <p className="text-sm font-medium">Paid From (Cash)</p>
                   <div className="flex items-center gap-2 px-3 py-2 bg-muted/30 rounded-md border border-border text-sm">
                     <Wallet className="w-3.5 h-3.5 text-muted-foreground" />
                     <span className="text-muted-foreground">{cashLedgerName ?? 'Loading…'}</span>
-                    <span className="ml-auto text-[10px] bg-muted rounded px-1 py-0.5 text-muted-foreground">Auto</span>
+                    {locationCash && (
+                      <span className="ml-auto font-mono text-xs font-semibold text-emerald-600">
+                        {fmt(availableCash)} available
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -497,7 +513,24 @@ export default function SalesExpenses() {
                   <FormField control={form.control} name="amount" render={({ field }) => (
                     <FormItem>
                       <FormLabel>Amount ₹ <span className="text-destructive">*</span></FormLabel>
-                      <FormControl><Input type="number" step="0.01" min={0.01} {...field} /></FormControl>
+                      <FormControl>
+                        <Input
+                          type="number" step="0.01" min={0.01}
+                          max={availableCash > 0 ? availableCash : undefined}
+                          className={overBalance ? 'border-destructive focus-visible:ring-destructive' : ''}
+                          {...field}
+                        />
+                      </FormControl>
+                      {overBalance ? (
+                        <p className="text-xs text-destructive flex items-center gap-1 mt-1">
+                          <AlertTriangle className="w-3 h-3 shrink-0" />
+                          Exceeds available cash (₹{availableCash.toLocaleString('en-IN', { minimumFractionDigits: 2 })})
+                        </p>
+                      ) : locationCash && amountNum > 0 ? (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Remaining: <span className="font-mono font-medium text-foreground">{fmt(availableCash - amountNum)}</span>
+                        </p>
+                      ) : null}
                       <FormMessage />
                     </FormItem>
                   )} />
@@ -510,6 +543,14 @@ export default function SalesExpenses() {
                   )} />
                 </div>
 
+                {/* Hard block if no cash available */}
+                {isSpecific && locationCash && availableCash <= 0 && (
+                  <div className="flex items-start gap-2 rounded-lg bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>No cash available at this location. Collect cash or make a sale first.</span>
+                  </div>
+                )}
+
                 <FormField control={form.control} name="reference" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Bill / Reference No. <span className="text-muted-foreground text-xs">(optional)</span></FormLabel>
@@ -519,7 +560,7 @@ export default function SalesExpenses() {
 
                 <DialogFooter>
                   <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
-                  <Button type="submit" disabled={submitting}>
+                  <Button type="submit" disabled={submitting || overBalance || (isSpecific && !!locationCash && availableCash <= 0)}>
                     {submitting ? 'Saving…' : 'Record Expense'}
                   </Button>
                 </DialogFooter>

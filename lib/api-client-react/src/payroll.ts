@@ -1,5 +1,5 @@
 /**
- * Manual hooks for payroll enhancements (pay components + payroll generation).
+ * Manual hooks for payroll enhancements (pay components + payroll generation + advances).
  * These supplement the auto-generated hooks in generated/api.ts.
  */
 import { useQuery, useMutation, UseQueryOptions } from "@tanstack/react-query";
@@ -52,6 +52,26 @@ export interface EnrichedPayrollRecord {
   notes?: string;
   isPaid: boolean;
   paidDate?: string | null;
+  // workflow
+  status: 'draft' | 'approved' | 'paid';
+  approvedAt?: string | null;
+  extraAmount: number;
+  extraNote?: string | null;
+  paidAmount: number;
+  paymentMode?: string | null;
+  advanceDeduction: number;
+}
+
+export interface EmployeeAdvance {
+  id: number;
+  employeeId: number;
+  employeeName: string;
+  amount: number;
+  date: string;
+  note?: string | null;
+  isDeducted: boolean;
+  deductedPayrollId?: number | null;
+  createdAt: string;
 }
 
 // ── Pay Components ─────────────────────────────────────────────────────────
@@ -114,4 +134,63 @@ export const useListEnrichedPayroll = (
       return customFetch<EnrichedPayrollRecord[]>(`/api/hr/payroll${q ? "?" + q : ""}`);
     },
     ...options?.query,
+  });
+
+// ── Payroll Workflow ────────────────────────────────────────────────────────
+
+export const useEditPayroll = () =>
+  useMutation<EnrichedPayrollRecord, Error, { id: number; extraAmount: number; extraNote?: string }>({
+    mutationFn: ({ id, extraAmount, extraNote }) =>
+      customFetch<EnrichedPayrollRecord>(`/api/hr/payroll/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ extraAmount, extraNote }),
+      }),
+  });
+
+export const useApprovePayroll = () =>
+  useMutation<EnrichedPayrollRecord, Error, { id: number }>({
+    mutationFn: ({ id }) =>
+      customFetch<EnrichedPayrollRecord>(`/api/hr/payroll/${id}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      }),
+  });
+
+export const usePayPayroll = () =>
+  useMutation<EnrichedPayrollRecord, Error, { id: number; amount?: number; paymentMode: string }>({
+    mutationFn: ({ id, amount, paymentMode }) =>
+      customFetch<EnrichedPayrollRecord>(`/api/hr/payroll/${id}/pay`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount, paymentMode }),
+      }),
+  });
+
+// ── Employee Advances ──────────────────────────────────────────────────────
+
+export const getAdvancesQueryKey = (employeeId?: number) => [
+  "/api/hr/advances",
+  employeeId,
+];
+
+export const useListAdvances = (
+  params?: { employeeId?: number },
+  options?: { query?: UseQueryOptions<EmployeeAdvance[], Error> }
+) =>
+  useQuery<EmployeeAdvance[], Error>({
+    queryKey: getAdvancesQueryKey(params?.employeeId),
+    queryFn: async () => customFetch<EmployeeAdvance[]>(`/api/hr/advances`),
+    ...options?.query,
+  });
+
+export const useAddAdvance = () =>
+  useMutation<EmployeeAdvance, Error, { employeeId: number; amount: number; date?: string; note?: string }>({
+    mutationFn: (body) =>
+      customFetch<EmployeeAdvance>("/api/hr/advances", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
   });

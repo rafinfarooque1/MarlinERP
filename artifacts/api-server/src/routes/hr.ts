@@ -126,21 +126,51 @@ function computePayroll(opts: {
 function enrichPayroll(r: any, emp?: any) {
   return {
     ...r,
-    employeeName: emp?.name ?? r.employeeName ?? "",
-    baseSalary: Number(r.baseSalary),
-    lopDeduction: Number(r.lopDeduction ?? 0),
-    grossPay: Number(r.grossPay ?? 0),
-    allowancesTotal: Number(r.allowancesTotal ?? 0),
-    allowancesBreakdown: r.allowancesBreakdown ?? [],
-    deductions: Number(r.deductions ?? 0),
-    deductionsBreakdown: r.deductionsBreakdown ?? [],
-    netPay: Number(r.netPay ?? 0),
-    bonus: Number(r.bonus ?? 0),
-    totalAmount: Number(r.totalAmount ?? r.netPay ?? 0),
-    lopDays: r.lopDays ?? 0,
-    workingDays: r.workingDays ?? 26,
-    presentDays: r.presentDays ?? 26,
+    employeeName: emp?.name ?? r.employeeName ?? r.employee_name ?? "",
+    baseSalary:        Number(r.baseSalary       ?? r.base_salary        ?? 0),
+    lopDeduction:      Number(r.lopDeduction      ?? r.lop_deduction      ?? 0),
+    grossPay:          Number(r.grossPay          ?? r.gross_pay          ?? 0),
+    allowancesTotal:   Number(r.allowancesTotal   ?? r.allowances_total   ?? 0),
+    allowancesBreakdown: r.allowancesBreakdown    ?? r.allowances_breakdown ?? [],
+    deductions:        Number(r.deductions        ?? 0),
+    deductionsBreakdown: r.deductionsBreakdown    ?? r.deductions_breakdown ?? [],
+    netPay:            Number(r.netPay            ?? r.net_pay            ?? 0),
+    bonus:             Number(r.bonus             ?? 0),
+    totalAmount:       Number(r.totalAmount       ?? r.total_amount       ?? r.netPay ?? r.net_pay ?? 0),
+    lopDays:           Number(r.lopDays           ?? r.lop_days           ?? 0),
+    workingDays:       Number(r.workingDays       ?? r.working_days       ?? 26),
+    presentDays:       Number(r.presentDays       ?? r.present_days       ?? 26),
+    // workflow
+    status:            r.status ?? 'draft',
+    approvedAt:        r.approvedAt   ?? r.approved_at   ?? null,
+    extraAmount:       Number(r.extraAmount   ?? r.extra_amount   ?? 0),
+    extraNote:         r.extraNote    ?? r.extra_note    ?? null,
+    paidAmount:        Number(r.paidAmount    ?? r.paid_amount    ?? 0),
+    paymentMode:       r.paymentMode  ?? r.payment_mode  ?? null,
+    advanceDeduction:  Number(r.advanceDeduction ?? r.advance_deduction ?? 0),
   };
+}
+
+// ── Ledger provisioning helper ─────────────────────────────────────────────
+async function findOrProvisionLedger(
+  code: string,
+  name: string,
+  type: string,
+  parentCode: string,
+  description: string,
+): Promise<number | null> {
+  const { rows: [existing] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1 LIMIT 1`, [code]);
+  if (existing) return existing.id;
+  const { rows: [parent] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1 LIMIT 1`, [parentCode]);
+  const { rows: [created] } = await pool.query(
+    `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_group, is_system_group, description)
+     VALUES ($1, $2, $3, 'balance_sheet', $4, false, false, $5)
+     ON CONFLICT DO NOTHING RETURNING id`,
+    [name, type, code, parent?.id ?? null, description],
+  );
+  if (created) return created.id;
+  const { rows: [retry] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1 LIMIT 1`, [code]);
+  return retry?.id ?? null;
 }
 
 // ── Hierarchies ───────────────────────────────────────────────────────────
@@ -352,40 +382,39 @@ router.put("/hr/pay-components/:employeeId", requireModuleAction("Payroll", "edi
 
 router.get("/hr/payroll", requireModuleView("Payroll"), async (req, res): Promise<void> => {
   const qp = ListPayrollQueryParams.safeParse(req.query);
-  const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  const scopeEmp = (req as any).employee as { id: number; branchType: string; branchId: number } | undefined;
 
-  // Resolve which employee IDs are in scope for non-HO users
-  let scopedEmpIds: Set<number> | null = null;
+  // Non-headoffice employees only see their own payroll
+  let empIdFilter: number | null = null;
   if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
-    const scope = await getUserDataScope(scopeEmp);
-    const scopeParams: unknown[] = [];
-    const scopeCond = scopeBranchWhere(scope, scopeParams, 'e');
-    const { rows: empRows } = await pool.query(
-      `SELECT id FROM employees e WHERE ${scopeCond}`,
-      scopeParams,
-    );
-    scopedEmpIds = new Set((empRows as any[]).map((r) => Number(r.id)));
+    // Map logged-in user → their employee record
+    const empRow = await db.select().from(employeesTable).where(eq(employeesTable.id, scopeEmp.id)).limit(1);
+    empIdFilter = empRow[0]?.id ?? null;
   }
 
-  let rows = await db.select().from(payrollTable).orderBy(payrollTable.id);
-  if (qp.success) {
-    if (qp.data.year) rows = rows.filter((r) => r.year === Number(qp.data.year));
-    if (qp.data.month) rows = rows.filter((r) => r.month === Number(qp.data.month));
-  }
-  if (scopedEmpIds !== null) {
-    rows = rows.filter((r) => scopedEmpIds!.has(r.employeeId));
-  }
+  // Use raw SQL so the new startup-migration columns are included
+  let whereParts = ['1=1'];
+  const params: unknown[] = [];
+  const p = (v: unknown) => { params.push(v); return `$${params.length}`; };
 
-  const employees = await db.select().from(employeesTable);
-  const eMap = new Map(employees.map((e) => [e.id, e]));
-  const enriched = await Promise.all(rows.map(async (r) => {
-    const emp = eMap.get(r.employeeId);
-    return {
-      ...enrichPayroll(r),
-      employeeName: emp?.name ?? "",
-      branchName: emp ? await getBranchName(emp.branchType, emp.branchId) : "",
-    };
-  }));
+  if (qp.success && qp.data.year)  whereParts.push(`pr.year  = ${p(Number(qp.data.year))}`);
+  if (qp.success && qp.data.month) whereParts.push(`pr.month = ${p(Number(qp.data.month))}`);
+  if (empIdFilter !== null) whereParts.push(`pr.employee_id = ${p(empIdFilter)}`);
+
+  const { rows } = await pool.query(
+    `SELECT pr.*, e.name AS employee_name, e.branch_type, e.branch_id
+     FROM payroll pr
+     JOIN employees e ON e.id = pr.employee_id
+     WHERE ${whereParts.join(' AND ')}
+     ORDER BY pr.id`,
+    params,
+  );
+
+  const enriched = await Promise.all(rows.map(async (r: any) => ({
+    ...enrichPayroll(r),
+    employeeName: r.employee_name ?? "",
+    branchName: await getBranchName(r.branch_type, r.branch_id),
+  })));
   res.json(enriched);
 });
 
@@ -393,6 +422,14 @@ router.get("/hr/payroll", requireModuleView("Payroll"), async (req, res): Promis
 router.post("/hr/payroll/generate", requireModuleAction("Payroll", "add"), async (req, res): Promise<void> => {
   const { month, year, employeeId, forceRegenerate = false } = req.body;
   if (!month || !year) { res.status(400).json({ error: "month and year are required" }); return; }
+
+  // Fetch work-hour thresholds from company generalSettings
+  const { rows: [csRow] } = await pool.query(
+    `SELECT general_settings FROM company_settings LIMIT 1`
+  );
+  const gs = (csRow?.general_settings as Record<string, any>) ?? {};
+  const fullDayHours = Number(gs.fullDayHours ?? 9);
+  const halfDayHours = Number(gs.halfDayHours ?? 4.5);
 
   // Fetch employees to generate for
   let employees = await db.select().from(employeesTable).where(eq(employeesTable.isActive, true));
@@ -404,21 +441,24 @@ router.post("/hr/payroll/generate", requireModuleAction("Payroll", "add"), async
   const startDate = `${year}-${monthStr}-01`;
   const endDate = `${year}-${monthStr}-${String(daysInMonth).padStart(2, "0")}`;
 
-  // Fetch attendance for the whole month
-  const monthAttendance = await db.select().from(attendanceTable)
-    .where(and(gte(attendanceTable.date, startDate), lte(attendanceTable.date, endDate)));
+  // Fetch attendance for the whole month (raw SQL to get checkIn/checkOut timestamps)
+  const { rows: monthAttendance } = await pool.query(
+    `SELECT employee_id AS "employeeId", date, check_in AS "checkIn", check_out AS "checkOut", status
+     FROM attendance WHERE date >= $1 AND date <= $2`,
+    [startDate, endDate],
+  );
 
   const results = [];
 
   for (const emp of employees) {
-    // Check for existing payroll record
-    const [existing] = await db.select().from(payrollTable)
-      .where(and(eq(payrollTable.employeeId, emp.id), eq(payrollTable.month, month), eq(payrollTable.year, year)))
-      .limit(1);
+    // Check for existing payroll record (raw SQL to read new columns)
+    const { rows: [existing] } = await pool.query(
+      `SELECT * FROM payroll WHERE employee_id = $1 AND month = $2 AND year = $3 LIMIT 1`,
+      [emp.id, month, year],
+    );
 
-    if (existing && existing.isPaid && !forceRegenerate) {
-      // Skip paid records unless forced
-      results.push(enrichPayroll(existing, emp));
+    if (existing && existing.is_paid && !forceRegenerate) {
+      results.push({ ...enrichPayroll(existing, emp), branchName: await getBranchName(emp.branchType, emp.branchId), employeeName: emp.name });
       continue;
     }
 
@@ -435,44 +475,79 @@ router.post("/hr/payroll/generate", requireModuleAction("Payroll", "add"), async
       { name: "ESI (0.75%)", type: "percent_of_gross", value: 0.75, enabled: true },
     ];
 
-    // Count present days from attendance
-    const empAtt = monthAttendance.filter(a => a.employeeId === emp.id);
-    const presentDays = empAtt.filter(a => a.status === "present" || !!a.checkIn).length;
-    // If no attendance data, assume full attendance
-    const effectivePresentDays = empAtt.length === 0 ? workingDays : presentDays;
+    // Hours-based present-days calculation
+    const empAtt = monthAttendance.filter((a: any) => Number(a.employeeId) === emp.id);
+    let effectivePresentDays: number;
+    if (empAtt.length === 0) {
+      effectivePresentDays = workingDays; // no data → assume full attendance
+    } else {
+      let pd = 0;
+      for (const a of empAtt) {
+        if (a.status === "leave") { pd += 1; continue; } // leave days count as full (no LOP)
+        if (a.checkIn && a.checkOut) {
+          const hrs = (new Date(a.checkOut).getTime() - new Date(a.checkIn).getTime()) / 3_600_000;
+          if (hrs >= fullDayHours) pd += 1;
+          else if (hrs >= halfDayHours) pd += 0.5;
+          // else 0 (LOP)
+        } else if (a.checkIn) {
+          pd += 1; // only checked in, no check-out yet → count as full day
+        } else if (a.status === "present") {
+          pd += 1;
+        } else if (a.status === "half_day") {
+          pd += 0.5;
+        }
+      }
+      effectivePresentDays = pd;
+    }
+
+    // Pending advances for this employee
+    const { rows: advances } = await pool.query(
+      `SELECT id, amount FROM employee_advances WHERE employee_id = $1 AND is_deducted = FALSE`,
+      [emp.id],
+    );
+    const advanceDeduction = round2(advances.reduce((s: number, a: any) => s + Number(a.amount), 0));
 
     const baseSalary = Number(emp.salary);
     const computed = computePayroll({ baseSalary, workingDays, presentDays: effectivePresentDays, allowances, deductions });
+    const netPayAfterAdvance = round2(Math.max(0, computed.netPay - advanceDeduction));
 
-    const payrollData = {
-      employeeId: emp.id,
-      month,
-      year,
-      baseSalary: String(baseSalary),
-      workingDays,
-      presentDays: effectivePresentDays,
-      lopDays: computed.lopDays,
-      lopDeduction: String(computed.lopDeduction),
-      grossPay: String(computed.grossPay),
-      allowancesTotal: String(computed.allowancesTotal),
-      allowancesBreakdown: computed.allowancesBreakdown,
-      deductions: String(computed.deductions),
-      deductionsBreakdown: computed.deductionsBreakdown,
-      netPay: String(computed.netPay),
-      totalAmount: String(computed.netPay),
-    };
-
-    let row;
-    if (existing && !existing.isPaid) {
-      [row] = await db.update(payrollTable).set(payrollData).where(eq(payrollTable.id, existing.id)).returning();
+    let row: any;
+    if (existing && !existing.is_paid) {
+      const { rows: [updated] } = await pool.query(
+        `UPDATE payroll SET
+           employee_id=$1, month=$2, year=$3, base_salary=$4, working_days=$5, present_days=$6,
+           lop_days=$7, lop_deduction=$8, gross_pay=$9, allowances_total=$10, allowances_breakdown=$11,
+           deductions=$12, deductions_breakdown=$13, net_pay=$14, total_amount=$14,
+           status='draft', advance_deduction=$15
+         WHERE id=$16 RETURNING *`,
+        [emp.id, month, year, String(baseSalary), workingDays, effectivePresentDays,
+         computed.lopDays, String(computed.lopDeduction), String(computed.grossPay),
+         String(computed.allowancesTotal), JSON.stringify(computed.allowancesBreakdown),
+         String(computed.deductions), JSON.stringify(computed.deductionsBreakdown),
+         String(netPayAfterAdvance), String(advanceDeduction), existing.id],
+      );
+      row = updated;
     } else if (!existing) {
-      [row] = await db.insert(payrollTable).values({ ...payrollData, bonus: "0" }).returning();
+      const { rows: [inserted] } = await pool.query(
+        `INSERT INTO payroll
+           (employee_id, month, year, base_salary, working_days, present_days,
+            lop_days, lop_deduction, gross_pay, allowances_total, allowances_breakdown,
+            deductions, deductions_breakdown, net_pay, total_amount, bonus, status, advance_deduction)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,'0','draft',$15)
+         RETURNING *`,
+        [emp.id, month, year, String(baseSalary), workingDays, effectivePresentDays,
+         computed.lopDays, String(computed.lopDeduction), String(computed.grossPay),
+         String(computed.allowancesTotal), JSON.stringify(computed.allowancesBreakdown),
+         String(computed.deductions), JSON.stringify(computed.deductionsBreakdown),
+         String(netPayAfterAdvance), String(advanceDeduction)],
+      );
+      row = inserted;
     } else {
       row = existing; // paid, skip update
     }
 
     results.push({
-      ...enrichPayroll(row!, emp),
+      ...enrichPayroll(row, emp),
       branchName: await getBranchName(emp.branchType, emp.branchId),
       employeeName: emp.name,
     });
@@ -481,96 +556,258 @@ router.post("/hr/payroll/generate", requireModuleAction("Payroll", "add"), async
   res.json(results);
 });
 
-router.post("/hr/payroll/:id/pay", requireModuleAction("Payroll", "edit"), async (req, res): Promise<void> => {
+// Edit extra amount / note (for authorised managers before approval)
+router.patch("/hr/payroll/:id", requireModuleAction("Payroll", "edit"), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const { extraAmount = 0, extraNote = null } = req.body;
+  const { rows: [row] } = await pool.query(
+    `UPDATE payroll SET extra_amount = $1, extra_note = $2 WHERE id = $3 AND status != 'paid' RETURNING *`,
+    [String(Number(extraAmount)), extraNote, id],
+  );
+  if (!row) { res.status(404).json({ error: "Not found or already paid" }); return; }
+  const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, row.employee_id)).limit(1);
+  res.json({ ...enrichPayroll(row, emp), branchName: emp ? await getBranchName(emp.branchType, emp.branchId) : "" });
+});
+
+// Approve payroll → Dr Salary Expense / Cr Salary Payable (per employee)
+router.post("/hr/payroll/:id/approve", requireModuleAction("Payroll", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const today = new Date().toISOString().split("T")[0];
-  const [row] = await db.update(payrollTable).set({ isPaid: true, paidDate: today }).where(eq(payrollTable.id, id)).returning();
-  if (!row) { res.status(404).json({ error: "Not found" }); return; }
-  const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, row.employeeId)).limit(1);
 
-  // ── Accounting entry: Dr Salary Expense / Cr Cash ─────────────────────────
-  // Find or auto-provision the Salary Expense ledger (STD-SALARY-EXP).
-  // Find the Cash ledger (STD-CASH) for the credit side.
+  const { rows: [existing] } = await pool.query(`SELECT * FROM payroll WHERE id = $1`, [id]);
+  if (!existing) { res.status(404).json({ error: "Not found" }); return; }
+  if (existing.status === 'paid') { res.status(400).json({ error: "Already paid" }); return; }
+
+  const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, existing.employee_id)).limit(1);
+  const monthStr = String(existing.month).padStart(2, "0");
+
+  // Extra amount is added to net pay for accounting purposes
+  const extraAmt = Number(existing.extra_amount ?? 0);
+  const netPay   = Number(existing.net_pay ?? 0) + extraAmt;
+
   try {
-    let salaryExpenseLedgerId: number | null = null;
-    const { rows: [salRow] } = await pool.query(
-      `SELECT id FROM account_ledgers WHERE code = 'STD-SALARY-EXP' LIMIT 1`
+    // Per-employee expense ledger under Indirect Expenses
+    const salExpId = await findOrProvisionLedger(
+      `SAL-EMP-${existing.employee_id}`,
+      `Salary - ${emp?.name ?? `Employee #${existing.employee_id}`}`,
+      'expense', 'SYS-INDEXP',
+      `Salary expense for ${emp?.name ?? `Employee #${existing.employee_id}`}`,
     );
-    if (salRow) {
-      salaryExpenseLedgerId = salRow.id;
-    } else {
-      // Auto-provision under Indirect Expenses if the group exists
-      const { rows: [indExp] } = await pool.query(
-        `SELECT id FROM account_ledgers WHERE code = 'STD-INDIRECT-EXP' LIMIT 1`
-      );
-      const { rows: [created] } = await pool.query(
-        `INSERT INTO account_ledgers (name, type, code, is_group, is_system_group, parent_id, description)
-         VALUES ('Salary Expense', 'expense', 'STD-SALARY-EXP', false, false, $1,
-                 'Employee salary and payroll expenses')
-         ON CONFLICT DO NOTHING
-         RETURNING id`,
-        [indExp?.id ?? null]
-      );
-      if (created) salaryExpenseLedgerId = created.id;
-      else {
-        // If ON CONFLICT suppressed the insert, fetch the existing row
-        const { rows: [existing] } = await pool.query(
-          `SELECT id FROM account_ledgers WHERE code = 'STD-SALARY-EXP' LIMIT 1`
-        );
-        if (existing) salaryExpenseLedgerId = existing.id;
-      }
-    }
-
-    const { rows: [cashRow] } = await pool.query(
-      `SELECT id FROM account_ledgers WHERE code = 'STD-CASH' LIMIT 1`
+    // Per-employee payable ledger under Current Liabilities
+    const salPayId = await findOrProvisionLedger(
+      `SAL-PAY-${existing.employee_id}`,
+      `Salary Payable - ${emp?.name ?? `Employee #${existing.employee_id}`}`,
+      'liability', 'SYS-CURL',
+      `Salary payable to ${emp?.name ?? `Employee #${existing.employee_id}`}`,
     );
-    const cashLedgerId: number | null = cashRow?.id ?? null;
 
-    const netPay = Number(row.netPay ?? 0);
-    if (salaryExpenseLedgerId && cashLedgerId && netPay > 0.004) {
-      const monthStr = String(row.month).padStart(2, "0");
-      const narration = `Salary — ${emp?.name ?? `Employee #${row.employeeId}`} — ${monthStr}/${row.year}`;
+    if (salExpId && salPayId && netPay > 0.004) {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
         const voucherNumber = await nextVoucherNumber(client, "journal", today);
+        const narration = `Salary Approved — ${emp?.name ?? `Emp #${existing.employee_id}`} — ${monthStr}/${existing.year}`;
         const { rows: [jv] } = await client.query(
-          `INSERT INTO journal_vouchers
-             (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by)
-           VALUES ('journal', $1, $2, $3, $4, $5)
-           RETURNING id`,
-          [voucherNumber, today, narration, netPay.toFixed(2), req.employee?.username ?? "system"]
+          `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by)
+           VALUES ('journal', $1, $2, $3, $4, $5) RETURNING id`,
+          [voucherNumber, today, narration, netPay.toFixed(2), req.employee?.username ?? "system"],
         );
         await client.query(
           `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit)
            VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)`,
-          [jv.id, salaryExpenseLedgerId, netPay.toFixed(2), cashLedgerId]
+          [jv.id, salExpId, netPay.toFixed(2), salPayId],
         );
         await client.query("COMMIT");
-      } catch (journalErr) {
-        await client.query("ROLLBACK").catch(() => {});
-        // Journal entry failure is non-fatal for the payroll marking operation;
-        // log it so the accountant can manually post if needed.
-        console.warn("[payroll/pay] Failed to create journal entry:", journalErr);
-      } finally {
-        client.release();
+      } catch (e) { await client.query("ROLLBACK").catch(() => {}); console.warn("[payroll/approve] JV error:", e); }
+      finally { client.release(); }
+    }
+  } catch (e) { console.warn("[payroll/approve] Ledger error:", e); }
+
+  const { rows: [updated] } = await pool.query(
+    `UPDATE payroll SET status = 'approved', approved_at = NOW() WHERE id = $1 RETURNING *`,
+    [id],
+  );
+  logActivity({ action: "UPDATE", module: "payroll", entityType: "payroll", entityId: id,
+    description: `Payroll approved for ${emp?.name ?? `Emp #${existing.employee_id}`} — ${monthStr}/${existing.year}`,
+    metadata: { netPay } }).catch(() => {});
+
+  res.json({ ...enrichPayroll(updated, emp), branchName: emp ? await getBranchName(emp.branchType, emp.branchId) : "" });
+});
+
+// Pay payroll — supports partial payments and payment mode
+router.post("/hr/payroll/:id/pay", requireModuleAction("Payroll", "edit"), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const today = new Date().toISOString().split("T")[0];
+  const payAmount = Number(req.body.amount ?? 0);
+  const paymentMode: string = req.body.paymentMode ?? "cash";
+
+  const { rows: [existing] } = await pool.query(`SELECT * FROM payroll WHERE id = $1`, [id]);
+  if (!existing) { res.status(404).json({ error: "Not found" }); return; }
+  if (existing.status === 'paid') { res.status(400).json({ error: "Already fully paid" }); return; }
+
+  const extraAmt   = Number(existing.extra_amount ?? 0);
+  const totalNet   = round2(Number(existing.net_pay ?? 0) + extraAmt);
+  const alreadyPaid = Number(existing.paid_amount ?? 0);
+  const payNow     = payAmount > 0 ? round2(payAmount) : round2(totalNet - alreadyPaid);
+  const newPaidAmt = round2(alreadyPaid + payNow);
+  const isFullyPaid = newPaidAmt >= totalNet - 0.005;
+  const newStatus   = isFullyPaid ? 'paid' : 'approved';
+
+  const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, existing.employee_id)).limit(1);
+  const monthStr = String(existing.month).padStart(2, "0");
+
+  try {
+    // Credit the salary payable ledger for this employee; debit cash/bank
+    const salPayId = await findOrProvisionLedger(
+      `SAL-PAY-${existing.employee_id}`,
+      `Salary Payable - ${emp?.name ?? `Employee #${existing.employee_id}`}`,
+      'liability', 'SYS-CURL',
+      `Salary payable to ${emp?.name ?? `Employee #${existing.employee_id}`}`,
+    );
+    const { rows: [cashRow] } = await pool.query(
+      paymentMode === 'bank'
+        ? `SELECT id FROM account_ledgers WHERE code = 'STD-BANK' LIMIT 1`
+        : `SELECT id FROM account_ledgers WHERE code = 'STD-CASH' LIMIT 1`,
+    );
+    const payLedgerId = cashRow?.id ?? null;
+
+    if (salPayId && payLedgerId && payNow > 0.004) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const voucherNumber = await nextVoucherNumber(client, "journal", today);
+        const narration = `Salary Payment${isFullyPaid ? '' : ' (Partial)'} — ${emp?.name ?? `Emp #${existing.employee_id}`} — ${monthStr}/${existing.year}`;
+        const { rows: [jv] } = await client.query(
+          `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by)
+           VALUES ('journal', $1, $2, $3, $4, $5) RETURNING id`,
+          [voucherNumber, today, narration, payNow.toFixed(2), req.employee?.username ?? "system"],
+        );
+        // Dr Salary Payable / Cr Cash or Bank
+        await client.query(
+          `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit)
+           VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)`,
+          [jv.id, salPayId, payNow.toFixed(2), payLedgerId],
+        );
+        await client.query("COMMIT");
+      } catch (e) { await client.query("ROLLBACK").catch(() => {}); console.warn("[payroll/pay] JV error:", e); }
+      finally { client.release(); }
+    }
+
+    // If approval JV wasn't created yet (status was draft), create it now too
+    if (existing.status === 'draft') {
+      const salExpId = await findOrProvisionLedger(
+        `SAL-EMP-${existing.employee_id}`,
+        `Salary - ${emp?.name ?? `Employee #${existing.employee_id}`}`,
+        'expense', 'SYS-INDEXP',
+        `Salary expense for ${emp?.name ?? `Employee #${existing.employee_id}`}`,
+      );
+      if (salExpId && salPayId && totalNet > 0.004) {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          const vn = await nextVoucherNumber(client, "journal", today);
+          const nar = `Salary Approved — ${emp?.name ?? `Emp #${existing.employee_id}`} — ${monthStr}/${existing.year}`;
+          const { rows: [jv2] } = await client.query(
+            `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by)
+             VALUES ('journal', $1, $2, $3, $4, $5) RETURNING id`,
+            [vn, today, nar, totalNet.toFixed(2), req.employee?.username ?? "system"],
+          );
+          await client.query(
+            `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit) VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)`,
+            [jv2.id, salExpId, totalNet.toFixed(2), salPayId],
+          );
+          await client.query("COMMIT");
+        } catch (e) { await client.query("ROLLBACK").catch(() => {}); }
+        finally { client.release(); }
       }
     }
-  } catch (acctErr) {
-    // Non-fatal: payroll is already marked paid; accounting can be corrected manually.
-    console.warn("[payroll/pay] Accounting entry error:", acctErr);
+  } catch (acctErr) { console.warn("[payroll/pay] Accounting error:", acctErr); }
+
+  const { rows: [row] } = await pool.query(
+    `UPDATE payroll
+     SET paid_amount = $1, payment_mode = $2, is_paid = $3, paid_date = $4, status = $5
+     WHERE id = $6 RETURNING *`,
+    [String(newPaidAmt), paymentMode, isFullyPaid, isFullyPaid ? today : null, newStatus, id],
+  );
+
+  logActivity({ action: "UPDATE", module: "payroll", entityType: "payroll", entityId: id,
+    description: `Salary ${isFullyPaid ? 'paid' : 'partial payment'} for ${emp?.name ?? `Emp #${existing.employee_id}`} — ₹${payNow.toLocaleString("en-IN")} via ${paymentMode}`,
+    metadata: { payNow, totalNet, newPaidAmt, isFullyPaid } }).catch(() => {});
+
+  res.json({ ...enrichPayroll(row, emp), branchName: emp ? await getBranchName(emp.branchType, emp.branchId) : "" });
+});
+
+// ── Employee Advances ──────────────────────────────────────────────────────
+router.get("/hr/advances", requireModuleView("Payroll"), async (req, res): Promise<void> => {
+  const scopeEmp = (req as any).employee as { id: number; branchType: string } | undefined;
+  let empFilter = '';
+  const params: unknown[] = [];
+  if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
+    empFilter = `WHERE ea.employee_id = $1`;
+    params.push(scopeEmp.id);
   }
+  const { rows } = await pool.query(
+    `SELECT ea.*, e.name AS employee_name
+     FROM employee_advances ea JOIN employees e ON e.id = ea.employee_id
+     ${empFilter} ORDER BY ea.created_at DESC`,
+    params,
+  );
+  res.json(rows.map((r: any) => ({
+    id: r.id, employeeId: r.employee_id, employeeName: r.employee_name,
+    amount: Number(r.amount), date: r.date, note: r.note,
+    isDeducted: r.is_deducted, deductedPayrollId: r.deducted_payroll_id,
+    createdAt: r.created_at,
+  })));
+});
 
-  logActivity({
-    action: "UPDATE", module: "payroll", entityType: "payroll", entityId: row.id,
-    description: `Payroll marked paid for ${emp?.name ?? `Employee #${row.employeeId}`} — ${row.month}/${row.year} — ₹${Number(row.netPay ?? 0).toLocaleString("en-IN")}`,
-    metadata: { after: { employeeId: row.employeeId, month: row.month, year: row.year, netPay: Number(row.netPay), paidDate: today } },
-  }).catch(() => {});
+router.post("/hr/advances", requireModuleAction("Payroll", "add"), async (req, res): Promise<void> => {
+  const { employeeId, amount, date, note } = req.body;
+  if (!employeeId || !amount) { res.status(400).json({ error: "employeeId and amount are required" }); return; }
+  const today = new Date().toISOString().split("T")[0];
+  const advDate = date ?? today;
 
-  res.json({
-    ...enrichPayroll(row),
-    employeeName: emp?.name ?? "",
-    branchName: emp ? await getBranchName(emp.branchType, emp.branchId) : "",
+  const { rows: [row] } = await pool.query(
+    `INSERT INTO employee_advances (employee_id, amount, date, note, is_deducted)
+     VALUES ($1, $2, $3, $4, false) RETURNING *`,
+    [employeeId, String(Number(amount)), advDate, note ?? null],
+  );
+  const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, Number(employeeId))).limit(1);
+
+  // Accounting: Dr Advance-to-Employee / Cr Cash
+  try {
+    const advLedgerId = await findOrProvisionLedger(
+      `ADV-EMP-${employeeId}`,
+      `Advance - ${emp?.name ?? `Employee #${employeeId}`}`,
+      'asset', 'SYS-CURA',
+      `Advance recoverable from ${emp?.name ?? `Employee #${employeeId}`}`,
+    );
+    const { rows: [cashRow] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = 'STD-CASH' LIMIT 1`);
+    if (advLedgerId && cashRow && Number(amount) > 0.004) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const vn = await nextVoucherNumber(client, "journal", advDate);
+        const { rows: [jv] } = await client.query(
+          `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by)
+           VALUES ('journal', $1, $2, $3, $4, $5) RETURNING id`,
+          [vn, advDate, `Advance to ${emp?.name ?? `Employee #${employeeId}`}`, Number(amount).toFixed(2), req.employee?.username ?? "system"],
+        );
+        await client.query(
+          `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit)
+           VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)`,
+          [jv.id, advLedgerId, Number(amount).toFixed(2), cashRow.id],
+        );
+        await client.query("COMMIT");
+      } catch (e) { await client.query("ROLLBACK").catch(() => {}); console.warn("[advances] JV error:", e); }
+      finally { client.release(); }
+    }
+  } catch (e) { console.warn("[advances] Accounting error:", e); }
+
+  res.status(201).json({
+    id: row.id, employeeId: row.employee_id, employeeName: emp?.name ?? "",
+    amount: Number(row.amount), date: row.date, note: row.note,
+    isDeducted: row.is_deducted, deductedPayrollId: row.deducted_payroll_id,
+    createdAt: row.created_at,
   });
 });
 
@@ -583,6 +820,12 @@ router.get("/hr/attendance", async (req, res): Promise<void> => {
   // All active employees (or just one if filtered)
   let allEmployees = await db.select().from(employeesTable).where(eq(employeesTable.isActive, true));
   if (filterEmployeeId) allEmployees = allEmployees.filter((e) => e.id === filterEmployeeId);
+
+  // Non-headoffice employees only see their own attendance row
+  const scopeEmp = (req as any).employee as { id: number; branchType: string } | undefined;
+  if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
+    allEmployees = allEmployees.filter((e) => e.id === scopeEmp.id);
+  }
 
   // Existing attendance rows for that date
   const rows = await db.select().from(attendanceTable)
@@ -695,6 +938,11 @@ router.get("/hr/leaves", requireModuleView("Leave"), async (req, res): Promise<v
     if (qp.data.employeeId) rows = rows.filter((r) => r.employeeId === Number(qp.data.employeeId));
     if (qp.data.status) rows = rows.filter((r) => r.status === qp.data.status);
   }
+  // Non-headoffice employees only see their own leave records
+  const scopeEmp = (req as any).employee as { id: number; branchType: string } | undefined;
+  if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
+    rows = rows.filter((r) => r.employeeId === scopeEmp.id);
+  }
   const employees = await db.select().from(employeesTable);
   const eMap = new Map(employees.map((e) => [e.id, e.name]));
   res.json(rows.map((r) => ({ ...r, employeeName: eMap.get(r.employeeId) ?? "", approverName: null })));
@@ -704,6 +952,25 @@ router.post("/hr/leaves", async (req, res): Promise<void> => {
   const parsed = ApplyLeaveBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const [row] = await db.insert(leavesTable).values({ ...parsed.data, status: "pending" }).returning();
+
+  // Sync leave days into attendance table as status = 'leave'
+  const startParts = parsed.data.fromDate.split('-').map(Number);
+  const cur = new Date(Date.UTC(startParts[0], startParts[1] - 1, startParts[2]));
+  const endParts = parsed.data.toDate.split('-').map(Number);
+  const endD = new Date(Date.UTC(endParts[0], endParts[1] - 1, endParts[2]));
+  while (cur <= endD) {
+    const dateStr = cur.toISOString().split('T')[0];
+    const [existing] = await db.select().from(attendanceTable)
+      .where(and(eq(attendanceTable.employeeId, parsed.data.employeeId), eq(attendanceTable.date, dateStr)))
+      .limit(1);
+    if (existing) {
+      await db.update(attendanceTable).set({ status: 'leave' }).where(eq(attendanceTable.id, existing.id));
+    } else {
+      await db.insert(attendanceTable).values({ employeeId: parsed.data.employeeId, date: dateStr, status: 'leave' });
+    }
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, row.employeeId)).limit(1);
   res.status(201).json({ ...row, employeeName: emp?.name ?? "", approverName: null });
 });

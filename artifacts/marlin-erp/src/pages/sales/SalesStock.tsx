@@ -3,6 +3,7 @@ import { useLocation } from 'wouter';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useLocationContext } from '@/lib/locationContext';
 import { useListStock, useListItems, useListOutlets, useListStockBatches, type StockBatch } from '@workspace/api-client-react';
+import { LocationFilter, parseLocationFilter } from '@/components/ui/LocationFilter';
 import { Package, AlertTriangle, Search, ShieldOff } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -10,12 +11,19 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 
 export default function SalesStock() {
-  const perm = usePermission('Location Stock');
+  const perm = usePermission('Stock');
   const { locationState } = useLocationContext();
   const [search, setSearch] = useState('');
+  const [filterLoc, setFilterLoc] = useState('all');
   const [, navigate] = useLocation();
 
-  const { locationType, locationId, locationName } = locationState;
+  const { locationType: ctxType, locationId: ctxId, locationName } = locationState;
+
+  // When a manual filter is chosen it overrides the location context
+  const { type: filterType, id: filterId } = parseLocationFilter(filterLoc);
+  const locationType = filterType !== 'all' ? filterType : ctxType;
+  const locationId   = filterId   ?? ctxId;
+
   const isAll       = locationType === 'all';
   const isWarehouse = locationType === 'warehouse' && !!locationId && !isAll;
   const isSpecific  = !isAll && !!locationType && !!locationId;
@@ -105,9 +113,13 @@ export default function SalesStock() {
         </div>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          {/* Search bar — useful for all/warehouse multi-location views */}
-          {showLocationCol && (
-            <div className="p-3 border-b border-border bg-muted/20 flex items-center gap-2">
+          {/* Filter / search bar */}
+          <div className="p-3 border-b border-border bg-muted/20 flex flex-wrap items-center gap-2">
+            <LocationFilter
+              value={filterLoc}
+              onChange={v => { setFilterLoc(v); setSearch(''); }}
+            />
+            <div className="flex items-center gap-2 flex-1 min-w-[160px]">
               <Search className="w-4 h-4 text-muted-foreground shrink-0" />
               <Input
                 placeholder="Search item or location…"
@@ -116,7 +128,7 @@ export default function SalesStock() {
                 className="border-transparent bg-transparent focus-visible:ring-0 h-8"
               />
             </div>
-          )}
+          </div>
 
           <Table>
             <TableHeader>

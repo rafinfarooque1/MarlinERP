@@ -701,6 +701,23 @@ router.get("/accounts/location-expenses", async (req, res): Promise<void> => {
   });
 });
 
+// ── Helper: compute running cash balance for a ledger ────────────────────────
+async function getLocationCashBalance(ledgerId: number): Promise<number> {
+  const { rows: recRows } = await pool.query(
+    `SELECT COALESCE(SUM(CASE WHEN received_in_ledger_id = $1 THEN amount::numeric ELSE 0 END), 0)
+          - COALESCE(SUM(CASE WHEN received_from_ledger_id = $1 THEN amount::numeric ELSE 0 END), 0) AS balance
+     FROM receipts WHERE received_in_ledger_id = $1 OR received_from_ledger_id = $1`,
+    [ledgerId]
+  );
+  const { rows: payRows } = await pool.query(
+    `SELECT COALESCE(SUM(CASE WHEN paid_to_ledger_id = $1 THEN amount::numeric ELSE 0 END), 0)
+          - COALESCE(SUM(CASE WHEN paid_from_ledger_id = $1 THEN amount::numeric ELSE 0 END), 0) AS balance
+     FROM payments WHERE paid_to_ledger_id = $1 OR paid_from_ledger_id = $1`,
+    [ledgerId]
+  );
+  return Number(recRows[0]?.balance ?? 0) + Number(payRows[0]?.balance ?? 0);
+}
+
 // Create a location-scoped expense (Dr expenseLedger, Cr location cashLedger via payments)
 router.post("/accounts/location-expenses", requireModuleAction("Location Expenses", "add"), async (req, res): Promise<void> => {
   const { locationType, locationId, expenseLedgerId, amount, expenseDate, description, reference } = req.body as {
@@ -709,6 +726,10 @@ router.post("/accounts/location-expenses", requireModuleAction("Location Expense
   };
   if (!locationType || !locationId || !expenseLedgerId || !amount || !expenseDate || !description) {
     res.status(400).json({ error: "locationType, locationId, expenseLedgerId, amount, expenseDate and description are required" }); return;
+  }
+  const parsedAmount = Number(amount);
+  if (!parsedAmount || parsedAmount <= 0) {
+    res.status(400).json({ error: "Amount must be positive." }); return;
   }
   // Server-side validation: expenseLedgerId must be within Direct/Indirect Expense subtree
   const allowedExpenseIds = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
@@ -719,12 +740,19 @@ router.post("/accounts/location-expenses", requireModuleAction("Location Expense
   if (!cashLedgerId) {
     res.status(400).json({ error: "This location has no Cash ledger. Provision ledgers under Accounts → Warehouses/Outlets first." }); return;
   }
+  // ── Cash balance check: expenses must not exceed available cash ──────────────
+  const cashBalance = await getLocationCashBalance(cashLedgerId);
+  if (parsedAmount > cashBalance + 0.001) {
+    res.status(400).json({
+      error: `Insufficient cash. Available balance is ₹${cashBalance.toFixed(2)} but expense is ₹${parsedAmount.toFixed(2)}.`,
+    }); return;
+  }
   const narration = reference ? `${description} [Ref: ${reference}]` : description;
   const voucherNumber = await nextVoucherNumber(pool, 'payment', expenseDate);
   const { rows: [r] } = await pool.query(
     `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration)
      VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-    [voucherNumber, expenseDate, cashLedgerId, Number(expenseLedgerId), Number(amount), narration]
+    [voucherNumber, expenseDate, cashLedgerId, Number(expenseLedgerId), parsedAmount, narration]
   );
   const { rows: [pf] } = await pool.query(`SELECT name FROM account_ledgers WHERE id = $1`, [cashLedgerId]);
   const { rows: [pt] } = await pool.query(`SELECT name FROM account_ledgers WHERE id = $1`, [expenseLedgerId]);

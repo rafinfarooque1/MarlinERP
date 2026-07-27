@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
+import { useLocation } from 'wouter';
 import {
   useListMaterials, useCreateMaterial, useUpdateMaterial, useDeleteMaterial, getListMaterialsQueryKey,
   useListRawMaterials, useCreateRawMaterial, useUpdateRawMaterial, useDeleteRawMaterial, getListRawMaterialsQueryKey,
   useListItems, useCreateItem, useUpdateItem, useDeleteItem, getListItemsQueryKey,
   useListBomTemplates, useCreateBomTemplate, useUpdateBomTemplate, useDeleteBomTemplate,
+  useListWarehouses, useListOutlets, useListStock,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -17,7 +19,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Edit2, Trash2, Layers, Download, Eye, ClipboardList, ShieldOff } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, Layers, Download, Eye, ClipboardList, ShieldOff, Tag } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
@@ -45,7 +47,6 @@ const schema = z.object({
   unit:        z.string().min(1, 'Unit required'),
   hsnCode:     z.string().optional(),
   taxRate:     z.coerce.number().min(0).max(28).optional(),
-  mrp:         z.coerce.number().min(0).optional(),
   cost:        z.coerce.number().min(0).optional(),
   reorderLevel: z.coerce.number().min(0).optional(),
   description: z.string().optional(),
@@ -65,6 +66,7 @@ type BomFormValues = z.infer<typeof bomSchema>;
 const defaultBomLine = { materialType: 'raw_material' as const, materialId: 0, quantity: 1 };
 
 export default function ItemMaster() {
+  const [, navigate] = useLocation();
   const perm = usePermission('Items');
   const { data: rawMaterials = [], isLoading: rmLoading } = useListRawMaterials();
   const { data: materials = [], isLoading: mLoading } = useListMaterials();
@@ -75,11 +77,35 @@ export default function ItemMaster() {
 
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [locType, setLocType] = useState<'all' | 'headoffice' | 'warehouse' | 'outlet'>('all');
+  const [locId, setLocId] = useState<number | null>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<{ id: number; type: ItemType } | null>(null);
   const [viewItem, setViewItem] = useState<any>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; type: ItemType } | null>(null);
   const [bomTarget, setBomTarget] = useState<any>(null);
+
+  // Location filter data
+  const { data: warehouses = [] } = useListWarehouses();
+  const { data: outlets = [] } = useListOutlets();
+  const locStockEnabled = locType !== 'all' && (locType === 'headoffice' || locId != null);
+  const locStockParams = locType === 'headoffice'
+    ? { branchType: 'headoffice' as const }
+    : locId != null
+      ? { branchType: locType as 'warehouse' | 'outlet', branchId: locId }
+      : undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: locStockRaw = [] } = useListStock(locStockParams, {
+    query: { enabled: locStockEnabled } as any,
+  });
+  const stockMap = useMemo(() => {
+    if (!locStockEnabled) return null;
+    const m = new Map<string, number>();
+    (locStockRaw as any[]).forEach(s => {
+      m.set(`${s.materialType}:${s.itemId}`, Number(s.quantity ?? 0));
+    });
+    return m;
+  }, [locStockRaw, locStockEnabled]);
 
   const createRM = useCreateRawMaterial(); const updateRM = useUpdateRawMaterial(); const deleteRM = useDeleteRawMaterial();
   const createM = useCreateMaterial(); const updateM = useUpdateMaterial(); const deleteM = useDeleteMaterial();
@@ -88,7 +114,7 @@ export default function ItemMaster() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { itemType: 'raw_material', name: '', unit: '', hsnCode: '', taxRate: 5, mrp: 0, cost: 0, reorderLevel: 10, description: '' },
+    defaultValues: { itemType: 'raw_material', name: '', unit: '', hsnCode: '', taxRate: 5, cost: 0, reorderLevel: 10, description: '' },
   });
 
   const watchType = form.watch('itemType');
@@ -117,7 +143,7 @@ export default function ItemMaster() {
 
   const openAdd = (type?: ItemType) => {
     setEditTarget(null);
-    form.reset({ itemType: type || 'raw_material', name: '', unit: units[0] || '', hsnCode: '', taxRate: 5, mrp: 0, cost: 0, reorderLevel: 10, description: '' });
+    form.reset({ itemType: type || 'raw_material', name: '', unit: units[0] || '', hsnCode: '', taxRate: 5, cost: 0, reorderLevel: 10, description: '' });
     setIsOpen(true);
   };
 
@@ -129,7 +155,6 @@ export default function ItemMaster() {
       unit: item.unit,
       hsnCode: item.hsnCode || '',
       taxRate: Number(item.taxRate ?? 5),
-      mrp: Number(item.mrp ?? 0),
       cost: Number(item.cost ?? 0),
       reorderLevel: Number(item.reorderLevel ?? 10),
       description: item.description || '',
@@ -183,8 +208,9 @@ export default function ItemMaster() {
       },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     };
-    const sharedData = { name: data.name, unit: data.unit, description: data.description, hsnCode: data.hsnCode || '', taxRate: Number(data.taxRate ?? 5), cost: Number(data.cost ?? 0) };
-    const itemData = { ...sharedData, mrp: Number(data.mrp ?? 0), reorderLevel: Number(data.reorderLevel ?? 10) };
+    // raw_material / material: cost auto-derives from purchases — never send it from the form
+    const sharedData = { name: data.name, unit: data.unit, description: data.description, hsnCode: data.hsnCode || '', taxRate: Number(data.taxRate ?? 5) };
+    const itemData = { ...sharedData, cost: Number(data.cost ?? 0), reorderLevel: Number(data.reorderLevel ?? 10) };
 
     if (editTarget) {
       if (type === 'raw_material') updateRM.mutate({ id: editTarget.id, data: sharedData as any }, opts);
@@ -268,6 +294,59 @@ export default function ItemMaster() {
               <Search className="w-4 h-4 text-muted-foreground shrink-0" />
               <Input placeholder="Search name or HSN..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0" />
             </div>
+
+            {/* Cascading location filter — step 1: branch type */}
+            <Select
+              value={locType}
+              onValueChange={v => {
+                setLocType(v as typeof locType);
+                setLocId(null); // reset second select when type changes
+              }}
+            >
+              <SelectTrigger className="w-40">
+                <SelectValue placeholder="All Locations" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Locations</SelectItem>
+                <SelectItem value="headoffice">Head Office</SelectItem>
+                <SelectItem value="warehouse">Warehouse</SelectItem>
+                <SelectItem value="outlet">Outlet</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {/* Step 2: specific branch (only for warehouse / outlet) */}
+            {locType === 'warehouse' && (
+              <Select
+                value={locId != null ? String(locId) : ''}
+                onValueChange={v => setLocId(Number(v))}
+              >
+                <SelectTrigger className="w-44">
+                  <SelectValue placeholder="Select warehouse…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(warehouses as any[]).map((w: any) => (
+                    <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            {locType === 'outlet' && (
+              <Select
+                value={locId != null ? String(locId) : ''}
+                onValueChange={v => setLocId(Number(v))}
+              >
+                <SelectTrigger className="w-44">
+                  <SelectValue placeholder="Select outlet…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(outlets as any[]).map((o: any) => (
+                    <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+
+            {/* Item type filter */}
             <Select value={typeFilter} onValueChange={setTypeFilter}>
               <SelectTrigger className="w-40"><SelectValue placeholder="All Types" /></SelectTrigger>
               <SelectContent>
@@ -287,20 +366,30 @@ export default function ItemMaster() {
                 <TableHead>Unit</TableHead>
                 <TableHead>HSN</TableHead>
                 <TableHead>Tax</TableHead>
-                <TableHead className="text-right">Cost (₹)</TableHead>
-                <TableHead className="text-right">MRP (₹)</TableHead>
-                <TableHead className="text-right">Stock</TableHead>
+                <TableHead className="text-right">Avg Cost (₹)</TableHead>
+                <TableHead className="text-right">
+                  {locType === 'all' ? 'Stock' :
+                   locType === 'headoffice' ? 'HO Stock' :
+                   locType === 'warehouse' && locId != null ? `${(warehouses as any[]).find((w: any) => w.id === locId)?.name ?? 'Warehouse'} Stock` :
+                   locType === 'outlet' && locId != null ? `${(outlets as any[]).find((o: any) => o.id === locId)?.name ?? 'Outlet'} Stock` :
+                   'Stock'}
+                </TableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(5)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
+                <TableRow><TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
                   <Layers className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No items found</p>
                 </TableCell></TableRow>
-              ) : filtered.map(item => (
+              ) : filtered.map(item => {
+                // Show avgCost for raw/packing materials (derives from purchases); cost for SKUs
+                const displayCost = (item._type === 'item')
+                  ? Number((item as any).cost)
+                  : Number((item as any).avgCost ?? (item as any).cost ?? 0);
+                return (
                 <TableRow key={`${item._type}-${item.id}`} className="hover:bg-muted/10">
                   <TableCell>
                     <Badge variant="outline" className={`text-xs ${(TYPE_COLORS as any)[item._type] ?? ''}`}>
@@ -317,20 +406,29 @@ export default function ItemMaster() {
                   <TableCell className="font-mono text-xs text-muted-foreground">{(item as any).hsnCode || '—'}</TableCell>
                   <TableCell className="text-sm">{(item as any).taxRate ? `${Number((item as any).taxRate)}%` : '—'}</TableCell>
                   <TableCell className="text-right font-mono text-sm">
-                    {Number((item as any).cost) > 0 ? `₹${Number((item as any).cost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'}
+                    {displayCost > 0 ? `₹${displayCost.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'}
                   </TableCell>
-                  <TableCell className="text-right font-mono text-sm">
-                    {item._type === 'item' && Number((item as any).mrp) > 0
-                      ? `₹${Number((item as any).mrp).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
-                      : '—'}
+                  <TableCell className="text-right font-mono font-bold">
+                    {(() => {
+                      const qty = stockMap
+                        ? (stockMap.get(`${item._type}:${item.id}`) ?? 0)
+                        : item.stock;
+                      return qty > 0
+                        ? qty.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 3 })
+                        : <span className="text-muted-foreground font-normal">0</span>;
+                    })()}
                   </TableCell>
-                  <TableCell className="text-right font-mono font-bold">{Number(item.stock).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 3 })}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       {item._type === 'item' && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title={bomByItem.has(item.id) ? 'Edit BOM template' : 'Set BOM template'} onClick={() => openBom(item)}>
-                          <ClipboardList className="w-4 h-4" />
-                        </Button>
+                        <>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500" title="Set selling price" onClick={() => navigate('/headoffice/item-price')}>
+                            <Tag className="w-4 h-4" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title={bomByItem.has(item.id) ? 'Edit BOM template' : 'Set BOM template'} onClick={() => openBom(item)}>
+                            <ClipboardList className="w-4 h-4" />
+                          </Button>
+                        </>
                       )}
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(item)}><Eye className="w-4 h-4" /></Button>
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(item)}><Edit2 className="w-4 h-4" /></Button>
@@ -338,7 +436,8 @@ export default function ItemMaster() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
         </div>
@@ -402,27 +501,22 @@ export default function ItemMaster() {
                     </Select>
                   </FormItem>
                 )} />
-                {/* Cost field — all item types */}
-                <FormField control={form.control} name="cost" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      Cost / Rate (₹)
-                      {watchType !== 'item' && <span className="ml-1 text-[10px] font-normal text-muted-foreground">(default; updates from purchases)</span>}
-                    </FormLabel>
-                    <FormControl><Input type="number" min={0} step="0.01" placeholder="0.00" className="font-mono" {...field} /></FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-
-                {/* MRP — finished items only */}
-                {watchType === 'item' && (
-                  <FormField control={form.control} name="mrp" render={({ field }) => (
+                {/* Cost — SKUs only; raw/packing materials derive cost from purchases automatically */}
+                {watchType === 'item' ? (
+                  <FormField control={form.control} name="cost" render={({ field }) => (
                     <FormItem>
-                      <FormLabel>MRP — Sale Price (₹) <span className="text-[10px] font-normal text-amber-500">auto-fills in sales</span></FormLabel>
+                      <FormLabel>Cost / Rate (₹)</FormLabel>
                       <FormControl><Input type="number" min={0} step="0.01" placeholder="0.00" className="font-mono" {...field} /></FormControl>
                       <FormMessage />
                     </FormItem>
                   )} />
+                ) : (
+                  <FormItem>
+                    <FormLabel>Avg Cost (₹)</FormLabel>
+                    <div className="flex items-center h-10 px-3 rounded-md border border-border bg-muted/40 text-sm text-muted-foreground font-mono">
+                      Auto-calculated from purchases
+                    </div>
+                  </FormItem>
                 )}
 
                 {/* Reorder level — finished items only */}
@@ -543,54 +637,63 @@ export default function ItemMaster() {
                 {viewItem.hsnCode && <div className="flex justify-between py-2 border-b border-border"><span className="text-muted-foreground">HSN Code</span><span className="font-mono">{viewItem.hsnCode}</span></div>}
                 {viewItem.taxRate !== undefined && <div className="flex justify-between py-2 border-b border-border"><span className="text-muted-foreground">GST Rate</span><span>{Number(viewItem.taxRate)}%</span></div>}
                 <div className="flex justify-between py-2 border-b border-border"><span className="text-muted-foreground">Current Stock</span><span className="font-mono font-bold">{Number(viewItem.stock).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 3 })}</span></div>
-                {Number(viewItem.cost) > 0 && (
+                {viewItem._type === 'item' ? (
+                  <>
+                    {Number(viewItem.cost) > 0 && (
+                      <div className="flex justify-between py-2 border-b border-border">
+                        <span className="text-muted-foreground">Cost / Rate</span>
+                        <span className="font-mono font-bold">₹{Number(viewItem.cost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                      </div>
+                    )}
+                    {Number(viewItem.avgCost) > 0 && (
+                      <div className="flex justify-between py-2 border-b border-border">
+                        <span className="text-muted-foreground">Avg Cost (weighted)</span>
+                        <span className="font-mono font-bold">₹{Number(viewItem.avgCost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between py-2 border-b border-border">
+                      <span className="text-muted-foreground">Reorder Level</span>
+                      <span className="font-mono">{Number(viewItem.reorderLevel ?? 10)}</span>
+                    </div>
+                    <div className="flex justify-between py-2 border-b border-border items-center">
+                      <span className="text-muted-foreground">BOM Template</span>
+                      {bomByItem.has(viewItem.id)
+                        ? <Badge variant="outline" className="text-xs bg-primary/5 text-primary border-primary/30">{(bomByItem.get(viewItem.id) as any).lines?.length ?? 0} inputs / unit</Badge>
+                        : <span className="text-muted-foreground text-xs">Not set</span>}
+                    </div>
+                  </>
+                ) : (
+                  /* raw_material / material — cost auto-derives from purchases */
                   <div className="flex justify-between py-2 border-b border-border">
-                    <span className="text-muted-foreground">Cost / Rate</span>
-                    <span className="font-mono font-bold">₹{Number(viewItem.cost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                  </div>
-                )}
-                {viewItem._type === 'item' && Number(viewItem.avgCost) > 0 && (
-                  <div className="flex justify-between py-2 border-b border-border">
-                    <span className="text-muted-foreground">Avg Cost (weighted)</span>
-                    <span className="font-mono font-bold">₹{Number(viewItem.avgCost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                  </div>
-                )}
-                {viewItem._type === 'item' && (
-                  <div className="flex justify-between py-2 border-b border-border">
-                    <span className="text-muted-foreground">Reorder Level</span>
-                    <span className="font-mono">{Number(viewItem.reorderLevel ?? 10)}</span>
-                  </div>
-                )}
-                {viewItem._type === 'item' && (
-                  <div className="flex justify-between py-2 border-b border-border">
-                    <span className="text-muted-foreground">MRP (Sale Price)</span>
-                    <span className={`font-mono font-bold ${Number(viewItem.mrp) > 0 ? 'text-primary' : 'text-muted-foreground'}`}>
-                      {Number(viewItem.mrp) > 0 ? `₹${Number(viewItem.mrp).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : 'Not set'}
+                    <span className="text-muted-foreground">Avg Cost (from purchases)</span>
+                    <span className="font-mono font-bold">
+                      {Number(viewItem.avgCost) > 0
+                        ? `₹${Number(viewItem.avgCost).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+                        : <span className="text-muted-foreground text-xs">No purchases yet</span>}
                     </span>
-                  </div>
-                )}
-                {viewItem._type === 'item' && (
-                  <div className="flex justify-between py-2 border-b border-border items-center">
-                    <span className="text-muted-foreground">BOM Template</span>
-                    {bomByItem.has(viewItem.id)
-                      ? <Badge variant="outline" className="text-xs bg-primary/5 text-primary border-primary/30">{(bomByItem.get(viewItem.id) as any).lines?.length ?? 0} inputs / unit</Badge>
-                      : <span className="text-muted-foreground text-xs">Not set</span>}
                   </div>
                 )}
                 {viewItem.description && <div className="py-2"><p className="text-muted-foreground mb-1">Description</p><p>{viewItem.description}</p></div>}
               </div>
-              <div className="flex gap-2 mt-6">
+              <div className="flex flex-col gap-2 mt-6">
                 {viewItem._type === 'item' && (
-                  <Button className="flex-1" variant="outline" onClick={() => { const it = viewItem; setViewItem(null); openBom(it); }}>
-                    <ClipboardList className="w-4 h-4 mr-2" /> BOM
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button className="flex-1" variant="outline" onClick={() => { setViewItem(null); navigate('/headoffice/item-price'); }}>
+                      <Tag className="w-4 h-4 mr-2" /> Set Price
+                    </Button>
+                    <Button className="flex-1" variant="outline" onClick={() => { const it = viewItem; setViewItem(null); openBom(it); }}>
+                      <ClipboardList className="w-4 h-4 mr-2" /> BOM
+                    </Button>
+                  </div>
                 )}
-                <Button className="flex-1" variant="outline" onClick={() => { setViewItem(null); openEdit(viewItem); }}>
-                  <Edit2 className="w-4 h-4 mr-2" /> Edit
-                </Button>
-                <Button className="flex-1" variant="destructive" onClick={() => { setViewItem(null); setDeleteTarget({ id: viewItem.id, name: viewItem.name, type: viewItem._type }); }}>
-                  <Trash2 className="w-4 h-4 mr-2" /> Delete
-                </Button>
+                <div className="flex gap-2">
+                  <Button className="flex-1" variant="outline" onClick={() => { setViewItem(null); openEdit(viewItem); }}>
+                    <Edit2 className="w-4 h-4 mr-2" /> Edit
+                  </Button>
+                  <Button className="flex-1" variant="destructive" onClick={() => { setViewItem(null); setDeleteTarget({ id: viewItem.id, name: viewItem.name, type: viewItem._type }); }}>
+                    <Trash2 className="w-4 h-4 mr-2" /> Delete
+                  </Button>
+                </div>
               </div>
             </>
           )}

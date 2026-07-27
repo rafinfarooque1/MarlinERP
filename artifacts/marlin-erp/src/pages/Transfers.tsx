@@ -42,6 +42,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { LocationFilter, parseLocationFilter } from '@/components/ui/LocationFilter';
 
 // ── Form schema ───────────────────────────────────────────────────────────────
 const schema = z.object({
@@ -378,20 +379,26 @@ export default function Transfers() {
   ]), [items, materials, rawMaterials]);
 
   // ── List view state ─────────────────────────────────────────────────────────
-  const [search, setSearch] = useState('');
-  const [tab,    setTab]    = useState<'all' | 'in_transit' | 'completed' | 'rejected'>('all');
+  const [search,    setSearch]    = useState('');
+  const [tab,       setTab]       = useState<'all' | 'in_transit' | 'completed' | 'rejected'>('all');
+  const [filterLoc, setFilterLoc] = useState('all');
   const [viewItem,      setViewItem]      = useState<any>(null);
   const [approveTarget, setApproveTarget] = useState<any>(null);
   const [isOpen,        setIsOpen]        = useState(false);
 
-  // Server already scoped the list for employees — just filter UI tabs/search
+  // Server already scoped the list for employees — just filter UI tabs/search/location
   const list = (Array.isArray(transfers) ? transfers : []) as any[];
   const searched = list.filter((t: any) =>
     t.challanNumber?.toLowerCase().includes(search.toLowerCase()) ||
     t.fromName?.toLowerCase().includes(search.toLowerCase()) ||
     t.toName?.toLowerCase().includes(search.toLowerCase())
   );
-  const filtered     = tab === 'all' ? searched : searched.filter((t: any) => t.status === tab);
+  const { type: locFType, id: locFId } = parseLocationFilter(filterLoc);
+  const locFiltered = locFType === 'all' ? searched : searched.filter((t: any) =>
+    (t.fromType === locFType && Number(t.fromId) === locFId) ||
+    (t.toType   === locFType && Number(t.toId)   === locFId)
+  );
+  const filtered = tab === 'all' ? locFiltered : locFiltered.filter((t: any) => t.status === tab);
   const pendingCount = list.filter((t: any) => t.status === 'in_transit').length;
 
   // Employee can only approve transfers coming TO their location
@@ -655,7 +662,7 @@ export default function Transfers() {
 
         {/* ── Transfer list ── */}
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border flex flex-col sm:flex-row items-start sm:items-center gap-3 bg-muted/20">
+          <div className="p-4 border-b border-border flex flex-wrap items-start sm:items-center gap-3 bg-muted/20">
             <Tabs value={tab} onValueChange={v => setTab(v as any)}>
               <TabsList className="h-8">
                 <TabsTrigger value="all" className="text-xs px-3">All</TabsTrigger>
@@ -668,7 +675,11 @@ export default function Transfers() {
                 <TabsTrigger value="rejected"  className="text-xs px-3">Rejected</TabsTrigger>
               </TabsList>
             </Tabs>
-            <div className="flex items-center gap-2 flex-1 max-w-sm">
+            <LocationFilter
+              value={filterLoc}
+              onChange={setFilterLoc}
+            />
+            <div className="flex items-center gap-2 flex-1 min-w-[160px]">
               <Search className="w-4 h-4 text-muted-foreground shrink-0" />
               <Input placeholder="Search challan, from or to…" value={search}
                 onChange={e => setSearch(e.target.value)}

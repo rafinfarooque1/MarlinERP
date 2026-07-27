@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { LocationFilter, parseLocationFilter } from '@/components/ui/LocationFilter';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '@/components/ui/command';
 import { Textarea } from '@/components/ui/textarea';
@@ -139,7 +140,9 @@ interface SalesProps {
 export default function Sales({ forceLocationType, forceLocationId, forceLocationName, permissionModule }: SalesProps = {}) {
   const perm = usePermission(permissionModule ?? 'Sales');
   const { data: outlets = [] } = useListOutlets();
-  const [outletFilter, setOutletFilter] = useState<string>('all');
+  // 'all' | 'warehouse:<id>' | 'outlet:<id>'
+  const [locationFilter, setLocationFilter] = useState<string>('all');
+  const { type: locFilterType, id: locFilterId } = parseLocationFilter(locationFilter);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -162,9 +165,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       ? { warehouseScope: forceLocationId }
       : forceLocationType === 'outlet' && forceLocationId
         ? { locationType: 'outlet' as const, locationId: forceLocationId }
-        : outletFilter !== 'all'
-          ? { locationType: 'outlet' as const, locationId: Number(outletFilter) }
-          : {}),
+        : locFilterType === 'warehouse' && locFilterId
+          ? { warehouseScope: locFilterId }
+          : locFilterType === 'outlet' && locFilterId
+            ? { locationType: 'outlet' as const, locationId: locFilterId }
+            : {}),
   });
   const sales = salesPage?.rows ?? [];
   const totalSales = salesPage?.total ?? 0;
@@ -637,13 +642,14 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               <Search className="w-4 h-4 text-muted-foreground" />
               <Input placeholder="Search invoice or customer..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0" />
             </div>
-            <Select value={outletFilter} onValueChange={v => { setOutletFilter(v); setPage(1); }}>
-              <SelectTrigger className="w-40"><SelectValue placeholder="All Outlets" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Outlets</SelectItem>
-                {outlets.map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            {/* Location filter — hidden when a specific location is already forced (e.g. POS context) */}
+            {!forceLocationType && (
+              <LocationFilter
+                value={locationFilter}
+                onChange={v => { setLocationFilter(v); setPage(1); }}
+                className="w-48"
+              />
+            )}
           </div>
           {/* Payment status filter pills */}
           <div className="px-4 py-2 border-b border-border flex flex-wrap gap-2">

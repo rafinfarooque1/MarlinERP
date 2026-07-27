@@ -243,6 +243,9 @@ export function downloadPayslipPDF(p: any, companySettings?: any) {
   for (const a of (p.allowancesBreakdown || [])) {
     earningRows.push([esc(a.name), fmt(a.amount)]);
   }
+  if (Number(p.extraAmount ?? 0) > 0) {
+    earningRows.push([esc(p.extraNote || 'Additional Amount'), fmt(p.extraAmount)]);
+  }
   earningRows.push(['Gross Pay', fmt(p.grossPay)]);
 
   y = drawTable(doc, y, [
@@ -252,16 +255,19 @@ export function downloadPayslipPDF(p: any, companySettings?: any) {
   y += 6;
 
   // Deductions
-  if ((p.deductionsBreakdown || []).length > 0) {
+  const hasDedRows = (p.deductionsBreakdown || []).length > 0 || Number(p.advanceDeduction ?? 0) > 0;
+  if (hasDedRows) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9);
     setColor(doc, RED);
     doc.text('DEDUCTIONS', MARGIN, y);
     y += 4;
 
+    const totalDed = Number(p.deductions ?? 0) + Number(p.advanceDeduction ?? 0);
     const dedRows: (string | number)[][] = [
       ...(p.deductionsBreakdown || []).map((d: any) => [esc(d.name), fmt(d.amount)]),
-      ['Total Deductions', fmt(p.deductions)],
+      ...(Number(p.advanceDeduction ?? 0) > 0 ? [['Advance Recovery', fmt(p.advanceDeduction)]] : []),
+      ['Total Deductions', fmt(totalDed)],
     ];
     y = drawTable(doc, y, [
       { header: 'Component', width: 140 },
@@ -271,6 +277,8 @@ export function downloadPayslipPDF(p: any, companySettings?: any) {
   }
 
   // Net Pay box
+  const displayNetPay = Number(p.netPay ?? 0) + Number(p.extraAmount ?? 0);
+  const paidAmt = Number(p.paidAmount ?? 0);
   setFill(doc, TEAL);
   doc.roundedRect(MARGIN, y, CONTENT_W, 16, 3, 3, 'F');
   doc.setFont('helvetica', 'bold');
@@ -278,7 +286,15 @@ export function downloadPayslipPDF(p: any, companySettings?: any) {
   setColor(doc, WHITE);
   doc.text('NET PAY', MARGIN + 5, y + 10.5);
   doc.setFontSize(16);
-  doc.text(fmt(p.netPay), PAGE_W - MARGIN - 5, y + 10.5, { align: 'right' });
+  doc.text(fmt(displayNetPay), PAGE_W - MARGIN - 5, y + 10.5, { align: 'right' });
+  if (paidAmt > 0 && paidAmt < displayNetPay - 0.005) {
+    y += 18;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    setColor(doc, MUTED);
+    doc.text(`Paid: ${fmt(paidAmt)}   |   Balance: ${fmt(displayNetPay - paidAmt)}`, MARGIN, y);
+    y -= 2;
+  }
   y += 24;
 
   // Signature lines

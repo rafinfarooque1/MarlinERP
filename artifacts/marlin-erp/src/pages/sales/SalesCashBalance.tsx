@@ -17,8 +17,9 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Banknote, Warehouse, Store, RefreshCw, ArrowUpFromLine, CheckCircle2 } from 'lucide-react';
+import { Banknote, Warehouse, Store, RefreshCw, ArrowUpFromLine, CheckCircle2, ArrowRight } from 'lucide-react';
 import { toast } from 'sonner';
+import { useLocation as useWouter } from 'wouter';
 
 function fmt(n: number) {
   return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -36,6 +37,8 @@ export default function SalesCashBalance() {
   const perm = usePermission('Cash Balance');
   const { locationState } = useLocationContext();
   const { locationType, locationId, locationName } = locationState;
+  const [, navigate] = useWouter();
+  const [depositSuccess, setDepositSuccess] = useState<number | null>(null); // amount of last deposit
 
   const { data: allBalances = [], isLoading, refetch } = useGetCashInOutlet();
   const { data: deposits = [], isLoading: depositsLoading } = useGetCashDeposits(
@@ -67,6 +70,7 @@ export default function SalesCashBalance() {
     const amount = Number(depAmount);
     if (!amount || amount <= 0) { toast.error('Amount must be positive'); return; }
     if (!depDate) { toast.error('Deposit date is required'); return; }
+    if (!depBankId) { toast.error('Select a destination bank account'); return; }
     try {
       await createDeposit.mutateAsync({
         ...(locationType === 'warehouse'
@@ -75,10 +79,10 @@ export default function SalesCashBalance() {
         amount,
         depositDate: depDate,
         depositReference: depRef || undefined,
-        destinationBankLedgerId: depBankId ? Number(depBankId) : undefined,
+        destinationBankLedgerId: Number(depBankId),
         notes: depNotes || undefined,
       } as any);
-      toast.success('Cash deposit recorded');
+      setDepositSuccess(amount);
       setShowDeposit(false);
       refetch();
     } catch (e: any) {
@@ -126,6 +130,28 @@ export default function SalesCashBalance() {
             </Button>
           </div>
         </div>
+
+        {/* ── Deposit success banner ── */}
+        {depositSuccess !== null && (
+          <div className="flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4">
+            <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
+            <div className="flex-1 text-sm">
+              <p className="font-semibold text-emerald-700">
+                {fmt(depositSuccess)} deposited to bank — pending confirmation
+              </p>
+              <p className="text-emerald-600 opacity-80">
+                Finance team can reconcile it in Accounts → Reconciliation.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" className="border-emerald-500/40 text-emerald-700 hover:bg-emerald-500/10 text-xs"
+                onClick={() => navigate('/accounts/reconciliation')}>
+                Go to Reconciliation <ArrowRight className="w-3.5 h-3.5 ml-1" />
+              </Button>
+              <button onClick={() => setDepositSuccess(null)} className="text-emerald-600 hover:text-emerald-800 text-lg leading-none px-1">×</button>
+            </div>
+          </div>
+        )}
 
         {isLoading ? (
           <div className="py-16 text-center text-muted-foreground">Loading…</div>
@@ -257,17 +283,24 @@ export default function SalesCashBalance() {
             </div>
             <div>
               <Label className="text-sm mb-1.5 block">
-                Destination Bank Account{' '}
-                <span className="text-xs text-muted-foreground font-normal">(optional)</span>
+                Destination Bank Account <span className="text-destructive">*</span>
               </Label>
               <Select value={depBankId} onValueChange={setDepBankId}>
-                <SelectTrigger className="h-9"><SelectValue placeholder="Select bank account (optional)…" /></SelectTrigger>
+                <SelectTrigger className={`h-9 ${!depBankId ? 'border-dashed' : ''}`}>
+                  <SelectValue placeholder="Select bank account…" />
+                </SelectTrigger>
                 <SelectContent>
-                  {bankLedgers.map((l: any) => (
-                    <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>
-                  ))}
+                  {(bankLedgers as any[]).length === 0
+                    ? <SelectItem value="__none__" disabled>No bank accounts configured</SelectItem>
+                    : (bankLedgers as any[]).map((l: any) => (
+                        <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>
+                      ))
+                  }
                 </SelectContent>
               </Select>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Cash will move to Cash-in-Transit and appear in Reconciliation for bank confirmation.
+              </p>
             </div>
             <div>
               <Label className="text-sm mb-1.5 block">Notes</Label>
@@ -276,9 +309,9 @@ export default function SalesCashBalance() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDeposit(false)}>Cancel</Button>
-            <Button onClick={handleCreateDeposit} disabled={createDeposit.isPending}>
+            <Button onClick={handleCreateDeposit} disabled={createDeposit.isPending || !depBankId}>
               <CheckCircle2 className="w-4 h-4 mr-1.5" />
-              {createDeposit.isPending ? 'Saving…' : 'Record Deposit'}
+              {createDeposit.isPending ? 'Saving…' : 'Deposit to Bank'}
             </Button>
           </DialogFooter>
         </DialogContent>
