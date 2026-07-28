@@ -3,7 +3,7 @@ import {
   useListEnrichedPayroll, useGeneratePayroll, getEnrichedPayrollQueryKey,
   useEditPayroll, useApprovePayroll, usePayPayroll,
   useListAdvances, useAddAdvance,
-  useGetCompanySettings, useListEmployees, useListWarehouses, useListOutlets,
+  useListEmployees, useListWarehouses, useListOutlets,
   EnrichedPayrollRecord,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -22,14 +22,34 @@ import {
   DollarSign, Download, Eye, CheckCircle, Zap, RefreshCw, FileDown,
   ShieldOff, Pencil, PlusCircle, ChevronDown, ChevronUp, Wallet,
 } from 'lucide-react';
-import { downloadPayslipPDF } from '@/lib/pdfUtils';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { downloadCSV } from '@/lib/download';
+import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
 import { useGetMe } from '@workspace/api-client-react';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+/**
+ * Salary slip, rendered by the server from the stored payroll row.
+ *
+ * Deliberately not built in the browser: the slip is a statutory document, and
+ * the stored row is what the books and the statutory returns were computed from.
+ * Printing from the row also means a slip reprinted after a rate change still
+ * shows the rates that were actually applied.
+ */
+async function downloadPayslip(p: { id: number; employeeName?: string; month?: number; year?: number }) {
+  const name = (p.employeeName || 'payslip').replace(/[^A-Za-z0-9._-]+/g, '-');
+  try {
+    await downloadPDFFromEndpoint(
+      '/api/pdf/payslip',
+      { payrollId: p.id },
+      `payslip-${name}-${MONTHS[(p.month ?? 1) - 1]}-${p.year ?? ''}.pdf`,
+    );
+  } catch (e: any) {
+    toast.error(e?.message ?? 'Could not generate the payslip');
+  }
+}
 
 function statusBadge(status: string, paidAmt: number, netPay: number) {
   if (status === 'paid') return <Badge className="bg-emerald-500 text-white">Paid</Badge>;
@@ -165,11 +185,10 @@ function PayslipSheet({
   onPay: () => void;
 }) {
   const totalNet = (item.netPay ?? 0) + (item.extraAmount ?? 0);
-  const cs = useGetCompanySettings();
-  const handleDownload = () => {
-    downloadPayslipPDF(item as any, cs.data as any);
-    toast.success('PDF downloaded');
-  };
+  const handleDownload = () => downloadPayslip(item);
+  const pfEmployer = Number((item as any).pfEmployer ?? 0);
+  const esiEmployer = Number((item as any).esiEmployer ?? 0);
+  const employerCost = (item.grossPay ?? 0) + (item.extraAmount ?? 0) + pfEmployer + esiEmployer;
 
   return (
     <Sheet open onOpenChange={onClose}>
@@ -271,6 +290,28 @@ function PayslipSheet({
           <span className="font-semibold">Net Pay</span>
           <span className="text-xl font-bold">{fmt(totalNet)}</span>
         </div>
+
+        {/* Employer statutory share — a real company cost that never appears in
+            the employee's deductions, so it needs its own block or it looks as
+            though salary is the whole cost of employing someone. */}
+        {(pfEmployer > 0 || esiEmployer > 0) && (
+          <div className="space-y-1 mt-4">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              Employer Contribution — not deducted from the employee
+            </p>
+            <div className="rounded-lg border divide-y text-sm">
+              {pfEmployer > 0 && (
+                <div className="flex justify-between px-3 py-2"><span>PF — employer share</span><span>{fmt(pfEmployer)}</span></div>
+              )}
+              {esiEmployer > 0 && (
+                <div className="flex justify-between px-3 py-2"><span>ESI — employer share</span><span>{fmt(esiEmployer)}</span></div>
+              )}
+              <div className="flex justify-between px-3 py-2 font-semibold bg-muted/30">
+                <span>Cost to Company</span><span>{fmt(employerCost)}</span>
+              </div>
+            </div>
+          </div>
+        )}
         {(item.paidAmount ?? 0) > 0 && (
           <div className="text-xs text-muted-foreground mt-1 flex justify-between px-1">
             <span>Paid: {fmt(item.paidAmount ?? 0)} via {item.paymentMode ?? '—'}</span>
@@ -637,7 +678,7 @@ export default function Payroll() {
                           <DollarSign className="h-4 w-4" />
                         </Button>
                       )}
-                      <Button size="sm" variant="ghost" onClick={() => { downloadPayslipPDF(p as any, undefined); toast.success('PDF downloaded'); }} title="Download PDF">
+                      <Button size="sm" variant="ghost" onClick={() => downloadPayslip(p)} title="Download payslip">
                         <FileDown className="h-4 w-4" />
                       </Button>
                     </div>

@@ -560,43 +560,67 @@ router.get("/expenses", async (req, res): Promise<void> => {
   const expEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
   const isHO = !expEmp || expEmp.branchType === 'headoffice';
 
-  let directExpenses: Array<{
-    id: number; source: 'direct'; expenseDate: any;
+  type ExpenseRow = {
+    id: number; source: 'direct' | 'location'; expenseDate: any;
     description: string | null; ledgerAccountId: number; ledgerAccountName: string;
     paymentAccountId: number; paymentAccountName: string; amount: number;
     voucherNumber: string | null; createdAt: any;
-  }> = [];
+    expenseNumber: string | null; category: string | null; attachmentUrl: string | null;
+    locationType: string | null; locationId: number | null; locationName: string;
+  };
+  let directExpenses: ExpenseRow[] = [];
 
-  if (isHO) {
-    // 1. Regular expenses from the expenses table (Head Office only)
-    const rows = await db.select().from(expensesTable).orderBy(expensesTable.id);
-    const ledgers = await db.select().from(accountLedgersTable);
-    const cashBanks = await db.select().from(cashBankAccountsTable);
-    const lMap = new Map(ledgers.map(l => [l.id, l.name]));
-    const cbMap = new Map(cashBanks.map(cb => [cb.id, cb.name]));
-    directExpenses = rows.map(r => ({
+  // 1. Expenses recorded at Head Office, paid from a company cash/bank account.
+  //    A branch user sees the ones attributed to their own location — Head
+  //    Office often pays a warehouse's bill centrally, and that spend belongs on
+  //    the warehouse's expense list even though the warehouse never touched it.
+  //    Raw SQL because the audit columns come from a startup migration and are
+  //    invisible to Drizzle's select().
+  {
+    const params: any[] = [];
+    let locFilter = '';
+    if (!isHO && expEmp) {
+      params.push(expEmp.branchType, Number(expEmp.branchId));
+      locFilter = `WHERE e.location_type = $1 AND e.location_id = $2`;
+    }
+    const { rows } = await pool.query(`
+      SELECT e.id, e.expense_date, e.description, e.ledger_account_id, e.payment_account_id,
+             e.amount, e.created_at, e.expense_number, e.category, e.attachment_url,
+             e.location_type, e.location_id,
+             al.name AS ledger_name, cb.name AS cash_bank_name,
+             COALESCE(w.name, o.name) AS location_name
+      FROM expenses e
+      LEFT JOIN account_ledgers    al ON al.id = e.ledger_account_id
+      LEFT JOIN cash_bank_accounts cb ON cb.id = e.payment_account_id
+      LEFT JOIN warehouses w ON e.location_type = 'warehouse' AND w.id = e.location_id
+      LEFT JOIN outlets    o ON e.location_type = 'outlet'    AND o.id = e.location_id
+      ${locFilter}
+      ORDER BY e.id DESC
+    `, params);
+    directExpenses = rows.map((r: any) => ({
       id: r.id,
       source: 'direct' as const,
-      expenseDate: r.expenseDate,
+      expenseDate: r.expense_date,
       description: r.description ?? null,
-      ledgerAccountId: r.ledgerAccountId,
-      ledgerAccountName: lMap.get(r.ledgerAccountId) ?? "",
-      paymentAccountId: r.paymentAccountId,
-      paymentAccountName: cbMap.get(r.paymentAccountId) ?? "",
+      ledgerAccountId: r.ledger_account_id,
+      ledgerAccountName: r.ledger_name ?? "",
+      paymentAccountId: r.payment_account_id,
+      paymentAccountName: r.cash_bank_name ?? "",
       amount: Number(r.amount),
-      voucherNumber: null as string | null,
-      createdAt: r.createdAt,
+      voucherNumber: r.expense_number ?? null,
+      createdAt: r.created_at,
+      expenseNumber: r.expense_number ?? null,
+      category: r.category ?? null,
+      attachmentUrl: r.attachment_url ?? null,
+      locationType: r.location_type ?? 'headoffice',
+      locationId: r.location_id ?? 0,
+      locationName: r.location_name ?? 'Head Office',
     }));
   }
 
   // 2. Location expenses: payments where paid_to is in Direct/Indirect Expense subtree
   const expenseLedgerIds = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
-  let locationExpenses: Array<{
-    id: number; source: 'direct' | 'location'; expenseDate: any;
-    description: string | null; ledgerAccountId: number; ledgerAccountName: string;
-    paymentAccountId: number; paymentAccountName: string; amount: number;
-    voucherNumber: string | null; createdAt: any;
-  }> = [];
+  let locationExpenses: ExpenseRow[] = [];
   if (expenseLedgerIds.length > 0) {
     // LBAC: non-HO users see only their location's expenses (from their cash ledger)
     let cashLedgerFilter = '';
@@ -618,11 +642,20 @@ router.get("/expenses", async (req, res): Promise<void> => {
     const { rows: pmtRows } = await pool.query(`
       SELECT p.id, p.voucher_number, p.payment_date, p.paid_from_ledger_id,
              p.paid_to_ledger_id, p.amount, p.narration, p.created_at,
-             pf.name AS paid_from_name, pt.name AS paid_to_name
+             p.expense_category, p.attachment_url, p.location_type, p.location_id,
+             pf.name AS paid_from_name, pt.name AS paid_to_name,
+             COALESCE(w.name, o.name) AS location_name
       FROM payments p
       LEFT JOIN account_ledgers pf ON p.paid_from_ledger_id = pf.id
       LEFT JOIN account_ledgers pt ON p.paid_to_ledger_id = pt.id
+      LEFT JOIN warehouses w ON w.cash_ledger_id = p.paid_from_ledger_id
+      LEFT JOIN outlets    o ON o.cash_ledger_id = p.paid_from_ledger_id
       WHERE p.paid_to_ledger_id = ANY($1)${cashLedgerFilter}
+        -- Must be spent out of a location's own cash box. Without this, an
+        -- ordinary Head Office payment to an expense head is dressed up as a
+        -- location expense with a blank location, and its voucher prints as
+        -- one. A payment is a location expense only if a location paid it.
+        AND (w.id IS NOT NULL OR o.id IS NOT NULL)
       ORDER BY p.id DESC
     `, pmtParams);
 
@@ -638,6 +671,12 @@ router.get("/expenses", async (req, res): Promise<void> => {
       amount: Number(r.amount),
       voucherNumber: r.voucher_number ?? null,
       createdAt: r.created_at,
+      expenseNumber: r.voucher_number ?? null,
+      category: r.expense_category ?? null,
+      attachmentUrl: r.attachment_url ?? null,
+      locationType: r.location_type ?? null,
+      locationId: r.location_id ?? null,
+      locationName: r.location_name ?? '',
     }));
   }
 
@@ -648,14 +687,101 @@ router.get("/expenses", async (req, res): Promise<void> => {
   res.json(all);
 });
 
+/** Expense categories. Free text would fragment the audit trail across
+ *  "Fuel", "fuel" and "Diesel/Fuel", so the set is fixed and validated here. */
+export const EXPENSE_CATEGORIES = [
+  'Uncategorised', 'Salaries & Wages', 'Rent & Utilities', 'Freight & Transport',
+  'Fuel', 'Repairs & Maintenance', 'Packing & Consumables', 'Office & Admin',
+  'Professional Fees', 'Marketing', 'Bank & Finance Charges', 'Taxes & Statutory',
+  'Cold Storage', 'Travel', 'Other',
+] as const;
+
+/** Read category + attachment from the RAW body — zod strips unknown keys. */
+function readExpenseExtras(body: any): { category: string; attachmentUrl: string | null } | { error: string } {
+  const rawCat = body?.category;
+  let category = 'Uncategorised';
+  if (rawCat !== undefined && rawCat !== null && String(rawCat).trim() !== '') {
+    const match = EXPENSE_CATEGORIES.find(c => c.toLowerCase() === String(rawCat).trim().toLowerCase());
+    if (!match) return { error: `category must be one of: ${EXPENSE_CATEGORIES.join(', ')}` };
+    category = match;
+  }
+  const rawAtt = body?.attachmentUrl;
+  let attachmentUrl: string | null = null;
+  if (rawAtt !== undefined && rawAtt !== null && String(rawAtt).trim() !== '') {
+    const v = String(rawAtt).trim();
+    // Only our own object-storage paths — an arbitrary URL here would let a
+    // voucher point anywhere, and the PDF/link would leave the app.
+    if (!/^\/objects\/[A-Za-z0-9._\-/]+$/.test(v)) {
+      return { error: 'attachmentUrl must be an uploaded file path' };
+    }
+    attachmentUrl = v;
+  }
+  return { category, attachmentUrl };
+}
+
 router.post("/expenses", requireModuleAction("Expenses", "add"), async (req, res): Promise<void> => {
   const parsed = CreateExpenseBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  // Head Office only. This row is paid from a company cash/bank account, which
+  // a branch does not operate — a branch records spending through
+  // /accounts/location-expenses, where its own cash balance is checked.
+  const emp = (req as any).employee as { branchType: string; branchId: number; id?: number } | undefined;
+  if (emp && emp.branchType !== 'headoffice') {
+    res.status(403).json({
+      error: "Only Head Office can record an expense against a company cash or bank account. Record this under Sales → Expenses to pay it from your location's cash.",
+    });
+    return;
+  }
+
+  const extras = readExpenseExtras(req.body);
+  if ('error' in extras) { res.status(400).json({ error: extras.error }); return; }
+
+  // Attribution: which location the spend belongs to. Defaults to Head Office.
+  let locationType = 'headoffice';
+  let locationId: number | null = null;
+  const rawLocType = (req.body as any)?.locationType;
+  if (rawLocType !== undefined && rawLocType !== null && String(rawLocType).trim() !== '') {
+    locationType = String(rawLocType).trim();
+    if (!['headoffice', 'warehouse', 'outlet'].includes(locationType)) {
+      res.status(400).json({ error: "locationType must be headoffice, warehouse or outlet" }); return;
+    }
+    if (locationType !== 'headoffice') {
+      locationId = Number((req.body as any)?.locationId);
+      if (!Number.isInteger(locationId) || locationId <= 0) {
+        res.status(400).json({ error: "locationId is required when locationType is not headoffice" }); return;
+      }
+      const table = locationType === 'warehouse' ? 'warehouses' : 'outlets';
+      const { rows: [loc] } = await pool.query(`SELECT id FROM ${table} WHERE id = $1`, [locationId]);
+      if (!loc) { res.status(400).json({ error: `No such ${locationType}` }); return; }
+    }
+  }
+
+  const expenseNumber = await nextVoucherNumber(pool, 'expense', String(parsed.data.expenseDate));
+
   const [row] = await db.insert(expensesTable).values({ ...parsed.data, amount: String(parsed.data.amount) }).returning();
+  // Audit columns come from a startup migration, so Drizzle cannot write them.
+  await pool.query(
+    `UPDATE expenses SET expense_number = $1, category = $2, attachment_url = $3,
+            location_type = $4, location_id = $5, created_by = $6
+     WHERE id = $7`,
+    [expenseNumber, extras.category, extras.attachmentUrl, locationType, locationId, emp?.id ?? null, row.id]
+  );
   await db.execute(sql`UPDATE cash_bank_accounts SET balance = balance::numeric - ${parsed.data.amount} WHERE id = ${parsed.data.paymentAccountId}`);
   const [ledger] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, row.ledgerAccountId)).limit(1);
   const [cashBank] = await db.select().from(cashBankAccountsTable).where(eq(cashBankAccountsTable.id, row.paymentAccountId)).limit(1);
-  res.status(201).json({ ...row, ledgerAccountName: ledger?.name ?? "", paymentAccountName: cashBank?.name ?? "", amount: Number(row.amount) });
+  res.status(201).json({
+    ...row, ledgerAccountName: ledger?.name ?? "", paymentAccountName: cashBank?.name ?? "",
+    amount: Number(row.amount),
+    expenseNumber, voucherNumber: expenseNumber,
+    category: extras.category, attachmentUrl: extras.attachmentUrl,
+    locationType, locationId,
+  });
+});
+
+// Category list for the pickers — one source of truth, shared by both pages.
+router.get("/expenses/categories", async (_req, res): Promise<void> => {
+  res.json(EXPENSE_CATEGORIES.map((name) => ({ name })));
 });
 
 // ── Location-scoped Expenses (Sales segment) ───────────────────────────────
@@ -799,7 +925,7 @@ router.get("/accounts/location-expenses/all", async (req, res): Promise<void> =>
   // Join warehouses and outlets on their cash ledger to tag each payment with location info
   const { rows } = await pool.query(`
     SELECT p.id, p.voucher_number, p.payment_date, p.paid_from_ledger_id, p.paid_to_ledger_id,
-           p.amount, p.narration, p.created_at,
+           p.amount, p.narration, p.created_at, p.expense_category, p.attachment_url,
            pt.name AS expense_ledger_name,
            COALESCE(w.name, o.name)         AS location_name,
            CASE WHEN w.id IS NOT NULL THEN 'warehouse' ELSE 'outlet' END AS location_type,
@@ -825,6 +951,8 @@ router.get("/accounts/location-expenses/all", async (req, res): Promise<void> =>
     locationType: r.location_type,
     locationId: Number(r.location_id),
     createdAt: r.created_at,
+    category: r.expense_category ?? null,
+    attachmentUrl: r.attachment_url ?? null,
   })));
 });
 
@@ -861,6 +989,7 @@ router.get("/accounts/location-expenses", async (req, res): Promise<void> => {
 
   const { rows } = await pool.query(`
     SELECT p.id, p.voucher_number, p.payment_date, p.paid_from_ledger_id, p.paid_to_ledger_id, p.amount, p.narration, p.created_at,
+           p.expense_category, p.attachment_url,
            pf.name AS paid_from_name, pt.name AS paid_to_name
     FROM payments p
     LEFT JOIN account_ledgers pf ON p.paid_from_ledger_id = pf.id
@@ -884,6 +1013,8 @@ router.get("/accounts/location-expenses", async (req, res): Promise<void> => {
       amount: Number(r.amount),
       description: r.narration,
       createdAt: r.created_at,
+      category: r.expense_category ?? null,
+      attachmentUrl: r.attachment_url ?? null,
     })),
   });
 });
@@ -946,13 +1077,16 @@ router.post("/accounts/location-expenses", requireModuleAction("Location Expense
       error: `Insufficient cash. Available balance is ₹${cashBalance.toFixed(2)} but expense is ₹${parsedAmount.toFixed(2)}.`,
     }); return;
   }
+  const extras = readExpenseExtras(req.body);
+  if ('error' in extras) { res.status(400).json({ error: extras.error }); return; }
+
   const narration = reference ? `${description} [Ref: ${reference}]` : description;
   const voucherNumber = await nextVoucherNumber(pool, 'payment', expenseDate);
   const { rows: [r] } = await pool.query(
-    `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+    `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id, expense_category, attachment_url)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
     [voucherNumber, expenseDate, cashLedgerId, Number(expenseLedgerId), parsedAmount, narration,
-     String(locationType), Number(locationId)]
+     String(locationType), Number(locationId), extras.category, extras.attachmentUrl]
   );
   const { rows: [pf] } = await pool.query(`SELECT name FROM account_ledgers WHERE id = $1`, [cashLedgerId]);
   const { rows: [pt] } = await pool.query(`SELECT name FROM account_ledgers WHERE id = $1`, [expenseLedgerId]);
@@ -961,6 +1095,7 @@ router.post("/accounts/location-expenses", requireModuleAction("Location Expense
     expenseLedgerId: r.paid_to_ledger_id, expenseLedgerName: pt?.name ?? '',
     cashLedgerId: r.paid_from_ledger_id, cashLedgerName: pf?.name ?? '',
     amount: Number(r.amount), description: r.narration, createdAt: r.created_at,
+    category: extras.category, attachmentUrl: extras.attachmentUrl,
   });
 });
 
@@ -1075,6 +1210,37 @@ router.get("/accounts/financial-statements", requireModuleView("Chart of Account
     add(Number(r.received_in_ledger_id), amt);
     add(Number(r.received_from_ledger_id), -amt);
   }
+
+  // Journal vouchers — Indirect Expenses only.
+  //
+  // Payroll approval, and only payroll approval, records an expense as a
+  // journal voucher rather than through the expenses/payments tables. Without
+  // this the salary bill was completely absent from the P&L: the voucher was in
+  // the trial balance but the statement never looked at journal lines, so
+  // reported profit was overstated by every salary approved.
+  //
+  // Deliberately restricted to the Indirect Expense subtree. Direct Expenses
+  // must NOT be included: production costing credits STD-PROD-ABS there to
+  // relieve the cost it capitalises into stock, and this statement already
+  // relieves that cost through closing stock on the income side. Reading both
+  // would relieve it twice. Reconciling the direct-expense side belongs with
+  // the wider financial-statement work, not here.
+  const jp: any[] = [];
+  const { rows: jvRows } = await pool.query(
+    `WITH RECURSIVE indexp AS (
+       SELECT id FROM account_ledgers WHERE code = 'SYS-INDEXP'
+       UNION ALL
+       SELECT a.id FROM account_ledgers a JOIN indexp ON a.parent_id = indexp.id
+     )
+     SELECT l.ledger_id,
+            COALESCE(SUM(l.debit::numeric), 0) - COALESCE(SUM(l.credit::numeric), 0) AS net
+     FROM journal_voucher_lines l
+     JOIN journal_vouchers v ON v.id = l.voucher_id
+     WHERE l.ledger_id IN (SELECT id FROM indexp)
+       ${(() => { const c = makeDateConds('v.voucher_date', jp); return c ? c.replace(/^WHERE/, 'AND') : ''; })()}
+     GROUP BY l.ledger_id`, jp
+  );
+  for (const r of jvRows) add(Number(r.ledger_id), Number(r.net));
 
   // Apply balances
   for (const [id, bal] of balanceMap) {

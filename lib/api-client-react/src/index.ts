@@ -22,5 +22,6 @@ export * from "./quick-search";
 export * from "./stock-ledger";
 export * from "./login-history";
 export * from "./paginated-lists";
+export * from "./expenses";
 export * from './generated/api';
 export * from './generated/api.schemas';

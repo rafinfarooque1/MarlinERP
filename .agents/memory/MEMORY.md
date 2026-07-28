@@ -33,3 +33,5 @@
 - [Stock reservations](stock-reservations.md) — hold reduces available, in_transit does NOT (already deducted); lock the stock row inside the deducting txn; `hold` has no producer yet, keep it.
 - [Inventory valuation & ageing](inventory-valuation-ageing.md) — ONE at-cost valuation (3 kinds + in-transit, sender-owned) feeds report+dashboard+P&L; movement class = last OUTBOUND only.
 - [GST transfer invoicing](gst-transfer-invoicing.md) — cross-GSTIN transfers write REAL sales/purchase rows that replace the dispatch/receive JVs; every revenue/spend query must exclude branch_transfer_id.
+- [Statutory payroll](statutory-payroll.md) — rates snapshotted per run (never re-read); approved payroll is locked, corrections are reversals; salary JV recognises full cost incl. employer PF/ESI; attendance is fractional.
+- [Attachment ACL](attachment-acl.md) — "signed in" is not authorisation in a location-scoped app; readable only if you uploaded it (id in path) or may see the record; 404 not 403; presigned PUT can't bind content-type.

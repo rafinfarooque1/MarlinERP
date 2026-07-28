@@ -3,9 +3,11 @@ import { useLocation } from 'wouter';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useLocationContext } from '@/lib/locationContext';
-import { customFetch, useListOutlets, useDeleteLocationExpense, useGetCashInOutlet } from '@workspace/api-client-react';
+import { customFetch, useListOutlets, useDeleteLocationExpense, useGetCashInOutlet, useExpenseCategories, attachmentViewUrl } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
-import { Receipt, Plus, Calendar, Wallet, AlertCircle, Layers, Trash2, Loader2, ShieldOff, AlertTriangle } from 'lucide-react';
+import { AttachmentField } from '@/components/AttachmentField';
+import { downloadPDFFromEndpoint } from '@/lib/download';
+import { Receipt, Plus, Calendar, Wallet, AlertCircle, Layers, Trash2, Loader2, ShieldOff, AlertTriangle, Printer, Paperclip } from 'lucide-react';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -24,10 +26,11 @@ import * as z from 'zod';
 import { toast } from 'sonner';
 
 const schema = z.object({
-  expenseLedgerId: z.coerce.number().min(1, 'Select an expense category'),
+  expenseLedgerId: z.coerce.number().min(1, 'Select an expense account'),
   description:     z.string().min(1, 'Description required'),
   amount:          z.coerce.number().min(0.01, 'Amount must be > 0'),
   expenseDate:     z.string().min(1, 'Date required'),
+  category:        z.string().min(1, 'Category required'),
   reference:       z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
@@ -35,6 +38,22 @@ type FormValues = z.infer<typeof schema>;
 const TODAY = new Date().toISOString().split('T')[0];
 
 const fmt = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+
+/**
+ * Print the payment voucher for a location expense. The server builds it from
+ * the row id, so the printed figures always match the books.
+ */
+async function printVoucher(id: number, label?: string) {
+  try {
+    await downloadPDFFromEndpoint(
+      '/api/pdf/expense-voucher',
+      { source: 'location', id },
+      `expense-voucher-${(label || id).toString().replace(/[^A-Za-z0-9._-]+/g, '-')}.pdf`,
+    );
+  } catch (e: any) {
+    toast.error(e?.message ?? 'Could not generate the voucher');
+  }
+}
 
 export default function SalesExpenses() {
   const [, navigate] = useLocation();
@@ -45,6 +64,8 @@ export default function SalesExpenses() {
   const perm = usePermission('Location Expenses');
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
   const deleteMutation = useDeleteLocationExpense();
+  const [attachmentUrl, setAttachmentUrl] = useState<string | null>(null);
+  const { data: categories = [] } = useExpenseCategories();
 
   const { locationType, locationId, locationName } = locationState;
   const isAll       = locationType === 'all';
@@ -130,9 +151,13 @@ export default function SalesExpenses() {
 
   const cashLedgerName: string | null = isSpecific ? (expenseData?.cashLedgerName ?? null) : null;
 
+  const blankForm = {
+    expenseLedgerId: 0, description: '', amount: 0, expenseDate: TODAY,
+    category: 'Uncategorised', reference: '',
+  };
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { expenseLedgerId: 0, description: '', amount: 0, expenseDate: TODAY, reference: '' },
+    defaultValues: blankForm,
   });
 
   const watchAmount = form.watch('amount');
@@ -140,7 +165,8 @@ export default function SalesExpenses() {
   const overBalance = isSpecific && !!locationCash && amountNum > availableCash + 0.001;
 
   const openAdd = () => {
-    form.reset({ expenseLedgerId: 0, description: '', amount: 0, expenseDate: TODAY, reference: '' });
+    form.reset(blankForm);
+    setAttachmentUrl(null);
     setIsOpen(true);
   };
 
@@ -157,12 +183,16 @@ export default function SalesExpenses() {
           amount: data.amount,
           expenseDate: data.expenseDate,
           description: data.description,
+          category: data.category,
+          attachmentUrl: attachmentUrl || undefined,
           reference: data.reference || undefined,
         }),
       });
       toast.success('Expense recorded');
       queryClient.invalidateQueries({ queryKey: expensesQueryKey });
+      queryClient.invalidateQueries({ queryKey: ['location-expenses-all'] });
       setIsOpen(false);
+      setAttachmentUrl(null);
     } catch (err: any) {
       toast.error(err?.message ?? 'Failed to record expense');
     } finally {
@@ -313,8 +343,10 @@ export default function SalesExpenses() {
                       <TableHead className="text-xs">Date</TableHead>
                       <TableHead className="text-xs">Description</TableHead>
                       <TableHead className="text-xs">Category</TableHead>
+                      <TableHead className="text-xs">Expense Account</TableHead>
                       <TableHead className="text-xs">Voucher</TableHead>
                       <TableHead className="text-right text-xs">Amount</TableHead>
+                      <TableHead className="w-10" />
                       {perm.canDelete && <TableHead className="w-10" />}
                     </TableRow>
                   </TableHeader>
@@ -327,11 +359,36 @@ export default function SalesExpenses() {
                             {e.expenseDate ? new Date(e.expenseDate).toLocaleDateString('en-IN') : '—'}
                           </div>
                         </TableCell>
-                        <TableCell className="text-sm font-medium max-w-xs truncate">{e.description}</TableCell>
+                        <TableCell className="text-sm font-medium max-w-xs truncate">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate">{e.description}</span>
+                            {e.attachmentUrl && (
+                              <a
+                                href={attachmentViewUrl(e.attachmentUrl)}
+                                target="_blank" rel="noreferrer"
+                                title="View attached bill"
+                                className="text-muted-foreground hover:text-primary shrink-0"
+                              >
+                                <Paperclip className="w-3 h-3" />
+                              </a>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{e.category || 'Uncategorised'}</TableCell>
                         <TableCell className="text-xs text-muted-foreground">{e.expenseLedgerName}</TableCell>
                         <TableCell className="font-mono text-xs text-primary">{e.voucherNumber}</TableCell>
                         <TableCell className="text-right font-mono font-bold text-red-500 text-sm">
                           {fmt(Number(e.amount))}
+                        </TableCell>
+                        <TableCell className="w-10">
+                          <Button
+                            variant="ghost" size="icon"
+                            className="h-7 w-7 text-muted-foreground hover:text-primary"
+                            title="Print payment voucher"
+                            onClick={() => printVoucher(e.id, e.voucherNumber)}
+                          >
+                            <Printer className="w-3.5 h-3.5" />
+                          </Button>
                         </TableCell>
                         {perm.canDelete && (
                           <TableCell className="w-10">
@@ -361,8 +418,10 @@ export default function SalesExpenses() {
                   <TableHead>Date</TableHead>
                   <TableHead>Description</TableHead>
                   <TableHead>Category</TableHead>
+                  <TableHead>Expense Account</TableHead>
                   <TableHead>Voucher</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
+                  <TableHead className="w-10" />
                   {perm.canDelete && <TableHead className="w-10" />}
                 </TableRow>
               </TableHeader>
@@ -370,12 +429,12 @@ export default function SalesExpenses() {
                 {isLoading ? (
                   [...Array(3)].map((_, i) => (
                     <TableRow key={i}>
-                      <TableCell colSpan={perm.canDelete ? 6 : 5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
+                      <TableCell colSpan={perm.canDelete ? 8 : 7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
                     </TableRow>
                   ))
                 ) : expenses.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={perm.canDelete ? 6 : 5} className="text-center py-16 text-muted-foreground">
+                    <TableCell colSpan={perm.canDelete ? 8 : 7} className="text-center py-16 text-muted-foreground">
                       <Receipt className="w-10 h-10 mx-auto mb-3 opacity-20" />
                       <p>No expenses recorded for {locationName}</p>
                     </TableCell>
@@ -388,11 +447,36 @@ export default function SalesExpenses() {
                         {e.expenseDate ? new Date(e.expenseDate).toLocaleDateString('en-IN') : '—'}
                       </div>
                     </TableCell>
-                    <TableCell className="font-medium max-w-xs truncate">{e.description}</TableCell>
+                    <TableCell className="font-medium max-w-xs truncate">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate">{e.description}</span>
+                        {e.attachmentUrl && (
+                          <a
+                            href={attachmentViewUrl(e.attachmentUrl)}
+                            target="_blank" rel="noreferrer"
+                            title="View attached bill"
+                            className="text-muted-foreground hover:text-primary shrink-0"
+                          >
+                            <Paperclip className="w-3 h-3" />
+                          </a>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{e.category || 'Uncategorised'}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{e.expenseLedgerName}</TableCell>
                     <TableCell className="font-mono text-xs text-primary">{e.voucherNumber}</TableCell>
                     <TableCell className="text-right font-mono font-bold text-red-500">
                       {fmt(Number(e.amount))}
+                    </TableCell>
+                    <TableCell className="w-10">
+                      <Button
+                        variant="ghost" size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-primary"
+                        title="Print payment voucher"
+                        onClick={() => printVoucher(e.id, e.voucherNumber)}
+                      >
+                        <Printer className="w-3.5 h-3.5" />
+                      </Button>
                     </TableCell>
                     {perm.canDelete && (
                       <TableCell className="w-10">
@@ -481,7 +565,7 @@ export default function SalesExpenses() {
 
                 <FormField control={form.control} name="expenseLedgerId" render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Expense Category <span className="text-destructive">*</span></FormLabel>
+                    <FormLabel>Expense Account <span className="text-destructive">*</span></FormLabel>
                     <Select
                       onValueChange={v => field.onChange(Number(v))}
                       value={field.value && field.value > 0 ? String(field.value) : ''}
@@ -493,6 +577,22 @@ export default function SalesExpenses() {
                         ) : (expenseLedgers as any[]).map((l: any) => (
                           <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>
                         ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                {/* Separate from the ledger above: the ledger is where it posts,
+                    the category is how it is reported. Fixed list, so spelling
+                    cannot fragment the audit trail. */}
+                <FormField control={form.control} name="category" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Category <span className="text-destructive">*</span></FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl><SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {categories.map(c => <SelectItem key={c.name} value={c.name}>{c.name}</SelectItem>)}
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -557,6 +657,14 @@ export default function SalesExpenses() {
                     <FormControl><Input placeholder="e.g. BILL-2024-001" {...field} /></FormControl>
                   </FormItem>
                 )} />
+
+                {/* Plain markup, not FormItem/FormLabel: the attachment is held
+                    in its own state rather than in the react-hook-form field
+                    tree, and FormLabel throws outside a FormField context. */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium leading-none">Supporting Bill</label>
+                  <AttachmentField value={attachmentUrl} onChange={setAttachmentUrl} />
+                </div>
 
                 <DialogFooter>
                   <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>

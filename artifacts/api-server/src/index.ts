@@ -7,6 +7,7 @@ import { addMaterialLocations } from "./migrations/materialLocations";
 import { addMaterialBatches } from "./migrations/materialBatches";
 import { PasswordService } from "./lib/password";
 import { PRODUCT_KINDS, PRODUCT_TABLE, nextProductIdentity } from "./lib/productIdentity";
+import { nextVoucherNumber } from "./lib/voucherNumber";
 
 async function runMigrations() {
   // Existing migrations
@@ -599,6 +600,31 @@ async function runMigrations() {
     ['Inter-Branch Transfer',    'liability', 'STD-BRANCH-TRF', 'balance_sheet', 'SYS-CURL', 'Value of taxable stock transferred between own GSTINs — credited on dispatch, debited on receipt, nets to zero'],
   ];
   for (const [name, type, code, section, parentCode, desc] of productionLedgers) {
+    const { rows: [parent] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1`, [parentCode]);
+    if (parent) {
+      await pool.query(
+        `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_system_group, description)
+         SELECT $1, $2, $3, $4, $5, false, $6
+         WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $3)`,
+        [name, type, code, section, parent.id, desc],
+      );
+    }
+  }
+
+  // ── Statutory payroll ledgers ───────────────────────────────────────────
+  // Salary is an indirect expense. The employee's own PF/ESI share is withheld
+  // from pay, so it is NOT a separate expense — it moves out of net pay into a
+  // payable. The employer's share IS an extra cost to the business, so it gets
+  // its own expense ledger. Both shares settle through the same payable, which
+  // is what a PF/ESI challan actually discharges.
+  const statutoryLedgers: [string, string, string, string, string, string][] = [
+    ["Employer PF Contribution",  "expense",   "STD-PF-EMPR",  "profit_loss",   "SYS-INDEXP", "Employer's share of Provident Fund — a cost to the business over and above gross salary"],
+    ["Employer ESI Contribution", "expense",   "STD-ESI-EMPR", "profit_loss",   "SYS-INDEXP", "Employer's share of Employees' State Insurance — a cost to the business over and above gross salary"],
+    ["PF Payable",                "liability", "STD-PF-PAY",   "balance_sheet", "SYS-CURL",   "Provident Fund withheld from employees plus the employer share, owed to EPFO until the challan is paid"],
+    ["ESI Payable",               "liability", "STD-ESI-PAY",  "balance_sheet", "SYS-CURL",   "ESI withheld from employees plus the employer share, owed to ESIC until the challan is paid"],
+    ["Employee Deductions Payable", "liability", "STD-EMP-DED", "balance_sheet", "SYS-CURL",  "Other amounts withheld from salary (TDS, loan instalments, fines) pending onward payment"],
+  ];
+  for (const [name, type, code, section, parentCode, desc] of statutoryLedgers) {
     const { rows: [parent] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1`, [parentCode]);
     if (parent) {
       await pool.query(
@@ -1659,6 +1685,114 @@ await pool.query(`
     await pool.query(`UPDATE payroll SET status = 'approved' WHERE is_paid = FALSE AND status = 'draft' AND net_pay::numeric > 0`);
     await pool.query(`INSERT INTO migration_log (name) VALUES ('payroll_status_backfill_v1')`);
     console.log('[migration] payroll_status_backfill_v1 applied');
+  }
+}
+
+// ── Audit-ready expenses + statutory payroll ──────────────────────────────────
+// Expenses are recorded two ways and both feed one audited list: rows in
+// `expenses` (Head Office, paid from a company cash/bank account) and rows in
+// `payments` (a location spending its own cash). The location rows already
+// carried a voucher number and a location stamp; these columns bring the
+// Head Office rows up to the same standard and give both a category and a
+// scanned-bill attachment.
+await pool.query(`
+  ALTER TABLE expenses ADD COLUMN IF NOT EXISTS expense_number TEXT;
+  ALTER TABLE expenses ADD COLUMN IF NOT EXISTS category       TEXT;
+  ALTER TABLE expenses ADD COLUMN IF NOT EXISTS attachment_url TEXT;
+  ALTER TABLE expenses ADD COLUMN IF NOT EXISTS location_type  TEXT;
+  ALTER TABLE expenses ADD COLUMN IF NOT EXISTS location_id    INTEGER;
+  ALTER TABLE expenses ADD COLUMN IF NOT EXISTS created_by     INTEGER;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_number ON expenses (expense_number) WHERE expense_number IS NOT NULL;
+
+  ALTER TABLE payments ADD COLUMN IF NOT EXISTS expense_category TEXT;
+  ALTER TABLE payments ADD COLUMN IF NOT EXISTS attachment_url   TEXT;
+
+  -- created_by was first shipped as TEXT, which cannot be joined against the
+  -- integer employees.id. ADD COLUMN IF NOT EXISTS will not retype an existing
+  -- column, so an already-migrated database needs this explicit correction.
+  DO $$
+  BEGIN
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'expenses' AND column_name = 'created_by' AND data_type = 'text'
+    ) THEN
+      ALTER TABLE expenses
+        ALTER COLUMN created_by TYPE INTEGER
+        USING NULLIF(regexp_replace(created_by, '\D', '', 'g'), '')::INTEGER;
+    END IF;
+  END $$;
+
+  -- Statutory rates live in company settings, not per employee: PF and ESI are
+  -- company-wide obligations. Percentages are editable because the statutory
+  -- rates change, and the wage ceilings differ by establishment.
+  ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS pf_enabled           BOOLEAN      NOT NULL DEFAULT TRUE;
+  ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS pf_employee_percent  NUMERIC(5,2) NOT NULL DEFAULT 12;
+  ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS pf_employer_percent  NUMERIC(5,2) NOT NULL DEFAULT 12;
+  ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS esi_enabled          BOOLEAN      NOT NULL DEFAULT TRUE;
+  ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS esi_employee_percent NUMERIC(5,2) NOT NULL DEFAULT 0.75;
+  ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS esi_employer_percent NUMERIC(5,2) NOT NULL DEFAULT 3.25;
+
+  -- The full salary breakdown is stored on the payroll row, not recomputed on
+  -- demand: a rate change must never alter what a period already paid out.
+  -- statutory_snapshot records the rates in force when the run was generated.
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS pf_employee        NUMERIC(12,2) NOT NULL DEFAULT 0;
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS pf_employer        NUMERIC(12,2) NOT NULL DEFAULT 0;
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS esi_employee       NUMERIC(12,2) NOT NULL DEFAULT 0;
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS esi_employer       NUMERIC(12,2) NOT NULL DEFAULT 0;
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS statutory_snapshot JSONB;
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS advance_ids        JSONB;
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS pay_period_label   TEXT;
+
+  -- Attendance is counted in half days (there is a half-day hours threshold in
+  -- settings, and the payslip reports these to one decimal), but these columns
+  -- were created as INTEGER. Any period containing a single half day therefore
+  -- failed to generate at all. Widened rather than rounded: rounding a half day
+  -- either pays for a day not worked or docks a day that was.
+  ALTER TABLE payroll ALTER COLUMN present_days TYPE NUMERIC(6,2);
+  ALTER TABLE payroll ALTER COLUMN lop_days     TYPE NUMERIC(6,2);
+`);
+
+// One-time: give every pre-existing expense an audit number in date order and
+// attribute it to Head Office, which is where all of them were recorded.
+{
+  const { rows: [done] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'expense_audit_fields_v1'`
+  );
+  if (!done) {
+    await pool.query(
+      `UPDATE expenses SET location_type = 'headoffice', location_id = 0
+        WHERE location_type IS NULL`
+    );
+    await pool.query(`UPDATE expenses SET category = 'Uncategorised' WHERE category IS NULL`);
+    const { rows: legacy } = await pool.query(
+      `SELECT id, expense_date FROM expenses
+        WHERE expense_number IS NULL ORDER BY expense_date ASC, id ASC`
+    );
+    for (const row of legacy) {
+      const num = await nextVoucherNumber(pool, "expense", String(row.expense_date).slice(0, 10));
+      await pool.query(`UPDATE expenses SET expense_number = $1 WHERE id = $2`, [num, row.id]);
+    }
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('expense_audit_fields_v1')`);
+    console.log(`[migration] expense_audit_fields_v1: numbered ${legacy.length} existing expense(s)`);
+  }
+}
+
+// One-time: materialise a pay structure row for every existing employee. The
+// pay-components table was only written when someone opened the editor and
+// saved, so most employees ran on an implicit hard-coded default. Seeding real
+// rows makes the table the single source of truth for allowances/deductions.
+{
+  const { rows: [done] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'pay_components_seed_v1'`
+  );
+  if (!done) {
+    const { rowCount } = await pool.query(
+      `INSERT INTO pay_components (employee_id, allowances, deductions)
+       SELECT e.id, '[]'::jsonb, '[]'::jsonb FROM employees e
+       WHERE NOT EXISTS (SELECT 1 FROM pay_components pc WHERE pc.employee_id = e.id)`
+    );
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('pay_components_seed_v1')`);
+    console.log(`[migration] pay_components_seed_v1: seeded ${rowCount} pay structure row(s)`);
   }
 }
 

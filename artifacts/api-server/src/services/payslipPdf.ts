@@ -1,13 +1,20 @@
 /**
  * Payslip PDF generator — jsPDF, A4 portrait.
- * Accepts pre-assembled payroll data posted from the frontend.
+ *
+ * The route assembles this input from the stored payroll row, so the slip always
+ * reflects the figures the run was approved on — never a recomputation against
+ * today's statutory rates.
  */
 import { jsPDF } from "jspdf";
 
 export interface PayslipBreakdownItem { name: string; amount: number }
 
 export interface PayslipPdfInput {
-  cs?: { companyName?: string };
+  cs?: {
+    companyName?: string;
+    address?: string; city?: string; state?: string; pincode?: string;
+    gstNumber?: string; phone?: string; email?: string;
+  };
   employeeName: string;
   branchName: string;
   monthLabel: string;
@@ -23,6 +30,46 @@ export interface PayslipPdfInput {
   netPay: number;
   isPaid: boolean;
   paidDate?: string | null;
+  // ── Statutory / audit additions ──────────────────────────────────────────
+  employeeCode?: string;
+  designation?: string;
+  joinDate?: string | null;
+  advanceDeduction?: number;
+  extraAmount?: number;
+  extraNote?: string | null;
+  pfEmployer?: number;
+  esiEmployer?: number;
+  status?: string;
+  paidAmount?: number;
+}
+
+/** Amount in words — cheques and audit trails expect it on a salary slip. */
+function amountInWords(value: number): string {
+  const n = Math.floor(Math.abs(value));
+  if (n === 0) return "Zero Rupees Only";
+  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+    "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
+    "Seventeen", "Eighteen", "Nineteen"];
+  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+  const two = (x: number): string =>
+    x < 20 ? ones[x] : `${tens[Math.floor(x / 10)]}${x % 10 ? " " + ones[x % 10] : ""}`;
+  const three = (x: number): string =>
+    x >= 100 ? `${ones[Math.floor(x / 100)]} Hundred${x % 100 ? " " + two(x % 100) : ""}` : two(x);
+
+  // Indian grouping: crore, lakh, thousand, hundred
+  const parts: string[] = [];
+  const crore = Math.floor(n / 10000000);
+  const lakh = Math.floor((n % 10000000) / 100000);
+  const thousand = Math.floor((n % 100000) / 1000);
+  const rest = n % 1000;
+  if (crore) parts.push(`${three(crore)} Crore`);
+  if (lakh) parts.push(`${three(lakh)} Lakh`);
+  if (thousand) parts.push(`${three(thousand)} Thousand`);
+  if (rest) parts.push(three(rest));
+
+  const paise = Math.round((Math.abs(value) - n) * 100);
+  const rupees = `${parts.join(" ")} Rupees`;
+  return paise > 0 ? `${rupees} and ${two(paise)} Paise Only` : `${rupees} Only`;
 }
 
 type RGB = [number, number, number];
@@ -87,7 +134,11 @@ export function generatePayslipPdf(data: PayslipPdfInput): Buffer {
   vline(M+CW/2, y, y+20);
   txt("Employee", M+3, y+5, { size: 6.5, color: [100,100,100] });
   txt(data.employeeName || "—", M+3, y+11, { size: 9.5, bold: true });
-  txt(`Branch: ${data.branchName || "—"}`, M+3, y+17, { size: 7.5, color: [80,80,80] });
+  const idBits = [
+    data.employeeCode ? `ID: ${data.employeeCode}` : "",
+    `Branch: ${data.branchName || "—"}`,
+  ].filter(Boolean).join("   ");
+  txt(idBits, M+3, y+17, { size: 7.5, color: [80,80,80] });
 
   txt("Attendance", M+CW/2+3, y+5, { size: 6.5, color: [100,100,100] });
   txt(`${data.workingDays ?? "—"} working days / ${data.presentDays ?? "—"} present`, M+CW/2+3, y+11, { size: 8, bold: true });
@@ -122,6 +173,7 @@ export function generatePayslipPdf(data: PayslipPdfInput): Buffer {
 
   // ── Earnings ──────────────────────────────────────────────────────────────
   sectionHeader("EARNINGS", [30, 80, 160]);
+  const extraAmt = Number(data.extraAmount ?? 0);
   const earningRows: Array<[string, number, RGB]> = [
     ["Basic Salary", data.baseSalary, [0,0,0]],
     ...((data.lopDays || 0) > 0 ? [["Less: LOP Deduction", data.lopDeduction, [200,50,50]] as [string, number, RGB]] : []),
@@ -130,9 +182,20 @@ export function generatePayslipPdf(data: PayslipPdfInput): Buffer {
   earningRows.forEach(([label, amt, fg], i) => tableRow(label, amt, i, fg));
   totalRow("Gross Pay", data.grossPay, [220,245,235], [22,163,74]);
 
+  if (extraAmt > 0.004) {
+    tableRow(data.extraNote?.trim() ? `Additional: ${data.extraNote.trim()}` : "Additional Payment", extraAmt, 0);
+  }
+
   // ── Deductions ────────────────────────────────────────────────────────────
+  // The stored breakdown already carries the employee's PF and ESI share
+  // alongside any configured deductions. Advance recovery is listed separately
+  // because it repays money already received, not a fresh withholding.
   sectionHeader("DEDUCTIONS", [170, 30, 30]);
-  const dedRows = data.deductionsBreakdown || [];
+  const advance = Number(data.advanceDeduction ?? 0);
+  const dedRows: PayslipBreakdownItem[] = [
+    ...(data.deductionsBreakdown || []),
+    ...(advance > 0.004 ? [{ name: "Advance Recovered", amount: advance }] : []),
+  ];
   if (dedRows.length === 0) {
     fillRect(M, y, CW, 7.5, [250,250,250]);
     outlineRect(M, y, CW, 7.5, 0.2);
@@ -141,20 +204,41 @@ export function generatePayslipPdf(data: PayslipPdfInput): Buffer {
   } else {
     dedRows.forEach((d: PayslipBreakdownItem, i: number) => tableRow(d.name, d.amount, i, [200,50,50]));
   }
-  totalRow("Total Deductions", data.deductions, [255,238,238], [200,50,50]);
+  totalRow("Total Deductions", Number(data.deductions ?? 0) + advance, [255,238,238], [200,50,50]);
 
   // ── Net Pay ───────────────────────────────────────────────────────────────
+  const netTotal = Number(data.netPay ?? 0);
   fillRect(M, y, CW, 16, [25, 72, 140]);
   outlineRect(M, y, CW, 16, 0.5);
   txt("NET PAY", M+4, y+10, { size: 13, bold: true, color: [255,255,255] });
-  txt(money(data.netPay), M+CW-4, y+10, { size: 14, bold: true, align: "right", color: [160,230,160] });
+  txt(money(netTotal), M+CW-4, y+10, { size: 14, bold: true, align: "right", color: [160,230,160] });
   y += 18;
 
+  txt(`Amount in words: ${amountInWords(netTotal)}`, M, y, { size: 7, bold: true, color: [60,60,60] });
+  y += 7;
+
+  // ── Employer contributions ────────────────────────────────────────────────
+  // Not deducted from the employee — shown so the slip discloses the full cost
+  // of employment, which is what the P&L carries.
+  const pfEmpr  = Number(data.pfEmployer ?? 0);
+  const esiEmpr = Number(data.esiEmployer ?? 0);
+  if (pfEmpr > 0.004 || esiEmpr > 0.004) {
+    sectionHeader("EMPLOYER CONTRIBUTIONS (not deducted from salary)", [90, 90, 110]);
+    let i = 0;
+    if (pfEmpr  > 0.004) tableRow("Employer Provident Fund", pfEmpr, i++);
+    if (esiEmpr > 0.004) tableRow("Employer ESI", esiEmpr, i++);
+    totalRow("Total Cost to Company", Number(data.grossPay ?? 0) + extraAmt + pfEmpr + esiEmpr, [240,240,248], [40,40,80]);
+  }
+
+  const paidAmt = Number(data.paidAmount ?? 0);
   if (isPaid && data.paidDate) {
     try {
       const d = new Date(data.paidDate);
       txt(`Paid on: ${d.toLocaleDateString("en-IN")}`, M, y, { size: 7, color: [80,80,80] });
     } catch { /* ignore */ }
+    y += 6;
+  } else if (paidAmt > 0.004) {
+    txt(`Part payment received: ${money(paidAmt)}   Balance: ${money(netTotal - paidAmt)}`, M, y, { size: 7, color: [180,100,0] });
     y += 6;
   }
 

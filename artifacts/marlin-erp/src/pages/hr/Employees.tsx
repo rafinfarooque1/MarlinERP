@@ -163,7 +163,17 @@ function PayStructureEditor({ employee }: { employee: any }) {
           <TabsTrigger value="deductions" className="flex-1">Deductions ({effectiveDeductions.filter(d => d.enabled !== false).length} active)</TabsTrigger>
         </TabsList>
         <TabsContent value="allowances" className="mt-3"><CompList kind="allowances" /></TabsContent>
-        <TabsContent value="deductions" className="mt-3"><CompList kind="deductions" /></TabsContent>
+        <TabsContent value="deductions" className="mt-3">
+          <CompList kind="deductions" />
+          {/* PF and ESI are obligations of the establishment, so they are set
+              company-wide and applied to everyone. Adding them by hand here
+              would deduct the same contribution twice. */}
+          <div className="mt-3 p-2.5 rounded-lg bg-muted/30 border border-border text-xs text-muted-foreground">
+            Do not add PF or ESI here. They are statutory, set company-wide under{' '}
+            <span className="font-medium text-foreground">Settings → Statutory Payroll</span>, and applied
+            automatically to every payroll run.
+          </div>
+        </TabsContent>
       </Tabs>
       <div className="p-3 bg-muted/30 rounded-lg text-xs space-y-1 border border-border">
         <p className="text-muted-foreground font-medium uppercase tracking-wider mb-2">Monthly Preview (full attendance)</p>

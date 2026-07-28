@@ -12,6 +12,7 @@ export const DEFAULT_VOUCHER_PREFIXES: Record<string, string> = {
   debit_note: "DN",
   sales_return: "SR",
   purchase_return: "PR",
+  expense: "EXP",
 };
 
 export const VOUCHER_TYPE_LABELS: Record<string, string> = {

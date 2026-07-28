@@ -25,6 +25,7 @@ import returnsRouter from "./returns";
 import bomRouter from "./bom";
 import reportsRouter from "./reports";
 import searchRouter from "./search";
+import storageRouter from "./storage";
 const router: IRouter = Router();
 
 router.use(healthRouter);
@@ -53,5 +54,6 @@ router.use(returnsRouter);
 router.use(bomRouter);
 router.use(reportsRouter);
 router.use(searchRouter);
+router.use(storageRouter);
 
 export default router;

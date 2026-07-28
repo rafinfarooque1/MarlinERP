@@ -47,12 +47,13 @@ const SETTING_GROUPS: SettingGroup[] = [
   {
     icon: DollarSign,
     title: 'Payroll',
-    description: 'Salary cycle and statutory deduction settings',
+    description: 'Salary cycle and working-hours settings',
     settings: [
+      // PF and ESI deliberately live in their own section below, not here.
+      // This group is a preferences blob; payroll computes contributions from
+      // dedicated fields, so a toggle here would look authoritative and change
+      // nothing.
       { key: 'salaryDay', label: 'Salary Credit Day', type: 'number', defaultValue: 28 },
-      { key: 'pfEnabled', label: 'Enable PF Deduction', type: 'toggle', defaultValue: true },
-      { key: 'esicEnabled', label: 'Enable ESIC Deduction', type: 'toggle', defaultValue: false },
-      { key: 'pfRate', label: 'PF Rate (%)', type: 'number', defaultValue: 12 },
       { key: 'fullDayHours', label: 'Full-Day Work Hours', type: 'number', defaultValue: 9 },
       { key: 'halfDayHours', label: 'Half-Day Work Hours', type: 'number', defaultValue: 4.5 },
     ],
@@ -304,6 +305,138 @@ function InvoicePdfSection() {
 }
 
 // ─── Production costing: default overhead % (server-persisted) ───────────────
+
+// ─── Statutory payroll: PF & ESI (server-persisted) ──────────────────────────
+//
+// Company-wide by design. PF and ESI are obligations of the establishment, not
+// a per-employee arrangement, so the rate is set once here and every payroll run
+// reads it. The percentages are editable because statutory rates change, and
+// each payroll row keeps a snapshot of the rates it was computed with — so
+// changing a rate here affects future runs only and never rewrites history.
+
+function StatutoryPayrollSection() {
+  const [s, setS] = useState({
+    pfEnabled: true, pfEmployeePercent: '12', pfEmployerPercent: '12',
+    esiEnabled: true, esiEmployeePercent: '0.75', esiEmployerPercent: '3.25',
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    customFetch<any>('/api/company/settings')
+      .then(r => setS({
+        pfEnabled: r?.pfEnabled !== false,
+        pfEmployeePercent: String(Number(r?.pfEmployeePercent ?? 12)),
+        pfEmployerPercent: String(Number(r?.pfEmployerPercent ?? 12)),
+        esiEnabled: r?.esiEnabled !== false,
+        esiEmployeePercent: String(Number(r?.esiEmployeePercent ?? 0.75)),
+        esiEmployerPercent: String(Number(r?.esiEmployerPercent ?? 3.25)),
+      }))
+      .catch(() => { /* keep statutory defaults */ })
+      .finally(() => setLoading(false));
+  }, []);
+
+  const save = async () => {
+    const nums: [string, string][] = [
+      ['pfEmployeePercent', s.pfEmployeePercent], ['pfEmployerPercent', s.pfEmployerPercent],
+      ['esiEmployeePercent', s.esiEmployeePercent], ['esiEmployerPercent', s.esiEmployerPercent],
+    ];
+    for (const [, raw] of nums) {
+      const v = Number(raw);
+      if (!Number.isFinite(v) || v < 0 || v > 100) {
+        toast.error('Contribution rates must be between 0 and 100 percent');
+        return;
+      }
+    }
+    setSaving(true);
+    try {
+      await customFetch('/api/company/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pfEnabled: s.pfEnabled,
+          pfEmployeePercent: Number(s.pfEmployeePercent),
+          pfEmployerPercent: Number(s.pfEmployerPercent),
+          esiEnabled: s.esiEnabled,
+          esiEmployeePercent: Number(s.esiEmployeePercent),
+          esiEmployerPercent: Number(s.esiEmployerPercent),
+        }),
+      });
+      toast.success('Statutory settings saved — they apply to future payroll runs');
+    } catch (e: any) {
+      toast.error(e?.data?.error || e.message || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const pctRow = (
+    label: string, hint: string,
+    key: 'pfEmployeePercent' | 'pfEmployerPercent' | 'esiEmployeePercent' | 'esiEmployerPercent',
+    disabled: boolean,
+  ) => (
+    <div className="p-4 flex items-center justify-between gap-4">
+      <div className="flex-1">
+        <label className="text-sm font-medium">{label}</label>
+        <p className="text-xs text-muted-foreground mt-0.5">{hint}</p>
+      </div>
+      <Input
+        type="number" min={0} max={100} step="0.05"
+        value={s[key]}
+        disabled={disabled}
+        onChange={e => setS(p => ({ ...p, [key]: e.target.value }))}
+        className="w-28 font-mono"
+      />
+    </div>
+  );
+
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <div className="p-4 border-b border-border bg-muted/20 flex items-center gap-3">
+        <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center"><ShieldCheck className="w-4 h-4 text-primary" /></div>
+        <div>
+          <h3 className="font-semibold">Statutory Payroll — PF &amp; ESI</h3>
+          <p className="text-xs text-muted-foreground">Contribution rates used by every payroll run. Changes apply to future runs only.</p>
+        </div>
+      </div>
+      {loading ? (
+        <div className="p-6 flex items-center gap-2 text-muted-foreground text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>
+      ) : (
+        <div className="divide-y divide-border">
+          <div className="p-4 flex items-center justify-between gap-4">
+            <div className="flex-1">
+              <label className="text-sm font-medium">Provident Fund (PF)</label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Employee share is deducted from salary; employer share is an additional company cost.
+              </p>
+            </div>
+            <Switch checked={s.pfEnabled} onCheckedChange={v => setS(p => ({ ...p, pfEnabled: v }))} />
+          </div>
+          {pctRow('PF — employee share (%)', 'Deducted from the employee’s gross pay.', 'pfEmployeePercent', !s.pfEnabled)}
+          {pctRow('PF — employer share (%)', 'Paid by the company on top of salary. Posted as an expense.', 'pfEmployerPercent', !s.pfEnabled)}
+
+          <div className="p-4 flex items-center justify-between gap-4">
+            <div className="flex-1">
+              <label className="text-sm font-medium">Employees’ State Insurance (ESI)</label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Statutory medical insurance. Same split: employee share deducted, employer share a company cost.
+              </p>
+            </div>
+            <Switch checked={s.esiEnabled} onCheckedChange={v => setS(p => ({ ...p, esiEnabled: v }))} />
+          </div>
+          {pctRow('ESI — employee share (%)', 'Deducted from the employee’s gross pay.', 'esiEmployeePercent', !s.esiEnabled)}
+          {pctRow('ESI — employer share (%)', 'Paid by the company on top of salary. Posted as an expense.', 'esiEmployerPercent', !s.esiEnabled)}
+
+          <div className="p-4 flex justify-end">
+            <Button onClick={save} disabled={saving}>
+              {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> Save Statutory Settings</>}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ProductionCostingSection() {
   const [overheadPct, setOverheadPct] = useState('0');
@@ -707,6 +840,8 @@ export default function Settings() {
         <InvoicePdfSection />
 
         {/* ── Production costing: default overhead % (server-persisted) ────── */}
+        <StatutoryPayrollSection />
+
         <ProductionCostingSection />
 
         {/* ── GST transfer invoicing (server-persisted) ────────────────────── */}

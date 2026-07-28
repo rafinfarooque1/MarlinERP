@@ -74,12 +74,79 @@ function validateComponents(allowances: unknown[], deductions: unknown[]): strin
 
 function round2(n: number) { return Math.round(n * 100) / 100; }
 
+const MONTH_LABELS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+// ── Statutory contribution rates ───────────────────────────────────────────
+// PF and ESI are company-wide statutory obligations, so the rates live in
+// company settings rather than on each employee. Every generated payroll run
+// stores the rates it used (see StatutorySnapshot) so that a later rate change
+// can never alter a period that has already been approved or paid.
+export interface StatutoryRates {
+  pfEnabled: boolean;
+  pfEmployeePercent: number;
+  pfEmployerPercent: number;
+  esiEnabled: boolean;
+  esiEmployeePercent: number;
+  esiEmployerPercent: number;
+}
+
+const STATUTORY_DEFAULTS: StatutoryRates = {
+  pfEnabled: true,  pfEmployeePercent: 12,   pfEmployerPercent: 12,
+  esiEnabled: true, esiEmployeePercent: 0.75, esiEmployerPercent: 3.25,
+};
+
+async function loadStatutoryRates(): Promise<StatutoryRates> {
+  try {
+    const { rows: [r] } = await pool.query(
+      `SELECT pf_enabled, pf_employee_percent, pf_employer_percent,
+              esi_enabled, esi_employee_percent, esi_employer_percent
+         FROM company_settings LIMIT 1`
+    );
+    if (!r) return { ...STATUTORY_DEFAULTS };
+    return {
+      pfEnabled:  r.pf_enabled !== false,
+      pfEmployeePercent:  Number(r.pf_employee_percent  ?? 12),
+      pfEmployerPercent:  Number(r.pf_employer_percent  ?? 12),
+      esiEnabled: r.esi_enabled !== false,
+      esiEmployeePercent: Number(r.esi_employee_percent ?? 0.75),
+      esiEmployerPercent: Number(r.esi_employer_percent ?? 3.25),
+    };
+  } catch {
+    // Columns not migrated yet — fall back to the statutory defaults.
+    return { ...STATUTORY_DEFAULTS };
+  }
+}
+
+/**
+ * PF and ESI used to be modelled as ordinary per-employee deductions, seeded
+ * from a hard-coded default list. Now that they are computed centrally from
+ * company settings, any legacy component with a statutory name would deduct the
+ * same contribution a second time. Drop those, but only for the scheme that is
+ * actually switched on — a company that keeps PF off should keep honouring a
+ * manually configured PF line.
+ */
+const PF_NAME_RE  = /\b(pf|epf|provident)\b/i;
+const ESI_NAME_RE = /\b(esi|esic)\b/i;
+
+function stripStatutoryDuplicates(deductions: DeductionComp[], rates: StatutoryRates): DeductionComp[] {
+  return deductions.filter(d => {
+    const name = String(d.name ?? "");
+    if (rates.pfEnabled  && PF_NAME_RE.test(name))  return false;
+    if (rates.esiEnabled && ESI_NAME_RE.test(name)) return false;
+    return true;
+  });
+}
+
 function computePayroll(opts: {
   baseSalary: number;
   workingDays: number;
   presentDays: number;
   allowances: AllowanceComp[];
   deductions: DeductionComp[];
+  rates?: StatutoryRates;
 }) {
   const { baseSalary, workingDays, presentDays, allowances, deductions } = opts;
   const lopDays = Math.max(0, workingDays - presentDays);
@@ -101,25 +168,50 @@ function computePayroll(opts: {
   allowancesTotal = round2(allowancesTotal);
   const grossPay = round2(effectiveBasic + allowancesTotal);
 
+  // Statutory contributions. PF is levied on basic pay, ESI on gross — both on
+  // the post-LOP figures, because a day not worked is not wages.
+  const rates = opts.rates ?? { ...STATUTORY_DEFAULTS, pfEnabled: false, esiEnabled: false };
+  const pfEmployee  = rates.pfEnabled  ? round2(effectiveBasic * rates.pfEmployeePercent  / 100) : 0;
+  const pfEmployer  = rates.pfEnabled  ? round2(effectiveBasic * rates.pfEmployerPercent  / 100) : 0;
+  const esiEmployee = rates.esiEnabled ? round2(grossPay       * rates.esiEmployeePercent / 100) : 0;
+  const esiEmployer = rates.esiEnabled ? round2(grossPay       * rates.esiEmployerPercent / 100) : 0;
+
   // Deductions: fixed, percent_of_basic, or percent_of_gross
-  const deductionsBreakdown: { name: string; amount: number }[] = [];
-  let deductionsTotal = 0;
+  const otherDeductionsBreakdown: { name: string; amount: number }[] = [];
+  let otherDeductionsTotal = 0;
   for (const d of deductions) {
     if (d.enabled === false) continue;
     let amount: number;
     if (d.type === "fixed") amount = round2(d.value);
     else if (d.type === "percent_of_basic") amount = round2(effectiveBasic * d.value / 100);
     else amount = round2(grossPay * d.value / 100); // percent_of_gross
-    deductionsBreakdown.push({ name: d.name, amount });
-    deductionsTotal += amount;
+    otherDeductionsBreakdown.push({ name: d.name, amount });
+    otherDeductionsTotal += amount;
   }
-  deductionsTotal = round2(deductionsTotal);
+  otherDeductionsTotal = round2(otherDeductionsTotal);
+
+  // The stored breakdown is the audit record of what was withheld, so the
+  // statutory lines belong in it alongside the configured deductions. Only the
+  // employee's share reduces take-home pay; the employer's share is a separate
+  // cost carried by the business and never subtracted from the employee.
+  const deductionsBreakdown = [
+    ...otherDeductionsBreakdown,
+    ...(pfEmployee  > 0 ? [{ name: `Provident Fund (${rates.pfEmployeePercent}% of basic)`, amount: pfEmployee  }] : []),
+    ...(esiEmployee > 0 ? [{ name: `ESI (${rates.esiEmployeePercent}% of gross)`,           amount: esiEmployee }] : []),
+  ];
+  const deductionsTotal = round2(otherDeductionsTotal + pfEmployee + esiEmployee);
   const netPay = round2(grossPay - deductionsTotal);
 
   return {
     lopDays, lopDeduction, effectiveBasic, grossPay,
     allowancesTotal, allowancesBreakdown,
-    deductions: deductionsTotal, deductionsBreakdown, netPay,
+    deductions: deductionsTotal, deductionsBreakdown,
+    otherDeductions: otherDeductionsTotal, otherDeductionsBreakdown,
+    pfEmployee, pfEmployer, esiEmployee, esiEmployer,
+    // Full cost to the business: what the employee earns plus the employer's
+    // statutory share. This is the amount that must hit the P&L.
+    employerCost: round2(grossPay + pfEmployer + esiEmployer),
+    netPay,
   };
 }
 
@@ -148,6 +240,12 @@ function enrichPayroll(r: any, emp?: any) {
     paidAmount:        Number(r.paidAmount    ?? r.paid_amount    ?? 0),
     paymentMode:       r.paymentMode  ?? r.payment_mode  ?? null,
     advanceDeduction:  Number(r.advanceDeduction ?? r.advance_deduction ?? 0),
+    // statutory
+    pfEmployee:        Number(r.pfEmployee   ?? r.pf_employee   ?? 0),
+    pfEmployer:        Number(r.pfEmployer   ?? r.pf_employer   ?? 0),
+    esiEmployee:       Number(r.esiEmployee  ?? r.esi_employee  ?? 0),
+    esiEmployer:       Number(r.esiEmployer  ?? r.esi_employer  ?? 0),
+    statutorySnapshot: r.statutorySnapshot ?? r.statutory_snapshot ?? null,
   };
 }
 
@@ -162,15 +260,160 @@ async function findOrProvisionLedger(
   const { rows: [existing] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1 LIMIT 1`, [code]);
   if (existing) return existing.id;
   const { rows: [parent] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1 LIMIT 1`, [parentCode]);
+  // Section follows the ledger type. This used to be hard-coded to
+  // 'balance_sheet', which stamped every per-employee salary ledger as a
+  // balance-sheet account even though it is an expense.
+  const section = (type === "expense" || type === "income") ? "profit_loss" : "balance_sheet";
   const { rows: [created] } = await pool.query(
     `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_group, is_system_group, description)
-     VALUES ($1, $2, $3, 'balance_sheet', $4, false, false, $5)
+     VALUES ($1, $2, $3, $4, $5, false, false, $6)
      ON CONFLICT DO NOTHING RETURNING id`,
-    [name, type, code, parent?.id ?? null, description],
+    [name, type, code, section, parent?.id ?? null, description],
   );
   if (created) return created.id;
   const { rows: [retry] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1 LIMIT 1`, [code]);
   return retry?.id ?? null;
+}
+
+/** Look up a standard ledger by code, failing loudly if seeding never ran. */
+async function requireLedgerId(code: string): Promise<number> {
+  const { rows: [row] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1 LIMIT 1`, [code]);
+  if (!row) throw new Error(`Ledger ${code} is missing from the chart of accounts`);
+  return row.id;
+}
+
+/**
+ * Post the salary approval voucher and move the payroll row to 'approved'.
+ *
+ * Everything happens in one transaction: the voucher, its lines, the advance
+ * recoveries it closes and the status change. Either the books and the payroll
+ * row both move or neither does — approval can no longer be recorded against
+ * accounting that failed to post.
+ */
+async function postSalaryApproval(opts: {
+  payroll: any;
+  empLabel: string;
+  voucherDate: string;
+  periodLabel: string;
+  createdBy: string;
+}): Promise<{ updated: any; netPay: number; salaryCost: number; voucherNumber: string }> {
+  const { payroll: pr, empLabel, voucherDate, periodLabel, createdBy } = opts;
+  const employeeId = Number(pr.employee_id);
+
+  const extraAmt    = round2(Number(pr.extra_amount ?? 0));
+  const grossPay    = round2(Number(pr.gross_pay ?? 0));
+  const pfEmployee  = round2(Number(pr.pf_employee ?? 0));
+  const pfEmployer  = round2(Number(pr.pf_employer ?? 0));
+  const esiEmployee = round2(Number(pr.esi_employee ?? 0));
+  const esiEmployer = round2(Number(pr.esi_employer ?? 0));
+  const advanceRec  = round2(Number(pr.advance_deduction ?? 0));
+  const netPay      = round2(Number(pr.net_pay ?? 0) + extraAmt);
+
+  // Withholdings other than PF/ESI, derived so the voucher always balances even
+  // for rows generated before the statutory columns existed.
+  const totalDeductions = round2(Number(pr.deductions ?? 0));
+  const otherDeductions = round2(Math.max(0, totalDeductions - pfEmployee - esiEmployee));
+
+  // Salary expense carries gross pay plus anything added by hand (arrears,
+  // bonus). Employer contributions are separate expenses.
+  const salaryCost = round2(grossPay + extraAmt);
+  const debitTotal = round2(salaryCost + pfEmployer + esiEmployer);
+
+  const salExpId = await findOrProvisionLedger(
+    `SAL-EMP-${employeeId}`, `Salary - ${empLabel}`, 'expense', 'SYS-INDEXP',
+    `Salary expense for ${empLabel}`,
+  );
+  const salPayId = await findOrProvisionLedger(
+    `SAL-PAY-${employeeId}`, `Salary Payable - ${empLabel}`, 'liability', 'SYS-CURL',
+    `Salary payable to ${empLabel}`,
+  );
+  if (!salExpId || !salPayId) throw new Error("Could not provision the employee's salary ledgers");
+
+  const advLedgerId = advanceRec > 0.004
+    ? await findOrProvisionLedger(
+        `ADV-EMP-${employeeId}`, `Advance to ${empLabel}`, 'asset', 'SYS-CURA',
+        `Salary advance paid to ${empLabel}`)
+    : null;
+  if (advanceRec > 0.004 && !advLedgerId) throw new Error("Could not provision the employee's advance ledger");
+
+  const debits: Array<[number, number]> = [[salExpId, salaryCost]];
+  const credits: Array<[number, number]> = [];
+  if (pfEmployer  > 0.004) debits.push([await requireLedgerId('STD-PF-EMPR'),  pfEmployer]);
+  if (esiEmployer > 0.004) debits.push([await requireLedgerId('STD-ESI-EMPR'), esiEmployer]);
+
+  const pfPayable  = round2(pfEmployee + pfEmployer);
+  const esiPayable = round2(esiEmployee + esiEmployer);
+  if (pfPayable      > 0.004) credits.push([await requireLedgerId('STD-PF-PAY'),  pfPayable]);
+  if (esiPayable     > 0.004) credits.push([await requireLedgerId('STD-ESI-PAY'), esiPayable]);
+  if (otherDeductions > 0.004) credits.push([await requireLedgerId('STD-EMP-DED'), otherDeductions]);
+  if (advanceRec      > 0.004 && advLedgerId) credits.push([advLedgerId, advanceRec]);
+  if (netPay          > 0.004) credits.push([salPayId, netPay]);
+
+  const creditTotal = round2(credits.reduce((s, [, amt]) => s + amt, 0));
+  if (Math.abs(creditTotal - debitTotal) > 0.02) {
+    throw new Error(
+      `Salary entry does not balance (debit ${debitTotal.toFixed(2)} vs credit ${creditTotal.toFixed(2)}) — payroll figures are inconsistent`
+    );
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Re-read under a row lock so two concurrent approvals cannot both post.
+    const { rows: [locked] } = await client.query(
+      `SELECT status FROM payroll WHERE id = $1 FOR UPDATE`, [pr.id],
+    );
+    if (!locked) throw new Error("Payroll record disappeared");
+    if (locked.status === 'approved' || locked.status === 'paid') {
+      throw new Error("This payroll was already approved by someone else");
+    }
+
+    const voucherNumber = await nextVoucherNumber(client, "journal", voucherDate);
+    const narration = `Salary Approved — ${empLabel} — ${periodLabel}`;
+    const { rows: [jv] } = await client.query(
+      `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by)
+       VALUES ('journal', $1, $2, $3, $4, $5) RETURNING id`,
+      [voucherNumber, voucherDate, narration, debitTotal.toFixed(2), createdBy],
+    );
+
+    for (const [ledgerId, amt] of debits) {
+      await client.query(
+        `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit) VALUES ($1, $2, $3, 0)`,
+        [jv.id, ledgerId, amt.toFixed(2)],
+      );
+    }
+    for (const [ledgerId, amt] of credits) {
+      await client.query(
+        `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit) VALUES ($1, $2, 0, $3)`,
+        [jv.id, ledgerId, amt.toFixed(2)],
+      );
+    }
+
+    // Close the advances this run recovered. They were claimed at generation
+    // time, so only the ones still attached to this payroll are marked.
+    const claimedIds: number[] = Array.isArray(pr.advance_ids) ? pr.advance_ids.map(Number) : [];
+    if (claimedIds.length) {
+      await client.query(
+        `UPDATE employee_advances SET is_deducted = TRUE, deducted_payroll_id = $1
+          WHERE id = ANY($2::int[]) AND is_deducted = FALSE`,
+        [pr.id, claimedIds],
+      );
+    }
+
+    const { rows: [updated] } = await client.query(
+      `UPDATE payroll SET status = 'approved', approved_at = NOW() WHERE id = $1 RETURNING *`,
+      [pr.id],
+    );
+
+    await client.query("COMMIT");
+    return { updated, netPay, salaryCost, voucherNumber };
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 // ── Hierarchies ───────────────────────────────────────────────────────────
@@ -265,6 +508,14 @@ router.post("/hr/employees", requireModuleAction("Employees", "add"), async (req
   }).returning();
   const [h] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, row.hierarchyId)).limit(1);
   const isProductionStaff = (await saveProductionStaffFlag(row.id, req.body)) ?? false;
+
+  // Give the employee a real pay structure row straight away. Payroll reads its
+  // allowances and deductions from this table, so an employee without a row
+  // would silently fall back to whatever the code happened to default to.
+  await db.insert(payComponentsTable)
+    .values({ employeeId: row.id, allowances: [], deductions: [] })
+    .onConflictDoNothing()
+    .catch((e) => console.warn("[hr/employees] pay structure seed failed:", e));
 
   logActivity({
     action: "CREATE", module: "hr", entityType: "employee", entityId: row.id,
@@ -467,6 +718,10 @@ router.post("/hr/payroll/generate", requireModuleAction("Payroll", "add"), async
   const fullDayHours = Number(gs.fullDayHours ?? 9);
   const halfDayHours = Number(gs.halfDayHours ?? 4.5);
 
+  // Rates in force right now. Snapshotted onto every row this run writes, so
+  // changing them later only affects runs generated after the change.
+  const rates = await loadStatutoryRates();
+
   // Fetch employees to generate for
   let employees = await db.select().from(employeesTable).where(eq(employeesTable.isActive, true));
   if (employeeId) employees = employees.filter(e => e.id === Number(employeeId));
@@ -493,23 +748,22 @@ router.post("/hr/payroll/generate", requireModuleAction("Payroll", "add"), async
       [emp.id, month, year],
     );
 
-    if (existing && existing.is_paid && !forceRegenerate) {
+    // A run that has been approved or paid is a posted document: it has a
+    // journal voucher against it and its statutory figures are what the
+    // employee was told. Regenerating would silently contradict both, so it is
+    // skipped even when forceRegenerate is set.
+    if (existing && (existing.is_paid || existing.status === 'approved' || existing.status === 'paid')) {
       results.push({ ...enrichPayroll(existing, emp), branchName: await getBranchName(emp.branchType, emp.branchId), employeeName: emp.name });
       continue;
     }
 
-    // Fetch pay components (or use defaults)
+    // Fetch pay components. Every employee has a row (seeded at creation and
+    // back-filled by migration), so an absent row means an empty structure —
+    // basic pay only, plus the statutory contributions.
     const [pc] = await db.select().from(payComponentsTable).where(eq(payComponentsTable.employeeId, emp.id)).limit(1);
     const workingDays = pc?.workingDaysPerMonth ?? 26;
-    const allowances: AllowanceComp[] = (pc?.allowances as AllowanceComp[]) ?? [
-      { name: "HRA", type: "percent_of_basic", value: 40, enabled: true },
-      { name: "DA", type: "percent_of_basic", value: 10, enabled: true },
-      { name: "Travel Allowance", type: "fixed", value: 1000, enabled: true },
-    ];
-    const deductions: DeductionComp[] = (pc?.deductions as DeductionComp[]) ?? [
-      { name: "PF (Employee 12%)", type: "percent_of_basic", value: 12, enabled: true },
-      { name: "ESI (0.75%)", type: "percent_of_gross", value: 0.75, enabled: true },
-    ];
+    const allowances: AllowanceComp[] = (pc?.allowances as AllowanceComp[]) ?? [];
+    const deductions = stripStatutoryDuplicates((pc?.deductions as DeductionComp[]) ?? [], rates);
 
     // Hours-based present-days calculation
     const empAtt = monthAttendance.filter((a: any) => Number(a.employeeId) === emp.id);
@@ -536,50 +790,106 @@ router.post("/hr/payroll/generate", requireModuleAction("Payroll", "add"), async
       effectivePresentDays = pd;
     }
 
-    // Pending advances for this employee
+    // Advances awaiting recovery. A draft run *claims* the advances it nets off
+    // (deducted_payroll_id) without marking them recovered; approval completes
+    // the recovery. Without the claim, two open drafts would each deduct the
+    // same advance, and re-running generate for a later month would recover an
+    // advance that an earlier month had already taken back.
+    if (existing) {
+      await pool.query(
+        `UPDATE employee_advances SET deducted_payroll_id = NULL
+          WHERE deducted_payroll_id = $1 AND is_deducted = FALSE`,
+        [existing.id],
+      );
+    }
     const { rows: advances } = await pool.query(
-      `SELECT id, amount FROM employee_advances WHERE employee_id = $1 AND is_deducted = FALSE`,
+      `SELECT id, amount FROM employee_advances
+        WHERE employee_id = $1 AND is_deducted = FALSE AND deducted_payroll_id IS NULL
+        ORDER BY date ASC, id ASC`,
       [emp.id],
     );
-    const advanceDeduction = round2(advances.reduce((s: number, a: any) => s + Number(a.amount), 0));
 
     const baseSalary = Number(emp.salary);
-    const computed = computePayroll({ baseSalary, workingDays, presentDays: effectivePresentDays, allowances, deductions });
-    const netPayAfterAdvance = round2(Math.max(0, computed.netPay - advanceDeduction));
+    const computed = computePayroll({ baseSalary, workingDays, presentDays: effectivePresentDays, allowances, deductions, rates });
+
+    // Recovery can never push take-home pay below zero, and an advance is only
+    // ever recovered whole — a part-recovered advance would leave the credit
+    // posted to the advance ledger out of step with the advances actually
+    // closed. Take advances in date order while they still fit in net pay;
+    // anything that does not fit stays outstanding for a later run.
+    const claimedIds: number[] = [];
+    let advanceDeduction = 0;
+    let recoverable = computed.netPay;
+    for (const a of advances) {
+      const amt = Number(a.amount);
+      if (amt <= recoverable + 0.005) {
+        claimedIds.push(Number(a.id));
+        advanceDeduction = round2(advanceDeduction + amt);
+        recoverable = round2(recoverable - amt);
+      }
+    }
+    const netPayAfterAdvance = round2(computed.netPay - advanceDeduction);
+
+    const snapshot = {
+      ...rates,
+      basicPay: computed.effectiveBasic,
+      grossPay: computed.grossPay,
+      pfEmployee: computed.pfEmployee, pfEmployer: computed.pfEmployer,
+      esiEmployee: computed.esiEmployee, esiEmployer: computed.esiEmployer,
+      otherDeductions: computed.otherDeductions,
+      otherDeductionsBreakdown: computed.otherDeductionsBreakdown,
+      employerCost: computed.employerCost,
+      capturedAt: new Date().toISOString(),
+    };
+    const periodLabel = `${MONTH_LABELS[Number(month) - 1] ?? month} ${year}`;
+
+    const writeCols = [
+      emp.id, month, year, String(baseSalary), workingDays, effectivePresentDays,
+      computed.lopDays, String(computed.lopDeduction), String(computed.grossPay),
+      String(computed.allowancesTotal), JSON.stringify(computed.allowancesBreakdown),
+      String(computed.deductions), JSON.stringify(computed.deductionsBreakdown),
+      String(netPayAfterAdvance), String(advanceDeduction),
+      String(computed.pfEmployee), String(computed.pfEmployer),
+      String(computed.esiEmployee), String(computed.esiEmployer),
+      JSON.stringify(snapshot), JSON.stringify(claimedIds), periodLabel,
+    ];
 
     let row: any;
-    if (existing && !existing.is_paid) {
+    if (existing) {
       const { rows: [updated] } = await pool.query(
         `UPDATE payroll SET
            employee_id=$1, month=$2, year=$3, base_salary=$4, working_days=$5, present_days=$6,
            lop_days=$7, lop_deduction=$8, gross_pay=$9, allowances_total=$10, allowances_breakdown=$11,
            deductions=$12, deductions_breakdown=$13, net_pay=$14, total_amount=$14,
-           status='draft', advance_deduction=$15
-         WHERE id=$16 RETURNING *`,
-        [emp.id, month, year, String(baseSalary), workingDays, effectivePresentDays,
-         computed.lopDays, String(computed.lopDeduction), String(computed.grossPay),
-         String(computed.allowancesTotal), JSON.stringify(computed.allowancesBreakdown),
-         String(computed.deductions), JSON.stringify(computed.deductionsBreakdown),
-         String(netPayAfterAdvance), String(advanceDeduction), existing.id],
+           status='draft', advance_deduction=$15,
+           pf_employee=$16, pf_employer=$17, esi_employee=$18, esi_employer=$19,
+           statutory_snapshot=$20, advance_ids=$21, pay_period_label=$22
+         WHERE id=$23 RETURNING *`,
+        [...writeCols, existing.id],
       );
       row = updated;
-    } else if (!existing) {
+    } else {
       const { rows: [inserted] } = await pool.query(
         `INSERT INTO payroll
            (employee_id, month, year, base_salary, working_days, present_days,
             lop_days, lop_deduction, gross_pay, allowances_total, allowances_breakdown,
-            deductions, deductions_breakdown, net_pay, total_amount, bonus, status, advance_deduction)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,'0','draft',$15)
+            deductions, deductions_breakdown, net_pay, total_amount, advance_deduction,
+            pf_employee, pf_employer, esi_employee, esi_employer,
+            statutory_snapshot, advance_ids, pay_period_label, bonus, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,$15,
+                 $16,$17,$18,$19,$20,$21,$22,'0','draft')
          RETURNING *`,
-        [emp.id, month, year, String(baseSalary), workingDays, effectivePresentDays,
-         computed.lopDays, String(computed.lopDeduction), String(computed.grossPay),
-         String(computed.allowancesTotal), JSON.stringify(computed.allowancesBreakdown),
-         String(computed.deductions), JSON.stringify(computed.deductionsBreakdown),
-         String(netPayAfterAdvance), String(advanceDeduction)],
+        writeCols,
       );
       row = inserted;
-    } else {
-      row = existing; // paid, skip update
+    }
+
+    if (row && claimedIds.length) {
+      await pool.query(
+        `UPDATE employee_advances SET deducted_payroll_id = $1
+          WHERE id = ANY($2::int[]) AND is_deducted = FALSE AND deducted_payroll_id IS NULL`,
+        [row.id, claimedIds],
+      );
     }
 
     results.push({
@@ -596,78 +906,80 @@ router.post("/hr/payroll/generate", requireModuleAction("Payroll", "add"), async
 router.patch("/hr/payroll/:id", requireModuleAction("Payroll", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { extraAmount = 0, extraNote = null } = req.body;
+  // Draft only. An extra amount changes net pay, and approval has already posted
+  // a salary voucher for the old figure — editing after that would leave the
+  // payslip saying one thing and the ledger another, with nothing to reconcile
+  // them. Correcting an approved run means reversing it, not amending it.
   const { rows: [row] } = await pool.query(
-    `UPDATE payroll SET extra_amount = $1, extra_note = $2 WHERE id = $3 AND status != 'paid' RETURNING *`,
+    `UPDATE payroll SET extra_amount = $1, extra_note = $2 WHERE id = $3 AND status = 'draft' RETURNING *`,
     [String(Number(extraAmount)), extraNote, id],
   );
-  if (!row) { res.status(404).json({ error: "Not found or already paid" }); return; }
+  if (!row) {
+    const { rows: [cur] } = await pool.query(`SELECT status FROM payroll WHERE id = $1`, [id]);
+    if (!cur) { res.status(404).json({ error: "Not found" }); return; }
+    res.status(409).json({
+      error: `This payroll is already ${cur.status}, so its amounts are locked. Salary has been posted to the accounts for this period — reverse the approval if the figures need to change.`,
+    });
+    return;
+  }
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, row.employee_id)).limit(1);
   res.json({ ...enrichPayroll(row, emp), branchName: emp ? await getBranchName(emp.branchType, emp.branchId) : "" });
 });
 
-// Approve payroll → Dr Salary Expense / Cr Salary Payable (per employee)
+// Approve payroll → post the full statutory salary entry.
+//
+// The old entry debited salary expense with *net* pay, which understated the
+// cost of employing someone by every rupee withheld and hid the PF/ESI
+// liability entirely. The correct entry recognises the whole cost and splits
+// what is owed to whom:
+//
+//   Dr  Salary - <employee>            gross pay + any extra (arrears/bonus)
+//   Dr  Employer PF Contribution       employer's PF share
+//   Dr  Employer ESI Contribution      employer's ESI share
+//     Cr  PF Payable                   employee + employer PF
+//     Cr  ESI Payable                  employee + employer ESI
+//     Cr  Employee Deductions Payable  other withholdings (TDS, fines…)
+//     Cr  Advance to <employee>         advance recovered this run
+//     Cr  Salary Payable - <employee>   net take-home pay
+//
+// Both sides come to gross + extra + employer contributions, so the voucher
+// balances. The two employer ledgers and the per-employee salary ledger all sit
+// under Indirect Expenses, which is what carries salary into the P&L.
 router.post("/hr/payroll/:id/approve", requireModuleAction("Payroll", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const today = new Date().toISOString().split("T")[0];
 
   const { rows: [existing] } = await pool.query(`SELECT * FROM payroll WHERE id = $1`, [id]);
   if (!existing) { res.status(404).json({ error: "Not found" }); return; }
-  if (existing.status === 'paid') { res.status(400).json({ error: "Already paid" }); return; }
+  if (existing.status === 'paid')     { res.status(400).json({ error: "Already paid" }); return; }
+  if (existing.status === 'approved') { res.status(400).json({ error: "Already approved" }); return; }
 
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, existing.employee_id)).limit(1);
   const monthStr = String(existing.month).padStart(2, "0");
-
-  // Extra amount is added to net pay for accounting purposes
-  const extraAmt = Number(existing.extra_amount ?? 0);
-  const netPay   = Number(existing.net_pay ?? 0) + extraAmt;
+  const empLabel = emp?.name ?? `Employee #${existing.employee_id}`;
 
   try {
-    // Per-employee expense ledger under Indirect Expenses
-    const salExpId = await findOrProvisionLedger(
-      `SAL-EMP-${existing.employee_id}`,
-      `Salary - ${emp?.name ?? `Employee #${existing.employee_id}`}`,
-      'expense', 'SYS-INDEXP',
-      `Salary expense for ${emp?.name ?? `Employee #${existing.employee_id}`}`,
-    );
-    // Per-employee payable ledger under Current Liabilities
-    const salPayId = await findOrProvisionLedger(
-      `SAL-PAY-${existing.employee_id}`,
-      `Salary Payable - ${emp?.name ?? `Employee #${existing.employee_id}`}`,
-      'liability', 'SYS-CURL',
-      `Salary payable to ${emp?.name ?? `Employee #${existing.employee_id}`}`,
-    );
+    const posting = await postSalaryApproval({
+      payroll: existing,
+      empLabel,
+      voucherDate: today,
+      periodLabel: existing.pay_period_label || `${monthStr}/${existing.year}`,
+      createdBy: req.employee?.username ?? "system",
+    });
 
-    if (salExpId && salPayId && netPay > 0.004) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const voucherNumber = await nextVoucherNumber(client, "journal", today);
-        const narration = `Salary Approved — ${emp?.name ?? `Emp #${existing.employee_id}`} — ${monthStr}/${existing.year}`;
-        const { rows: [jv] } = await client.query(
-          `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by)
-           VALUES ('journal', $1, $2, $3, $4, $5) RETURNING id`,
-          [voucherNumber, today, narration, netPay.toFixed(2), req.employee?.username ?? "system"],
-        );
-        await client.query(
-          `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit)
-           VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)`,
-          [jv.id, salExpId, netPay.toFixed(2), salPayId],
-        );
-        await client.query("COMMIT");
-      } catch (e) { await client.query("ROLLBACK").catch(() => {}); console.warn("[payroll/approve] JV error:", e); }
-      finally { client.release(); }
-    }
-  } catch (e) { console.warn("[payroll/approve] Ledger error:", e); }
+    logActivity({ action: "UPDATE", module: "payroll", entityType: "payroll", entityId: id,
+      description: `Payroll approved for ${empLabel} — ${monthStr}/${existing.year}`,
+      metadata: { netPay: posting.netPay, salaryCost: posting.salaryCost, voucherNumber: posting.voucherNumber },
+    }).catch(() => {});
 
-  const { rows: [updated] } = await pool.query(
-    `UPDATE payroll SET status = 'approved', approved_at = NOW() WHERE id = $1 RETURNING *`,
-    [id],
-  );
-  logActivity({ action: "UPDATE", module: "payroll", entityType: "payroll", entityId: id,
-    description: `Payroll approved for ${emp?.name ?? `Emp #${existing.employee_id}`} — ${monthStr}/${existing.year}`,
-    metadata: { netPay } }).catch(() => {});
-
-  res.json({ ...enrichPayroll(updated, emp), branchName: emp ? await getBranchName(emp.branchType, emp.branchId) : "" });
+    res.json({ ...enrichPayroll(posting.updated, emp), branchName: emp ? await getBranchName(emp.branchType, emp.branchId) : "" });
+  } catch (e: any) {
+    // Approval used to swallow posting failures, leaving payroll marked
+    // approved with no accounting behind it. The status now moves only if the
+    // voucher committed, so a failure here means nothing changed.
+    console.error("[payroll/approve] posting failed:", e);
+    res.status(500).json({ error: `Could not post the salary entry, so the payroll was not approved: ${e?.message ?? "unknown error"}` });
+  }
 });
 
 // Pay payroll — supports partial payments and payment mode
@@ -680,6 +992,13 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("Payroll", "edit"), async
   const { rows: [existing] } = await pool.query(`SELECT * FROM payroll WHERE id = $1`, [id]);
   if (!existing) { res.status(404).json({ error: "Not found" }); return; }
   if (existing.status === 'paid') { res.status(400).json({ error: "Already fully paid" }); return; }
+  // Payment discharges the salary payable that approval creates. Paying a draft
+  // used to quietly post the approval entry as a side effect, which meant a
+  // salary could reach the books without anyone approving it.
+  if (existing.status !== 'approved') {
+    res.status(400).json({ error: "Approve this payroll before recording a payment." });
+    return;
+  }
 
   const extraAmt   = Number(existing.extra_amount ?? 0);
   const totalNet   = round2(Number(existing.net_pay ?? 0) + extraAmt);
@@ -692,79 +1011,81 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("Payroll", "edit"), async
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, existing.employee_id)).limit(1);
   const monthStr = String(existing.month).padStart(2, "0");
 
-  try {
-    // Credit the salary payable ledger for this employee; debit cash/bank
-    const salPayId = await findOrProvisionLedger(
-      `SAL-PAY-${existing.employee_id}`,
-      `Salary Payable - ${emp?.name ?? `Employee #${existing.employee_id}`}`,
-      'liability', 'SYS-CURL',
-      `Salary payable to ${emp?.name ?? `Employee #${existing.employee_id}`}`,
-    );
-    const { rows: [cashRow] } = await pool.query(
-      paymentMode === 'bank'
-        ? `SELECT id FROM account_ledgers WHERE code = 'STD-BANK' LIMIT 1`
-        : `SELECT id FROM account_ledgers WHERE code = 'STD-CASH' LIMIT 1`,
-    );
-    const payLedgerId = cashRow?.id ?? null;
+  if (payNow <= 0.004) {
+    res.status(400).json({ error: "Payment amount must be greater than zero." });
+    return;
+  }
 
-    if (salPayId && payLedgerId && payNow > 0.004) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const voucherNumber = await nextVoucherNumber(client, "journal", today);
-        const narration = `Salary Payment${isFullyPaid ? '' : ' (Partial)'} — ${emp?.name ?? `Emp #${existing.employee_id}`} — ${monthStr}/${existing.year}`;
-        const { rows: [jv] } = await client.query(
-          `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by)
-           VALUES ('journal', $1, $2, $3, $4, $5) RETURNING id`,
-          [voucherNumber, today, narration, payNow.toFixed(2), req.employee?.username ?? "system"],
-        );
-        // Dr Salary Payable / Cr Cash or Bank
-        await client.query(
-          `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit)
-           VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)`,
-          [jv.id, salPayId, payNow.toFixed(2), payLedgerId],
-        );
-        await client.query("COMMIT");
-      } catch (e) { await client.query("ROLLBACK").catch(() => {}); console.warn("[payroll/pay] JV error:", e); }
-      finally { client.release(); }
-    }
-
-    // If approval JV wasn't created yet (status was draft), create it now too
-    if (existing.status === 'draft') {
-      const salExpId = await findOrProvisionLedger(
-        `SAL-EMP-${existing.employee_id}`,
-        `Salary - ${emp?.name ?? `Employee #${existing.employee_id}`}`,
-        'expense', 'SYS-INDEXP',
-        `Salary expense for ${emp?.name ?? `Employee #${existing.employee_id}`}`,
-      );
-      if (salExpId && salPayId && totalNet > 0.004) {
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
-          const vn = await nextVoucherNumber(client, "journal", today);
-          const nar = `Salary Approved — ${emp?.name ?? `Emp #${existing.employee_id}`} — ${monthStr}/${existing.year}`;
-          const { rows: [jv2] } = await client.query(
-            `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by)
-             VALUES ('journal', $1, $2, $3, $4, $5) RETURNING id`,
-            [vn, today, nar, totalNet.toFixed(2), req.employee?.username ?? "system"],
-          );
-          await client.query(
-            `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit) VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)`,
-            [jv2.id, salExpId, totalNet.toFixed(2), salPayId],
-          );
-          await client.query("COMMIT");
-        } catch (e) { await client.query("ROLLBACK").catch(() => {}); }
-        finally { client.release(); }
-      }
-    }
-  } catch (acctErr) { console.warn("[payroll/pay] Accounting error:", acctErr); }
-
-  const { rows: [row] } = await pool.query(
-    `UPDATE payroll
-     SET paid_amount = $1, payment_mode = $2, is_paid = $3, paid_date = $4, status = $5
-     WHERE id = $6 RETURNING *`,
-    [String(newPaidAmt), paymentMode, isFullyPaid, isFullyPaid ? today : null, newStatus, id],
+  // Credit the salary payable ledger for this employee; debit cash/bank.
+  const salPayId = await findOrProvisionLedger(
+    `SAL-PAY-${existing.employee_id}`,
+    `Salary Payable - ${emp?.name ?? `Employee #${existing.employee_id}`}`,
+    'liability', 'SYS-CURL',
+    `Salary payable to ${emp?.name ?? `Employee #${existing.employee_id}`}`,
   );
+  const { rows: [cashRow] } = await pool.query(
+    paymentMode === 'bank'
+      ? `SELECT id FROM account_ledgers WHERE code = 'STD-BANK' LIMIT 1`
+      : `SELECT id FROM account_ledgers WHERE code = 'STD-CASH' LIMIT 1`,
+  );
+  const payLedgerId = cashRow?.id ?? null;
+  if (!salPayId || !payLedgerId) {
+    res.status(500).json({
+      error: "Cannot record this payment: the salary payable or cash/bank ledger is missing. No payment was recorded.",
+    });
+    return;
+  }
+
+  // The voucher and the payroll row move together or not at all. Marking a
+  // salary paid while its cash entry failed would show the money as gone from
+  // the payroll screen and still sitting in the cash ledger.
+  let row: any;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const voucherNumber = await nextVoucherNumber(client, "journal", today);
+    const narration = `Salary Payment${isFullyPaid ? '' : ' (Partial)'} — ${emp?.name ?? `Emp #${existing.employee_id}`} — ${monthStr}/${existing.year}`;
+    const { rows: [jv] } = await client.query(
+      `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by)
+       VALUES ('journal', $1, $2, $3, $4, $5) RETURNING id`,
+      [voucherNumber, today, narration, payNow.toFixed(2), req.employee?.username ?? "system"],
+    );
+    // Dr Salary Payable / Cr Cash or Bank
+    await client.query(
+      `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit)
+       VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)`,
+      [jv.id, salPayId, payNow.toFixed(2), payLedgerId],
+    );
+    // Re-read under the row lock so two concurrent payments cannot each think
+    // they are settling the same outstanding balance.
+    const { rows: [locked] } = await client.query(
+      `SELECT paid_amount, status FROM payroll WHERE id = $1 FOR UPDATE`, [id],
+    );
+    if (!locked || locked.status === 'paid') {
+      throw Object.assign(new Error("Already fully paid"), { httpStatus: 400 });
+    }
+    const lockedPaid = round2(Number(locked.paid_amount ?? 0) + payNow);
+    const lockedFull = lockedPaid >= totalNet - 0.005;
+    const { rows: [updated] } = await client.query(
+      `UPDATE payroll
+       SET paid_amount = $1, payment_mode = $2, is_paid = $3, paid_date = $4, status = $5
+       WHERE id = $6 RETURNING *`,
+      [String(lockedPaid), paymentMode, lockedFull, lockedFull ? today : null, lockedFull ? 'paid' : 'approved', id],
+    );
+    await client.query("COMMIT");
+    row = updated;
+  } catch (e: any) {
+    await client.query("ROLLBACK").catch(() => {});
+    const status = e?.httpStatus ?? 500;
+    res.status(status).json({
+      error: status === 400
+        ? e.message
+        : "Could not record the salary payment. Nothing was changed — please try again.",
+    });
+    return;
+  } finally {
+    client.release();
+  }
 
   logActivity({ action: "UPDATE", module: "payroll", entityType: "payroll", entityId: id,
     description: `Salary ${isFullyPaid ? 'paid' : 'partial payment'} for ${emp?.name ?? `Emp #${existing.employee_id}`} — ₹${payNow.toLocaleString("en-IN")} via ${paymentMode}`,

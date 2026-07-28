@@ -36,11 +36,15 @@ async function extraSettingsFields(id: number): Promise<{
   passwordMinLength: number; passwordRequireUppercase: boolean; passwordRequireNumber: boolean; passwordRequireSpecial: boolean;
   generalSettings: Record<string, any> | null;
   gstTransferInvoicing: boolean; branchTransferPrefix: string;
+  pfEnabled: boolean; pfEmployeePercent: number; pfEmployerPercent: number;
+  esiEnabled: boolean; esiEmployeePercent: number; esiEmployerPercent: number;
 }> {
   const { rows: [r] } = await pool.query<any>(
     `SELECT payment_terms, invoice_footer, production_overhead_percent,
             password_min_length, password_require_uppercase, password_require_number, password_require_special,
-            general_settings, gst_transfer_invoicing, branch_transfer_prefix
+            general_settings, gst_transfer_invoicing, branch_transfer_prefix,
+            pf_enabled, pf_employee_percent, pf_employer_percent,
+            esi_enabled, esi_employee_percent, esi_employer_percent
      FROM company_settings WHERE id = $1`, [id]
   );
   return {
@@ -54,6 +58,12 @@ async function extraSettingsFields(id: number): Promise<{
     generalSettings: r?.general_settings ?? null,
     gstTransferInvoicing: r?.gst_transfer_invoicing !== false,
     branchTransferPrefix: r?.branch_transfer_prefix ?? 'BTR',
+    pfEnabled: r?.pf_enabled !== false,
+    pfEmployeePercent: Number(r?.pf_employee_percent ?? 12),
+    pfEmployerPercent: Number(r?.pf_employer_percent ?? 12),
+    esiEnabled: r?.esi_enabled !== false,
+    esiEmployeePercent: Number(r?.esi_employee_percent ?? 0.75),
+    esiEmployerPercent: Number(r?.esi_employer_percent ?? 3.25),
   };
 }
 
@@ -123,6 +133,36 @@ router.patch("/company/settings", requireModuleAction("Settings", "edit"), async
     transferUpdates.push(['branch_transfer_prefix', v.trim().toUpperCase()]);
   }
 
+  // Statutory payroll (raw columns). PF and ESI are company-wide obligations,
+  // so the rates live here rather than on each employee. Changing a rate only
+  // affects payroll generated afterwards — every run stores the rates it used,
+  // so an approved period keeps the figures the employee was actually paid on.
+  const statutoryUpdates: Array<[column: string, value: boolean | number]> = [];
+  for (const [bodyKey, column] of [
+    ['pfEnabled',  'pf_enabled'],
+    ['esiEnabled', 'esi_enabled'],
+  ] as const) {
+    if (bodyKey in req.body) {
+      const v = (req.body as any)[bodyKey];
+      if (typeof v !== 'boolean') { res.status(400).json({ error: `${bodyKey} must be a boolean` }); return; }
+      statutoryUpdates.push([column, v]);
+    }
+  }
+  for (const [bodyKey, column, max] of [
+    ['pfEmployeePercent',  'pf_employee_percent',  100],
+    ['pfEmployerPercent',  'pf_employer_percent',  100],
+    ['esiEmployeePercent', 'esi_employee_percent', 100],
+    ['esiEmployerPercent', 'esi_employer_percent', 100],
+  ] as const) {
+    if (bodyKey in req.body) {
+      const v = Number((req.body as any)[bodyKey]);
+      if (!Number.isFinite(v) || v < 0 || v > max) {
+        res.status(400).json({ error: `${bodyKey} must be a number between 0 and ${max}` }); return;
+      }
+      statutoryUpdates.push([column, Math.round(v * 100) / 100]);
+    }
+  }
+
   // Password policy (raw columns) — minLength 6–32, three boolean complexity flags
   const policyUpdates: Array<[column: string, value: number | boolean]> = [];
   if ('passwordMinLength' in req.body) {
@@ -145,7 +185,7 @@ router.patch("/company/settings", requireModuleAction("Settings", "edit"), async
     }
   }
 
-  if (Object.keys(data).length === 0 && pdfUpdates.length === 0 && overheadUpdate === undefined && policyUpdates.length === 0 && generalSettingsUpdate === undefined && transferUpdates.length === 0) { res.status(400).json({ error: "No valid fields to update" }); return; }
+  if (Object.keys(data).length === 0 && pdfUpdates.length === 0 && overheadUpdate === undefined && policyUpdates.length === 0 && generalSettingsUpdate === undefined && transferUpdates.length === 0 && statutoryUpdates.length === 0) { res.status(400).json({ error: "No valid fields to update" }); return; }
 
   const rows = await db.select().from(companySettingsTable).limit(1);
   let row;
@@ -167,6 +207,9 @@ router.patch("/company/settings", requireModuleAction("Settings", "edit"), async
   }
   if (policyUpdates.length > 0) invalidatePolicyCache();
   for (const [column, value] of transferUpdates) {
+    await pool.query(`UPDATE company_settings SET ${column} = $1 WHERE id = $2`, [value, row.id]);
+  }
+  for (const [column, value] of statutoryUpdates) {
     await pool.query(`UPDATE company_settings SET ${column} = $1 WHERE id = $2`, [value, row.id]);
   }
   if (generalSettingsUpdate !== undefined) {

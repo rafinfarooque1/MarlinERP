@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { useListExpenses, useCreateExpense, getListExpensesQueryKey, useListChartOfAccounts, useListCashBankAccounts, useLocationExpensesSummary, useLocationExpenses, LocationExpenseSummary } from '@workspace/api-client-react';
+import { useListExpenses, useCreateExpense, getListExpensesQueryKey, useListChartOfAccounts, useListCashBankAccounts, useLocationExpensesSummary, useLocationExpenses, LocationExpenseSummary, useExpenseCategories, useListWarehouses, useListOutlets, attachmentViewUrl } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { AttachmentField } from '@/components/AttachmentField';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -13,11 +14,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Receipt, Download, Eye, Calendar, MapPin, Building2, ChevronRight, ArrowLeft, LayoutList, ShieldOff } from 'lucide-react';
+import { Plus, Search, Receipt, Download, Eye, Calendar, MapPin, Building2, ChevronRight, ArrowLeft, LayoutList, ShieldOff, Printer, Paperclip, Tag } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { downloadCSV } from '@/lib/download';
+import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 
 const schema = z.object({
@@ -26,9 +27,28 @@ const schema = z.object({
   expenseDate: z.string().min(1, 'Date required'),
   ledgerAccountId: z.coerce.number().min(1, 'Ledger account required'),
   paymentAccountId: z.coerce.number().min(1, 'Payment account required'),
+  category: z.string().min(1, 'Category required'),
+  attributeTo: z.string().min(1),
   notes: z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
+
+/**
+ * Print the payment voucher. Assembled entirely server-side from the row id —
+ * nothing about the figures comes from this page, so a printed voucher can
+ * never state an amount the books do not hold.
+ */
+async function printVoucher(source: 'direct' | 'location', id: number, label?: string) {
+  try {
+    await downloadPDFFromEndpoint(
+      '/api/pdf/expense-voucher',
+      { source, id },
+      `expense-voucher-${(label || id).toString().replace(/[^A-Za-z0-9._-]+/g, '-')}.pdf`,
+    );
+  } catch (e: any) {
+    toast.error(e?.message ?? 'Could not generate the voucher');
+  }
+}
 
 // ── By-Location drilldown panel ───────────────────────────────────────────────
 function LocationDrilldown({ loc, onBack }: { loc: LocationExpenseSummary; onBack: () => void }) {
@@ -64,8 +84,10 @@ function LocationDrilldown({ loc, onBack }: { loc: LocationExpenseSummary; onBac
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/10">
+              <TableHead>Voucher</TableHead>
               <TableHead>Date</TableHead>
               <TableHead>Description</TableHead>
+              <TableHead>Category</TableHead>
               <TableHead>Expense Account</TableHead>
               <TableHead className="text-right">Amount</TableHead>
               <TableHead />
@@ -75,18 +97,21 @@ function LocationDrilldown({ loc, onBack }: { loc: LocationExpenseSummary; onBac
             {isLoading ? (
               [...Array(3)].map((_, i) => (
                 <TableRow key={i}>
-                  <TableCell colSpan={5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
+                  <TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
                 </TableRow>
               ))
             ) : expenses.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
+                <TableCell colSpan={7} className="text-center py-12 text-muted-foreground">
                   <Receipt className="w-8 h-8 mx-auto mb-2 opacity-20" />
                   <p>No expenses recorded for this location</p>
                 </TableCell>
               </TableRow>
             ) : expenses.map(e => (
               <TableRow key={e.id} className="hover:bg-muted/10">
+                <TableCell className="font-mono text-xs text-primary whitespace-nowrap">
+                  {e.voucherNumber || <span className="text-muted-foreground">—</span>}
+                </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
                   <div className="flex items-center gap-1">
                     <Calendar className="w-3 h-3" />
@@ -94,10 +119,23 @@ function LocationDrilldown({ loc, onBack }: { loc: LocationExpenseSummary; onBac
                   </div>
                 </TableCell>
                 <TableCell>
-                  <span className="font-medium">{e.description ?? <span className="italic text-muted-foreground">No description</span>}</span>
-                  {e.voucherNumber && (
-                    <span className="ml-2 text-xs text-muted-foreground">{e.voucherNumber}</span>
-                  )}
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{e.description ?? <span className="italic text-muted-foreground">No description</span>}</span>
+                    {(e as any).attachmentUrl && (
+                      <a
+                        href={attachmentViewUrl((e as any).attachmentUrl)}
+                        target="_blank" rel="noreferrer"
+                        title="View attached bill"
+                        onClick={ev => ev.stopPropagation()}
+                        className="text-muted-foreground hover:text-primary shrink-0"
+                      >
+                        <Paperclip className="w-3.5 h-3.5" />
+                      </a>
+                    )}
+                  </div>
+                </TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  {(e as any).category || 'Uncategorised'}
                 </TableCell>
                 <TableCell>
                   <Badge variant="outline" className="text-xs">{e.expenseLedgerName || '—'}</Badge>
@@ -105,7 +143,14 @@ function LocationDrilldown({ loc, onBack }: { loc: LocationExpenseSummary; onBac
                 <TableCell className="text-right font-mono font-bold text-red-500">
                   ₹{e.amount.toLocaleString('en-IN')}
                 </TableCell>
-                <TableCell className="text-right">
+                <TableCell className="text-right whitespace-nowrap">
+                  <Button
+                    variant="ghost" size="icon" className="h-8 w-8 hover:text-primary"
+                    title="Print payment voucher"
+                    onClick={() => printVoucher('location', e.id, e.voucherNumber)}
+                  >
+                    <Printer className="w-4 h-4" />
+                  </Button>
                   <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(e)}>
                     <Eye className="w-4 h-4" />
                   </Button>
@@ -128,11 +173,12 @@ function LocationDrilldown({ loc, onBack }: { loc: LocationExpenseSummary; onBac
           {viewItem && (
             <div className="mt-6 space-y-4">
               {[
+                ...(viewItem.voucherNumber ? [['Voucher', viewItem.voucherNumber]] : []),
                 ['Amount', `₹${viewItem.amount.toLocaleString('en-IN')}`],
                 ['Date', new Date(viewItem.expenseDate).toLocaleDateString('en-IN')],
+                ['Category', viewItem.category || 'Uncategorised'],
                 ['Expense Account', viewItem.expenseLedgerName || '—'],
                 ['Paid From', viewItem.cashLedgerName || '—'],
-                ...(viewItem.voucherNumber ? [['Voucher', viewItem.voucherNumber]] : []),
                 ['Location', `${loc.locationName} (${loc.locationType})`],
               ].map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
@@ -140,6 +186,28 @@ function LocationDrilldown({ loc, onBack }: { loc: LocationExpenseSummary; onBac
                   <span className="font-medium">{v}</span>
                 </div>
               ))}
+
+              <div className="flex flex-col gap-1 border-b border-border pb-3">
+                <span className="text-xs text-muted-foreground uppercase tracking-wider">Supporting Bill</span>
+                {viewItem.attachmentUrl ? (
+                  <a
+                    href={attachmentViewUrl(viewItem.attachmentUrl)}
+                    target="_blank" rel="noreferrer"
+                    className="font-medium text-primary hover:underline flex items-center gap-1.5"
+                  >
+                    <Paperclip className="w-3.5 h-3.5" /> View attached bill
+                  </a>
+                ) : (
+                  <span className="font-medium text-amber-600">Not attached</span>
+                )}
+              </div>
+
+              <Button
+                variant="outline" className="w-full"
+                onClick={() => printVoucher('location', viewItem.id, viewItem.voucherNumber)}
+              >
+                <Printer className="w-4 h-4 mr-2" /> Print Payment Voucher
+              </Button>
             </div>
           )}
         </SheetContent>
@@ -268,25 +336,46 @@ export default function Expenses() {
   const { data: expenses = [], isLoading } = useListExpenses();
   const { data: accounts = [] } = useListChartOfAccounts();
   const { data: cashBanks = [] } = useListCashBankAccounts();
+  const { data: categories = [] } = useExpenseCategories();
+  const { data: warehouses = [] } = useListWarehouses();
+  const { data: outlets = [] } = useListOutlets();
   const expenseAccounts = accounts.filter(a => a.type === 'expense');
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
+  const [attachmentUrl, setAttachmentUrl] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const createMutation = useCreateExpense();
 
+  const blankForm = {
+    description: '', amount: 0, expenseDate: new Date().toISOString().split('T')[0],
+    ledgerAccountId: 0, paymentAccountId: 0, category: 'Uncategorised', attributeTo: 'headoffice',
+  };
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { description: '', amount: 0, expenseDate: new Date().toISOString().split('T')[0], ledgerAccountId: 0, paymentAccountId: 0 },
+    defaultValues: blankForm,
   });
 
   const onSubmit = (data: FormValues) => {
-    createMutation.mutate({ data: { ...data, amount: Number(data.amount) } as any }, {
+    // `attributeTo` is one picker in the UI ("Head Office" / a warehouse / an
+    // outlet) but two fields on the wire.
+    const [locationType, rawId] = data.attributeTo.split(':');
+    const { attributeTo: _drop, ...rest } = data;
+    createMutation.mutate({
+      data: {
+        ...rest,
+        amount: Number(data.amount),
+        attachmentUrl: attachmentUrl ?? undefined,
+        locationType,
+        ...(locationType === 'headoffice' ? {} : { locationId: Number(rawId) }),
+      } as any,
+    }, {
       onSuccess: () => {
         toast.success('Expense recorded');
         queryClient.invalidateQueries({ queryKey: getListExpensesQueryKey() });
         setIsOpen(false);
-        form.reset();
+        setAttachmentUrl(null);
+        form.reset(blankForm);
       },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
@@ -297,7 +386,10 @@ export default function Expenses() {
     return (
       (e.description ?? '').toLowerCase().includes(q) ||
       (e.ledgerAccountName ?? '').toLowerCase().includes(q) ||
-      (e.paymentAccountName ?? '').toLowerCase().includes(q)
+      (e.paymentAccountName ?? '').toLowerCase().includes(q) ||
+      (e.category ?? '').toLowerCase().includes(q) ||
+      (e.expenseNumber ?? '').toLowerCase().includes(q) ||
+      (e.locationName ?? '').toLowerCase().includes(q)
     );
   });
   const total = filtered.reduce((s, e) => s + Number(e.amount || 0), 0);
@@ -329,17 +421,22 @@ export default function Expenses() {
           </div>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => downloadCSV('expenses.csv', filtered.map(e => ({
+              Voucher: e.expenseNumber ?? e.voucherNumber ?? '',
               Date: e.expenseDate,
               Description: e.description ?? '',
+              Category: e.category ?? 'Uncategorised',
               Account: e.ledgerAccountName ?? '',
               PaidFrom: e.paymentAccountName ?? '',
+              Location: e.locationName ?? 'Head Office',
               Amount: e.amount,
+              Bill: e.attachmentUrl ? 'Attached' : 'Missing',
               Source: e.source === 'location' ? 'Location' : 'Direct',
             })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
             <Button onClick={() => {
-              form.reset({ description: '', amount: 0, expenseDate: new Date().toISOString().split('T')[0], ledgerAccountId: 0, paymentAccountId: 0 });
+              form.reset(blankForm);
+              setAttachmentUrl(null);
               setIsOpen(true);
             }}>
               <Plus className="w-4 h-4 mr-2" /> Add Expense
@@ -370,7 +467,7 @@ export default function Expenses() {
               <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
                 <Search className="w-4 h-4 text-muted-foreground" />
                 <Input
-                  placeholder="Search by description, account…"
+                  placeholder="Search by voucher, description, category, account, location…"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
                   className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm"
@@ -379,9 +476,12 @@ export default function Expenses() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/10">
+                    <TableHead>Voucher</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead>Description</TableHead>
+                    <TableHead>Category</TableHead>
                     <TableHead>Expense Account</TableHead>
+                    <TableHead>Location</TableHead>
                     <TableHead>Paid From</TableHead>
                     <TableHead className="text-right">Amount</TableHead>
                     <TableHead />
@@ -391,18 +491,21 @@ export default function Expenses() {
                   {isLoading ? (
                     [...Array(4)].map((_, i) => (
                       <TableRow key={i}>
-                        <TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
+                        <TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell>
                       </TableRow>
                     ))
                   ) : filtered.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
+                      <TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
                         <Receipt className="w-10 h-10 mx-auto mb-3 opacity-20" />
                         <p>No expenses recorded</p>
                       </TableCell>
                     </TableRow>
                   ) : filtered.map(e => (
                     <TableRow key={`${e.source}-${e.id}`} className="hover:bg-muted/10">
+                      <TableCell className="font-mono text-xs text-primary whitespace-nowrap">
+                        {e.expenseNumber ?? e.voucherNumber ?? <span className="text-muted-foreground">—</span>}
+                      </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         <div className="flex items-center gap-1">
                           <Calendar className="w-3 h-3" />
@@ -412,6 +515,18 @@ export default function Expenses() {
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <span className="font-semibold">{e.description ?? <span className="text-muted-foreground italic">No description</span>}</span>
+                          {e.attachmentUrl && (
+                            <a
+                              href={attachmentViewUrl(e.attachmentUrl)}
+                              target="_blank"
+                              rel="noreferrer"
+                              title="View attached bill"
+                              onClick={ev => ev.stopPropagation()}
+                              className="text-muted-foreground hover:text-primary shrink-0"
+                            >
+                              <Paperclip className="w-3.5 h-3.5" />
+                            </a>
+                          )}
                           {e.source === 'location' && (
                             <Badge variant="secondary" className="text-xs gap-1">
                               <MapPin className="w-2.5 h-2.5" /> Location
@@ -420,13 +535,24 @@ export default function Expenses() {
                         </div>
                       </TableCell>
                       <TableCell>
+                        <span className="text-xs text-muted-foreground">{e.category || 'Uncategorised'}</span>
+                      </TableCell>
+                      <TableCell>
                         <Badge variant="outline" className="text-xs">{e.ledgerAccountName || '—'}</Badge>
                       </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{e.locationName || 'Head Office'}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{e.paymentAccountName || '—'}</TableCell>
                       <TableCell className="text-right font-mono font-bold text-red-500">
                         ₹{Number(e.amount).toLocaleString('en-IN')}
                       </TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="text-right whitespace-nowrap">
+                        <Button
+                          variant="ghost" size="icon" className="h-8 w-8 hover:text-primary"
+                          title="Print payment voucher"
+                          onClick={() => printVoucher(e.source === 'location' ? 'location' : 'direct', e.id, e.expenseNumber ?? e.voucherNumber)}
+                        >
+                          <Printer className="w-4 h-4" />
+                        </Button>
                         <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(e)}>
                           <Eye className="w-4 h-4" />
                         </Button>
@@ -497,6 +623,49 @@ export default function Expenses() {
                   <FormMessage />
                 </FormItem>
               )} />
+              {/* Category drives expense reporting, so it is a fixed list rather
+                  than free text — "Fuel" and "fuel" would otherwise split. */}
+              <FormField control={form.control} name="category" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Category <span className="text-destructive">*</span></FormLabel>
+                  <Select onValueChange={field.onChange} value={field.value}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger></FormControl>
+                    <SelectContent>
+                      {categories.map(c => <SelectItem key={c.name} value={c.name}>{c.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )} />
+              {/* Attribution, not payment: the money still leaves a company
+                  account, but the cost belongs to whichever site incurred it. */}
+              <FormField control={form.control} name="attributeTo" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Attribute To</FormLabel>
+                  <Select onValueChange={field.onChange} value={field.value}>
+                    <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
+                    <SelectContent>
+                      <SelectItem value="headoffice">Head Office</SelectItem>
+                      {(warehouses as any[]).map((w: any) => (
+                        <SelectItem key={`w${w.id}`} value={`warehouse:${w.id}`}>{w.name} (warehouse)</SelectItem>
+                      ))}
+                      {(outlets as any[]).map((o: any) => (
+                        <SelectItem key={`o${o.id}`} value={`outlet:${o.id}`}>{o.name} (outlet)</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Which site the cost belongs to. Payment still comes from the company account above.
+                  </p>
+                </FormItem>
+              )} />
+              {/* Plain markup, not FormItem/FormLabel: the attachment is held in
+                  its own state rather than in the react-hook-form field tree, and
+                  FormLabel throws outside a FormField context. */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium leading-none">Supporting Bill</label>
+                <AttachmentField value={attachmentUrl} onChange={setAttachmentUrl} />
+              </div>
               <FormField control={form.control} name="notes" render={({ field }) => (
                 <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
               )} />
@@ -524,11 +693,13 @@ export default function Expenses() {
           {viewItem && (
             <div className="mt-6 space-y-4">
               {[
+                ['Voucher', viewItem.expenseNumber ?? viewItem.voucherNumber ?? 'Not numbered'],
                 ['Amount', `₹${Number(viewItem.amount).toLocaleString('en-IN')}`],
                 ['Date', new Date(viewItem.expenseDate).toLocaleDateString('en-IN')],
+                ['Category', viewItem.category || 'Uncategorised'],
                 ['Expense Account', viewItem.ledgerAccountName || '—'],
+                ['Location', viewItem.locationName || 'Head Office'],
                 ['Paid From', viewItem.paymentAccountName || '—'],
-                ...(viewItem.voucherNumber ? [['Voucher', viewItem.voucherNumber]] : []),
                 ['Source', viewItem.source === 'location' ? 'Location (Sales segment)' : 'Direct entry'],
               ].map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
@@ -536,6 +707,32 @@ export default function Expenses() {
                   <span className="font-medium">{v}</span>
                 </div>
               ))}
+
+              <div className="flex flex-col gap-1 border-b border-border pb-3">
+                <span className="text-xs text-muted-foreground uppercase tracking-wider">Supporting Bill</span>
+                {viewItem.attachmentUrl ? (
+                  <a
+                    href={attachmentViewUrl(viewItem.attachmentUrl)}
+                    target="_blank" rel="noreferrer"
+                    className="font-medium text-primary hover:underline flex items-center gap-1.5"
+                  >
+                    <Paperclip className="w-3.5 h-3.5" /> View attached bill
+                  </a>
+                ) : (
+                  <span className="font-medium text-amber-600">Not attached</span>
+                )}
+              </div>
+
+              <Button
+                variant="outline" className="w-full"
+                onClick={() => printVoucher(
+                  viewItem.source === 'location' ? 'location' : 'direct',
+                  viewItem.id,
+                  viewItem.expenseNumber ?? viewItem.voucherNumber,
+                )}
+              >
+                <Printer className="w-4 h-4 mr-2" /> Print Payment Voucher
+              </Button>
             </div>
           )}
         </SheetContent>
