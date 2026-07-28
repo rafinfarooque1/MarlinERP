@@ -11,6 +11,13 @@ const router = Router();
 const JV_TYPES = new Set(["journal", "contra", "credit_note", "debit_note"]);
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const isDate = (s: unknown): s is string => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+/**
+ * A pg `date` column parses to a Date at LOCAL midnight. `toISOString()` on that
+ * would shift the day backwards in any timezone west of UTC, so read the local
+ * calendar fields instead — a voucher dated the 1st must not report as the 31st.
+ */
+const toLocalISODate = (d: Date): string =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -281,8 +288,11 @@ router.delete("/accounts/journal-vouchers/:id", requireModuleAction("page:/accou
 // agree with each other. Sales/purchases have no stored ledger postings, so
 // they are derived here the same way the financial statements imply them.
 
-interface Posting {
+export interface Posting {
   date: string;
+  /** Stable identity of the source document, so consumers can regroup the
+   *  legs of one entry without guessing from voucher number + description. */
+  entryId: string;
   ledgerId: number;
   debit: number;
   credit: number;
@@ -294,8 +304,23 @@ interface Posting {
 export async function buildDerivedPostings(opts: { toDate?: string } = {}): Promise<Posting[]> {
   const { toDate } = opts;
   const postings: Posting[] = [];
+  /**
+   * `date` is declared as a YYYY-MM-DD string, but pg hands back a JS Date for
+   * every `date`/`timestamptz` column, so half the sources below would push a
+   * Date object into a field typed `string`. Consumers then either crash
+   * (`p.date.localeCompare is not a function`) or silently mis-sort, because
+   * a Date stringifies to "Fri Jul 28 2026 …" which does not compare against
+   * "2026-07-28". Normalising once here makes the declared type true for every
+   * consumer instead of asking each one to remember `String(p.date)`.
+   */
   const push = (p: Posting) => {
-    if (p.ledgerId && (p.debit > 0.004 || p.credit > 0.004)) postings.push(p);
+    if (!p.ledgerId || (p.debit <= 0.004 && p.credit <= 0.004)) return;
+    const d = p.date as unknown;
+    postings.push(
+      typeof d === "string"
+        ? (d.length === 10 ? p : { ...p, date: d.slice(0, 10) })
+        : { ...p, date: d instanceof Date ? toLocalISODate(d) : String(d ?? "").slice(0, 10) },
+    );
   };
   const upTo = (col: string, params: any[]) => {
     if (!isDate(toDate)) return "";
@@ -332,15 +357,16 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   // 1. Payments: Dr paid_to / Cr paid_from
   const pp: any[] = [];
   const { rows: pays } = await pool.query(
-    `SELECT payment_date AS date, paid_from_ledger_id AS f, paid_to_ledger_id AS t,
+    `SELECT id, payment_date AS date, paid_from_ledger_id AS f, paid_to_ledger_id AS t,
             amount, voucher_number, narration
      FROM payments WHERE 1=1${upTo("payment_date", pp)}`, pp
   );
   for (const r of pays) {
     const amt = Number(r.amount);
     const desc = r.narration || "Payment";
-    push({ date: r.date, ledgerId: r.t, debit: amt, credit: 0, source: "payment", voucherNumber: r.voucher_number, description: desc });
-    push({ date: r.date, ledgerId: r.f, debit: 0, credit: amt, source: "payment", voucherNumber: r.voucher_number, description: desc });
+    const eid = `payment:${r.id}`;
+    push({ entryId: eid, date: r.date, ledgerId: r.t, debit: amt, credit: 0, source: "payment", voucherNumber: r.voucher_number, description: desc });
+    push({ entryId: eid, date: r.date, ledgerId: r.f, debit: 0, credit: amt, source: "payment", voucherNumber: r.voucher_number, description: desc });
   }
 
   // 2. Receipts: Dr received_in / Cr received_from
@@ -351,7 +377,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   // from sales + sale_payments instead — including both would double-count.
   const rp: any[] = [];
   const { rows: recs } = await pool.query(
-    `SELECT receipt_date AS date, received_from_ledger_id AS f, received_in_ledger_id AS t,
+    `SELECT id, receipt_date AS date, received_from_ledger_id AS f, received_in_ledger_id AS t,
             amount, voucher_number, narration
      FROM receipts
      WHERE id NOT IN (SELECT clearing_receipt_id FROM sale_payments WHERE clearing_receipt_id IS NOT NULL)
@@ -361,14 +387,15 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   for (const r of recs) {
     const amt = Number(r.amount);
     const desc = r.narration || "Receipt";
-    push({ date: r.date, ledgerId: r.t, debit: amt, credit: 0, source: "receipt", voucherNumber: r.voucher_number, description: desc });
-    push({ date: r.date, ledgerId: r.f, debit: 0, credit: amt, source: "receipt", voucherNumber: r.voucher_number, description: desc });
+    const eid = `receipt:${r.id}`;
+    push({ entryId: eid, date: r.date, ledgerId: r.t, debit: amt, credit: 0, source: "receipt", voucherNumber: r.voucher_number, description: desc });
+    push({ entryId: eid, date: r.date, ledgerId: r.f, debit: 0, credit: amt, source: "receipt", voucherNumber: r.voucher_number, description: desc });
   }
 
   // 3. Journal voucher lines (journal, contra, credit/debit notes) — as stored
   const jp: any[] = [];
   const { rows: jls } = await pool.query(
-    `SELECT v.voucher_date AS date, v.voucher_number, v.voucher_type, v.narration,
+    `SELECT v.id AS voucher_id, v.voucher_date AS date, v.voucher_number, v.voucher_type, v.narration,
             l.ledger_id, l.debit, l.credit
      FROM journal_voucher_lines l
      JOIN journal_vouchers v ON v.id = l.voucher_id
@@ -376,6 +403,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   );
   for (const r of jls) {
     push({
+      entryId: `jv:${r.voucher_id}`,
       date: r.date, ledgerId: r.ledger_id, debit: Number(r.debit), credit: Number(r.credit),
       source: r.voucher_type, voucherNumber: r.voucher_number,
       description: r.narration || VOUCHER_TYPE_LABELS[r.voucher_type] || "Journal",
@@ -385,7 +413,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   // 4. Legacy direct expenses: Dr expense ledger / Cr Cash or Bank root
   const ep: any[] = [];
   const { rows: exps } = await pool.query(
-    `SELECT e.expense_date AS date, e.ledger_account_id AS lid, e.amount, e.description,
+    `SELECT e.id, e.expense_number, e.expense_date AS date, e.ledger_account_id AS lid, e.amount, e.description,
             cb.account_type AS cb_type
      FROM expenses e
      LEFT JOIN cash_bank_accounts cb ON cb.id = e.payment_account_id
@@ -395,8 +423,9 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     const amt = Number(r.amount);
     const creditLedger = String(r.cb_type ?? "").toLowerCase().includes("bank") ? stdBank : stdCash;
     const desc = r.description || "Expense";
-    push({ date: r.date, ledgerId: r.lid, debit: amt, credit: 0, source: "expense", voucherNumber: null, description: desc });
-    push({ date: r.date, ledgerId: creditLedger, debit: 0, credit: amt, source: "expense", voucherNumber: null, description: desc });
+    const eid = `expense:${r.id}`;
+    push({ entryId: eid, date: r.date, ledgerId: r.lid, debit: amt, credit: 0, source: "expense", voucherNumber: r.expense_number ?? null, description: desc });
+    push({ entryId: eid, date: r.date, ledgerId: creditLedger, debit: 0, credit: amt, source: "expense", voucherNumber: r.expense_number ?? null, description: desc });
   }
 
   // 5. Sales: Cr sales ledger (net) + Cr Output GST (split CGST/SGST/IGST when
@@ -437,8 +466,9 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
       ? (branchTrf || stdSales)
       : (loc?.sales_ledger_id ?? stdSales);
     const cashLedger = loc?.cash_ledger_id ?? stdCash;
+    const eid = `sale:${s.id}`;
 
-    push({ date: s.sale_date, ledgerId: salesLedger, debit: 0, credit: net, source: "sale", voucherNumber: s.invoice_number, description: isBranchTransfer ? `Branch transfer out — ${inv}` : `Sales ${inv}` });
+    push({ entryId: eid, date: s.sale_date, ledgerId: salesLedger, debit: 0, credit: net, source: "sale", voucherNumber: s.invoice_number, description: isBranchTransfer ? `Branch transfer out — ${inv}` : `Sales ${inv}` });
     if (tax > 0) {
       const sLines = (s.line_items ?? []) as any[];
       let cg = 0, sg = 0, ig = 0;
@@ -446,14 +476,14 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
       cg = round2(cg); sg = round2(sg); ig = round2(ig);
       const split = round2(cg + sg + ig);
       if (outCgst && outSgst && outIgst && split > 0.004 && Math.abs(split - tax) <= 0.05) {
-        if (cg > 0.004) push({ date: s.sale_date, ledgerId: outCgst, debit: 0, credit: cg, source: "sale", voucherNumber: s.invoice_number, description: `Output CGST — ${inv}` });
-        if (sg > 0.004) push({ date: s.sale_date, ledgerId: outSgst, debit: 0, credit: sg, source: "sale", voucherNumber: s.invoice_number, description: `Output SGST — ${inv}` });
-        if (ig > 0.004) push({ date: s.sale_date, ledgerId: outIgst, debit: 0, credit: ig, source: "sale", voucherNumber: s.invoice_number, description: `Output IGST — ${inv}` });
+        if (cg > 0.004) push({ entryId: eid, date: s.sale_date, ledgerId: outCgst, debit: 0, credit: cg, source: "sale", voucherNumber: s.invoice_number, description: `Output CGST — ${inv}` });
+        if (sg > 0.004) push({ entryId: eid, date: s.sale_date, ledgerId: outSgst, debit: 0, credit: sg, source: "sale", voucherNumber: s.invoice_number, description: `Output SGST — ${inv}` });
+        if (ig > 0.004) push({ entryId: eid, date: s.sale_date, ledgerId: outIgst, debit: 0, credit: ig, source: "sale", voucherNumber: s.invoice_number, description: `Output IGST — ${inv}` });
         const resid = round2(tax - split);
-        if (resid > 0.004) push({ date: s.sale_date, ledgerId: stdDtx, debit: 0, credit: resid, source: "sale", voucherNumber: s.invoice_number, description: `GST rounding — ${inv}` });
-        else if (resid < -0.004) push({ date: s.sale_date, ledgerId: stdDtx, debit: -resid, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `GST rounding — ${inv}` });
+        if (resid > 0.004) push({ entryId: eid, date: s.sale_date, ledgerId: stdDtx, debit: 0, credit: resid, source: "sale", voucherNumber: s.invoice_number, description: `GST rounding — ${inv}` });
+        else if (resid < -0.004) push({ entryId: eid, date: s.sale_date, ledgerId: stdDtx, debit: -resid, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `GST rounding — ${inv}` });
       } else {
-        push({ date: s.sale_date, ledgerId: stdDtx, debit: 0, credit: tax, source: "sale", voucherNumber: s.invoice_number, description: `GST on ${inv}` });
+        push({ entryId: eid, date: s.sale_date, ledgerId: stdDtx, debit: 0, credit: tax, source: "sale", voucherNumber: s.invoice_number, description: `GST on ${inv}` });
       }
     }
 
@@ -463,7 +493,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     // note raised at rejection is what reverses it, and skipping the invoice
     // as well would subtract the same amount twice.
     if (isBranchTransfer) {
-      push({ date: s.sale_date, ledgerId: branchDebtor || debtors, debit: total, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Due from branch — ${inv}` });
+      push({ entryId: eid, date: s.sale_date, ledgerId: branchDebtor || debtors, debit: total, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Due from branch — ${inv}` });
       continue;
     }
 
@@ -472,7 +502,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
       const amt = Number(p.amount);
       paidViaSp += amt;
       const drLedger = p.method === "cash" ? cashLedger : elecClr;
-      push({ date: p.payment_date, ledgerId: drLedger, debit: amt, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `${p.method === "cash" ? "Cash" : "Electronic"} received — ${inv}` });
+      push({ entryId: eid, date: p.payment_date, ledgerId: drLedger, debit: amt, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `${p.method === "cash" ? "Cash" : "Electronic"} received — ${inv}` });
     }
 
     const amountPaid = Number(s.amount_paid ?? 0);
@@ -480,13 +510,13 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     if (extra > 0.004) {
       // Cash sits in the cash box; bank/UPI/card clear through Electronic Clearing.
       const drLedger = clearsThroughBank(s.payment_mode) ? elecClr : cashLedger;
-      push({ date: s.sale_date, ledgerId: drLedger, debit: extra, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Received — ${inv}` });
+      push({ entryId: eid, date: s.sale_date, ledgerId: drLedger, debit: extra, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Received — ${inv}` });
     }
 
     const due = round2(total - amountPaid);
     if (due > 0.004) {
       const custLedger = s.customer_id ? (byCode.get(`CUST-${s.customer_id}`)?.id ?? debtors) : debtors;
-      push({ date: s.sale_date, ledgerId: custLedger, debit: due, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Outstanding — ${inv}` });
+      push({ entryId: eid, date: s.sale_date, ledgerId: custLedger, debit: due, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Outstanding — ${inv}` });
     }
   }
 
@@ -530,125 +560,87 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     const consistent =
       (lineTaxSum <= 0.004 || Math.abs(inputTax - lineTaxSum) <= 0.05) &&
       (pTaxTotal <= 0.004 || Math.abs(inputTax - pTaxTotal) <= 0.05);
+    const eid = `purchase:${p.id}`;
     if (inpCgst && inpSgst && inpIgst && inputTax > 0.004 && inputTax < amt && consistent) {
-      push({ date: p.purchase_date, ledgerId: purLedger, debit: round2(amt - inputTax), credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}` });
-      if (cg > 0.004) push({ date: p.purchase_date, ledgerId: inpCgst, debit: cg, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Input CGST — ${bill}` });
-      if (sg > 0.004) push({ date: p.purchase_date, ledgerId: inpSgst, debit: sg, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Input SGST — ${bill}` });
-      if (ig > 0.004) push({ date: p.purchase_date, ledgerId: inpIgst, debit: ig, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Input IGST — ${bill}` });
+      push({ entryId: eid, date: p.purchase_date, ledgerId: purLedger, debit: round2(amt - inputTax), credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}` });
+      if (cg > 0.004) push({ entryId: eid, date: p.purchase_date, ledgerId: inpCgst, debit: cg, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Input CGST — ${bill}` });
+      if (sg > 0.004) push({ entryId: eid, date: p.purchase_date, ledgerId: inpSgst, debit: sg, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Input SGST — ${bill}` });
+      if (ig > 0.004) push({ entryId: eid, date: p.purchase_date, ledgerId: inpIgst, debit: ig, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Input IGST — ${bill}` });
     } else {
-      push({ date: p.purchase_date, ledgerId: purLedger, debit: amt, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}` });
+      push({ entryId: eid, date: p.purchase_date, ledgerId: purLedger, debit: amt, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}` });
     }
-    push({ date: p.purchase_date, ledgerId: vendLedger, debit: 0, credit: amt, source: "purchase", voucherNumber: p.invoice_number, description: isBranchTransfer ? `Due to branch — ${bill}` : `Purchase ${bill}` });
+    push({ entryId: eid, date: p.purchase_date, ledgerId: vendLedger, debit: 0, credit: amt, source: "purchase", voucherNumber: p.invoice_number, description: isBranchTransfer ? `Due to branch — ${bill}` : `Purchase ${bill}` });
   }
 
   return postings;
 }
 
 // ── Day Book ───────────────────────────────────────────────────────────────
+//
+// One day's entries as double entries, grouped from the same derived posting
+// stream the Trial Balance reads. It used to re-query every source table with
+// its own posting rules, so a day book total could disagree with the trial
+// balance for the same day and journal-only movements were shown as a lump.
 
 router.get("/accounts/day-book", requireModuleView("page:/accounts/day-book"), async (req, res): Promise<void> => {
   // LBAC: the day book is a Head Office accounting view
-  if ((req as any).employee?.branchType !== 'headoffice') { res.json({ date: "", entries: [] }); return; }
+  if ((req as any).employee?.branchType !== 'headoffice') {
+    res.json({ date: "", entries: [], totals: { count: 0, amount: 0, debit: 0, credit: 0, byType: {} } });
+    return;
+  }
   const q = String((req.query as any).date ?? "");
   const date = isDate(q) ? q : new Date().toISOString().slice(0, 10);
 
-  const entries: any[] = [];
+  const postings = (await buildDerivedPostings({ toDate: date }))
+    .filter((p) => String(p.date).slice(0, 10) === date);
 
-  // Journal-family vouchers
-  const { rows: jvs } = await pool.query(
-    `SELECT v.id, v.voucher_type, v.voucher_number, v.narration, v.total_amount
-     FROM journal_vouchers v WHERE v.voucher_date = $1 ORDER BY v.id`, [date]
-  );
-  if (jvs.length > 0) {
-    const { rows: jlines } = await pool.query(
-      `SELECT l.voucher_id, l.debit, l.credit, al.name AS ledger_name
-       FROM journal_voucher_lines l
-       LEFT JOIN account_ledgers al ON al.id = l.ledger_id
-       WHERE l.voucher_id = ANY($1) ORDER BY l.id`, [jvs.map((v: any) => v.id)]
-    );
-    for (const v of jvs) {
-      const lines = jlines.filter((l: any) => l.voucher_id === v.id);
-      const drNames = lines.filter((l: any) => Number(l.debit) > 0).map((l: any) => l.ledger_name).join(", ");
-      const crNames = lines.filter((l: any) => Number(l.credit) > 0).map((l: any) => l.ledger_name).join(", ");
-      entries.push({
-        id: `jv-${v.id}`, refId: v.id, source: v.voucher_type,
-        voucherNumber: v.voucher_number,
-        particulars: `Dr ${drNames} / Cr ${crNames}`,
-        narration: v.narration, amount: Number(v.total_amount),
-      });
+  const { rows: ledgerRows } = await pool.query(`SELECT id, name FROM account_ledgers`);
+  const nameOf = new Map<number, string>(ledgerRows.map((l: any) => [Number(l.id), l.name as string]));
+
+  type Entry = {
+    id: string; refId: number; source: string; voucherNumber: string | null;
+    particulars: string; narration: string | null; amount: number;
+    debit: number; credit: number;
+    lines: Array<{ ledgerId: number; ledgerName: string; debit: number; credit: number }>;
+  };
+
+  const byEntry = new Map<string, Entry>();
+  for (const p of postings) {
+    const key = p.entryId;
+    let e = byEntry.get(key);
+    if (!e) {
+      e = {
+        id: key,
+        refId: Number(key.split(":")[1] ?? 0),
+        source: p.source,
+        voucherNumber: p.voucherNumber,
+        particulars: "",
+        narration: p.description || null,
+        amount: 0, debit: 0, credit: 0, lines: [],
+      };
+      byEntry.set(key, e);
     }
+    e.debit = round2(e.debit + p.debit);
+    e.credit = round2(e.credit + p.credit);
+    e.lines.push({
+      ledgerId: p.ledgerId, ledgerName: nameOf.get(p.ledgerId) ?? `Ledger #${p.ledgerId}`,
+      debit: p.debit, credit: p.credit,
+    });
   }
 
-  // Payments
-  const { rows: pays } = await pool.query(
-    `SELECT p.id, p.voucher_number, p.amount, p.narration, pf.name AS from_name, pt.name AS to_name
-     FROM payments p
-     LEFT JOIN account_ledgers pf ON pf.id = p.paid_from_ledger_id
-     LEFT JOIN account_ledgers pt ON pt.id = p.paid_to_ledger_id
-     WHERE p.payment_date = $1 ORDER BY p.id`, [date]
-  );
-  for (const p of pays) entries.push({
-    id: `pay-${p.id}`, refId: p.id, source: "payment", voucherNumber: p.voucher_number,
-    particulars: `${p.from_name ?? "?"} → ${p.to_name ?? "?"}`, narration: p.narration, amount: Number(p.amount),
-  });
-
-  // Receipts — sale-linked receipt rows are excluded (the sale itself is
-  // already listed below; showing its auto-receipt too would double-list it)
-  const { rows: recs } = await pool.query(
-    `SELECT r.id, r.voucher_number, r.amount, r.narration, rf.name AS from_name, ri.name AS in_name
-     FROM receipts r
-     LEFT JOIN account_ledgers rf ON rf.id = r.received_from_ledger_id
-     LEFT JOIN account_ledgers ri ON ri.id = r.received_in_ledger_id
-     WHERE r.receipt_date = $1
-       AND r.id NOT IN (SELECT clearing_receipt_id FROM sale_payments WHERE clearing_receipt_id IS NOT NULL)
-       AND (r.voucher_number IS NULL OR r.voucher_number NOT IN (SELECT invoice_number FROM sales WHERE invoice_number IS NOT NULL))
-     ORDER BY r.id`, [date]
-  );
-  for (const r of recs) entries.push({
-    id: `rec-${r.id}`, refId: r.id, source: "receipt", voucherNumber: r.voucher_number,
-    particulars: `${r.from_name ?? "?"} → ${r.in_name ?? "?"}`, narration: r.narration, amount: Number(r.amount),
-  });
-
-  // Sales
-  const { rows: sales } = await pool.query(
-    `SELECT s.id, s.invoice_number, s.total_amount, c.name AS customer_name,
-            COALESCE(w.name, o.name) AS location_name
-     FROM sales s
-     LEFT JOIN customers c ON c.id = s.customer_id
-     LEFT JOIN warehouses w ON s.location_type = 'warehouse' AND w.id = s.location_id
-     LEFT JOIN outlets o    ON s.location_type = 'outlet'    AND o.id = s.location_id
-     WHERE s.sale_date = $1 ORDER BY s.id`, [date]
-  );
-  for (const s of sales) entries.push({
-    id: `sale-${s.id}`, refId: s.id, source: "sale", voucherNumber: s.invoice_number,
-    particulars: [s.customer_name, s.location_name].filter(Boolean).join(" — ") || "Walk-in",
-    narration: null, amount: Number(s.total_amount),
-  });
-
-  // Purchases
-  const { rows: purchases } = await pool.query(
-    `SELECT p.id, p.invoice_number, p.total_amount, v.name AS vendor_name
-     FROM purchases p
-     LEFT JOIN vendors v ON v.id = p.vendor_id
-     WHERE p.purchase_date = $1 ORDER BY p.id`, [date]
-  );
-  for (const p of purchases) entries.push({
-    id: `pur-${p.id}`, refId: p.id, source: "purchase",
-    voucherNumber: p.invoice_number ?? `#${p.id}`,
-    particulars: p.vendor_name ?? "Vendor", narration: null, amount: Number(p.total_amount),
-  });
-
-  // Legacy direct expenses
-  const { rows: exps } = await pool.query(
-    `SELECT e.id, e.amount, e.description, al.name AS ledger_name
-     FROM expenses e
-     LEFT JOIN account_ledgers al ON al.id = e.ledger_account_id
-     WHERE e.expense_date = $1 ORDER BY e.id`, [date]
-  );
-  for (const e of exps) entries.push({
-    id: `exp-${e.id}`, refId: e.id, source: "expense", voucherNumber: null,
-    particulars: e.ledger_name ?? "Expense", narration: e.description, amount: Number(e.amount),
-  });
+  const entries: Entry[] = [];
+  for (const e of byEntry.values()) {
+    // Distinct names only: a sale debits Cash twice when it is part-paid twice,
+    // and "Dr Cash, Cash" reads like a mistake.
+    const dr = [...new Set(e.lines.filter((l) => l.debit > 0.004).map((l) => l.ledgerName))];
+    const cr = [...new Set(e.lines.filter((l) => l.credit > 0.004).map((l) => l.ledgerName))];
+    e.particulars = `Dr ${dr.join(", ") || "—"} / Cr ${cr.join(", ") || "—"}`;
+    // The entry's value is one side of it, not both added together.
+    e.amount = Math.max(e.debit, e.credit);
+    e.lines.sort((a, b) => (b.debit - a.debit) || (a.credit - b.credit));
+    entries.push(e);
+  }
+  entries.sort((a, b) => a.source.localeCompare(b.source) || a.refId - b.refId);
 
   const byType: Record<string, { count: number; amount: number }> = {};
   for (const e of entries) {
@@ -658,12 +650,20 @@ router.get("/accounts/day-book", requireModuleView("page:/accounts/day-book"), a
     byType[e.source] = t;
   }
 
+  const debit = round2(entries.reduce((s, e) => s + e.debit, 0));
+  const credit = round2(entries.reduce((s, e) => s + e.credit, 0));
+
   res.json({
     date,
     entries,
     totals: {
       count: entries.length,
       amount: round2(entries.reduce((s, e) => s + e.amount, 0)),
+      debit,
+      credit,
+      // A day's postings are balanced in their own right, so a mismatch here
+      // means an entry was written with only one leg.
+      balanced: Math.abs(debit - credit) < 0.01,
       byType,
     },
   });

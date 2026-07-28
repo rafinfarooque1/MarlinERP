@@ -19,6 +19,8 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Undo2, Plus, Search, Eye, PackageX, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
+import { useQueryClient } from '@tanstack/react-query';
+import { invalidateDashboard } from '@/lib/invalidateDashboard';
 
 const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
 const dfmt = (d?: string | null) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
@@ -31,6 +33,7 @@ function NewSalesReturnDialog({ open, onOpenChange }: { open: boolean; onOpenCha
   const { data: items = [] } = useListItems();
   const { data: allReturns = [] } = useListSalesReturns();
   const createMutation = useCreateSalesReturn();
+  const queryClient = useQueryClient();
 
   const [saleId, setSaleId] = useState<number>(0);
   const [returnDate, setReturnDate] = useState(today());
@@ -87,6 +90,7 @@ function NewSalesReturnDialog({ open, onOpenChange }: { open: boolean; onOpenCha
               ? `${r.returnNumber} recorded — cash refund ₹${fmt(r.totalAmount)}`
               : `${r?.returnNumber} recorded — Credit Note ${r?.creditNoteNumber ?? ''} issued`,
           );
+          invalidateDashboard(queryClient);
           reset();
           onOpenChange(false);
         },
@@ -191,6 +195,7 @@ function NewPurchaseReturnDialog({ open, onOpenChange }: { open: boolean; onOpen
   const { data: purchases = [] } = useListPurchases();
   const { data: allReturns = [] } = useListPurchaseReturns();
   const createMutation = useCreatePurchaseReturn();
+  const queryClient = useQueryClient();
 
   const [purchaseId, setPurchaseId] = useState<number>(0);
   const [returnDate, setReturnDate] = useState(today());
@@ -242,6 +247,7 @@ function NewPurchaseReturnDialog({ open, onOpenChange }: { open: boolean; onOpen
       {
         onSuccess: (r: any) => {
           toast.success(`${r?.returnNumber} recorded — Debit Note ${r?.debitNoteNumber ?? ''} issued`);
+          invalidateDashboard(queryClient);
           reset();
           onOpenChange(false);
         },

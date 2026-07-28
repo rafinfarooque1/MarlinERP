@@ -282,6 +282,349 @@ router.get("/dashboard/sales-by-location", requireModuleView("page:/"), async (r
   })));
 });
 
+// ── Business-intelligence figure set (Task #10 / #37) ──────────────────────────
+// One server-computed payload so the dashboard never sums lists itself. Every
+// revenue figure excludes branch-transfer invoices (statutory own-stock moves,
+// not turnover). sales.location_type / location_id are startup-migration columns
+// invisible to drizzle, so all sales/purchase/production reads go through `pool`.
+const BI_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const money = (n: unknown) => Math.round(Number(n ?? 0) * 100) / 100;
+const qty = (n: unknown) => Math.round(Number(n ?? 0) * 1000) / 1000;
+const asISODate = (d: unknown): string => {
+  // Postgres date columns come back as JS Date objects, never 'YYYY-MM-DD'
+  // strings — format them, never compare with ===.
+  if (d instanceof Date) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  const s = String(d ?? "");
+  return s.length >= 10 ? s.slice(0, 10) : s;
+};
+
+router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promise<void> => {
+  const q = req.query as Record<string, unknown>;
+  const fromDate = typeof q.fromDate === "string" ? q.fromDate : "";
+  const toDate = typeof q.toDate === "string" ? q.toDate : "";
+  if ((fromDate && !BI_DATE_RE.test(fromDate)) || (toDate && !BI_DATE_RE.test(toDate))) {
+    res.status(400).json({ error: "fromDate/toDate must be YYYY-MM-DD" });
+    return;
+  }
+  const reqLocType = typeof q.locationType === "string" ? q.locationType : "";
+  const reqLocId = Number(q.locationId);
+  if (reqLocType && !["warehouse", "outlet", "headoffice"].includes(reqLocType)) {
+    res.status(400).json({ error: "locationType must be warehouse, outlet or headoffice" });
+    return;
+  }
+
+  // ── Resolve effective scope ─────────────────────────────────────────────
+  // A non-headoffice employee only ever sees their own location, regardless of
+  // query params. Head Office may filter to any single location or see all.
+  const emp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  const scope = emp ? await getUserDataScope(emp) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
+
+  let effLocType: string | null = null;
+  let effLocId: number | null = null;
+  if (scope.isHeadOffice) {
+    if ((reqLocType === "warehouse" || reqLocType === "outlet") && Number.isFinite(reqLocId) && reqLocId > 0) {
+      effLocType = reqLocType;
+      effLocId = reqLocId;
+    }
+  } else if (emp) {
+    // Forced to the employee's own location.
+    effLocType = emp.branchType;
+    effLocId = emp.branchId;
+  }
+
+  // Resolve a friendly scope label.
+  let scopeLabel = "All locations";
+  if (effLocType && effLocId != null) {
+    if (effLocType === "warehouse") {
+      const { rows } = await pool.query(`SELECT name FROM warehouses WHERE id = $1`, [effLocId]);
+      scopeLabel = rows[0]?.name ?? `Warehouse #${effLocId}`;
+    } else if (effLocType === "outlet") {
+      const { rows } = await pool.query(`SELECT name FROM outlets WHERE id = $1`, [effLocId]);
+      scopeLabel = rows[0]?.name ?? `Outlet #${effLocId}`;
+    } else {
+      scopeLabel = "Head Office";
+    }
+  }
+
+  // ── WHERE-builder for the `sales` table (alias s) ─────────────────────────
+  // Always excludes branch transfers and cancelled invoices; applies date and
+  // location filters; applies mandatory LBAC scope for non-HO users.
+  function salesConds(): { where: string; params: unknown[] } {
+    const conds = ["s.branch_transfer_id IS NULL", "s.cancelled_at IS NULL"];
+    const params: unknown[] = [];
+    if (fromDate) { params.push(fromDate); conds.push(`s.sale_date >= $${params.length}::date`); }
+    if (toDate) { params.push(toDate); conds.push(`s.sale_date <= $${params.length}::date`); }
+    if (effLocType && effLocId != null) {
+      params.push(effLocType); conds.push(`COALESCE(s.location_type,'outlet') = $${params.length}`);
+      params.push(effLocId); conds.push(`COALESCE(s.location_id, s.outlet_id) = $${params.length}`);
+    } else if (!scope.isHeadOffice) {
+      conds.push(scopeSalesWhere(scope, params));
+    }
+    return { where: conds.join(" AND "), params };
+  }
+
+  // ── WHERE-builder for tables with location_type/location_id (alias p) ─────
+  // Used for purchases, productions, receipts, payments. Non-HO users can only
+  // see their own location; if a non-HO location has no rows it returns FALSE.
+  function locConds(alias: string, opts: { dateCol: string; dateCast?: string } ): { where: string; params: unknown[] } {
+    const cast = opts.dateCast ?? "::date";
+    const conds: string[] = [];
+    const params: unknown[] = [];
+    if (fromDate) { params.push(fromDate); conds.push(`${alias}.${opts.dateCol}${cast} >= $${params.length}::date`); }
+    if (toDate) { params.push(toDate); conds.push(`${alias}.${opts.dateCol}${cast} <= $${params.length}::date`); }
+    if (effLocType && effLocId != null) {
+      params.push(effLocType); conds.push(`COALESCE(${alias}.location_type,'headoffice') = $${params.length}`);
+      params.push(effLocId); conds.push(`COALESCE(${alias}.location_id,0) = $${params.length}`);
+    } else if (!scope.isHeadOffice) {
+      const parts: string[] = [];
+      if (scope.warehouseIds.length > 0) {
+        params.push(scope.warehouseIds);
+        parts.push(`(${alias}.location_type = 'warehouse' AND ${alias}.location_id = ANY($${params.length}::int[]))`);
+      }
+      if (scope.outletIds.length > 0) {
+        params.push(scope.outletIds);
+        parts.push(`(${alias}.location_type = 'outlet' AND ${alias}.location_id = ANY($${params.length}::int[]))`);
+      }
+      conds.push(parts.length > 0 ? `(${parts.join(" OR ")})` : "FALSE");
+    }
+    return { where: conds.length ? conds.join(" AND ") : "TRUE", params };
+  }
+
+  const sc = salesConds();
+
+  // ── Run everything in parallel ────────────────────────────────────────────
+  const [
+    salesTotals,
+    salesByDay,
+    salesByLoc,
+    salesByPay,
+    topItemsRows,
+    topCustomersRows,
+    purchaseTotals,
+    purchaseByDay,
+    productionAgg,
+    productionByDay,
+    receivablesRows,
+    cashInRows,
+    cashOutRows,
+    valuation,
+    lowStockRow,
+    expiringRow,
+  ] = await Promise.all([
+    // sales totals
+    pool.query(
+      `SELECT COALESCE(SUM(s.total_amount::numeric),0)::float AS total, COUNT(*)::int AS count
+         FROM sales s WHERE ${sc.where}`, sc.params),
+    // sales by day
+    pool.query(
+      `SELECT s.sale_date AS date,
+              COALESCE(SUM(s.total_amount::numeric),0)::float AS total,
+              COUNT(*)::int AS count
+         FROM sales s WHERE ${sc.where}
+        GROUP BY s.sale_date ORDER BY s.sale_date`, sc.params),
+    // sales by location
+    pool.query(
+      `SELECT COALESCE(s.location_type,'outlet') AS location_type,
+              COALESCE(s.location_id, s.outlet_id) AS location_id,
+              COALESCE(w.name, o.name, 'Unknown') AS name,
+              COALESCE(SUM(s.total_amount::numeric),0)::float AS total,
+              COUNT(*)::int AS count
+         FROM sales s
+         LEFT JOIN warehouses w ON COALESCE(s.location_type,'outlet') = 'warehouse' AND w.id = COALESCE(s.location_id, s.outlet_id)
+         LEFT JOIN outlets    o ON COALESCE(s.location_type,'outlet') = 'outlet'    AND o.id = COALESCE(s.location_id, s.outlet_id)
+        WHERE ${sc.where}
+        GROUP BY 1,2,3 ORDER BY total DESC`, sc.params),
+    // sales by payment mode
+    pool.query(
+      `SELECT COALESCE(s.payment_mode,'unknown') AS mode,
+              COALESCE(SUM(s.total_amount::numeric),0)::float AS total,
+              COUNT(*)::int AS count
+         FROM sales s WHERE ${sc.where}
+        GROUP BY 1 ORDER BY total DESC`, sc.params),
+    // top items (by revenue) from line_items
+    pool.query(
+      `SELECT (li->>'itemId')::int AS item_id,
+              COALESCE(i.name,'Unknown') AS name,
+              COALESCE(SUM((li->>'quantity')::numeric),0)::float AS qty,
+              COALESCE(SUM((li->>'quantity')::numeric * COALESCE((li->>'unitPrice')::numeric,0)),0)::float AS revenue
+         FROM sales s
+         CROSS JOIN LATERAL jsonb_array_elements(s.line_items) AS li
+         LEFT JOIN items i ON i.id = (li->>'itemId')::int
+        WHERE ${sc.where}
+        GROUP BY 1,2 ORDER BY revenue DESC LIMIT 8`, sc.params),
+    // top customers
+    pool.query(
+      `SELECT s.customer_id AS customer_id,
+              COALESCE(c.name, 'Walk-in') AS name,
+              COALESCE(SUM(s.total_amount::numeric),0)::float AS revenue,
+              COUNT(*)::int AS count
+         FROM sales s
+         LEFT JOIN customers c ON c.id = s.customer_id
+        WHERE ${sc.where} AND s.customer_id IS NOT NULL
+        GROUP BY 1,2 ORDER BY revenue DESC LIMIT 8`, sc.params),
+    // purchases totals — exclude branch transfers
+    (() => { const p = locConds("p", { dateCol: "purchase_date" });
+      return pool.query(
+        `SELECT COALESCE(SUM(p.total_amount::numeric),0)::float AS total, COUNT(*)::int AS count
+           FROM purchases p WHERE p.branch_transfer_id IS NULL AND p.cancelled_at IS NULL AND ${p.where}`, p.params); })(),
+    // purchases by day
+    (() => { const p = locConds("p", { dateCol: "purchase_date" });
+      return pool.query(
+        `SELECT p.purchase_date AS date, COALESCE(SUM(p.total_amount::numeric),0)::float AS total
+           FROM purchases p WHERE p.branch_transfer_id IS NULL AND p.cancelled_at IS NULL AND ${p.where}
+          GROUP BY p.purchase_date ORDER BY p.purchase_date`, p.params); })(),
+    // production aggregate
+    (() => { const p = locConds("p", { dateCol: "production_date" });
+      return pool.query(
+        `SELECT COUNT(*)::int AS batches,
+                COALESCE(SUM(p.produced_quantity::numeric),0)::float AS output_qty,
+                COALESCE(SUM(p.wastage_qty::numeric),0)::float AS wastage_qty
+           FROM productions p WHERE ${p.where}`, p.params); })(),
+    // production by day
+    (() => { const p = locConds("p", { dateCol: "production_date" });
+      return pool.query(
+        `SELECT p.production_date AS date, COALESCE(SUM(p.produced_quantity::numeric),0)::float AS qty
+           FROM productions p WHERE ${p.where}
+          GROUP BY p.production_date ORDER BY p.production_date`, p.params); })(),
+    // receivables — outstanding on non-transfer, non-cancelled sales (all-time
+    // exposure, not period-bound); overdue = outstanding on sales older than 30d.
+    (() => {
+      const conds = ["s.branch_transfer_id IS NULL", "s.cancelled_at IS NULL", "s.payment_status <> 'paid'"];
+      const params: unknown[] = [];
+      if (effLocType && effLocId != null) {
+        params.push(effLocType); conds.push(`COALESCE(s.location_type,'outlet') = $${params.length}`);
+        params.push(effLocId); conds.push(`COALESCE(s.location_id, s.outlet_id) = $${params.length}`);
+      } else if (!scope.isHeadOffice) {
+        conds.push(scopeSalesWhere(scope, params));
+      }
+      const refDate = toDate || null;
+      params.push(refDate);
+      const refIdx = params.length;
+      return pool.query(
+        `SELECT COALESCE(SUM(s.total_amount::numeric - s.amount_paid::numeric),0)::float AS total,
+                COUNT(*)::int AS count,
+                COALESCE(SUM(CASE WHEN s.sale_date < (COALESCE($${refIdx}::date, CURRENT_DATE) - INTERVAL '30 day')
+                     THEN s.total_amount::numeric - s.amount_paid::numeric ELSE 0 END),0)::float AS overdue
+           FROM sales s WHERE ${conds.join(" AND ")}`, params); })(),
+    // cash inflow — receipts
+    (() => { const p = locConds("r", { dateCol: "receipt_date", dateCast: "::date" });
+      return pool.query(
+        `SELECT COALESCE(SUM(r.amount::numeric),0)::float AS total FROM receipts r WHERE ${p.where}`, p.params); })(),
+    // cash outflow — payments
+    (() => { const p = locConds("py", { dateCol: "payment_date", dateCast: "::date" });
+      return pool.query(
+        `SELECT COALESCE(SUM(py.amount::numeric),0)::float AS total FROM payments py WHERE ${p.where}`, p.params); })(),
+    // inventory valuation — the one shared function
+    stockValuation(pool, {
+      includeInTransit: true,
+      dataScope: scope,
+      branchType: effLocType ?? undefined,
+      branchId: effLocId ?? undefined,
+    }),
+    // low-stock count (finished items only)
+    (() => {
+      const conds = [`stock_entries.material_type = 'item'`, `stock_entries.quantity::numeric < COALESCE(items.reorder_level, 10)::numeric`];
+      const params: unknown[] = [];
+      if (effLocType && effLocId != null) {
+        params.push(effLocType); conds.push(`stock_entries.branch_type = $${params.length}`);
+        params.push(effLocId); conds.push(`stock_entries.branch_id = $${params.length}`);
+      } else if (!scope.isHeadOffice) {
+        const parts: string[] = [];
+        if (scope.warehouseIds.length > 0) { params.push(scope.warehouseIds); parts.push(`(stock_entries.branch_type='warehouse' AND stock_entries.branch_id = ANY($${params.length}::int[]))`); }
+        if (scope.outletIds.length > 0) { params.push(scope.outletIds); parts.push(`(stock_entries.branch_type='outlet' AND stock_entries.branch_id = ANY($${params.length}::int[]))`); }
+        conds.push(parts.length ? `(${parts.join(" OR ")})` : "FALSE");
+      }
+      return pool.query(
+        `SELECT COUNT(*)::int AS count FROM stock_entries
+           LEFT JOIN items ON stock_entries.item_id = items.id
+          WHERE ${conds.join(" AND ")}`, params); })(),
+    // expiring soon — batches expiring within 30 days that still hold stock
+    (() => {
+      const conds = ["sb.quantity::numeric > 0", "sb.expiry_date IS NOT NULL", "sb.expiry_date <> ''",
+        "sb.expiry_date::date >= CURRENT_DATE", "sb.expiry_date::date <= CURRENT_DATE + INTERVAL '30 day'"];
+      const params: unknown[] = [];
+      if (effLocType && effLocId != null) {
+        params.push(effLocType); conds.push(`sb.branch_type = $${params.length}`);
+        params.push(effLocId); conds.push(`sb.branch_id = $${params.length}`);
+      } else if (!scope.isHeadOffice) {
+        const parts: string[] = [];
+        if (scope.warehouseIds.length > 0) { params.push(scope.warehouseIds); parts.push(`(sb.branch_type='warehouse' AND sb.branch_id = ANY($${params.length}::int[]))`); }
+        if (scope.outletIds.length > 0) { params.push(scope.outletIds); parts.push(`(sb.branch_type='outlet' AND sb.branch_id = ANY($${params.length}::int[]))`); }
+        conds.push(parts.length ? `(${parts.join(" OR ")})` : "FALSE");
+      }
+      return pool.query(
+        `SELECT COUNT(*)::int AS count FROM stock_batches sb WHERE ${conds.join(" AND ")}`, params); })(),
+  ]);
+
+  const salesTotal = money(salesTotals.rows[0]?.total);
+  const salesCount = Number(salesTotals.rows[0]?.count ?? 0);
+  const outputQty = qty(productionAgg.rows[0]?.output_qty);
+  const wastageQty = qty(productionAgg.rows[0]?.wastage_qty);
+
+  res.json({
+    period: { fromDate: fromDate || null, toDate: toDate || null },
+    scope: {
+      locationType: effLocType,
+      locationId: effLocId,
+      label: scopeLabel,
+      isHeadOffice: scope.isHeadOffice,
+    },
+    sales: {
+      total: salesTotal,
+      count: salesCount,
+      avgTicket: salesCount > 0 ? money(salesTotal / salesCount) : 0,
+      byDay: salesByDay.rows.map((r: any) => ({ date: asISODate(r.date), total: money(r.total), count: Number(r.count) })),
+      byLocation: salesByLoc.rows.map((r: any) => ({
+        locationType: r.location_type, locationId: Number(r.location_id),
+        name: r.name, total: money(r.total), count: Number(r.count),
+      })),
+      byPaymentMode: salesByPay.rows.map((r: any) => ({ mode: r.mode, total: money(r.total), count: Number(r.count) })),
+    },
+    purchases: {
+      total: money(purchaseTotals.rows[0]?.total),
+      count: Number(purchaseTotals.rows[0]?.count ?? 0),
+      byDay: purchaseByDay.rows.map((r: any) => ({ date: asISODate(r.date), total: money(r.total) })),
+    },
+    production: {
+      batches: Number(productionAgg.rows[0]?.batches ?? 0),
+      outputQty,
+      wastageQty,
+      wastagePct: outputQty + wastageQty > 0 ? Math.round((wastageQty / (outputQty + wastageQty)) * 10000) / 100 : 0,
+      byDay: productionByDay.rows.map((r: any) => ({ date: asISODate(r.date), qty: qty(r.qty) })),
+    },
+    inventory: {
+      valuation: valuation.grandTotal,
+      itemCount: valuation.byProduct.filter((p) => p.quantity > 0).length,
+      lowStockCount: Number(lowStockRow.rows[0]?.count ?? 0),
+      expiringSoonCount: Number(expiringRow.rows[0]?.count ?? 0),
+    },
+    receivables: {
+      total: money(receivablesRows.rows[0]?.total),
+      overdue: money(receivablesRows.rows[0]?.overdue),
+      count: Number(receivablesRows.rows[0]?.count ?? 0),
+    },
+    payables: {
+      // Purchases carry no payment tracking, so the full non-transfer purchase
+      // value in the period is the payables exposure.
+      total: money(purchaseTotals.rows[0]?.total),
+      count: Number(purchaseTotals.rows[0]?.count ?? 0),
+    },
+    cash: {
+      inflow: money(cashInRows.rows[0]?.total),
+      outflow: money(cashOutRows.rows[0]?.total),
+      net: money(Number(cashInRows.rows[0]?.total ?? 0) - Number(cashOutRows.rows[0]?.total ?? 0)),
+    },
+    topItems: topItemsRows.rows.map((r: any) => ({
+      itemId: Number(r.item_id), name: r.name, qty: qty(r.qty), revenue: money(r.revenue),
+    })),
+    topCustomers: topCustomersRows.rows.map((r: any) => ({
+      customerId: Number(r.customer_id), name: r.name, revenue: money(r.revenue), count: Number(r.count),
+    })),
+  });
+});
+
 router.get("/dashboard/production-trend", requireModuleView("page:/"), async (req, res): Promise<void> => {
   const days = Math.min(Math.max(parseInt(req.query.days as string) || 30, 1), 365);
   const rows = await db.execute(sql`

@@ -1,22 +1,22 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCreateAccountLedger, customFetch } from '@workspace/api-client-react';
+import { customFetch } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Button } from '@/components/ui/button';
-import { Building2, CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, Plus, ChevronDown, ChevronRight, Package, Lock, Trash2, ScrollText, ArrowUpRight, ArrowDownLeft, FolderPlus, Folder, ShieldOff } from 'lucide-react';
+import { CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, ChevronDown, ChevronRight, Package, Lock, Trash2, ScrollText, ArrowUpRight, ArrowDownLeft, Folder, ShieldOff, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePermission } from '@/lib/usePermission';
 
 /* ── types ──────────────────────────────────────────────────────────────────── */
 type ALType = 'asset' | 'liability' | 'income' | 'expense' | 'equity';
 
-interface StockItem { id: number; name: string; unit: string; stock: number; mrp: number; total: number }
+// `id` is only unique within a product kind — a finished good and a raw material
+// can both be id 1 — so anything keying off a stock item must include the kind.
+interface StockItem { id: number; name: string; unit: string; stock: number; unitCost: number; total: number; materialType: string }
 interface LedgerNode { id: number; name: string; type: string; parentId: number | null; code: string | null; balance: number; isGroup?: boolean; children: LedgerNode[] }
 interface GroupSummary { id: number | null; name: string; code: string | null; type?: string; total: number; children: LedgerNode[]; dutyAndTax?: number }
 interface FinancialStatements {
@@ -28,8 +28,9 @@ interface FinancialStatements {
   };
   balanceSheet: {
     liabilities: { capitalAccount: GroupSummary; loans: GroupSummary; currentLiabilities: GroupSummary; pandlCarryForward: number; difference: number; total: number };
-    assets: { fixedAssets: GroupSummary; currentAssets: GroupSummary; total: number };
+    assets: { fixedAssets: GroupSummary; currentAssets: GroupSummary; closingStock: number; total: number };
   };
+  integrity?: { balanced: boolean; difference: number; issues: string[] };
 }
 
 /* ── helpers ─────────────────────────────────────────────────────────────────── */
@@ -60,184 +61,18 @@ function computeDateRange(period: string, from: string, to: string) {
   return { fromDate: undefined, toDate: undefined };
 }
 
-/* ── inline add ─────────────────────────────────────────────────────────────── */
-function InlineAdd({ parentId, parentType, depth = 1, onCreated, hint }: {
-  parentId: number; parentType: ALType; depth?: number; onCreated: () => void; hint?: string;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState('');
-  const ref = useRef<HTMLInputElement>(null);
-  const create = useCreateAccountLedger();
-
-  useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
-
-  const submit = () => {
-    const t = name.trim();
-    if (!t) { setEditing(false); setName(''); return; }
-    create.mutate({ data: { name: t, type: parentType, parentId } }, {
-      onSuccess: () => { toast.success('Ledger created'); setEditing(false); setName(''); onCreated(); },
-      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
-    });
-  };
-
+/* ── manual ledger creation retired ───────────────────────────────────────────
+ * Ledgers are no longer created by hand — they are provisioned automatically
+ * alongside their master record (customers, vendors, employees, locations,
+ * standard chart accounts). The inline "Add ledger" / "Add sub-group" affordances
+ * have been withdrawn; the backend enforces this with a 409. Once per group we
+ * leave a short muted line so the absence reads as deliberate, not broken. */
+function LedgerCreationRetiredNote({ depth = 1 }: { depth?: number }) {
   const pl = `${8 + depth * 16}px`;
-
-  if (editing) {
-    return (
-      <div className="flex items-center gap-2 py-2" style={{ paddingLeft: pl }}>
-        <Plus className="w-3.5 h-3.5 text-primary shrink-0" />
-        <input
-          ref={ref} value={name}
-          onChange={e => setName(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') { setEditing(false); setName(''); } }}
-          onBlur={submit}
-          placeholder={hint ?? (depth === 1 ? 'Ledger name…' : 'Sub-ledger name…')}
-          className="flex-1 text-sm bg-transparent border-b-2 border-primary outline-none pb-0.5 text-foreground placeholder:text-muted-foreground/40"
-          disabled={create.isPending}
-        />
-        {create.isPending && <span className="text-[10px] text-muted-foreground">Saving…</span>}
-      </div>
-    );
-  }
-
   return (
-    <button
-      onClick={() => setEditing(true)}
-      style={{ paddingLeft: pl }}
-      className="flex items-center gap-1.5 py-2 w-full text-xs text-primary/60 hover:text-primary active:text-primary transition-colors font-medium"
-    >
-      <Plus className="w-3.5 h-3.5" />
-      {hint ?? (depth === 1 ? 'Add ledger' : 'Add sub-ledger')}
-    </button>
-  );
-}
-
-/* ── inline add sub-group ────────────────────────────────────────────────────── */
-function InlineAddGroup({ parentId, parentType, depth = 1, onCreated }: {
-  parentId: number; parentType: ALType; depth?: number; onCreated: () => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState('');
-  const [saving, setSaving] = useState(false);
-  const ref = useRef<HTMLInputElement>(null);
-
-  useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
-
-  const submit = async () => {
-    const t = name.trim();
-    if (!t) { setEditing(false); setName(''); return; }
-    setSaving(true);
-    try {
-      await customFetch('/api/accounts/chart', {
-        method: 'POST',
-        body: JSON.stringify({ name: t, type: parentType, parentId, isGroup: true }),
-      });
-      toast.success('Sub-group created');
-      setEditing(false);
-      setName('');
-      onCreated();
-    } catch (e: any) {
-      toast.error(e?.data?.error || e?.message || 'Failed to create sub-group');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const pl = `${8 + depth * 16}px`;
-
-  if (editing) {
-    return (
-      <div className="flex items-center gap-2 py-2" style={{ paddingLeft: pl }}>
-        <FolderPlus className="w-3.5 h-3.5 text-violet-400 shrink-0" />
-        <input
-          ref={ref} value={name}
-          onChange={e => setName(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') { setEditing(false); setName(''); } }}
-          onBlur={submit}
-          placeholder="Sub-group name…"
-          disabled={saving}
-          className="flex-1 text-sm bg-transparent border-b-2 border-violet-500 outline-none pb-0.5 text-foreground placeholder:text-muted-foreground/40"
-        />
-        {saving && <span className="text-[10px] text-muted-foreground">Saving…</span>}
-      </div>
-    );
-  }
-
-  return (
-    <button
-      onClick={() => setEditing(true)}
-      style={{ paddingLeft: pl }}
-      className="flex items-center gap-1.5 py-1.5 w-full text-xs text-violet-400/60 hover:text-violet-400 transition-colors font-medium"
-    >
-      <FolderPlus className="w-3.5 h-3.5" />
-      Add sub-group
-    </button>
-  );
-}
-
-/* ── bank ledger dialog ──────────────────────────────────────────────────────── */
-function BankLedgerDialog({ parentId, parentType, onCreated, onClose }: {
-  parentId: number; parentType: ALType; onCreated: () => void; onClose: () => void;
-}) {
-  const [name, setName]         = useState('');
-  const [bankName, setBankName] = useState('');
-  const [accNo, setAccNo]       = useState('');
-  const [ifsc, setIfsc]         = useState('');
-  const [branch, setBranch]     = useState('');
-  const create = useCreateAccountLedger();
-
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name.trim()) return;
-    create.mutate(
-      { data: { name: name.trim(), type: parentType, parentId, bankDetails: { bankName, accountNumber: accNo, ifscCode: ifsc.toUpperCase(), branch } } as any },
-      {
-        onSuccess: () => { toast.success('Bank account added'); onCreated(); onClose(); },
-        onError: (err: any) => toast.error(err?.data?.error || err.message || 'Failed'),
-      }
-    );
-  };
-
-  return (
-    <Dialog open onOpenChange={v => { if (!v) onClose(); }}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Building2 className="w-4 h-4 text-primary" /> Add Bank Account
-          </DialogTitle>
-        </DialogHeader>
-        <form onSubmit={submit} className="space-y-3 pt-1">
-          <div>
-            <label className="text-xs font-medium text-foreground">Account Name / Branch Label <span className="text-destructive">*</span></label>
-            <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. HDFC Current A/C" className="mt-1" autoFocus />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium text-foreground">Bank Name</label>
-              <Input value={bankName} onChange={e => setBankName(e.target.value)} placeholder="HDFC Bank" className="mt-1" />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-foreground">Account Number</label>
-              <Input value={accNo} onChange={e => setAccNo(e.target.value)} placeholder="50100XXXXXXXX" className="mt-1" />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-foreground">IFSC Code</label>
-              <Input value={ifsc} onChange={e => setIfsc(e.target.value.toUpperCase())} placeholder="HDFC0001234" className="mt-1 font-mono" />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-foreground">Branch</label>
-              <Input value={branch} onChange={e => setBranch(e.target.value)} placeholder="Anna Nagar" className="mt-1" />
-            </div>
-          </div>
-          <DialogFooter className="pt-2">
-            <Button variant="outline" type="button" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={create.isPending || !name.trim()}>
-              {create.isPending ? 'Saving…' : 'Add Bank Account'}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <p className="py-1.5 text-[11px] text-muted-foreground/40 italic" style={{ paddingLeft: pl }}>
+      Ledgers are provisioned automatically with their master record.
+    </p>
   );
 }
 
@@ -369,7 +204,6 @@ type LedgerLineProps = {
 function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename, onViewStatement, onMove, canAdd, canEdit, canDelete }: LedgerLineProps) {
   const pl = `${8 + depth * 16}px`;
   const balance = Math.abs(node.balance);
-  const isBank = node.code === 'STD-BANK';
   const isSystem = node.code != null;
   const canDrag = !isSystem;
 
@@ -442,8 +276,6 @@ function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename, onV
             {node.children.map(c => (
               <LedgerLine key={c.id} node={c} depth={depth + 1} {...sharedProps} />
             ))}
-            {canAdd && <InlineAdd parentId={node.id} parentType={node.type as ALType} depth={depth + 1} onCreated={onCreated} />}
-            {canAdd && <InlineAddGroup parentId={node.id} parentType={node.type as ALType} depth={depth + 1} onCreated={onCreated} />}
           </>
         )}
       </div>
@@ -506,22 +338,6 @@ function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename, onV
       {node.children.map(c => (
         <LedgerLine key={c.id} node={c} depth={depth + 1} {...sharedProps} />
       ))}
-
-      {/* Add sub-ledger at depth 1 */}
-      {depth === 1 && canAdd && (
-        isBank && onBankAdd
-          ? (
-            <button
-              onClick={() => onBankAdd(node.id, node.type as ALType)}
-              style={{ paddingLeft: `${8 + 2 * 16}px` }}
-              className="flex items-center gap-1.5 py-2 w-full text-xs text-primary/60 hover:text-primary active:text-primary transition-colors font-medium"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              Add bank account
-            </button>
-          )
-          : <InlineAdd parentId={node.id} parentType={node.type as ALType} depth={2} onCreated={onCreated} />
-      )}
     </div>
   );
 }
@@ -540,7 +356,6 @@ function GroupBlock({ group, onCreated, onBankAdd, onDelete, onRename, onViewSta
   if (!group.id) return null;
   const hasChildren = group.children.length > 0;
   const [dropOver, setDropOver] = useState(false);
-  const pt = (group.type ?? 'expense') as ALType;
 
   return (
     <div className="mb-3">
@@ -564,7 +379,7 @@ function GroupBlock({ group, onCreated, onBankAdd, onDelete, onRename, onViewSta
       {/* Ledgers and sub-groups under this group */}
       {group.children.map(node => (
         <LedgerLine key={node.id} node={node} depth={1} onCreated={onCreated}
-          onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename}
+          onDelete={onDelete} onRename={onRename}
           onViewStatement={onViewStatement} onMove={onMove}
           canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
       ))}
@@ -573,8 +388,7 @@ function GroupBlock({ group, onCreated, onBankAdd, onDelete, onRename, onViewSta
         <p className="pl-6 py-1 text-[11px] text-muted-foreground/40 italic">No ledgers yet</p>
       )}
 
-      {canAdd && <InlineAdd parentId={group.id!} parentType={pt} depth={1} onCreated={onCreated} />}
-      {canAdd && <InlineAddGroup parentId={group.id!} parentType={pt} depth={1} onCreated={onCreated} />}
+      <LedgerCreationRetiredNote depth={1} />
 
       <div className="border-b border-border/20 mx-2 mt-1" />
     </div>
@@ -616,11 +430,11 @@ function StockBlock({ label, items, total }: { label: string; items: StockItem[]
       {open && items.length > 0 && (
         <div className="pl-6 pb-1">
           {items.map(item => (
-            <div key={item.id} className="flex items-center gap-2 py-1">
+            <div key={`${item.materialType}:${item.id}`} className="flex items-center gap-2 py-1">
               <span className="w-1 h-1 rounded-full bg-muted-foreground/25 shrink-0" />
               <span className="flex-1 text-xs text-muted-foreground">{item.name}</span>
               <span className="text-[10px] text-muted-foreground/50 font-mono">
-                {item.stock.toLocaleString('en-IN')} {item.unit} × {fmt(item.mrp)}
+                {item.stock.toLocaleString('en-IN')} {item.unit} × {fmt(item.unitCost)}
               </span>
               <span className="text-[11px] font-mono tabular-nums text-muted-foreground pr-3">{fmt(item.total)}</span>
             </div>
@@ -673,14 +487,10 @@ export default function ChartOfAccounts() {
   const [customFrom, setFrom]     = useState('');
   const [customTo, setTo]         = useState('');
   const [outletId, setOutletId]   = useState('all');
-  const [bankParent, setBankParent]     = useState<{ id: number; type: ALType } | null>(null);
   const [selectedLedger, setSelectedLedger] = useState<LedgerNode | null>(null);
   const queryClient               = useQueryClient();
 
   const onViewStatement = (node: LedgerNode) => setSelectedLedger(node);
-
-  const onBankAdd = (parentId: number, parentType: ALType) =>
-    setBankParent({ id: parentId, type: parentType });
 
   const onRename = async (id: number, newName: string) => {
     try {
@@ -819,6 +629,35 @@ export default function ChartOfAccounts() {
             <p className="text-muted-foreground text-xs">{(error as any)?.message ?? 'Unknown error'}</p>
           </div>
         ) : (
+          <>
+          {/* ── Integrity warning banner ──
+              'difference' is no longer a plug figure — on healthy books it is ~0.
+              Any non-zero difference or any reported integrity issue is a REAL
+              defect (orphan ledgers, unbalanced opening balances, unmatched
+              production-costing overlay, incomplete stock ledgers) and is surfaced
+              here to investigate, never as an ordinary balance-sheet line. */}
+          {fs?.integrity && (!fs.integrity.balanced || fs.integrity.issues.length > 0) && (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 mb-4">
+              <div className="flex items-center gap-2 text-amber-500 font-semibold text-sm">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>Books integrity check failed — investigate before relying on these statements</span>
+              </div>
+              {Math.abs(fs.integrity.difference) > 0.01 && (
+                <p className="mt-1.5 text-xs text-amber-500/90">
+                  Unexplained difference of <span className="font-mono font-semibold">{fmt(Math.abs(fs.integrity.difference))}</span>{' '}
+                  — the balance sheet does not tie out. This is a defect, not a balancing figure.
+                </p>
+              )}
+              {fs.integrity.issues.length > 0 && (
+                <ul className="mt-2 space-y-1 text-xs text-amber-600/90 dark:text-amber-300/90 list-disc pl-5">
+                  {fs.integrity.issues.map((issue, i) => (
+                    <li key={i}>{issue}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
           <Tabs defaultValue="balance_sheet">
             <TabsList className="grid w-full max-w-xs grid-cols-2">
               <TabsTrigger value="balance_sheet" className="gap-1.5 text-xs">
@@ -853,24 +692,19 @@ export default function ChartOfAccounts() {
 
                       <Divider />
 
-                      {/* P&L carry-forward */}
+                      {/* Reserves & Surplus (P&L) — cumulative retained earnings
+                          (all postings up to toDate), not just the period profit. */}
                       <div className={`flex items-center gap-2 py-2 px-3 mx-2 rounded-lg text-xs font-semibold
                         ${bs.liabilities.pandlCarryForward >= 0
                           ? 'bg-emerald-500/10 text-emerald-400'
                           : 'bg-red-500/10 text-red-400'}`}>
-                        <span className="flex-1">
-                          P&amp;L {bs.liabilities.pandlCarryForward >= 0 ? '(Net Profit)' : '(Net Loss)'}
-                        </span>
+                        <span className="flex-1">Reserves &amp; Surplus (P&amp;L)</span>
                         <span className="font-mono tabular-nums">{fmt(Math.abs(bs.liabilities.pandlCarryForward))}</span>
                       </div>
 
-                      {/* Difference */}
-                      {Math.abs(bs.liabilities.difference) > 0.01 && (
-                        <div className="flex items-center gap-2 py-2 px-3 mx-2 mt-1 rounded-lg text-xs font-semibold bg-amber-500/10 text-amber-400">
-                          <span className="flex-1">Difference</span>
-                          <span className="font-mono tabular-nums">{fmt(Math.abs(bs.liabilities.difference))}</span>
-                        </div>
-                      )}
+                      {/* 'Difference' is intentionally NOT rendered as a balance-sheet
+                          line anymore — a non-zero difference is a defect surfaced in
+                          the integrity warning banner above, not a plug figure here. */}
                     </>
                   )}
                 </Panel>
@@ -884,8 +718,19 @@ export default function ChartOfAccounts() {
                 >
                   {bs && (
                     <>
-                      <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
-                      <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} onBankAdd={onBankAdd} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+
+                      {/* Closing Stock — a real asset line. Before this change closing
+                          stock never appeared on the balance sheet, which is why a
+                          plug 'Difference' was needed. It now shows explicitly. */}
+                      <div className="flex items-center gap-2 py-2 px-3 mx-2 mb-2 rounded-lg text-xs font-semibold bg-emerald-500/5 text-foreground/80">
+                        <span className="flex-1">Closing Stock</span>
+                        <span className="font-mono tabular-nums text-foreground/70">
+                          {bs.assets.closingStock === 0 ? '—' : fmt(bs.assets.closingStock)}
+                        </span>
+                      </div>
+
+                      <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
                     </>
                   )}
                 </Panel>
@@ -973,18 +818,9 @@ export default function ChartOfAccounts() {
               </div>
             </TabsContent>
           </Tabs>
+          </>
         )}
       </div>
-
-      {/* ── Bank details dialog ── */}
-      {bankParent && (
-        <BankLedgerDialog
-          parentId={bankParent.id}
-          parentType={bankParent.type}
-          onCreated={() => { queryClient.invalidateQueries({ queryKey: qKey }); }}
-          onClose={() => setBankParent(null)}
-        />
-      )}
 
       {selectedLedger && (
         <LedgerStatementSheet

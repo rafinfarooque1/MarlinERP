@@ -116,7 +116,7 @@ export interface ReconciliationBatchDetail extends ReconciliationBatch {
     referenceNumber: string | null;
     invoiceNumber: string;
     saleId: number;
-    outletName: string;
+    locationName: string;
     customerName: string | null;
   }[];
 }
@@ -130,10 +130,12 @@ export interface PendingPayment {
   referenceNumber: string | null;
   notes: string | null;
   reconciliationStatus: string;
-  outletId: number;
+  /** The sale's own location — 'outlet' or 'warehouse'. */
+  locationType: string;
+  locationId: number;
   createdAt: string;
   invoiceNumber: string;
-  outletName: string;
+  locationName: string;
   customerName: string | null;
 }
 
@@ -211,12 +213,16 @@ export function useCreateSalePayment() {
 
 // ── Hooks: Reconciliation ─────────────────────────────────────────────────────
 
-export function useGetPendingPayments(params?: { outletId?: number; method?: string; fromDate?: string; toDate?: string; search?: string }) {
+export function useGetPendingPayments(params?: { locationType?: string; locationId?: number; method?: string; fromDate?: string; toDate?: string; search?: string }) {
   return useQuery<PendingPayment[]>({
     queryKey: getPendingPaymentsQueryKey(params),
     queryFn: () => {
       const qs = new URLSearchParams();
-      if (params?.outletId) qs.set("outletId", String(params.outletId));
+      // Filter by the sale's own location, so warehouse receipts are reachable.
+      if (params?.locationType && params?.locationId) {
+        qs.set("locationType", params.locationType);
+        qs.set("locationId", String(params.locationId));
+      }
       if (params?.method)   qs.set("method", params.method);
       if (params?.fromDate) qs.set("fromDate", params.fromDate);
       if (params?.toDate)   qs.set("toDate", params.toDate);
@@ -246,6 +252,21 @@ export function useGetBankLedgers() {
   return useQuery<BankLedger[]>({
     queryKey: getBankLedgersQueryKey(),
     queryFn: () => customFetch("/api/reconciliation/bank-ledgers"),
+  });
+}
+
+export function useCreateBankAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { name: string; bankName?: string; accountNumber?: string; ifscCode?: string; branch?: string }) =>
+      customFetch<BankLedger>("/api/reconciliation/bank-accounts", {
+        method: "POST", body: JSON.stringify(data), headers: { "Content-Type": "application/json" },
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: getBankLedgersQueryKey() });
+      qc.invalidateQueries({ queryKey: ["cash-bank-ledgers-list"] });
+      qc.invalidateQueries({ queryKey: ["chart-of-accounts"] });
+    },
   });
 }
 

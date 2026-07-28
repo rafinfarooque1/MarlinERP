@@ -10,6 +10,7 @@ import { requireModuleAction } from "../middleware/permissions";
 import { generateChallanPdf } from "../services/challanPdf";
 import { generatePayslipPdf } from "../services/payslipPdf";
 import { generateReportPdf, type ReportPdfInput } from "../services/reportPdf";
+import { generateReportXlsx } from "../services/reportXlsx";
 import { generateExpenseVoucherPdf } from "../services/expenseVoucherPdf";
 import { pool } from "@workspace/db";
 
@@ -52,26 +53,51 @@ router.post("/pdf/challan", requireModuleAction("page:/transfers", "download"), 
 // ── Generic tabular report (Reports Center exports) ──────────────────────────
 const MAX_REPORT_ROWS = 3000;
 
-router.post("/pdf/report", requireModuleAction("page:/reports/sales", "download"), async (req, res) => {
+/**
+ * Shape-check + row-cap shared by the PDF and Excel renderers, so the two
+ * cannot drift into accepting different payloads.
+ * Returns null and writes the response when the body is unusable.
+ */
+function validateReportBody(req: any, res: any, format: "PDF" | "Excel"): ReportPdfInput | null {
+  const body = req.body as Partial<ReportPdfInput>;
+  if (!body || typeof body.title !== "string" || !body.title.trim()) {
+    res.status(400).json({ error: "title is required" }); return null;
+  }
+  if (!Array.isArray(body.sections) || body.sections.length === 0) {
+    res.status(400).json({ error: "at least one section is required" }); return null;
+  }
+  let rowCount = 0;
+  for (const s of body.sections) {
+    if (!s || !Array.isArray(s.columns) || s.columns.length === 0 || !Array.isArray(s.rows)) {
+      res.status(400).json({ error: "each section needs columns[] and rows[]" }); return null;
+    }
+    rowCount += s.rows.length;
+  }
+  if (rowCount > MAX_REPORT_ROWS) {
+    res.status(413).json({ error: `Report too large for ${format} (${rowCount} rows, max ${MAX_REPORT_ROWS}). Narrow the date range or use CSV.` });
+    return null;
+  }
+  return body as ReportPdfInput;
+}
+
+/**
+ * Reports are rendered once and used two ways: saved to disk, or sent to a
+ * printer. Those are separate rights on the Permissions page, so the guard has
+ * to follow the button the user actually pressed rather than demand `download`
+ * from everyone. `intent` names the button; an unrecognised value falls back to
+ * download, which is the stricter reading of an ambiguous request.
+ */
+function reportIntentGuard(req: any): "download" | "print" {
+  return (req.body?.intent === "print" || req.query?.intent === "print") ? "print" : "download";
+}
+
+router.post("/pdf/report", async (req, res, next) => {
+  const action = reportIntentGuard(req);
+  requireModuleAction("page:/reports/sales", action)(req, res, next);
+}, async (req, res) => {
   try {
-    const body = req.body as Partial<ReportPdfInput>;
-    if (!body || typeof body.title !== "string" || !body.title.trim()) {
-      res.status(400).json({ error: "title is required" }); return;
-    }
-    if (!Array.isArray(body.sections) || body.sections.length === 0) {
-      res.status(400).json({ error: "at least one section is required" }); return;
-    }
-    let rowCount = 0;
-    for (const s of body.sections) {
-      if (!s || !Array.isArray(s.columns) || s.columns.length === 0 || !Array.isArray(s.rows)) {
-        res.status(400).json({ error: "each section needs columns[] and rows[]" }); return;
-      }
-      rowCount += s.rows.length;
-    }
-    if (rowCount > MAX_REPORT_ROWS) {
-      res.status(413).json({ error: `Report too large for PDF (${rowCount} rows, max ${MAX_REPORT_ROWS}). Narrow the date range or use CSV.` });
-      return;
-    }
+    const body = validateReportBody(req, res, "PDF");
+    if (!body) return;
 
     // Company header comes from server-side settings — clients never send it.
     const { rows: [cs] } = await pool.query<any>(
@@ -105,6 +131,48 @@ router.post("/pdf/report", requireModuleAction("page:/reports/sales", "download"
   } catch (err) {
     console.error("[pdfGen] report error:", err);
     res.status(500).json({ error: "PDF generation failed" });
+  }
+});
+
+// ── Generic tabular report — Excel ───────────────────────────────────────────
+// Same payload as /pdf/report. Always `download`: there is no such thing as
+// printing a spreadsheet straight out of the browser.
+router.post("/xlsx/report", requireModuleAction("page:/reports/sales", "download"), async (req, res) => {
+  try {
+    const body = validateReportBody(req, res, "Excel");
+    if (!body) return;
+
+    const { rows: [cs] } = await pool.query<any>(
+      `SELECT company_name, address, city, state, pincode, gst_number, phone, email
+       FROM company_settings ORDER BY id LIMIT 1`,
+    ).catch(() => ({ rows: [undefined as any] }));
+
+    const buffer = await generateReportXlsx({
+      title: body.title,
+      subtitle: typeof body.subtitle === "string" ? body.subtitle : undefined,
+      metaRows: Array.isArray(body.metaRows) ? (body.metaRows as [string, string][]) : undefined,
+      orientation: body.orientation === "landscape" ? "landscape" : "portrait",
+      sections: body.sections,
+      footerNote: typeof body.footerNote === "string" ? body.footerNote : undefined,
+      cs: cs ? {
+        companyName: cs.company_name ?? undefined,
+        address: cs.address ?? undefined,
+        city: cs.city ?? undefined,
+        state: cs.state ?? undefined,
+        pincode: cs.pincode ?? undefined,
+        gstNumber: cs.gst_number ?? undefined,
+        phone: cs.phone ?? undefined,
+        email: cs.email ?? undefined,
+      } : undefined,
+    });
+    const safe = body.title.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "Report";
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${safe}.xlsx"`);
+    res.setHeader("Content-Length", buffer.length);
+    res.end(buffer);
+  } catch (err) {
+    console.error("[pdfGen] xlsx error:", err);
+    res.status(500).json({ error: "Excel generation failed" });
   }
 });
 

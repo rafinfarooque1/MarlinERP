@@ -24,6 +24,7 @@ import pdfGenRouter from "./pdfGen";
 import returnsRouter from "./returns";
 import bomRouter from "./bom";
 import reportsRouter from "./reports";
+import financialReportsRouter from "./financialReports";
 import searchRouter from "./search";
 import storageRouter from "./storage";
 const router: IRouter = Router();
@@ -53,6 +54,7 @@ router.use(pdfGenRouter);
 router.use(returnsRouter);
 router.use(bomRouter);
 router.use(reportsRouter);
+router.use(financialReportsRouter);
 router.use(searchRouter);
 router.use(storageRouter);
 

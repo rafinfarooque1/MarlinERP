@@ -86,6 +86,65 @@ export async function downloadPDFFromEndpoint(
   }
 }
 
+/** POST JSON to an authenticated endpoint and save the binary response to disk. */
+export async function downloadFileFromEndpoint(
+  endpoint: string,
+  data: unknown,
+  filename: string,
+): Promise<void> {
+  const token = localStorage.getItem('marlin_auth_token');
+  const resp = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    credentials: 'include',
+    body: JSON.stringify(data),
+  });
+  if (!resp.ok) {
+    const err: any = await resp.json().catch(() => ({}));
+    throw new Error(err?.error || `Export failed (${resp.status})`);
+  }
+  const url = URL.createObjectURL(await resp.blob());
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 15_000);
+}
+
+/**
+ * POST JSON to an endpoint that returns a PDF and send it straight to the
+ * printer — no file is saved.
+ *
+ * The tab is opened synchronously inside the click gesture (popup blockers
+ * only allow that), then pointed at the blob once it arrives. Same pattern as
+ * invoice printing on the Sales page; if the built-in PDF viewer refuses the
+ * programmatic print call, the document is still on screen to print by hand.
+ */
+export async function printPDFFromEndpoint(endpoint: string, data: unknown): Promise<void> {
+  const tab = window.open('about:blank', '_blank');
+  try {
+    const token = localStorage.getItem('marlin_auth_token');
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      credentials: 'include',
+      body: JSON.stringify(data),
+    });
+    if (!resp.ok) {
+      tab?.close();
+      const err: any = await resp.json().catch(() => ({}));
+      throw new Error(err?.error || `Print failed (${resp.status})`);
+    }
+    const url = URL.createObjectURL(await resp.blob());
+    if (!tab) { window.open(url, '_blank'); return; }
+    tab.location.replace(url);
+    tab.addEventListener?.('load', () => { try { tab.print(); } catch { /* viewer declined */ } });
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (e) {
+    tab?.close();
+    throw e;
+  }
+}
+
 /** Convert a number to Indian words (e.g. 1020 → "One Thousand And Twenty Only") */
 export function numberToWords(amount: number): string {
   const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',

@@ -7,6 +7,46 @@ import { LEGACY_BANK_MODES } from "../lib/paymentModes";
 
 const router = Router();
 
+// A sale's location is `location_type` + `location_id`. `sale_payments.outlet_id`
+// is copied from the legacy `sales.outlet_id`, which is null for warehouse sales
+// and stale on others (a warehouse sale can still carry an old outlet id), so
+// joining payments through it hides every warehouse receipt from reconciliation
+// and mislabels some of the ones it does return. Resolve the location from the
+// sale itself. Both joins are LEFT so a payment is never dropped for want of a
+// location record.
+const SALE_LOCATION_JOINS = `
+     LEFT JOIN outlets    o ON s.location_type = 'outlet'    AND o.id = s.location_id
+     LEFT JOIN warehouses w ON s.location_type = 'warehouse' AND w.id = s.location_id`;
+const SALE_LOCATION_NAME = `COALESCE(o.name, w.name)`;
+
+/**
+ * Restrict a payment query to the caller's own location. Head office sees every
+ * location; anyone bound to one sees only theirs. Scoping on the sale's location
+ * rather than on `sale_payments.outlet_id` is what lets warehouse staff see
+ * their own receipts at all.
+ */
+function applyLocationScope(
+  req: any,
+  params: any[],
+  conds: string[],
+  filter: { locationType?: string; locationId?: string; outletId?: string },
+): void {
+  const emp = req.employee as { branchType?: string; branchId?: number } | undefined;
+  if (emp && emp.branchType && emp.branchType !== "headoffice" && emp.branchId != null) {
+    params.push(emp.branchType); const t = params.length;
+    params.push(emp.branchId);   const i = params.length;
+    conds.push(`(s.location_type = $${t} AND s.location_id = $${i})`);
+    return;
+  }
+  // `outletId` is the older param name for the same filter, and always an outlet.
+  const type = filter.locationType ?? (filter.outletId ? "outlet" : undefined);
+  const id = filter.locationId ?? filter.outletId;
+  if (!type || !id) return;
+  params.push(type); const t = params.length;
+  params.push(Number(id)); const i = params.length;
+  conds.push(`(s.location_type = $${t} AND s.location_id = $${i})`);
+}
+
 // ── GET /reconciliation/bank-ledgers ─────────────────────────────────────────
 // Returns all active ledgers under STD-BANK hierarchy (for destination dropdown)
 // Serves Reconciliation, Cash Balance (accounts + sales) pages.
@@ -35,20 +75,109 @@ router.get("/reconciliation/bank-ledgers", requireModuleView(["page:/accounts/re
   res.json(bankLedgers);
 });
 
+// ── POST /reconciliation/bank-accounts ───────────────────────────────────────
+// A bank account is the one balance-sheet leaf with no master record of its own,
+// so retiring hand-made ledgers left it with no way to exist — and a batch cannot
+// be settled without a destination account, which would strand reconciliation
+// entirely on a fresh install. Provisioning the account creates its ledger, which
+// is the same rule every other ledger in the chart now follows.
+router.post(
+  "/reconciliation/bank-accounts",
+  requireModuleAction("page:/accounts/reconciliation", "add"),
+  async (req, res): Promise<void> => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    /** Trimmed text, or `undefined` when the value is the wrong type or too long. */
+    const readText = (key: string, max: number): string | undefined => {
+      const raw = body[key];
+      if (raw === undefined || raw === null) return "";
+      if (typeof raw !== "string") return undefined;
+      const trimmed = raw.trim();
+      return trimmed.length > max ? undefined : trimmed;
+    };
+
+    const name = readText("name", 120);
+    const bankName = readText("bankName", 120);
+    const accountNumber = readText("accountNumber", 64);
+    const ifscCode = readText("ifscCode", 32);
+    const branch = readText("branch", 120);
+
+    if ([name, bankName, accountNumber, ifscCode, branch].some((v) => v === undefined)) {
+      res.status(400).json({ error: "Bank account details must be text within the allowed length." });
+      return;
+    }
+    if (!name) { res.status(400).json({ error: "Give the bank account a name." }); return; }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Check-then-insert has to be one writer at a time or two clicks race past
+      // the duplicate check and leave two ledgers with the same name.
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('reconciliation:bank-account:create'))");
+
+      const { rows: [bankRoot] } = await client.query(
+        `SELECT id FROM account_ledgers WHERE code = 'STD-BANK' LIMIT 1`,
+      );
+      if (!bankRoot) {
+        await client.query("ROLLBACK");
+        res.status(500).json({ error: "The standard Bank group is missing from the chart of accounts." });
+        return;
+      }
+
+      const { rows: [dupe] } = await client.query(
+        `SELECT id FROM account_ledgers WHERE parent_id = $1 AND lower(name) = lower($2) LIMIT 1`,
+        [bankRoot.id, name],
+      );
+      if (dupe) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: `A bank account named "${name}" already exists.` });
+        return;
+      }
+
+      const bankDetails = {
+        bankName: bankName ?? "",
+        accountNumber: accountNumber ?? "",
+        ifscCode: ifscCode ?? "",
+        branch: branch ?? "",
+      };
+      const { rows: [created] } = await client.query(
+        `INSERT INTO account_ledgers (name, type, parent_id, section, is_system_group, is_group, bank_details)
+         VALUES ($1, 'asset', $2, NULL, false, false, $3::jsonb)
+         RETURNING id, name, bank_details`,
+        [name, bankRoot.id, JSON.stringify(bankDetails)],
+      );
+      await client.query("COMMIT");
+
+      logActivity({
+        action: "CREATE", module: "reconciliation", entityType: "bank_account", entityId: created.id,
+        description: `Bank account ${name}`,
+        metadata: { after: { name, ...bankDetails } },
+      }).catch(() => {});
+
+      res.status(201).json({
+        id: created.id,
+        name: created.name,
+        code: null,
+        bankDetails: created.bank_details ?? null,
+      });
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+);
+
 // ── GET /reconciliation/pending ───────────────────────────────────────────────
 // Lists all pending electronic sale_payments
 router.get("/reconciliation/pending", requireModuleView("page:/accounts/reconciliation"), async (req, res): Promise<void> => {
-  const { outletId, method, fromDate, toDate, search } = req.query as Record<string, string | undefined>;
+  const { outletId, locationType, locationId, method, fromDate, toDate, search } =
+    req.query as Record<string, string | undefined>;
 
   const params: any[] = ["pending"];
   const conds: string[] = ["sp.reconciliation_status = $1"];
 
-  // LBAC: outlet users are automatically scoped to their own outlet
-  const rcnEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
-  if (rcnEmp && rcnEmp.branchType === 'outlet') {
-    // Force scope to this employee's outlet regardless of query param
-    params.push(rcnEmp.branchId); conds.push(`sp.outlet_id = $${params.length}`);
-  } else if (outletId) { params.push(Number(outletId)); conds.push(`sp.outlet_id = $${params.length}`); }
+  applyLocationScope(req, params, conds, { locationType, locationId, outletId });
   // 'bank' also matches the legacy 'card' / 'bank_transfer' values, which mean
   // the same thing and are never rewritten in place.
   if (method) {
@@ -65,14 +194,14 @@ router.get("/reconciliation/pending", requireModuleView("page:/accounts/reconcil
   const where = conds.join(" AND ");
   const { rows } = await pool.query(
     `SELECT sp.id, sp.sale_id, sp.payment_date, sp.method, sp.amount::numeric AS amount,
-            sp.reference_number, sp.notes, sp.reconciliation_status, sp.outlet_id,
+            sp.reference_number, sp.notes, sp.reconciliation_status,
             sp.created_at,
-            s.invoice_number,
-            o.name AS outlet_name,
+            s.invoice_number, s.location_type, s.location_id::int AS location_id,
+            ${SALE_LOCATION_NAME} AS location_name,
             c.name AS customer_name
      FROM sale_payments sp
      JOIN sales s ON s.id = sp.sale_id
-     JOIN outlets o ON o.id = sp.outlet_id
+     ${SALE_LOCATION_JOINS}
      LEFT JOIN customers c ON c.id = s.customer_id
      WHERE ${where}
      ORDER BY sp.payment_date DESC, sp.id DESC`,
@@ -88,10 +217,11 @@ router.get("/reconciliation/pending", requireModuleView("page:/accounts/reconcil
     referenceNumber: r.reference_number,
     notes: r.notes,
     reconciliationStatus: r.reconciliation_status,
-    outletId: r.outlet_id,
+    locationType: r.location_type,
+    locationId: r.location_id,
     createdAt: r.created_at,
     invoiceNumber: r.invoice_number,
-    outletName: r.outlet_name,
+    locationName: r.location_name ?? "—",
     customerName: r.customer_name ?? null,
   })));
 });
@@ -152,12 +282,12 @@ router.get("/reconciliation/batches/:id", requireModuleView("page:/accounts/reco
     `SELECT rbi.id, rbi.sale_payment_id, rbi.amount::numeric AS amount,
             sp.method, sp.payment_date, sp.reference_number,
             s.invoice_number, s.id AS sale_id,
-            o.name AS outlet_name,
+            ${SALE_LOCATION_NAME} AS location_name,
             c.name AS customer_name
      FROM reconciliation_batch_items rbi
      JOIN sale_payments sp ON sp.id = rbi.sale_payment_id
      JOIN sales s ON s.id = sp.sale_id
-     JOIN outlets o ON o.id = sp.outlet_id
+     ${SALE_LOCATION_JOINS}
      LEFT JOIN customers c ON c.id = s.customer_id
      WHERE rbi.batch_id = $1
      ORDER BY sp.payment_date`,
@@ -187,7 +317,7 @@ router.get("/reconciliation/batches/:id", requireModuleView("page:/accounts/reco
       referenceNumber: i.reference_number,
       invoiceNumber: i.invoice_number,
       saleId: i.sale_id,
-      outletName: i.outlet_name,
+      locationName: i.location_name ?? "—",
       customerName: i.customer_name ?? null,
     })),
   });
@@ -287,10 +417,20 @@ router.post("/reconciliation/batches", requireModuleAction("page:/accounts/recon
       res.status(500).json({ error: "Processor charges ledger not configured" }); return;
     }
 
-    // 6. Generate batch reference
+    // 6. Generate batch reference — COUNT(*) is a duplicate-key bug (deleting a
+    //    row makes the next insert reuse a number, and concurrent inserts collide).
+    //    Serialize allocation with a per-year advisory lock (held to COMMIT) and
+    //    derive the next sequence from MAX(existing suffix)+1 INSIDE the txn —
+    //    the check-then-insert guard pattern used elsewhere in this codebase.
     const year = new Date().getFullYear();
-    const { rows: [cntRow] } = await client.query(`SELECT COUNT(*) FROM reconciliation_batches WHERE batch_reference LIKE $1`, [`RECON-${year}-%`]);
-    const seq = Number(cntRow.count) + 1;
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext('reconciliation-batch-ref'), $1)`, [year]);
+    const { rows: [maxRow] } = await client.query(
+      `SELECT COALESCE(MAX((regexp_replace(batch_reference, '^RECON-\\d+-', ''))::int), 0) AS max_seq
+       FROM reconciliation_batches
+       WHERE batch_reference ~ ('^RECON-' || $1 || '-\\d+$')`,
+      [String(year)]
+    );
+    const seq = Number(maxRow.max_seq) + 1;
     const batchReference = `RECON-${year}-${String(seq).padStart(4, "0")}`;
 
     // 7. Create reconciliation batch
@@ -356,6 +496,191 @@ router.post("/reconciliation/batches", requireModuleAction("page:/accounts/recon
     await client.query("ROLLBACK").catch(() => {});
     console.error("Reconciliation error:", err);
     res.status(500).json({ error: err.message ?? "Failed to create reconciliation batch" });
+  } finally {
+    client.release();
+  }
+});
+
+// ── GET /reconciliation/reconciled ────────────────────────────────────────────
+// Lists reconciled + matched sale_payments so a user can prove (Match) an entry
+// against a specific ledger posting/voucher, or reverse a match (Un-match).
+// The matched_* audit columns are startup-migration columns INVISIBLE to
+// Drizzle, so they are read here with raw SQL via `pool`.
+router.get("/reconciliation/reconciled", requireModuleView("page:/accounts/reconciliation"), async (req, res): Promise<void> => {
+  const { outletId, locationType, locationId, method, status, fromDate, toDate, search } =
+    req.query as Record<string, string | undefined>;
+
+  const params: any[] = [];
+  const conds: string[] = [];
+
+  // Only the two post-pending states are relevant here.
+  if (status === 'reconciled' || status === 'matched') {
+    params.push(status); conds.push(`sp.reconciliation_status = $${params.length}`);
+  } else {
+    params.push(['reconciled', 'matched']); conds.push(`sp.reconciliation_status = ANY($${params.length}::text[])`);
+  }
+
+  applyLocationScope(req, params, conds, { locationType, locationId, outletId });
+  if (method) {
+    const matches = method === 'bank' ? ['bank', ...LEGACY_BANK_MODES] : [method];
+    params.push(matches); conds.push(`sp.method = ANY($${params.length}::text[])`);
+  }
+  if (fromDate) { params.push(fromDate); conds.push(`sp.payment_date >= $${params.length}`); }
+  if (toDate)   { params.push(toDate);   conds.push(`sp.payment_date <= $${params.length}`); }
+  if (search) {
+    params.push(`%${search}%`);
+    conds.push(`(s.invoice_number ILIKE $${params.length} OR c.name ILIKE $${params.length})`);
+  }
+
+  const where = conds.join(" AND ");
+  const { rows } = await pool.query(
+    `SELECT sp.id, sp.sale_id, sp.payment_date, sp.method, sp.amount::numeric AS amount,
+            sp.reference_number, sp.notes, sp.reconciliation_status,
+            sp.created_at, sp.matched_reference, sp.matched_by, sp.matched_at,
+            s.invoice_number, s.location_type, s.location_id::int AS location_id,
+            ${SALE_LOCATION_NAME} AS location_name,
+            c.name AS customer_name
+     FROM sale_payments sp
+     JOIN sales s ON s.id = sp.sale_id
+     ${SALE_LOCATION_JOINS}
+     LEFT JOIN customers c ON c.id = s.customer_id
+     WHERE ${where}
+     ORDER BY sp.payment_date DESC, sp.id DESC`,
+    params
+  );
+
+  res.json(rows.map((r: any) => ({
+    id: r.id,
+    saleId: r.sale_id,
+    paymentDate: r.payment_date,
+    method: r.method,
+    amount: Number(r.amount),
+    referenceNumber: r.reference_number,
+    notes: r.notes,
+    reconciliationStatus: r.reconciliation_status,
+    outletId: r.outlet_id,
+    createdAt: r.created_at,
+    matchedReference: r.matched_reference ?? null,
+    matchedBy: r.matched_by ?? null,
+    matchedAt: r.matched_at ?? null,
+    invoiceNumber: r.invoice_number,
+    locationName: r.location_name ?? "—",
+    customerName: r.customer_name ?? null,
+  })));
+});
+
+// ── POST /reconciliation/:id/match ────────────────────────────────────────────
+// Transition Reconciled -> Matched. Ties the entry to a specific ledger
+// posting / voucher reference so it can be PROVEN. Records who matched it and
+// when. Only a Reconciled entry may become Matched — any other current state
+// is rejected with 409 stating the state it is actually in.
+// matched_* are startup-migration columns invisible to Drizzle → write via `pool`.
+router.post("/reconciliation/:id/match", requireModuleAction("page:/accounts/reconciliation", "edit"), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid payment id" }); return; }
+
+  const matchedReference = String((req.body as any)?.matchedReference ?? "").trim();
+  if (!matchedReference) {
+    res.status(400).json({ error: "matchedReference is required — the voucher / ledger posting this entry proves against" });
+    return;
+  }
+
+  const matchedBy = (req as any).user?.username ?? "system";
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const { rows: [payment] } = await client.query(
+      `SELECT id, reconciliation_status FROM sale_payments WHERE id = $1 FOR UPDATE`,
+      [id]
+    );
+    if (!payment) { await client.query("ROLLBACK"); res.status(404).json({ error: "Payment not found" }); return; }
+
+    if (payment.reconciliation_status !== 'reconciled') {
+      await client.query("ROLLBACK");
+      res.status(409).json({
+        error: `Only a Reconciled entry may be Matched. This entry is currently "${payment.reconciliation_status ?? 'pending'}".`,
+      });
+      return;
+    }
+
+    await client.query(
+      `UPDATE sale_payments
+       SET reconciliation_status = 'matched',
+           matched_reference = $2,
+           matched_by = $3,
+           matched_at = now()
+       WHERE id = $1`,
+      [id, matchedReference, matchedBy]
+    );
+
+    await client.query("COMMIT");
+
+    logActivity({
+      action: "UPDATE", module: "reconciliation", entityType: "sale_payment", entityId: id,
+      description: `Matched payment #${id} to ${matchedReference}`,
+      metadata: { after: { reconciliationStatus: 'matched', matchedReference, matchedBy } },
+    }).catch(() => {});
+
+    res.json({ id, reconciliationStatus: 'matched', matchedReference, matchedBy });
+  } catch (err: any) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Match error:", err);
+    res.status(500).json({ error: err.message ?? "Failed to match payment" });
+  } finally {
+    client.release();
+  }
+});
+
+// ── POST /reconciliation/:id/unmatch ──────────────────────────────────────────
+// Reverse a match: Matched -> Reconciled, clearing the stored reference and
+// audit stamps. Only a Matched entry may be un-matched; anything else is 409.
+router.post("/reconciliation/:id/unmatch", requireModuleAction("page:/accounts/reconciliation", "edit"), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid payment id" }); return; }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const { rows: [payment] } = await client.query(
+      `SELECT id, reconciliation_status FROM sale_payments WHERE id = $1 FOR UPDATE`,
+      [id]
+    );
+    if (!payment) { await client.query("ROLLBACK"); res.status(404).json({ error: "Payment not found" }); return; }
+
+    if (payment.reconciliation_status !== 'matched') {
+      await client.query("ROLLBACK");
+      res.status(409).json({
+        error: `Only a Matched entry may be un-matched. This entry is currently "${payment.reconciliation_status ?? 'pending'}".`,
+      });
+      return;
+    }
+
+    await client.query(
+      `UPDATE sale_payments
+       SET reconciliation_status = 'reconciled',
+           matched_reference = NULL,
+           matched_by = NULL,
+           matched_at = NULL
+       WHERE id = $1`,
+      [id]
+    );
+
+    await client.query("COMMIT");
+
+    logActivity({
+      action: "UPDATE", module: "reconciliation", entityType: "sale_payment", entityId: id,
+      description: `Un-matched payment #${id} (reverted to reconciled)`,
+      metadata: { after: { reconciliationStatus: 'reconciled' } },
+    }).catch(() => {});
+
+    res.json({ id, reconciliationStatus: 'reconciled', matchedReference: null });
+  } catch (err: any) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Un-match error:", err);
+    res.status(500).json({ error: err.message ?? "Failed to un-match payment" });
   } finally {
     client.release();
   }

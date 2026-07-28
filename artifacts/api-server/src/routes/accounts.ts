@@ -11,6 +11,8 @@ import { nextVoucherNumber, VOUCHER_TYPE_LABELS } from "../lib/voucherNumber";
 import { lineTaxHeads } from "../lib/gst";
 import { logActivity } from "../lib/audit";
 import { closingStockValuation } from "../lib/valuation";
+import { buildBooks } from "../lib/books";
+import { buildDerivedPostings } from "./journal";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { getUserDataScope, scopeSalesWhere, scopeBranchWhere } from "../lib/dataScope";
 import {
@@ -103,28 +105,17 @@ router.get("/accounts/cash-bank-ledgers", requireModuleView(["page:/accounts/cas
   })));
 });
 
-router.post("/accounts/chart", requireModuleAction("page:/accounts/chart", "add"), async (req, res): Promise<void> => {
-  const parsed = CreateAccountLedgerBody.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-  const code = (req.body as any).code ?? null;
-  const bankDetails = (req.body as any).bankDetails ?? null;
-  const isGroup = !!(req.body as any).isGroup;
-  const [row] = await db.insert(accountLedgersTable).values({ ...parsed.data, ...(code ? {} : {}) }).returning();
-  // Set code, bank_details, and is_group via raw query if provided
-  if (code || bankDetails || isGroup) {
-    await pool.query(
-      `UPDATE account_ledgers SET
-         code = COALESCE($1, code),
-         bank_details = COALESCE($2, bank_details),
-         is_group = CASE WHEN $4 THEN true ELSE is_group END
-       WHERE id = $3`,
-      [code, bankDetails ? JSON.stringify(bankDetails) : null, row.id, isGroup]
-    );
-  }
-  const parentName = parsed.data.parentId
-    ? (await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, parsed.data.parentId!)).limit(1))[0]?.name ?? null
-    : null;
-  res.status(201).json({ ...row, code, bankDetails, isGroup, parentName, children: [], balance: 0 });
+// Manual ledger creation is retired. Ledgers are no longer created by hand —
+// they are provisioned automatically alongside the master record they belong to
+// (customers, vendors, employees, locations, standard chart accounts). The route
+// is kept but enforces a 409 so any stale client gets a real answer instead of
+// silently creating an orphan ledger.
+router.post("/accounts/chart", requireModuleAction("page:/accounts/chart", "add"), async (_req, res): Promise<void> => {
+  res.status(409).json({
+    error: "Ledgers are no longer created by hand — they are provisioned automatically. " +
+      "Create the master record instead and its ledger is created with it " +
+      "(e.g. create the customer and its ledger is created with it; the same applies to vendors, employees, locations and standard chart accounts).",
+  });
 });
 
 router.patch("/accounts/chart/:id", requireModuleAction("page:/accounts/chart", "edit"), async (req, res): Promise<void> => {
@@ -1146,272 +1137,30 @@ router.delete("/accounts/location-expenses/:id", requireModuleAction("page:/sale
 });
 
 // ── Financial Statements (Balance Sheet + P&L) ────────────────────────────
+//
+// Both statements are assembled by `buildBooks()` from the derived posting
+// stream, so they agree with the Trial Balance, Cash Book and Bank Book by
+// construction. See lib/books.ts for why that removes the plug figure.
 router.get("/accounts/financial-statements", requireModuleView(["page:/accounts/chart", "page:/reports/sales"]), async (req, res): Promise<void> => {
   // LBAC: P&L and Balance Sheet are Head Office accounting
   if ((req as any).employee?.branchType !== 'headoffice') { res.json({ pl: null, bs: null }); return; }
-  const { fromDate, toDate, outletId } = req.query as {
-    fromDate?: string; toDate?: string; outletId?: string;
-  };
+  const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
 
-  // Load all ledgers
-  const { rows: allLedgers } = await pool.query(`SELECT * FROM account_ledgers ORDER BY id`);
+  const books = await buildBooks(buildDerivedPostings, { fromDate, toDate });
 
-  // Build id→node map with children
-  const ledgerMap = new Map<number, any>();
-  for (const r of allLedgers) {
-    ledgerMap.set(r.id, {
-      id: r.id, name: r.name, type: r.type,
-      parentId: r.parent_id ?? null, code: r.code ?? null,
-      section: r.section ?? null, isSystemGroup: r.is_system_group ?? false,
-      children: [], balance: 0,
-    });
-  }
-  for (const r of allLedgers) {
-    if (r.parent_id && ledgerMap.has(r.parent_id)) {
-      ledgerMap.get(r.parent_id).children.push(ledgerMap.get(r.id));
-    }
-  }
-
-  // Helpers to build parameterised date conditions
-  const makeDateConds = (dateCol: string, params: any[]): string => {
-    const conds: string[] = [];
-    if (fromDate) { params.push(fromDate); conds.push(`${dateCol} >= $${params.length}`); }
-    if (toDate)   { params.push(toDate);   conds.push(`${dateCol} <= $${params.length}`); }
-    return conds.length ? `WHERE ${conds.join(' AND ')}` : '';
-  };
-
-  // ── Ledger balance computation ──────────────────────────────────────────
-  const balanceMap = new Map<number, number>();
-  const add = (id: number, v: number) => balanceMap.set(id, (balanceMap.get(id) ?? 0) + v);
-
-  // Expenses → debit to ledger_account_id
-  const ep: any[] = [];
-  const { rows: expRows } = await pool.query(
-    `SELECT ledger_account_id, COALESCE(SUM(amount::numeric), 0) AS total
-     FROM expenses ${makeDateConds('expense_date', ep)}
-     GROUP BY ledger_account_id`, ep
-  );
-  for (const r of expRows) add(Number(r.ledger_account_id), Number(r.total));
-
-  // Payments
-  const pp: any[] = [];
-  const { rows: pmtRows } = await pool.query(
-    `SELECT paid_to_ledger_id, paid_from_ledger_id, amount::numeric AS amount
-     FROM payments ${makeDateConds('payment_date', pp)}`, pp
-  );
-  for (const r of pmtRows) {
-    const amt = Number(r.amount);
-    add(Number(r.paid_to_ledger_id), amt);
-    add(Number(r.paid_from_ledger_id), -amt);
-  }
-
-  // Receipts
-  const rp: any[] = [];
-  const { rows: recRows } = await pool.query(
-    `SELECT received_in_ledger_id, received_from_ledger_id, amount::numeric AS amount
-     FROM receipts ${makeDateConds('receipt_date', rp)}`, rp
-  );
-  for (const r of recRows) {
-    const amt = Number(r.amount);
-    add(Number(r.received_in_ledger_id), amt);
-    add(Number(r.received_from_ledger_id), -amt);
-  }
-
-  // Journal vouchers — Indirect Expenses only.
-  //
-  // Payroll approval, and only payroll approval, records an expense as a
-  // journal voucher rather than through the expenses/payments tables. Without
-  // this the salary bill was completely absent from the P&L: the voucher was in
-  // the trial balance but the statement never looked at journal lines, so
-  // reported profit was overstated by every salary approved.
-  //
-  // Deliberately restricted to the Indirect Expense subtree. Direct Expenses
-  // must NOT be included: production costing credits STD-PROD-ABS there to
-  // relieve the cost it capitalises into stock, and this statement already
-  // relieves that cost through closing stock on the income side. Reading both
-  // would relieve it twice. Reconciling the direct-expense side belongs with
-  // the wider financial-statement work, not here.
-  const jp: any[] = [];
-  const { rows: jvRows } = await pool.query(
-    `WITH RECURSIVE indexp AS (
-       SELECT id FROM account_ledgers WHERE code = 'SYS-INDEXP'
-       UNION ALL
-       SELECT a.id FROM account_ledgers a JOIN indexp ON a.parent_id = indexp.id
-     )
-     SELECT l.ledger_id,
-            COALESCE(SUM(l.debit::numeric), 0) - COALESCE(SUM(l.credit::numeric), 0) AS net
-     FROM journal_voucher_lines l
-     JOIN journal_vouchers v ON v.id = l.voucher_id
-     WHERE l.ledger_id IN (SELECT id FROM indexp)
-       ${(() => { const c = makeDateConds('v.voucher_date', jp); return c ? c.replace(/^WHERE/, 'AND') : ''; })()}
-     GROUP BY l.ledger_id`, jp
-  );
-  for (const r of jvRows) add(Number(r.ledger_id), Number(r.net));
-
-  // Apply balances
-  for (const [id, bal] of balanceMap) {
-    const node = ledgerMap.get(id);
-    if (node) node.balance = bal;
-  }
-
-  // ── STD-DTX (Duty & Tax) balance = GST collected on sales (date-filtered) ──
-  // This is computed below after salesTaxTotal is known; placeholder set here
-  // so the ledgerMap node exists when buildGroup walks the tree.
-
-  // Recursively sum children (for group totals)
-  const sumNode = (node: any): number => {
-    const childSum = node.children.reduce((s: number, c: any) => s + sumNode(c), 0);
-    return node.isSystemGroup ? childSum : node.balance + childSum;
-  };
-
-  const serializeNode = (node: any): any => ({
-    id: node.id, name: node.name, type: node.type,
-    parentId: node.parentId, code: node.code,
-    isGroup: node.isGroup ?? false,
-    isSystemGroup: node.isSystemGroup ?? false,
-    balance: Math.round(node.balance * 100) / 100,
-    children: node.children.map(serializeNode),
-  });
-
-  const buildGroup = (code: string) => {
-    const r = allLedgers.find((l: any) => l.code === code);
-    const node = r ? ledgerMap.get(r.id) : null;
-    if (!node) return { id: null, name: code, code, total: 0, children: [] };
-    return {
-      id: node.id, name: node.name, code: node.code, type: node.type,
-      total: Math.round(Math.abs(sumNode(node)) * 100) / 100,
-      children: node.children.map(serializeNode),
-    };
-  };
-
-  // ── Auto-computed amounts ───────────────────────────────────────────────
-  // Sales total + tax collected (filtered by outlet if provided)
-  const sp: any[] = [];
-  // Branch-transfer invoices are excluded from BOTH the sales and purchases
-  // totals here. They are tax documents for moving own stock: including them
-  // would inflate turnover and cost of goods by the same amount, so the P&L
-  // must not see them at all. Their value posts to the inter-branch clearing
-  // ledger in the balance sheet instead (see buildDerivedPostings).
-  const salesConds: string[] = ['branch_transfer_id IS NULL'];
-  if (fromDate) { sp.push(fromDate); salesConds.push(`sale_date >= $${sp.length}`); }
-  if (toDate)   { sp.push(toDate);   salesConds.push(`sale_date <= $${sp.length}`); }
-  if (outletId) { sp.push(Number(outletId)); salesConds.push(`outlet_id = $${sp.length}`); }
-  const salesWhere = salesConds.length ? `WHERE ${salesConds.join(' AND ')}` : '';
-  const { rows: salesRows } = await pool.query(
-    `SELECT COALESCE(SUM(total_amount::numeric), 0) AS total,
-            COALESCE(SUM(tax_total::numeric), 0) AS tax_total
-     FROM sales ${salesWhere}`, sp
-  );
-  const salesTotal    = Number(salesRows[0]?.total     ?? 0);
-  const salesTaxTotal = Number(salesRows[0]?.tax_total ?? 0); // → Duty & Tax (Current Liab)
-
-  // ── Set STD-DTX balance from sales tax so it appears in COA tree ──────────
-  const dtxLedgerRow = allLedgers.find((l: any) => l.code === 'STD-DTX');
-  if (dtxLedgerRow) {
-    const dtxNode = ledgerMap.get(dtxLedgerRow.id);
-    if (dtxNode) dtxNode.balance = salesTaxTotal;
-  }
-
-  // Purchases total
-  const pup: any[] = [];
-  const { rows: purRows } = await pool.query(
-    `SELECT COALESCE(SUM(total_amount::numeric), 0) AS total FROM purchases
-      ${makeDateConds('purchase_date', pup) || 'WHERE TRUE'} AND branch_transfer_id IS NULL`, pup
-  );
-  const purchasesTotal = Number(purRows[0]?.total ?? 0);
-
-  // Closing stock, via the one shared valuation function.
-  // Previously this read `items.production_stock` — a counter that sales never
-  // decremented, so it reported ~76 units against a real ~3,389 — and valued it
-  // at MRP, which capitalises unrealised profit into inventory. Both are fixed
-  // by deriving quantity from the stock truth and valuing at cost.
-  //
-  // It now covers raw materials and packing materials as well as finished goods,
-  // and counts stock dispatched but not yet received (owned by the sender until
-  // it lands). Closing stock is everything the business owns on the last day:
-  // leaving materials out understated it by the entire material holding, and
-  // leaving in-transit out made profit dip for the length of every transfer.
-  // `inTransit` is reported separately so the drill-down reconciles to the total.
-  const valuation = await closingStockValuation(pool);
-  const stockItems = valuation.items.map((i) => ({
-    id: i.id, name: i.name, unit: i.unit,
-    stock: i.stock, unitCost: i.unitCost, total: i.total,
-    materialType: i.materialType, typeLabel: i.typeLabel,
-  }));
-  const closingStock = valuation.total;
-  const closingStockInTransit = valuation.inTransit;
-  // Intentionally zero: the business has not gone live, so there is no
-  // historical stock to carry in. Not a defect.
-  const openingStock = 0;
-
-  // ── P&L ────────────────────────────────────────────────────────────────
-  const directExp   = buildGroup('SYS-DIREXP');
-  const indirectExp = buildGroup('SYS-INDEXP');
-  const directInc   = buildGroup('SYS-DIRINC');
-  const indirectInc = buildGroup('SYS-INDINC');
-
-  const totalExpenses = openingStock + purchasesTotal + directExp.total + indirectExp.total;
-  const totalIncomes  = salesTotal + closingStock + directInc.total + indirectInc.total;
-  const netProfit     = totalIncomes - totalExpenses;
-
-  // ── Balance Sheet ───────────────────────────────────────────────────────
-  const capitalGroup = buildGroup('SYS-CAP');
-  const loansGroup   = buildGroup('SYS-LOAN');
-  const curlBase     = buildGroup('SYS-CURL');
-  const fixedGroup   = buildGroup('SYS-FIXD');
-  const curaGroup    = buildGroup('SYS-CURA');
-
-  // Current Liabilities — STD-DTX balance already set from salesTaxTotal above;
-  // curlBase.total now includes it automatically via buildGroup → sumNode.
-  const dutyAndTax = Math.round(salesTaxTotal * 100) / 100;
-  const curlGroup  = { ...curlBase, dutyAndTax }; // total already correct
-
-  const pandlFwd    = Math.round(netProfit * 100) / 100;
-  const assetsTotal = fixedGroup.total + curaGroup.total;
-  const liabBase    = capitalGroup.total + loansGroup.total + curlGroup.total;
-  const liabTotal   = liabBase + (pandlFwd > 0 ? pandlFwd : 0);
-  const difference  = Math.round((assetsTotal - liabTotal - (pandlFwd < 0 ? Math.abs(pandlFwd) : 0)) * 100) / 100;
-
-  // Filters
-  const { rows: warehouses } = await pool.query(`SELECT id, name FROM warehouses ORDER BY id`);
-  const { rows: outlets }    = await pool.query(`SELECT id, name FROM outlets ORDER BY id`);
+  const [{ rows: warehouses }, { rows: outlets }] = await Promise.all([
+    pool.query(`SELECT id, name FROM warehouses ORDER BY id`),
+    pool.query(`SELECT id, name FROM outlets ORDER BY id`),
+  ]);
 
   res.json({
+    // Statutory statements are company-wide: the posting stream carries no
+    // location, so a per-warehouse slice of it would be an unbalanced fragment
+    // rather than a smaller balance sheet. Location profit lives in the
+    // Profitability report and the dashboard instead.
+    locationScoped: false,
     filters: { warehouses, outlets },
-    profitAndLoss: {
-      expenses: {
-        // Opening stock is zero, so it carries no item breakdown. Sending the
-        // closing-stock list here made the statement look like it opened with
-        // the stock it actually closed with.
-        openingStock, openingStockItems: [],
-        purchases: purchasesTotal,
-        directExpenses: directExp, indirectExpenses: indirectExp,
-        total: Math.round(totalExpenses * 100) / 100,
-      },
-      incomes: {
-        sales: salesTotal,
-        closingStock: Math.round(closingStock * 100) / 100,
-        closingStockItems: stockItems,
-        // Part of closingStock above, broken out so a reader can see how much of
-        // the closing figure is still on a lorry rather than on a shelf.
-        closingStockInTransit: Math.round(closingStockInTransit * 100) / 100,
-        directIncomes: directInc, indirectIncomes: indirectInc,
-        total: Math.round(totalIncomes * 100) / 100,
-      },
-      netProfit: Math.round(netProfit * 100) / 100,
-    },
-    balanceSheet: {
-      liabilities: {
-        capitalAccount: capitalGroup, loans: loansGroup, currentLiabilities: curlGroup,
-        pandlCarryForward: pandlFwd,
-        difference: Math.abs(difference) > 0.01 ? difference : 0,
-        total: Math.round((liabTotal + (pandlFwd < 0 ? Math.abs(pandlFwd) : 0) + (difference > 0 ? difference : 0)) * 100) / 100,
-      },
-      assets: {
-        fixedAssets: fixedGroup, currentAssets: curaGroup,
-        total: Math.round(assetsTotal * 100) / 100,
-      },
-    },
+    ...books,
   });
 });
 

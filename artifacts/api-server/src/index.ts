@@ -277,6 +277,18 @@ async function runMigrations() {
   // Drop NOT NULL on sale_payments.outlet_id — warehouse sales have no outlet_id
   await pool.query(`ALTER TABLE sale_payments ALTER COLUMN outlet_id DROP NOT NULL`);
 
+  // ── Reconciliation "Matched" state ───────────────────────────────────────
+  // Widen the sale_payments reconciliation workflow with a third state:
+  // pending -> reconciled -> matched. A matched payment is tied to a specific
+  // ledger posting/voucher so it can be PROVEN, not just asserted. These audit
+  // columns are added via startup migration, so they are INVISIBLE to Drizzle's
+  // select() — they must be read AND written with raw SQL via `pool`.
+  await pool.query(`
+    ALTER TABLE sale_payments ADD COLUMN IF NOT EXISTS matched_reference text;
+    ALTER TABLE sale_payments ADD COLUMN IF NOT EXISTS matched_by text;
+    ALTER TABLE sale_payments ADD COLUMN IF NOT EXISTS matched_at timestamptz;
+  `);
+
   // Allow warehouse deposits: add warehouse_id column and make outlet_id nullable
   await pool.query(`ALTER TABLE cash_deposits ADD COLUMN IF NOT EXISTS warehouse_id integer REFERENCES warehouses(id)`);
   await pool.query(`ALTER TABLE cash_deposits ALTER COLUMN outlet_id DROP NOT NULL`);

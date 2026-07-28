@@ -13,8 +13,8 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { CalendarDays, Download, FileText, Loader2, Store, Warehouse, Factory } from 'lucide-react';
-import { downloadPDFFromEndpoint } from '@/lib/download';
+import { CalendarDays, Download, FileText, Loader2, Store, Warehouse, Factory, Printer, Sheet, MapPin } from 'lucide-react';
+import { downloadPDFFromEndpoint, downloadFileFromEndpoint, printPDFFromEndpoint } from '@/lib/download';
 import { toast } from 'sonner';
 
 // ── Formatters ────────────────────────────────────────────────────────────────
@@ -113,6 +113,84 @@ export function RangeBar({ range, children }: { range: RangeState; children?: Re
         </div>
       )}
       {children}
+    </div>
+  );
+}
+
+// ── Warehouse / outlet filter ────────────────────────────────────────────────
+/**
+ * A report is filtered by ONE location at a time, identified by a compound key
+ * `${type}:${id}` because warehouse #1 and outlet #1 are different places that
+ * share an id.
+ */
+export interface LocationOption { type: 'warehouse' | 'outlet' | 'headoffice'; id: number; name: string }
+export interface LocationFilterState {
+  key: string;                       // '' = all locations
+  setKey: (k: string) => void;
+  type: '' | 'warehouse' | 'outlet' | 'headoffice';
+  id: number;                        // 0 when unset
+  label: string;
+}
+
+export function useLocationFilter(): LocationFilterState {
+  const [key, setKey] = useState('');
+  const [type = '', rawId = ''] = key ? key.split(':') : [];
+  return {
+    key, setKey,
+    type: type as LocationFilterState['type'],
+    id: Number(rawId) || 0,
+    label: key ? key : 'All locations',
+  };
+}
+
+/**
+ * `disabledReason` renders the control greyed out with an explanation instead of
+ * hiding it. Balance Sheet and Trial Balance are company-wide by construction —
+ * the posting stream carries no location, so a per-warehouse slice of it would
+ * be an unbalanced fragment, not a smaller balance sheet. Hiding the control
+ * would make that look like an oversight; disabling it states the rule.
+ */
+export function LocationFilter({ state, options, loading, disabledReason }: {
+  state: LocationFilterState;
+  options: LocationOption[];
+  loading?: boolean;
+  disabledReason?: string;
+}) {
+  if (disabledReason) {
+    // A real disabled <select>, not a lookalike chip: assistive tech and
+    // keyboard users need to perceive this as a control that is switched off,
+    // otherwise the rule reads as a missing feature.
+    return (
+      <div className="flex items-center gap-1.5">
+        <MapPin className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+        <select
+          disabled
+          aria-disabled="true"
+          aria-label={`Location filter unavailable — ${disabledReason}`}
+          title={`This report is ${disabledReason.toLowerCase()} and cannot be filtered by location.`}
+          value="__disabled__"
+          onChange={() => {}}
+          className="h-8 rounded-md border border-dashed border-border bg-muted/20 px-2 text-xs text-muted-foreground disabled:opacity-70 disabled:cursor-not-allowed"
+        >
+          <option value="__disabled__">{disabledReason}</option>
+        </select>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-1.5">
+      <MapPin className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+      <select
+        value={state.key}
+        onChange={(e) => state.setKey(e.target.value)}
+        disabled={loading}
+        className="h-8 rounded-md border border-border bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
+      >
+        <option value="">All locations</option>
+        {options.map((o) => (
+          <option key={`${o.type}:${o.id}`} value={`${o.type}:${o.id}`}>{o.name}</option>
+        ))}
+      </select>
     </div>
   );
 }
@@ -266,12 +344,7 @@ export interface PdfSection {
   totalsRow?: (string | number)[];
 }
 
-/**
- * POST to the server-side renderer. MUST be invoked synchronously from the
- * click handler — downloadPDFFromEndpoint opens the preview window immediately
- * so popup blockers don't eat it.
- */
-export function exportReportPdf(opts: {
+export interface ReportDoc {
   title: string;
   subtitle?: string;
   metaRows?: [string, string][];
@@ -279,45 +352,88 @@ export function exportReportPdf(opts: {
   sections: PdfSection[];
   footerNote?: string;
   filename?: string;
-}): Promise<void> {
-  const filename = `${(opts.filename ?? opts.title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}.pdf`;
+}
+
+const slug = (d: ReportDoc) =>
+  (d.filename ?? d.title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+/**
+ * POST to the server-side renderer. MUST be invoked synchronously from the
+ * click handler — downloadPDFFromEndpoint opens the preview window immediately
+ * so popup blockers don't eat it.
+ */
+export function exportReportPdf(opts: ReportDoc): Promise<void> {
   const { filename: _f, ...payload } = opts;
-  return downloadPDFFromEndpoint('/api/pdf/report', payload, filename);
+  return downloadPDFFromEndpoint('/api/pdf/report', { ...payload, intent: 'download' }, `${slug(opts)}.pdf`);
+}
+
+/** Same document, sent to the printer instead of the disk. Requires Print, not
+ *  Download — the server checks the intent it is given. */
+export function printReportPdf(opts: ReportDoc): Promise<void> {
+  const { filename: _f, ...payload } = opts;
+  return printPDFFromEndpoint('/api/pdf/report', { ...payload, intent: 'print' });
+}
+
+/** Same document as a real .xlsx — numbers stay numbers so the recipient can
+ *  sum a column. */
+export function exportReportXlsx(opts: ReportDoc): Promise<void> {
+  const { filename: _f, ...payload } = opts;
+  return downloadFileFromEndpoint('/api/xlsx/report', payload, `${slug(opts)}.xlsx`);
 }
 
 // ── Export buttons ────────────────────────────────────────────────────────────
-// `canDownload` is the caller's download capability — the parent page owns its
-// own permission key and passes the resolved flag here, so this shared toolbar
-// never hardcodes a module name. When false the toolbar renders nothing.
-export function ExportButtons({ onCSV, onPDF, disabled, canDownload = true }: {
+// `canDownload` / `canPrint` are the caller's capabilities — the parent page owns
+// its own permission key and passes the resolved flags here, so this shared
+// toolbar never hardcodes a module name.
+//
+// `doc` is the preferred API: give the toolbar the report document once and it
+// renders CSV, Excel, PDF and Print off it. The older onPDF/onCSV callbacks are
+// still honoured for callers that build their payload differently.
+export function ExportButtons({ onCSV, onPDF, doc, disabled, canDownload = true, canPrint = false }: {
   onCSV?: () => void;
   onPDF?: () => Promise<void> | void;
+  doc?: () => ReportDoc;
   disabled?: boolean;
   canDownload?: boolean;
+  canPrint?: boolean;
 }) {
-  const [busy, setBusy] = useState(false);
-  const handlePdf = () => {
-    if (!onPDF) return;
-    // Call synchronously so the popup window opens inside the click gesture.
-    const p = onPDF();
-    if (p && typeof (p as Promise<void>).then === 'function') {
-      setBusy(true);
-      (p as Promise<void>)
-        .catch((e: unknown) => toast.error(e instanceof Error ? e.message : 'PDF export failed'))
-        .finally(() => setBusy(false));
-    }
+  const [busy, setBusy] = useState<'pdf' | 'xlsx' | 'print' | null>(null);
+
+  const run = (kind: 'pdf' | 'xlsx' | 'print', p: Promise<void> | void) => {
+    if (!p || typeof (p as Promise<void>).then !== 'function') return;
+    setBusy(kind);
+    (p as Promise<void>)
+      .catch((e: unknown) => toast.error(e instanceof Error ? e.message : 'Export failed'))
+      .finally(() => setBusy(null));
   };
-  if (!canDownload) return null;
+
+  // Called synchronously so the popup window opens inside the click gesture.
+  const handlePdf = () => run('pdf', onPDF ? onPDF() : doc ? exportReportPdf(doc()) : undefined);
+  const handleXlsx = () => { if (doc) run('xlsx', exportReportXlsx(doc())); };
+  const handlePrint = () => { if (doc) run('print', printReportPdf(doc())); };
+
+  const showPdf = Boolean(onPDF || doc);
+  if (!canDownload && !(canPrint && doc)) return null;
   return (
     <div className="flex items-center gap-2 ml-auto">
-      {onCSV && (
+      {canDownload && onCSV && (
         <Button variant="outline" size="sm" onClick={onCSV} disabled={disabled}>
           <Download className="w-4 h-4 mr-2" /> CSV
         </Button>
       )}
-      {onPDF && (
-        <Button variant="outline" size="sm" onClick={handlePdf} disabled={disabled || busy}>
-          {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileText className="w-4 h-4 mr-2" />} PDF
+      {canDownload && doc && (
+        <Button variant="outline" size="sm" onClick={handleXlsx} disabled={disabled || busy !== null}>
+          {busy === 'xlsx' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sheet className="w-4 h-4 mr-2" />} Excel
+        </Button>
+      )}
+      {canDownload && showPdf && (
+        <Button variant="outline" size="sm" onClick={handlePdf} disabled={disabled || busy !== null}>
+          {busy === 'pdf' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileText className="w-4 h-4 mr-2" />} PDF
+        </Button>
+      )}
+      {canPrint && doc && (
+        <Button variant="outline" size="sm" onClick={handlePrint} disabled={disabled || busy !== null}>
+          {busy === 'print' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Printer className="w-4 h-4 mr-2" />} Print
         </Button>
       )}
     </div>

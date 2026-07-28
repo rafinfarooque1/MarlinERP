@@ -41,6 +41,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
+import { invalidateDashboard } from '@/lib/invalidateDashboard';
 import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -208,6 +209,7 @@ function ApproveDialog({
         onSuccess: () => {
           toast.success('Transfer approved — stock credited');
           qc.invalidateQueries({ queryKey: getListStockTransfersQueryKey() });
+          invalidateDashboard(qc);
           onClose();
         },
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Approval failed'),
@@ -222,6 +224,7 @@ function ApproveDialog({
         onSuccess: () => {
           toast.success('Transfer rejected — source stock restored');
           qc.invalidateQueries({ queryKey: getListStockTransfersQueryKey() });
+          invalidateDashboard(qc);
           setShowRejectConfirm(false);
           onClose();
         },
@@ -584,6 +587,7 @@ export default function Transfers() {
         queryClient.invalidateQueries({ queryKey: ['/api/stock/ledger'] });
         queryClient.invalidateQueries({ queryKey: ['/api/materials'] });
         queryClient.invalidateQueries({ queryKey: ['/api/raw-materials'] });
+        invalidateDashboard(queryClient);
         setIsOpen(false);
         form.reset();
       },

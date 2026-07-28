@@ -1,24 +1,41 @@
 import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import {
   useGetPendingPayments, useGetReconciliationBatches, useGetReconciliationBatch,
-  useGetBankLedgers, useCreateReconciliationBatch,
-  useListOutlets,
+  useGetBankLedgers, useCreateReconciliationBatch, useCreateBankAccount,
+  useListOutlets, useListWarehouses, customFetch,
 } from '@workspace/api-client-react';
 import { toast } from 'sonner';
-import { CheckSquare, RefreshCw, Layers, Info, IndianRupee, CreditCard } from 'lucide-react';
+import { CheckSquare, Layers, Info, Link2, Link2Off, ShieldCheck } from 'lucide-react';
 import { paymentModeLabel } from '@/lib/paymentModes';
+
+// ── Reconciled/Matched entry shape (raw customFetch) ─────────────────────────
+interface ReconciledEntry {
+  id: number;
+  saleId: number;
+  paymentDate: string;
+  method: string;
+  amount: number;
+  referenceNumber: string | null;
+  reconciliationStatus: string;
+  matchedReference: string | null;
+  matchedBy: string | null;
+  matchedAt: string | null;
+  invoiceNumber: string;
+  locationName: string;
+  customerName: string | null;
+}
 
 // ── Payment method badge ─────────────────────────────────────────────────────
 
@@ -42,11 +59,28 @@ function fmt(n: number) {
   return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+// ── Reconciliation status badge ──────────────────────────────────────────────
+// Pending → Reconciled → Matched. Matched means the entry is tied to a specific
+// ledger posting/voucher and can be proven, not just asserted.
+function StatusBadge({ status }: { status: string }) {
+  const map: Record<string, { label: string; cls: string }> = {
+    pending:    { label: 'Pending',    cls: 'bg-gray-500/10 text-gray-500 border-gray-500/20' },
+    reconciled: { label: 'Reconciled', cls: 'bg-amber-500/10 text-amber-600 border-amber-500/20' },
+    matched:    { label: 'Matched',    cls: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' },
+  };
+  const m = map[status] ?? map.pending;
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded border font-medium uppercase ${m.cls}`}>
+      {m.label}
+    </span>
+  );
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function Reconciliation() {
   const perm = usePermission('page:/accounts/reconciliation');
-  const [tab, setTab] = useState<'pending' | 'batches'>('pending');
+  const [tab, setTab] = useState<'pending' | 'reconciled' | 'batches'>('pending');
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -61,13 +95,18 @@ export default function Reconciliation() {
   }
 
   // Filters for pending tab
-  const [outletFilter, setOutletFilter] = useState('all');
+  // Sales happen at outlets *and* warehouses, so the filter is keyed by
+  // "<type>:<id>" rather than by outlet id alone.
+  const [locationFilter, setLocationFilter] = useState('all');
   const [methodFilter, setMethodFilter] = useState('all');
   const [search, setSearch] = useState('');
 
   const { data: outlets = [] } = useListOutlets();
+  const { data: warehouses = [] } = useListWarehouses();
+  const [filterType, filterId] = locationFilter !== 'all' ? locationFilter.split(':') : [];
   const { data: pending = [], isLoading: pendingLoading } = useGetPendingPayments({
-    outletId: outletFilter !== 'all' ? Number(outletFilter) : undefined,
+    locationType: filterType,
+    locationId: filterId ? Number(filterId) : undefined,
     method: methodFilter !== 'all' ? methodFilter : undefined,
     search: search || undefined,
   });
@@ -91,6 +130,32 @@ export default function Reconciliation() {
   const [extRef, setExtRef] = useState('');
   const [settlementDate, setSettlementDate] = useState(new Date().toISOString().split('T')[0]);
   const createBatchMutation = useCreateReconciliationBatch();
+
+  // Add-bank-account dialog. Bank accounts have no master screen of their own,
+  // so this is where they get created — right next to the field that needs one.
+  const [bankDialogOpen, setBankDialogOpen] = useState(false);
+  const [bankForm, setBankForm] = useState({ name: '', bankName: '', accountNumber: '', ifscCode: '', branch: '' });
+  const createBankAccount = useCreateBankAccount();
+
+  async function handleCreateBankAccount() {
+    const name = bankForm.name.trim();
+    if (!name) { toast.error('Give the bank account a name'); return; }
+    try {
+      const created = await createBankAccount.mutateAsync({
+        name,
+        bankName: bankForm.bankName.trim() || undefined,
+        accountNumber: bankForm.accountNumber.trim() || undefined,
+        ifscCode: bankForm.ifscCode.trim() || undefined,
+        branch: bankForm.branch.trim() || undefined,
+      });
+      toast.success(`Bank account "${created.name}" added`);
+      setBankLedgerId(String(created.id));
+      setBankDialogOpen(false);
+      setBankForm({ name: '', bankName: '', accountNumber: '', ifscCode: '', branch: '' });
+    } catch (e: any) {
+      toast.error(e?.data?.error || e?.message || 'Failed to add bank account');
+    }
+  }
 
   const selectedPayments = pending.filter(p => selected.has(p.id));
   const grossTotal = selectedPayments.reduce((s, p) => s + p.amount, 0);
@@ -127,6 +192,62 @@ export default function Reconciliation() {
   const [selectedBatchId, setSelectedBatchId] = useState<number>(0);
   const { data: batchDetail, isLoading: batchDetailLoading } = useGetReconciliationBatch(selectedBatchId, { enabled: selectedBatchId > 0 });
 
+  // ── Reconciled / Matched tab ──
+  const queryClient = useQueryClient();
+  const [statusFilter, setStatusFilter] = useState<'all' | 'reconciled' | 'matched'>('all');
+  const reconciledKey = ['reconciliation-reconciled', statusFilter] as const;
+  const { data: reconciledEntries = [], isLoading: reconciledLoading } = useQuery<ReconciledEntry[]>({
+    queryKey: reconciledKey,
+    queryFn: () => {
+      const q = statusFilter !== 'all' ? `?status=${statusFilter}` : '';
+      return customFetch<ReconciledEntry[]>(`/api/reconciliation/reconciled${q}`);
+    },
+    enabled: tab === 'reconciled',
+  });
+
+  // Match dialog: capture the voucher/ledger reference this entry proves against.
+  const [matchTarget, setMatchTarget] = useState<ReconciledEntry | null>(null);
+  const [matchRef, setMatchRef] = useState('');
+  const [matchBusy, setMatchBusy] = useState(false);
+
+  const invalidateReconciled = () =>
+    queryClient.invalidateQueries({ queryKey: ['reconciliation-reconciled'] });
+
+  async function submitMatch() {
+    if (!matchTarget) return;
+    const ref = matchRef.trim();
+    if (!ref) { toast.error('Enter the voucher / ledger posting reference'); return; }
+    setMatchBusy(true);
+    try {
+      await customFetch(`/api/reconciliation/${matchTarget.id}/match`, {
+        method: 'POST',
+        body: JSON.stringify({ matchedReference: ref }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      toast.success('Entry matched to posting');
+      setMatchTarget(null);
+      setMatchRef('');
+      invalidateReconciled();
+    } catch (e: any) {
+      toast.error(e?.data?.error || e?.message || 'Failed to match entry');
+    } finally {
+      setMatchBusy(false);
+    }
+  }
+
+  async function handleUnmatch(entry: ReconciledEntry) {
+    try {
+      await customFetch(`/api/reconciliation/${entry.id}/unmatch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      toast.success('Match reversed');
+      invalidateReconciled();
+    } catch (e: any) {
+      toast.error(e?.data?.error || e?.message || 'Failed to un-match entry');
+    }
+  }
+
   return (
     <AppLayout>
       <div className="p-4 md:p-6 space-y-4">
@@ -140,13 +261,13 @@ export default function Reconciliation() {
 
         {/* Tabs */}
         <div className="flex gap-1 border-b border-border">
-          {(['pending', 'batches'] as const).map(t => (
+          {(['pending', 'reconciled', 'batches'] as const).map(t => (
             <button
               key={t}
               onClick={() => setTab(t)}
               className={`px-4 py-2 text-sm font-medium transition-colors capitalize ${tab === t ? 'border-b-2 border-primary text-primary' : 'text-muted-foreground hover:text-foreground'}`}
             >
-              {t === 'pending' ? `Pending (${pending.length})` : 'Reconciled Batches'}
+              {t === 'pending' ? `Pending (${pending.length})` : t === 'reconciled' ? 'Reconciled / Matched' : 'Reconciled Batches'}
             </button>
           ))}
         </div>
@@ -162,11 +283,25 @@ export default function Reconciliation() {
                 onChange={e => setSearch(e.target.value)}
                 className="h-8 w-52 text-sm"
               />
-              <Select value={outletFilter} onValueChange={setOutletFilter}>
-                <SelectTrigger className="h-8 w-40 text-sm"><SelectValue placeholder="All outlets" /></SelectTrigger>
+              <Select value={locationFilter} onValueChange={setLocationFilter}>
+                <SelectTrigger className="h-8 w-44 text-sm"><SelectValue placeholder="All locations" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All outlets</SelectItem>
-                  {outlets.map((o: any) => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
+                  <SelectItem value="all">All locations</SelectItem>
+                  {/* A place can appear in both masters under the same name, so the
+                      two lists are labelled — the sale's own location_type decides
+                      which one actually matches. */}
+                  {warehouses.length > 0 && (
+                    <SelectGroup>
+                      <SelectLabel>Warehouses</SelectLabel>
+                      {warehouses.map((w: any) => <SelectItem key={`warehouse:${w.id}`} value={`warehouse:${w.id}`}>{w.name}</SelectItem>)}
+                    </SelectGroup>
+                  )}
+                  {outlets.length > 0 && (
+                    <SelectGroup>
+                      <SelectLabel>Outlets</SelectLabel>
+                      {outlets.map((o: any) => <SelectItem key={`outlet:${o.id}`} value={`outlet:${o.id}`}>{o.name}</SelectItem>)}
+                    </SelectGroup>
+                  )}
                 </SelectContent>
               </Select>
               <Select value={methodFilter} onValueChange={setMethodFilter}>
@@ -214,7 +349,7 @@ export default function Reconciliation() {
                       <TableHead className="w-10"><Checkbox checked={selected.size === pending.length && pending.length > 0} onCheckedChange={v => v ? selectAll() : clearSel()} /></TableHead>
                       <TableHead>Invoice</TableHead>
                       <TableHead>Customer</TableHead>
-                      <TableHead>Outlet</TableHead>
+                      <TableHead>Location</TableHead>
                       <TableHead>Date</TableHead>
                       <TableHead>Method</TableHead>
                       <TableHead>Reference</TableHead>
@@ -227,11 +362,98 @@ export default function Reconciliation() {
                         <TableCell><Checkbox checked={selected.has(p.id)} onCheckedChange={() => toggleRow(p.id)} /></TableCell>
                         <TableCell className="font-mono text-xs">{p.invoiceNumber}</TableCell>
                         <TableCell className="text-sm">{p.customerName ?? <span className="text-muted-foreground italic text-xs">Walk-in</span>}</TableCell>
-                        <TableCell className="text-sm">{p.outletName}</TableCell>
+                        <TableCell className="text-sm">{p.locationName}</TableCell>
                         <TableCell className="text-xs text-muted-foreground">{p.paymentDate}</TableCell>
                         <TableCell><MethodBadge method={p.method} /></TableCell>
                         <TableCell className="font-mono text-xs text-muted-foreground">{p.referenceNumber ?? '—'}</TableCell>
                         <TableCell className="text-right font-mono font-semibold text-sm">{fmt(p.amount)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Reconciled / Matched Tab ── */}
+        {tab === 'reconciled' && (
+          <div className="space-y-3">
+            {/* Filter chips */}
+            <div className="flex flex-wrap gap-2 items-center">
+              {(['all', 'reconciled', 'matched'] as const).map(f => (
+                <button
+                  key={f}
+                  onClick={() => setStatusFilter(f)}
+                  className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors capitalize
+                    ${statusFilter === f
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'text-muted-foreground border-border hover:text-foreground'}`}
+                >
+                  {f === 'all' ? 'All' : f}
+                </button>
+              ))}
+              <span className="text-xs text-muted-foreground ml-1">
+                Reconciled entries can be <span className="font-medium">Matched</span> to a specific ledger posting/voucher to prove them.
+              </span>
+            </div>
+
+            {reconciledLoading ? (
+              <div className="py-12 text-center text-muted-foreground">Loading…</div>
+            ) : reconciledEntries.length === 0 ? (
+              <div className="py-16 text-center text-muted-foreground space-y-2">
+                <ShieldCheck className="w-10 h-10 mx-auto opacity-30" />
+                <p className="font-medium">No reconciled entries</p>
+                <p className="text-xs">Reconcile pending payments first, then match them to ledger postings here.</p>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-border overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Invoice</TableHead>
+                      <TableHead>Customer</TableHead>
+                      <TableHead>Location</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Method</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Matched To</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                      <TableHead className="text-right">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {reconciledEntries.map(e => (
+                      <TableRow key={e.id}>
+                        <TableCell className="font-mono text-xs">{e.invoiceNumber}</TableCell>
+                        <TableCell className="text-sm">{e.customerName ?? <span className="text-muted-foreground italic text-xs">Walk-in</span>}</TableCell>
+                        <TableCell className="text-sm">{e.locationName}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{e.paymentDate}</TableCell>
+                        <TableCell><MethodBadge method={e.method} /></TableCell>
+                        <TableCell><StatusBadge status={e.reconciliationStatus} /></TableCell>
+                        <TableCell className="text-xs">
+                          {e.reconciliationStatus === 'matched' && e.matchedReference ? (
+                            <span className="font-mono text-emerald-600" title={e.matchedBy ? `by ${e.matchedBy}${e.matchedAt ? ` · ${new Date(e.matchedAt).toLocaleString('en-IN')}` : ''}` : undefined}>
+                              {e.matchedReference}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground/40">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right font-mono font-semibold text-sm">{fmt(e.amount)}</TableCell>
+                        <TableCell className="text-right">
+                          {e.reconciliationStatus === 'reconciled' ? (
+                            <Button size="sm" variant="outline" disabled={!perm.canEdit}
+                              onClick={() => { setMatchTarget(e); setMatchRef(''); }}>
+                              <Link2 className="w-3.5 h-3.5 mr-1" /> Match
+                            </Button>
+                          ) : e.reconciliationStatus === 'matched' ? (
+                            <Button size="sm" variant="ghost" disabled={!perm.canEdit}
+                              onClick={() => handleUnmatch(e)}>
+                              <Link2Off className="w-3.5 h-3.5 mr-1" /> Un-match
+                            </Button>
+                          ) : null}
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -338,7 +560,18 @@ export default function Reconciliation() {
                   </SelectContent>
                 </Select>
                 {bankLedgers.length === 0 && (
-                  <p className="text-xs text-amber-500 mt-1">No bank accounts found. Add sub-ledgers under the Bank ledger in Chart of Accounts.</p>
+                  <p className="text-xs text-amber-500 mt-1">
+                    No bank accounts yet — add the account the money lands in before settling this batch.
+                  </p>
+                )}
+                {perm.canAdd && (
+                  <Button
+                    type="button" variant="link" size="sm"
+                    className="h-auto p-0 mt-1 text-xs"
+                    onClick={() => setBankDialogOpen(true)}
+                  >
+                    + Add a bank account
+                  </Button>
                 )}
               </div>
               <div>
@@ -355,6 +588,107 @@ export default function Reconciliation() {
             <Button variant="outline" onClick={() => setShowReconcile(false)}>Cancel</Button>
             <Button onClick={handleReconcile} disabled={createBatchMutation.isPending || netTotal <= 0}>
               {createBatchMutation.isPending ? 'Processing…' : `Reconcile ${fmt(netTotal)}`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Add Bank Account Dialog ── */}
+      <Dialog open={bankDialogOpen} onOpenChange={setBankDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add Bank Account</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              This is the account settled money lands in. Adding it here creates its ledger under
+              Bank in the chart of accounts.
+            </p>
+            <div>
+              <Label className="text-sm mb-1.5 block">Account Name <span className="text-destructive">*</span></Label>
+              <Input
+                value={bankForm.name}
+                onChange={e => setBankForm(f => ({ ...f, name: e.target.value }))}
+                placeholder="e.g. HDFC Current A/c"
+                className="h-9"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-sm mb-1.5 block">Bank</Label>
+                <Input
+                  value={bankForm.bankName}
+                  onChange={e => setBankForm(f => ({ ...f, bankName: e.target.value }))}
+                  placeholder="e.g. HDFC Bank" className="h-9"
+                />
+              </div>
+              <div>
+                <Label className="text-sm mb-1.5 block">Branch</Label>
+                <Input
+                  value={bankForm.branch}
+                  onChange={e => setBankForm(f => ({ ...f, branch: e.target.value }))}
+                  placeholder="e.g. Andheri East" className="h-9"
+                />
+              </div>
+              <div>
+                <Label className="text-sm mb-1.5 block">Account Number</Label>
+                <Input
+                  value={bankForm.accountNumber}
+                  onChange={e => setBankForm(f => ({ ...f, accountNumber: e.target.value }))}
+                  className="h-9"
+                />
+              </div>
+              <div>
+                <Label className="text-sm mb-1.5 block">IFSC</Label>
+                <Input
+                  value={bankForm.ifscCode}
+                  onChange={e => setBankForm(f => ({ ...f, ifscCode: e.target.value }))}
+                  className="h-9"
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBankDialogOpen(false)}>Cancel</Button>
+            <Button onClick={handleCreateBankAccount} disabled={createBankAccount.isPending || !bankForm.name.trim()}>
+              {createBankAccount.isPending ? 'Adding…' : 'Add Bank Account'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Match Dialog ── */}
+      <Dialog open={!!matchTarget} onOpenChange={o => { if (!o) { setMatchTarget(null); setMatchRef(''); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Match to Ledger Posting</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2 text-sm">
+            <p className="text-muted-foreground text-xs">
+              Matching ties this reconciled payment to a specific ledger posting or voucher so it can be
+              <span className="font-medium text-foreground"> proven</span>, not just asserted. Enter the voucher / ledger reference it matches.
+            </p>
+            {matchTarget && (
+              <div className="rounded-lg border border-border p-3 space-y-1.5 text-xs">
+                <div className="flex justify-between"><span className="text-muted-foreground">Invoice</span><span className="font-mono">{matchTarget.invoiceNumber}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Amount</span><span className="font-mono font-semibold">{fmt(matchTarget.amount)}</span></div>
+              </div>
+            )}
+            <div>
+              <Label className="text-sm mb-1.5 block">Voucher / Ledger Reference <span className="text-destructive">*</span></Label>
+              <Input
+                value={matchRef}
+                onChange={e => setMatchRef(e.target.value)}
+                placeholder="e.g. REC/2026-27/0042 or GL posting id"
+                className="h-9"
+                autoFocus
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setMatchTarget(null); setMatchRef(''); }}>Cancel</Button>
+            <Button onClick={submitMatch} disabled={matchBusy || !matchRef.trim()}>
+              {matchBusy ? 'Matching…' : 'Confirm Match'}
             </Button>
           </DialogFooter>
         </DialogContent>
