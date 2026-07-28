@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db, pool, itemsTable, salesTable, stockEntriesTable, employeesTable, stockTransfersTable, attendanceTable, leavesTable, productionsTable, expensesTable } from "@workspace/db";
 import { count, sum, eq, and, sql, inArray } from "drizzle-orm";
 import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
+import { stockValuation } from "../lib/valuation";
 
 const router = Router();
 
@@ -67,7 +68,7 @@ router.get("/dashboard/summary", async (req, res): Promise<void> => {
   const [
     [itemsCount],
     [salesSum],
-    [stockSum],
+    stockValue,
     [activeEmps],
     [pendingTransfers],
     [todayAtt],
@@ -78,8 +79,12 @@ router.get("/dashboard/summary", async (req, res): Promise<void> => {
   ] = await Promise.all([
     db.select({ count: count() }).from(itemsTable),
     db.select({ total: sum(salesTable.totalAmount) }).from(salesTable),
-    db.select({ total: sql<number>`sum(${stockEntriesTable.quantity}::numeric * ${stockEntriesTable.costPrice}::numeric)` })
-      .from(stockEntriesTable).where(ITEM_ROWS_ONLY),
+    // Stock value comes from the one shared valuation function, so the tile, the
+    // Stock Valuation report and the P&L closing stock cannot disagree. It used
+    // to multiply quantity by `stock_entries.cost_price` — a cost frozen at the
+    // row's creation — and to count finished goods only, ignoring every raw and
+    // packing material in the building.
+    stockValuation(pool, { includeInTransit: true }),
     db.select({ count: count() }).from(employeesTable).where(eq(employeesTable.isActive, true)),
     // Transfers awaiting action: legacy rows use "pending"; the dispatch →
     // approve lifecycle creates them as "in_transit".
@@ -98,7 +103,9 @@ router.get("/dashboard/summary", async (req, res): Promise<void> => {
   res.json({
     totalItemsProduced:   itemsCount.count,
     totalSalesAmount:     Number(salesSum.total ?? 0),
-    totalStockValue:      Number(stockSum.total ?? 0),
+    totalStockValue:      stockValue.grandTotal,
+    stockValueOnHand:     stockValue.onHandValue,
+    stockValueInTransit:  stockValue.inTransitValue,
     activeEmployees:      activeEmps.count,
     pendingTransfers:     pendingTransfers.count,
     todayAttendance:      todayAtt.count,

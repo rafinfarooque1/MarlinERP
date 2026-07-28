@@ -75,17 +75,21 @@ export default function Stock() {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
 
-  // Batches only apply to items (SKU); pass only branchType/branchId, not materialType
+  // Lots exist for all three product kinds. Omitting materialType returns every
+  // kind; it is only passed when the page itself is filtered to one.
   const batchParams: any = {};
   if (branchType !== 'all') batchParams.branchType = branchType;
   if (branchId && branchId !== '0') batchParams.branchId = Number(branchId);
+  if (materialType !== 'all') batchParams.materialType = materialType;
   const { data: batches = [] } = useListStockBatches(batchParams);
 
-  // Group batches per item-location key (items only)
+  // Finished goods, raw materials and packing materials share one id space, so
+  // the kind has to be part of the key — grouping on item id alone would show a
+  // material's row the identically-numbered finished good's lots.
   const batchMap = useMemo(() => {
     const m = new Map<string, StockBatch[]>();
     for (const b of batches as StockBatch[]) {
-      const key = `item:${b.branchType}:${b.branchId}:${b.itemId}`;
+      const key = `${b.materialType ?? 'item'}:${b.branchType}:${b.branchId}:${b.itemId}`;
       const arr = m.get(key) ?? [];
       arr.push(b);
       m.set(key, arr);
@@ -141,6 +145,8 @@ export default function Stock() {
             Location: s.branchName,
             'Location Type': s.branchType,
             Qty: s.quantity,
+            Reserved: s.reserved || 0,
+            Available: s.available,
             Unit: s.unit,
             'Reorder Level': s.reorderLevel,
             'Avg Cost': s.avgCost,
@@ -205,7 +211,9 @@ export default function Stock() {
                 <TableHead>Item</TableHead>
                 <TableHead>Item Type</TableHead>
                 <TableHead>Location</TableHead>
-                <TableHead className="text-right">Available Stock</TableHead>
+                <TableHead className="text-right">Quantity</TableHead>
+                <TableHead className="text-right">Reserved</TableHead>
+                <TableHead className="text-right">Available</TableHead>
                 <TableHead className="text-right">Value</TableHead>
                 <TableHead className="text-right">Status</TableHead>
               </TableRow>
@@ -214,23 +222,25 @@ export default function Stock() {
               {isLoading ? (
                 [...Array(5)].map((_, i) => (
                   <TableRow key={i}>
-                    <TableCell colSpan={7}>
+                    <TableCell colSpan={9}>
                       <div className="h-8 bg-muted/30 rounded animate-pulse" />
                     </TableCell>
                   </TableRow>
                 ))
               ) : filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
+                  <TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
                     <BarChart3 className="w-10 h-10 mx-auto mb-3 opacity-20" />
                     <p>No stock data found</p>
                   </TableCell>
                 </TableRow>
               ) : filtered.map((s, i) => {
-                const isItem   = !s.materialType || s.materialType === 'item';
-                const rowKey   = `${s.materialType ?? 'item'}:${s.branchType}:${s.branchId}:${s.itemId}:${i}`;
-                const batchKey = `item:${s.branchType}:${s.branchId}:${s.itemId}`;
-                const rowBatches = isItem ? (batchMap.get(batchKey) ?? []) : [];
+                const kind     = (s.materialType ?? 'item') as string;
+                const isItem   = kind === 'item';
+                const rowKey   = `${kind}:${s.branchType}:${s.branchId}:${s.itemId}:${i}`;
+                const batchKey = `${kind}:${s.branchType}:${s.branchId}:${s.itemId}`;
+                const rowBatches = batchMap.get(batchKey) ?? [];
+                const hasLots  = rowBatches.length > 0;
                 const tracked    = rowBatches.reduce((sum, b) => sum + Number(b.quantity), 0);
                 const untracked  = Math.round((Number(s.quantity) - tracked) * 1000) / 1000;
                 const low  = !!s.lowStock;
@@ -241,11 +251,11 @@ export default function Stock() {
                 return (
                   <Fragment key={rowKey}>
                     <TableRow
-                      className={`hover:bg-muted/10 ${isItem ? 'cursor-pointer' : ''} ${low ? 'bg-red-500/5' : ''}`}
-                      onClick={() => isItem && toggle(rowKey)}
+                      className={`hover:bg-muted/10 ${hasLots ? 'cursor-pointer' : ''} ${low ? 'bg-red-500/5' : ''}`}
+                      onClick={() => hasLots && toggle(rowKey)}
                     >
                       <TableCell className="pr-0">
-                        {isItem
+                        {hasLots
                           ? (isOpen
                               ? <ChevronDown  className="w-4 h-4 text-muted-foreground" />
                               : <ChevronRight className="w-4 h-4 text-muted-foreground" />)
@@ -254,8 +264,19 @@ export default function Stock() {
                       <TableCell className="font-semibold">{s.itemName}</TableCell>
                       <TableCell><ItemTypeBadge type={s.materialType} /></TableCell>
                       <TableCell className="text-muted-foreground">{s.branchName || 'Head Office'}</TableCell>
-                      <TableCell className={`text-right font-mono font-bold ${low ? 'text-red-500' : 'text-emerald-500'}`}>
+                      <TableCell className="text-right font-mono text-sm">
                         {Number(s.quantity).toLocaleString('en-IN')}{' '}
+                        <span className="text-xs font-normal text-muted-foreground">{s.unit}</span>
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-sm">
+                        {Number(s.reserved || 0) > 0 ? (
+                          <span className="text-amber-600 font-semibold">{Number(s.reserved).toLocaleString('en-IN')}</span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className={`text-right font-mono font-bold ${low ? 'text-red-500' : 'text-emerald-500'}`}>
+                        {Number(s.available).toLocaleString('en-IN')}{' '}
                         <span className="text-xs font-normal text-muted-foreground">{s.unit}</span>
                       </TableCell>
                       <TableCell className="text-right font-mono text-sm">
@@ -263,8 +284,8 @@ export default function Stock() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1 flex-wrap">
-                          {isItem && worst === 'expired'    && <Badge variant="destructive" className="text-[10px]">Expired batch</Badge>}
-                          {isItem && worst === 'near_expiry' && <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">Expiring</Badge>}
+                          {worst === 'expired'    && <Badge variant="destructive" className="text-[10px]">Expired batch</Badge>}
+                          {worst === 'near_expiry' && <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">Expiring</Badge>}
                           {isItem
                             ? (low
                                 ? <Badge variant="destructive" className="text-xs gap-1"><AlertTriangle className="w-3 h-3" /> Low (&lt;{Number(s.reorderLevel)})</Badge>
@@ -274,11 +295,11 @@ export default function Stock() {
                       </TableCell>
                     </TableRow>
 
-                    {/* Expanded batch detail — items only */}
-                    {isOpen && isItem && (
+                    {/* Expanded lot detail — every product kind that has lots */}
+                    {isOpen && hasLots && (
                       <TableRow className="bg-muted/5 hover:bg-muted/5">
                         <TableCell />
-                        <TableCell colSpan={6} className="py-3">
+                        <TableCell colSpan={8} className="py-3">
                           {rowBatches.length === 0 && untracked <= 0 ? (
                             <p className="text-xs text-muted-foreground flex items-center gap-2">
                               <Layers className="w-3.5 h-3.5" /> No batch records for this stock
@@ -289,37 +310,57 @@ export default function Stock() {
                                 <thead>
                                   <tr className="bg-muted/20 text-muted-foreground">
                                     <th className="text-left px-3 py-1.5 font-medium">Batch</th>
-                                    <th className="text-left px-3 py-1.5 font-medium">Barcode</th>
+                                    <th className="text-left px-3 py-1.5 font-medium">Location</th>
                                     <th className="text-left px-3 py-1.5 font-medium">Mfg</th>
                                     <th className="text-left px-3 py-1.5 font-medium">Expiry</th>
                                     <th className="text-left px-3 py-1.5 font-medium">Shelf Life</th>
                                     <th className="text-right px-3 py-1.5 font-medium">Qty</th>
+                                    <th className="text-right px-3 py-1.5 font-medium">Rsvd</th>
+                                    <th className="text-right px-3 py-1.5 font-medium">Avail</th>
                                     <th className="text-right px-3 py-1.5 font-medium">MRP</th>
                                     <th className="text-right px-3 py-1.5 font-medium">Unit Cost</th>
-                                    <th className="text-left px-3 py-1.5 font-medium">Source</th>
+                                    <th className="text-right px-3 py-1.5 font-medium">Value</th>
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {rowBatches.map(b => (
-                                    <tr key={b.id} className="border-t border-border/60">
-                                      <td className="px-3 py-1.5 font-mono">{b.batchNumber}</td>
-                                      <td className="px-3 py-1.5 font-mono text-[11px] text-muted-foreground">{(b as any).barcode || '—'}</td>
-                                      <td className="px-3 py-1.5">{dateIN(b.mfgDate)}</td>
-                                      <td className="px-3 py-1.5">{dateIN(b.expiryDate)}</td>
-                                      <td className="px-3 py-1.5"><ExpiryBadge batch={b} /></td>
-                                      <td className="px-3 py-1.5 text-right font-mono">{Number(b.quantity).toLocaleString('en-IN')}</td>
-                                      {/* Null MRP = never priced. Lots created before MRP was
-                                          tracked fall back to the item's current MRP. */}
-                                      <td className="px-3 py-1.5 text-right font-mono">{(b as any).mrp != null ? money((b as any).mrp) : '—'}</td>
-                                      <td className="px-3 py-1.5 text-right font-mono">{Number(b.unitCost) > 0 ? money(b.unitCost) : '—'}</td>
-                                      <td className="px-3 py-1.5 capitalize text-muted-foreground">{b.source}</td>
-                                    </tr>
-                                  ))}
+                                  {rowBatches.map(b => {
+                                    const hasReserved = Number(b.reserved || 0) > 0;
+                                    const toneMap: Record<string, string> = {
+                                      critical: 'bg-red-500/10 text-red-600 border-red-500/20',
+                                      warn: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+                                      caution: 'bg-yellow-500/10 text-yellow-600 border-yellow-500/20',
+                                      ok: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
+                                      none: 'bg-muted/20 text-muted-foreground border-muted',
+                                    };
+                                    return (
+                                      <tr key={b.id} className="border-t border-border/60">
+                                        <td className="px-3 py-1.5 font-mono">{b.batchNumber}</td>
+                                        <td className="px-3 py-1.5 text-muted-foreground text-[11px]">{b.branchName}</td>
+                                        <td className="px-3 py-1.5">{dateIN(b.mfgDate)}</td>
+                                        <td className="px-3 py-1.5">{dateIN(b.expiryDate)}</td>
+                                        <td className="px-3 py-1.5">
+                                          <Badge className={`text-[10px] ${toneMap[b.tone] ?? toneMap.none}`}>{b.bucketLabel}</Badge>
+                                        </td>
+                                        <td className="px-3 py-1.5 text-right font-mono">{Number(b.quantity).toLocaleString('en-IN')}</td>
+                                        <td className="px-3 py-1.5 text-right font-mono">
+                                          {hasReserved ? (
+                                            <span className="text-amber-600 font-semibold">{Number(b.reserved).toLocaleString('en-IN')}</span>
+                                          ) : (
+                                            <span className="text-muted-foreground">—</span>
+                                          )}
+                                        </td>
+                                        <td className="px-3 py-1.5 text-right font-mono font-semibold">{Number(b.available).toLocaleString('en-IN')}</td>
+                                        <td className="px-3 py-1.5 text-right font-mono">{b.mrp != null ? money(b.mrp) : '—'}</td>
+                                        <td className="px-3 py-1.5 text-right font-mono">{Number(b.unitCost) > 0 ? money(b.unitCost) : '—'}</td>
+                                        <td className="px-3 py-1.5 text-right font-mono">{money(b.value)}</td>
+                                      </tr>
+                                    );
+                                  })}
                                   {untracked > 0 && (
                                     <tr className="border-t border-border/60 text-muted-foreground">
                                       <td className="px-3 py-1.5 italic" colSpan={5}>Untracked (no batch record)</td>
                                       <td className="px-3 py-1.5 text-right font-mono">{untracked.toLocaleString('en-IN')}</td>
-                                      <td colSpan={3} />
+                                      <td colSpan={5} />
                                     </tr>
                                   )}
                                 </tbody>

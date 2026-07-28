@@ -65,6 +65,12 @@ design does not allow for. The batch layer tolerates *fewer* batch units than st
 (the "untracked residual" fallback), but never more. Item 2 drifts the other way, by 4.
 Reserved-stock enforcement computed on top of this would be wrong from day one.
 
+**Worked around, not resolved.** Availability is computed from the **stock row** (the quantity
+truth) minus active holds, never from batch totals, so the drift cannot corrupt what the system
+promises. Lot-level reserved figures are shown per lot for pickers, and a hold that names no lot
+is reported at product level rather than being forced onto an arbitrary batch. The reconciliation
+itself is still owed.
+
 ### A5 — Sales never write the stock ledger
 
 Sale creation and edits update `stock_entries` and `stock_batches` but write **no**
@@ -157,11 +163,31 @@ tax and receivables twice. The invoices must **replace** those vouchers, not acc
 Rejecting a transfer reverses stock only. Once a tax invoice exists, rejection must also
 raise a credit note, or output GST stays on the books for goods that came back.
 
-### C3 — In-transit stock is invisible
+### C3 — In-transit stock is invisible — **FIXED**
 
 Dispatch removes stock from the source; the destination only receives it on approval. In
-between, the quantity exists in **no** location total. Group inventory value understates by
-the whole in-transit amount.
+between, the quantity existed in **no** location total, so group inventory value understated by
+the whole in-transit amount and net profit dipped for the length of every transfer.
+
+Dispatch now writes an `in_transit` reservation row per lot (plus an untracked remainder where
+the lot layer is short), carrying the dispatched unit cost. Valuation appends those rows as the
+**sender's** stock until receipt, and reports the in-transit portion separately so a reader can
+see how much of the closing figure is on a lorry. Approve and reject both release the whole
+document's rows inside their own transaction, so the goods are never counted in two places.
+
+An `in_transit` row deliberately does **not** reduce available quantity: the dispatch already
+deducted the source stock, and subtracting it again would refuse sales the business can fulfil.
+
+**Short receipts no longer vanish.** A destination may count less than was dispatched. Releasing
+the whole document's in-transit rows on approval used to erase that difference from every
+location and every total at once. The shortfall now stays an **active** in-transit commitment
+owned by the sender: out of everyone's on-hand figure (it is not on a shelf), still valued as
+the sender's stock, and visibly unreconciled. The approve response returns the short lines
+rather than swallowing them.
+
+**Still open:** nothing yet *resolves* an unreconciled shortfall. Deciding whether it was lost,
+stolen or still coming — and writing it off to a ledger if so — is a business decision, and the
+row stays flagged until someone makes it.
 
 ### C4 — Converting outlets will create new tax liability going forward
 

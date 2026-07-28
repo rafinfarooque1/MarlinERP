@@ -66,6 +66,11 @@ export interface PaginatedStockRow {
   reorderLevel: number;
   avgCost: number;
   stockValue: number;
+  /** Committed elsewhere (transfer in flight, unfulfilled order) — not sellable. */
+  reserved: number;
+  /** quantity − reserved: what can actually be promised to someone. */
+  available: number;
+  /** Judged on `available`, not `quantity`. */
   lowStock: boolean;
 }
 

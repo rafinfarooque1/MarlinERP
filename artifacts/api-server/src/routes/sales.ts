@@ -13,6 +13,7 @@ import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } 
 import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 import { blockedByInactiveProducts, INACTIVE_PRODUCT_CODE } from "../lib/productIdentity";
 import { SALE_PAYMENT_MODES, isSettledAtSale, clearsThroughBank } from "../lib/paymentModes";
+import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 
 const router = Router();
 
@@ -356,24 +357,11 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
     locationUpiId = (outlet as any).upiId ?? '';
   }
 
-  // ── Validate stock availability before committing ─────────────────────────
-  for (const li of rawLineItems) {
-    const [stock] = await db.select().from(stockEntriesTable)
-      .where(and(
-        eq(stockEntriesTable.itemId, li.itemId),
-        ITEM_ROWS_ONLY,
-        eq(stockEntriesTable.branchType, locationType as any),
-        eq(stockEntriesTable.branchId, locationId)
-      ))
-      .limit(1);
-    const available = stock ? Number(stock.quantity) : 0;
-    if (available < li.quantity) {
-      res.status(400).json({
-        error: `Insufficient stock for item ${li.itemId}. Available: ${available}, requested: ${li.quantity}`
-      });
-      return;
-    }
-  }
+  // NOTE: stock availability is NOT checked here. It used to be — with a
+  // non-locking read, several statements before the deduction, which let two
+  // concurrent bills both pass the check and sell the same unit twice. The
+  // check, the row lock and the deduction now happen together inside the sale
+  // transaction below.
 
   // ── Fetch (or create) company settings for invoice numbering and GST state ─
   let company = (await db.select().from(companySettingsTable).limit(1))[0];
@@ -493,6 +481,7 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
   const txClient = await pgPool.connect();
   let row: any;
   let invoiceNumber = '';
+  let lineItemsWithBatches: any[] = [];
   try {
     await txClient.query('BEGIN');
 
@@ -550,6 +539,59 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
       }
     }
 
+    // ── Stock: check, lock and deduct in one transaction ────────────────────
+    // This is the write that stops stock being promised twice. Each line's
+    // stock_entries row is locked BEFORE its availability is judged, so a second
+    // bill for the same item waits here and then sees the reduced quantity
+    // instead of reading a figure that is about to change. Availability is
+    // on-hand minus active holds — stock already committed to another document
+    // cannot be sold from under it.
+    //
+    // Lines are locked in ascending item order so two concurrent bills covering
+    // the same items acquire their locks in the same sequence and cannot
+    // deadlock waiting on each other.
+    //
+    // It also runs before the invoice-sequence bump: a sale that cannot be
+    // fulfilled must not hold a lock on company_settings (which would serialise
+    // every till in the business) while it finds out.
+    const stockOrder = lineItems.map((_, i) => i).sort((a, b) => lineItems[a].itemId - lineItems[b].itemId);
+    const breakdowns: any[] = new Array(lineItems.length);
+    for (const idx of stockOrder) {
+      const li = lineItems[idx];
+      const avail = await availabilityAt(txClient, {
+        refId: li.itemId, materialType: 'item',
+        branchType: locationType, branchId: locationId, lock: true,
+      });
+      if (avail.available + 0.001 < Number(li.quantity)) {
+        await txClient.query('ROLLBACK');
+        res.status(400).json({
+          error: insufficientStockMessage({
+            productName: li.itemName || `Item #${li.itemId}`,
+            locationName, unit: li.unit,
+            quantity: avail.quantity, reserved: avail.reserved,
+            requested: Number(li.quantity),
+          }),
+          code: 'INSUFFICIENT_STOCK',
+          itemId: li.itemId,
+          available: avail.available,
+          reserved: avail.reserved,
+          onHand: avail.quantity,
+          requested: Number(li.quantity),
+        });
+        return;
+      }
+      await txClient.query(
+        `UPDATE stock_entries SET quantity = quantity::numeric - $1, updated_at = now() WHERE id = $2`,
+        [li.quantity, avail.entryId]
+      );
+      // Draw the lots that serve this line, earliest expiry first, so the sale
+      // carries its own batch trail and an edit can restore the exact lots.
+      breakdowns[idx] = await consumeBatches(txClient, {
+        itemId: li.itemId, branchType: locationType, branchId: locationId, quantity: li.quantity,
+      });
+    }
+    lineItemsWithBatches = lineItems.map((li, i) => ({ ...li, batchBreakdown: breakdowns[i] ?? [] }));
+
     // ── Atomically increment invoice sequence (same transaction) ────────────
     const { rows: [comp] } = await txClient.query<{
       invoice_sequence: number; financial_year: string | null; invoice_prefix: string | null;
@@ -571,7 +613,9 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
       [invoiceNumber, outletIdForInsert, locationType, locationId,
        parsed.data.customerId ?? null, parsed.data.saleDate,
-       JSON.stringify(lineItems), subtotal, taxTotal, discountTotal, totalAmount,
+       // Stored WITH the batch trail already resolved above, so the served lots
+       // are committed with the bill rather than patched in afterwards.
+       JSON.stringify(lineItemsWithBatches), subtotal, taxTotal, discountTotal, totalAmount,
        paymentModeIn, parsed.data.couponCode ?? null,
        settledAtSale ? totalAmount : 0, settledAtSale ? 'paid' : 'unpaid']
     ));
@@ -583,30 +627,6 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
   } finally {
     txClient.release();
   }
-
-  // ── Deduct stock from the selling location + consume batches (FEFO) ──────
-  const lineItemsWithBatches: any[] = [];
-  for (const li of lineItems) {
-    const [existing] = await db.select().from(stockEntriesTable)
-      .where(and(
-        eq(stockEntriesTable.itemId, li.itemId),
-        ITEM_ROWS_ONLY,
-        eq(stockEntriesTable.branchType, locationType as any),
-        eq(stockEntriesTable.branchId, locationId)
-      ))
-      .limit(1);
-    if (existing) {
-      await db.update(stockEntriesTable)
-        .set({ quantity: sql`${stockEntriesTable.quantity}::numeric - ${li.quantity}` })
-        .where(eq(stockEntriesTable.id, existing.id));
-    }
-    const batchBreakdown = await consumeBatches(pool, {
-      itemId: li.itemId, branchType: locationType, branchId: locationId, quantity: li.quantity,
-    });
-    lineItemsWithBatches.push({ ...li, batchBreakdown });
-  }
-  // Persist which batches served this sale (traceability + exact reversal on edit)
-  await pool.query(`UPDATE sales SET line_items = $1::jsonb WHERE id = $2`, [JSON.stringify(lineItemsWithBatches), row.id]);
 
   // ── Stock ledger: sales are the largest source of stock movement, so they
   // have to appear in the audit trail alongside purchases, transfers and
@@ -871,21 +891,129 @@ router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit")
     }
   }
 
-  // Reverse old stock deductions
+  // ── Stock and sale row: one transaction ───────────────────────────────────
+  // An edit reverses the bill's old lines and applies the new ones. Both halves
+  // and the sale row itself move together: a failure part-way used to leave
+  // stock credited back with the bill unchanged, and the re-apply had no
+  // availability check at all, so an edit could overdraw a location until the
+  // negative-stock constraint threw a raw database error at the user.
+  //
+  // Every stock_entries row is locked before it is judged, in ascending item
+  // order, so a concurrent bill for the same item waits rather than reading a
+  // quantity that is about to change.
   const oldLineItems = (existingRaw.line_items ?? []) as Array<{ itemId: number; quantity: number; batchBreakdown?: any[] }>;
-  for (const li of oldLineItems) {
-    const [se] = await db.select().from(stockEntriesTable)
-      .where(and(eq(stockEntriesTable.itemId, li.itemId), ITEM_ROWS_ONLY, eq(stockEntriesTable.branchType, oldLocationType as any), eq(stockEntriesTable.branchId, oldLocationId)))
-      .limit(1);
-    if (se) {
-      await db.update(stockEntriesTable)
-        .set({ quantity: sql`${stockEntriesTable.quantity}::numeric + ${li.quantity}` })
-        .where(eq(stockEntriesTable.id, se.id));
-    }
-    // Restore the exact batches this sale consumed. Legacy lines without a
-    // stored breakdown leave batches untouched (residual shows as untracked).
-    await restoreBatches(pool, li.itemId, oldLocationType, oldLocationId, li.batchBreakdown, "sale", id);
+  const newPaymentMode = parsed.data.paymentMode ?? 'cash';
+  let newAmountPaid = totalAmount;
+  let newPaymentStatus = 'paid';
+  if (!isSettledAtSale(newPaymentMode)) {
+    // Credit sales re-derive amount_paid from recorded sale_payments so an edit
+    // never wipes out collected payments.
+    const { rows: [pp] } = await pgPool.query<{ paid: string }>(
+      `SELECT COALESCE(SUM(amount::numeric), 0) AS paid FROM sale_payments WHERE sale_id = $1`, [id]
+    );
+    newAmountPaid = Number(pp?.paid ?? 0);
+    newPaymentStatus = newAmountPaid >= totalAmount - 0.004 ? 'paid' : newAmountPaid > 0.004 ? 'partially_paid' : 'unpaid';
   }
+  const newOutletId = newLocationType === 'outlet' ? newLocationId : null;
+
+  const editTx = await pgPool.connect();
+  let updated: any;
+  const newLineItemsWithBatches: any[] = [];
+  try {
+    await editTx.query('BEGIN');
+
+    // 1. Reverse the old lines: credit the quantity back and restore the exact
+    //    lots the bill consumed. Legacy lines without a stored breakdown leave
+    //    batches untouched (the residual shows as untracked).
+    for (const li of [...oldLineItems].sort((a, b) => Number(a.itemId) - Number(b.itemId))) {
+      const { rows: [se] } = await editTx.query<{ id: number }>(
+        `SELECT id FROM stock_entries
+          WHERE item_id = $1 AND material_type = 'item' AND branch_type = $2 AND branch_id = $3
+          LIMIT 1 FOR UPDATE`,
+        [li.itemId, oldLocationType, oldLocationId]
+      );
+      if (se) {
+        await editTx.query(
+          `UPDATE stock_entries SET quantity = quantity::numeric + $1, updated_at = now() WHERE id = $2`,
+          [li.quantity, se.id]
+        );
+      } else {
+        await editTx.query(
+          `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price)
+           VALUES ($1, 'item', $2, $3, $4, '0')`,
+          [li.itemId, oldLocationType, oldLocationId, li.quantity]
+        );
+      }
+      await restoreBatches(editTx, li.itemId, oldLocationType, oldLocationId, li.batchBreakdown, "sale", id);
+    }
+
+    // 2. Apply the new lines against available stock (on hand − held). The old
+    //    lines are already back in stock above, so an edit that keeps the same
+    //    quantity always passes.
+    const editOrder = lineItems.map((_, i) => i).sort((a, b) => lineItems[a].itemId - lineItems[b].itemId);
+    const editBreakdowns: any[] = new Array(lineItems.length);
+    for (const idx of editOrder) {
+      const li = lineItems[idx];
+      const avail = await availabilityAt(editTx, {
+        refId: li.itemId, materialType: 'item',
+        branchType: newLocationType, branchId: newLocationId, lock: true,
+      });
+      if (avail.available + 0.001 < Number(li.quantity)) {
+        await editTx.query('ROLLBACK');
+        // Named only when refusing, so the happy path costs no extra query.
+        const { rows: [locRow] } = await pgPool.query<{ name: string }>(
+          newLocationType === 'warehouse'
+            ? `SELECT name FROM warehouses WHERE id = $1`
+            : `SELECT name FROM outlets WHERE id = $1`,
+          [newLocationId]
+        );
+        res.status(400).json({
+          error: insufficientStockMessage({
+            productName: li.itemName || `Item #${li.itemId}`,
+            locationName: locRow?.name ?? null, unit: li.unit,
+            quantity: avail.quantity, reserved: avail.reserved,
+            requested: Number(li.quantity),
+          }),
+          code: 'INSUFFICIENT_STOCK',
+          itemId: li.itemId,
+          available: avail.available,
+          reserved: avail.reserved,
+          onHand: avail.quantity,
+          requested: Number(li.quantity),
+        });
+        return;
+      }
+      await editTx.query(
+        `UPDATE stock_entries SET quantity = quantity::numeric - $1, updated_at = now() WHERE id = $2`,
+        [li.quantity, avail.entryId]
+      );
+      editBreakdowns[idx] = await consumeBatches(editTx, {
+        itemId: li.itemId, branchType: newLocationType, branchId: newLocationId, quantity: li.quantity,
+      });
+    }
+    for (let i = 0; i < lineItems.length; i++) {
+      newLineItemsWithBatches.push({ ...lineItems[i], batchBreakdown: editBreakdowns[i] ?? [] });
+    }
+
+    // 3. The sale row, carrying the lots that now serve it.
+    ({ rows: [updated] } = await editTx.query<any>(
+      `UPDATE sales SET outlet_id=$1, location_type=$2, location_id=$3, customer_id=$4, sale_date=$5,
+       line_items=$6::jsonb, subtotal=$7, tax_total=$8, discount_total=$9, total_amount=$10,
+       payment_mode=$11, coupon_code=$12, amount_paid=$13, payment_status=$14
+       WHERE id=$15 RETURNING *`,
+      [newOutletId, newLocationType, newLocationId, parsed.data.customerId ?? null,
+       parsed.data.saleDate, JSON.stringify(newLineItemsWithBatches), subtotal, taxTotal, discountTotal, totalAmount,
+       newPaymentMode, parsed.data.couponCode ?? null, newAmountPaid, newPaymentStatus, id]
+    ));
+
+    await editTx.query('COMMIT');
+  } catch (txErr) {
+    try { await editTx.query('ROLLBACK'); } catch { /* already rolled back */ }
+    throw txErr;
+  } finally {
+    editTx.release();
+  }
+
   // Ledger the reversal before the re-apply so the trail reads
   // out → back-in → out again, and the running balance stays truthful.
   // Awaited (not fire-and-forget) so the two writes cannot interleave and land
@@ -894,7 +1022,7 @@ router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit")
   // stock tables have already accepted — but it must never fail *silently*.
   try {
     const [meta, branchFn] = await Promise.all([
-      batchResolveMeta(pool, oldLineItems.map(li => ({ materialType: 'item' as const, refId: li.itemId }))),
+      batchResolveMeta(pool, [...oldLineItems, ...lineItems].map(li => ({ materialType: 'item' as const, refId: li.itemId }))),
       buildBranchMaps(),
     ]);
     await writeStockLedger(pool, oldLineItems.map(li => {
@@ -910,58 +1038,6 @@ router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit")
         notes: `${existingRaw.invoice_number} — reversed for edit`,
       };
     }));
-  } catch (err) {
-    console.error(`[stock-ledger] sale ${id} reversal entries failed to write:`, err);
-  }
-
-  // Update the sale row via raw SQL to include location columns.
-  // Settlement fields: counter-settled modes (cash/upi/card) stay fully paid;
-  // credit sales re-derive amount_paid from recorded sale_payments so an edit
-  // never wipes out collected payments.
-  const newPaymentMode = parsed.data.paymentMode ?? 'cash';
-  let newAmountPaid = totalAmount;
-  let newPaymentStatus = 'paid';
-  if (!isSettledAtSale(newPaymentMode)) {
-    const { rows: [pp] } = await pgPool.query<{ paid: string }>(
-      `SELECT COALESCE(SUM(amount::numeric), 0) AS paid FROM sale_payments WHERE sale_id = $1`, [id]
-    );
-    newAmountPaid = Number(pp?.paid ?? 0);
-    newPaymentStatus = newAmountPaid >= totalAmount - 0.004 ? 'paid' : newAmountPaid > 0.004 ? 'partially_paid' : 'unpaid';
-  }
-  const newOutletId = newLocationType === 'outlet' ? newLocationId : null;
-  const { rows: [updated] } = await pgPool.query<any>(
-    `UPDATE sales SET outlet_id=$1, location_type=$2, location_id=$3, customer_id=$4, sale_date=$5,
-     line_items=$6::jsonb, subtotal=$7, tax_total=$8, discount_total=$9, total_amount=$10,
-     payment_mode=$11, coupon_code=$12, amount_paid=$13, payment_status=$14
-     WHERE id=$15 RETURNING *`,
-    [newOutletId, newLocationType, newLocationId, parsed.data.customerId ?? null,
-     parsed.data.saleDate, JSON.stringify(lineItems), subtotal, taxTotal, discountTotal, totalAmount,
-     newPaymentMode, parsed.data.couponCode ?? null, newAmountPaid, newPaymentStatus, id]
-  );
-
-  // Apply new stock deductions + consume batches (FEFO)
-  const newLineItemsWithBatches: any[] = [];
-  for (const li of lineItems) {
-    const [se] = await db.select().from(stockEntriesTable)
-      .where(and(eq(stockEntriesTable.itemId, li.itemId), ITEM_ROWS_ONLY, eq(stockEntriesTable.branchType, newLocationType as any), eq(stockEntriesTable.branchId, newLocationId)))
-      .limit(1);
-    if (se) {
-      await db.update(stockEntriesTable)
-        .set({ quantity: sql`${stockEntriesTable.quantity}::numeric - ${li.quantity}` })
-        .where(eq(stockEntriesTable.id, se.id));
-    }
-    const batchBreakdown = await consumeBatches(pool, {
-      itemId: li.itemId, branchType: newLocationType, branchId: newLocationId, quantity: li.quantity,
-    });
-    newLineItemsWithBatches.push({ ...li, batchBreakdown });
-  }
-  await pool.query(`UPDATE sales SET line_items = $1::jsonb WHERE id = $2`, [JSON.stringify(newLineItemsWithBatches), id]);
-
-  try {
-    const [meta, branchFn] = await Promise.all([
-      batchResolveMeta(pool, lineItems.map(li => ({ materialType: 'item' as const, refId: li.itemId }))),
-      buildBranchMaps(),
-    ]);
     await writeStockLedger(pool, lineItems.map(li => {
       const m = meta.get(`item:${li.itemId}`);
       return {
@@ -976,7 +1052,7 @@ router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit")
       };
     }));
   } catch (err) {
-    console.error(`[stock-ledger] sale ${id} re-apply entries failed to write:`, err);
+    console.error(`[stock-ledger] sale ${id} edit entries failed to write:`, err);
   }
 
   // Adjust customer total purchases

@@ -35,6 +35,40 @@ columns are left dormant and documented as dead rather than silently half-mainta
 **Transition order matters:** materials and packing materials have no location rows at all
 today, so those rows are created and reconciled *before* their global columns are retired.
 
+## 1a. Reserved quantity
+
+**Truth:** the reservation ledger — one row per commitment against stock, never a counter on
+the stock or batch row. Reserved quantity is always summed from active rows; a mirrored
+column would be one more thing that can drift.
+
+> **Rule:** on-hand quantity is not availability. Everything that consumes stock compares the
+> request against **available = on hand − active holds**, and refuses in one shared wording
+> that names both figures. A check that reads the raw quantity is a double-promise waiting to
+> happen.
+
+Two kinds, and the difference is load-bearing:
+
+| Kind | Goods are… | Reduces available? | Valued as |
+|---|---|---|---|
+| `hold` | still on the shelf, committed to a document that has not shipped | **yes** | the holder's on-hand stock |
+| `in_transit` | already deducted from the sender at dispatch | **no** — subtracting twice would double-count the dispatch | the **sender's** stock until received |
+
+Reservation and the movement it accompanies share **one transaction**, and availability is
+read with the stock row locked — otherwise two requests both pass the check before either
+deducts. Release is by document and idempotent: receiving, fulfilling, cancelling or
+rejecting releases the whole document's rows, so a retried callback cannot free stock twice.
+
+**A commitment is released only when it is actually resolved.** Where a receipt comes up short
+of what was dispatched, the difference stays an active in-transit commitment owned by the
+sender — unreconciled and visible — because the sender's stock is already gone and releasing it
+would erase those units from every location and every total at once. Whether that shortfall is
+a loss, a theft or a late delivery is a business decision; the system refuses to guess.
+
+**`hold` has no producer yet.** The system has no order concept — no sales order, quotation or
+requisition — and sales deduct stock at the moment they are recorded, so nothing today can
+promise stock it has not yet taken. The kind is implemented and enforced at every consumption
+point so the day an order document exists it is honoured without revisiting those call sites.
+
 ## 2. Stock movement audit trail
 
 **Truth:** the append-only stock ledger.
@@ -125,15 +159,34 @@ read everywhere. No screen recomputes profit from raw sales and purchase rows.
 batch layer, falling back to the item's weighted-average cost only where a lot genuinely has
 no cost.
 
-Covers **all three item types** across **all locations**, plus **in-transit stock**, which
-today belongs to no location and is missing from every total.
+> **Implemented.** One function now serves the stock valuation report, the dashboard stock
+> tile and the profit & loss closing stock. It covers **all three product kinds** across
+> **all locations**, and appends **in-transit** rows valued at the cost they were dispatched
+> at, owned by the sender. Every roll-up (per location, per kind, per product) comes from the
+> same row set, so a drill-down always sums to the headline. Any new stock figure calls this
+> function — a fresh `SUM(quantity * cost)` is a defect, not an optimisation.
 
-Valued at **cost, never at MRP**. The profit & loss currently values closing stock at MRP and
-reads it from a retired counter — both are corrected here.
+Valued at **cost, never at MRP**. The profit & loss used to value closing stock at MRP and read
+it from a retired counter — both are corrected.
 
-The production report and the stock status report currently value the same item differently,
-one from a batch-time snapshot and one from current average cost. After this, one function
-serves both.
+> **Closing stock moved, and so did reported profit.** It now includes raw and packing
+> materials and in-transit goods, and is priced at cost. That is the correct figure, but it is
+> not the figure last month's screen showed; the in-transit portion is reported separately so
+> the change is auditable rather than mysterious.
+
+## 6b. Inventory ageing
+
+**Truth:** one ageing module. Expiry tiers (7 / 15 / 30 / 60 / 90 days, plus *expired* and
+*no expiry date*) and movement classes (fast / slow / dormant / dead) are defined once as data,
+never as literals scattered through SQL, so a report, a tile and a future alert cannot disagree
+about what "near expiry" or "dead stock" means.
+
+A lot falls in the **narrowest** tier it qualifies for, so it is counted exactly once. A lot
+with no expiry date is its own bucket — a data gap, not a fresh lot.
+
+Movement class is measured from the last **outbound** movement in the stock ledger: receiving
+more of something that never leaves does not make it alive. Stock with no ledger history at all
+is reported as such, alongside the date the ledger began, rather than presented as neglected.
 
 ## 6a. Product identity
 

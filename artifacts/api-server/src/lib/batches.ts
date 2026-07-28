@@ -13,6 +13,8 @@
 // All helpers accept a query-able client (pool or a transaction client) so
 // callers can choose their atomicity.
 
+import { batchReservedSql, insufficientStockMessage } from "./reservations";
+
 export type Queryable = { query: (text: string, params?: any[]) => Promise<{ rows: any[] }> };
 
 /** Discriminator shared with stock_entries and stock_ledger. */
@@ -168,14 +170,25 @@ export async function validateBatchOverride(c: Queryable, args: {
     if (seen.has(batchId)) return { ok: false, error: "Duplicate batch in override" };
     seen.add(batchId);
 
+    // Reserved quantity is subtracted here too: picking a lot by hand must not
+    // be a way around a hold that FEFO would have respected.
     const { rows: [b] } = await c.query(
-      `SELECT id, batch_number, quantity FROM stock_batches
+      `SELECT id, batch_number, quantity, ${batchReservedSql("stock_batches")} AS reserved
+       FROM stock_batches
        WHERE id = $1 AND item_id = $2 AND material_type = $5 AND branch_type = $3 AND branch_id = $4 FOR UPDATE`,
       [batchId, args.itemId, args.branchType, args.branchId, args.materialType ?? "item"]
     );
     if (!b) return { ok: false, error: `Batch #${batchId} not found for this item at the source location` };
-    if (qty > Number(b.quantity) + 0.001) {
-      return { ok: false, error: `Batch ${b.batch_number} has only ${Number(b.quantity)} available (requested ${qty})` };
+    const onHand = Number(b.quantity);
+    const reserved = Number(b.reserved ?? 0);
+    if (qty > r3(onHand - reserved) + 0.001) {
+      return {
+        ok: false,
+        error: insufficientStockMessage({
+          productName: `Batch ${b.batch_number}`,
+          quantity: onHand, reserved, requested: qty,
+        }),
+      };
     }
     total = r3(total + qty);
   }

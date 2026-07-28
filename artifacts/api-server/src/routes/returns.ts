@@ -17,6 +17,7 @@ import { logActivity } from "../lib/audit";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
 import { deductMaterialAt, isMaterialKind } from "../lib/materialStock";
+import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 
 const router: IRouter = Router();
 
@@ -548,10 +549,30 @@ router.post("/purchase-returns", requireModuleAction(["Sales", "Purchases"], "ad
         // Availability is checked against the location that holds the goods
         // (Head Office), not the company-wide mirror — the mirror cannot tell
         // you whether the stock is actually here to send back.
+        const held = await availabilityAt(client, {
+          refId: materialId, materialType, branchType: "headoffice", branchId: 1, lock: true,
+        });
+        if (held.available + 0.001 < rq) {
+          await client.query("ROLLBACK");
+          res.status(400).json({
+            error: insufficientStockMessage({
+              productName: materialName, locationName: "Head Office",
+              quantity: held.quantity, reserved: held.reserved, requested: rq,
+            }),
+            code: 'INSUFFICIENT_STOCK',
+          });
+          return;
+        }
         const sent = await deductMaterialAt(client, materialType, materialId, "headoffice", 1, rq);
         if (!sent.ok) {
           await client.query("ROLLBACK");
-          res.status(400).json({ error: `Insufficient stock to return ${materialName}: available ${sent.available}, returning ${rq}` });
+          res.status(400).json({
+            error: insufficientStockMessage({
+              productName: materialName, locationName: "Head Office",
+              quantity: sent.available, reserved: held.reserved, requested: rq,
+            }),
+            code: 'INSUFFICIENT_STOCK',
+          });
           return;
         }
         await client.query(`UPDATE ${tbl} SET current_stock = current_stock::numeric - $1, updated_at = now() WHERE id = $2`, [rq, materialId]);
@@ -563,18 +584,21 @@ router.post("/purchase-returns", requireModuleAction(["Sales", "Purchases"], "ad
         });
       } else {
         // Finished item bought into production stock
-        const { rows: [se] } = await client.query(
-          `SELECT id, quantity FROM stock_entries
-            WHERE item_id = $1 AND material_type = 'item' AND branch_type = 'headoffice' AND branch_id = 1 FOR UPDATE`,
-          [materialId]
-        );
-        const avail = se ? Number(se.quantity) : 0;
-        if (avail + 0.001 < rq) {
+        const held = await availabilityAt(client, {
+          refId: materialId, materialType: 'item', branchType: "headoffice", branchId: 1, lock: true,
+        });
+        if (held.available + 0.001 < rq) {
           await client.query("ROLLBACK");
-          res.status(400).json({ error: `Insufficient production stock to return ${materialName}: available ${avail}, returning ${rq}` });
+          res.status(400).json({
+            error: insufficientStockMessage({
+              productName: materialName, locationName: "Head Office",
+              quantity: held.quantity, reserved: held.reserved, requested: rq,
+            }),
+            code: 'INSUFFICIENT_STOCK',
+          });
           return;
         }
-        await client.query(`UPDATE stock_entries SET quantity = quantity::numeric - $1, updated_at = now() WHERE id = $2`, [rq, se.id]);
+        await client.query(`UPDATE stock_entries SET quantity = quantity::numeric - $1, updated_at = now() WHERE id = $2`, [rq, held.entryId]);
         await client.query(`UPDATE items SET production_stock = GREATEST(0, COALESCE(production_stock, 0)::numeric - $1), updated_at = now() WHERE id = $2`, [rq, materialId]);
         const batchNumber = li.batchNumber || `PUR-${purchaseId}`;
         await debitBatchByNumber(client, {

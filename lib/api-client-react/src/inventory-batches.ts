@@ -5,10 +5,23 @@ import { customFetch } from './custom-fetch';
 
 export type BatchExpiryStatus = 'ok' | 'near_expiry' | 'expired' | 'no_expiry';
 
+/** Kinds of product that share the stock tables. */
+export type StockProductKind = 'item' | 'material' | 'raw_material';
+
+/** Expiry tier a lot falls into. Narrowest tier wins, so each lot appears once. */
+export type ExpiryBucket = 'expired' | 'd7' | 'd15' | 'd30' | 'd60' | 'd90' | 'ok' | 'no_expiry';
+
+/** Colour hint from the server, so every surface tones a tier the same way. */
+export type ExpiryTone = 'critical' | 'warn' | 'caution' | 'ok' | 'none';
+
 export interface StockBatch {
   id: number;
   itemId: number;
+  materialType: StockProductKind;
   itemName: string;
+  itemCode?: string;
+  barcode?: string;
+  mrp?: number | null;
   unit: string;
   branchType: string;
   branchId: number;
@@ -17,10 +30,18 @@ export interface StockBatch {
   mfgDate: string | null;
   expiryDate: string | null;
   quantity: number;
+  /** Committed to a transfer or an unfulfilled order; not free to consume. */
+  reserved: number;
+  /** quantity − reserved, floored at zero. */
+  available: number;
   unitCost: number;
+  value: number;
   source: string;
   daysToExpiry: number | null;
   status: BatchExpiryStatus;
+  bucket: ExpiryBucket;
+  bucketLabel: string;
+  tone: ExpiryTone;
 }
 
 export interface BatchPlanEntry {
@@ -40,7 +61,10 @@ export interface BatchSuggestResponse {
 export interface ExpiryReportRow {
   id: number;
   itemId: number;
+  materialType: StockProductKind;
+  typeLabel: string;
   itemName: string;
+  itemCode: string;
   unit: string;
   branchType: string;
   branchId: number;
@@ -48,11 +72,25 @@ export interface ExpiryReportRow {
   batchNumber: string;
   mfgDate: string | null;
   expiryDate: string;
+  mrp: number | null;
   quantity: number;
+  reserved: number;
+  available: number;
   unitCost: number;
   value: number;
   daysToExpiry: number;
   status: 'near_expiry' | 'expired';
+  bucket: ExpiryBucket;
+  bucketLabel: string;
+  tone: ExpiryTone;
+}
+
+export interface ExpiryBucketSummary {
+  bucket: ExpiryBucket;
+  label: string;
+  batches: number;
+  quantity: number;
+  value: number;
 }
 
 export interface ExpiryReportSummary {
@@ -64,22 +102,51 @@ export interface ExpiryReportSummary {
   nearExpiryValue: number;
 }
 
+export type ExpiryReportStatus = 'all' | 'near_expiry' | 'expired';
+
 export interface ExpiryReport {
   days: number;
+  status: ExpiryReportStatus;
+  /** Tier boundaries in days, narrowest first. */
+  tiers: number[];
   rows: ExpiryReportRow[];
+  /** One entry per tier, always present — a zero reads as zero, not as absent. */
+  buckets: ExpiryBucketSummary[];
+  bucketOrder: ExpiryBucket[];
   summary: ExpiryReportSummary;
+}
+
+export interface ExpiryReportParams {
+  days?: number;
+  status?: ExpiryReportStatus;
+  branchType?: string;
+  branchId?: number;
+  itemId?: number;
+  materialType?: StockProductKind;
+  /** Expiring on or after this date (YYYY-MM-DD). */
+  from?: string;
+  /** Expiring on or before this date (YYYY-MM-DD). */
+  to?: string;
 }
 
 export interface ValuationRow {
   itemId: number;
+  refId: number;
+  materialType: StockProductKind;
+  typeLabel: string;
   itemName: string;
   unit: string;
   branchType: string;
   branchId: number;
   branchName: string;
   quantity: number;
+  reserved: number;
+  available: number;
   avgCost: number;
+  unitCost: number;
   value: number;
+  /** Dispatched, not yet received — still owned by this location. */
+  inTransit: boolean;
 }
 
 export interface ValuationLocation {
@@ -87,14 +154,102 @@ export interface ValuationLocation {
   branchId: number;
   branchName: string;
   totalValue: number;
+  onHandValue: number;
+  inTransitValue: number;
   itemCount: number;
   totalQuantity: number;
+}
+
+export interface ValuationTypeTotal {
+  materialType: StockProductKind;
+  label: string;
+  lines: number;
+  quantity: number;
+  value: number;
+}
+
+export interface ValuationProductTotal {
+  materialType: StockProductKind;
+  refId: number;
+  itemName: string;
+  unit: string;
+  quantity: number;
+  unitCost: number;
+  value: number;
 }
 
 export interface StockValuation {
   rows: ValuationRow[];
   locations: ValuationLocation[];
+  byType: ValuationTypeTotal[];
+  byProduct: ValuationProductTotal[];
+  onHandValue: number;
+  inTransitValue: number;
+  reservedQuantity: number;
   grandTotal: number;
+}
+
+export interface StockValuationParams {
+  branchType?: string;
+  branchId?: number;
+  materialType?: StockProductKind;
+}
+
+// ── Movement analysis (dead / slow-moving stock) ──────────────────────────────
+
+export type MovementClass = 'fast' | 'slow' | 'dormant' | 'dead';
+
+export interface MovementRow {
+  refId: number;
+  itemId: number;
+  materialType: StockProductKind;
+  typeLabel: string;
+  itemName: string;
+  itemCode: string;
+  unit: string;
+  branchType: string;
+  branchId: number;
+  branchName: string;
+  quantity: number;
+  reserved: number;
+  available: number;
+  unitCost: number;
+  value: number;
+  lastMovementAt: string | null;
+  lastOutboundAt: string | null;
+  daysSinceMovement: number | null;
+  daysSinceOutbound: number | null;
+  class: MovementClass;
+  classLabel: string;
+  /** No ledger entry at all — may simply predate the ledger. */
+  noHistory: boolean;
+}
+
+export interface MovementClassSummary {
+  class: MovementClass;
+  label: string;
+  lines: number;
+  quantity: number;
+  value: number;
+}
+
+export interface MovementAnalysis {
+  basis: 'last_outbound_movement';
+  /** When the stock ledger began; movement before it was never recorded. */
+  ledgerStart: string | null;
+  thresholds: Record<string, number>;
+  classOrder: MovementClass[];
+  rows: MovementRow[];
+  summary: MovementClassSummary[];
+  totalValue: number;
+}
+
+export interface MovementAnalysisParams {
+  branchType?: string;
+  branchId?: number;
+  itemId?: number;
+  materialType?: StockProductKind;
+  class?: MovementClass | 'all';
 }
 
 export interface ReorderRow {
@@ -148,10 +303,13 @@ export interface CreateVerificationBody {
 
 export const getStockBatchesQueryKey = (params?: Record<string, unknown>) =>
   params ? (['/api/stock/batches', params] as const) : (['/api/stock/batches'] as const);
-export const getStockValuationQueryKey = () => ['/api/stock/valuation'] as const;
+export const getStockValuationQueryKey = (params?: StockValuationParams) =>
+  params ? (['/api/stock/valuation', params] as const) : (['/api/stock/valuation'] as const);
 export const getReorderReportQueryKey = () => ['/api/stock/reorder-report'] as const;
-export const getExpiryReportQueryKey = (days?: number) =>
-  days != null ? (['/api/stock/expiry-report', days] as const) : (['/api/stock/expiry-report'] as const);
+export const getExpiryReportQueryKey = (params?: number | ExpiryReportParams) =>
+  params != null ? (['/api/stock/expiry-report', params] as const) : (['/api/stock/expiry-report'] as const);
+export const getMovementAnalysisQueryKey = (params?: MovementAnalysisParams) =>
+  params ? (['/api/stock/movement-analysis', params] as const) : (['/api/stock/movement-analysis'] as const);
 export const getStockVerificationsQueryKey = () => ['/api/stock/verifications'] as const;
 
 const qs = (params: Record<string, unknown>) => {
@@ -166,7 +324,7 @@ const qs = (params: Record<string, unknown>) => {
 // ── Hooks ─────────────────────────────────────────────────────────────────────
 
 export function useListStockBatches(
-  params?: { branchType?: string; branchId?: number; itemId?: number; nearDays?: number },
+  params?: { branchType?: string; branchId?: number; itemId?: number; materialType?: StockProductKind; nearDays?: number },
   options?: { enabled?: boolean },
 ) {
   const p = params ?? {};
@@ -194,17 +352,33 @@ export function useSuggestBatches(params: {
   });
 }
 
-export function useGetExpiryReport(days = 30) {
+/**
+ * Expiry report. Accepts a bare `days` number (the original signature) or the
+ * full filter set — warehouse, item, kind, expiry-date range and which side of
+ * today to look at.
+ */
+export function useGetExpiryReport(params: number | ExpiryReportParams = 90) {
+  const p: ExpiryReportParams = typeof params === 'number' ? { days: params } : params;
   return useQuery({
-    queryKey: getExpiryReportQueryKey(days),
-    queryFn: ({ signal }) => customFetch<ExpiryReport>(`/api/stock/expiry-report?days=${days}`, { signal }),
+    queryKey: getExpiryReportQueryKey(p),
+    queryFn: ({ signal }) => customFetch<ExpiryReport>(`/api/stock/expiry-report${qs(p as Record<string, unknown>)}`, { signal }),
   });
 }
 
-export function useGetStockValuation() {
+export function useGetStockValuation(params?: StockValuationParams) {
+  const p = params ?? {};
   return useQuery({
-    queryKey: getStockValuationQueryKey(),
-    queryFn: ({ signal }) => customFetch<StockValuation>('/api/stock/valuation', { signal }),
+    queryKey: getStockValuationQueryKey(p),
+    queryFn: ({ signal }) => customFetch<StockValuation>(`/api/stock/valuation${qs(p as Record<string, unknown>)}`, { signal }),
+  });
+}
+
+/** Dead and slow-moving stock, classified by time since the last outbound move. */
+export function useGetMovementAnalysis(params?: MovementAnalysisParams) {
+  const p = params ?? {};
+  return useQuery({
+    queryKey: getMovementAnalysisQueryKey(p),
+    queryFn: ({ signal }) => customFetch<MovementAnalysis>(`/api/stock/movement-analysis${qs(p as Record<string, unknown>)}`, { signal }),
   });
 }
 

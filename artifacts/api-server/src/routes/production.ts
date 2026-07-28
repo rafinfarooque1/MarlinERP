@@ -13,6 +13,7 @@ import {
   resolveActingLocation, locationLabel, type ProdLocation,
 } from "../lib/productionCosting";
 import { getUserDataScope, scopeLocationTypeWhere } from "../lib/dataScope";
+import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 
 // ── Batch costing & wastage ──────────────────────────────────────────────────
 // Every new batch snapshots, at save time:
@@ -545,6 +546,26 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
         [mat.usedQuantity, mat.materialId]
       );
       if (isMaterialKind(mat.materialType)) {
+        // Material already committed to another document cannot also be consumed
+        // here, so the check is against available (on hand − held) and the row is
+        // locked before it is judged.
+        const avail = await availabilityAt(client, {
+          refId: mat.materialId, materialType: mat.materialType,
+          branchType: loc.type, branchId: loc.id, lock: true,
+        });
+        if (avail.available + 0.001 < Number(mat.usedQuantity)) {
+          await client.query("ROLLBACK");
+          res.status(400).json({
+            error: insufficientStockMessage({
+              productName: mat.materialName ?? `#${mat.materialId}`,
+              locationName: locName, unit: mat.unit,
+              quantity: avail.quantity, reserved: avail.reserved,
+              requested: Number(mat.usedQuantity),
+            }),
+            code: 'INSUFFICIENT_STOCK',
+          });
+          return;
+        }
         // Forward consumption must NOT clamp: a shortfall here means the batch
         // is claiming more material than this location holds, and silently
         // flooring it at zero would manufacture stock out of nothing.
@@ -554,7 +575,13 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
         if (!taken.ok) {
           await client.query("ROLLBACK");
           res.status(400).json({
-            error: `Insufficient stock for ${mat.materialName ?? `#${mat.materialId}`} at ${locName}: available ${taken.available}, batch needs ${mat.usedQuantity}`,
+            error: insufficientStockMessage({
+              productName: mat.materialName ?? `#${mat.materialId}`,
+              locationName: locName, unit: mat.unit,
+              quantity: taken.available, reserved: avail.reserved,
+              requested: Number(mat.usedQuantity),
+            }),
+            code: 'INSUFFICIENT_STOCK',
           });
           return;
         }

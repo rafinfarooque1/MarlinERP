@@ -12,6 +12,10 @@ import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
 import { deductMaterialAt, creditMaterialAt } from "../lib/materialStock";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { productBatchIdentity, blockedByInactiveProducts, INACTIVE_PRODUCT_CODE, isProductKind } from "../lib/productIdentity";
+import {
+  reservedSql, availabilityAt, insufficientStockMessage, reserveStock, releaseReservations,
+  type ReservationProductKind, type ReservationLine,
+} from "../lib/reservations";
 
 const router = Router();
 
@@ -31,6 +35,50 @@ export async function buildBranchMaps() {
     if (type === "outlet") return oMap.get(id) ?? `Outlet #${id}`;
     return `Branch #${id}`;
   };
+}
+
+/**
+ * Record dispatched goods as in transit, owned by the sender.
+ *
+ * Dispatch deducts the source's stock_entries row, so between dispatch and
+ * receipt the goods sit in no location's on-hand figure. These rows are the only
+ * record that they exist, which is what lets valuation keep counting them
+ * instead of watching inventory dip for the length of every transfer. Lot rows
+ * come from the consumed FEFO breakdown; whatever the lot layer could not cover
+ * is reserved as one untracked remainder, exactly as the batch layer treats it.
+ *
+ * They are `in_transit`, never `hold`: the quantity has already left the source
+ * row, so subtracting it from availability again would deduct it twice.
+ */
+async function reserveDispatchedInTransit(
+  client: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> },
+  args: {
+    transferId: number; challanNumber: string;
+    refId: number; materialType: ReservationProductKind;
+    branchType: string; branchId: number;
+    quantity: number; breakdown?: BatchBreakdownEntry[] | null; fallbackCost: number;
+  },
+): Promise<void> {
+  const breakdown = args.breakdown ?? [];
+  const lines: ReservationLine[] = breakdown
+    .filter((b) => Number(b?.quantity ?? 0) > 0)
+    .map((b) => ({
+      batchId: (b as any).batchId ?? null,
+      batchNumber: b.batchNumber ?? null,
+      quantity: Number(b.quantity),
+      unitCost: Number((b as any).unitCost ?? 0) > 0 ? Number((b as any).unitCost) : args.fallbackCost,
+    }));
+  const tracked = lines.reduce((s, l) => s + l.quantity, 0);
+  const remainder = r3(args.quantity - tracked);
+  if (remainder > 0) lines.push({ batchId: null, batchNumber: null, quantity: remainder, unitCost: args.fallbackCost });
+  await reserveStock(client, {
+    kind: "in_transit",
+    docType: "stock_transfer", docId: args.transferId,
+    refId: args.refId, materialType: args.materialType,
+    branchType: args.branchType, branchId: args.branchId,
+    lines,
+    notes: `In transit on challan ${args.challanNumber}`,
+  });
 }
 
 // GET /stock — server-paginated. Every row comes from stock_entries, which is
@@ -97,6 +145,7 @@ router.get("/stock", async (req, res): Promise<void> => {
         se.branch_type,
         se.branch_id::int,
         se.quantity::numeric                      AS quantity,
+        ${reservedSql('se')}                      AS reserved,
         se.cost_price::numeric                    AS cost_price
       FROM stock_entries se
       LEFT JOIN items         i  ON se.material_type = 'item'         AND i.id  = se.item_id
@@ -121,7 +170,7 @@ router.get("/stock", async (req, res): Promise<void> => {
     pool.query(
       `${cte}
        SELECT entry_id, ref_id, material_type, item_name, unit, hsn_code,
-              reorder_level, avg_cost, cost, branch_type, branch_id, quantity, cost_price
+              reorder_level, avg_cost, cost, branch_type, branch_id, quantity, reserved, cost_price
        FROM u ${where}
        ORDER BY ${paginated ? 'item_name ASC NULLS LAST, ref_id' : 'ref_id'}
        ${limit ? `LIMIT ${limit} OFFSET ${(page - 1) * limit}` : ''}`,
@@ -134,6 +183,11 @@ router.get("/stock", async (req, res): Promise<void> => {
     const qty      = Number(r.quantity);
     const avgCost  = Number(r.avg_cost ?? 0) > 0 ? Number(r.avg_cost) : Number(r.cost ?? 0);
     const reorderLevel = Number(r.reorder_level ?? 10);
+    // Reserved is what is already committed to a document that has not shipped;
+    // available is what a new commitment may draw on. Low stock is judged on
+    // available, not on-hand — stock that is spoken for cannot cover an order.
+    const reserved = r3(Number(r.reserved ?? 0));
+    const available = r3(Math.max(0, qty - reserved));
     return {
       id:           r.entry_id,
       itemId:       r.ref_id,
@@ -144,12 +198,14 @@ router.get("/stock", async (req, res): Promise<void> => {
       branchId:     r.branch_id,
       branchName:   branchName(r.branch_type, r.branch_id),
       quantity:     qty,
+      reserved,
+      available,
       costPrice:    Number(r.cost_price),
       unit:         r.unit ?? "",
       reorderLevel,
       avgCost,
       stockValue:   Math.round(qty * avgCost * 100) / 100,
-      lowStock:     r.material_type === 'item' && qty < reorderLevel,
+      lowStock:     r.material_type === 'item' && available < reorderLevel,
     };
   });
 
@@ -417,6 +473,25 @@ router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), as
           [li.itemId]
         );
         if (!mat) { await client.query("ROLLBACK"); res.status(400).json({ error: `Raw Material #${li.itemId} not found` }); return; }
+        // Stock already committed elsewhere cannot be dispatched, so the check
+        // is against available (on hand − held), not the raw on-hand figure.
+        const avail = await availabilityAt(client, {
+          refId: li.itemId, materialType: 'material',
+          branchType: parsed.data.fromType, branchId: parsed.data.fromId, lock: true,
+        });
+        if (avail.available + 0.001 < Number(li.quantity)) {
+          await client.query("ROLLBACK");
+          res.status(400).json({
+            error: insufficientStockMessage({
+              productName: mat.name ?? `Raw Material #${li.itemId}`,
+              locationName: branchFn(parsed.data.fromType, parsed.data.fromId),
+              unit: mat.unit, quantity: avail.quantity, reserved: avail.reserved,
+              requested: Number(li.quantity),
+            }),
+            code: 'INSUFFICIENT_STOCK',
+          });
+          return;
+        }
         // mirror stays put: a dispatch relocates goods, it does not change the
         // company-wide total. The mirror is corrected only on receive/reject.
         const moved = await deductMaterialAt(
@@ -424,7 +499,15 @@ router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), as
         );
         if (!moved.ok) {
           await client.query("ROLLBACK");
-          res.status(400).json({ error: `Insufficient stock of ${mat.name} at the source location (available ${moved.available}, requested ${li.quantity})` });
+          res.status(400).json({
+            error: insufficientStockMessage({
+              productName: mat.name ?? `Raw Material #${li.itemId}`,
+              locationName: branchFn(parsed.data.fromType, parsed.data.fromId),
+              unit: mat.unit, quantity: moved.available, reserved: avail.reserved,
+              requested: Number(li.quantity),
+            }),
+            code: 'INSUFFICIENT_STOCK',
+          });
           return;
         }
         // Materials carry lots too: pull FEFO so mfg/expiry dates travel with
@@ -435,6 +518,11 @@ router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), as
           quantity: Number(li.quantity),
           override: rawLines[i]?.batchOverride,
         });
+        await reserveDispatchedInTransit(client, {
+          transferId: row.id, challanNumber, refId: li.itemId, materialType: 'material',
+          branchType: row.from_type, branchId: row.from_id,
+          quantity: Number(li.quantity), breakdown: matBreakdown, fallbackCost: Number(li.costPrice ?? 0),
+        });
         enrichedLines.push({ ...li, materialType, batchBreakdown: matBreakdown });
         dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'material', refId: li.itemId, itemName: mat.name ?? '', unit: mat.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id });
       } else if (materialType === 'raw_material') {
@@ -444,12 +532,37 @@ router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), as
           [li.itemId]
         );
         if (!rm) { await client.query("ROLLBACK"); res.status(400).json({ error: `Packing Material #${li.itemId} not found` }); return; }
+        const avail = await availabilityAt(client, {
+          refId: li.itemId, materialType: 'raw_material',
+          branchType: parsed.data.fromType, branchId: parsed.data.fromId, lock: true,
+        });
+        if (avail.available + 0.001 < Number(li.quantity)) {
+          await client.query("ROLLBACK");
+          res.status(400).json({
+            error: insufficientStockMessage({
+              productName: rm.name ?? `Packing Material #${li.itemId}`,
+              locationName: branchFn(parsed.data.fromType, parsed.data.fromId),
+              unit: rm.unit, quantity: avail.quantity, reserved: avail.reserved,
+              requested: Number(li.quantity),
+            }),
+            code: 'INSUFFICIENT_STOCK',
+          });
+          return;
+        }
         const moved = await deductMaterialAt(
           client, 'raw_material', li.itemId, parsed.data.fromType, parsed.data.fromId, Number(li.quantity)
         );
         if (!moved.ok) {
           await client.query("ROLLBACK");
-          res.status(400).json({ error: `Insufficient stock of ${rm.name} at the source location (available ${moved.available}, requested ${li.quantity})` });
+          res.status(400).json({
+            error: insufficientStockMessage({
+              productName: rm.name ?? `Packing Material #${li.itemId}`,
+              locationName: branchFn(parsed.data.fromType, parsed.data.fromId),
+              unit: rm.unit, quantity: moved.available, reserved: avail.reserved,
+              requested: Number(li.quantity),
+            }),
+            code: 'INSUFFICIENT_STOCK',
+          });
           return;
         }
         const rmBreakdown = await consumeBatches(client, {
@@ -458,26 +571,38 @@ router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), as
           quantity: Number(li.quantity),
           override: rawLines[i]?.batchOverride,
         });
+        await reserveDispatchedInTransit(client, {
+          transferId: row.id, challanNumber, refId: li.itemId, materialType: 'raw_material',
+          branchType: row.from_type, branchId: row.from_id,
+          quantity: Number(li.quantity), breakdown: rmBreakdown, fallbackCost: Number(li.costPrice ?? 0),
+        });
         enrichedLines.push({ ...li, materialType, batchBreakdown: rmBreakdown });
         dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'raw_material', refId: li.itemId, itemName: rm.name ?? '', unit: rm.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id });
       } else {
-        // Item (SKU): deduct from stock_entries
-        const { rows: [srcExisting] } = await client.query(
-          `SELECT id, quantity::numeric AS quantity FROM stock_entries
-            WHERE item_id = $1 AND material_type = 'item' AND branch_type = $2 AND branch_id = $3 LIMIT 1 FOR UPDATE`,
-          [li.itemId, parsed.data.fromType, parsed.data.fromId]
-        );
-        if (!srcExisting || Number(srcExisting.quantity) + 0.001 < Number(li.quantity)) {
+        // Item (SKU): deduct from stock_entries. The row is locked and the check
+        // is against available, so a concurrent dispatch or sale of the same
+        // stock waits here rather than passing the same quantity twice.
+        const avail = await availabilityAt(client, {
+          refId: li.itemId, materialType: 'item',
+          branchType: parsed.data.fromType, branchId: parsed.data.fromId, lock: true,
+        });
+        if (avail.available + 0.001 < Number(li.quantity)) {
           await client.query("ROLLBACK");
-          const { rows: [it] } = await pool.query(`SELECT name FROM items WHERE id = $1`, [li.itemId]);
-          const itemName = it?.name ?? `Item #${li.itemId}`;
-          const available = srcExisting ? Number(srcExisting.quantity) : 0;
-          res.status(400).json({ error: `Insufficient stock of ${itemName} at the source location (available ${available}, requested ${li.quantity})` });
+          const { rows: [it] } = await pool.query(`SELECT name, unit FROM items WHERE id = $1`, [li.itemId]);
+          res.status(400).json({
+            error: insufficientStockMessage({
+              productName: it?.name ?? `Item #${li.itemId}`,
+              locationName: branchFn(parsed.data.fromType, parsed.data.fromId),
+              unit: it?.unit, quantity: avail.quantity, reserved: avail.reserved,
+              requested: Number(li.quantity),
+            }),
+            code: 'INSUFFICIENT_STOCK',
+          });
           return;
         }
         await client.query(
           `UPDATE stock_entries SET quantity = quantity::numeric - $1, updated_at = now() WHERE id = $2`,
-          [li.quantity, srcExisting.id]
+          [li.quantity, avail.entryId]
         );
         const batchBreakdown = await consumeBatches(client, {
           itemId: li.itemId,
@@ -485,6 +610,11 @@ router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), as
           branchId: parsed.data.fromId,
           quantity: li.quantity,
           override: rawLines[i]?.batchOverride,
+        });
+        await reserveDispatchedInTransit(client, {
+          transferId: row.id, challanNumber, refId: li.itemId, materialType: 'item',
+          branchType: row.from_type, branchId: row.from_id,
+          quantity: Number(li.quantity), breakdown: batchBreakdown, fallbackCost: Number(li.costPrice ?? 0),
         });
         enrichedLines.push({ ...li, materialType: 'item', batchBreakdown });
         const { rows: [itemMeta] } = await pool.query(`SELECT name, unit FROM items WHERE id = $1`, [li.itemId]);
@@ -575,6 +705,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"
   const client = await pool.connect();
   let row: any;
   let linesToCredit: Array<{ itemId: number; quantity: number; costPrice: number; materialType?: string }>;
+  const shortReceived: Array<{ itemId: number; materialType: string; dispatched: number; received: number; shortfall: number }> = [];
   try {
     await client.query("BEGIN");
 
@@ -595,6 +726,16 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"
       res.status(400).json({ error: `Cannot approve a transfer with status "${chk.status}"` });
       return;
     }
+
+    // The shipment has landed: it is no longer in transit, so its in-transit
+    // reservations are settled here. The destination credit below puts the goods
+    // back into a location's on-hand figure, and leaving the reservations active
+    // would then count the same stock twice. Released inside this transaction so
+    // a failure downstream leaves the transfer in flight, not counted nowhere.
+    await releaseReservations(client, {
+      docType: 'stock_transfer', docId: id, kind: 'in_transit',
+      notes: `Received on challan ${row.challan_number}`,
+    });
 
     const dispatchedLines = (row.line_items ?? []) as Array<{ itemId: number; quantity: number; costPrice?: number; batchBreakdown?: BatchBreakdownEntry[]; materialType?: string }>;
 
@@ -772,6 +913,43 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"
       });
     }
 
+    // ── Short receipt: goods dispatched that never arrived ───────────────────
+    // The destination is credited with what it actually counted, which may be
+    // less than what left the source. That difference is not nothing: the
+    // source's stock is already gone, so releasing the whole document's
+    // in-transit rows here would make the missing units — and their value —
+    // disappear from every location and every total at once.
+    //
+    // So the shortfall stays an ACTIVE in-transit commitment owned by the
+    // sender: still out of everyone's on-hand figure (it is not on a shelf),
+    // still valued as the sender's stock, and visibly unreconciled until
+    // somebody decides whether it was lost, stolen or is still coming. It does
+    // not reduce available quantity, because those units were deducted at
+    // dispatch. Writing the loss off against a ledger is a business decision,
+    // not something to do silently here.
+    for (const d of dispatchedLines) {
+      const kind = (d.materialType ?? 'item') as 'item' | 'material' | 'raw_material';
+      const received = linesToCredit.find(
+        l => Number(l.itemId) === Number(d.itemId) && (l.materialType ?? 'item') === kind
+      );
+      const shortfall = r3(Number(d.quantity) - Number(received?.quantity ?? 0));
+      if (shortfall <= 0.001) continue;
+      shortReceived.push({
+        itemId: Number(d.itemId), materialType: kind,
+        dispatched: r3(Number(d.quantity)),
+        received: r3(Number(received?.quantity ?? 0)),
+        shortfall,
+      });
+      await reserveStock(client, {
+        kind: 'in_transit',
+        docType: 'stock_transfer', docId: id,
+        refId: Number(d.itemId), materialType: kind,
+        branchType: row.from_type, branchId: Number(row.from_id),
+        lines: [{ quantity: shortfall, unitCost: Number(d.costPrice ?? 0) }],
+        notes: `Short receipt on challan ${row.challan_number}: ${shortfall} of ${r3(Number(d.quantity))} dispatched units were never received — unreconciled`,
+      });
+    }
+
     await client.query(`UPDATE stock_transfers SET received_line_items = $1, receive_voucher_id = $2 WHERE id = $3`, [JSON.stringify(linesToCredit), receiveVoucherId, id]);
 
     // ── Stock ledger — inside the transaction so it rolls back with everything ─
@@ -806,7 +984,15 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"
     metadata: { after: { status: "completed", receivedLineItems: linesToCredit } },
   }).catch(() => {});
 
-  res.json({ success: true, id, status: "completed", fromName, toName });
+  // shortReceived is surfaced, never swallowed: a receipt that came up short is
+  // an exception someone has to act on, not a rounding detail.
+  res.json({
+    success: true, id, status: "completed", fromName, toName,
+    shortReceived,
+    ...(shortReceived.length > 0
+      ? { shortReceivedNote: `${shortReceived.length} line(s) were received short. The missing quantity stays recorded against ${fromName} as unreconciled in-transit stock until it is found or written off.` }
+      : {}),
+  });
 });
 
 // Reject a transfer — reverses the source deduction
@@ -837,6 +1023,14 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction(["HO Transfers"]
     }
 
     const lineItems = row.line_items as Array<{ itemId: number; quantity: number; costPrice?: number; batchBreakdown?: BatchBreakdownEntry[]; materialType?: string }>;
+
+    // Nothing is in flight any more — the goods are going back to the sender's
+    // on-hand stock below, so the in-transit rows must go or the returned
+    // quantity would be counted both as on hand and as in transit.
+    await releaseReservations(client, {
+      docType: 'stock_transfer', docId: id, kind: 'in_transit',
+      notes: `Rejected — returned to source on challan ${row.challan_number}`,
+    });
 
     // Reverse source deduction (goods returned)
     for (const li of lineItems) {

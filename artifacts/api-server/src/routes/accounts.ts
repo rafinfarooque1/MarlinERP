@@ -10,7 +10,7 @@ import {
 import { nextVoucherNumber, VOUCHER_TYPE_LABELS } from "../lib/voucherNumber";
 import { lineTaxHeads } from "../lib/gst";
 import { logActivity } from "../lib/audit";
-import { itemStockValuation } from "../lib/valuation";
+import { closingStockValuation } from "../lib/valuation";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { getUserDataScope, scopeSalesWhere, scopeBranchWhere } from "../lib/dataScope";
 import {
@@ -1142,17 +1142,26 @@ router.get("/accounts/financial-statements", requireModuleView("Chart of Account
   );
   const purchasesTotal = Number(purRows[0]?.total ?? 0);
 
-  // Item-wise closing stock, via the one shared valuation function.
+  // Closing stock, via the one shared valuation function.
   // Previously this read `items.production_stock` — a counter that sales never
   // decremented, so it reported ~76 units against a real ~3,389 — and valued it
   // at MRP, which capitalises unrealised profit into inventory. Both are fixed
   // by deriving quantity from the stock truth and valuing at cost.
-  const valuation = await itemStockValuation(pool);
+  //
+  // It now covers raw materials and packing materials as well as finished goods,
+  // and counts stock dispatched but not yet received (owned by the sender until
+  // it lands). Closing stock is everything the business owns on the last day:
+  // leaving materials out understated it by the entire material holding, and
+  // leaving in-transit out made profit dip for the length of every transfer.
+  // `inTransit` is reported separately so the drill-down reconciles to the total.
+  const valuation = await closingStockValuation(pool);
   const stockItems = valuation.items.map((i) => ({
     id: i.id, name: i.name, unit: i.unit,
     stock: i.stock, unitCost: i.unitCost, total: i.total,
+    materialType: i.materialType, typeLabel: i.typeLabel,
   }));
   const closingStock = valuation.total;
+  const closingStockInTransit = valuation.inTransit;
   // Intentionally zero: the business has not gone live, so there is no
   // historical stock to carry in. Not a defect.
   const openingStock = 0;
@@ -1205,6 +1214,9 @@ router.get("/accounts/financial-statements", requireModuleView("Chart of Account
         sales: salesTotal,
         closingStock: Math.round(closingStock * 100) / 100,
         closingStockItems: stockItems,
+        // Part of closingStock above, broken out so a reader can see how much of
+        // the closing figure is still on a lorry rather than on a shelf.
+        closingStockInTransit: Math.round(closingStockInTransit * 100) / 100,
         directIncomes: directInc, indirectIncomes: indirectInc,
         total: Math.round(totalIncomes * 100) / 100,
       },

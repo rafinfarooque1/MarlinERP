@@ -6,9 +6,12 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   customFetch, useGetStockValuation, useGetExpiryReport, useGetReorderReport,
+  useGetMovementAnalysis, useListWarehouses, useListOutlets,
+  type StockProductKind,
 } from '@workspace/api-client-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { downloadCSV } from '@/lib/download';
 import {
   fmt, num, pdfMoney, fmtDate, titleCase,
@@ -16,59 +19,118 @@ import {
   periodLabel, type Col,
 } from '../shared';
 
-type InvReport = 'valuation' | 'expiry' | 'reorder' | 'transfers';
+type InvReport = 'valuation' | 'near_expiry' | 'expired' | 'movement' | 'reorder' | 'transfers';
 
 const today = () => new Date().toLocaleDateString('en-IN');
 
 // ── Stock valuation ───────────────────────────────────────────────────────────
 function ValuationReport() {
-  const { data, isLoading } = useGetStockValuation();
+  const { data: warehouses = [] } = useListWarehouses();
+  const { data: outlets = [] } = useListOutlets();
+  const [materialType, setMaterialType] = useState<string>('all');
+  const [branchType, setBranchType] = useState<string>('all');
+  const [branchId, setBranchId] = useState<string>('');
+
+  const params: any = {};
+  if (materialType !== 'all') params.materialType = materialType as StockProductKind;
+  if (branchType !== 'all') params.branchType = branchType;
+  if (branchId && branchId !== '0') params.branchId = Number(branchId);
+
+  const { data, isLoading } = useGetStockValuation(params);
   const rows = data?.rows ?? [];
   const grandTotal = data?.grandTotal ?? 0;
+  const onHandValue = data?.onHandValue ?? 0;
+  const inTransitValue = data?.inTransitValue ?? 0;
+  const reservedQty = data?.reservedQuantity ?? 0;
 
   const byLocation = useMemo(() => {
-    const m = new Map<string, { branchType: string; branchName: string; skus: number; totalQty: number; value: number }>();
+    const m = new Map<string, { branchType: string; branchName: string; skus: number; totalQty: number; value: number; onHand: number; transit: number }>();
     for (const r of rows) {
       const k = `${r.branchType}:${r.branchId}`;
-      const e = m.get(k) ?? { branchType: r.branchType, branchName: r.branchName, skus: 0, totalQty: 0, value: 0 };
+      const e = m.get(k) ?? { branchType: r.branchType, branchName: r.branchName, skus: 0, totalQty: 0, value: 0, onHand: 0, transit: 0 };
       e.skus += 1; e.totalQty += r.quantity; e.value += r.value;
+      if (r.inTransit) e.transit += r.value;
+      else e.onHand += r.value;
       m.set(k, e);
     }
     return [...m.values()].sort((a, b) => b.value - a.value);
   }, [rows]);
 
+  const branchOptions = branchType === 'warehouse' ? warehouses : branchType === 'outlet' ? outlets : [];
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <p className="text-xs text-muted-foreground">Live snapshot as of {today()}</p>
+        <Select value={materialType} onValueChange={setMaterialType}>
+          <SelectTrigger className="h-8 text-xs w-44"><SelectValue placeholder="All Types" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Product Kinds</SelectItem>
+            <SelectItem value="item">Finished Good</SelectItem>
+            <SelectItem value="material">Raw Material</SelectItem>
+            <SelectItem value="raw_material">Packing Material</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={branchType} onValueChange={(v) => { setBranchType(v); setBranchId(''); }}>
+          <SelectTrigger className="h-8 text-xs w-36"><SelectValue placeholder="All Locations" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Locations</SelectItem>
+            <SelectItem value="headoffice">Head Office</SelectItem>
+            <SelectItem value="warehouse">Warehouse</SelectItem>
+            <SelectItem value="outlet">Outlet</SelectItem>
+          </SelectContent>
+        </Select>
+        {branchOptions.length > 0 && (
+          <Select value={branchId} onValueChange={setBranchId}>
+            <SelectTrigger className="h-8 text-xs w-36"><SelectValue placeholder="All" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="0">All</SelectItem>
+              {branchOptions.map((b: any) => (
+                <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         <ExportButtons
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('stock-valuation.csv', rows.map((r) => ({
-            Item: r.itemName, Unit: r.unit, Location: r.branchName, 'Location Type': r.branchType,
-            Qty: r.quantity, 'Avg Cost (₹)': r.avgCost.toFixed(2), 'Value (₹)': r.value.toFixed(2),
+            'Product Type': r.typeLabel, Item: r.itemName, Unit: r.unit, Location: r.branchName, 'Location Type': titleCase(r.branchType),
+            'In Transit': r.inTransit ? 'Yes' : 'No',
+            Qty: r.quantity, Reserved: r.reserved, Available: r.available,
+            'Avg Cost (₹)': r.avgCost.toFixed(2), 'Value (₹)': r.value.toFixed(2),
           })))}
           onPDF={() => exportReportPdf({
             title: 'Stock Valuation',
             subtitle: `Snapshot as of ${today()}`,
-            metaRows: [['As of', today()], ['Locations', String(byLocation.length)], ['Stock Value', pdfMoney(grandTotal)]],
+            metaRows: [
+              ['As of', today()],
+              ['Locations', String(byLocation.length)],
+              ['On-hand value', pdfMoney(onHandValue)],
+              ['In-transit value', pdfMoney(inTransitValue)],
+              ['Grand total', pdfMoney(grandTotal)],
+            ],
             sections: [
               {
                 heading: 'Value by Location',
                 columns: [
-                  { label: 'Location', width: 2.2 }, { label: 'Type' }, { label: 'SKUs', align: 'center' },
-                  { label: 'Total Qty', align: 'right' }, { label: 'Value', align: 'right', width: 1.5 },
+                  { label: 'Location', width: 2 }, { label: 'Type' }, { label: 'Lines', align: 'center' },
+                  { label: 'Total Qty', align: 'right' }, { label: 'On-hand', align: 'right', width: 1.3 },
+                  { label: 'In-transit', align: 'right', width: 1.3 }, { label: 'Total', align: 'right', width: 1.3 },
                 ],
-                rows: byLocation.map((l) => [l.branchName, titleCase(l.branchType), l.skus, num(l.totalQty), pdfMoney(l.value)]),
-                totalsRow: ['TOTAL', '', '', '', pdfMoney(grandTotal)],
+                rows: byLocation.map((l) => [l.branchName, titleCase(l.branchType), l.skus, num(l.totalQty), pdfMoney(l.onHand), pdfMoney(l.transit), pdfMoney(l.value)]),
+                totalsRow: ['TOTAL', '', '', '', pdfMoney(onHandValue), pdfMoney(inTransitValue), pdfMoney(grandTotal)],
               },
               {
                 heading: 'Detail by Item & Location',
                 columns: [
-                  { label: 'Item', width: 2.2 }, { label: 'Unit' }, { label: 'Location', width: 1.6 },
-                  { label: 'Qty', align: 'right' }, { label: 'Avg Cost', align: 'right', width: 1.2 },
-                  { label: 'Value', align: 'right', width: 1.4 },
+                  { label: 'Type' }, { label: 'Item', width: 2 }, { label: 'Location', width: 1.4 },
+                  { label: 'Qty', align: 'right' }, { label: 'Rsvd', align: 'right' }, { label: 'Avail', align: 'right' },
+                  { label: 'Avg Cost', align: 'right', width: 1.1 }, { label: 'Value', align: 'right', width: 1.2 },
                 ],
-                rows: rows.map((r) => [r.itemName, r.unit, r.branchName, num(r.quantity), pdfMoney(r.avgCost), pdfMoney(r.value)]),
+                rows: rows.map((r) => [
+                  r.typeLabel, r.itemName, r.branchName + (r.inTransit ? ' (transit)' : ''),
+                  num(r.quantity), num(r.reserved), num(r.available), pdfMoney(r.avgCost), pdfMoney(r.value),
+                ]),
               },
             ],
           })}
@@ -76,10 +138,10 @@ function ValuationReport() {
       </div>
 
       <SummaryCards cards={[
-        { label: 'Total Stock Value', value: fmt(grandTotal), tone: 'accent' },
-        { label: 'Locations', value: byLocation.length },
-        { label: 'Stock Lines', value: rows.length },
-        { label: 'Total Qty', value: num(rows.reduce((s, r) => s + r.quantity, 0)) },
+        { label: 'Grand Total', value: fmt(grandTotal), tone: 'accent' },
+        { label: 'On-hand Value', value: fmt(onHandValue) },
+        { label: 'In-transit Value', value: fmt(inTransitValue) },
+        { label: 'Reserved Qty', value: num(reservedQty), tone: reservedQty > 0 ? 'warn' : 'default' },
       ]} />
 
       <div className="space-y-2">
@@ -88,12 +150,14 @@ function ValuationReport() {
           cols={[
             { key: 'branchName', label: 'Location', render: (r) => <span className="font-medium">{r.branchName}</span> },
             { key: 'branchType', label: 'Type', render: (r) => <LocationBadge type={r.branchType} /> },
-            { key: 'skus', label: 'SKUs', align: 'center' },
+            { key: 'skus', label: 'Lines', align: 'center' },
             { key: 'totalQty', label: 'Total Qty', align: 'right', render: (r) => num(r.totalQty) },
-            { key: 'value', label: 'Value', align: 'right', render: (r) => <b>{fmt(r.value)}</b> },
+            { key: 'onHand', label: 'On-hand', align: 'right', render: (r) => fmt(r.onHand) },
+            { key: 'transit', label: 'In-transit', align: 'right', render: (r) => r.transit > 0 ? fmt(r.transit) : <span className="text-muted-foreground">—</span> },
+            { key: 'value', label: 'Total Value', align: 'right', render: (r) => <b>{fmt(r.value)}</b> },
           ] satisfies Col<(typeof byLocation)[number]>[]}
           rows={byLocation} loading={isLoading} rowKey={(_, i) => i}
-          footer={['TOTAL', '', '', '', fmt(grandTotal)]}
+          footer={['TOTAL', '', '', '', fmt(onHandValue), fmt(inTransitValue), fmt(grandTotal)]}
         />
       </div>
 
@@ -101,89 +165,394 @@ function ValuationReport() {
         <h3 className="text-sm font-semibold text-muted-foreground">Detail by Item &amp; Location</h3>
         <RTable
           cols={[
+            { key: 'typeLabel', label: 'Type', render: (r) => <Badge variant="outline" className="text-[10px]">{r.typeLabel}</Badge> },
             { key: 'itemName', label: 'Item', render: (r) => <span className="font-medium">{r.itemName}</span> },
-            { key: 'unit', label: 'Unit' },
-            { key: 'branchName', label: 'Location' },
-            { key: 'branchType', label: 'Type', render: (r) => <LocationBadge type={r.branchType} /> },
+            { key: 'branchName', label: 'Location', render: (r) => (
+              <span className={r.inTransit ? 'text-amber-600 text-xs' : ''}>{r.branchName}</span>
+            ) },
+            { key: 'branchType', label: 'Loc Type', render: (r) => <LocationBadge type={r.branchType} /> },
             { key: 'quantity', label: 'Qty', align: 'right', render: (r) => num(r.quantity) },
+            { key: 'reserved', label: 'Rsvd', align: 'right', render: (r) => r.reserved > 0 ? <span className="text-amber-600 font-semibold">{num(r.reserved)}</span> : <span className="text-muted-foreground">—</span> },
+            { key: 'available', label: 'Avail', align: 'right', render: (r) => <span className="font-semibold">{num(r.available)}</span> },
             { key: 'avgCost', label: 'Avg Cost', align: 'right', render: (r) => fmt(r.avgCost) },
             { key: 'value', label: 'Value', align: 'right', render: (r) => <b>{fmt(r.value)}</b> },
           ] satisfies Col<(typeof rows)[number]>[]}
-          rows={rows} loading={isLoading} rowKey={(r) => `${r.itemId}:${r.branchType}:${r.branchId}`}
+          rows={rows} loading={isLoading}
+          // A product can appear at one location twice — once on hand, once in
+          // transit — and the three product kinds share one id space, so both
+          // the kind and the in-transit flag belong in the key.
+          rowKey={(r) => `${r.materialType}:${r.refId}:${r.branchType}:${r.branchId}:${r.inTransit ? 'transit' : 'onhand'}`}
         />
       </div>
     </div>
   );
 }
 
-// ── Expiry report ─────────────────────────────────────────────────────────────
-function ExpiryReport() {
-  const [days, setDays] = useState(30);
-  const { data, isLoading } = useGetExpiryReport(days);
+// ── Near Expiry report ────────────────────────────────────────────────────────
+function NearExpiryReport() {
+  const { data: warehouses = [] } = useListWarehouses();
+  const { data: outlets = [] } = useListOutlets();
+  const [branchType, setBranchType] = useState<string>('');
+  const [branchId, setBranchId] = useState<string>('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+
+  const params: any = { status: 'near_expiry' };
+  if (branchType) params.branchType = branchType;
+  if (branchId && branchId !== '0') params.branchId = Number(branchId);
+  if (from) params.from = from;
+  if (to) params.to = to;
+
+  const { data, isLoading } = useGetExpiryReport(params);
   const rows = data?.rows ?? [];
-  const expired = rows.filter((r) => r.status === 'expired');
-  const valueAtRisk = rows.reduce((s, r) => s + r.value, 0);
+  const buckets = data?.buckets ?? [];
+  const summary = data?.summary;
+  const valueAtRisk = summary?.nearExpiryValue ?? 0;
+
+  const branchOptions = branchType === 'warehouse' ? warehouses : branchType === 'outlet' ? outlets : [];
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-muted-foreground">Batches expiring within</span>
-        <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>
-          <SelectTrigger className="h-8 text-xs w-28"><SelectValue /></SelectTrigger>
+        <p className="text-xs text-muted-foreground">Near-expiry batches</p>
+        <Select value={branchType} onValueChange={(v) => { setBranchType(v); setBranchId(''); }}>
+          <SelectTrigger className="h-8 text-xs w-36"><SelectValue placeholder="All Locations" /></SelectTrigger>
           <SelectContent>
-            {[7, 15, 30, 60, 90].map((d) => <SelectItem key={d} value={String(d)}>{d} days</SelectItem>)}
+            <SelectItem value="">All Locations</SelectItem>
+            <SelectItem value="warehouse">Warehouse</SelectItem>
+            <SelectItem value="outlet">Outlet</SelectItem>
           </SelectContent>
         </Select>
+        {branchOptions.length > 0 && (
+          <Select value={branchId} onValueChange={setBranchId}>
+            <SelectTrigger className="h-8 text-xs w-36"><SelectValue placeholder="All" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="0">All</SelectItem>
+              {branchOptions.map((b: any) => (
+                <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-muted-foreground">From</span>
+          <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-8 text-xs w-36" />
+          <span className="text-xs text-muted-foreground">to</span>
+          <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-8 text-xs w-36" />
+        </div>
         <ExportButtons
           disabled={isLoading || rows.length === 0}
-          onCSV={() => downloadCSV('expiry-report.csv', rows.map((r) => ({
-            Item: r.itemName, Batch: r.batchNumber, Location: r.branchName, 'Mfg Date': r.mfgDate ?? '',
-            'Expiry Date': r.expiryDate, 'Days to Expiry': r.daysToExpiry, Qty: r.quantity,
-            'Unit Cost (₹)': r.unitCost.toFixed(2), 'Value (₹)': r.value.toFixed(2), Status: r.status,
+          onCSV={() => downloadCSV('near-expiry.csv', rows.map((r) => ({
+            Type: r.typeLabel, Item: r.itemName, Batch: r.batchNumber, Location: r.branchName,
+            'Mfg Date': r.mfgDate ?? '', 'Expiry Date': r.expiryDate, 'Days to Expiry': r.daysToExpiry,
+            Qty: r.quantity, Reserved: r.reserved, Available: r.available,
+            'Unit Cost (₹)': r.unitCost.toFixed(2), 'Value (₹)': r.value.toFixed(2), Bucket: r.bucketLabel,
           })))}
           onPDF={() => exportReportPdf({
-            title: 'Stock Expiry Report',
-            subtitle: `Batches expiring within ${days} days (as of ${today()})`,
-            metaRows: [['Window', `${days} days`], ['At-risk batches', String(rows.length)], ['Value at risk', pdfMoney(valueAtRisk)]],
+            title: 'Near Expiry Report',
+            subtitle: `Batches nearing expiry (as of ${today()})`,
+            metaRows: [['As of', today()], ['Near-expiry batches', String(summary?.nearExpiryBatches ?? 0)], ['Value at risk', pdfMoney(valueAtRisk)]],
             sections: [{
               columns: [
-                { label: 'Item', width: 2 }, { label: 'Batch', width: 1.2 }, { label: 'Location', width: 1.5 },
-                { label: 'Expiry', width: 1.1 }, { label: 'Days Left', align: 'center' },
-                { label: 'Qty', align: 'right' }, { label: 'Value', align: 'right', width: 1.2 }, { label: 'Status' },
+                { label: 'Type' }, { label: 'Item', width: 1.8 }, { label: 'Batch', width: 1.1 }, { label: 'Location', width: 1.3 },
+                { label: 'Expiry' }, { label: 'Days', align: 'center' },
+                { label: 'Qty', align: 'right' }, { label: 'Avail', align: 'right' }, { label: 'Value', align: 'right', width: 1.1 },
               ],
-              rows: rows.map((r) => [r.itemName, r.batchNumber, r.branchName, fmtDate(r.expiryDate),
-                r.daysToExpiry, num(r.quantity), pdfMoney(r.value), r.status === 'expired' ? 'EXPIRED' : 'Near expiry']),
-              totalsRow: ['TOTAL', '', '', '', '', '', pdfMoney(valueAtRisk), ''],
+              rows: rows.map((r) => [r.typeLabel, r.itemName, r.batchNumber, r.branchName, fmtDate(r.expiryDate),
+                r.daysToExpiry, num(r.quantity), num(r.available), pdfMoney(r.value)]),
+              totalsRow: ['', '', '', '', '', '', '', '', pdfMoney(valueAtRisk)],
             }],
           })}
         />
       </div>
 
-      <SummaryCards cards={[
-        { label: 'At-risk Batches', value: rows.length, tone: rows.length > 0 ? 'warn' : 'pos' },
-        { label: 'Already Expired', value: expired.length, tone: expired.length > 0 ? 'neg' : 'pos' },
-        { label: 'Qty at Risk', value: num(rows.reduce((s, r) => s + r.quantity, 0)) },
-        { label: 'Value at Risk', value: fmt(valueAtRisk), tone: 'neg' },
-      ]} />
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        {buckets.filter(b => b.bucket !== 'expired' && b.bucket !== 'ok' && b.bucket !== 'no_expiry').map(b => (
+          <div key={b.bucket} className="bg-card border border-border rounded-lg p-3">
+            <p className="text-xs text-muted-foreground mb-1">{b.label}</p>
+            <p className="font-bold font-mono text-sm">{b.batches} batches</p>
+            <p className="text-xs text-muted-foreground">{num(b.quantity)} qty · {fmt(b.value)}</p>
+          </div>
+        ))}
+      </div>
+
+      {summary && (
+        <SummaryCards cards={[
+          { label: 'Near-expiry Batches', value: summary.nearExpiryBatches, tone: summary.nearExpiryBatches > 0 ? 'warn' : 'pos' },
+          { label: 'Qty at Risk', value: num(summary.nearExpiryQuantity) },
+          { label: 'Value at Risk', value: fmt(summary.nearExpiryValue), tone: 'warn' },
+          { label: 'Locations', value: new Set(rows.map(r => `${r.branchType}:${r.branchId}`)).size },
+        ]} />
+      )}
 
       <RTable
         cols={[
+          { key: 'typeLabel', label: 'Type', render: (r) => <Badge variant="outline" className="text-[10px]">{r.typeLabel}</Badge> },
           { key: 'itemName', label: 'Item', render: (r) => <span className="font-medium">{r.itemName}</span> },
           { key: 'batchNumber', label: 'Batch', render: (r) => <span className="font-mono text-xs">{r.batchNumber}</span> },
           { key: 'branchName', label: 'Location' },
           { key: 'expiryDate', label: 'Expiry', render: (r) => fmtDate(r.expiryDate) },
-          { key: 'daysToExpiry', label: 'Days Left', align: 'center', render: (r) => (
-            <Badge className={`text-[10px] ${r.status === 'expired' ? 'bg-red-500/10 text-red-600 border-red-500/20' : r.daysToExpiry <= 7 ? 'bg-orange-500/10 text-orange-600 border-orange-500/20' : 'bg-amber-500/10 text-amber-600 border-amber-500/20'}`}>
-              {r.status === 'expired' ? 'Expired' : `${r.daysToExpiry}d`}
-            </Badge>
-          ) },
+          { key: 'bucketLabel', label: 'Shelf Life', render: (r) => {
+            const toneMap: Record<string, string> = {
+              critical: 'bg-red-500/10 text-red-600 border-red-500/20',
+              warn: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+              caution: 'bg-yellow-500/10 text-yellow-600 border-yellow-500/20',
+            };
+            return <Badge className={`text-[10px] ${toneMap[r.tone] ?? ''}`}>{r.bucketLabel}</Badge>;
+          } },
           { key: 'quantity', label: 'Qty', align: 'right', render: (r) => num(r.quantity) },
-          { key: 'unitCost', label: 'Unit Cost', align: 'right', render: (r) => fmt(r.unitCost) },
+          { key: 'available', label: 'Avail', align: 'right', render: (r) => <span className="font-semibold">{num(r.available)}</span> },
           { key: 'value', label: 'Value', align: 'right', render: (r) => <b>{fmt(r.value)}</b> },
         ] satisfies Col<(typeof rows)[number]>[]}
         rows={rows} loading={isLoading} rowKey={(r) => r.id}
-        empty={`No batches expiring within ${days} days 🎉`}
-        footer={['TOTAL', '', '', '', '', num(rows.reduce((s, r) => s + r.quantity, 0)), '', fmt(valueAtRisk)]}
+        empty="No batches nearing expiry"
+        footer={['', '', '', '', '', '', num(rows.reduce((s, r) => s + r.quantity, 0)), num(rows.reduce((s, r) => s + r.available, 0)), fmt(valueAtRisk)]}
+      />
+    </div>
+  );
+}
+
+// ── Expired Stock report ──────────────────────────────────────────────────────
+function ExpiredReport() {
+  const { data: warehouses = [] } = useListWarehouses();
+  const { data: outlets = [] } = useListOutlets();
+  const [branchType, setBranchType] = useState<string>('');
+  const [branchId, setBranchId] = useState<string>('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+
+  const params: any = { status: 'expired' };
+  if (branchType) params.branchType = branchType;
+  if (branchId && branchId !== '0') params.branchId = Number(branchId);
+  if (from) params.from = from;
+  if (to) params.to = to;
+
+  const { data, isLoading } = useGetExpiryReport(params);
+  const rows = data?.rows ?? [];
+  const summary = data?.summary;
+  const expiredValue = summary?.expiredValue ?? 0;
+
+  const branchOptions = branchType === 'warehouse' ? warehouses : branchType === 'outlet' ? outlets : [];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs text-muted-foreground">Expired stock</p>
+        <Select value={branchType} onValueChange={(v) => { setBranchType(v); setBranchId(''); }}>
+          <SelectTrigger className="h-8 text-xs w-36"><SelectValue placeholder="All Locations" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">All Locations</SelectItem>
+            <SelectItem value="warehouse">Warehouse</SelectItem>
+            <SelectItem value="outlet">Outlet</SelectItem>
+          </SelectContent>
+        </Select>
+        {branchOptions.length > 0 && (
+          <Select value={branchId} onValueChange={setBranchId}>
+            <SelectTrigger className="h-8 text-xs w-36"><SelectValue placeholder="All" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="0">All</SelectItem>
+              {branchOptions.map((b: any) => (
+                <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-muted-foreground">From</span>
+          <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-8 text-xs w-36" />
+          <span className="text-xs text-muted-foreground">to</span>
+          <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-8 text-xs w-36" />
+        </div>
+        <ExportButtons
+          disabled={isLoading || rows.length === 0}
+          onCSV={() => downloadCSV('expired-stock.csv', rows.map((r) => ({
+            Type: r.typeLabel, Item: r.itemName, Batch: r.batchNumber, Location: r.branchName,
+            'Mfg Date': r.mfgDate ?? '', 'Expired On': r.expiryDate, 'Days Ago': Math.abs(r.daysToExpiry),
+            Qty: r.quantity, Reserved: r.reserved, Available: r.available,
+            'Unit Cost (₹)': r.unitCost.toFixed(2), 'Value (₹)': r.value.toFixed(2),
+          })))}
+          onPDF={() => exportReportPdf({
+            title: 'Expired Stock Report',
+            subtitle: `Expired batches (as of ${today()})`,
+            metaRows: [['As of', today()], ['Expired batches', String(summary?.expiredBatches ?? 0)], ['Expired value', pdfMoney(expiredValue)]],
+            sections: [{
+              columns: [
+                { label: 'Type' }, { label: 'Item', width: 1.8 }, { label: 'Batch', width: 1.1 }, { label: 'Location', width: 1.3 },
+                { label: 'Expired', width: 1.1 }, { label: 'Days Ago', align: 'center' },
+                { label: 'Qty', align: 'right' }, { label: 'Avail', align: 'right' }, { label: 'Value', align: 'right', width: 1.1 },
+              ],
+              rows: rows.map((r) => [r.typeLabel, r.itemName, r.batchNumber, r.branchName, fmtDate(r.expiryDate),
+                Math.abs(r.daysToExpiry), num(r.quantity), num(r.available), pdfMoney(r.value)]),
+              totalsRow: ['', '', '', '', '', '', '', '', pdfMoney(expiredValue)],
+            }],
+          })}
+        />
+      </div>
+
+      {summary && (
+        <SummaryCards cards={[
+          { label: 'Expired Batches', value: summary.expiredBatches, tone: summary.expiredBatches > 0 ? 'neg' : 'pos' },
+          { label: 'Expired Qty', value: num(summary.expiredQuantity), tone: 'neg' },
+          { label: 'Expired Value', value: fmt(summary.expiredValue), tone: 'neg' },
+          { label: 'Locations', value: new Set(rows.map(r => `${r.branchType}:${r.branchId}`)).size },
+        ]} />
+      )}
+
+      <RTable
+        cols={[
+          { key: 'typeLabel', label: 'Type', render: (r) => <Badge variant="outline" className="text-[10px]">{r.typeLabel}</Badge> },
+          { key: 'itemName', label: 'Item', render: (r) => <span className="font-medium">{r.itemName}</span> },
+          { key: 'batchNumber', label: 'Batch', render: (r) => <span className="font-mono text-xs">{r.batchNumber}</span> },
+          { key: 'branchName', label: 'Location' },
+          { key: 'expiryDate', label: 'Expired On', render: (r) => fmtDate(r.expiryDate) },
+          { key: 'daysToExpiry', label: 'Days Ago', align: 'center', render: (r) => (
+            <Badge variant="destructive" className="text-[10px]">{Math.abs(r.daysToExpiry)}d ago</Badge>
+          ) },
+          { key: 'quantity', label: 'Qty', align: 'right', render: (r) => num(r.quantity) },
+          { key: 'available', label: 'Avail', align: 'right', render: (r) => <span className="font-semibold">{num(r.available)}</span> },
+          { key: 'value', label: 'Value', align: 'right', render: (r) => <b>{fmt(r.value)}</b> },
+        ] satisfies Col<(typeof rows)[number]>[]}
+        rows={rows} loading={isLoading} rowKey={(r) => r.id}
+        empty="No expired stock 🎉"
+        footer={['', '', '', '', '', '', num(rows.reduce((s, r) => s + r.quantity, 0)), num(rows.reduce((s, r) => s + r.available, 0)), fmt(expiredValue)]}
+      />
+    </div>
+  );
+}
+
+// ── Slow / Dead Stock ─────────────────────────────────────────────────────────
+function MovementReport() {
+  const { data: warehouses = [] } = useListWarehouses();
+  const { data: outlets = [] } = useListOutlets();
+  const [branchType, setBranchType] = useState<string>('');
+  const [branchId, setBranchId] = useState<string>('');
+  const [classFilter, setClassFilter] = useState<string>('all');
+
+  const params: any = {};
+  if (branchType) params.branchType = branchType;
+  if (branchId && branchId !== '0') params.branchId = Number(branchId);
+  if (classFilter !== 'all') params.class = classFilter;
+
+  const { data, isLoading } = useGetMovementAnalysis(params);
+  const rows = data?.rows ?? [];
+  const summary = data?.summary ?? [];
+  const ledgerStart = data?.ledgerStart;
+
+  const branchOptions = branchType === 'warehouse' ? warehouses : branchType === 'outlet' ? outlets : [];
+
+  const classMap: Record<string, string> = {
+    fast: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
+    slow: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+    dormant: 'bg-orange-500/10 text-orange-600 border-orange-500/20',
+    dead: 'bg-red-500/10 text-red-600 border-red-500/20',
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs text-muted-foreground">Slow &amp; dead stock analysis</p>
+        <Select value={branchType} onValueChange={(v) => { setBranchType(v); setBranchId(''); }}>
+          <SelectTrigger className="h-8 text-xs w-36"><SelectValue placeholder="All Locations" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">All Locations</SelectItem>
+            <SelectItem value="warehouse">Warehouse</SelectItem>
+            <SelectItem value="outlet">Outlet</SelectItem>
+          </SelectContent>
+        </Select>
+        {branchOptions.length > 0 && (
+          <Select value={branchId} onValueChange={setBranchId}>
+            <SelectTrigger className="h-8 text-xs w-36"><SelectValue placeholder="All" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="0">All</SelectItem>
+              {branchOptions.map((b: any) => (
+                <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        <Select value={classFilter} onValueChange={setClassFilter}>
+          <SelectTrigger className="h-8 text-xs w-32"><SelectValue placeholder="All Classes" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Classes</SelectItem>
+            <SelectItem value="fast">Fast</SelectItem>
+            <SelectItem value="slow">Slow</SelectItem>
+            <SelectItem value="dormant">Dormant</SelectItem>
+            <SelectItem value="dead">Dead</SelectItem>
+          </SelectContent>
+        </Select>
+        <ExportButtons
+          disabled={isLoading || rows.length === 0}
+          onCSV={() => downloadCSV('movement-analysis.csv', rows.map((r) => ({
+            Type: r.typeLabel, Item: r.itemName, Location: r.branchName,
+            Class: r.classLabel, 'Days Since Outbound': r.daysSinceOutbound ?? 'Never',
+            'Last Outbound': r.lastOutboundAt ? fmtDate(r.lastOutboundAt) : 'Never',
+            Qty: r.quantity, Available: r.available, 'Unit Cost (₹)': r.unitCost.toFixed(2), 'Value (₹)': r.value.toFixed(2),
+            'No History': r.noHistory ? 'Yes' : 'No',
+          })))}
+          onPDF={() => exportReportPdf({
+            title: 'Movement Analysis (Slow / Dead Stock)',
+            subtitle: `Based on last outbound movement (as of ${today()})`,
+            metaRows: [
+              ['As of', today()],
+              ['Ledger start', ledgerStart ? fmtDate(ledgerStart) : 'Unknown'],
+              ['Stock lines', String(rows.length)],
+              ['Total value', pdfMoney(data?.totalValue ?? 0)],
+            ],
+            sections: [{
+              columns: [
+                { label: 'Class' }, { label: 'Type' }, { label: 'Item', width: 2 }, { label: 'Location', width: 1.3 },
+                { label: 'Days Since Out', align: 'right' }, { label: 'Qty', align: 'right' },
+                { label: 'Avail', align: 'right' }, { label: 'Value', align: 'right', width: 1.1 },
+              ],
+              rows: rows.map((r) => [
+                r.classLabel, r.typeLabel, r.itemName, r.branchName,
+                r.noHistory ? 'Never' : (r.daysSinceOutbound ?? 'N/A'), num(r.quantity), num(r.available), pdfMoney(r.value),
+              ]),
+              totalsRow: ['', '', '', '', '', '', '', pdfMoney(data?.totalValue ?? 0)],
+            }],
+          })}
+        />
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {summary.map(s => (
+          <div key={s.class} className="bg-card border border-border rounded-lg p-3">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-xs text-muted-foreground">{s.label}</p>
+              <Badge className={`text-[10px] ${classMap[s.class] ?? ''}`}>{s.class}</Badge>
+            </div>
+            <p className="font-bold font-mono text-sm">{s.lines} lines</p>
+            <p className="text-xs text-muted-foreground">{num(s.quantity)} qty · {fmt(s.value)}</p>
+          </div>
+        ))}
+      </div>
+
+      {ledgerStart && (
+        <div className="text-xs text-muted-foreground bg-muted/20 border border-border rounded-lg p-3">
+          Movement recorded since <b>{fmtDate(ledgerStart)}</b>. Stock acquired before this date may show as "no history" even if it moved.
+        </div>
+      )}
+
+      <RTable
+        cols={[
+          { key: 'classLabel', label: 'Class', render: (r) => (
+            <Badge className={`text-[10px] ${classMap[r.class] ?? ''}`}>{r.classLabel}</Badge>
+          ) },
+          { key: 'typeLabel', label: 'Type', render: (r) => <Badge variant="outline" className="text-[10px]">{r.typeLabel}</Badge> },
+          { key: 'itemName', label: 'Item', render: (r) => <span className="font-medium">{r.itemName}</span> },
+          { key: 'branchName', label: 'Location' },
+          { key: 'daysSinceOutbound', label: 'Days Since Outbound', align: 'right', render: (r) =>
+            r.noHistory ? <span className="text-xs text-muted-foreground italic">No history</span> :
+            r.daysSinceOutbound != null ? num(r.daysSinceOutbound) : <span className="text-muted-foreground">—</span>
+          },
+          { key: 'lastOutboundAt', label: 'Last Outbound', render: (r) => r.lastOutboundAt ? fmtDate(r.lastOutboundAt) : <span className="text-muted-foreground text-xs">Never</span> },
+          { key: 'quantity', label: 'Qty', align: 'right', render: (r) => num(r.quantity) },
+          { key: 'available', label: 'Avail', align: 'right', render: (r) => <span className="font-semibold">{num(r.available)}</span> },
+          { key: 'value', label: 'Value', align: 'right', render: (r) => <b>{fmt(r.value)}</b> },
+        ] satisfies Col<(typeof rows)[number]>[]}
+        rows={rows} loading={isLoading} rowKey={(r) => `${r.materialType}:${r.refId}:${r.branchType}:${r.branchId}`}
+        empty="No stock in selected class"
+        footer={['', '', '', '', '', '', num(rows.reduce((s, r) => s + r.quantity, 0)), num(rows.reduce((s, r) => s + r.available, 0)), fmt(rows.reduce((s, r) => s + r.value, 0))]}
       />
     </div>
   );
@@ -352,14 +721,18 @@ export default function InventorySection() {
       <ReportPicker
         options={[
           { value: 'valuation', label: 'Stock Valuation' },
-          { value: 'expiry', label: 'Expiry Report' },
+          { value: 'near_expiry', label: 'Near Expiry' },
+          { value: 'expired', label: 'Expired Stock' },
+          { value: 'movement', label: 'Slow / Dead Stock' },
           { value: 'reorder', label: 'Reorder Alerts' },
           { value: 'transfers', label: 'Transfer Register' },
         ]}
         value={report} onChange={setReport}
       />
       {report === 'valuation' && <ValuationReport />}
-      {report === 'expiry' && <ExpiryReport />}
+      {report === 'near_expiry' && <NearExpiryReport />}
+      {report === 'expired' && <ExpiredReport />}
+      {report === 'movement' && <MovementReport />}
       {report === 'reorder' && <ReorderReport />}
       {report === 'transfers' && <TransfersReport />}
     </div>

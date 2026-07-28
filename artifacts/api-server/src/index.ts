@@ -1336,6 +1336,64 @@ await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_ledger_ref      ON stock_
 await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_ledger_doc      ON stock_ledger (doc_type, doc_id)`);
 await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_ledger_created  ON stock_ledger (created_at DESC)`);
 
+// ── stock_reservations table ──────────────────────────────────────────────────
+// One row per commitment against stock, so the same physical goods can never be
+// promised twice. `hold` rows reduce available quantity (goods still on hand);
+// `in_transit` rows do not (goods already deducted at dispatch) and exist so
+// in-flight stock stays visible and valuable to its sender. See
+// lib/reservations.ts for the full contract.
+await pool.query(`
+  CREATE TABLE IF NOT EXISTS stock_reservations (
+    id            SERIAL PRIMARY KEY,
+    ref_id        INTEGER NOT NULL,
+    material_type TEXT    NOT NULL DEFAULT 'item',
+    branch_type   TEXT    NOT NULL,
+    branch_id     INTEGER NOT NULL,
+    batch_id      INTEGER,
+    batch_number  TEXT,
+    quantity      NUMERIC(12,3) NOT NULL,
+    unit_cost     NUMERIC(12,2) NOT NULL DEFAULT 0,
+    kind          TEXT    NOT NULL,
+    doc_type      TEXT    NOT NULL,
+    doc_id        INTEGER NOT NULL,
+    status        TEXT    NOT NULL DEFAULT 'active',
+    notes         TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    released_at   TIMESTAMPTZ,
+    CONSTRAINT stock_reservations_qty_positive CHECK (quantity > 0),
+    CONSTRAINT stock_reservations_kind_valid   CHECK (kind IN ('hold','in_transit')),
+    CONSTRAINT stock_reservations_status_valid CHECK (status IN ('active','released'))
+  )
+`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_res_active ON stock_reservations (material_type, ref_id, branch_type, branch_id, kind) WHERE status = 'active'`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_res_batch  ON stock_reservations (batch_id) WHERE status = 'active'`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_res_doc    ON stock_reservations (doc_type, doc_id)`);
+
+// Transfers dispatched before reservations existed still have goods in flight.
+// Without a row each, that stock belongs to no location and vanishes from
+// valuation. Line-level (not lot-level) is enough for a backfill: availability
+// is unaffected by in-transit rows, and the value is what matters.
+await pool.query(`
+  INSERT INTO stock_reservations
+    (ref_id, material_type, branch_type, branch_id, quantity, unit_cost, kind, doc_type, doc_id, notes)
+  SELECT (li->>'itemId')::int,
+         COALESCE(NULLIF(li->>'materialType', ''), 'item'),
+         t.from_type, t.from_id,
+         (li->>'quantity')::numeric,
+         COALESCE(NULLIF(li->>'costPrice', '')::numeric, 0),
+         'in_transit', 'stock_transfer', t.id,
+         'Backfilled from a transfer already in transit'
+    FROM stock_transfers t
+    CROSS JOIN LATERAL jsonb_array_elements(t.line_items) li
+   WHERE t.status = 'in_transit'
+     AND (li->>'itemId') IS NOT NULL
+     AND COALESCE((li->>'quantity')::numeric, 0) > 0
+     AND NOT EXISTS (
+       SELECT 1 FROM stock_reservations r
+        WHERE r.doc_type = 'stock_transfer' AND r.doc_id = t.id
+     )
+`);
+
 // ── Additional performance indexes ────────────────────────────────────────────
 await pool.query(`CREATE INDEX IF NOT EXISTS idx_sales_customer       ON sales (customer_id)       WHERE customer_id IS NOT NULL`);
 await pool.query(`CREATE INDEX IF NOT EXISTS idx_sales_invoice        ON sales (invoice_number)    WHERE invoice_number IS NOT NULL`);
