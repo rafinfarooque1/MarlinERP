@@ -1,0 +1,185 @@
+Perform a complete end-to-end audit and fix of the Stock Transfer module. Do not apply temporary fixes. Find the root cause and ensure every stock movement updates correctly throughout the ERP.
+
+Current Issue:
+- Stock transfers are created successfully.
+- Delivery challan is generated.
+- Warehouse receives the transfer request.
+- Clicking "Receive" does not correctly update warehouse stock.
+- Source stock, destination stock, inventory ledger, and related records are not always updated consistently.
+
+Tasks to verify and fix:
+
+1. Complete Stock Transfer Flow
+- Head Office → Warehouse
+- Warehouse → Warehouse
+- Warehouse → Outlet
+- Outlet → Warehouse (if allowed)
+- Ensure every transfer follows the correct workflow.
+
+2. Transfer Status
+Verify status changes correctly:
+Draft
+Pending Approval
+Approved
+In Transit
+Received
+Rejected
+Cancelled
+
+Ensure stock is updated ONLY after "Receive" is confirmed.
+
+3. Source Stock
+When dispatching:
+- Reduce stock from source location.
+- Prevent negative stock.
+- Validate available quantity before transfer.
+
+4. Destination Stock
+When receiving:
+- Increase stock at destination.
+- Create stock record automatically if it does not exist.
+- Update available quantity.
+- Update inventory valuation.
+
+5. Inventory Tables
+Verify all related tables are updated consistently:
+- Stock
+- Stock Ledger
+- Inventory Ledger
+- Stock Movement History
+- Transfer Header
+- Transfer Items
+- Batch Stock
+- Location Stock
+- Item Master balances
+- Raw Material balances
+- Packing Material balances
+
+6. Item Types
+Verify transfers work correctly for:
+- Item Name (SKU)
+- Raw Material
+- Packing Material
+
+All three item types must transfer correctly.
+
+7. Batch / Expiry
+If batch-controlled:
+- Batch number transfers.
+- Manufacturing date transfers.
+- Expiry date transfers.
+- FIFO remains correct.
+
+8. Costing
+Transfer must preserve:
+- Unit Cost
+- Average Cost
+- Total Value
+- Batch Cost
+
+No cost should become zero after transfer.
+
+9. Inventory Page
+After Receive:
+Inventory → Stock must immediately show:
+- Correct location
+- Correct quantity
+- Correct stock value
+- Correct item type
+
+10. Live Stock
+Production
+Inventory
+Warehouse
+Sales
+
+All modules must display identical stock quantities.
+
+11. Ledger Verification
+Verify stock ledger entries are created for:
+Dispatch
+Receive
+Reject
+Cancel
+
+No duplicate entries.
+
+12. Transfer History
+Maintain complete audit trail:
+Created By
+Approved By
+Received By
+Date
+Time
+Source
+Destination
+Quantity
+Remarks
+
+13. Multi-location Validation
+Test:
+Head Office → Warehouse A
+Head Office → Warehouse B
+Warehouse A → Warehouse B
+Warehouse → Outlet
+
+Verify stock balances remain accurate.
+
+14. GST Rules
+Same GST State:
+- Stock Transfer only.
+- No sales invoice.
+- No purchase invoice.
+- No GST posting.
+
+Different GST State:
+- Automatically treat as Inter-State transfer.
+- Backend creates:
+    Sales Invoice (Source)
+    Purchase Invoice (Destination)
+- Apply IGST.
+- Update customer/vendor ledgers.
+- Update stock at both locations.
+
+15. Atomic Transaction
+Entire transfer process must execute inside a database transaction.
+If any step fails:
+- Rollback everything.
+- Never leave partial stock updates.
+
+16. Validation
+Prevent:
+- Receiving twice.
+- Dispatching without stock.
+- Duplicate transfers.
+- Duplicate receive actions.
+- Receiving cancelled transfers.
+
+17. Final Testing
+Run a complete end-to-end verification using test data.
+
+Test:
+- Head Office stock before transfer.
+- Dispatch 24 units.
+- Verify source reduced.
+- Receive at warehouse.
+- Verify warehouse increased by 24.
+- Verify Inventory → Stock page.
+- Verify Stock Ledger.
+- Verify Transfer History.
+- Verify Inventory Valuation.
+- Verify Reports.
+- Verify Dashboard.
+
+18. Final Report
+Do not mark complete until every test passes.
+
+Provide:
+- Root cause found.
+- Files modified.
+- Database tables affected.
+- APIs updated.
+- Before vs After results.
+- Confirmation that every stock transfer scenario works correctly.
+
+Do not use mock data or temporary fixes. Ensure the entire stock transfer system is production-ready and fully synchronized across all modules.
