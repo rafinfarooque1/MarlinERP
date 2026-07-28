@@ -8,6 +8,7 @@ async function runMigrations() {
   await pool.query(`
     ALTER TABLE item_prices ADD COLUMN IF NOT EXISTS valid_from text;
     ALTER TABLE item_prices ADD COLUMN IF NOT EXISTS valid_to text;
+    ALTER TABLE item_prices ADD COLUMN IF NOT EXISTS location_type text NOT NULL DEFAULT 'outlet';
     ALTER TABLE account_ledgers ADD COLUMN IF NOT EXISTS code text;
     ALTER TABLE purchases ADD COLUMN IF NOT EXISTS tax_total numeric(12,2) DEFAULT 0;
     ALTER TABLE purchases ADD COLUMN IF NOT EXISTS discount_total numeric(12,2) DEFAULT 0;

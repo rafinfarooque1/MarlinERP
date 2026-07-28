@@ -222,12 +222,12 @@ export const MODULE_REGISTRY: ModuleDef[] = [
   // ── Production ─────────────────────────────────────────────────────────────
   {
     key: 'Units', permGroup: 'Production',
-    navGroup: 'Item Master',
+    navGroup: 'Inventory',
     navEntries: [{ name: 'Units', href: '/production/units' }],
   },
   {
     key: 'Items', permGroup: 'Production',
-    navGroup: 'Item Master',
+    navGroup: 'Inventory',
     navEntries: [{ name: 'Item Master', href: '/production/item-master' }],
   },
   {

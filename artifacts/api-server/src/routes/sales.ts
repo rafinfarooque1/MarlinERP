@@ -37,52 +37,109 @@ function computeLineTax(
 // ── Item Prices ───────────────────────────────────────────────────────────────
 
 router.get("/item-prices", async (req, res): Promise<void> => {
+  const { pool: pgPool } = await import("@workspace/db");
   const qp = ListItemPricesQueryParams.safeParse(req.query);
-  let rows = await db.select().from(itemPricesTable);
+
+  // Use raw SQL — location_type column is invisible to Drizzle (startup migration)
+  const { rows } = await pgPool.query(`
+    SELECT
+      ip.id, ip.item_id, ip.outlet_id, ip.price, ip.updated_at,
+      ip.valid_from, ip.valid_to,
+      COALESCE(ip.location_type, 'outlet') AS location_type,
+      i.name  AS item_name,
+      CASE
+        WHEN COALESCE(ip.location_type, 'outlet') = 'warehouse'  THEN w.name
+        WHEN COALESCE(ip.location_type, 'outlet') = 'headoffice' THEN 'Head Office'
+        ELSE o.name
+      END AS outlet_name
+    FROM item_prices ip
+    LEFT JOIN items     i ON i.id = ip.item_id
+    LEFT JOIN outlets   o ON o.id = ip.outlet_id AND COALESCE(ip.location_type, 'outlet') = 'outlet'
+    LEFT JOIN warehouses w ON w.id = ip.outlet_id AND ip.location_type = 'warehouse'
+    ORDER BY ip.id DESC
+  `);
+
+  let result = rows.map((r: any) => ({
+    id:           r.id,
+    itemId:       r.item_id,
+    outletId:     r.outlet_id,
+    locationType: r.location_type,
+    price:        Number(r.price),
+    validFrom:    r.valid_from ?? null,
+    validTo:      r.valid_to   ?? null,
+    itemName:     r.item_name  ?? '',
+    outletName:   r.outlet_name ?? '',
+    updatedAt:    r.updated_at instanceof Date ? r.updated_at.toISOString() : String(r.updated_at),
+  }));
+
   if (qp.success && qp.data.outletId) {
-    rows = rows.filter((r) => r.outletId === Number(qp.data.outletId));
+    result = result.filter((r: any) => r.outletId === Number(qp.data.outletId));
   }
-  const items = await db.select().from(itemsTable);
-  const outlets = await db.select().from(outletsTable);
-  const iMap = new Map(items.map((i) => [i.id, i.name]));
-  const oMap = new Map(outlets.map((o) => [o.id, o.name]));
-  res.json(rows.map((r) => ({
-    ...r,
-    itemName: iMap.get(r.itemId) ?? "",
-    outletName: oMap.get(r.outletId) ?? "",
-    price: Number(r.price),
-    updatedAt: r.updatedAt.toISOString(),
-  })));
+
+  res.json(result);
 });
 
 router.post("/item-prices", requireModuleAction("Item Prices", "add"), async (req, res): Promise<void> => {
+  const { pool: pgPool } = await import("@workspace/db");
   const parsed = SetItemPriceBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
-  const [existing] = await db.select().from(itemPricesTable)
-    .where(and(eq(itemPricesTable.itemId, parsed.data.itemId), eq(itemPricesTable.outletId, parsed.data.outletId)))
-    .limit(1);
+  const body = req.body as { validFrom?: string; validTo?: string; locationType?: string };
+  const locationType = body.locationType ?? 'outlet';
+  const locationId   = parsed.data.outletId; // reused field: holds warehouse/HO id too
 
-  const body = req.body as { validFrom?: string; validTo?: string };
-  const extraFields: Record<string, unknown> = {};
-  if (body.validFrom !== undefined) extraFields.validFrom = body.validFrom || null;
-  if (body.validTo !== undefined) extraFields.validTo = body.validTo || null;
+  // For headoffice there's no sub-id — store 0
+  const storedId = locationType === 'headoffice' ? 0 : locationId;
 
-  let row;
-  if (existing) {
-    [row] = await db.update(itemPricesTable)
-      .set({ price: String(parsed.data.price), ...extraFields })
-      .where(eq(itemPricesTable.id, existing.id))
-      .returning();
+  const validFrom = body.validFrom || null;
+  const validTo   = body.validTo   || null;
+
+  // Upsert: match on item + location combo
+  const { rows: existing } = await pgPool.query(
+    `SELECT id FROM item_prices WHERE item_id = $1 AND outlet_id = $2 AND COALESCE(location_type,'outlet') = $3 LIMIT 1`,
+    [parsed.data.itemId, storedId, locationType]
+  );
+
+  let row: any;
+  if (existing.length > 0) {
+    const { rows: updated } = await pgPool.query(
+      `UPDATE item_prices SET price = $1, valid_from = $2, valid_to = $3, updated_at = now()
+       WHERE id = $4 RETURNING *`,
+      [String(parsed.data.price), validFrom, validTo, existing[0].id]
+    );
+    row = updated[0];
   } else {
-    [row] = await db.insert(itemPricesTable)
-      .values({ itemId: parsed.data.itemId, outletId: parsed.data.outletId, price: String(parsed.data.price), ...extraFields })
-      .returning();
+    const { rows: inserted } = await pgPool.query(
+      `INSERT INTO item_prices (item_id, outlet_id, location_type, price, valid_from, valid_to)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [parsed.data.itemId, storedId, locationType, String(parsed.data.price), validFrom, validTo]
+    );
+    row = inserted[0];
   }
 
-  const [item] = await db.select().from(itemsTable).where(eq(itemsTable.id, row.itemId)).limit(1);
-  const [outlet] = await db.select().from(outletsTable).where(eq(outletsTable.id, row.outletId)).limit(1);
-  res.json({ ...row, itemName: item?.name ?? "", outletName: outlet?.name ?? "", price: Number(row.price), updatedAt: row.updatedAt.toISOString() });
+  // Resolve display names
+  const { rows: itemRows }   = await pgPool.query(`SELECT name FROM items WHERE id = $1 LIMIT 1`, [row.item_id]);
+  let locationName = 'Head Office';
+  if (locationType === 'warehouse') {
+    const { rows: wRows } = await pgPool.query(`SELECT name FROM warehouses WHERE id = $1 LIMIT 1`, [storedId]);
+    locationName = wRows[0]?.name ?? '';
+  } else if (locationType === 'outlet') {
+    const { rows: oRows } = await pgPool.query(`SELECT name FROM outlets WHERE id = $1 LIMIT 1`, [storedId]);
+    locationName = oRows[0]?.name ?? '';
+  }
+
+  res.json({
+    id:           row.id,
+    itemId:       row.item_id,
+    outletId:     row.outlet_id,
+    locationType: row.location_type ?? 'outlet',
+    price:        Number(row.price),
+    validFrom:    row.valid_from  ?? null,
+    validTo:      row.valid_to    ?? null,
+    itemName:     itemRows[0]?.name ?? '',
+    outletName:   locationName,
+    updatedAt:    row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
+  });
 });
 
 // ── Sales ──────────────────────────────────────────────────────────────────
