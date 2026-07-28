@@ -112,3 +112,43 @@ export function scopeBranchWhere(
 
   return conds.length > 0 ? `(${conds.join(" OR ")})` : "FALSE";
 }
+
+/**
+ * SQL WHERE fragment for tables with `location_type` + `location_id` columns
+ * (customers, sales_returns, vendors, etc.).
+ *
+ * @param alias             Table alias (default: 't')
+ * @param includeHeadoffice Also match rows tagged 'headoffice' or NULL — useful
+ *                          for shared master-data like HO-created vendors that
+ *                          should be visible to all locations.
+ */
+export function scopeLocationTypeWhere(
+  scope: DataScope,
+  params: unknown[],
+  alias = "t",
+  includeHeadoffice = false,
+): string {
+  if (scope.isHeadOffice) return "TRUE";
+
+  const conds: string[] = [];
+
+  if (includeHeadoffice) {
+    conds.push(
+      `(${alias}.location_type IS NULL OR ${alias}.location_type = 'headoffice')`,
+    );
+  }
+  if (scope.warehouseIds.length > 0) {
+    params.push(scope.warehouseIds);
+    conds.push(
+      `(${alias}.location_type = 'warehouse' AND ${alias}.location_id = ANY($${params.length}::int[]))`,
+    );
+  }
+  if (scope.outletIds.length > 0) {
+    params.push(scope.outletIds);
+    conds.push(
+      `(${alias}.location_type = 'outlet' AND ${alias}.location_id = ANY($${params.length}::int[]))`,
+    );
+  }
+
+  return conds.length > 0 ? `(${conds.join(" OR ")})` : "FALSE";
+}

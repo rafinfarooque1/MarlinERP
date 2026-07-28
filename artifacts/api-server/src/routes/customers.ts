@@ -63,13 +63,12 @@ async function creditFieldsRow(id: number): Promise<{ creditLimit: number; credi
 
 // ── Customers ─────────────────────────────────────────────────────────────
 router.get("/customers", async (req, res): Promise<void> => {
-  const { locationType, locationId } = req.query as { locationType?: string; locationId?: string };
+  const emp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  if (!emp) { res.status(401).json({ error: "Authentication required" }); return; }
+  const { getUserDataScope, scopeLocationTypeWhere } = await import("../lib/dataScope");
+  const scope = await getUserDataScope(emp);
   const params: any[] = [];
-  let whereClause = '';
-  if (locationType && locationId) {
-    whereClause = `WHERE (c.location_type = $1 AND c.location_id = $2)`;
-    params.push(locationType, Number(locationId));
-  }
+  const scopeCond = scopeLocationTypeWhere(scope, params, "c");
   const { rows } = await pool.query<any>(`
     SELECT
       c.*,
@@ -77,7 +76,7 @@ router.get("/customers", async (req, res): Promise<void> => {
       COALESCE(SUM(s.total_amount - s.amount_paid), 0) AS "outstandingBalance"
     FROM customers c
     LEFT JOIN sales s ON s.customer_id = c.id
-    ${whereClause}
+    WHERE ${scopeCond}
     GROUP BY c.id
     ORDER BY c.id
   `, params);
@@ -101,14 +100,19 @@ router.post("/customers", requireModuleAction("Customers", "add"), async (req, r
   // pickCustomer whitelists keys and the guard above ensures name is present
   const [row] = await db.insert(customersTable).values(data as typeof customersTable.$inferInsert).returning();
 
-  // Stamp the location this customer belongs to (outlet or warehouse)
-  const { locationType, locationId } = req.body as { locationType?: string; locationId?: number };
-  if (locationType && locationId) {
-    await pool.query(
-      `UPDATE customers SET location_type = $1, location_id = $2 WHERE id = $3`,
-      [locationType, Number(locationId), row.id],
-    );
+  // LBAC: stamp location from the authenticated employee's session — never trust client
+  const empLbac = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  let stampType = empLbac?.branchType ?? 'headoffice';
+  let stampId   = empLbac?.branchId  ?? 0;
+  // HO users may explicitly assign a customer to a specific location via request body
+  if (stampType === 'headoffice') {
+    const { locationType: ct, locationId: ci } = req.body as { locationType?: string; locationId?: number };
+    if (ct && ci) { stampType = ct; stampId = Number(ci); }
   }
+  await pool.query(
+    `UPDATE customers SET location_type = $1, location_id = $2 WHERE id = $3`,
+    [stampType, stampId, row.id],
+  );
 
   // Auto-create a debtor ledger under Sundry Debtors
   try {
@@ -204,7 +208,14 @@ router.delete("/customers/:id", requireModuleAction("Customers", "delete"), asyn
 });
 
 // ── Vendors ────────────────────────────────────────────────────────────────
-router.get("/vendors", async (_req, res): Promise<void> => {
+router.get("/vendors", async (req, res): Promise<void> => {
+  const emp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  if (!emp) { res.status(401).json({ error: "Authentication required" }); return; }
+  const { getUserDataScope, scopeLocationTypeWhere } = await import("../lib/dataScope");
+  const scope = await getUserDataScope(emp);
+  const params: any[] = [];
+  // HO-created vendors (headoffice/null) are shared master records visible to all locations
+  const scopeCond = scopeLocationTypeWhere(scope, params, "v", true);
   const { rows } = await pool.query<any>(`
     SELECT
       v.*,
@@ -226,9 +237,10 @@ router.get("/vendors", async (_req, res): Promise<void> => {
       ) AS "outstandingBalance"
     FROM vendors v
     LEFT JOIN purchases p ON p.vendor_id = v.id
+    WHERE ${scopeCond}
     GROUP BY v.id
     ORDER BY v.id
-  `);
+  `, params);
   res.json(rows.map((r: any) => ({
     ...r,
     gstNumber:          r.gst_number ?? null,
@@ -248,6 +260,20 @@ router.post("/vendors", requireModuleAction("Vendors", "add"), async (req, res):
   }
   // pickVendor whitelists keys and the guard above ensures name is present
   const [row] = await db.insert(vendorsTable).values(data as typeof vendorsTable.$inferInsert).returning();
+
+  // LBAC: stamp location from the authenticated employee's session
+  const vendEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  let vendStampType = vendEmp?.branchType ?? 'headoffice';
+  let vendStampId   = vendEmp?.branchId  ?? 0;
+  // HO users may override via request body
+  if (vendStampType === 'headoffice') {
+    const { locationType: ct, locationId: ci } = req.body as { locationType?: string; locationId?: number };
+    if (ct && ci) { vendStampType = ct; vendStampId = Number(ci); }
+  }
+  await pool.query(
+    `UPDATE vendors SET location_type = $1, location_id = $2 WHERE id = $3`,
+    [vendStampType, vendStampId, row.id],
+  ).catch(() => {});
 
   // Auto-create a creditor ledger under Sundry Creditors
   try {

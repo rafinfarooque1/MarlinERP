@@ -21,7 +21,7 @@ import { usePermission } from '@/lib/usePermission';
 
 const schema = z.object({
   employeeId: z.coerce.number().min(1, 'Employee required'),
-  leaveType: z.enum(['sick', 'casual', 'earned', 'other']),
+  leaveType: z.enum(['sick', 'casual', 'annual', 'other']),
   startDate: z.string().min(1, 'Start date required'),
   endDate: z.string().min(1, 'End date required'),
   reason: z.string().min(1, 'Reason required'),
@@ -56,17 +56,32 @@ export default function Leave() {
   });
 
   const onSubmit = (data: FormValues) => {
-    applyMutation.mutate({ data: data as any }, {
+    // API contract uses fromDate/toDate; the form collects startDate/endDate.
+    const { startDate, endDate, ...rest } = data;
+    applyMutation.mutate({ data: { ...rest, fromDate: startDate, toDate: endDate } }, {
       onSuccess: () => { toast.success('Leave application submitted'); queryClient.invalidateQueries({ queryKey: getListLeavesQueryKey() }); setIsOpen(false); form.reset(); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
   };
 
   const handleApprove = (id: number, approved: boolean) => {
-    approveMutation.mutate({ id, data: { approved, remarks: approved ? 'Approved' : 'Rejected' } as any }, {
+    approveMutation.mutate({ id, data: { status: approved ? 'approved' : 'rejected', note: approved ? 'Approved' : 'Rejected' } }, {
       onSuccess: () => { toast.success(approved ? 'Leave approved' : 'Leave rejected'); queryClient.invalidateQueries({ queryKey: getListLeavesQueryKey() }); setViewItem(null); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
+  };
+
+  // The API exposes fromDate/toDate only; the day count is derived (inclusive).
+  const leaveDays = (l: any) => {
+    if (!l?.fromDate || !l?.toDate) return '—';
+    const from = new Date(l.fromDate), to = new Date(l.toDate);
+    if (isNaN(from.getTime()) || isNaN(to.getTime())) return '—';
+    return String(Math.floor((to.getTime() - from.getTime()) / 86400000) + 1);
+  };
+  const fmtDate = (d?: string | null) => {
+    if (!d) return '—';
+    const dt = new Date(d);
+    return isNaN(dt.getTime()) ? '—' : dt.toLocaleDateString('en-IN');
   };
 
   const statusColor = (s: string) => s === 'approved' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : s === 'rejected' ? 'bg-red-500/10 text-red-500 border-red-500/20' : 'bg-amber-500/10 text-amber-500 border-amber-500/20';
@@ -106,7 +121,7 @@ export default function Leave() {
             <p className="text-muted-foreground mt-1">Apply, approve, and track employee leaves</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('leaves.csv', filtered.map(l => ({ Employee: l.employeeName, Type: l.leaveType, From: l.startDate, To: l.endDate, Days: l.totalDays, Status: l.status })))}>
+            <Button variant="outline" size="sm" onClick={() => downloadCSV('leaves.csv', filtered.map(l => ({ Employee: l.employeeName, Type: l.leaveType, From: l.fromDate, To: l.toDate, Days: leaveDays(l), Status: l.status })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
             <Button onClick={() => { form.reset(); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Apply Leave</Button>
@@ -183,9 +198,9 @@ export default function Leave() {
                 <TableRow key={l.id} className="hover:bg-muted/10">
                   <TableCell className="font-semibold">{l.employeeName}</TableCell>
                   <TableCell><Badge variant="outline" className="capitalize text-xs">{l.leaveType}</Badge></TableCell>
-                  <TableCell className="text-sm">{new Date(l.startDate).toLocaleDateString('en-IN')}</TableCell>
-                  <TableCell className="text-sm">{new Date(l.endDate).toLocaleDateString('en-IN')}</TableCell>
-                  <TableCell className="font-mono font-bold text-primary">{l.totalDays}</TableCell>
+                  <TableCell className="text-sm">{fmtDate(l.fromDate)}</TableCell>
+                  <TableCell className="text-sm">{fmtDate(l.toDate)}</TableCell>
+                  <TableCell className="font-mono font-bold text-primary">{leaveDays(l)}</TableCell>
                   <TableCell><Badge variant="outline" className={statusColor(l.status || 'pending')}>{l.status || 'pending'}</Badge></TableCell>
                   <TableCell className="text-right">
                     <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(l)}><Eye className="w-4 h-4" /></Button>
@@ -212,7 +227,7 @@ export default function Leave() {
                     <SelectContent>
                       <SelectItem value="sick">Sick Leave</SelectItem>
                       <SelectItem value="casual">Casual Leave</SelectItem>
-                      <SelectItem value="earned">Earned Leave</SelectItem>
+                      <SelectItem value="annual">Annual Leave</SelectItem>
                       <SelectItem value="other">Other</SelectItem>
                     </SelectContent>
                   </Select></FormItem>
@@ -245,7 +260,7 @@ export default function Leave() {
           </SheetHeader>
           {viewItem && (
             <div className="mt-6 space-y-4">
-              {[['From', new Date(viewItem.startDate).toLocaleDateString('en-IN')], ['To', new Date(viewItem.endDate).toLocaleDateString('en-IN')], ['Days', String(viewItem.totalDays)], ['Status', viewItem.status || 'pending'], ['Reason', viewItem.reason || '—'], ['Remarks', viewItem.remarks || '—']].map(([k, v]) => (
+              {[['From', fmtDate(viewItem.fromDate)], ['To', fmtDate(viewItem.toDate)], ['Days', leaveDays(viewItem)], ['Status', viewItem.status || 'pending'], ['Reason', viewItem.reason || '—'], ['Remarks', viewItem.approvalNote || '—']].map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
                   <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                   <span className="font-medium">{v}</span>

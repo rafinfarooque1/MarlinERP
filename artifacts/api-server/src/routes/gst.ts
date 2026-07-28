@@ -38,6 +38,10 @@ async function materialHsnMap(): Promise<Map<string, { hsn: string; unit: string
 // ── HSN Summary (outward from sales, inward from purchases) ─────────────────
 
 router.get("/gst/hsn-summary", async (req, res): Promise<void> => {
+  // LBAC: GST filing is a Head Office activity
+  if ((req as any).employee?.branchType !== 'headoffice') {
+    res.json({ outward: [], inward: [] }); return;
+  }
   const { fromDate, toDate } = parseRange(req);
 
   const sp: any[] = [];
@@ -110,6 +114,10 @@ router.get("/gst/hsn-summary", async (req, res): Promise<void> => {
 // ── GSTR-1 (outward supplies register: B2B invoice-wise, B2C rate-wise) ─────
 
 router.get("/gst/gstr1", async (req, res): Promise<void> => {
+  // LBAC: GST filing is a Head Office activity
+  if ((req as any).employee?.branchType !== 'headoffice') {
+    res.json({ b2b: [], b2cs: [], totals: {} }); return;
+  }
   const { fromDate, toDate } = parseRange(req);
 
   const sp: any[] = [];
@@ -191,6 +199,10 @@ router.get("/gst/gstr1", async (req, res): Promise<void> => {
 // ── GSTR-3B (monthly summary: outward, ITC, net payable) ────────────────────
 
 router.get("/gst/gstr3b", async (req, res): Promise<void> => {
+  // LBAC: GST filing is a Head Office activity
+  if ((req as any).employee?.branchType !== 'headoffice') {
+    res.json({}); return;
+  }
   const month = String(req.query.month ?? "");
   if (!isMonth(month)) {
     res.status(400).json({ error: "month is required in YYYY-MM format" });
@@ -265,6 +277,10 @@ router.get("/gst/gstr3b", async (req, res): Promise<void> => {
 // ── Reconciliation (GST ledger balances vs sales/purchase registers) ────────
 
 router.get("/gst/reconciliation", async (req, res): Promise<void> => {
+  // LBAC: GST reconciliation is a Head Office activity
+  if ((req as any).employee?.branchType !== 'headoffice') {
+    res.json({}); return;
+  }
   const { fromDate, toDate } = parseRange(req);
 
   // Register side: line-item sums from sales & purchases

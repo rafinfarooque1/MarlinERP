@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import { pool } from "@workspace/db";
+import { getUserDataScope, scopeSalesWhere, scopeLocationTypeWhere } from "../lib/dataScope";
 
 const router: IRouter = Router();
 
@@ -11,6 +12,10 @@ const router: IRouter = Router();
  * when the employee's hierarchy can view the corresponding module, using the
  * same default-allow semantics as requireModuleView (level 1 = everything,
  * missing permission row = visible).
+ *
+ * LBAC: results are automatically scoped to the employee's assigned location —
+ * customers and vendors by their location_type/location_id, sales by
+ * their location columns.
  */
 const GROUP_MODULES: Record<string, string[]> = {
   items: ["Items"],
@@ -24,8 +29,10 @@ router.get("/search", async (req, res): Promise<void> => {
   const empty = { items: [], customers: [], vendors: [], sales: [] };
   if (q.length < 2) { res.json(empty); return; }
 
-  const hierarchyId = (req as any).employee?.hierarchyId;
-  if (!hierarchyId) { res.status(401).json({ error: "Authentication required" }); return; }
+  const employee = (req as any).employee as { branchType: string; branchId: number; hierarchyId: number } | undefined;
+  if (!employee) { res.status(401).json({ error: "Authentication required" }); return; }
+
+  const hierarchyId = employee.hierarchyId;
 
   const allModules = Object.values(GROUP_MODULES).flat();
   const { rows: permRows } = await pool.query<any>(
@@ -39,23 +46,47 @@ router.get("/search", async (req, res): Promise<void> => {
   const canView = (group: keyof typeof GROUP_MODULES): boolean =>
     level === 1 || GROUP_MODULES[group].some((m) => flags[m] !== false);
 
+  // Resolve data scope once; all queries below will use it
+  const scope = await getUserDataScope(employee);
   const like = `%${q}%`;
+
+  const custParams: any[] = [like];
+  const custScope = scopeLocationTypeWhere(scope, custParams, "c");
+
+  const vendParams: any[] = [like];
+  const vendScope = scopeLocationTypeWhere(scope, vendParams, "v", true); // HO vendors visible to all
+
+  const salesParams: any[] = [like];
+  const salesScope = scopeSalesWhere(scope, salesParams);
+
   const [items, customers, vendors, sales] = await Promise.all([
     canView("items")
       ? pool.query(`SELECT id, name, unit FROM items WHERE name ILIKE $1 ORDER BY name LIMIT 8`, [like])
       : Promise.resolve({ rows: [] as any[] }),
     canView("customers")
-      ? pool.query(`SELECT id, name, phone FROM customers WHERE name ILIKE $1 OR phone ILIKE $1 ORDER BY name LIMIT 8`, [like])
+      ? pool.query(
+          `SELECT c.id, c.name, c.phone FROM customers c
+           WHERE (c.name ILIKE $1 OR c.phone ILIKE $1) AND ${custScope}
+           ORDER BY c.name LIMIT 8`,
+          custParams,
+        )
       : Promise.resolve({ rows: [] as any[] }),
     canView("vendors")
-      ? pool.query(`SELECT id, name, phone FROM vendors WHERE name ILIKE $1 OR phone ILIKE $1 ORDER BY name LIMIT 8`, [like])
+      ? pool.query(
+          `SELECT v.id, v.name, v.phone FROM vendors v
+           WHERE (v.name ILIKE $1 OR v.phone ILIKE $1) AND ${vendScope}
+           ORDER BY v.name LIMIT 8`,
+          vendParams,
+        )
       : Promise.resolve({ rows: [] as any[] }),
     canView("sales")
       ? pool.query(
           `SELECT s.id, s.invoice_number, s.total_amount, s.sale_date::text AS sale_date, c.name AS customer_name
            FROM sales s LEFT JOIN customers c ON c.id = s.customer_id
-           WHERE s.invoice_number ILIKE $1 OR c.name ILIKE $1
-           ORDER BY s.id DESC LIMIT 8`, [like])
+           WHERE (s.invoice_number ILIKE $1 OR c.name ILIKE $1) AND ${salesScope}
+           ORDER BY s.id DESC LIMIT 8`,
+          salesParams,
+        )
       : Promise.resolve({ rows: [] as any[] }),
   ]);
 

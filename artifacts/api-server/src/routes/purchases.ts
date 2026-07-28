@@ -83,6 +83,14 @@ function enrichLines(lineItems: unknown, maps: NameMaps): any[] {
 // `limit` the legacy full-array response is returned. `q` searches invoice
 // number and vendor name (works in both modes).
 router.get("/purchases", async (req, res): Promise<void> => {
+  // LBAC: all purchases are recorded at Head Office; non-HO users see nothing
+  const purchEmp = (req as any).employee as { branchType: string } | undefined;
+  if (purchEmp && purchEmp.branchType !== 'headoffice') {
+    const paginated = 'page' in req.query || 'limit' in req.query;
+    res.json(paginated ? { total: 0, page: 1, limit: 25, rows: [] } : []);
+    return;
+  }
+
   const paginated = 'page' in req.query || 'limit' in req.query;
   const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
 

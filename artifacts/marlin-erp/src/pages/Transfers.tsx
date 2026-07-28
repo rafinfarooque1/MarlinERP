@@ -69,7 +69,7 @@ const MAT_LABELS: Record<string, string> = {
 // ── Status badge ──────────────────────────────────────────────────────────────
 const STATUS_CFG: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
   in_transit: { label: 'In Transit',  color: 'text-amber-400 bg-amber-400/10 border-amber-400/30',  icon: <Clock className="w-3 h-3" /> },
-  completed:  { label: 'Approved',    color: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30', icon: <CheckCircle2 className="w-3 h-3" /> },
+  completed:  { label: 'Received',    color: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/30', icon: <CheckCircle2 className="w-3 h-3" /> },
   rejected:   { label: 'Rejected',    color: 'text-red-400 bg-red-400/10 border-red-400/30',    icon: <XCircle className="w-3 h-3" /> },
 };
 
@@ -177,6 +177,7 @@ function ApproveDialog({
   const approveMutation = useApproveTransfer();
   const rejectMutation  = useRejectTransfer();
   const qc = useQueryClient();
+  const { data: me } = useGetMe();
 
   const [received, setReceived] = useState<Record<number, number>>(() => {
     const init: Record<number, number> = {};
@@ -196,7 +197,7 @@ function ApproveDialog({
       materialType: li.materialType ?? 'item',
     }));
     approveMutation.mutate(
-      { id: transfer.id, receivedLineItems, approvedBy: 'admin' },
+      { id: transfer.id, receivedLineItems, approvedBy: (me as any)?.name ?? (me as any)?.username ?? 'admin' },
       {
         onSuccess: () => {
           toast.success('Transfer approved — stock credited');
@@ -562,6 +563,11 @@ export default function Transfers() {
       onSuccess: () => {
         toast.success('Transfer dispatched — receiving location must approve');
         queryClient.invalidateQueries({ queryKey: getListStockTransfersQueryKey() });
+        // Dispatch reduces source stock immediately — keep stock views fresh
+        queryClient.invalidateQueries({ queryKey: ['/api/stock'] });
+        queryClient.invalidateQueries({ queryKey: ['/api/stock/ledger'] });
+        queryClient.invalidateQueries({ queryKey: ['/api/materials'] });
+        queryClient.invalidateQueries({ queryKey: ['/api/raw-materials'] });
         setIsOpen(false);
         form.reset();
       },

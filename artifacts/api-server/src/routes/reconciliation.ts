@@ -41,7 +41,12 @@ router.get("/reconciliation/pending", async (req, res): Promise<void> => {
   const params: any[] = ["pending"];
   const conds: string[] = ["sp.reconciliation_status = $1"];
 
-  if (outletId) { params.push(Number(outletId)); conds.push(`sp.outlet_id = $${params.length}`); }
+  // LBAC: outlet users are automatically scoped to their own outlet
+  const rcnEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  if (rcnEmp && rcnEmp.branchType === 'outlet') {
+    // Force scope to this employee's outlet regardless of query param
+    params.push(rcnEmp.branchId); conds.push(`sp.outlet_id = $${params.length}`);
+  } else if (outletId) { params.push(Number(outletId)); conds.push(`sp.outlet_id = $${params.length}`); }
   if (method)   { params.push(method);            conds.push(`sp.method = $${params.length}`); }
   if (fromDate) { params.push(fromDate);           conds.push(`sp.payment_date >= $${params.length}`); }
   if (toDate)   { params.push(toDate);             conds.push(`sp.payment_date <= $${params.length}`); }

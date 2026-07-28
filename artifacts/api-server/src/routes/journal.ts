@@ -78,6 +78,9 @@ function serializeVoucher(v: any, lines: any[]) {
 // ── Journal / Contra / Credit Note / Debit Note vouchers ──────────────────
 
 router.get("/accounts/journal-vouchers", async (req, res): Promise<void> => {
+  // LBAC: journal vouchers are Head Office accounting — non-HO users see nothing
+  if ((req as any).employee?.branchType !== 'headoffice') { res.json([]); return; }
+
   const { type, fromDate, toDate } = req.query as { type?: string; fromDate?: string; toDate?: string };
   const conds: string[] = [];
   const params: any[] = [];
@@ -498,6 +501,8 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
 // ── Day Book ───────────────────────────────────────────────────────────────
 
 router.get("/accounts/day-book", requireModuleView("Books"), async (req, res): Promise<void> => {
+  // LBAC: the day book is a Head Office accounting view
+  if ((req as any).employee?.branchType !== 'headoffice') { res.json({ date: "", entries: [] }); return; }
   const q = String((req.query as any).date ?? "");
   const date = isDate(q) ? q : new Date().toISOString().slice(0, 10);
 
@@ -622,6 +627,8 @@ router.get("/accounts/day-book", requireModuleView("Books"), async (req, res): P
 
 // Ledger options for the book selector (cash or bank subtree)
 router.get("/accounts/cash-bank-book/ledgers", requireModuleView("Cash & Bank"), async (req, res): Promise<void> => {
+  // LBAC: full cash-bank ledger list is Head Office only
+  if ((req as any).employee?.branchType !== 'headoffice') { res.json([]); return; }
   const kind = (req.query as any).kind === "bank" ? "bank" : "cash";
   const ids = await ledgerIdsUnderCodes([kind === "bank" ? "STD-BANK" : "STD-CASH"]);
   if (ids.size === 0) { res.json([]); return; }
@@ -635,6 +642,8 @@ router.get("/accounts/cash-bank-book/ledgers", requireModuleView("Cash & Bank"),
 });
 
 router.get("/accounts/cash-bank-book", requireModuleView("Cash & Bank"), async (req, res): Promise<void> => {
+  // LBAC: full cash-bank book is Head Office only
+  if ((req as any).employee?.branchType !== 'headoffice') { res.json({ ledger: null, entries: [], openingBalance: 0, closingBalance: 0 }); return; }
   const ledgerId = Number((req.query as any).ledgerId);
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
   if (!ledgerId) { res.status(400).json({ error: "ledgerId is required" }); return; }
@@ -681,6 +690,8 @@ router.get("/accounts/cash-bank-book", requireModuleView("Cash & Bank"), async (
 // ── Trial Balance ──────────────────────────────────────────────────────────
 
 router.get("/accounts/trial-balance", requireModuleView("Books"), async (req, res): Promise<void> => {
+  // LBAC: the trial balance is a Head Office accounting view
+  if ((req as any).employee?.branchType !== 'headoffice') { res.json([]); return; }
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
 
   let postings = await buildDerivedPostings({ toDate: isDate(toDate) ? toDate : undefined });

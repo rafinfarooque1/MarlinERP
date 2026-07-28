@@ -916,7 +916,14 @@ router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit")
 // location_id are startup-migration columns invisible to drizzle — the old
 // drizzle version grouped warehouse sales under their fallback outlet_id,
 // losing them from the breakdown (bug #37).
-router.get("/sales/summary", async (_req, res): Promise<void> => {
+router.get("/sales/summary", async (req, res): Promise<void> => {
+  // LBAC: scope summary to the employee's assigned location
+  const { getUserDataScope, scopeSalesWhere } = await import("../lib/dataScope");
+  const summEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  const summScope = summEmp ? await getUserDataScope(summEmp) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
+  const summParams: any[] = [];
+  const summScopeCond = scopeSalesWhere(summScope, summParams);
+
   const { pool: pgPool } = await import("@workspace/db");
   const { rows } = await pgPool.query(`
     SELECT COALESCE(s.location_type, 'outlet')   AS location_type,
@@ -925,8 +932,9 @@ router.get("/sales/summary", async (_req, res): Promise<void> => {
            COALESCE(SUM(s.total_amount::numeric), 0)::float AS sales_amount,
            COALESCE(SUM(s.tax_total::numeric), 0)::float    AS tax_amount
     FROM sales s
+    WHERE ${summScopeCond}
     GROUP BY 1, 2
-  `);
+  `, summParams);
   const outlets = await db.select().from(outletsTable);
   const oMap = new Map(outlets.map((o) => [o.id, o.name]));
   const { rows: warehouses } = await pgPool.query<{ id: number; name: string }>(`SELECT id, name FROM warehouses`);

@@ -753,6 +753,7 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction(["HO Transfers"]
 
   const client = await pool.connect();
   let row: any;
+  let fromName = '';
   try {
     await client.query("BEGIN");
 
@@ -772,7 +773,7 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction(["HO Transfers"]
       return;
     }
 
-    const lineItems = row.line_items as Array<{ itemId: number; quantity: number; batchBreakdown?: BatchBreakdownEntry[]; materialType?: string }>;
+    const lineItems = row.line_items as Array<{ itemId: number; quantity: number; costPrice?: number; batchBreakdown?: BatchBreakdownEntry[]; materialType?: string }>;
 
     // Reverse source deduction (goods returned)
     for (const li of lineItems) {
@@ -794,14 +795,24 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction(["HO Transfers"]
           );
         } else {
           await client.query(
-            `INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price) VALUES ($1,$2,$3,$4,'0')`,
-            [li.itemId, row.from_type, row.from_id, li.quantity]
+            `INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price) VALUES ($1,$2,$3,$4,$5)`,
+            [li.itemId, row.from_type, row.from_id, li.quantity, String(li.costPrice ?? 0)]
           );
         }
         // Restore exactly the batches that were consumed at dispatch
         await restoreBatches(client, li.itemId, row.from_type, row.from_id, li.batchBreakdown, "transfer", id);
       }
     }
+
+    // ── Stock ledger — inside the transaction so it rolls back atomically ──────
+    const rejectBm = await buildBranchMaps();
+    fromName = rejectBm(row.from_type, Number(row.from_id));
+    const rejectMeta = await batchResolveMeta(client, lineItems.map(l => ({ materialType: (l.materialType ?? 'item') as string, refId: Number(l.itemId) })));
+    await writeStockLedger(client, lineItems.map(l => {
+      const mt   = (l.materialType ?? 'item') as string;
+      const info = rejectMeta.get(`${mt}:${l.itemId}`) ?? { name: '', unit: '' };
+      return { txnType: 'transfer_in', materialType: mt, refId: Number(l.itemId), itemName: info.name, unit: info.unit, branchType: row.from_type, branchId: Number(row.from_id), branchName: fromName, qtyChange: Number(l.quantity), unitCost: Number(l.costPrice ?? 0), docType: 'stock_transfer', docId: id, notes: 'Transfer rejected — stock returned to source' };
+    }));
 
     await client.query("COMMIT");
   } catch (e) {
@@ -810,20 +821,6 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction(["HO Transfers"]
   } finally {
     client.release();
   }
-
-  const branchName = await buildBranchMaps();
-  const fromName = branchName(row.from_type, row.from_id);
-
-  // ── Stock ledger (reject: stock returned to source — fire-and-forget) ──────
-  ;(async () => {
-    const rLines = (row.line_items as any[]) ?? [];
-    const meta = await batchResolveMeta(pool, rLines.map((l: any) => ({ materialType: l.materialType ?? 'item', refId: Number(l.itemId) })));
-    await writeStockLedger(pool, rLines.map((l: any) => {
-      const mt   = l.materialType ?? 'item';
-      const info = meta.get(`${mt}:${l.itemId}`) ?? { name: '', unit: '' };
-      return { txnType: 'transfer_in', materialType: mt, refId: Number(l.itemId), itemName: info.name, unit: info.unit, branchType: row.from_type, branchId: Number(row.from_id), branchName: fromName, qtyChange: Number(l.quantity), unitCost: Number(l.costPrice ?? 0), docType: 'stock_transfer', docId: id, notes: 'Transfer rejected — stock returned to source' };
-    }));
-  })().catch((e: any) => console.error('[stock-ledger] reject write failed', e));
 
   logActivity({
     action: "UPDATE", module: "transfers", entityType: "stock_transfer", entityId: id,

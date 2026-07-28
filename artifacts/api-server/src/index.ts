@@ -818,6 +818,88 @@ async function runMigrations() {
     console.log('[migration] remove_production_branch_v1 applied — production branch re-homed to headoffice');
   }
 
+  // Repair: stock_batches predates the UNIQUE (item_id, branch_type, branch_id,
+  // batch_number) clause in its CREATE TABLE above. Because CREATE TABLE IF NOT
+  // EXISTS is a no-op on an existing table, older databases never got the
+  // constraint — so every `ON CONFLICT (item_id, branch_type, branch_id,
+  // batch_number)` in this file and in lib/batches.ts fails with 42P10
+  // ("no unique or exclusion constraint matching the ON CONFLICT
+  // specification"). That broke batch credits, and with them sales returns.
+  // Merge any duplicate rows first so the index can be created on live data.
+  const { rows: [batchKeyDone] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'stock_batches_natural_key_v1'`
+  );
+  if (!batchKeyDone) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Collapse duplicates onto the lowest id: sum quantity, keep earliest
+      // known dates, and carry a quantity-weighted unit cost.
+      await client.query(`
+        WITH dupes AS (
+          SELECT item_id, branch_type, branch_id, batch_number,
+                 MIN(id) AS keep_id,
+                 SUM(quantity::numeric) AS total_qty,
+                 MIN(mfg_date) AS mfg_date,
+                 MIN(expiry_date) AS expiry_date,
+                 CASE WHEN SUM(quantity::numeric) > 0
+                      THEN ROUND((SUM(quantity::numeric * unit_cost::numeric) / SUM(quantity::numeric))::numeric, 2)
+                      ELSE MAX(unit_cost::numeric) END AS wavg_cost
+          FROM stock_batches
+          GROUP BY item_id, branch_type, branch_id, batch_number
+          HAVING COUNT(*) > 1
+        )
+        UPDATE stock_batches sb
+        SET quantity = d.total_qty, unit_cost = d.wavg_cost,
+            mfg_date = d.mfg_date, expiry_date = d.expiry_date, updated_at = now()
+        FROM dupes d
+        WHERE sb.id = d.keep_id
+      `);
+      await client.query(`
+        DELETE FROM stock_batches sb
+        USING (
+          SELECT id,
+                 ROW_NUMBER() OVER (PARTITION BY item_id, branch_type, branch_id, batch_number ORDER BY id) AS rn
+          FROM stock_batches
+        ) x
+        WHERE sb.id = x.id AND x.rn > 1
+      `);
+      await client.query(
+        `CREATE UNIQUE INDEX IF NOT EXISTS stock_batches_natural_key
+           ON stock_batches (item_id, branch_type, branch_id, batch_number)`
+      );
+      await client.query(`INSERT INTO migration_log (name) VALUES ('stock_batches_natural_key_v1')`);
+      await client.query('COMMIT');
+      console.log('[migration] stock_batches_natural_key_v1 applied — ON CONFLICT upserts on stock_batches now work');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      console.error('[migration] stock_batches_natural_key_v1 FAILED:', e);
+    } finally {
+      client.release();
+    }
+  }
+
+  // Assert the conflict target actually exists. Every batch upsert below and in
+  // lib/batches.ts targets this natural key, so without it sales returns,
+  // production and purchase batch credits all fail with Postgres 42P10. We do
+  // not throw: rethrowing here would abort runMigrations() and skip every
+  // later migration. Instead fail LOUDLY so a broken index can't hide behind a
+  // successful boot, and skip the two migrations that depend on the key.
+  const { rows: [batchKeyIdx] } = await pool.query(`
+    SELECT 1 FROM pg_indexes
+    WHERE tablename = 'stock_batches' AND indexdef ILIKE '%UNIQUE%'
+      AND indexdef ILIKE '%item_id%' AND indexdef ILIKE '%branch_type%'
+      AND indexdef ILIKE '%branch_id%' AND indexdef ILIKE '%batch_number%'
+  `);
+  const batchKeyOk = Boolean(batchKeyIdx);
+  if (!batchKeyOk) {
+    console.error(
+      '[migration] CRITICAL: stock_batches has no UNIQUE (item_id, branch_type, branch_id, batch_number) index. ' +
+      'Batch upserts (sales returns, production and purchase batch credits) WILL fail with Postgres 42P10 until this is repaired. ' +
+      'Most likely cause: duplicate rows on that key that the dedupe step could not merge.'
+    );
+  }
+
   const { rows: [openingDone] } = await pool.query(
     `SELECT 1 FROM migration_log WHERE name = 'stock_batches_opening_v1'`
   );
@@ -902,6 +984,10 @@ try {
   logger.warn({ err }, "Migration warning (non-fatal)");
 }
 
+// ── MRP column on materials and raw_materials ────────────────────────────────
+await pool.query(`ALTER TABLE materials    ADD COLUMN IF NOT EXISTS mrp NUMERIC(10,2) DEFAULT 0`);
+await pool.query(`ALTER TABLE raw_materials ADD COLUMN IF NOT EXISTS mrp NUMERIC(10,2) DEFAULT 0`);
+
 // ── GST-aware transfer columns ────────────────────────────────────────────────
 await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS transfer_type     TEXT DEFAULT 'internal'`);
 await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS from_gstin        TEXT`);
@@ -957,6 +1043,14 @@ await pool.query(`CREATE INDEX IF NOT EXISTS idx_journal_voucher_lines_ledger ON
 // ── GIN index on JSONB line_items for fast containment queries ────────────────
 await pool.query(`CREATE INDEX IF NOT EXISTS idx_sales_line_items_gin   ON sales   USING gin (line_items)`);
 await pool.query(`CREATE INDEX IF NOT EXISTS idx_purchases_line_items_gin ON purchases USING gin (line_items)`);
+
+// ── LBAC: location columns for vendors (allows per-location vendor isolation) ──
+await pool.query(`ALTER TABLE vendors ADD COLUMN IF NOT EXISTS location_type TEXT DEFAULT 'headoffice'`);
+await pool.query(`ALTER TABLE vendors ADD COLUMN IF NOT EXISTS location_id   INT  DEFAULT 0`);
+
+// ── LBAC: location columns for purchases (all existing records stay headoffice) ─
+await pool.query(`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS branch_type TEXT DEFAULT 'headoffice'`);
+await pool.query(`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS branch_id   INT  DEFAULT 1`);
 
 // ── Default-deny permission seeding ──────────────────────────────────────────
 // Ensures every existing non-level-1 hierarchy has an explicit permissions row

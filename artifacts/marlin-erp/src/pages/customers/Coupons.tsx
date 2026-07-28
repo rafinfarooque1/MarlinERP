@@ -18,14 +18,13 @@ import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 
+// Mirrors the coupons table: code, discount_type, discount_value, valid_days.
+// The server derives expiry_date from valid_days at creation time.
 const schema = z.object({
   code: z.string().min(1, 'Code required'),
-  discountType: z.enum(['percent', 'flat']),
+  discountType: z.enum(['percentage', 'fixed']),
   discountValue: z.coerce.number().min(0.01, 'Value > 0'),
-  minPurchase: z.coerce.number().min(0),
-  maxUses: z.coerce.number().min(1),
-  validFrom: z.string().min(1),
-  validTo: z.string().min(1),
+  validDays: z.coerce.number().int().min(1, 'Valid for at least 1 day'),
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -40,19 +39,25 @@ export default function Coupons() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { code: '', discountType: 'percent', discountValue: 10, minPurchase: 0, maxUses: 100, validFrom: new Date().toISOString().split('T')[0], validTo: '' },
+    defaultValues: { code: '', discountType: 'percentage', discountValue: 10, validDays: 30 },
   });
 
   const onSubmit = (data: FormValues) => {
-    const payload = { ...data, code: data.code.toUpperCase(), discountValue: String(data.discountValue), minPurchase: String(data.minPurchase) };
-    createMutation.mutate({ data: payload as any }, {
+    createMutation.mutate({
+      data: {
+        code: data.code.toUpperCase(),
+        discountType: data.discountType,
+        discountValue: Number(data.discountValue),
+        validDays: Number(data.validDays),
+      },
+    }, {
       onSuccess: () => { toast.success('Coupon created'); queryClient.invalidateQueries({ queryKey: getListCouponsQueryKey() }); setIsOpen(false); form.reset(); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
   };
 
   const now = new Date();
-  const isActive = (c: any) => new Date(c.validFrom ?? c.expiryDate) <= now && new Date(c.validTo ?? c.expiryDate) >= now && (c.usageCount || c.usedCount || 0) < (c.maxUses || 999);
+  const isActive = (c: any) => c.isActive !== false && (!c.expiryDate || new Date(c.expiryDate) >= now);
   const filtered = coupons.filter(c => c.code.toLowerCase().includes(search.toLowerCase()));
 
   if (!perm.isLoading && !perm.canView) {
@@ -83,10 +88,10 @@ export default function Coupons() {
             <p className="text-muted-foreground mt-1">Discount codes and promotional offers</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('coupons.csv', (filtered as any[]).map(c => ({ Code: c.code, Type: c.discountType, Value: c.discountValue, MinPurchase: c.minPurchase || 0, MaxUses: c.maxUses, Used: c.usageCount || c.usedCount || 0, ValidFrom: c.validFrom, ValidTo: c.validTo })))}>
+            <Button variant="outline" size="sm" onClick={() => downloadCSV('coupons.csv', (filtered as any[]).map(c => ({ Code: c.code, Type: c.discountType, Value: c.discountValue, ValidDays: c.validDays, Used: c.usageCount ?? 0, ExpiresOn: c.expiryDate ?? '' })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
-            <Button onClick={() => { form.reset({ code: '', discountType: 'percent', discountValue: 10, minPurchase: 0, maxUses: 100, validFrom: new Date().toISOString().split('T')[0], validTo: '' }); setIsOpen(true); }}>
+            <Button onClick={() => { form.reset({ code: '', discountType: 'percentage', discountValue: 10, validDays: 30 }); setIsOpen(true); }}>
               <Plus className="w-4 h-4 mr-2" /> Create Coupon
             </Button>
           </div>
@@ -102,9 +107,9 @@ export default function Coupons() {
               <TableRow className="bg-muted/10">
                 <TableHead>Code</TableHead>
                 <TableHead>Discount</TableHead>
-                <TableHead>Min Purchase</TableHead>
-                <TableHead>Uses</TableHead>
-                <TableHead>Valid Until</TableHead>
+                <TableHead>Valid For</TableHead>
+                <TableHead>Used</TableHead>
+                <TableHead>Expires On</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">View</TableHead>
               </TableRow>
@@ -120,11 +125,11 @@ export default function Coupons() {
                 <TableRow key={c.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono font-bold text-primary tracking-wider">{c.code}</TableCell>
                   <TableCell className="font-bold text-emerald-500">
-                    {(c as any).discountType === 'percent' ? `${(c as any).discountValue}% OFF` : `₹${(c as any).discountValue} OFF`}
+                    {(c as any).discountType === 'percentage' ? `${(c as any).discountValue}% OFF` : `₹${(c as any).discountValue} OFF`}
                   </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">₹{Number((c as any).minPurchase || 0).toLocaleString()}</TableCell>
-                  <TableCell className="text-sm">{(c as any).usageCount ?? (c as any).usedCount ?? 0} / {(c as any).maxUses ?? '∞'}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{(c as any).validTo ? new Date((c as any).validTo).toLocaleDateString('en-IN') : '—'}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{(c as any).validDays ?? '—'} days</TableCell>
+                  <TableCell className="text-sm">{(c as any).usageCount ?? 0}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{(c as any).expiryDate ? new Date((c as any).expiryDate).toLocaleDateString('en-IN') : '—'}</TableCell>
                   <TableCell>
                     {isActive(c)
                       ? <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">Active</Badge>
@@ -153,23 +158,19 @@ export default function Coupons() {
                   <FormItem><FormLabel>Type</FormLabel>
                     <Select onValueChange={field.onChange} value={field.value}>
                       <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                      <SelectContent><SelectItem value="percent">Percentage (%)</SelectItem><SelectItem value="flat">Flat (₹)</SelectItem></SelectContent>
+                      <SelectContent><SelectItem value="percentage">Percentage (%)</SelectItem><SelectItem value="fixed">Fixed (₹)</SelectItem></SelectContent>
                     </Select></FormItem>
                 )} />
                 <FormField control={form.control} name="discountValue" render={({ field }) => (
                   <FormItem><FormLabel>Value <span className="text-destructive">*</span></FormLabel><FormControl><Input type="number" step="0.01" min={0.01} {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
-                <FormField control={form.control} name="minPurchase" render={({ field }) => (
-                  <FormItem><FormLabel>Min Purchase ₹</FormLabel><FormControl><Input type="number" min={0} {...field} /></FormControl></FormItem>
-                )} />
-                <FormField control={form.control} name="maxUses" render={({ field }) => (
-                  <FormItem><FormLabel>Max Uses</FormLabel><FormControl><Input type="number" min={1} {...field} /></FormControl></FormItem>
-                )} />
-                <FormField control={form.control} name="validFrom" render={({ field }) => (
-                  <FormItem><FormLabel>Valid From</FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
-                )} />
-                <FormField control={form.control} name="validTo" render={({ field }) => (
-                  <FormItem><FormLabel>Valid To</FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
+                <FormField control={form.control} name="validDays" render={({ field }) => (
+                  <FormItem className="col-span-2">
+                    <FormLabel>Valid For (days) <span className="text-destructive">*</span></FormLabel>
+                    <FormControl><Input type="number" min={1} step={1} {...field} /></FormControl>
+                    <p className="text-xs text-muted-foreground">Expiry date is calculated from today plus this many days.</p>
+                    <FormMessage />
+                  </FormItem>
                 )} />
               </div>
               <DialogFooter>
@@ -185,11 +186,11 @@ export default function Coupons() {
         <SheetContent>
           <SheetHeader>
             <SheetTitle className="font-mono text-primary tracking-widest">{viewItem?.code}</SheetTitle>
-            <SheetDescription>{viewItem?.discountType === 'percent' ? `${viewItem?.discountValue}% discount` : `₹${viewItem?.discountValue} flat off`}</SheetDescription>
+            <SheetDescription>{viewItem?.discountType === 'percentage' ? `${viewItem?.discountValue}% discount` : `₹${viewItem?.discountValue} off`}</SheetDescription>
           </SheetHeader>
           {viewItem && (
             <div className="mt-6 space-y-4">
-              {[['Type', viewItem.discountType === 'percent' ? 'Percentage' : 'Flat'], ['Value', viewItem.discountType === 'percent' ? `${viewItem.discountValue}%` : `₹${viewItem.discountValue}`], ['Min Purchase', `₹${Number(viewItem.minPurchase || 0).toLocaleString()}`], ['Max Uses', String(viewItem.maxUses)], ['Used', String(viewItem.usedCount || 0)], ['Valid From', viewItem.validFrom ? new Date(viewItem.validFrom).toLocaleDateString('en-IN') : '—'], ['Valid To', viewItem.validTo ? new Date(viewItem.validTo).toLocaleDateString('en-IN') : '—'], ['Status', isActive(viewItem) ? 'Active' : 'Expired']].map(([k, v]) => (
+              {[['Type', viewItem.discountType === 'percentage' ? 'Percentage' : 'Fixed'], ['Value', viewItem.discountType === 'percentage' ? `${viewItem.discountValue}%` : `₹${viewItem.discountValue}`], ['Valid For', `${viewItem.validDays ?? '—'} days`], ['Used', String(viewItem.usageCount ?? 0)], ['Expires On', viewItem.expiryDate ? new Date(viewItem.expiryDate).toLocaleDateString('en-IN') : '—'], ['Status', isActive(viewItem) ? 'Active' : 'Expired']].map(([k, v]) => (
                 <div key={k} className="flex justify-between items-center border-b border-border pb-3">
                   <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                   <span className="font-semibold">{v}</span>

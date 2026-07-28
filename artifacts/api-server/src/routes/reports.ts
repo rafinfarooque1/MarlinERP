@@ -140,6 +140,12 @@ router.get("/reports/sales-by-item", requireModuleView("Sales"), async (req, res
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
 
+  const { getUserDataScope: getScope2, scopeSalesWhere: sScope2 } = await import("../lib/dataScope");
+  const emp2 = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  const scope2 = emp2 ? await getScope2(emp2) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
+  const itemParams: any[] = [range.from, range.to];
+  const itemScopeCond = sScope2(scope2, itemParams);
+
   const { rows } = await pool.query<any>(
     `SELECT (li->>'itemId')::int AS item_id,
             SUM(COALESCE((li->>'quantity')::numeric,0))     AS qty,
@@ -151,8 +157,9 @@ router.get("/reports/sales-by-item", requireModuleView("Sales"), async (req, res
      FROM sales s, jsonb_array_elements(s.line_items) li
      WHERE ($1 = '' OR s.sale_date >= $1::date)
        AND ($2 = '' OR s.sale_date <= $2::date)
+       AND ${itemScopeCond}
      GROUP BY 1 ORDER BY 4 DESC NULLS LAST`,
-    [range.from, range.to],
+    itemParams,
   );
   const { rows: items } = await pool.query<any>(`SELECT id, name, COALESCE(unit,'') AS unit FROM items`);
   const iMap = new Map<number, { name: string; unit: string }>(items.map((i: any) => [Number(i.id), { name: String(i.name), unit: String(i.unit) }]));
@@ -185,6 +192,12 @@ router.get("/reports/sales-by-location", requireModuleView("Sales"), async (req,
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
 
+  const { getUserDataScope: getScope3, scopeSalesWhere: sScope3 } = await import("../lib/dataScope");
+  const emp3 = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  const scope3 = emp3 ? await getScope3(emp3) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
+  const locParams: any[] = [range.from, range.to];
+  const locScopeCond = sScope3(scope3, locParams);
+
   const { rows } = await pool.query<any>(
     `SELECT COALESCE(s.location_type,'outlet') AS location_type,
             COALESCE(s.location_id, s.outlet_id) AS location_id,
@@ -196,8 +209,9 @@ router.get("/reports/sales-by-location", requireModuleView("Sales"), async (req,
      FROM sales s
      WHERE ($1 = '' OR s.sale_date >= $1::date)
        AND ($2 = '' OR s.sale_date <= $2::date)
+       AND ${locScopeCond}
      GROUP BY 1, 2 ORDER BY 6 DESC NULLS LAST`,
-    [range.from, range.to],
+    locParams,
   );
   const maps = await locationMaps();
   const list = rows.map((r: any) => ({
@@ -237,6 +251,12 @@ router.get("/reports/discounts", requireModuleView("Sales"), async (req, res): P
   }
   const args = [range.from, range.to, locationType, Number.isFinite(locationId) ? locationId : 0];
 
+  // LBAC: mandatory scope enforcement — non-HO users can only see their own location's data
+  const { getUserDataScope: discScope, scopeSalesWhere: discSales } = await import("../lib/dataScope");
+  const discEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  const discS = discEmp ? await discScope(discEmp) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
+  const discScopeCond = discSales(discS, args); // appends scope params to args
+
   const { rows } = await pool.query<any>(
     `SELECT s.id, s.invoice_number, to_char(s.sale_date,'YYYY-MM-DD') AS sale_date,
             COALESCE(s.location_type,'outlet') AS location_type,
@@ -258,19 +278,23 @@ router.get("/reports/discounts", requireModuleView("Sales"), async (req, res): P
        AND ($2 = '' OR s.sale_date <= $2::date)
        AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
        AND ($4 = 0 OR COALESCE(s.location_id, s.outlet_id) = $4)
+       AND ${discScopeCond}
        AND (d.item_discount > 0 OR COALESCE(s.discount_total,0) > 0)
      ORDER BY s.sale_date, s.id`,
     args,
   );
 
   // All invoices in the same range/location so the UI can show "X of Y".
+  // args already includes scope params from discScopeCond above
+  const countArgs = args.slice(); // same params, no extra scope needed (scope already appended)
   const { rows: [cnt] } = await pool.query<any>(
     `SELECT COUNT(*) AS n FROM sales s
      WHERE ($1 = '' OR s.sale_date >= $1::date)
        AND ($2 = '' OR s.sale_date <= $2::date)
        AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
-       AND ($4 = 0 OR COALESCE(s.location_id, s.outlet_id) = $4)`,
-    args,
+       AND ($4 = 0 OR COALESCE(s.location_id, s.outlet_id) = $4)
+       AND ${discScopeCond}`,
+    countArgs,
   );
 
   const maps = await locationMaps();
@@ -318,9 +342,14 @@ router.get("/reports/discounts", requireModuleView("Sales"), async (req, res): P
 // ═════════════════════════════════════════════════════════════════════════════
 
 // ── Purchase register — one row per bill ────────────────────────────────────
+// LBAC: all purchases are at Head Office; non-HO users receive an empty report.
 router.get("/reports/purchase-register", requireModuleView("Purchases"), async (req, res): Promise<void> => {
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
+  const prEmp = (req as any).employee as { branchType: string } | undefined;
+  if (prEmp && prEmp.branchType !== 'headoffice') {
+    res.json({ rows: [], totals: { bills: 0, subtotal: 0, discount: 0, tax: 0, total: 0 } }); return;
+  }
   const vendorId = typeof req.query.vendorId === "string" ? parseInt(req.query.vendorId, 10) : 0;
 
   const { rows } = await pool.query<any>(
@@ -359,9 +388,14 @@ router.get("/reports/purchase-register", requireModuleView("Purchases"), async (
 });
 
 // ── Purchases by vendor ──────────────────────────────────────────────────────
+// LBAC: purchases are Head Office only.
 router.get("/reports/purchases-by-vendor", requireModuleView("Purchases"), async (req, res): Promise<void> => {
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
+  const pvEmp = (req as any).employee as { branchType: string } | undefined;
+  if (pvEmp && pvEmp.branchType !== 'headoffice') {
+    res.json({ rows: [], totals: { vendors: 0, bills: 0, taxable: 0, tax: 0, total: 0 } }); return;
+  }
 
   const { rows } = await pool.query<any>(
     `SELECT p.vendor_id, v.name AS vendor_name,
@@ -395,9 +429,14 @@ router.get("/reports/purchases-by-vendor", requireModuleView("Purchases"), async
 });
 
 // ── Purchases by material ────────────────────────────────────────────────────
+// LBAC: purchases are Head Office only.
 router.get("/reports/purchases-by-material", requireModuleView("Purchases"), async (req, res): Promise<void> => {
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
+  const pmEmp = (req as any).employee as { branchType: string } | undefined;
+  if (pmEmp && pmEmp.branchType !== 'headoffice') {
+    res.json({ rows: [], totals: { materials: 0, taxable: 0, tax: 0, total: 0 } }); return;
+  }
 
   const { rows } = await pool.query<any>(
     `SELECT li->>'materialType' AS material_type,
@@ -454,13 +493,20 @@ router.get("/reports/profitability", requireModuleView("Chart of Accounts"), asy
     res.status(400).json({ error: "groupBy must be item or location" }); return;
   }
 
+  const { getUserDataScope: getScope4, scopeSalesWhere: sScope4 } = await import("../lib/dataScope");
+  const emp4 = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  const scope4 = emp4 ? await getScope4(emp4) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
+  const profitParams: any[] = [range.from, range.to];
+  const profitScopeCond = sScope4(scope4, profitParams);
+
   const { rows: sales } = await pool.query<any>(
     `SELECT s.id, COALESCE(s.location_type,'outlet') AS location_type,
             COALESCE(s.location_id, s.outlet_id) AS location_id, s.line_items
      FROM sales s
      WHERE ($1 = '' OR s.sale_date >= $1::date)
-       AND ($2 = '' OR s.sale_date <= $2::date)`,
-    [range.from, range.to],
+       AND ($2 = '' OR s.sale_date <= $2::date)
+       AND ${profitScopeCond}`,
+    profitParams,
   );
   const { rows: items } = await pool.query<any>(
     `SELECT id, name, COALESCE(unit,'') AS unit,
@@ -539,14 +585,26 @@ router.get("/reports/sales-stock-combined", requireModuleView("Sales"), async (r
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
 
+  const { getUserDataScope: getScope5, scopeSalesWhere: sScope5 } = await import("../lib/dataScope");
+  const emp5 = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  const scope5 = emp5 ? await getScope5(emp5) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
+
+  const aggParams: any[] = [range.from, range.to];
+  const aggScope = sScope5(scope5, aggParams);
+  const locParams: any[] = [range.from, range.to];
+  const locScope = sScope5(scope5, locParams);
+  const topParams: any[] = [range.from, range.to];
+  const topScope = sScope5(scope5, topParams);
+
   const [salesAgg, byLoc, topItems, stockRows, maps] = await Promise.all([
     pool.query<any>(
       `SELECT COUNT(*) AS invoices, COALESCE(SUM(total_amount),0) AS revenue,
               COALESCE(SUM(COALESCE(tax_total,0)),0) AS tax,
               COALESCE(SUM(COALESCE(amount_paid,0)),0) AS collected
        FROM sales
-       WHERE ($1 = '' OR sale_date >= $1::date) AND ($2 = '' OR sale_date <= $2::date)`,
-      [range.from, range.to],
+       WHERE ($1 = '' OR sale_date >= $1::date) AND ($2 = '' OR sale_date <= $2::date)
+         AND ${aggScope}`,
+      aggParams,
     ),
     pool.query<any>(
       `SELECT COALESCE(location_type,'outlet') AS location_type,
@@ -554,8 +612,9 @@ router.get("/reports/sales-stock-combined", requireModuleView("Sales"), async (r
               COUNT(*) AS invoices, SUM(total_amount) AS revenue
        FROM sales
        WHERE ($1 = '' OR sale_date >= $1::date) AND ($2 = '' OR sale_date <= $2::date)
+         AND ${locScope}
        GROUP BY 1, 2 ORDER BY 4 DESC NULLS LAST`,
-      [range.from, range.to],
+      locParams,
     ),
     pool.query<any>(
       `SELECT (li->>'itemId')::int AS item_id,
@@ -564,8 +623,9 @@ router.get("/reports/sales-stock-combined", requireModuleView("Sales"), async (r
                            COALESCE((li->>'lineSubtotal')::numeric,0) + COALESCE((li->>'taxAmount')::numeric,0))) AS revenue
        FROM sales s, jsonb_array_elements(s.line_items) li
        WHERE ($1 = '' OR s.sale_date >= $1::date) AND ($2 = '' OR s.sale_date <= $2::date)
+         AND ${topScope}
        GROUP BY 1 ORDER BY 3 DESC NULLS LAST LIMIT 10`,
-      [range.from, range.to],
+      topParams,
     ),
     pool.query<any>(
       `SELECT se.branch_type, se.branch_id,

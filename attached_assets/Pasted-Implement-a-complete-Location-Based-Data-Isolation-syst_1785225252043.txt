@@ -1,0 +1,420 @@
+Implement a complete Location-Based Data Isolation system across the entire ERP.
+
+This is NOT related to the Permission module.
+
+Permissions only control:
+- Module visibility
+- View
+- Add
+- Edit
+- Delete
+
+Location-Based Access Control (LBAC) must work independently from permissions.
+
+===========================================================
+MASTER RULE
+===========================================================
+
+Every employee must ONLY see, create, edit, search, print, export, and report data belonging to the location assigned in Employee Creation.
+
+The assigned location determines data visibility everywhere in the ERP.
+
+Never rely on frontend filtering.
+
+All filtering must be enforced on the backend.
+
+===========================================================
+USER TYPES
+===========================================================
+
+1. Head Office
+Can:
+- View all warehouses
+- View all outlets
+- View all head office data
+- Transfer between all locations
+- Edit all locations
+- See all reports
+- See all customers
+- See all vendors
+- See all stock
+- See all accounts
+- See all ledgers
+
+2. Warehouse User
+Can:
+- View ONLY their assigned warehouse
+- View outlets under that warehouse (if applicable)
+- Cannot see other warehouses
+- Cannot see other warehouse customers
+- Cannot see other warehouse vendors
+- Cannot see other warehouse stock
+- Cannot edit another warehouse
+
+3. Outlet User
+Can:
+- View ONLY their assigned outlet
+- Cannot see warehouse data
+- Cannot see head office data
+- Cannot see other outlets
+
+===========================================================
+EMPLOYEE LOCATION
+===========================================================
+
+Employee Creation already contains:
+
+- User
+- Role
+- Assigned Location
+
+Use Assigned Location as the master filter throughout the ERP.
+
+===========================================================
+GLOBAL RULE
+===========================================================
+
+Every page
+Every API
+Every report
+Every search
+Every export
+Every dashboard
+Every dropdown
+Every lookup
+Every popup
+Every autocomplete
+Every print
+Every PDF
+
+must automatically filter using the employee's assigned location.
+
+===========================================================
+CUSTOMERS
+===========================================================
+
+If Warehouse A creates a customer:
+
+Only:
+- Warehouse A
+- Head Office
+
+can see that customer.
+
+Warehouse B cannot.
+
+Warehouse C cannot.
+
+Outlets cannot.
+
+Likewise:
+
+If Outlet creates customer:
+
+Only:
+- That outlet
+- Head Office
+
+can access.
+
+===========================================================
+VENDORS
+===========================================================
+
+Same rule.
+
+Vendor created by Warehouse A
+
+Visible only to:
+- Warehouse A
+- Head Office
+
+===========================================================
+STOCK
+===========================================================
+
+Warehouse users:
+
+Must only see stock belonging to their warehouse.
+
+Never show stock from:
+- Head Office
+- Other Warehouses
+- Other Outlets
+
+Outlet users:
+
+Only their outlet stock.
+
+===========================================================
+PURCHASE
+===========================================================
+
+Warehouse Purchase
+
+Visible only to:
+- That warehouse
+- Head Office
+
+===========================================================
+SALES
+===========================================================
+
+Warehouse Sales
+
+Visible only to:
+- That warehouse
+- Head Office
+
+Outlet Sales
+
+Visible only to:
+- That outlet
+- Head Office
+
+===========================================================
+EXPENSES
+===========================================================
+
+Warehouse expenses
+
+Only Warehouse + Head Office
+
+Outlet expenses
+
+Only Outlet + Head Office
+
+===========================================================
+PAYMENTS
+===========================================================
+
+Payment history
+
+Receipts
+
+Outstanding
+
+Invoices
+
+Collections
+
+Must all follow assigned location.
+
+===========================================================
+LEDGER
+===========================================================
+
+Warehouse user
+
+Only warehouse ledger.
+
+Outlet user
+
+Only outlet ledger.
+
+Head Office
+
+All ledgers.
+
+===========================================================
+REPORTS
+===========================================================
+
+Warehouse reports
+
+Only warehouse.
+
+Outlet reports
+
+Only outlet.
+
+Head Office
+
+Everything.
+
+===========================================================
+INVENTORY
+===========================================================
+
+Warehouse
+
+Only warehouse inventory.
+
+Outlet
+
+Only outlet inventory.
+
+Head Office
+
+All inventory.
+
+===========================================================
+PRODUCTION
+===========================================================
+
+Production data
+
+Head Office only unless explicitly assigned.
+
+===========================================================
+TRANSFERS
+===========================================================
+
+Warehouse
+
+Can only see transfers where:
+
+Source = Assigned Warehouse
+
+OR
+
+Destination = Assigned Warehouse
+
+Cannot see transfers between other warehouses.
+
+===========================================================
+SEARCH
+===========================================================
+
+Global Search
+
+Must NEVER return records outside assigned location.
+
+===========================================================
+DASHBOARD
+===========================================================
+
+Dashboard widgets
+
+Sales
+
+Stock
+
+Expenses
+
+Revenue
+
+Customers
+
+Pending
+
+Transfers
+
+All KPIs
+
+Must only calculate data from assigned location.
+
+===========================================================
+EXPORTS
+===========================================================
+
+Excel
+
+PDF
+
+CSV
+
+Print
+
+Must export only assigned location data.
+
+===========================================================
+API SECURITY
+===========================================================
+
+Do NOT trust frontend.
+
+Every backend API must validate:
+
+Current Employee
+
+↓
+
+Assigned Location
+
+↓
+
+Automatically apply WHERE location_id = assigned location.
+
+Never return records from other locations.
+
+===========================================================
+HEAD OFFICE EXCEPTION
+===========================================================
+
+Head Office users bypass location filtering.
+
+They can:
+
+View
+
+Add
+
+Edit
+
+Delete
+
+All locations.
+
+===========================================================
+TESTING
+===========================================================
+
+Create:
+
+Head Office
+
+Warehouse A
+
+Warehouse B
+
+Outlet A
+
+Outlet B
+
+Create different:
+
+Customers
+
+Vendors
+
+Sales
+
+Purchases
+
+Expenses
+
+Stock
+
+Payments
+
+Transfers
+
+Verify:
+
+Warehouse A cannot see Warehouse B data.
+
+Warehouse B cannot see Warehouse A data.
+
+Outlet cannot see warehouse data.
+
+Warehouse cannot see unrelated outlet data.
+
+Head Office can see everything.
+
+===========================================================
+FINAL REPORT
+===========================================================
+
+Do not mark complete until every page, API, report, search, export, dashboard, popup, dropdown, and workflow follows Location-Based Data Isolation.
+
+Provide:
+
+- Files modified
+- APIs secured
+- Database queries updated
+- Pages verified
+- Modules tested
+- Confirmation that Location-Based Access Control works across the entire ERP.
+
+This Location-Based Data Isolation system must remain completely independent from the existing Permission module.

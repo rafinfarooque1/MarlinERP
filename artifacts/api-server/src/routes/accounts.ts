@@ -195,7 +195,9 @@ router.delete("/accounts/chart/:id", requireModuleAction("Chart of Accounts", "d
 });
 
 // ── Payments ──────────────────────────────────────────────────────────────
-router.get("/accounts/payments", requireModuleView("Payments"), async (_req, res): Promise<void> => {
+// LBAC: full payment ledger is Head Office accounting — non-HO users see nothing
+router.get("/accounts/payments", requireModuleView("Payments"), async (req, res): Promise<void> => {
+  if ((req as any).employee?.branchType !== 'headoffice') { res.json([]); return; }
   const result = await pool.query(`
     SELECT p.*, 
       pf.name AS paid_from_name,
@@ -250,7 +252,9 @@ router.delete("/accounts/payments/:id", requireModuleAction("Payments", "delete"
 });
 
 // ── Receipts ──────────────────────────────────────────────────────────────
-router.get("/accounts/receipts", requireModuleView("Payments"), async (_req, res): Promise<void> => {
+// LBAC: full receipt ledger is Head Office accounting — non-HO users see nothing
+router.get("/accounts/receipts", requireModuleView("Payments"), async (req, res): Promise<void> => {
+  if ((req as any).employee?.branchType !== 'headoffice') { res.json([]); return; }
   const result = await pool.query(`
     SELECT r.*,
       rf.name AS received_from_name,
@@ -306,6 +310,8 @@ router.delete("/accounts/receipts/:id", requireModuleAction("Payments", "delete"
 
 // ── Ledger Statement ──────────────────────────────────────────────────────
 router.get("/accounts/ledger-statement", requireModuleView("Ledger"), async (req, res): Promise<void> => {
+  // LBAC: full ledger statement is Head Office accounting
+  if ((req as any).employee?.branchType !== 'headoffice') { res.json({ account: null, entries: [], openingBalance: 0, closingBalance: 0 }); return; }
   const qp = GetLedgerStatementQueryParams.safeParse(req.query);
   if (!qp.success) { res.status(400).json({ error: qp.error.message }); return; }
 
@@ -438,27 +444,38 @@ router.post("/accounts/cash-bank", requireModuleAction("Cash & Bank", "add"), as
 });
 
 // ── Expenses (merged: expenses table + location expense payments) ──────────
-router.get("/expenses", async (_req, res): Promise<void> => {
-  // 1. Regular expenses from the expenses table
-  const rows = await db.select().from(expensesTable).orderBy(expensesTable.id);
-  const ledgers = await db.select().from(accountLedgersTable);
-  const cashBanks = await db.select().from(cashBankAccountsTable);
-  const lMap = new Map(ledgers.map(l => [l.id, l.name]));
-  const cbMap = new Map(cashBanks.map(cb => [cb.id, cb.name]));
+router.get("/expenses", async (req, res): Promise<void> => {
+  const expEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  const isHO = !expEmp || expEmp.branchType === 'headoffice';
 
-  const directExpenses = rows.map(r => ({
-    id: r.id,
-    source: 'direct' as const,
-    expenseDate: r.expenseDate,
-    description: r.description ?? null,
-    ledgerAccountId: r.ledgerAccountId,
-    ledgerAccountName: lMap.get(r.ledgerAccountId) ?? "",
-    paymentAccountId: r.paymentAccountId,
-    paymentAccountName: cbMap.get(r.paymentAccountId) ?? "",
-    amount: Number(r.amount),
-    voucherNumber: null as string | null,
-    createdAt: r.createdAt,
-  }));
+  let directExpenses: Array<{
+    id: number; source: 'direct'; expenseDate: any;
+    description: string | null; ledgerAccountId: number; ledgerAccountName: string;
+    paymentAccountId: number; paymentAccountName: string; amount: number;
+    voucherNumber: string | null; createdAt: any;
+  }> = [];
+
+  if (isHO) {
+    // 1. Regular expenses from the expenses table (Head Office only)
+    const rows = await db.select().from(expensesTable).orderBy(expensesTable.id);
+    const ledgers = await db.select().from(accountLedgersTable);
+    const cashBanks = await db.select().from(cashBankAccountsTable);
+    const lMap = new Map(ledgers.map(l => [l.id, l.name]));
+    const cbMap = new Map(cashBanks.map(cb => [cb.id, cb.name]));
+    directExpenses = rows.map(r => ({
+      id: r.id,
+      source: 'direct' as const,
+      expenseDate: r.expenseDate,
+      description: r.description ?? null,
+      ledgerAccountId: r.ledgerAccountId,
+      ledgerAccountName: lMap.get(r.ledgerAccountId) ?? "",
+      paymentAccountId: r.paymentAccountId,
+      paymentAccountName: cbMap.get(r.paymentAccountId) ?? "",
+      amount: Number(r.amount),
+      voucherNumber: null as string | null,
+      createdAt: r.createdAt,
+    }));
+  }
 
   // 2. Location expenses: payments where paid_to is in Direct/Indirect Expense subtree
   const expenseLedgerIds = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
@@ -469,6 +486,23 @@ router.get("/expenses", async (_req, res): Promise<void> => {
     voucherNumber: string | null; createdAt: any;
   }> = [];
   if (expenseLedgerIds.length > 0) {
+    // LBAC: non-HO users see only their location's expenses (from their cash ledger)
+    let cashLedgerFilter = '';
+    const pmtParams: any[] = [expenseLedgerIds];
+    if (!isHO && expEmp) {
+      const locTable = expEmp.branchType === 'warehouse' ? 'warehouses' : 'outlets';
+      const { rows: [locRow] } = await pool.query(
+        `SELECT cash_ledger_id FROM ${locTable} WHERE id = $1`, [expEmp.branchId]
+      );
+      if (locRow?.cash_ledger_id) {
+        pmtParams.push(locRow.cash_ledger_id);
+        cashLedgerFilter = ` AND p.paid_from_ledger_id = $${pmtParams.length}`;
+      } else {
+        // Location has no cash ledger configured — return empty
+        res.json([]); return;
+      }
+    }
+
     const { rows: pmtRows } = await pool.query(`
       SELECT p.id, p.voucher_number, p.payment_date, p.paid_from_ledger_id,
              p.paid_to_ledger_id, p.amount, p.narration, p.created_at,
@@ -476,9 +510,9 @@ router.get("/expenses", async (_req, res): Promise<void> => {
       FROM payments p
       LEFT JOIN account_ledgers pf ON p.paid_from_ledger_id = pf.id
       LEFT JOIN account_ledgers pt ON p.paid_to_ledger_id = pt.id
-      WHERE p.paid_to_ledger_id = ANY($1)
+      WHERE p.paid_to_ledger_id = ANY($1)${cashLedgerFilter}
       ORDER BY p.id DESC
-    `, [expenseLedgerIds]);
+    `, pmtParams);
 
     locationExpenses = pmtRows.map((r: any) => ({
       id: r.id,
@@ -557,13 +591,25 @@ router.get("/accounts/expense-ledgers", async (_req, res): Promise<void> => {
 router.get("/accounts/location-expenses/summary", async (req, res): Promise<void> => {
   const expenseLedgerIds = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
 
-  // Fetch all warehouses and outlets with their cash ledger ids
-  const { rows: warehouses } = await pool.query(
-    `SELECT id, name, cash_ledger_id FROM warehouses WHERE cash_ledger_id IS NOT NULL ORDER BY name`
-  );
-  const { rows: outlets } = await pool.query(
-    `SELECT id, name, cash_ledger_id FROM outlets WHERE cash_ledger_id IS NOT NULL ORDER BY name`
-  );
+  // LBAC: non-HO users see only their own location
+  const sumEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  const sumIsHO = !sumEmp || sumEmp.branchType === 'headoffice';
+
+  // Fetch warehouses and outlets (scoped to user's location if non-HO)
+  let warehouses: any[] = [];
+  let outlets: any[] = [];
+  if (sumIsHO) {
+    const wRes = await pool.query(`SELECT id, name, cash_ledger_id FROM warehouses WHERE cash_ledger_id IS NOT NULL ORDER BY name`);
+    const oRes = await pool.query(`SELECT id, name, cash_ledger_id FROM outlets WHERE cash_ledger_id IS NOT NULL ORDER BY name`);
+    warehouses = wRes.rows;
+    outlets = oRes.rows;
+  } else if (sumEmp.branchType === 'warehouse') {
+    const { rows } = await pool.query(`SELECT id, name, cash_ledger_id FROM warehouses WHERE id = $1 AND cash_ledger_id IS NOT NULL`, [sumEmp.branchId]);
+    warehouses = rows;
+  } else {
+    const { rows } = await pool.query(`SELECT id, name, cash_ledger_id FROM outlets WHERE id = $1 AND cash_ledger_id IS NOT NULL`, [sumEmp.branchId]);
+    outlets = rows;
+  }
 
   const locations: Array<{
     locationType: string; locationId: number; locationName: string;
@@ -619,6 +665,25 @@ router.get("/accounts/location-expenses/all", async (req, res): Promise<void> =>
   const expenseLedgerIds = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
   if (expenseLedgerIds.length === 0) { res.json([]); return; }
 
+  // LBAC: non-HO users see only their own location's expenses
+  const allEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  const allIsHO = !allEmp || allEmp.branchType === 'headoffice';
+
+  let cashLedgerFilterAll = '';
+  const allParams: any[] = [expenseLedgerIds];
+  if (!allIsHO && allEmp) {
+    const locTable = allEmp.branchType === 'warehouse' ? 'warehouses' : 'outlets';
+    const { rows: [locRow] } = await pool.query(
+      `SELECT cash_ledger_id FROM ${locTable} WHERE id = $1`, [allEmp.branchId]
+    );
+    if (locRow?.cash_ledger_id) {
+      allParams.push(locRow.cash_ledger_id);
+      cashLedgerFilterAll = ` AND p.paid_from_ledger_id = $${allParams.length}`;
+    } else {
+      res.json([]); return;
+    }
+  }
+
   // Join warehouses and outlets on their cash ledger to tag each payment with location info
   const { rows } = await pool.query(`
     SELECT p.id, p.voucher_number, p.payment_date, p.paid_from_ledger_id, p.paid_to_ledger_id,
@@ -632,9 +697,9 @@ router.get("/accounts/location-expenses/all", async (req, res): Promise<void> =>
     LEFT JOIN warehouses w ON w.cash_ledger_id = p.paid_from_ledger_id
     LEFT JOIN outlets    o ON o.cash_ledger_id = p.paid_from_ledger_id
     WHERE p.paid_to_ledger_id = ANY($1)
-      AND (w.id IS NOT NULL OR o.id IS NOT NULL)
+      AND (w.id IS NOT NULL OR o.id IS NOT NULL)${cashLedgerFilterAll}
     ORDER BY p.payment_date DESC, p.id DESC
-  `, [expenseLedgerIds]);
+  `, allParams);
 
   res.json(rows.map((r: any) => ({
     id: r.id,
@@ -655,6 +720,16 @@ router.get("/accounts/location-expenses", async (req, res): Promise<void> => {
   const { locationType, locationId } = req.query as { locationType?: string; locationId?: string };
   if (!locationType || !locationId) {
     res.status(400).json({ error: "locationType and locationId are required" }); return;
+  }
+  // LBAC: non-HO users may only view their own location's expenses
+  const locExpEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  if (locExpEmp && locExpEmp.branchType !== 'headoffice') {
+    const reqLocType = String(locationType);
+    const reqLocId   = Number(locationId);
+    const empLocType = locExpEmp.branchType; // 'warehouse' or 'outlet'
+    if (reqLocType !== empLocType || reqLocId !== locExpEmp.branchId) {
+      res.status(403).json({ error: "Access denied: you may only view your own location's expenses" }); return;
+    }
   }
   const cashLedgerId = await resolveLocationCashLedger(locationType, Number(locationId));
   if (!cashLedgerId) {
@@ -800,6 +875,8 @@ router.delete("/accounts/location-expenses/:id", requireModuleAction("Location E
 
 // ── Financial Statements (Balance Sheet + P&L) ────────────────────────────
 router.get("/accounts/financial-statements", requireModuleView("Chart of Accounts"), async (req, res): Promise<void> => {
+  // LBAC: P&L and Balance Sheet are Head Office accounting
+  if ((req as any).employee?.branchType !== 'headoffice') { res.json({ pl: null, bs: null }); return; }
   const { fromDate, toDate, outletId } = req.query as {
     fromDate?: string; toDate?: string; outletId?: string;
   };
@@ -1014,6 +1091,8 @@ router.get("/accounts/financial-statements", requireModuleView("Chart of Account
 
 // ── Ledger Statement ──────────────────────────────────────────────────────
 router.get("/accounts/ledger/:id/statement", async (req, res): Promise<void> => {
+  // LBAC: individual ledger statements are Head Office accounting
+  if ((req as any).employee?.branchType !== 'headoffice') { res.json({ ledger: null, entries: [], openingBalance: 0, closingBalance: 0 }); return; }
   const id = parseInt(req.params.id, 10);
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
 
@@ -1155,6 +1234,10 @@ router.get("/accounts/ledger/:id/statement", async (req, res): Promise<void> => 
 
 // ── GST Summary ───────────────────────────────────────────────────────────
 router.get("/gst/summary", requireModuleView(["GST Summary", "GST Returns"]), async (req, res): Promise<void> => {
+  // LBAC: GST summary is Head Office accounting
+  if ((req as any).employee?.branchType !== 'headoffice') {
+    res.json({ salesByRate: [], purchasesByRate: [], totals: {} }); return;
+  }
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
 
   let allSales = await db.select().from(salesTable).orderBy(salesTable.saleDate);

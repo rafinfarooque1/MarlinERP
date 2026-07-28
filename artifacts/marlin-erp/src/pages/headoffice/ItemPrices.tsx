@@ -79,7 +79,7 @@ export default function ItemPrices() {
       itemId:       data.itemId,
       outletId:     data.locationType === 'headoffice' ? 0 : data.locationId,
       locationType: data.locationType,
-      price:        String(data.price),
+      price:        Number(data.price),
       validFrom:    data.validFrom || undefined,
       validTo:      data.validTo   || undefined,
     };

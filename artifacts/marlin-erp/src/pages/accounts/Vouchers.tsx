@@ -188,9 +188,11 @@ function NewVoucherDialog({ onClose, defaultType }: { onClose: () => void; defau
     } else if (type === 'contra') {
       if (!fromId || !toId) { toast.error('Select both accounts'); return; }
       if (!amount || Number(amount) <= 0) { toast.error('Enter amount'); return; }
+      // Backend derives the double-entry itself: Dr destination (toLedgerId),
+      // Cr source (fromLedgerId). Send the contra contract, not journal lines.
       createJV.mutate({
         voucherType: 'contra', voucherDate: date, narration,
-        lines: [{ ledgerId: fromId, debit: Number(amount), credit: 0 }, { ledgerId: toId, debit: 0, credit: Number(amount) }],
+        fromLedgerId: fromId, toLedgerId: toId, amount: Number(amount),
       } as any, {
         onSuccess: (v: any) => { toast.success(`Contra ${v.voucherNumber} recorded`); invalidate(); },
         onError: onErr,

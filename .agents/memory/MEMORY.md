@@ -9,7 +9,8 @@
 - [Accounts derivation & numbering](accounts-derivation.md) — books derive from buildDerivedPostings(); sale-linked receipts stay excluded (double-count trap); ALL GST math via lineTaxHeads(); never COUNT(*)-number vouchers.
 - [Inventory batch layer](inventory-batches.md) — additive lot layer over stock_entries (qty truth); FEFO clamped consumption, shortfall = "Untracked"; zod strips unknown keys so optional passthrough fields read from raw body.
 - [pg query gotchas](pg-gotchas.md) — date columns return JS Date (never string-compare vs YYYY-MM-DD); creates return 201; check-then-insert guards need one txn + pg_advisory_xact_lock.
-- [Codegen staleness trap](codegen-staleness.md) — regenerating api-zod can flip stale-optional fields to required; diff generated output and verify UI forms send them after codegen.
+- [Codegen staleness trap](codegen-staleness.md) — cuts BOTH ways: codegen can flip optional→required, AND generated types under-declare what routes really return (auditing UI reads against them yields mass false positives).
+- [CREATE TABLE IF NOT EXISTS drift](migration-ddl-drift.md) — constraints added to an existing CREATE TABLE IF NOT EXISTS never apply to live DBs; a 42P10 is almost always this. Dedupe before adding a unique index.
 - [Sales settlement & discounts](sales-settlement.md) — cash/upi/card settle at creation; only 'credit' is credit-controlled; dues = total−paid; line discounts net into GST pre-tax, discount_total = bill-level coupon ONLY (post-tax).
 - [RBAC & branch scoping](rbac-branch-scoping.md) — branch_type 'headoffice' is a string, not null; backend default-ALLOWS missing perm rows; most GETs unguarded, scoping is client-side.
 - [Sales location gate](location-context-gate.md) — /sales/* pages render blank (null) in fresh sessions until a location is picked at /sales; not a crash — navigate via the picker in tests.
@@ -19,3 +20,4 @@
 - [Phase 1 stabilization changes](phase1-stabilization.md) — default-deny perms + seeding migration, 8-hr token expiry, payroll COA posting, negative-stock DB constraint, opening-balances table, CORS/body limits.
 - [Phase 1 QA findings](phase1-qa-findings.md) — 3 bugs found+fixed in QA: health bypass path, incomplete seeding list, frontend default-allow. All Phase 1 items verified with test evidence.
 - [Payroll workflow](payroll-workflow.md) — draft→approved→paid; per-employee ledgers (SAL-EMP/SAL-PAY/ADV-EMP); hours-based attendance; advances auto-deducted at generate time.
+- [LBAC implementation](lbac-implementation.md) — full location-scoping across all routes; decisions on HO-only endpoints; vendor/customer location stamping; dataScope helpers.

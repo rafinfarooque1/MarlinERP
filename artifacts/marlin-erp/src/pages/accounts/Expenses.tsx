@@ -281,7 +281,7 @@ export default function Expenses() {
   });
 
   const onSubmit = (data: FormValues) => {
-    createMutation.mutate({ data: { ...data, amount: String(data.amount) } as any }, {
+    createMutation.mutate({ data: { ...data, amount: Number(data.amount) } as any }, {
       onSuccess: () => {
         toast.success('Expense recorded');
         queryClient.invalidateQueries({ queryKey: getListExpensesQueryKey() });

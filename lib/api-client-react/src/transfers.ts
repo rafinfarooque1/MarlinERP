@@ -26,6 +26,8 @@ export function useApproveTransfer() {
       qc.invalidateQueries({ queryKey: ['/api/stock'] });
       // Batch quantity displays
       qc.invalidateQueries({ queryKey: ['/api/stock/batches'] });
+      // Stock ledger — new transfer_in entries
+      qc.invalidateQueries({ queryKey: ['/api/stock/ledger'] });
       // Materials and raw-materials current_stock
       qc.invalidateQueries({ queryKey: ['/api/materials'] });
       qc.invalidateQueries({ queryKey: ['/api/raw-materials'] });
@@ -44,6 +46,15 @@ export function useRejectTransfer() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rejectionReason }),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: getTransfersQueryKey() }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: getTransfersQueryKey() });
+      // Reject restores source stock — refresh every stock-related view
+      qc.invalidateQueries({ queryKey: ['/api/stock'] });
+      qc.invalidateQueries({ queryKey: ['/api/stock/batches'] });
+      qc.invalidateQueries({ queryKey: ['/api/stock/ledger'] });
+      qc.invalidateQueries({ queryKey: ['/api/materials'] });
+      qc.invalidateQueries({ queryKey: ['/api/raw-materials'] });
+      qc.invalidateQueries({ queryKey: ['/api/dashboard'] });
+    },
   });
 }

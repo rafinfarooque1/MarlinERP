@@ -1,5 +1,4 @@
 import { useState, useMemo } from 'react';
-import { useLocation } from 'wouter';
 import {
   useListMaterials, useCreateMaterial, useUpdateMaterial, useDeleteMaterial, getListMaterialsQueryKey,
   useListRawMaterials, useCreateRawMaterial, useUpdateRawMaterial, useDeleteRawMaterial, getListRawMaterialsQueryKey,
@@ -19,7 +18,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Edit2, Trash2, Layers, Download, Eye, ClipboardList, ShieldOff, Tag } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, Layers, Download, Eye, ClipboardList, ShieldOff } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
@@ -48,6 +47,7 @@ const schema = z.object({
   hsnCode:     z.string().optional(),
   taxRate:     z.coerce.number().min(0).max(28).optional(),
   cost:        z.coerce.number().min(0).optional(),
+  mrp:         z.coerce.number().min(0).optional(),
   reorderLevel: z.coerce.number().min(0).optional(),
   description: z.string().optional(),
 });
@@ -66,7 +66,6 @@ type BomFormValues = z.infer<typeof bomSchema>;
 const defaultBomLine = { materialType: 'raw_material' as const, materialId: 0, quantity: 1 };
 
 export default function ItemMaster() {
-  const [, navigate] = useLocation();
   const perm = usePermission('Items');
   const { data: rawMaterials = [], isLoading: rmLoading } = useListRawMaterials();
   const { data: materials = [], isLoading: mLoading } = useListMaterials();
@@ -114,7 +113,7 @@ export default function ItemMaster() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { itemType: 'raw_material', name: '', unit: '', hsnCode: '', taxRate: 5, cost: 0, reorderLevel: 10, description: '' },
+    defaultValues: { itemType: 'raw_material', name: '', unit: '', hsnCode: '', taxRate: 5, cost: 0, mrp: 0, reorderLevel: 10, description: '' },
   });
 
   const watchType = form.watch('itemType');
@@ -143,7 +142,7 @@ export default function ItemMaster() {
 
   const openAdd = (type?: ItemType) => {
     setEditTarget(null);
-    form.reset({ itemType: type || 'raw_material', name: '', unit: units[0] || '', hsnCode: '', taxRate: 5, cost: 0, reorderLevel: 10, description: '' });
+    form.reset({ itemType: type || 'raw_material', name: '', unit: units[0] || '', hsnCode: '', taxRate: 5, cost: 0, mrp: 0, reorderLevel: 10, description: '' });
     setIsOpen(true);
   };
 
@@ -156,6 +155,7 @@ export default function ItemMaster() {
       hsnCode: item.hsnCode || '',
       taxRate: Number(item.taxRate ?? 5),
       cost: Number(item.cost ?? 0),
+      mrp: Number(item.mrp ?? 0),
       reorderLevel: Number(item.reorderLevel ?? 10),
       description: item.description || '',
     });
@@ -208,8 +208,8 @@ export default function ItemMaster() {
       },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     };
-    // raw_material / material: cost auto-derives from purchases — never send it from the form
-    const sharedData = { name: data.name, unit: data.unit, description: data.description, hsnCode: data.hsnCode || '', taxRate: Number(data.taxRate ?? 5) };
+    // raw_material / material: production cost auto-derives from purchases; mrp is manually set
+    const sharedData = { name: data.name, unit: data.unit, description: data.description, hsnCode: data.hsnCode || '', taxRate: Number(data.taxRate ?? 5), mrp: Number(data.mrp ?? 0) };
     const itemData = { ...sharedData, cost: Number(data.cost ?? 0), reorderLevel: Number(data.reorderLevel ?? 10) };
 
     if (editTarget) {
@@ -366,7 +366,7 @@ export default function ItemMaster() {
                 <TableHead>Unit</TableHead>
                 <TableHead>HSN</TableHead>
                 <TableHead>Tax</TableHead>
-                <TableHead className="text-right">Avg Cost (₹)</TableHead>
+                <TableHead className="text-right">MRP (₹)</TableHead>
                 <TableHead className="text-right">
                   {locType === 'all' ? 'Stock' :
                    locType === 'headoffice' ? 'HO Stock' :
@@ -385,10 +385,8 @@ export default function ItemMaster() {
                   <Layers className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No items found</p>
                 </TableCell></TableRow>
               ) : filtered.map(item => {
-                // Show avgCost for raw/packing materials (derives from purchases); cost for SKUs
-                const displayCost = (item._type === 'item')
-                  ? Number((item as any).cost)
-                  : Number((item as any).avgCost ?? (item as any).cost ?? 0);
+                // Show mrp for all types
+                const displayCost = Number((item as any).mrp ?? 0);
                 return (
                 <TableRow key={`${item._type}-${item.id}`} className="hover:bg-muted/10">
                   <TableCell>
@@ -421,14 +419,9 @@ export default function ItemMaster() {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       {item._type === 'item' && (
-                        <>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500" title="Set selling price" onClick={() => navigate('/headoffice/item-price')}>
-                            <Tag className="w-4 h-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title={bomByItem.has(item.id) ? 'Edit BOM template' : 'Set BOM template'} onClick={() => openBom(item)}>
-                            <ClipboardList className="w-4 h-4" />
-                          </Button>
-                        </>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title={bomByItem.has(item.id) ? 'Edit BOM template' : 'Set BOM template'} onClick={() => openBom(item)}>
+                          <ClipboardList className="w-4 h-4" />
+                        </Button>
                       )}
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(item)}><Eye className="w-4 h-4" /></Button>
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(item)}><Edit2 className="w-4 h-4" /></Button>
@@ -501,8 +494,8 @@ export default function ItemMaster() {
                     </Select>
                   </FormItem>
                 )} />
-                {/* Cost — SKUs only; raw/packing materials derive cost from purchases automatically */}
-                {watchType === 'item' ? (
+                {/* Cost / Rate — SKUs only (production cost, auto-derived for materials) */}
+                {watchType === 'item' && (
                   <FormField control={form.control} name="cost" render={({ field }) => (
                     <FormItem>
                       <FormLabel>Cost / Rate (₹)</FormLabel>
@@ -510,14 +503,16 @@ export default function ItemMaster() {
                       <FormMessage />
                     </FormItem>
                   )} />
-                ) : (
-                  <FormItem>
-                    <FormLabel>Avg Cost (₹)</FormLabel>
-                    <div className="flex items-center h-10 px-3 rounded-md border border-border bg-muted/40 text-sm text-muted-foreground font-mono">
-                      Auto-calculated from purchases
-                    </div>
-                  </FormItem>
                 )}
+
+                {/* MRP — all types */}
+                <FormField control={form.control} name="mrp" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>MRP (₹)</FormLabel>
+                    <FormControl><Input type="number" min={0} step="0.01" placeholder="0.00" className="font-mono" {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
 
                 {/* Reorder level — finished items only */}
                 {watchType === 'item' && (
@@ -678,9 +673,6 @@ export default function ItemMaster() {
               <div className="flex flex-col gap-2 mt-6">
                 {viewItem._type === 'item' && (
                   <div className="flex gap-2">
-                    <Button className="flex-1" variant="outline" onClick={() => { setViewItem(null); navigate('/headoffice/item-price'); }}>
-                      <Tag className="w-4 h-4 mr-2" /> Set Price
-                    </Button>
                     <Button className="flex-1" variant="outline" onClick={() => { const it = viewItem; setViewItem(null); openBom(it); }}>
                       <ClipboardList className="w-4 h-4 mr-2" /> BOM
                     </Button>

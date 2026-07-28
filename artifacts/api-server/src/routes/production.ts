@@ -77,7 +77,10 @@ const EXTRA_COLS = `id, batch_number, mfg_date, expiry_date, material_cost, over
 
 const router = Router();
 
-router.get("/productions", async (_req, res): Promise<void> => {
+router.get("/productions", async (req, res): Promise<void> => {
+  // LBAC: production data is Head Office only
+  if ((req as any).employee?.branchType !== 'headoffice') { res.json([]); return; }
+
   const rows = await db.select().from(productionsTable).orderBy(productionsTable.id);
   const items = await db.select().from(itemsTable);
   const iMap = new Map(items.map((i) => [i.id, i.name]));
@@ -103,6 +106,10 @@ router.get("/productions", async (_req, res): Promise<void> => {
 // ── Production reports (must be registered before /productions/:id) ──────────
 // GET /productions/reports?from=YYYY-MM-DD&to=YYYY-MM-DD
 router.get("/productions/reports", requireModuleView("Production"), async (req, res): Promise<void> => {
+  // LBAC: production data is Head Office only
+  if ((req as any).employee?.branchType !== 'headoffice') {
+    res.json({ rows: [], totals: {} }); return;
+  }
   const from = typeof req.query.from === "string" ? req.query.from : "";
   const to = typeof req.query.to === "string" ? req.query.to : "";
   const dateRe = /^\d{4}-\d{2}-\d{2}$/;

@@ -401,9 +401,14 @@ router.post("/sales-returns", requireModuleAction(["Sales", "Point of Sale"], "a
 // GET /sales-returns — list (optionally ?saleId= for per-invoice history)
 router.get("/sales-returns", async (req: Request, res: Response) => {
   try {
+    const emp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+    const { getUserDataScope, scopeLocationTypeWhere } = await import("../lib/dataScope");
+    const scope = emp ? await getUserDataScope(emp) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
     const params: any[] = [];
-    let where = "";
-    if (req.query.saleId) { params.push(Number(req.query.saleId)); where = ` WHERE sr.sale_id = $${params.length}`; }
+    const scopeCond = scopeLocationTypeWhere(scope, params, "sr");
+    let whereParts = [`${scopeCond}`];
+    if (req.query.saleId) { params.push(Number(req.query.saleId)); whereParts.push(`sr.sale_id = $${params.length}`); }
+    const where = `WHERE ${whereParts.join(" AND ")}`;
     const { rows } = await pool.query(
       `SELECT sr.*, s.invoice_number, c.name AS customer_name,
               jv.voucher_number AS credit_note_number
@@ -676,8 +681,13 @@ router.post("/purchase-returns", requireModuleAction(["Sales", "Purchases"], "ad
 });
 
 // GET /purchase-returns — list (optionally ?purchaseId=)
+// LBAC: purchases are headoffice-only; non-HO users get an empty list
 router.get("/purchase-returns", async (req: Request, res: Response) => {
   try {
+    const purchRetEmp = (req as any).employee as { branchType: string } | undefined;
+    if (purchRetEmp && purchRetEmp.branchType !== 'headoffice') {
+      res.json([]); return;
+    }
     const params: any[] = [];
     let where = "";
     if (req.query.purchaseId) { params.push(Number(req.query.purchaseId)); where = ` WHERE pr.purchase_id = $${params.length}`; }
@@ -740,9 +750,14 @@ const addDays = (iso: string, days: number): string =>
 // GET /outstanding/receivables — per-customer aging on unpaid invoice balances,
 // aged by days PAST DUE (due = sale date + customer credit days), with issued
 // credit notes shown as unallocated credits.
-router.get("/outstanding/receivables", requireModuleView(["Customers", "Sales"]), async (_req: Request, res: Response) => {
+router.get("/outstanding/receivables", requireModuleView(["Customers", "Sales"]), async (req: Request, res: Response) => {
   try {
     const asOf = todayISO();
+    const { getUserDataScope, scopeSalesWhere } = await import("../lib/dataScope");
+    const rcvEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+    const rcvScope = rcvEmp ? await getUserDataScope(rcvEmp) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
+    const rcvParams: any[] = [];
+    const rcvScopeCond = scopeSalesWhere(rcvScope, rcvParams);
     const { rows: invoices } = await pool.query(
       `SELECT s.id, s.invoice_number, s.sale_date, s.customer_id,
               s.total_amount::numeric AS total, COALESCE(s.amount_paid, 0)::numeric AS paid,
@@ -750,7 +765,9 @@ router.get("/outstanding/receivables", requireModuleView(["Customers", "Sales"])
        FROM sales s
        JOIN customers c ON c.id = s.customer_id
        WHERE (s.total_amount::numeric - COALESCE(s.amount_paid, 0)::numeric) > 0.009
-       ORDER BY s.sale_date ASC, s.id ASC`
+         AND ${rcvScopeCond}
+       ORDER BY s.sale_date ASC, s.id ASC`,
+      rcvParams
     );
     const { rows: cnRows } = await pool.query(
       `SELECT l.code, COALESCE(SUM(v.total_amount::numeric), 0) AS amt
@@ -829,8 +846,14 @@ router.get("/outstanding/receivables", requireModuleView(["Customers", "Sales"])
 // GET /outstanding/payables — per-vendor aging. Purchases have no amount_paid,
 // so vendor payments + debit notes are FIFO-allocated against bills oldest-first;
 // unallocated remainder ages by days since the bill date.
-router.get("/outstanding/payables", requireModuleView(["Vendors", "Sales"]), async (_req: Request, res: Response) => {
+router.get("/outstanding/payables", requireModuleView(["Vendors", "Sales"]), async (req: Request, res: Response) => {
   try {
+    // LBAC: purchases/payables are Head Office only
+    const payEmp = (req as any).employee as { branchType: string } | undefined;
+    if (payEmp && payEmp.branchType !== 'headoffice') {
+      res.json({ asOf: todayISO(), totals: { b0_30: 0, b31_60: 0, b61_90: 0, b90p: 0, totalDue: 0, debitNotes: 0, netDue: 0 }, vendors: [] });
+      return;
+    }
     const asOf = todayISO();
     const { rows: bills } = await pool.query(
       `SELECT p.id, p.invoice_number, p.purchase_date, p.vendor_id, p.total_amount::numeric AS total, v.name, v.phone
@@ -926,9 +949,14 @@ router.get("/outstanding/payables", requireModuleView(["Vendors", "Sales"]), asy
 
 // GET /outstanding/collections — flat worklist of unpaid/partial invoices,
 // most-overdue first, ready for inline payment collection.
-router.get("/outstanding/collections", async (_req: Request, res: Response) => {
+router.get("/outstanding/collections", async (req: Request, res: Response) => {
   try {
     const asOf = todayISO();
+    const { getUserDataScope, scopeSalesWhere } = await import("../lib/dataScope");
+    const colEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+    const colScope = colEmp ? await getUserDataScope(colEmp) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
+    const colParams: any[] = [];
+    const colScopeCond = scopeSalesWhere(colScope, colParams);
     const { rows } = await pool.query(
       `SELECT s.id, s.invoice_number, s.sale_date, s.payment_status, s.payment_mode, s.customer_id,
               s.location_type, s.location_id,
@@ -937,7 +965,9 @@ router.get("/outstanding/collections", async (_req: Request, res: Response) => {
        FROM sales s
        LEFT JOIN customers c ON c.id = s.customer_id
        WHERE (s.total_amount::numeric - COALESCE(s.amount_paid, 0)::numeric) > 0.009
-       ORDER BY s.sale_date ASC, s.id ASC`
+         AND ${colScopeCond}
+       ORDER BY s.sale_date ASC, s.id ASC`,
+      colParams
     );
     const items = rows.map((r: any) => {
       const balance = r2(Number(r.total) - Number(r.paid));
