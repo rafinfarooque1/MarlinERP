@@ -634,6 +634,7 @@ router.get("/reports/sales-stock-combined", requireModuleView("Sales"), async (r
               COALESCE(SUM(se.quantity * COALESCE(i.avg_cost, i.cost, 0)),0) AS stock_value
        FROM stock_entries se
        JOIN items i ON i.id = se.item_id
+       WHERE se.material_type = 'item'
        GROUP BY 1, 2 ORDER BY 5 DESC`,
     ),
     locationMaps(),

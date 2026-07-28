@@ -6,6 +6,7 @@ import { CreateProductionBody } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
 import { creditBatch, updateAvgCostOnInbound, inboundCostForItem } from "../lib/batches";
 import { writeStockLedger } from "../lib/stockLedger";
+import { deductMaterialAt, creditMaterialAt, isMaterialKind } from "../lib/materialStock";
 
 // ── Phase 5: batch costing & wastage ─────────────────────────────────────────
 // Every new batch snapshots, at save time:
@@ -371,13 +372,29 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
        JSON.stringify(wastageLines), wastageQty, wastageValue, rowId]
     );
 
-    // Deduct materials used
+    // Deduct materials used. The mirror counter and the location row move
+    // together: production consumes at Head Office, where materials are held.
     for (const mat of materialUsed) {
       const table = mat.materialType === "material" ? "materials" : "raw_materials";
       await client.query(
         `UPDATE ${table} SET current_stock = current_stock::numeric - $1, updated_at = now() WHERE id = $2`,
         [mat.usedQuantity, mat.materialId]
       );
+      if (isMaterialKind(mat.materialType)) {
+        // Forward consumption must NOT clamp: a shortfall here means the batch
+        // is claiming more material than Head Office holds, and silently
+        // flooring it at zero would manufacture stock out of nothing.
+        const taken = await deductMaterialAt(
+          client, mat.materialType, mat.materialId, "headoffice", 1, Number(mat.usedQuantity)
+        );
+        if (!taken.ok) {
+          await client.query("ROLLBACK");
+          res.status(400).json({
+            error: `Insufficient stock for ${mat.materialName ?? `#${mat.materialId}`}: available ${taken.available}, batch needs ${mat.usedQuantity}`,
+          });
+          return;
+        }
+      }
     }
 
     // Add to item production stock (good units only — wastage never enters stock)
@@ -386,11 +403,11 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
       [produced, parsed.data.itemId]
     );
 
-    // Production stock entry (atomic upsert on uq_stock_entries_item_branch)
+    // Production stock entry (atomic upsert on uq_stock_entries_ref_branch)
     await client.query(
-      `INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price)
-       VALUES ($1, 'headoffice', 1, $2, '0')
-       ON CONFLICT (item_id, branch_type, branch_id)
+      `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price)
+       VALUES ($1, 'item', 'headoffice', 1, $2, '0')
+       ON CONFLICT (item_id, material_type, branch_type, branch_id)
        DO UPDATE SET quantity = stock_entries.quantity::numeric + EXCLUDED.quantity::numeric, updated_at = now()`,
       [parsed.data.itemId, produced]
     );
@@ -537,6 +554,11 @@ router.delete("/productions/:id", requireModuleAction("Production", "delete"), a
         `UPDATE ${table} SET current_stock = GREATEST(0, current_stock::numeric + $1), updated_at = now() WHERE id = $2`,
         [mat.usedQuantity, mat.materialId]
       );
+      if (isMaterialKind(mat.materialType)) {
+        await creditMaterialAt(
+          client, mat.materialType, mat.materialId, "headoffice", 1, Number(mat.usedQuantity)
+        );
+      }
     }
 
     // Reverse production stock
@@ -546,7 +568,7 @@ router.delete("/productions/:id", requireModuleAction("Production", "delete"), a
     );
     await client.query(
       `UPDATE stock_entries SET quantity = GREATEST(0, quantity::numeric - $1), updated_at = now()
-       WHERE item_id = $2 AND branch_type = 'headoffice' AND branch_id = 1`,
+       WHERE item_id = $2 AND material_type = 'item' AND branch_type = 'headoffice' AND branch_id = 1`,
       [qty, itemId]
     );
 

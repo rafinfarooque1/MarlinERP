@@ -10,6 +10,7 @@ import {
 import { nextVoucherNumber, VOUCHER_TYPE_LABELS } from "../lib/voucherNumber";
 import { lineTaxHeads } from "../lib/gst";
 import { logActivity } from "../lib/audit";
+import { itemStockValuation } from "../lib/valuation";
 
 const router = Router();
 
@@ -1011,18 +1012,20 @@ router.get("/accounts/financial-statements", requireModuleView("Chart of Account
   );
   const purchasesTotal = Number(purRows[0]?.total ?? 0);
 
-  // Item-wise stock (closing = current finished goods; opening = 0 without historical records)
-  const { rows: stockRows } = await pool.query(
-    `SELECT id, name, unit, production_stock::float AS stock, mrp::float
-     FROM items WHERE production_stock > 0 ORDER BY name`
-  );
-  const stockItems = stockRows.map((r: any) => ({
-    id: Number(r.id), name: r.name, unit: r.unit || 'unit',
-    stock: Number(r.stock), mrp: Number(r.mrp),
-    total: Math.round(Number(r.stock) * Number(r.mrp) * 100) / 100,
+  // Item-wise closing stock, via the one shared valuation function.
+  // Previously this read `items.production_stock` — a counter that sales never
+  // decremented, so it reported ~76 units against a real ~3,389 — and valued it
+  // at MRP, which capitalises unrealised profit into inventory. Both are fixed
+  // by deriving quantity from the stock truth and valuing at cost.
+  const valuation = await itemStockValuation(pool);
+  const stockItems = valuation.items.map((i) => ({
+    id: i.id, name: i.name, unit: i.unit,
+    stock: i.stock, unitCost: i.unitCost, total: i.total,
   }));
-  const closingStock = stockItems.reduce((s: number, i: any) => s + i.total, 0);
-  const openingStock = 0; // set to 0 until opening-balance journal entry is supported
+  const closingStock = valuation.total;
+  // Intentionally zero: the business has not gone live, so there is no
+  // historical stock to carry in. Not a defect.
+  const openingStock = 0;
 
   // ── P&L ────────────────────────────────────────────────────────────────
   const directExp   = buildGroup('SYS-DIREXP');
@@ -1060,7 +1063,10 @@ router.get("/accounts/financial-statements", requireModuleView("Chart of Account
     filters: { warehouses, outlets },
     profitAndLoss: {
       expenses: {
-        openingStock, openingStockItems: stockItems,
+        // Opening stock is zero, so it carries no item breakdown. Sending the
+        // closing-stock list here made the statement look like it opened with
+        // the stock it actually closed with.
+        openingStock, openingStockItems: [],
         purchases: purchasesTotal,
         directExpenses: directExp, indirectExpenses: indirectExp,
         total: Math.round(totalExpenses * 100) / 100,

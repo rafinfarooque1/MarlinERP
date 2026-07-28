@@ -9,6 +9,7 @@ import { consumeBatches, restoreBatches, creditBatch, updateAvgCostOnInbound, va
 import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
 import { resolveLocationGst, classifyTransfer, computeTransferGst, createDispatchVoucher, createReceiveVoucher, type TaxType, type GstTotals } from "../lib/gstTransfer";
 import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
+import { deductMaterialAt, creditMaterialAt } from "../lib/materialStock";
 
 const router = Router();
 
@@ -30,8 +31,11 @@ export async function buildBranchMaps() {
   };
 }
 
-// GET /stock — server-paginated. Unions Item (SKU) from stock_entries,
-// Raw Material from materials table, and Packing Material from raw_materials table.
+// GET /stock — server-paginated. Every row comes from stock_entries, which is
+// the single quantity truth for items, raw materials and packing materials
+// alike; `material_type` says which master table `ref_id` points at. Materials
+// used to be read from their own global counters here, which is why they always
+// appeared at Head Office with no real location.
 // Optional query params: branchType, branchId, q (search), materialType (item|material|raw_material)
 router.get("/stock", async (req, res): Promise<void> => {
   const qp = ListStockQueryParams.safeParse(req.query);
@@ -70,63 +74,32 @@ router.get("/stock", async (req, res): Promise<void> => {
 
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 
-  // UNION CTE: items (stock_entries) + raw materials + packing materials
+  // One CTE over stock_entries, joined to whichever master table the row's
+  // material_type points at. The three id spaces overlap from 1, so each JOIN
+  // must be guarded by material_type or a material row would pick up an
+  // unrelated item's name and cost.
   const cte = `
     WITH u AS (
       SELECT
-        se.id                                   AS entry_id,
-        se.item_id                              AS ref_id,
-        'item'                                  AS material_type,
-        COALESCE(i.name, '')                    AS item_name,
-        COALESCE(i.unit, '')                    AS unit,
-        COALESCE(i.hsn_code, '')                AS hsn_code,
-        COALESCE(i.reorder_level, 10)::numeric  AS reorder_level,
-        COALESCE(i.avg_cost, 0)::numeric        AS avg_cost,
-        COALESCE(i.cost, 0)::numeric            AS cost,
+        se.id                                     AS entry_id,
+        se.item_id                                AS ref_id,
+        se.material_type,
+        COALESCE(i.name, m.name, rm.name, '')     AS item_name,
+        COALESCE(i.unit, m.unit, rm.unit, '')     AS unit,
+        COALESCE(i.hsn_code, m.hsn_code, rm.hsn_code, '') AS hsn_code,
+        CASE WHEN se.material_type = 'item'
+             THEN COALESCE(i.reorder_level, 10)::numeric
+             ELSE 0::numeric END                  AS reorder_level,
+        COALESCE(i.avg_cost, m.avg_cost, rm.avg_cost, 0)::numeric AS avg_cost,
+        COALESCE(i.cost,     m.cost,     rm.cost,     0)::numeric AS cost,
         se.branch_type,
         se.branch_id::int,
-        se.quantity::numeric                    AS quantity,
-        se.cost_price::numeric                  AS cost_price
+        se.quantity::numeric                      AS quantity,
+        se.cost_price::numeric                    AS cost_price
       FROM stock_entries se
-      LEFT JOIN items i ON i.id = se.item_id
-
-      UNION ALL
-
-      SELECT
-        NULL                AS entry_id,
-        m.id                AS ref_id,
-        'material'          AS material_type,
-        m.name              AS item_name,
-        COALESCE(m.unit, '') AS unit,
-        ''                  AS hsn_code,
-        0::numeric          AS reorder_level,
-        COALESCE(m.avg_cost, 0)::numeric AS avg_cost,
-        COALESCE(m.cost,     0)::numeric AS cost,
-        'headoffice'        AS branch_type,
-        0                   AS branch_id,
-        m.current_stock::numeric AS quantity,
-        0::numeric          AS cost_price
-      FROM materials m
-      WHERE m.current_stock::numeric > 0
-
-      UNION ALL
-
-      SELECT
-        NULL                  AS entry_id,
-        rm.id                 AS ref_id,
-        'raw_material'        AS material_type,
-        rm.name               AS item_name,
-        COALESCE(rm.unit, '') AS unit,
-        ''                    AS hsn_code,
-        0::numeric            AS reorder_level,
-        COALESCE(rm.avg_cost, 0)::numeric AS avg_cost,
-        COALESCE(rm.cost,     0)::numeric AS cost,
-        'headoffice'          AS branch_type,
-        0                     AS branch_id,
-        rm.current_stock::numeric AS quantity,
-        0::numeric            AS cost_price
-      FROM raw_materials rm
-      WHERE rm.current_stock::numeric > 0
+      LEFT JOIN items         i  ON se.material_type = 'item'         AND i.id  = se.item_id
+      LEFT JOIN materials     m  ON se.material_type = 'material'     AND m.id  = se.item_id
+      LEFT JOIN raw_materials rm ON se.material_type = 'raw_material' AND rm.id = se.item_id
     )
   `;
 
@@ -418,39 +391,46 @@ router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), as
       const materialType: string = (rawLines[i] as any)?.materialType ?? 'item';
 
       if (materialType === 'material') {
-        // Raw Material: check availability then deduct
+        // Raw Material: availability is now per location, not a global counter.
         const { rows: [mat] } = await client.query(
-          `SELECT id, name, unit, current_stock::numeric AS current_stock FROM materials WHERE id = $1 FOR UPDATE`,
+          `SELECT id, name, unit FROM materials WHERE id = $1 FOR UPDATE`,
           [li.itemId]
         );
         if (!mat) { await client.query("ROLLBACK"); res.status(400).json({ error: `Raw Material #${li.itemId} not found` }); return; }
-        if (Number(mat.current_stock) + 0.001 < Number(li.quantity)) {
+        // mirror stays put: a dispatch relocates goods, it does not change the
+        // company-wide total. The mirror is corrected only on receive/reject.
+        const moved = await deductMaterialAt(
+          client, 'material', li.itemId, parsed.data.fromType, parsed.data.fromId, Number(li.quantity)
+        );
+        if (!moved.ok) {
           await client.query("ROLLBACK");
-          res.status(400).json({ error: `Insufficient stock of ${mat.name} (available ${mat.current_stock}, requested ${li.quantity})` });
+          res.status(400).json({ error: `Insufficient stock of ${mat.name} at the source location (available ${moved.available}, requested ${li.quantity})` });
           return;
         }
-        await client.query(`UPDATE materials SET current_stock = current_stock::numeric - $1, updated_at = now() WHERE id = $2`, [li.quantity, li.itemId]);
         enrichedLines.push({ ...li, materialType, batchBreakdown: [] });
         dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'material', refId: li.itemId, itemName: mat.name ?? '', unit: mat.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id });
       } else if (materialType === 'raw_material') {
-        // Packing Material: check availability then deduct
+        // Packing Material: availability is now per location, not a global counter.
         const { rows: [rm] } = await client.query(
-          `SELECT id, name, unit, current_stock::numeric AS current_stock FROM raw_materials WHERE id = $1 FOR UPDATE`,
+          `SELECT id, name, unit FROM raw_materials WHERE id = $1 FOR UPDATE`,
           [li.itemId]
         );
         if (!rm) { await client.query("ROLLBACK"); res.status(400).json({ error: `Packing Material #${li.itemId} not found` }); return; }
-        if (Number(rm.current_stock) + 0.001 < Number(li.quantity)) {
+        const moved = await deductMaterialAt(
+          client, 'raw_material', li.itemId, parsed.data.fromType, parsed.data.fromId, Number(li.quantity)
+        );
+        if (!moved.ok) {
           await client.query("ROLLBACK");
-          res.status(400).json({ error: `Insufficient stock of ${rm.name} (available ${rm.current_stock}, requested ${li.quantity})` });
+          res.status(400).json({ error: `Insufficient stock of ${rm.name} at the source location (available ${moved.available}, requested ${li.quantity})` });
           return;
         }
-        await client.query(`UPDATE raw_materials SET current_stock = current_stock::numeric - $1, updated_at = now() WHERE id = $2`, [li.quantity, li.itemId]);
         enrichedLines.push({ ...li, materialType, batchBreakdown: [] });
         dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'raw_material', refId: li.itemId, itemName: rm.name ?? '', unit: rm.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id });
       } else {
         // Item (SKU): deduct from stock_entries
         const { rows: [srcExisting] } = await client.query(
-          `SELECT id, quantity::numeric AS quantity FROM stock_entries WHERE item_id = $1 AND branch_type = $2 AND branch_id = $3 LIMIT 1 FOR UPDATE`,
+          `SELECT id, quantity::numeric AS quantity FROM stock_entries
+            WHERE item_id = $1 AND material_type = 'item' AND branch_type = $2 AND branch_id = $3 LIMIT 1 FOR UPDATE`,
           [li.itemId, parsed.data.fromType, parsed.data.fromId]
         );
         if (!srcExisting || Number(srcExisting.quantity) + 0.001 < Number(li.quantity)) {
@@ -635,16 +615,18 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"
       if (!li.quantity || li.quantity <= 0) continue;
       const matType = li.materialType ?? 'item';
 
-      if (matType === 'material') {
-        // Raw Material: credit to materials.current_stock
-        await client.query(`UPDATE materials SET current_stock = current_stock::numeric + $1 WHERE id = $2`, [li.quantity, li.itemId]);
-      } else if (matType === 'raw_material') {
-        // Packing Material: credit to raw_materials.current_stock
-        await client.query(`UPDATE raw_materials SET current_stock = current_stock::numeric + $1 WHERE id = $2`, [li.quantity, li.itemId]);
+      if (matType === 'material' || matType === 'raw_material') {
+        // Material: land it at the destination location. The dispatch already
+        // took it off the source, so the company-wide mirror is untouched — a
+        // completed transfer relocates goods without changing the total.
+        await creditMaterialAt(
+          client, matType, li.itemId, destType, destId, Number(li.quantity), Number(li.costPrice ?? 0)
+        );
       } else {
         // Item (SKU): credit stock_entries + batches
         const { rows: [dstExisting] } = await client.query(
-          `SELECT id FROM stock_entries WHERE item_id = $1 AND branch_type = $2 AND branch_id = $3 LIMIT 1 FOR UPDATE`,
+          `SELECT id FROM stock_entries
+            WHERE item_id = $1 AND material_type = 'item' AND branch_type = $2 AND branch_id = $3 LIMIT 1 FOR UPDATE`,
           [li.itemId, destType, destId]
         );
         if (dstExisting) {
@@ -654,7 +636,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"
           );
         } else {
           await client.query(
-            `INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price) VALUES ($1,$2,$3,$4,$5)`,
+            `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price) VALUES ($1,'item',$2,$3,$4,$5)`,
             [li.itemId, destType, destId, li.quantity, String(li.costPrice ?? 0)]
           );
         }
@@ -779,13 +761,15 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction(["HO Transfers"]
     for (const li of lineItems) {
       const matType = li.materialType ?? 'item';
 
-      if (matType === 'material') {
-        await client.query(`UPDATE materials SET current_stock = current_stock::numeric + $1 WHERE id = $2`, [li.quantity, li.itemId]);
-      } else if (matType === 'raw_material') {
-        await client.query(`UPDATE raw_materials SET current_stock = current_stock::numeric + $1 WHERE id = $2`, [li.quantity, li.itemId]);
+      if (matType === 'material' || matType === 'raw_material') {
+        // Rejected: put the material back exactly where it was dispatched from.
+        await creditMaterialAt(
+          client, matType, li.itemId, row.from_type, row.from_id, Number(li.quantity), Number(li.costPrice ?? 0)
+        );
       } else {
         const { rows: [srcExisting] } = await client.query(
-          `SELECT id FROM stock_entries WHERE item_id = $1 AND branch_type = $2 AND branch_id = $3 LIMIT 1 FOR UPDATE`,
+          `SELECT id FROM stock_entries
+            WHERE item_id = $1 AND material_type = 'item' AND branch_type = $2 AND branch_id = $3 LIMIT 1 FOR UPDATE`,
           [li.itemId, row.from_type, row.from_id]
         );
         if (srcExisting) {
@@ -795,7 +779,7 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction(["HO Transfers"]
           );
         } else {
           await client.query(
-            `INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price) VALUES ($1,$2,$3,$4,$5)`,
+            `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price) VALUES ($1,'item',$2,$3,$4,$5)`,
             [li.itemId, row.from_type, row.from_id, li.quantity, String(li.costPrice ?? 0)]
           );
         }

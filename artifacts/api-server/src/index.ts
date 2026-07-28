@@ -1,6 +1,9 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { pool } from "@workspace/db";
+import { migrateOutletsToWarehouses } from "./migrations/outletToWarehouse";
+import { repairOpeningBatches } from "./migrations/repairOpeningBatches";
+import { addMaterialLocations } from "./migrations/materialLocations";
 import { PasswordService } from "./lib/password";
 
 async function runMigrations() {
@@ -696,34 +699,53 @@ async function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_purchase_returns_vendor   ON purchase_returns(vendor_id);
   `);
 
-  // De-duplicate stock_entries so (item, branch_type, branch_id) is unique,
-  // then enforce it. Atomic: the merged quantity lands on the keeper row and
-  // duplicates are removed in one transaction. Once the unique index exists,
-  // the dedup query matches nothing and this is a permanent no-op.
+  // De-duplicate stock_entries so its identity key is unique, then enforce it.
+  // Atomic: the merged quantity lands on the keeper row and duplicates are
+  // removed in one transaction. Once the unique index exists, the dedup query
+  // matches nothing and this is a permanent no-op.
+  //
+  // The identity key GREW to include material_type once materials became
+  // location-aware. It must be read from the live schema, never hardcoded: on a
+  // migrated database item #1 and material #1 legitimately share
+  // (item_id, branch_type, branch_id), so grouping without material_type would
+  // see them as duplicates and MERGE A MATERIAL INTO AN ITEM — silently
+  // destroying stock on an ordinary restart.
   {
+    const { rows: [seTyped] } = await pool.query(
+      `SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'stock_entries' AND column_name = 'material_type'`
+    );
+    const keyCols = seTyped
+      ? `item_id, material_type, branch_type, branch_id`
+      : `item_id, branch_type, branch_id`;
+    const matchCols = seTyped
+      ? `se.item_id = d.item_id AND se.material_type = d.material_type
+          AND se.branch_type = d.branch_type AND se.branch_id = d.branch_id`
+      : `se.item_id = d.item_id AND se.branch_type = d.branch_type
+          AND se.branch_id = d.branch_id`;
+
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       await client.query(`
         UPDATE stock_entries se SET quantity = d.total_qty, cost_price = d.max_cost, updated_at = now()
         FROM (
-          SELECT item_id, branch_type, branch_id, MIN(id) AS keep_id,
+          SELECT ${keyCols}, MIN(id) AS keep_id,
                  SUM(quantity::numeric) AS total_qty, MAX(cost_price::numeric) AS max_cost
           FROM stock_entries
-          GROUP BY item_id, branch_type, branch_id
+          GROUP BY ${keyCols}
           HAVING COUNT(*) > 1
         ) d
         WHERE se.id = d.keep_id
       `);
       await client.query(`
         DELETE FROM stock_entries se USING (
-          SELECT item_id, branch_type, branch_id, MIN(id) AS keep_id
+          SELECT ${keyCols}, MIN(id) AS keep_id
           FROM stock_entries
-          GROUP BY item_id, branch_type, branch_id
+          GROUP BY ${keyCols}
           HAVING COUNT(*) > 1
         ) d
-        WHERE se.item_id = d.item_id AND se.branch_type = d.branch_type
-          AND se.branch_id = d.branch_id AND se.id <> d.keep_id
+        WHERE ${matchCols} AND se.id <> d.keep_id
       `);
       await client.query('COMMIT');
     } catch (e) {
@@ -732,11 +754,17 @@ async function runMigrations() {
     } finally {
       client.release();
     }
+
+    // Only create the pre-material index on databases that have not yet gained
+    // the discriminator. Recreating it afterwards would forbid a location from
+    // holding both item #1 and material #1.
+    if (!seTyped) {
+      await pool.query(
+        `CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_entries_item_branch
+         ON stock_entries(item_id, branch_type, branch_id)`
+      );
+    }
   }
-  await pool.query(
-    `CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_entries_item_branch
-     ON stock_entries(item_id, branch_type, branch_id)`
-  );
 
   // One-time: seed weighted-average cost from the manual cost field
   const { rows: [avgSeeded] } = await pool.query(
@@ -907,12 +935,21 @@ async function runMigrations() {
     await pool.query(`
       INSERT INTO stock_batches (item_id, branch_type, branch_id, batch_number, quantity, unit_cost, source)
       SELECT se.item_id, se.branch_type, se.branch_id, 'OPENING',
-             se.quantity::numeric,
+             se.quantity::numeric - COALESCE(c.lots, 0),
              CASE WHEN se.cost_price::numeric > 0 THEN se.cost_price::numeric ELSE COALESCE(i.avg_cost, 0) END,
              'opening'
       FROM stock_entries se
       LEFT JOIN items i ON i.id = se.item_id
-      WHERE se.quantity::numeric > 0
+      -- An OPENING batch represents only stock that real lots do NOT already
+      -- cover. Inserting the full quantity would double-count every item that
+      -- had already been produced or purchased, leaving lots claiming more
+      -- goods than the location holds.
+      LEFT JOIN (
+        SELECT item_id, branch_type, branch_id, SUM(quantity::numeric) AS lots
+        FROM stock_batches WHERE batch_number <> 'OPENING'
+        GROUP BY item_id, branch_type, branch_id
+      ) c ON c.item_id = se.item_id AND c.branch_type = se.branch_type AND c.branch_id = se.branch_id
+      WHERE se.quantity::numeric - COALESCE(c.lots, 0) > 0
       ON CONFLICT (item_id, branch_type, branch_id, batch_number) DO NOTHING
     `);
     await pool.query(`INSERT INTO migration_log (name) VALUES ('stock_batches_opening_v1')`);
@@ -934,12 +971,24 @@ async function runMigrations() {
       const emp = await client.query(
         `UPDATE employees SET branch_type = 'headoffice', branch_id = 1 WHERE branch_type = 'production'`
       );
+      // The uniqueness key gained `material_type` once materials became
+      // location-aware. This block predates that, so the conflict target is
+      // resolved against the live schema — naming columns that are not in the
+      // current unique index raises 42P10 and would abort every later
+      // migration.
+      const { rows: [mt] } = await client.query(
+        `SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'stock_entries' AND column_name = 'material_type'`
+      );
+      const seKey = mt
+        ? `(item_id, material_type, branch_type, branch_id)`
+        : `(item_id, branch_type, branch_id)`;
       await client.query(`
         INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price)
         SELECT item_id, 'headoffice', 1, SUM(quantity::numeric), MAX(cost_price::numeric)
         FROM stock_entries WHERE branch_type = 'production'
         GROUP BY item_id
-        ON CONFLICT (item_id, branch_type, branch_id) DO UPDATE SET
+        ON CONFLICT ${seKey} DO UPDATE SET
           quantity = stock_entries.quantity::numeric + EXCLUDED.quantity::numeric,
           cost_price = GREATEST(stock_entries.cost_price::numeric, EXCLUDED.cost_price::numeric),
           updated_at = now()
@@ -1180,6 +1229,18 @@ try {
     ADD CONSTRAINT opening_balances_ledger_year_unique UNIQUE (ledger_id, financial_year)
   `);
 } catch { /* constraint already exists */ }
+
+// ── Outlets become warehouses ─────────────────────────────────────────────────
+// Runs last: it depends on every column and ledger table created above.
+await migrateOutletsToWarehouses(pool);
+
+// Runs after the conversion so it repairs the post-migration locations.
+await repairOpeningBatches(pool);
+
+// Materials gain a location dimension. Runs after the conversion so material
+// rows land on the final warehouse/head-office layout, and after the opening
+// repair so the batch layer is already consistent for items.
+await addMaterialLocations(pool);
 
 const rawPort = process.env["PORT"];
 if (!rawPort) throw new Error("PORT environment variable is required but was not provided.");

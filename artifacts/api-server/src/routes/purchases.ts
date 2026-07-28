@@ -7,8 +7,14 @@ import { logActivity } from "../lib/audit";
 import { isValidGstSlab, gstSlabErrorMessage } from "../lib/gst";
 import { creditBatch, updateAvgCostOnInbound } from "../lib/batches";
 import { writeStockLedger } from "../lib/stockLedger";
+import { deductMaterialAt, creditMaterialAt, isMaterialKind } from "../lib/materialStock";
 
 const router = Router();
+
+/** Purchased materials land at Head Office, the location that holds them.
+ *  The mirror counter is maintained by the caller's own UPDATE (which also
+ *  rolls avg_cost), so these only move the authoritative location row. */
+const HO = { type: "headoffice", id: 1 } as const;
 
 function calcLineItems(rawLineItems: any[]) {
   let subtotal = 0, discountTotal = 0, taxTotal = 0;
@@ -190,6 +196,7 @@ router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, r
          WHERE id = $1`,
         [li.materialId, li.quantity, li.unitCost]
       );
+      await creditMaterialAt(pool, "material", li.materialId, HO.type, HO.id, Number(li.quantity), Number(li.unitCost));
     } else if (li.materialType === "raw_material") {
       await pool.query(
         `UPDATE raw_materials SET
@@ -201,6 +208,7 @@ router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, r
          WHERE id = $1`,
         [li.materialId, li.quantity, li.unitCost]
       );
+      await creditMaterialAt(pool, "raw_material", li.materialId, HO.type, HO.id, Number(li.quantity), Number(li.unitCost));
     } else if (li.materialType === "item") {
       await db.update(itemsTable).set({ productionStock: sql`${itemsTable.productionStock}::numeric + ${li.quantity}` }).where(eq(itemsTable.id, li.materialId));
       // Purchased finished goods arrive at the production unit: keep the
@@ -208,9 +216,9 @@ router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, r
       // counter was bumped), roll the weighted-average cost, and track the
       // inbound batch.
       await pool.query(
-        `INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price)
-         VALUES ($1, 'headoffice', 1, $2, $3)
-         ON CONFLICT (item_id, branch_type, branch_id) DO UPDATE SET
+        `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price)
+         VALUES ($1, 'item', 'headoffice', 1, $2, $3)
+         ON CONFLICT (item_id, material_type, branch_type, branch_id) DO UPDATE SET
            quantity = stock_entries.quantity::numeric + EXCLUDED.quantity::numeric,
            cost_price = EXCLUDED.cost_price,
            updated_at = now()`,
@@ -289,17 +297,19 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
         await db.update(materialsTable)
           .set({ currentStock: sql`GREATEST(0, ${materialsTable.currentStock}::numeric - ${li.quantity})` })
           .where(eq(materialsTable.id, li.materialId));
+        await deductMaterialAt(pool, "material", li.materialId, HO.type, HO.id, Number(li.quantity), { floor: true });
       } else if (li.materialType === "raw_material") {
         await db.update(rawMaterialsTable)
           .set({ currentStock: sql`GREATEST(0, ${rawMaterialsTable.currentStock}::numeric - ${li.quantity})` })
           .where(eq(rawMaterialsTable.id, li.materialId));
+        await deductMaterialAt(pool, "raw_material", li.materialId, HO.type, HO.id, Number(li.quantity), { floor: true });
       } else if (li.materialType === "item") {
         await db.update(itemsTable)
           .set({ productionStock: sql`GREATEST(0, ${itemsTable.productionStock}::numeric - ${li.quantity})` })
           .where(eq(itemsTable.id, li.materialId));
         await pool.query(
           `UPDATE stock_entries SET quantity = GREATEST(0, quantity::numeric - $1), updated_at = now()
-           WHERE item_id = $2 AND branch_type = 'headoffice' AND branch_id = 1`,
+           WHERE item_id = $2 AND material_type = 'item' AND branch_type = 'headoffice' AND branch_id = 1`,
           [li.quantity, li.materialId],
         );
         await pool.query(
@@ -343,6 +353,7 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
            WHERE id = $1`,
           [li.materialId, li.quantity, li.unitCost]
         );
+        await creditMaterialAt(pool, "material", li.materialId, HO.type, HO.id, Number(li.quantity), Number(li.unitCost));
       } else if (li.materialType === "raw_material") {
         await pool.query(
           `UPDATE raw_materials SET
@@ -354,14 +365,15 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
            WHERE id = $1`,
           [li.materialId, li.quantity, li.unitCost]
         );
+        await creditMaterialAt(pool, "raw_material", li.materialId, HO.type, HO.id, Number(li.quantity), Number(li.unitCost));
       } else if (li.materialType === "item") {
         await db.update(itemsTable)
           .set({ productionStock: sql`${itemsTable.productionStock}::numeric + ${li.quantity}` })
           .where(eq(itemsTable.id, li.materialId));
         await pool.query(
-          `INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price)
-           VALUES ($1, 'headoffice', 1, $2, $3)
-           ON CONFLICT (item_id, branch_type, branch_id) DO UPDATE SET
+          `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price)
+           VALUES ($1, 'item', 'headoffice', 1, $2, $3)
+           ON CONFLICT (item_id, material_type, branch_type, branch_id) DO UPDATE SET
              quantity = stock_entries.quantity::numeric + EXCLUDED.quantity::numeric,
              cost_price = EXCLUDED.cost_price,
              updated_at = now()`,
@@ -435,14 +447,16 @@ router.delete("/purchases/:id", requireModuleAction("Purchases", "delete"), asyn
   for (const li of lineItems) {
     if (li.materialType === "material") {
       await db.update(materialsTable).set({ currentStock: sql`GREATEST(0, ${materialsTable.currentStock}::numeric - ${li.quantity})` }).where(eq(materialsTable.id, li.materialId));
+      await deductMaterialAt(pool, "material", li.materialId, HO.type, HO.id, Number(li.quantity), { floor: true });
     } else if (li.materialType === "raw_material") {
       await db.update(rawMaterialsTable).set({ currentStock: sql`GREATEST(0, ${rawMaterialsTable.currentStock}::numeric - ${li.quantity})` }).where(eq(rawMaterialsTable.id, li.materialId));
+      await deductMaterialAt(pool, "raw_material", li.materialId, HO.type, HO.id, Number(li.quantity), { floor: true });
     } else if (li.materialType === "item") {
       await db.update(itemsTable).set({ productionStock: sql`GREATEST(0, ${itemsTable.productionStock}::numeric - ${li.quantity})` }).where(eq(itemsTable.id, li.materialId));
       // Reverse the stock-entry credit and the inbound batch (floored)
       await pool.query(
         `UPDATE stock_entries SET quantity = GREATEST(0, quantity::numeric - $1), updated_at = now()
-         WHERE item_id = $2 AND branch_type = 'headoffice' AND branch_id = 1`,
+         WHERE item_id = $2 AND material_type = 'item' AND branch_type = 'headoffice' AND branch_id = 1`,
         [li.quantity, li.materialId]
       );
       await pool.query(

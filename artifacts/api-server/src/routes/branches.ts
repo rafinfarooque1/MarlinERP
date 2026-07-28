@@ -81,18 +81,25 @@ async function provisionOutletLedgers(outletId: number, outletName: string): Pro
 
 /** Update display names of all linked ledgers when an entity is renamed. */
 async function syncWarehouseLedgerNames(warehouseId: number, newName: string): Promise<void> {
-  await pool.query(
-    `UPDATE account_ledgers SET name = $1 WHERE code = $2`,
-    [`${newName} Cash`, `WH-CASH-${warehouseId}`],
-  );
-  await pool.query(
-    `UPDATE account_ledgers SET name = $1 WHERE code = $2`,
-    [`${newName} Sales`, `WH-SAL-${warehouseId}`],
-  );
-  await pool.query(
-    `UPDATE account_ledgers SET name = $1 WHERE code = $2`,
-    [`${newName} Purchase`, `WH-PUR-${warehouseId}`],
-  );
+  // Resolve by the linked ledger ID, not by the `WH-*` code convention:
+  // warehouses converted from outlets deliberately keep their original
+  // `OUTLET-*` ledgers so cash and revenue history stays attached, so a
+  // code-based lookup would silently match nothing and let names drift.
+  const { rows: [wh] } = await pool.query<{
+    cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null;
+  }>(`SELECT cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses WHERE id = $1`, [warehouseId]);
+  if (!wh) return;
+
+  const renames: [number | null, string][] = [
+    [wh.cash_ledger_id,     `${newName} Cash`],
+    [wh.sales_ledger_id,    `${newName} Sales`],
+    [wh.purchase_ledger_id, `${newName} Purchase`],
+  ];
+  for (const [ledgerId, name] of renames) {
+    if (ledgerId != null) {
+      await pool.query(`UPDATE account_ledgers SET name = $1 WHERE id = $2`, [name, ledgerId]);
+    }
+  }
 }
 
 async function syncOutletLedgerNames(outletId: number, newName: string): Promise<void> {

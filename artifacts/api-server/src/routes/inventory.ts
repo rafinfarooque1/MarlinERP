@@ -30,7 +30,12 @@ const fmtMaterial = (r: any) => ({
 });
 const fmtItem = (r: any) => ({
   id: r.id, name: r.name, hsnCode: r.hsn_code, taxRate: Number(r.tax_rate),
-  unit: r.unit, description: r.description, productionStock: Number(r.production_stock),
+  unit: r.unit, description: r.description,
+  // `items.production_stock` is a retired counter: sales never decremented it,
+  // so it drifted to a fraction of reality. Read queries supply `derived_stock`
+  // computed from the stock truth; create/update responses fall back to the
+  // column, which is correct there because a new item holds no stock yet.
+  productionStock: Number(r.derived_stock ?? r.production_stock ?? 0),
   mrp: Number(r.mrp || 0),
   cost: Number(r.cost || 0),
   reorderLevel: Number(r.reorder_level ?? 10), avgCost: Number(r.avg_cost || 0),
@@ -151,7 +156,10 @@ router.delete("/raw-materials/:id", requireModuleAction("Raw Materials", "delete
 // ── Items (Finished SKUs) ──────────────────────────────────────────────────
 router.get("/items", async (_req, res): Promise<void> => {
   const result = await pool.query(
-    `SELECT id, name, hsn_code, tax_rate, unit, description, production_stock, mrp, cost, reorder_level, avg_cost, created_at, updated_at FROM items ORDER BY id`
+    `SELECT id, name, hsn_code, tax_rate, unit, description, production_stock, mrp, cost, reorder_level, avg_cost, created_at, updated_at,
+            COALESCE((SELECT SUM(se.quantity::numeric) FROM stock_entries se
+                       WHERE se.item_id = items.id AND se.material_type = 'item'), 0)::float AS derived_stock
+       FROM items ORDER BY id`
   );
   res.json(result.rows.map(fmtItem));
 });
@@ -169,7 +177,11 @@ router.post("/items", requireModuleAction("Items", "add"), async (req, res): Pro
 
 router.get("/items/:id", async (req, res): Promise<void> => {
   const { id: rawId } = GetItemParams.parse(req.params);
-  const result = await pool.query(`SELECT * FROM items WHERE id = $1 LIMIT 1`, [rawId]);
+  const result = await pool.query(
+    `SELECT items.*,
+            COALESCE((SELECT SUM(se.quantity::numeric) FROM stock_entries se
+                       WHERE se.item_id = items.id AND se.material_type = 'item'), 0)::float AS derived_stock
+       FROM items WHERE id = $1 LIMIT 1`, [rawId]);
   if (!result.rows[0]) { res.status(404).json({ error: "Not found" }); return; }
   res.json(fmtItem(result.rows[0]));
 });

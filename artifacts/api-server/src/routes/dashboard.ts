@@ -1,9 +1,15 @@
 import { Router } from "express";
 import { db, pool, itemsTable, salesTable, stockEntriesTable, employeesTable, stockTransfersTable, attendanceTable, leavesTable, productionsTable, expensesTable } from "@workspace/db";
-import { count, sum, eq, sql, inArray } from "drizzle-orm";
+import { count, sum, eq, and, sql, inArray } from "drizzle-orm";
 import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 
 const router = Router();
+
+/** `stock_entries` holds items, raw materials and packing materials, and those
+ *  ID spaces overlap. Dashboard stock value and low-stock alerts are about
+ *  finished items only — without this filter they would join material rows to
+ *  unrelated items and invent both value and alerts. */
+const ITEM_ROWS_ONLY = sql`stock_entries.material_type = 'item'`;
 
 router.get("/dashboard/summary", async (req, res): Promise<void> => {
   const today = new Date().toISOString().split("T")[0];
@@ -72,7 +78,8 @@ router.get("/dashboard/summary", async (req, res): Promise<void> => {
   ] = await Promise.all([
     db.select({ count: count() }).from(itemsTable),
     db.select({ total: sum(salesTable.totalAmount) }).from(salesTable),
-    db.select({ total: sql<number>`sum(${stockEntriesTable.quantity}::numeric * ${stockEntriesTable.costPrice}::numeric)` }).from(stockEntriesTable),
+    db.select({ total: sql<number>`sum(${stockEntriesTable.quantity}::numeric * ${stockEntriesTable.costPrice}::numeric)` })
+      .from(stockEntriesTable).where(ITEM_ROWS_ONLY),
     db.select({ count: count() }).from(employeesTable).where(eq(employeesTable.isActive, true)),
     // Transfers awaiting action: legacy rows use "pending"; the dispatch →
     // approve lifecycle creates them as "in_transit".
@@ -81,7 +88,7 @@ router.get("/dashboard/summary", async (req, res): Promise<void> => {
     db.select({ count: count() }).from(leavesTable).where(eq(leavesTable.status, "pending")),
     db.select({ count: count() }).from(stockEntriesTable)
       .leftJoin(itemsTable, eq(stockEntriesTable.itemId, itemsTable.id))
-      .where(sql`${stockEntriesTable.quantity}::numeric < COALESCE(items.reorder_level, 10)::numeric`),
+      .where(and(ITEM_ROWS_ONLY, sql`${stockEntriesTable.quantity}::numeric < COALESCE(items.reorder_level, 10)::numeric`)),
     db.select({ total: sum(expensesTable.amount) }).from(expensesTable),
     db.execute(sql`SELECT COUNT(*)::int AS batch_count, COALESCE(SUM(produced_quantity::numeric), 0)::float AS total_qty FROM productions`),
   ]);
@@ -118,7 +125,7 @@ router.get("/dashboard/stock-alerts", async (req, res): Promise<void> => {
     })
     .from(stockEntriesTable)
     .leftJoin(itemsTable, eq(stockEntriesTable.itemId, itemsTable.id))
-    .where(sql`${stockEntriesTable.quantity}::numeric < COALESCE(items.reorder_level, 10)::numeric`)
+    .where(and(ITEM_ROWS_ONLY, sql`${stockEntriesTable.quantity}::numeric < COALESCE(items.reorder_level, 10)::numeric`))
     .limit(20);
 
   res.json(alerts.map((a) => ({

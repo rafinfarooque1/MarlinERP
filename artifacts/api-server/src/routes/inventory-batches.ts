@@ -5,6 +5,7 @@ import { logActivity } from "../lib/audit";
 import { buildBranchMaps } from "./stock";
 import { consumeBatches, creditBatch, planFEFO, inboundCostForItem } from "../lib/batches";
 import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
+import { ITEM_UNIT_COST_SQL } from "../lib/valuation";
 
 const router = Router();
 
@@ -148,12 +149,14 @@ router.get("/stock/expiry-report", requireModuleView("Stock"), async (req, res):
 router.get("/stock/valuation", requireModuleView("Stock"), async (_req, res): Promise<void> => {
   const [result, branchName] = await Promise.all([
     pool.query(
+      // Unit cost comes from the shared constant so this per-location report and
+      // the P&L closing-stock total can never value the same item differently.
       `SELECT se.branch_type, se.branch_id, se.item_id, se.quantity::numeric AS qty,
               i.name AS item_name, i.unit,
-              CASE WHEN COALESCE(i.avg_cost, 0) > 0 THEN i.avg_cost ELSE COALESCE(i.cost, 0) END AS avg_cost
+              ${ITEM_UNIT_COST_SQL} AS avg_cost
        FROM stock_entries se
        JOIN items i ON i.id = se.item_id
-       WHERE se.quantity::numeric > 0
+       WHERE se.material_type = 'item' AND se.quantity::numeric > 0
        ORDER BY se.branch_type, se.branch_id, i.name`
     ),
     buildBranchMaps(),
@@ -200,7 +203,8 @@ router.get("/stock/reorder-report", requireModuleView("Stock"), async (_req, res
               i.name AS item_name, i.unit, COALESCE(i.reorder_level, 10)::numeric AS reorder_level
        FROM stock_entries se
        JOIN items i ON i.id = se.item_id
-       WHERE se.quantity::numeric < COALESCE(i.reorder_level, 10)::numeric
+       WHERE se.material_type = 'item'
+         AND se.quantity::numeric < COALESCE(i.reorder_level, 10)::numeric
        ORDER BY (COALESCE(i.reorder_level, 10)::numeric - se.quantity::numeric) DESC`
     ),
     buildBranchMaps(),
@@ -264,7 +268,8 @@ router.post("/stock/verifications", requireModuleAction("Stock Verification", "a
       const counted = r3(Number(l.countedQty));
       const { rows: [item] } = await client.query(`SELECT name, unit FROM items WHERE id = $1`, [itemId]);
       const { rows: [se] } = await client.query(
-        `SELECT id, quantity::numeric AS quantity FROM stock_entries WHERE item_id = $1 AND branch_type = $2 AND branch_id = $3 LIMIT 1 FOR UPDATE`,
+        `SELECT id, quantity::numeric AS quantity FROM stock_entries
+          WHERE item_id = $1 AND material_type = 'item' AND branch_type = $2 AND branch_id = $3 LIMIT 1 FOR UPDATE`,
         [itemId, branchType, bId]
       );
       const systemQty = se ? Number(se.quantity) : 0;
@@ -277,7 +282,7 @@ router.post("/stock/verifications", requireModuleAction("Stock Verification", "a
           await client.query(`UPDATE stock_entries SET quantity = $1, updated_at = now() WHERE id = $2`, [counted, se.id]);
         } else {
           await client.query(
-            `INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price) VALUES ($1,$2,$3,$4,0)`,
+            `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price) VALUES ($1,'item',$2,$3,$4,0)`,
             [itemId, branchType, bId, counted]
           );
         }

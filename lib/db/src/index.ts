@@ -13,4 +13,8 @@ if (!process.env.DATABASE_URL) {
 export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 export const db = drizzle(pool, { schema });
 
+// `pg` is a dependency of this package only, so consumers cannot import its
+// types directly under pnpm's strict resolution. Re-export the ones they need.
+export type { Pool as PgPool, PoolClient as PgPoolClient } from "pg";
+
 export * from "./schema";

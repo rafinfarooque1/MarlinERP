@@ -185,7 +185,8 @@ export async function restoreBatches(c: Queryable, itemId: number, branchType: s
 export async function updateAvgCostOnInbound(c: Queryable, itemId: number, inQty: number, inCost: number): Promise<void> {
   if (!(inQty > 0) || !(inCost > 0)) return;
   const { rows: [tot] } = await c.query(
-    `SELECT COALESCE(SUM(quantity::numeric), 0) AS q FROM stock_entries WHERE item_id = $1`, [itemId]
+    `SELECT COALESCE(SUM(quantity::numeric), 0) AS q FROM stock_entries
+      WHERE item_id = $1 AND material_type = 'item'`, [itemId]
   );
   const { rows: [it] } = await c.query(
     `SELECT COALESCE(avg_cost, 0) AS avg_cost, COALESCE(cost, 0) AS cost FROM items WHERE id = $1`, [itemId]

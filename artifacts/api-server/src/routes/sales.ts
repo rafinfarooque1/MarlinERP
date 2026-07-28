@@ -11,6 +11,17 @@ import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 
 const router = Router();
 
+/**
+ * `stock_entries` is polymorphic: it holds items, raw materials and packing
+ * materials, and those three ID spaces overlap from 1. Every item-stock query
+ * MUST carry this filter or a sale of item #1 can read — and deduct — the row
+ * belonging to material #1 at the same location.
+ *
+ * `material_type` is added by a startup migration, so Drizzle's schema does not
+ * know about it; it has to be expressed as raw SQL.
+ */
+const ITEM_ROWS_ONLY = sql`stock_entries.material_type = 'item'`;
+
 // ── Tax computation helpers ───────────────────────────────────────────────────
 
 function computeInvoiceNumber(prefix: string, fy: string, seq: number): string {
@@ -326,6 +337,7 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
     const [stock] = await db.select().from(stockEntriesTable)
       .where(and(
         eq(stockEntriesTable.itemId, li.itemId),
+        ITEM_ROWS_ONLY,
         eq(stockEntriesTable.branchType, locationType as any),
         eq(stockEntriesTable.branchId, locationId)
       ))
@@ -545,6 +557,7 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
     const [existing] = await db.select().from(stockEntriesTable)
       .where(and(
         eq(stockEntriesTable.itemId, li.itemId),
+        ITEM_ROWS_ONLY,
         eq(stockEntriesTable.branchType, locationType as any),
         eq(stockEntriesTable.branchId, locationId)
       ))
@@ -794,7 +807,7 @@ router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit")
   const oldLineItems = (existingRaw.line_items ?? []) as Array<{ itemId: number; quantity: number; batchBreakdown?: any[] }>;
   for (const li of oldLineItems) {
     const [se] = await db.select().from(stockEntriesTable)
-      .where(and(eq(stockEntriesTable.itemId, li.itemId), eq(stockEntriesTable.branchType, oldLocationType as any), eq(stockEntriesTable.branchId, oldLocationId)))
+      .where(and(eq(stockEntriesTable.itemId, li.itemId), ITEM_ROWS_ONLY, eq(stockEntriesTable.branchType, oldLocationType as any), eq(stockEntriesTable.branchId, oldLocationId)))
       .limit(1);
     if (se) {
       await db.update(stockEntriesTable)
@@ -835,7 +848,7 @@ router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit")
   const newLineItemsWithBatches: any[] = [];
   for (const li of lineItems) {
     const [se] = await db.select().from(stockEntriesTable)
-      .where(and(eq(stockEntriesTable.itemId, li.itemId), eq(stockEntriesTable.branchType, newLocationType as any), eq(stockEntriesTable.branchId, newLocationId)))
+      .where(and(eq(stockEntriesTable.itemId, li.itemId), ITEM_ROWS_ONLY, eq(stockEntriesTable.branchType, newLocationType as any), eq(stockEntriesTable.branchId, newLocationId)))
       .limit(1);
     if (se) {
       await db.update(stockEntriesTable)

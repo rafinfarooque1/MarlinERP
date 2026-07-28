@@ -15,6 +15,7 @@ import { nextVoucherNumber } from "../lib/voucherNumber";
 import { restoreBatches, type BatchBreakdownEntry } from "../lib/batches";
 import { logActivity } from "../lib/audit";
 import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
+import { deductMaterialAt, isMaterialKind } from "../lib/materialStock";
 
 const router: IRouter = Router();
 
@@ -246,7 +247,8 @@ router.post("/sales-returns", requireModuleAction(["Sales", "Point of Sale"], "a
     // ── Restore stock_entries at the sale's location ──────────────────────
     for (const rl of retLines) {
       const { rows: [se] } = await client.query(
-        `SELECT id FROM stock_entries WHERE item_id = $1 AND branch_type = $2 AND branch_id = $3 FOR UPDATE`,
+        `SELECT id FROM stock_entries
+          WHERE item_id = $1 AND material_type = 'item' AND branch_type = $2 AND branch_id = $3 FOR UPDATE`,
         [rl.itemId, locationType, locationId]
       );
       if (se) {
@@ -266,8 +268,8 @@ router.post("/sales-returns", requireModuleAction(["Sales", "Point of Sale"], "a
           cost = Number(it?.avg_cost) > 0 ? Number(it.avg_cost) : Number(it?.cost ?? 0);
         }
         await client.query(
-          `INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price)
-           VALUES ($1, $2, $3, $4, $5)`,
+          `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price)
+           VALUES ($1, 'item', $2, $3, $4, $5)`,
           [rl.itemId, locationType, locationId, rl.quantity, cost]
         );
       }
@@ -529,21 +531,25 @@ router.post("/purchase-returns", requireModuleAction(["Sales", "Purchases"], "ad
       }
 
       // ── Stock decrement (validate availability first) ────────────────────
-      if (materialType === "material" || materialType === "raw_material") {
+      if (isMaterialKind(materialType)) {
         const tbl = materialType === "material" ? "materials" : "raw_materials";
-        const { rows: [row] } = await client.query(`SELECT current_stock FROM ${tbl} WHERE id = $1 FOR UPDATE`, [materialId]);
+        const { rows: [row] } = await client.query(`SELECT id FROM ${tbl} WHERE id = $1 FOR UPDATE`, [materialId]);
         if (!row) { await client.query("ROLLBACK"); res.status(400).json({ error: `${materialName} no longer exists` }); return; }
-        const avail = Number(row.current_stock ?? 0);
-        if (avail + 0.001 < rq) {
+        // Availability is checked against the location that holds the goods
+        // (Head Office), not the company-wide mirror — the mirror cannot tell
+        // you whether the stock is actually here to send back.
+        const sent = await deductMaterialAt(client, materialType, materialId, "headoffice", 1, rq);
+        if (!sent.ok) {
           await client.query("ROLLBACK");
-          res.status(400).json({ error: `Insufficient stock to return ${materialName}: available ${avail}, returning ${rq}` });
+          res.status(400).json({ error: `Insufficient stock to return ${materialName}: available ${sent.available}, returning ${rq}` });
           return;
         }
         await client.query(`UPDATE ${tbl} SET current_stock = current_stock::numeric - $1, updated_at = now() WHERE id = $2`, [rq, materialId]);
       } else {
         // Finished item bought into production stock
         const { rows: [se] } = await client.query(
-          `SELECT id, quantity FROM stock_entries WHERE item_id = $1 AND branch_type = 'headoffice' AND branch_id = 1 FOR UPDATE`,
+          `SELECT id, quantity FROM stock_entries
+            WHERE item_id = $1 AND material_type = 'item' AND branch_type = 'headoffice' AND branch_id = 1 FOR UPDATE`,
           [materialId]
         );
         const avail = se ? Number(se.quantity) : 0;
