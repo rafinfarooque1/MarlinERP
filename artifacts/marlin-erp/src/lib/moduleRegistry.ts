@@ -200,7 +200,7 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     key: 'HO Transfers', permGroup: 'Inventory',
     navGroup: 'Stock',
     navEntries: [
-      { name: 'Transfers', href: '/transfers' },
+      { name: 'Stock Transfer', href: '/transfers' },
     ],
     icon: ArrowLeftRight,
   },
@@ -251,7 +251,7 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     key: 'Stock', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [
-      { name: 'Stock Transfers', href: '/headoffice/stock', navGroup: 'Stock' },
+      { name: 'Stock', href: '/headoffice/stock', navGroup: 'Stock' },
     ],
     icon: Package,
   },
