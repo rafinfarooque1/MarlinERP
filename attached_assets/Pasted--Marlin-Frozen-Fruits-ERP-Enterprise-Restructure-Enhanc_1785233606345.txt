@@ -1,0 +1,804 @@
+# Marlin Frozen Fruits ERP – Enterprise Restructure & Enhancement
+
+IMPORTANT
+
+Read the existing ERP completely before making any changes.
+
+Do NOT redesign the ERP.
+
+Do NOT change the sidebar navigation.
+
+Do NOT change the existing architecture unless explicitly mentioned.
+
+Preserve the current modules, APIs, permissions, accounting logic, reports, and workflows.
+
+This is an enhancement of the current ERP, NOT a rewrite.
+
+==========================================================
+1. ERP STRUCTURE
+==========================================================
+
+The ERP will have only two operational location types.
+
+1. Head Office
+2. Warehouse
+
+Remove Outlet from the current workflow.
+
+Do NOT delete Outlet from the database.
+
+Instead,
+
+Create a feature flag under Settings.
+
+Enable Outlet = OFF (default)
+
+Future:
+
+If Enable Outlet = ON
+
+then the existing Outlet workflow should work exactly like today.
+
+==========================================================
+2. LOCATION HIERARCHY
+==========================================================
+
+Head Office
+
+↓
+
+Warehouse
+
+↓
+
+(Future Outlet if enabled)
+
+Head Office
+
+• Complete monitoring
+• Can view all warehouses
+• Can edit everything
+• Can manage master data
+
+Warehouse
+
+• Can Purchase
+• Can Produce
+• Can Sell
+• Can Transfer Stock
+• Can Manage Customers
+• Can Manage Vendors
+• Can Record Expenses
+• Can Manage Cash Balance
+
+==========================================================
+3. ITEM MASTER
+==========================================================
+
+Only Head Office should create
+
+• SKU
+• Raw Material
+• Packing Material
+
+Warehouse users may only VIEW them.
+
+Permission should control Add/Edit/Delete.
+
+Every item must contain:
+
+Item Code
+
+Barcode / QR Code
+
+Item Name
+
+Item Type
+
+Unit
+
+HSN
+
+GST %
+
+MRP
+
+Cost
+
+Status
+
+SKU
+
+Raw Material
+
+Packing Material
+
+must all support
+
+MRP.
+
+==========================================================
+4. PURCHASE
+==========================================================
+
+Warehouse
+
+and
+
+Head Office
+
+can purchase.
+
+Purchase supports
+
+Raw Material
+
+Packing Material
+
+SKU
+
+During Purchase
+
+Mandatory:
+
+Batch Number
+
+Manufacturing Date
+
+Expiry Date
+
+Supplier
+
+Invoice
+
+Cost
+
+GST
+
+Quantity
+
+Batch Code
+
+Every purchase creates
+
+Stock
+
+Batch
+
+Ledger
+
+Vendor Outstanding
+
+GST Input
+
+==========================================================
+5. PRODUCTION
+==========================================================
+
+Production allowed
+
+Head Office
+
+Warehouse
+
+Production consumes
+
+Raw Material
+
+Packing Material
+
+Produces
+
+SKU
+
+Production Batch stores
+
+Batch No
+
+Manufacturing Date
+
+Expiry Date
+
+Yield
+
+Wastage
+
+Cost
+
+Overhead
+
+Finished Cost
+
+==========================================================
+6. SALES
+==========================================================
+
+Warehouse
+
+Head Office
+
+can sell.
+
+POS should support
+
+Cash
+
+Bank
+
+UPI
+
+Credit
+
+Invoice PDF
+
+Download
+
+Print
+
+WhatsApp Share
+
+Customer Ledger
+
+Outstanding
+
+GST
+
+==========================================================
+7. PDF + WHATSAPP
+==========================================================
+
+Every Sales Invoice
+
+Generate PDF
+
+Button
+
+Download PDF
+
+Button
+
+Share WhatsApp
+
+Click
+
+↓
+
+Open WhatsApp chat
+
+↓
+
+Attach PDF
+
+↓
+
+Pre-filled message
+
+↓
+
+User clicks Send.
+
+==========================================================
+8. STOCK
+==========================================================
+
+Warehouse Stock
+
+Head Office Stock
+
+Stock Page must display
+
+SKU
+
+Raw Material
+
+Packing Material
+
+Batch
+
+MRP
+
+Cost
+
+Expiry
+
+Manufacturing
+
+Location
+
+Available Qty
+
+Reserved Qty
+
+==========================================================
+9. BATCH MANAGEMENT
+==========================================================
+
+Every purchase
+
+Every production
+
+Creates
+
+Batch.
+
+Batch contains
+
+Batch Code
+
+Barcode
+
+Manufacturing Date
+
+Expiry Date
+
+Location
+
+Cost
+
+MRP
+
+Quantity
+
+FIFO / FEFO
+
+==========================================================
+10. EXPIRY MANAGEMENT
+==========================================================
+
+Automatic alerts
+
+90 days
+
+60 days
+
+30 days
+
+15 days
+
+7 days
+
+Expired
+
+Dashboard widget
+
+Stock page
+
+Reports
+
+Near Expiry Report
+
+Expired Stock Report
+
+==========================================================
+11. STOCK TRANSFER
+==========================================================
+
+Warehouse
+
+↓
+
+Warehouse
+
+Head Office
+
+↓
+
+Warehouse
+
+Rules
+
+Same GST
+
+Only Stock Transfer
+
+No Sale
+
+No Purchase
+
+No GST Posting
+
+Different GST
+
+Automatically create
+
+Sales Invoice
+
+Purchase Invoice
+
+GST
+
+Accounting
+
+Transfer History
+
+Separate GST Transfer Report.
+
+==========================================================
+12. CUSTOMERS
+==========================================================
+
+Warehouse creates customer
+
+↓
+
+Only that warehouse sees customer.
+
+Head Office
+
+↓
+
+Sees all customers.
+
+==========================================================
+13. VENDORS
+==========================================================
+
+Warehouse creates vendor
+
+↓
+
+Only that warehouse.
+
+Head Office
+
+↓
+
+All vendors.
+
+==========================================================
+14. CASH BALANCE
+==========================================================
+
+Every warehouse
+
+Own Cash
+
+Own Expenses
+
+Own Receipts
+
+Own Payments
+
+Head Office
+
+All.
+
+==========================================================
+15. EXPENSES
+==========================================================
+
+Warehouse Expenses
+
+Cash only.
+
+Every Expense
+
+PDF
+
+Print
+
+Voucher
+
+Ledger Posting
+
+Expense Attachment
+
+Expense Category
+
+Expense Ledger
+
+Expense Number
+
+Salary must automatically appear here as an Indirect Expense after payroll is processed.
+
+==========================================================
+16. HR
+==========================================================
+
+Attendance
+
+Check In
+
+Check Out
+
+Leave
+
+Payroll
+
+Salary Slip
+
+Advance
+
+Hierarchy
+
+==========================================================
+17. PAYROLL
+==========================================================
+
+Attendance
+
+↓
+
+Salary Auto Calculation
+
+Daily Wage
+
+Monthly Salary
+
+Auto Generate
+
+Advance Deduction
+
+PF
+
+ESI
+
+Allowances
+
+Deductions
+
+Configurable
+
+Salary Slip
+
+PDF
+
+Print
+
+Salary Payment
+
+↓
+
+Indirect Expense
+
+↓
+
+Accounting
+
+==========================================================
+18. ACCOUNTS
+==========================================================
+
+Keep current Accounts structure.
+
+Do NOT redesign.
+
+Chart of Accounts
+
+Ledger Statement
+
+Cash Book
+
+Bank Book
+
+Day Book
+
+Trial Balance
+
+GST
+
+Reports
+
+Vouchers
+
+All remain.
+
+Manual Ledger creation disabled.
+
+Only system creates ledgers.
+
+==========================================================
+19. BANK RECONCILIATION
+==========================================================
+
+Every bank receipt
+
+Pending
+
+↓
+
+Reconciled
+
+↓
+
+Matched
+
+Bank Reconciliation page
+
+Improved.
+
+==========================================================
+20. DASHBOARD
+==========================================================
+
+Professional Dashboard.
+
+KPIs
+
+Total Sales
+
+Total Purchase
+
+Total Production
+
+Total Expenses
+
+Total Profit
+
+Warehouse Wise Sales
+
+Warehouse Wise Purchase
+
+Warehouse Wise Profit
+
+Item Wise Sales
+
+Top Selling Items
+
+Top Customers
+
+Top Vendors
+
+Highest Stock
+
+Near Expiry
+
+Pending Receivables
+
+Pending Payables
+
+Recent Transfers
+
+Recent Production
+
+Cash
+
+Bank
+
+==========================================================
+21. REPORTS
+==========================================================
+
+Sales
+
+Purchase
+
+Production
+
+Inventory
+
+Stock
+
+Batch
+
+Expiry
+
+Warehouse
+
+Customer
+
+Vendor
+
+GST
+
+Ledger
+
+Profitability
+
+All reports
+
+Warehouse Wise
+
+Date Wise
+
+Item Wise
+
+==========================================================
+22. PERMISSIONS
+==========================================================
+
+NEVER CHANGE THE SIDEBAR.
+
+Permissions page must exactly match the sidebar.
+
+Every sidebar menu
+
+One permission row.
+
+No grouping.
+
+Every row
+
+View
+
+Add
+
+Edit
+
+Delete
+
+Download
+
+Print
+
+Permission only hides functionality.
+
+Permissions do NOT control data visibility.
+
+==========================================================
+23. LOCATION BASED ACCESS
+==========================================================
+
+Separate from Permission.
+
+Warehouse User
+
+↓
+
+Only warehouse data.
+
+Head Office
+
+↓
+
+Everything.
+
+Backend filtering only.
+
+==========================================================
+24. FUTURE OUTLET
+==========================================================
+
+Settings
+
+Enable Outlet
+
+OFF
+
+Default.
+
+If enabled
+
+Current outlet workflow should work exactly as before.
+
+Warehouse
+
+↓
+
+Outlet
+
+Outlet
+
+↓
+
+Outlet
+
+Warehouse
+
+↓
+
+Warehouse
+
+All preserved.
+
+==========================================================
+25. GENERAL RULES
+==========================================================
+
+Do NOT redesign the ERP.
+
+Do NOT change navigation.
+
+Do NOT merge sidebar items.
+
+Do NOT remove existing accounting.
+
+Do NOT break existing APIs.
+
+Do NOT break reports.
+
+Improve the existing ERP.
+
+Maintain enterprise standards similar to SAP Business One, Microsoft Dynamics 365 Business Central, Oracle NetSuite, and Tally Prime, while preserving the current Marlin ERP architecture and workflows.
+
+First produce a complete implementation plan showing affected modules, database changes, API changes, UI changes, workflow changes, and migration strategy. Do not start coding until the implementation plan is complete and approved.
