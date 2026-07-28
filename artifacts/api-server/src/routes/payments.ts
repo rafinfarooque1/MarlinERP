@@ -3,6 +3,9 @@ import { requireModuleAction } from "../middleware/permissions";
 import { pool } from "@workspace/db";
 import { logActivity } from "../lib/audit";
 import { nextVoucherNumber } from "../lib/voucherNumber";
+import { COLLECTION_METHODS, paymentModeLabel } from "../lib/paymentModes";
+import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
+import { callerLocation } from "../lib/moneyScope";
 
 const router = Router();
 
@@ -27,6 +30,17 @@ async function getOutletCashLedgerId(outletId: number): Promise<number | null> {
 router.get("/sales/:id/payments", async (req, res): Promise<void> => {
   const saleId = parseInt(req.params.id, 10);
   if (!Number.isFinite(saleId)) { res.status(400).json({ error: "Invalid sale id" }); return; }
+
+  // A sale's collection history is part of the sale, so it follows the Sales
+  // module's read rule (a warehouse also sees the outlets it supplies) — not the
+  // narrower money scope that governs who may take the money.
+  const readScope = await getUserDataScope((req as any).employee);
+  const readParams: unknown[] = [saleId];
+  const { rows: [visibleSale] } = await pool.query(
+    `SELECT s.id FROM sales s WHERE s.id = $1 AND ${scopeSalesWhere(readScope, readParams)}`,
+    readParams
+  );
+  if (!visibleSale) { res.status(404).json({ error: "Sale not found" }); return; }
 
   const { rows: payments } = await pool.query(
     `SELECT sp.*,
@@ -76,7 +90,7 @@ router.post("/sales/:id/payments", requireModuleAction(["Sales", "Point of Sale"
   const parsedAmount = Number(amount);
   if (!parsedAmount || parsedAmount <= 0) { res.status(400).json({ error: "amount must be positive" }); return; }
 
-  const validMethods = ["cash", "upi", "card", "bank_transfer", "other"];
+  const validMethods: readonly string[] = COLLECTION_METHODS;
   if (!validMethods.includes(method)) {
     res.status(400).json({ error: `method must be one of: ${validMethods.join(", ")}` }); return;
   }
@@ -129,11 +143,29 @@ router.post("/sales/:id/payments", requireModuleAction(["Sales", "Point of Sale"
     let clearingReceiptId: number | null = null;
     let reconciliationStatus: string | null = null;
 
+    // The collection belongs to the location that made the sale — stamped on
+    // the receipt so the location's own money book stays complete.
+    const locType = sale.location_type ?? 'outlet';
+    const locId   = Number(sale.location_id ?? sale.outlet_id);
+
+    // A branch may only take money for its own sales. The posting below moves
+    // cash through the *sale's* ledgers, so without this a warehouse user could
+    // collect into another location's till just by using its sale id. Head
+    // Office stays unrestricted; this is the narrow money scope on purpose —
+    // seeing an outlet's invoice does not mean holding its cash box.
+    const caller = callerLocation((req as any).employee);
+    if (caller.locationType !== 'headoffice' &&
+        (locType !== caller.locationType || locId !== caller.locationId)) {
+      await client.query("ROLLBACK");
+      res.status(403).json({
+        error: "This sale was made at another location. Collections are recorded by the location that made the sale.",
+      });
+      return;
+    }
+
     if (!isElectronic) {
       // ── CASH PAYMENT ────────────────────────────────────────────────────
       // Resolve cash ledger based on location type (warehouse or outlet)
-      const locType = sale.location_type ?? 'outlet';
-      const locId   = sale.location_id ?? sale.outlet_id;
       const cashLedgerCode = locType === 'warehouse'
         ? `WH-CASH-${locId}`
         : `OUTLET-CASH-${locId}`;
@@ -159,10 +191,11 @@ router.post("/sales/:id/payments", requireModuleAction(["Sales", "Point of Sale"
 
       const voucherNum = await nextVoucherNumber(client, "receipt", pDate);
       const { rows: [receipt] } = await client.query(
-        `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
         [voucherNum, pDate, salesLedger.id, cashLedger.id, parsedAmount,
-          `Cash payment for invoice ${(await client.query(`SELECT invoice_number FROM sales WHERE id=$1`,[saleId])).rows[0]?.invoice_number ?? saleId}`]
+          `Cash payment for invoice ${(await client.query(`SELECT invoice_number FROM sales WHERE id=$1`,[saleId])).rows[0]?.invoice_number ?? saleId}`,
+          locType, locId]
       );
       clearingReceiptId = receipt.id;
       reconciliationStatus = null; // cash — no reconciliation needed
@@ -191,10 +224,11 @@ router.post("/sales/:id/payments", requireModuleAction(["Sales", "Point of Sale"
       const voucherNum = await nextVoucherNumber(client, "receipt", pDate);
       const { rows: [invRow] } = await client.query(`SELECT invoice_number FROM sales WHERE id=$1`, [saleId]);
       const { rows: [receipt] } = await client.query(
-        `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
         [voucherNum, pDate, salesLedger.id, clearingLedger.id, parsedAmount,
-          `${method.toUpperCase()} payment for invoice ${invRow?.invoice_number ?? saleId}${referenceNumber ? ` — Ref: ${referenceNumber}` : ""}`]
+          `${paymentModeLabel(method)} payment for invoice ${invRow?.invoice_number ?? saleId}${referenceNumber ? ` — Ref: ${referenceNumber}` : ""}`,
+          locType, locId]
       );
       clearingReceiptId = receipt.id;
       reconciliationStatus = "pending";

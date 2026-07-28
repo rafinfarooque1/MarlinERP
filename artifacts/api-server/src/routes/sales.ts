@@ -12,6 +12,7 @@ import { buildBranchMaps } from "./stock";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 import { blockedByInactiveProducts, INACTIVE_PRODUCT_CODE } from "../lib/productIdentity";
+import { SALE_PAYMENT_MODES, isSettledAtSale, clearsThroughBank } from "../lib/paymentModes";
 
 const router = Router();
 
@@ -443,10 +444,19 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
   // sales so two requests cannot both pass the limit check, and a rejected
   // sale never burns an invoice number.
   const paymentModeIn = parsed.data.paymentMode ?? 'cash';
-  // cash/upi/card are settled at the counter — mark them paid immediately so
+  // The generated zod schema types paymentMode as a plain string, so the mode
+  // list is enforced here. Legacy 'card' / 'bank_transfer' rows are still
+  // accepted so an old invoice can be edited without rewriting its mode.
+  if (!isSettledAtSale(paymentModeIn) && paymentModeIn !== 'credit') {
+    res.status(400).json({
+      error: `paymentMode must be one of: ${SALE_PAYMENT_MODES.join(', ')}`,
+    });
+    return;
+  }
+  // cash/bank/upi are settled at the counter — mark them paid immediately so
   // outstanding, collections, and the credit check only track true credit
   // exposure. Only 'credit' (pay later) sales are credit-controlled.
-  const settledAtSale = ['cash', 'upi', 'card'].includes(paymentModeIn);
+  const settledAtSale = isSettledAtSale(paymentModeIn);
   const isCreditControlled = !!parsed.data.customerId && paymentModeIn === 'credit';
   const overrideRequested = rawBody.creditOverride === true;
 
@@ -454,7 +464,7 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
   // account to owe the balance and the credit check would be bypassed.
   if (paymentModeIn === 'credit' && !parsed.data.customerId) {
     res.status(400).json({
-      error: 'Credit sales require a customer. Pick a customer or choose cash/UPI/card.',
+      error: 'Credit sales require a customer. Pick a customer or choose cash, bank or UPI.',
       code: 'CREDIT_REQUIRES_CUSTOMER',
     });
     return;
@@ -637,7 +647,7 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
     // upi/card (settled, awaiting bank) → Electronic Payment Clearing, and only
     // true credit sales → the customer debtor ledger.
     let debitLedgerId = cashLedgerId;
-    if (paymentModeIn === 'upi' || paymentModeIn === 'card') {
+    if (clearsThroughBank(paymentModeIn)) {
       const { rows: [clr] } = await pgPool.query<{ id: number }>(
         `SELECT id FROM account_ledgers WHERE code = 'STD-ELEC-CLR'`
       );
@@ -650,10 +660,11 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
     }
     if (debitLedgerId) {
       await pgPool.query(
-        `INSERT INTO receipts (receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, voucher_number)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
+        `INSERT INTO receipts (receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, voucher_number, location_type, location_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [parsed.data.saleDate, salesLedgerId, debitLedgerId, totalAmount,
-         `Sale: ${invoiceNumber}${locationName ? ` at ${locationName}` : ''}`, invoiceNumber]
+         `Sale: ${invoiceNumber}${locationName ? ` at ${locationName}` : ''}`, invoiceNumber,
+         locationType, locationId]
       );
     }
   }
@@ -708,7 +719,7 @@ router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit")
   // creation, enforced before any stock reversal side effects run.
   if ((parsed.data.paymentMode ?? 'cash') === 'credit' && !parsed.data.customerId) {
     res.status(400).json({
-      error: 'Credit sales require a customer. Pick a customer or choose cash/UPI/card.',
+      error: 'Credit sales require a customer. Pick a customer or choose cash, bank or UPI.',
       code: 'CREDIT_REQUIRES_CUSTOMER',
     });
     return;
@@ -910,7 +921,7 @@ router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit")
   const newPaymentMode = parsed.data.paymentMode ?? 'cash';
   let newAmountPaid = totalAmount;
   let newPaymentStatus = 'paid';
-  if (!['cash', 'upi', 'card'].includes(newPaymentMode)) {
+  if (!isSettledAtSale(newPaymentMode)) {
     const { rows: [pp] } = await pgPool.query<{ paid: string }>(
       `SELECT COALESCE(SUM(amount::numeric), 0) AS paid FROM sale_payments WHERE sale_id = $1`, [id]
     );
@@ -1098,7 +1109,15 @@ router.post("/sales/:id/share-token", async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid sale id" }); return; }
-  const [row] = await db.select({ id: salesTable.id }).from(salesTable).where(eq(salesTable.id, id)).limit(1);
+  // LBAC: a share link is a public, month-long window onto one invoice, so only
+  // someone who can see the sale may mint one. Scoped through the same rule the
+  // sales list uses, otherwise a branch user could publish any invoice by id.
+  const shareScope = await getUserDataScope((req as any).employee);
+  const shareParams: unknown[] = [id];
+  const { rows: [row] } = await pool.query(
+    `SELECT s.id FROM sales s WHERE s.id = $1 AND ${scopeSalesWhere(shareScope, shareParams)}`,
+    shareParams,
+  );
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const { token, expiresAt } = createInvoiceShareToken(id);
   res.json({ token, expiresAt });

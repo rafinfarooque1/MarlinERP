@@ -6,6 +6,7 @@ import {
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
+import { COLLECTION_METHODS, paymentModeLabel } from '@/lib/paymentModes';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -104,10 +105,9 @@ function CollectPaymentDialog({ item, onOpenChange }: { item: any | null; onOpen
               <Select value={method} onValueChange={setMethod}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="cash">Cash</SelectItem>
-                  <SelectItem value="upi">UPI</SelectItem>
-                  <SelectItem value="card">Card</SelectItem>
-                  <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
+                  {COLLECTION_METHODS.map(m => (
+                    <SelectItem key={m} value={m}>{paymentModeLabel(m)}</SelectItem>
+                  ))}
                   <SelectItem value="other">Other (cheque, adjustment…)</SelectItem>
                 </SelectContent>
               </Select>

@@ -23,6 +23,8 @@
 - [Phase 1 QA findings](phase1-qa-findings.md) — 3 bugs found+fixed in QA: health bypass path, incomplete seeding list, frontend default-allow. All Phase 1 items verified with test evidence.
 - [Payroll workflow](payroll-workflow.md) — draft→approved→paid; per-employee ledgers (SAL-EMP/SAL-PAY/ADV-EMP); hours-based attendance; advances auto-deducted at generate time.
 - [LBAC implementation](lbac-implementation.md) — full location-scoping across all routes; decisions on HO-only endpoints; vendor/customer location stamping; dataScope helpers.
+- [Money voucher ownership](money-voucher-ownership.md) — stamp OR ledger-leg ownership; money uses own-location scope (NOT getUserDataScope); foreign ledgers = set difference on ids.
+- [Payment modes & invoice share](payment-modes-invoice-share.md) — modes are Cash/Bank/UPI/Credit with legacy card/bank_transfer read as Bank, never rewritten; share = composed message + channel seam.
 - [Polymorphic stock_entries](polymorphic-stock-entries.md) — items AND materials share the table with OVERLAPPING ids; every query must scope material_type; boot-time dedupe blocks destroy data when the key widens.
 - [Module retirement pattern](module-retirement-pattern.md) — backend 409s enforce, frontend only withdraws affordances; retire a nav entry by filtering href in the layout, never by editing the frozen registry.
 - [Product identity](product-identity.md) — code prefixes follow the DISPLAY label (materials="Raw Material"→RM); EAN-13 in the `2` in-store range; inactive blocks CREATE only; HO-only is a location rule.

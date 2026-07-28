@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { Building2, Store } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
+import { paymentModeLabel } from '@/lib/paymentModes';
 import {
   fmt, num, pdfMoney, fmtDate, titleCase, periodLabel,
   useDateRange, RangeBar, ReportPicker, SummaryCards, LocationBadge, RTable, ExportButtons, exportReportPdf,
@@ -295,7 +296,7 @@ function RegisterReport({ range }: { range: RangeState }) {
             Invoice: r.invoiceNumber, Date: r.date, Location: r.locationName, 'Location Type': r.locationType,
             Customer: r.customerName, 'Taxable (₹)': r.subtotal.toFixed(2), 'Discount (₹)': r.discount.toFixed(2),
             'Tax (₹)': r.tax.toFixed(2), 'Total (₹)': r.total.toFixed(2), 'Paid (₹)': r.paid.toFixed(2),
-            'Balance (₹)': r.balance.toFixed(2), Mode: r.paymentMode, Status: r.paymentStatus,
+            'Balance (₹)': r.balance.toFixed(2), Mode: paymentModeLabel(r.paymentMode), Status: r.paymentStatus,
           })))}
           onPDF={() => exportReportPdf({
             title: 'Sales Register',

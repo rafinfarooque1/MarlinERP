@@ -89,6 +89,29 @@ re-implements the logic), the GST summary and returns, the dashboard totals, the
 report, and receivables aging (which computes from the sales table and so disagrees with the
 customer ledger).
 
+## 4a. Money vouchers and location ownership
+
+**Truth:** the payment and receipt vouchers themselves, and the location that owns them.
+
+**Rule:** a voucher belongs to a location when it is stamped with that location **or** when one
+of its two legs is a ledger that location owns. Ownership is decided in one place; no handler
+writes its own location filter. A branch may only move money through its own cash ledger — never
+another location's ledger, and never a Head Office cash or bank account.
+
+**Rule:** money vouchers use an **own-location** scope, deliberately narrower than the scope used
+for stock and sales. Supplying an outlet is a stock relationship, not a shared wallet. Sales and
+purchases shown inside a ledger statement keep the wider scope.
+
+**Payment modes have one canonical list:** Cash, Bank, UPI, Credit. Only Credit creates a
+receivable; everything else is settled when the sale is recorded. Cash lands in the location's
+own cash ledger, Bank and UPI in Electronic Payment Clearing until a bank settlement is matched.
+Historical `card` and `bank_transfer` rows mean Bank; they are displayed as Bank and never
+rewritten, and any filter offering Bank must match them too.
+
+**Invoice delivery:** one PDF renderer, reached through a signed public link. Message text and
+delivery channel live outside the renderer, so adding a channel that attaches the PDF never
+touches the invoice itself.
+
 ## 5. Profitability
 
 **Truth:** derived from the accounting source and the valuation source, nothing else.

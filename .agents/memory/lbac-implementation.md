@@ -22,8 +22,15 @@ All purchases recorded at HO. Warehouse/outlet users get empty on all purchase e
 ## Decision: GST is Head Office only
 GSTR-1, GSTR-3B, HSN summary, GST reconciliation, GST summary — all return empty for non-HO.
 
-## Decision: Double-entry accounting is Head Office only
-Journal vouchers, day book, trial balance, cash-bank book, ledger statements, financial statements, payments list, receipts list — all return empty for non-HO.
+## Decision: Double-entry accounting is Head Office only — PARTLY REVERSED
+Journal vouchers, day book, trial balance, cash-bank book, financial statements: still HO-only.
+**Money vouchers are no longer HO-only.** Payments, receipts and ledger statements are now
+location-scoped so each warehouse runs its own till. See `money-voucher-ownership.md`.
+
+**Money scope ≠ LBAC scope.** `getUserDataScope` hands a warehouse every outlet it supplies —
+fine for stock, wrong for cash (it would let one location spend another's till, and retired
+outlets share ledger ids with warehouse rows). Money paths use an own-location-only scope
+instead; sales/purchases *inside* a ledger statement keep the wider scope.
 
 ## Decision: Production is Head Office only
 Production batches and production reports return empty for non-HO users.
@@ -38,7 +45,7 @@ Production batches and production reports return empty for non-HO users.
 | `returns.ts` | GET /sales-returns → scopeLocationTypeWhere; GET /purchase-returns → HO-only; receivables → scopeSalesWhere; payables → HO-only; collections → scopeSalesWhere |
 | `purchases.ts` | GET /purchases → HO-only |
 | `reports.ts` | sales-by-item, sales-by-location, profitability, discounts, sales-stock-combined → scopeSalesWhere; purchase-register, purchases-by-vendor, purchases-by-material → HO-only |
-| `accounts.ts` | GET /expenses → HO gets both direct+location; non-HO gets only their cash ledger location expenses; location-expenses/summary, /all, /single → scoped to location; payments, receipts → HO-only; gst/summary, ledger-statement, ledger/:id/statement, financial-statements → HO-only |
+| `accounts.ts` | GET /expenses → HO gets both direct+location; non-HO gets only their cash ledger location expenses; location-expenses/summary, /all, /single → scoped to location; payments, receipts, ledger-statement, ledger/:id/statement, cash-bank-ledgers → own-location scoped (see `money-voucher-ownership.md`); gst/summary, financial-statements → HO-only |
 | `gst.ts` | All 4 endpoints → HO-only |
 | `journal.ts` | journal-vouchers, day-book, trial-balance, cash-bank-book/ledgers, cash-bank-book → HO-only |
 | `production.ts` | GET /productions, GET /productions/reports → HO-only |

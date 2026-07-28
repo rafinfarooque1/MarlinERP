@@ -3,6 +3,7 @@ import { requireModuleAction } from "../middleware/permissions";
 import { pool } from "@workspace/db";
 import { logActivity } from "../lib/audit";
 import { nextVoucherNumber } from "../lib/voucherNumber";
+import { LEGACY_BANK_MODES } from "../lib/paymentModes";
 
 const router = Router();
 
@@ -47,7 +48,12 @@ router.get("/reconciliation/pending", async (req, res): Promise<void> => {
     // Force scope to this employee's outlet regardless of query param
     params.push(rcnEmp.branchId); conds.push(`sp.outlet_id = $${params.length}`);
   } else if (outletId) { params.push(Number(outletId)); conds.push(`sp.outlet_id = $${params.length}`); }
-  if (method)   { params.push(method);            conds.push(`sp.method = $${params.length}`); }
+  // 'bank' also matches the legacy 'card' / 'bank_transfer' values, which mean
+  // the same thing and are never rewritten in place.
+  if (method) {
+    const matches = method === 'bank' ? ['bank', ...LEGACY_BANK_MODES] : [method];
+    params.push(matches); conds.push(`sp.method = ANY($${params.length}::text[])`);
+  }
   if (fromDate) { params.push(fromDate);           conds.push(`sp.payment_date >= $${params.length}`); }
   if (toDate)   { params.push(toDate);             conds.push(`sp.payment_date <= $${params.length}`); }
   if (search) {

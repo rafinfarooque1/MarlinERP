@@ -18,19 +18,22 @@ import {
 } from '@workspace/api-client-react';
 import { toast } from 'sonner';
 import { CheckSquare, RefreshCw, Layers, Info, IndianRupee, CreditCard } from 'lucide-react';
+import { paymentModeLabel } from '@/lib/paymentModes';
 
 // ── Payment method badge ─────────────────────────────────────────────────────
 
 function MethodBadge({ method }: { method: string }) {
   const map: Record<string, string> = {
     upi: 'bg-violet-500/10 text-violet-600 border-violet-500/20',
-    card: 'bg-blue-500/10 text-blue-600 border-blue-500/20',
+    // Legacy 'card' / 'bank_transfer' rows read as Bank and share its colour.
+    bank: 'bg-teal-500/10 text-teal-600 border-teal-500/20',
+    card: 'bg-teal-500/10 text-teal-600 border-teal-500/20',
     bank_transfer: 'bg-teal-500/10 text-teal-600 border-teal-500/20',
     other: 'bg-gray-500/10 text-gray-600 border-gray-500/20',
   };
   return (
     <span className={`text-xs px-2 py-0.5 rounded border font-medium uppercase ${map[method] ?? map.other}`}>
-      {method.replace('_', ' ')}
+      {paymentModeLabel(method)}
     </span>
   );
 }
@@ -171,8 +174,8 @@ export default function Reconciliation() {
                 <SelectContent>
                   <SelectItem value="all">All methods</SelectItem>
                   <SelectItem value="upi">UPI</SelectItem>
-                  <SelectItem value="card">Card</SelectItem>
-                  <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
+                  {/* 'bank' also covers older card / bank-transfer rows */}
+                  <SelectItem value="bank">Bank</SelectItem>
                   <SelectItem value="other">Other</SelectItem>
                 </SelectContent>
               </Select>

@@ -4,6 +4,7 @@ import { pool } from "@workspace/db";
 import { nextVoucherNumber, VOUCHER_TYPE_LABELS } from "../lib/voucherNumber";
 import { logActivity } from "../lib/audit";
 import { lineTaxHeads } from "../lib/gst";
+import { clearsThroughBank } from "../lib/paymentModes";
 
 const router = Router();
 
@@ -452,7 +453,8 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     const amountPaid = Number(s.amount_paid ?? 0);
     const extra = round2(amountPaid - paidViaSp);
     if (extra > 0.004) {
-      const drLedger = s.payment_mode === "cash" ? cashLedger : elecClr;
+      // Cash sits in the cash box; bank/UPI/card clear through Electronic Clearing.
+      const drLedger = clearsThroughBank(s.payment_mode) ? elecClr : cashLedger;
       push({ date: s.sale_date, ledgerId: drLedger, debit: extra, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Received — ${inv}` });
     }
 

@@ -195,6 +195,23 @@ can never grant or revoke them.
 
 These return data across all locations regardless of the caller's warehouse.
 
+### D5 — Money vouchers were Head-Office-only — **FIXED**
+
+Payments, receipts, ledger statements and the cash/bank ledger picker returned nothing outside
+Head Office, so a warehouse could take cash at the counter but never see or spend its own till.
+They are now location-scoped: a voucher belongs to a location when it is stamped with it *or*
+one of its two legs is a ledger that location owns.
+
+Two traps this exposed, worth remembering before touching money scope again:
+
+- **The general location scope is too wide for cash.** It grants a warehouse every outlet it
+  supplies, which would let one location spend another's till; worse, retired outlet rows share
+  cash and sales ledger ids with warehouse rows, so the same ledger would read as owned by two
+  locations. Money paths use an own-location-only scope. Sales and purchases *inside* a ledger
+  statement keep the wider scope, matching the Sales module.
+- **New location columns default to Head Office**, which would have re-homed every historical
+  voucher to HO. A one-time guarded backfill re-owned old rows from their ledger legs instead.
+
 ---
 
 ## How the plan changed

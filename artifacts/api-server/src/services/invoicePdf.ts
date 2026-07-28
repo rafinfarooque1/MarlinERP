@@ -20,6 +20,7 @@ import {
   db, pool, salesTable, outletsTable, customersTable, itemsTable, companySettingsTable,
 } from "@workspace/db";
 import { eq, inArray } from "drizzle-orm";
+import { paymentModeLabel } from "../lib/paymentModes";
 
 // ── Data assembly ─────────────────────────────────────────────────────────────
 
@@ -543,11 +544,11 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     txt(`Ref       :  ${esc(sale.invoiceNumber)}`, M + 3, y + 26 + QR_SIZE, { size: 6.5, color: MGRAY });
   } else {
     // No UPI configured — show payment mode only
-    txt(`Payment Mode : ${esc(sale.paymentMode ?? "-").replace(/_/g, " ").toUpperCase()}`,
+    txt(`Payment Mode : ${esc(paymentModeLabel(sale.paymentMode) || "-")}`,
         M + 3, y + 18, { size: 7.5, color: BK });
   }
   if (sale.paymentMode) {
-    txt(`Payment Mode  :  ${esc(sale.paymentMode).replace(/_/g, " ").toUpperCase()}`,
+    txt(`Payment Mode  :  ${esc(paymentModeLabel(sale.paymentMode))}`,
         M + 3, y + PAY_H - 5, { size: 7, color: MGRAY });
   }
 
@@ -578,7 +579,7 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   if (sale.paymentMode) {
     bx(M, y, CW, 7, BORDER);
     fill(M, y, CW, 7, LGRAY);
-    txt(`Payment Mode : ${esc(sale.paymentMode).replace(/_/g, " ").toUpperCase()}`,
+    txt(`Payment Mode : ${esc(paymentModeLabel(sale.paymentMode))}`,
         M + 3, y + 5, { bold: true, size: 7.5, color: NAVY });
     txt(`For ${companyName}`, M + CW - 3, y + 5, { bold: true, size: 7.5, color: NAVY, align: "right" });
     y += 9;

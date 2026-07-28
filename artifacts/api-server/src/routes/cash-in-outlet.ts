@@ -245,10 +245,11 @@ router.post("/cash-in-outlet/deposits", requireModuleAction("Cash Balance", "add
     // 4. Post payment: paid_from=cash, paid_to=STD-CIT
     const payVoucher = await nextVoucherNumber(client, 'payment', depositDate);
     const { rows: [payment] } = await client.query(
-      `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
       [payVoucher, depositDate, cashLedger.id, citLedger.id, parsedAmount,
-        `Cash deposit to bank — ${depositReference ?? "no ref"}`]
+        `Cash deposit to bank — ${depositReference ?? "no ref"}`,
+        isWarehouse ? 'warehouse' : 'outlet', locationId]
     );
 
     // 5. Insert cash_deposit record (outlet_id or warehouse_id, the other stays NULL)

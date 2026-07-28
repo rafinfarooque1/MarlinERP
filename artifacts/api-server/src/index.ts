@@ -1358,6 +1358,61 @@ await pool.query(`ALTER TABLE vendors ADD COLUMN IF NOT EXISTS location_id   INT
 await pool.query(`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS branch_type TEXT DEFAULT 'headoffice'`);
 await pool.query(`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS branch_id   INT  DEFAULT 1`);
 
+// ── LBAC: location columns for money vouchers (payments & receipts) ───────────
+// Warehouses run their own cash box, so a voucher has to say which location it
+// belongs to. Existing rows default to Head Office and are re-owned by the
+// backfill below wherever a ledger leg identifies a branch.
+await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS location_type TEXT DEFAULT 'headoffice'`);
+await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS location_id   INT  DEFAULT 0`);
+await pool.query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS location_type TEXT DEFAULT 'headoffice'`);
+await pool.query(`ALTER TABLE receipts ADD COLUMN IF NOT EXISTS location_id   INT  DEFAULT 0`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_location ON payments (location_type, location_id)`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_receipts_location ON receipts (location_type, location_id)`);
+
+// One-time backfill: stamp historical vouchers from their ledger legs. A
+// payment out of (or receipt into) a location's cash ledger, and a receipt from
+// a location's sales ledger, all belong to that location. Runs after the DDL
+// above so the columns are guaranteed to exist; migration_log keeps it one-time.
+{
+  const { rows: mlRows } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'money_voucher_location_backfill_v1'`,
+  );
+  if (mlRows.length === 0) {
+    for (const [table, legs] of [
+      ["payments", ["paid_from_ledger_id", "paid_to_ledger_id"]],
+      ["receipts", ["received_in_ledger_id", "received_from_ledger_id"]],
+    ] as const) {
+      // Cash leg (money physically leaves/enters a location's cash box)
+      for (const loc of ["warehouse", "outlet"] as const) {
+        const locTable = loc === "warehouse" ? "warehouses" : "outlets";
+        await pool.query(`
+          UPDATE ${table} t SET location_type = '${loc}', location_id = l.id
+          FROM ${locTable} l
+          WHERE l.cash_ledger_id IS NOT NULL
+            AND (t.${legs[0]} = l.cash_ledger_id OR t.${legs[1]} = l.cash_ledger_id)
+            AND t.location_type = 'headoffice'
+        `);
+      }
+    }
+    // Sales-ledger leg: a location's own sales revenue (e.g. UPI counter sales
+    // that clear through STD-ELEC-CLR and never touch the cash box).
+    for (const loc of ["warehouse", "outlet"] as const) {
+      const locTable = loc === "warehouse" ? "warehouses" : "outlets";
+      await pool.query(`
+        UPDATE receipts t SET location_type = '${loc}', location_id = l.id
+        FROM ${locTable} l
+        WHERE l.sales_ledger_id IS NOT NULL
+          AND t.received_from_ledger_id = l.sales_ledger_id
+          AND t.location_type = 'headoffice'
+      `);
+    }
+    await pool.query(
+      `INSERT INTO migration_log (name) VALUES ('money_voucher_location_backfill_v1')`,
+    );
+    console.log("[migration] money_voucher_location_backfill_v1 — stamped historical payments/receipts with their owning location");
+  }
+}
+
 // ── Default-deny permission seeding ──────────────────────────────────────────
 // Ensures every existing non-level-1 hierarchy has an explicit permissions row
 // for every registered module, so the switch from default-allow to default-deny

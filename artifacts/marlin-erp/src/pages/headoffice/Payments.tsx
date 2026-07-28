@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
+import { COLLECTION_METHODS, paymentModeLabel } from '@/lib/paymentModes';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -98,7 +99,7 @@ function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: ()
             {payments.map((p: any) => (
               <div key={p.id} className="flex justify-between items-center text-xs bg-muted/30 rounded px-3 py-2 border border-border">
                 <div className="space-y-0.5">
-                  <p className="capitalize font-medium">{p.method.replace('_', ' ')}</p>
+                  <p className="font-medium">{paymentModeLabel(p.method)}</p>
                   <p className="text-muted-foreground">{p.paymentDate}
                     {p.referenceNumber && <span className="font-mono ml-2">#{p.referenceNumber}</span>}
                   </p>
@@ -131,11 +132,9 @@ function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: ()
                 <Select value={method} onValueChange={setMethod}>
                   <SelectTrigger className="h-8 text-sm"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="cash">Cash</SelectItem>
-                    <SelectItem value="upi">UPI</SelectItem>
-                    <SelectItem value="card">Card</SelectItem>
-                    <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
-                    <SelectItem value="other">Other</SelectItem>
+                    {COLLECTION_METHODS.map(m => (
+                      <SelectItem key={m} value={m}>{paymentModeLabel(m)}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

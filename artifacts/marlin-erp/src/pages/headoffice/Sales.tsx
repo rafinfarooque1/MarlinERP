@@ -26,9 +26,16 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { INDIAN_STATES } from '@/lib/indianStates';
 import {
+  SALE_PAYMENT_MODES, PAYMENT_MODE_OPTIONS, COLLECTION_METHODS,
+  paymentModeLabel, editableSaleMode,
+} from '@/lib/paymentModes';
+import {
+  normaliseWhatsAppNumber, composeInvoiceMessage, activeInvoiceShareChannel,
+} from '@/lib/invoiceShare';
+import {
   Plus, Search, Trash2, CreditCard, Calendar, Receipt,
   Download, Eye, PackageOpen, FileDown, AlertTriangle,
-  UserPlus, Check, ChevronsUpDown, Banknote, IndianRupee, Pencil,
+  UserPlus, Check, ChevronsUpDown, Banknote, IndianRupee, Pencil, Printer,
 } from 'lucide-react';
 
 // ── WhatsApp brand icon (inline SVG) ──────────────────────────────────────────
@@ -97,7 +104,7 @@ const schema = z.object({
   locationId: z.coerce.number().min(1, 'Location required'),
   customerId: z.coerce.number().optional(),
   saleDate: z.string().min(1, 'Date required'),
-  paymentMode: z.enum(['cash', 'credit']).default('cash'),
+  paymentMode: z.enum(SALE_PAYMENT_MODES).default('cash'),
   couponCode: z.string().optional(),
   lineItems: z.array(saleLineSchema).min(1, 'Add at least one item'),
 });
@@ -253,7 +260,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       locationId: sale.locationId ?? sale.outletId ?? 0,
       customerId: sale.customerId ?? undefined,
       saleDate: sale.saleDate,
-      paymentMode: (['cash', 'credit'].includes(sale.paymentMode) ? sale.paymentMode : 'cash') as FormValues['paymentMode'],
+      // Legacy 'card' / 'bank_transfer' invoices collapse onto Bank so an edit
+      // keeps their meaning instead of silently becoming a cash sale.
+      paymentMode: editableSaleMode(sale.paymentMode) as FormValues['paymentMode'],
       couponCode: sale.couponCode ?? '',
       lineItems: (sale.lineItems ?? []).map((li: any) => ({
         itemId: li.itemId,
@@ -547,93 +556,58 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     }
   };
 
+  // Print: same PDF, opened in a tab that asks to print itself. The tab is
+  // opened synchronously (click gesture) and then navigated, like Preview.
+  const handlePrintPDF = async (sale: any) => {
+    const tab = window.open('', '_blank');
+    try {
+      const url = await requestInvoicePdfUrl(sale.id, false);
+      if (!tab) { window.open(url, '_blank'); return; }
+      tab.location.replace(url);
+      // Same-origin PDF, so the print dialog can be triggered once it loads.
+      // If the viewer blocks it the invoice is still on screen to print by hand.
+      tab.addEventListener?.('load', () => { try { tab.print(); } catch { /* viewer declined */ } });
+    } catch {
+      tab?.close();
+      toast.error('Unable to open the invoice for printing. Please try again.');
+    }
+  };
+
   // ── WhatsApp invoice share ─────────────────────────────────────────────────
-  // Opens wa.me directly to the customer's chat with a short message holding a
-  // secure HTTPS link to the invoice PDF — the customer taps the link to
-  // view/download it. No attachments, no extra tabs, nothing to re-upload.
+  // Hands the customer's chat a short message holding a secure HTTPS link to
+  // the invoice PDF — they tap the link to view/download it. The message text
+  // and the delivery channel both live in lib/invoiceShare.ts, so a WhatsApp
+  // Business API path (which would attach the PDF instead of linking it) plugs
+  // in there without touching this page or the invoice renderer.
   //
   // Popup-safety: the tab is opened synchronously inside the click gesture and
   // redirected once the link is ready. (The previous setTimeout-based
   // window.open lost the user gesture → popup blocked → "nothing happened".)
   const handleWhatsApp = async (sale: any) => {
-    const raw = (sale.customerPhone ?? '').replace(/\D/g, '');
-    if (!raw) {
+    const phone = normaliseWhatsAppNumber(sale.customerPhone);
+    if (!phone) {
       toast.error('WhatsApp number is not available for this customer. Please update Customer Details.');
       return;
-    }
-
-    // Normalise to Indian international format without leading + (91XXXXXXXXXX)
-    let intl = raw;
-    if (raw.startsWith('91') && raw.length === 12) {
-      intl = raw;                        // already 91XXXXXXXXXX
-    } else if (raw.startsWith('0') && raw.length === 11) {
-      intl = `91${raw.slice(1)}`;        // 0XXXXXXXXXX → 91XXXXXXXXXX
-    } else {
-      intl = `91${raw}`;                 // bare 10-digit → 91XXXXXXXXXX
     }
 
     const waTab = window.open('', '_blank'); // sync open — popup-blocker safe
 
     try {
       const pdfUrl = await requestInvoicePdfUrl(sale.id, false);
-
-      const cs      = companySettings as any;
-      const company = cs?.companyName ?? cs?.name ?? 'Marlin Frozen Fruits';
-      const date    = new Date(sale.saleDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-      const inr     = (n: number) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-
-      // ── Bill detail lines ────────────────────────────────────────────────
-      const lineItems: any[] = (sale as any).lineItems ?? [];
-      const itemLines = lineItems.map((li: any, i: number) => {
-        const name    = li.itemName || itemsMap.get(li.itemId)?.name || `Item #${li.itemId}`;
-        const qty     = Number(li.quantity);
-        const rate    = Number(li.unitPrice);
-        const disc    = Number(li.discount ?? 0);
-        const lineAmt = qty * rate - disc;
-        const discPart = disc > 0 ? ` - ${inr(disc)} disc` : '';
-        return `  ${i + 1}. ${name}\n     ${qty} × ${inr(rate)}${discPart} = *${inr(lineAmt)}*`;
+      const cs = companySettings as any;
+      const message = composeInvoiceMessage({
+        sale,
+        pdfUrl,
+        companyName: cs?.companyName ?? cs?.name ?? 'Marlin Frozen Fruits',
+        resolveItemName: id => itemsMap.get(id)?.name,
       });
 
-      const subtotal    = Number((sale as any).subtotal ?? 0);
-      const taxTotal    = Number((sale as any).taxTotal ?? 0);
-      const discTotal   = Number((sale as any).discountTotal ?? 0);
-      const itemDiscAmt = lineItems.reduce((s: number, li: any) => s + Number(li.discount ?? 0), 0);
-      const grandTotal  = Number(sale.totalAmount);
-
-      const totalsLines: string[] = [];
-      if (itemDiscAmt > 0) totalsLines.push(`  Item discounts: -${inr(itemDiscAmt)}`);
-      totalsLines.push(`  Subtotal: ${inr(subtotal)}`);
-      if (taxTotal > 0) totalsLines.push(`  GST: ${inr(taxTotal)}`);
-      if (discTotal > 0) totalsLines.push(`  Bill discount${(sale as any).couponCode ? ` (${(sale as any).couponCode})` : ''}: -${inr(discTotal)}`);
-      totalsLines.push(`  *Total: ${inr(grandTotal)}*`);
-
-      const payMode = (sale as any).paymentMode;
-      const payStatus = (sale as any).paymentStatus;
-      const payLine = payMode ? `  Payment: ${String(payMode).toUpperCase()}${payStatus === 'credit' ? ' (Credit)' : ''}` : '';
-
-      const message = [
-        `Dear ${sale.customerName || 'Customer'},`,
-        ``,
-        `Thank you for your purchase from *${sale.outletName || company}*! 🙏`,
-        ``,
-        `*Invoice No:* ${sale.invoiceNumber}`,
-        `*Date:* ${date}`,
-        ``,
-        `*Bill Details:*`,
-        ...itemLines,
-        ``,
-        ...totalsLines,
-        ...(payLine ? [payLine] : []),
-        ``,
-        `📄 View / download invoice PDF:`,
-        pdfUrl,
-        ``,
-        `— ${sale.outletName || company}`,
-      ].join('\n');
-
-      const waUrl = `https://wa.me/${intl}?text=${encodeURIComponent(message)}`;
-      if (waTab) waTab.location.replace(waUrl);
-      else window.open(waUrl, '_blank');   // fallback if the tab was blocked
+      const target = await activeInvoiceShareChannel().deliver({
+        phone, message, pdfUrl, saleId: sale.id,
+      });
+      if (!target) { waTab?.close(); toast.success('Invoice sent on WhatsApp'); return; }
+      if (waTab) waTab.location.replace(target);
+      else window.open(target, '_blank');   // fallback if the tab was blocked
     } catch {
       waTab?.close();
       toast.error('Unable to prepare the WhatsApp share. Please try again.');
@@ -669,7 +643,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
             {perm.canDownload && (
               <Button variant="outline" size="sm" onClick={() => downloadCSV('sales.csv', filtered.map(s => ({
                 Invoice: s.invoiceNumber, Date: s.saleDate, Outlet: s.outletName,
-                Customer: s.customerName || 'Walk-in', Payment: s.paymentMode,
+                Customer: s.customerName || 'Walk-in', Payment: paymentModeLabel(s.paymentMode),
                 Subtotal: s.subtotal, Tax: s.taxTotal,
                 Discount: (Number((s as any).discountTotal ?? 0)
                   + (((s as any).lineItems as any[]) ?? []).reduce((acc: number, li: any) => acc + Number(li?.discount ?? 0), 0)).toFixed(2),
@@ -918,8 +892,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <Select onValueChange={field.onChange} value={field.value}>
                       <FormControl><SelectTrigger><SelectValue placeholder="Select mode" /></SelectTrigger></FormControl>
                       <SelectContent>
-                        <SelectItem value="cash">💵 Cash</SelectItem>
-                        <SelectItem value="credit">🕒 Credit (pay later)</SelectItem>
+                        {PAYMENT_MODE_OPTIONS.map(m => (
+                          <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                     {field.value === 'credit' && !watchCustomerId && (
@@ -1287,6 +1262,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <FileDown className="w-3.5 h-3.5" /> PDF
                   </Button>
                 )}
+                {perm.canDownload && viewItem && (
+                  <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void handlePrintPDF(viewItem)} title="Print invoice">
+                    <Printer className="w-3.5 h-3.5" /> Print
+                  </Button>
+                )}
                 {viewItem && (viewItem as any).customerPhone && (
                   <Button
                     variant="outline" size="sm"
@@ -1435,7 +1415,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     {viewItemPayments.map((p: any) => (
                       <div key={p.id} className="flex justify-between items-center text-xs bg-background/60 rounded px-2 py-1">
                         <div>
-                          <span className="capitalize">{p.method.replace('_', ' ')}</span>
+                          <span>{paymentModeLabel(p.method)}</span>
                           {p.referenceNumber && <span className="font-mono ml-1.5 text-muted-foreground text-[10px]">#{p.referenceNumber}</span>}
                           <span className="ml-1.5 text-muted-foreground">{p.paymentDate}</span>
                         </div>
@@ -1475,11 +1455,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                     <Select value={row.method} onValueChange={v => setPaymentRows(rs => rs.map(r => r.id === row.id ? { ...r, method: v } : r))}>
                                       <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
                                       <SelectContent>
-                                        <SelectItem value="cash">Cash</SelectItem>
-                                        <SelectItem value="upi">UPI</SelectItem>
-                                        <SelectItem value="card">Card</SelectItem>
-                                        <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
-                                        <SelectItem value="other">Other</SelectItem>
+                                        {COLLECTION_METHODS.map(m => (
+                                          <SelectItem key={m} value={m}>{paymentModeLabel(m)}</SelectItem>
+                                        ))}
                                       </SelectContent>
                                     </Select>
                                   </div>
@@ -1609,12 +1587,15 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   </Button>
                 )}
                 {perm.canDownload && (
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-3 gap-2">
                     <Button variant="outline" onClick={() => void handlePreviewPDF(viewItem)}>
-                      <Eye className="w-4 h-4 mr-2" /> Preview PDF
+                      <Eye className="w-4 h-4 mr-2" /> Preview
                     </Button>
                     <Button variant="outline" onClick={() => void handleDownloadPDF(viewItem)}>
-                      <FileDown className="w-4 h-4 mr-2" /> Download PDF
+                      <FileDown className="w-4 h-4 mr-2" /> Download
+                    </Button>
+                    <Button variant="outline" onClick={() => void handlePrintPDF(viewItem)}>
+                      <Printer className="w-4 h-4 mr-2" /> Print
                     </Button>
                   </div>
                 )}
