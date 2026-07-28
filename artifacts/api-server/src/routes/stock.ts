@@ -840,7 +840,8 @@ router.get("/stock/transfers/:id", async (req, res): Promise<void> => {
   const result = await pool.query(
     `SELECT id, challan_number, from_type, from_id, to_type, to_id, transfer_date,
             line_items, is_interstate, status, notes, created_at,
-            approved_by, approved_at, received_line_items, rejection_reason
+            approved_by, approved_at, received_line_items, rejection_reason,
+            transfer_type, from_gstin, to_gstin, tax_type, transfer_value, gst_amount
      FROM stock_transfers WHERE id = $1 LIMIT 1`,
     [id]
   );

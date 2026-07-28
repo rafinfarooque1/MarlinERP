@@ -177,10 +177,10 @@ export async function computeTransferGst(
   const rateMap = new Map<number, number>();
   if (ids.length > 0) {
     const { rows } = await db.query(
-      `SELECT id, COALESCE(gst_rate, 0)::numeric AS gst_rate FROM items WHERE id = ANY($1::int[])`,
+      `SELECT id, COALESCE(tax_rate, 0)::numeric AS tax_rate FROM items WHERE id = ANY($1::int[])`,
       [ids],
     );
-    for (const r of rows) rateMap.set(Number(r.id), Number(r.gst_rate));
+    for (const r of rows) rateMap.set(Number(r.id), Number(r.tax_rate));
   }
 
   let taxableValue = 0, cgst = 0, sgst = 0, igst = 0;
