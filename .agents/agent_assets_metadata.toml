@@ -12,3 +12,9 @@ id = "Xt2ukZumm4xO9KjvbupX_"
 uri = "file://ERP_SYSTEM_GUIDE.md"
 type = "text"
 title = "Marlin ERP — Full System Guide"
+
+[[outputs]]
+id = "ckqeaA_BvcXlJOsjxyEGI"
+uri = "file://INTEGRATION_AUDIT.md"
+type = "text"
+title = "Marlin ERP — End-to-End Integration Audit"

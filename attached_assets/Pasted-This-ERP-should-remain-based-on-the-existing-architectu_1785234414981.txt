@@ -1,0 +1,34 @@
+This ERP should remain based on the existing architecture. Do not redesign the modules, sidebar, database structure or workflows unless required for the approved implementation.
+
+Also include the following enterprise enhancements if they are not already covered in the implementation plan:
+
+• Automatic costing engine:
+  Production Cost = Raw Material + Packing Material + Labour + Overheads.
+  Every production batch must automatically calculate SKU cost.
+
+• Automatic inventory valuation after every Purchase, Production, Sale, Return, Adjustment and Stock Transfer.
+
+• Automatic Gross Profit, Net Profit, Gross Margin and Net Margin calculations.
+
+• Every operational transaction must automatically update the accounting ledgers, Trial Balance, Profit & Loss and Balance Sheet.
+
+• Chart of Accounts must remain the single accounting source.
+
+• Dashboard should become a complete business intelligence dashboard showing Sales, Purchases, Production, Inventory Value, Cash, Bank, Warehouse-wise Profit, Warehouse-wise Sales, Warehouse-wise Purchases, Top Selling Items, Dead Stock, Slow Moving Stock, Near Expiry, Expired Stock, Pending Receivables, Pending Payables and Recent Activities.
+
+• Every report should be independent:
+  Sales, Purchase, Production, Inventory, Stock, Warehouse, Customer, Vendor, Profitability, Batch, Expiry, Stock Transfer, GST, Expense, Salary, Cash, Bank, Ledger, Trial Balance, Profit & Loss and Balance Sheet.
+
+• Every report should support Date Filter, Warehouse Filter, Export PDF, Export Excel and Print.
+
+• Stock Transfers must immediately reduce source stock, increase destination stock, update inventory valuation, stock ledger, reports and dashboard in real time.
+
+• Production must immediately consume Raw Materials and Packing Materials, create Finished Goods, create Batch, calculate Cost and update inventory and accounting automatically.
+
+• Salary should be generated automatically from Attendance, reflected in Payroll, posted as an Indirect Expense and update accounting automatically.
+
+• FIFO/FEFO, batch management, manufacturing date, expiry date, barcode/batch code and expiry alerts should be fully integrated.
+
+• Ensure the ERP behaves like a complete enterprise ERP similar to SAP Business One, Microsoft Dynamics 365 Business Central, Oracle NetSuite and Tally Prime while preserving the current Marlin ERP architecture.
+
+After incorporating these enhancements, the implementation plan should represent the final enterprise version before coding begins.

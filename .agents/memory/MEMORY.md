@@ -7,6 +7,7 @@
 - [Raw-migration columns](raw-migration-columns.md) — startup-migration columns are invisible to drizzle: db.select() silently drops them (fields read as 0/undefined); read AND write them via raw SQL.
 - [Invoice PDFs & share links](invoice-pdf-links.md) — ONE server-side renderer + HMAC public links; open popups synchronously in the click gesture; blob-URL PDFs trigger AV false positives.
 - [Accounts derivation & numbering](accounts-derivation.md) — books derive from buildDerivedPostings(); sale-linked receipts stay excluded (double-count trap); ALL GST math via lineTaxHeads(); never COUNT(*)-number vouchers.
+- [ERP integration conflicts](erp-integration-conflicts.md) — modules disagree: 5 stock qty stores (item-table col is STALE), materials have no location, P&L skips journal vouchers, transfer JVs already post tax
 - [Inventory batch layer](inventory-batches.md) — additive lot layer over stock_entries (qty truth); FEFO clamped consumption, shortfall = "Untracked"; zod strips unknown keys so optional passthrough fields read from raw body.
 - [pg query gotchas](pg-gotchas.md) — date columns return JS Date (never string-compare vs YYYY-MM-DD); creates return 201; check-then-insert guards need one txn + pg_advisory_xact_lock.
 - [Codegen staleness trap](codegen-staleness.md) — cuts BOTH ways: codegen can flip optional→required, AND generated types under-declare what routes really return (auditing UI reads against them yields mass false positives).
