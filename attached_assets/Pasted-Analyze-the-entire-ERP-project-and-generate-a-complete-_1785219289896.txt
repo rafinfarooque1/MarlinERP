@@ -1,0 +1,235 @@
+Analyze the entire ERP project and generate a complete documentation of the CURRENT ERP STRUCTURE.
+
+Do NOT modify any code.
+
+Do NOT fix any issues.
+
+Do NOT suggest improvements.
+
+Do NOT generate a future roadmap.
+
+Do NOT compare with other ERP systems.
+
+I only want to know the complete structure of the ERP as it exists today.
+
+Generate a detailed report covering:
+
+=========================================================
+1. PROJECT OVERVIEW
+=========================================================
+
+- ERP name
+- Purpose
+- Technology stack
+- Frontend framework
+- Backend framework
+- Database
+- Authentication method
+- Deployment architecture
+
+=========================================================
+2. FOLDER STRUCTURE
+=========================================================
+
+Explain the complete project folder structure.
+
+For every folder explain:
+- Purpose
+- Files inside
+- Responsibility
+
+=========================================================
+3. FRONTEND STRUCTURE
+=========================================================
+
+Explain the complete frontend architecture.
+
+Include:
+- Layouts
+- Sidebar
+- Navigation
+- Routing
+- Pages
+- Components
+- Forms
+- Tables
+- Dialogs
+- Hooks
+- Contexts
+- API services
+- State management
+- Search
+- Filters
+- Export
+- Import
+- Authentication flow
+
+List every page currently available in the ERP.
+
+=========================================================
+4. BACKEND STRUCTURE
+=========================================================
+
+Explain the backend architecture.
+
+Include:
+- Server startup
+- Express structure
+- Route organization
+- Middleware
+- Authentication
+- Authorization
+- RBAC
+- Data Scope
+- API structure
+- Validation
+- Error handling
+- Audit logging
+- Database access
+- Transactions
+
+List every API module.
+
+=========================================================
+5. DATABASE STRUCTURE
+=========================================================
+
+List every database table.
+
+For each table explain:
+- Purpose
+- Main columns
+- Relationships
+- Which module uses it
+
+=========================================================
+6. ERP MODULES
+=========================================================
+
+List every module currently available.
+
+For each module explain:
+- Purpose
+- Features
+- Pages
+- APIs
+- Database tables used
+
+Include every existing module such as:
+
+Dashboard
+
+Operations
+
+Production
+
+Inventory
+
+Stock
+
+Stock Transfer
+
+Sales
+
+Customers
+
+Vendors
+
+HR
+
+Accounts
+
+Company
+
+Permissions
+
+Hierarchy
+
+Employees
+
+Item Master
+
+Material Master
+
+Raw Material Master
+
+Expenses
+
+Cash Balance
+
+Journal
+
+Reports
+
+Settings
+
+and every other module currently present in the ERP.
+
+=========================================================
+7. BUSINESS FLOW
+=========================================================
+
+Explain the current workflow of the ERP exactly as implemented.
+
+Show how data flows between modules.
+
+=========================================================
+8. PERMISSION STRUCTURE
+=========================================================
+
+Explain:
+- Roles
+- Hierarchy
+- Permissions
+- Branch access
+- Data scope
+
+=========================================================
+9. ACCOUNTING STRUCTURE
+=========================================================
+
+Explain the accounting modules currently available.
+
+=========================================================
+10. INVENTORY STRUCTURE
+=========================================================
+
+Explain the inventory and stock management structure currently implemented.
+
+=========================================================
+11. COMPLETE PAGE LIST
+=========================================================
+
+Generate a complete list of every page currently available in the ERP.
+
+Include:
+- URL
+- Page name
+- Module
+- Purpose
+
+=========================================================
+12. COMPLETE API LIST
+=========================================================
+
+Generate a complete list of all APIs currently available.
+
+=========================================================
+13. SUMMARY
+=========================================================
+
+Summarize the entire ERP structure exactly as it exists today.
+
+IMPORTANT:
+
+This is an analysis task only.
+
+Do not modify code.
+
+Do not add features.
+
+Do not recommend improvements.
+
+Do not fix issues.
+
+Document only what currently exists in the ERP codebase.
