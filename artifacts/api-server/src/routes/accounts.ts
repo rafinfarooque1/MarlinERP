@@ -457,7 +457,7 @@ router.get("/accounts/ledger-statement", requireModuleView("Ledger"), async (req
     const salesWhere = scopeSalesWhere(scope, salesParams);
     const { rows } = await pool.query(
       `SELECT s.id, s.sale_date, s.invoice_number, s.total_amount, s.tax_total
-       FROM sales s WHERE ${salesWhere}`, salesParams,
+       FROM sales s WHERE s.branch_transfer_id IS NULL AND ${salesWhere}`, salesParams,
     );
     scopedSales = rows as typeof scopedSales;
   }
@@ -493,7 +493,7 @@ router.get("/accounts/ledger-statement", requireModuleView("Ledger"), async (req
     const purWhere = scopeBranchWhere(scope, purParams, 'p');
     const { rows: purRows } = await pool.query(
       `SELECT p.id, p.purchase_date, p.invoice_number, p.total_amount
-       FROM purchases p WHERE ${purWhere}`, purParams,
+       FROM purchases p WHERE p.branch_transfer_id IS NULL AND ${purWhere}`, purParams,
     );
     entries.push(...purRows.map((p: any) => ({
       date: p.purchase_date,
@@ -1115,7 +1115,12 @@ router.get("/accounts/financial-statements", requireModuleView("Chart of Account
   // ── Auto-computed amounts ───────────────────────────────────────────────
   // Sales total + tax collected (filtered by outlet if provided)
   const sp: any[] = [];
-  const salesConds: string[] = [];
+  // Branch-transfer invoices are excluded from BOTH the sales and purchases
+  // totals here. They are tax documents for moving own stock: including them
+  // would inflate turnover and cost of goods by the same amount, so the P&L
+  // must not see them at all. Their value posts to the inter-branch clearing
+  // ledger in the balance sheet instead (see buildDerivedPostings).
+  const salesConds: string[] = ['branch_transfer_id IS NULL'];
   if (fromDate) { sp.push(fromDate); salesConds.push(`sale_date >= $${sp.length}`); }
   if (toDate)   { sp.push(toDate);   salesConds.push(`sale_date <= $${sp.length}`); }
   if (outletId) { sp.push(Number(outletId)); salesConds.push(`outlet_id = $${sp.length}`); }
@@ -1138,7 +1143,8 @@ router.get("/accounts/financial-statements", requireModuleView("Chart of Account
   // Purchases total
   const pup: any[] = [];
   const { rows: purRows } = await pool.query(
-    `SELECT COALESCE(SUM(total_amount::numeric), 0) AS total FROM purchases ${makeDateConds('purchase_date', pup)}`, pup
+    `SELECT COALESCE(SUM(total_amount::numeric), 0) AS total FROM purchases
+      ${makeDateConds('purchase_date', pup) || 'WHERE TRUE'} AND branch_transfer_id IS NULL`, pup
   );
   const purchasesTotal = Number(purRows[0]?.total ?? 0);
 

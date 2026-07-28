@@ -168,7 +168,11 @@ router.get("/dashboard/recent-activity", async (req, res): Promise<void> => {
 // that are null on legacy rows (outlet sales).
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 function salesWhere(query: Record<string, unknown>): { conds: string[]; params: unknown[]; error?: string } {
-  const conds: string[] = [];
+  // Branch-transfer invoices live in `sales` so GST returns can see them, but
+  // they are statutory documents for moving own stock — not business revenue.
+  // Every sales analytic excludes them or the dashboard reports turnover the
+  // company never earned.
+  const conds: string[] = ['s.branch_transfer_id IS NULL'];
   const params: unknown[] = [];
   const from = typeof query.from === 'string' ? query.from : '';
   const to = typeof query.to === 'string' ? query.to : '';

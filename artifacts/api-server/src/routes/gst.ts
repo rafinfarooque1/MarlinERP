@@ -46,7 +46,7 @@ router.get("/gst/hsn-summary", async (req, res): Promise<void> => {
 
   const sp: any[] = [];
   const { rows: sales } = await pool.query(
-    `SELECT line_items FROM sales WHERE 1=1${rangeFilter("sale_date", fromDate, toDate, sp)}`, sp
+    `SELECT line_items FROM sales WHERE cancelled_at IS NULL${rangeFilter("sale_date", fromDate, toDate, sp)}`, sp
   );
   type HsnAgg = { hsnCode: string; taxRate: number; unit: string; quantity: number; taxableValue: number; cgst: number; sgst: number; igst: number; taxAmount: number };
   const outward = new Map<string, HsnAgg>();
@@ -70,7 +70,7 @@ router.get("/gst/hsn-summary", async (req, res): Promise<void> => {
 
   const pp: any[] = [];
   const { rows: purchases } = await pool.query(
-    `SELECT line_items FROM purchases WHERE 1=1${rangeFilter("purchase_date", fromDate, toDate, pp)}`, pp
+    `SELECT line_items FROM purchases WHERE cancelled_at IS NULL${rangeFilter("purchase_date", fromDate, toDate, pp)}`, pp
   );
   const matMap = await materialHsnMap();
   const inward = new Map<string, HsnAgg>();
@@ -122,8 +122,9 @@ router.get("/gst/gstr1", async (req, res): Promise<void> => {
 
   const sp: any[] = [];
   const { rows: sales } = await pool.query(
-    `SELECT id, invoice_number, sale_date, total_amount, tax_total, customer_id, line_items
-     FROM sales WHERE 1=1${rangeFilter("sale_date", fromDate, toDate, sp)}
+    `SELECT id, invoice_number, sale_date, total_amount, tax_total, customer_id, line_items,
+            branch_transfer_id, party_name, party_gstin, party_state
+     FROM sales WHERE cancelled_at IS NULL${rangeFilter("sale_date", fromDate, toDate, sp)}
      ORDER BY sale_date, id`, sp
   );
   const { rows: customers } = await pool.query(`SELECT id, name, gst_number, state FROM customers`);
@@ -153,16 +154,21 @@ router.get("/gst/gstr1", async (req, res): Promise<void> => {
   let b2bCount = 0, b2cCount = 0;
   for (const s of sales) {
     const cust: any = s.customer_id ? custMap.get(s.customer_id) : undefined;
-    const gstin = String(cust?.gst_number || "").trim();
-    const pos = String(cust?.state || "").trim() || homeState;
+    // A branch-transfer invoice has no customer record — the receiving branch's
+    // details are stamped on the invoice itself. Reading only customers here
+    // would leave the GSTIN blank and dump a registered B2B supply into B2CS.
+    const gstin = String(s.party_gstin || cust?.gst_number || "").trim();
+    const pos = String(s.party_state || cust?.state || "").trim() || homeState;
+    const partyName = String(s.party_name || cust?.name || "");
     const groups = rateGroups((s.line_items ?? []) as any[]);
     if (gstin) {
       b2bCount++;
       for (const g of groups) {
         b2b.push({
           invoiceNumber: s.invoice_number, saleDate: iso(s.sale_date),
-          customerName: cust?.name ?? "", gstin, placeOfSupply: pos,
+          customerName: partyName, gstin, placeOfSupply: pos,
           invoiceValue: round2(Number(s.total_amount)), ...g,
+          isBranchTransfer: s.branch_transfer_id != null,
         });
       }
     } else {
@@ -214,7 +220,7 @@ router.get("/gst/gstr3b", async (req, res): Promise<void> => {
 
   const sp: any[] = [];
   const { rows: sales } = await pool.query(
-    `SELECT line_items FROM sales WHERE 1=1${rangeFilter("sale_date", fromDate, toDate, sp)}`, sp
+    `SELECT line_items FROM sales WHERE cancelled_at IS NULL${rangeFilter("sale_date", fromDate, toDate, sp)}`, sp
   );
   let outTaxable = 0, outCgst = 0, outSgst = 0, outIgst = 0, nilTaxable = 0;
   for (const s of sales) {
@@ -235,7 +241,7 @@ router.get("/gst/gstr3b", async (req, res): Promise<void> => {
 
   const pp: any[] = [];
   const { rows: purchases } = await pool.query(
-    `SELECT line_items FROM purchases WHERE 1=1${rangeFilter("purchase_date", fromDate, toDate, pp)}`, pp
+    `SELECT line_items FROM purchases WHERE cancelled_at IS NULL${rangeFilter("purchase_date", fromDate, toDate, pp)}`, pp
   );
   let itcCgst = 0, itcSgst = 0, itcIgst = 0;
   for (const p of purchases) {
@@ -286,7 +292,7 @@ router.get("/gst/reconciliation", async (req, res): Promise<void> => {
   // Register side: line-item sums from sales & purchases
   const sp: any[] = [];
   const { rows: sales } = await pool.query(
-    `SELECT tax_total, line_items FROM sales WHERE 1=1${rangeFilter("sale_date", fromDate, toDate, sp)}`, sp
+    `SELECT tax_total, line_items FROM sales WHERE cancelled_at IS NULL${rangeFilter("sale_date", fromDate, toDate, sp)}`, sp
   );
   let regOutC = 0, regOutS = 0, regOutI = 0, salesTaxTotal = 0;
   for (const s of sales) {
@@ -298,7 +304,7 @@ router.get("/gst/reconciliation", async (req, res): Promise<void> => {
   }
   const pp: any[] = [];
   const { rows: purchases } = await pool.query(
-    `SELECT line_items FROM purchases WHERE 1=1${rangeFilter("purchase_date", fromDate, toDate, pp)}`, pp
+    `SELECT line_items FROM purchases WHERE cancelled_at IS NULL${rangeFilter("purchase_date", fromDate, toDate, pp)}`, pp
   );
   let regInpC = 0, regInpS = 0, regInpI = 0;
   for (const p of purchases) {

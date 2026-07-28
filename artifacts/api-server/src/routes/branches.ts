@@ -292,9 +292,14 @@ router.delete("/outlets/:id", requireModuleAction("Outlets", "delete"), async (r
     res.status(400).json({ error: "This outlet cannot be deleted because accounting entries already exist. Deleting it would affect financial history." });
     return;
   }
-  // Block if outlet has sales — fail closed (no catch)
+  // Block if outlet has sales — fail closed (no catch).
+  // Both columns are checked: customer sales stamp outlet_id, while branch
+  // transfer invoices stamp location_type/location_id and leave outlet_id null.
+  // Counting only outlet_id would let an outlet with transfer history be deleted.
   const { rows: [salCnt] } = await pool.query<{ count: string }>(
-    `SELECT COUNT(*) AS count FROM sales WHERE outlet_id = $1`, [id]
+    `SELECT COUNT(*) AS count FROM sales
+      WHERE outlet_id = $1
+         OR (COALESCE(location_type, '') = 'outlet' AND location_id = $1)`, [id]
   );
   if (Number(salCnt.count) > 0) {
     res.status(400).json({ error: "This outlet cannot be deleted because sales records exist. Deleting it would affect financial history." });

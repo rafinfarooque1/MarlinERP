@@ -374,6 +374,106 @@ function ProductionCostingSection() {
   );
 }
 
+// ─── GST transfer invoicing (server-persisted) ───────────────────────────────
+//
+// Deliberately a single on/off switch for the whole module. Whether a transfer
+// is taxable is decided automatically from the two GSTINs — same GSTIN is a
+// stock movement, different GSTIN in the same state is CGST+SGST, different
+// state is IGST. Letting anyone choose per transfer would mean choosing whether
+// to follow tax law, so that choice is not offered.
+
+function GstTransferSection() {
+  const [enabled, setEnabled] = useState(true);
+  const [prefix, setPrefix] = useState('BTR');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    customFetch<any>('/api/company/settings')
+      .then(s => {
+        setEnabled(s?.gstTransferInvoicing !== false);
+        setPrefix(String(s?.branchTransferPrefix ?? 'BTR'));
+      })
+      .catch(() => { /* keep defaults */ })
+      .finally(() => setLoading(false));
+  }, []);
+
+  const save = async () => {
+    const p = prefix.trim().toUpperCase();
+    if (!/^[A-Z0-9-]{1,10}$/.test(p)) {
+      toast.error('Invoice prefix must be 1–10 letters, digits or hyphens');
+      return;
+    }
+    setSaving(true);
+    try {
+      await customFetch('/api/company/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gstTransferInvoicing: enabled, branchTransferPrefix: p }),
+      });
+      setPrefix(p);
+      toast.success('GST transfer settings saved');
+    } catch (e: any) {
+      toast.error(e?.data?.error || e.message || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <div className="p-4 border-b border-border bg-muted/20 flex items-center gap-3">
+        <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center"><FileText className="w-4 h-4 text-primary" /></div>
+        <div>
+          <h3 className="font-semibold">GST Transfer Invoicing</h3>
+          <p className="text-xs text-muted-foreground">Tax invoices for stock moved between two of your own GST numbers</p>
+        </div>
+      </div>
+      {loading ? (
+        <div className="p-6 flex items-center gap-2 text-muted-foreground text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>
+      ) : (
+        <div className="divide-y divide-border">
+          <div className="p-4 flex items-center justify-between gap-4">
+            <div className="flex-1">
+              <label className="text-sm font-medium">Raise tax invoices for cross-GSTIN transfers</label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                A transfer between two different GST numbers is a taxable supply. With this on, each one raises a
+                tax invoice at the sending location and a purchase invoice at the receiving location, so the supply
+                appears in GSTR-1 and GSTR-3B. Transfers within the same GST number are never taxed.
+              </p>
+              <p className="text-xs text-amber-600 mt-1.5">
+                Turning this off keeps your books balanced but leaves cross-GSTIN transfers out of your GST returns.
+                Transfers already invoiced are not affected.
+              </p>
+            </div>
+            <Switch checked={enabled} onCheckedChange={setEnabled} />
+          </div>
+          <div className="p-4 flex items-center justify-between gap-4">
+            <div className="flex-1">
+              <label className="text-sm font-medium">Transfer invoice prefix</label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Transfer invoices use their own numbering series so they don't leave gaps in your customer invoice
+                register. Current format: <span className="font-mono">{prefix || 'BTR'}/2025-26/0001</span>
+              </p>
+            </div>
+            <Input
+              value={prefix}
+              onChange={e => setPrefix(e.target.value)}
+              maxLength={10}
+              className="w-28 font-mono uppercase"
+            />
+          </div>
+          <div className="p-4 flex justify-end">
+            <Button onClick={save} disabled={saving}>
+              {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> Save GST Transfer Settings</>}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Security: password policy (server-persisted) ────────────────────────────
 
 const POLICY_TOGGLES = [
@@ -608,6 +708,9 @@ export default function Settings() {
 
         {/* ── Production costing: default overhead % (server-persisted) ────── */}
         <ProductionCostingSection />
+
+        {/* ── GST transfer invoicing (server-persisted) ────────────────────── */}
+        <GstTransferSection />
 
         {/* ── Security: password policy (server-persisted) ─────────────────── */}
         <SecuritySection />

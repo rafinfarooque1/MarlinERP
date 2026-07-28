@@ -95,7 +95,8 @@ router.get("/reports/sales-register", requireModuleView("Sales"), async (req, re
             COALESCE(s.payment_status,'pending') AS payment_status
      FROM sales s
      LEFT JOIN customers c ON c.id = s.customer_id
-     WHERE ($1 = '' OR s.sale_date >= $1::date)
+     WHERE s.branch_transfer_id IS NULL
+       AND ($1 = '' OR s.sale_date >= $1::date)
        AND ($2 = '' OR s.sale_date <= $2::date)
        AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
        AND ($4 = 0 OR COALESCE(s.location_id, s.outlet_id) = $4)
@@ -155,7 +156,8 @@ router.get("/reports/sales-by-item", requireModuleView("Sales"), async (req, res
                          COALESCE((li->>'lineSubtotal')::numeric,0) + COALESCE((li->>'taxAmount')::numeric,0))) AS total,
             COUNT(DISTINCT s.id)                            AS invoices
      FROM sales s, jsonb_array_elements(s.line_items) li
-     WHERE ($1 = '' OR s.sale_date >= $1::date)
+     WHERE s.branch_transfer_id IS NULL
+       AND ($1 = '' OR s.sale_date >= $1::date)
        AND ($2 = '' OR s.sale_date <= $2::date)
        AND ${itemScopeCond}
      GROUP BY 1 ORDER BY 4 DESC NULLS LAST`,
@@ -207,7 +209,8 @@ router.get("/reports/sales-by-location", requireModuleView("Sales"), async (req,
             SUM(s.total_amount) AS total,
             SUM(COALESCE(s.amount_paid,0)) AS paid
      FROM sales s
-     WHERE ($1 = '' OR s.sale_date >= $1::date)
+     WHERE s.branch_transfer_id IS NULL
+       AND ($1 = '' OR s.sale_date >= $1::date)
        AND ($2 = '' OR s.sale_date <= $2::date)
        AND ${locScopeCond}
      GROUP BY 1, 2 ORDER BY 6 DESC NULLS LAST`,
@@ -274,7 +277,8 @@ router.get("/reports/discounts", requireModuleView("Sales"), async (req, res): P
        SELECT COALESCE(SUM(COALESCE((li->>'discount')::numeric, 0)), 0) AS item_discount
        FROM jsonb_array_elements(COALESCE(s.line_items, '[]'::jsonb)) AS li
      ) d
-     WHERE ($1 = '' OR s.sale_date >= $1::date)
+     WHERE s.branch_transfer_id IS NULL
+       AND ($1 = '' OR s.sale_date >= $1::date)
        AND ($2 = '' OR s.sale_date <= $2::date)
        AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
        AND ($4 = 0 OR COALESCE(s.location_id, s.outlet_id) = $4)
@@ -289,7 +293,8 @@ router.get("/reports/discounts", requireModuleView("Sales"), async (req, res): P
   const countArgs = args.slice(); // same params, no extra scope needed (scope already appended)
   const { rows: [cnt] } = await pool.query<any>(
     `SELECT COUNT(*) AS n FROM sales s
-     WHERE ($1 = '' OR s.sale_date >= $1::date)
+     WHERE s.branch_transfer_id IS NULL
+       AND ($1 = '' OR s.sale_date >= $1::date)
        AND ($2 = '' OR s.sale_date <= $2::date)
        AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
        AND ($4 = 0 OR COALESCE(s.location_id, s.outlet_id) = $4)
@@ -360,7 +365,8 @@ router.get("/reports/purchase-register", requireModuleView("Purchases"), async (
             COALESCE(p.tax_total,0) AS tax_total, p.total_amount
      FROM purchases p
      LEFT JOIN vendors v ON v.id = p.vendor_id
-     WHERE ($1 = '' OR p.purchase_date >= $1::date)
+     WHERE p.branch_transfer_id IS NULL
+       AND ($1 = '' OR p.purchase_date >= $1::date)
        AND ($2 = '' OR p.purchase_date <= $2::date)
        AND ($3 = 0 OR p.vendor_id = $3)
      ORDER BY p.purchase_date, p.id`,
@@ -405,7 +411,8 @@ router.get("/reports/purchases-by-vendor", requireModuleView("Purchases"), async
             SUM(p.total_amount) AS total
      FROM purchases p
      LEFT JOIN vendors v ON v.id = p.vendor_id
-     WHERE ($1 = '' OR p.purchase_date >= $1::date)
+     WHERE p.branch_transfer_id IS NULL
+       AND ($1 = '' OR p.purchase_date >= $1::date)
        AND ($2 = '' OR p.purchase_date <= $2::date)
      GROUP BY 1, 2 ORDER BY 6 DESC NULLS LAST`,
     [range.from, range.to],
@@ -447,7 +454,8 @@ router.get("/reports/purchases-by-material", requireModuleView("Purchases"), asy
             SUM(COALESCE((li->>'lineTotal')::numeric,0))     AS total,
             COUNT(DISTINCT p.id) AS bills
      FROM purchases p, jsonb_array_elements(p.line_items) li
-     WHERE ($1 = '' OR p.purchase_date >= $1::date)
+     WHERE p.branch_transfer_id IS NULL
+       AND ($1 = '' OR p.purchase_date >= $1::date)
        AND ($2 = '' OR p.purchase_date <= $2::date)
      GROUP BY 1, 2 ORDER BY 6 DESC NULLS LAST`,
     [range.from, range.to],
@@ -503,7 +511,8 @@ router.get("/reports/profitability", requireModuleView("Chart of Accounts"), asy
     `SELECT s.id, COALESCE(s.location_type,'outlet') AS location_type,
             COALESCE(s.location_id, s.outlet_id) AS location_id, s.line_items
      FROM sales s
-     WHERE ($1 = '' OR s.sale_date >= $1::date)
+     WHERE s.branch_transfer_id IS NULL
+       AND ($1 = '' OR s.sale_date >= $1::date)
        AND ($2 = '' OR s.sale_date <= $2::date)
        AND ${profitScopeCond}`,
     profitParams,
@@ -602,7 +611,8 @@ router.get("/reports/sales-stock-combined", requireModuleView("Sales"), async (r
               COALESCE(SUM(COALESCE(tax_total,0)),0) AS tax,
               COALESCE(SUM(COALESCE(amount_paid,0)),0) AS collected
        FROM sales
-       WHERE ($1 = '' OR sale_date >= $1::date) AND ($2 = '' OR sale_date <= $2::date)
+       WHERE branch_transfer_id IS NULL
+         AND ($1 = '' OR sale_date >= $1::date) AND ($2 = '' OR sale_date <= $2::date)
          AND ${aggScope}`,
       aggParams,
     ),
@@ -611,7 +621,8 @@ router.get("/reports/sales-stock-combined", requireModuleView("Sales"), async (r
               COALESCE(location_id, outlet_id) AS location_id,
               COUNT(*) AS invoices, SUM(total_amount) AS revenue
        FROM sales
-       WHERE ($1 = '' OR sale_date >= $1::date) AND ($2 = '' OR sale_date <= $2::date)
+       WHERE branch_transfer_id IS NULL
+         AND ($1 = '' OR sale_date >= $1::date) AND ($2 = '' OR sale_date <= $2::date)
          AND ${locScope}
        GROUP BY 1, 2 ORDER BY 4 DESC NULLS LAST`,
       locParams,
@@ -622,7 +633,8 @@ router.get("/reports/sales-stock-combined", requireModuleView("Sales"), async (r
               SUM(COALESCE((li->>'lineTotal')::numeric,
                            COALESCE((li->>'lineSubtotal')::numeric,0) + COALESCE((li->>'taxAmount')::numeric,0))) AS revenue
        FROM sales s, jsonb_array_elements(s.line_items) li
-       WHERE ($1 = '' OR s.sale_date >= $1::date) AND ($2 = '' OR s.sale_date <= $2::date)
+       WHERE s.branch_transfer_id IS NULL
+         AND ($1 = '' OR s.sale_date >= $1::date) AND ($2 = '' OR s.sale_date <= $2::date)
          AND ${topScope}
        GROUP BY 1 ORDER BY 3 DESC NULLS LAST LIMIT 10`,
       topParams,
@@ -679,6 +691,137 @@ router.get("/reports/sales-stock-combined", requireModuleView("Sales"), async (r
       stockValue: r2(Number(r.stock_value)),
     })),
     stockValueTotal: r2(stockRows.rows.reduce((s: number, r: any) => s + Number(r.stock_value), 0)),
+  });
+});
+
+// ── GST Transfers — cross-GSTIN stock movements that are taxable supplies ────
+//
+// Transfers between two of the company's own GSTINs are supplies under GST and
+// carry a real tax invoice, so they belong in GSTR-1 — but they are not sales.
+// This is the one report where both figures sit side by side, precisely because
+// everywhere else they must never be mixed: Customer Sales is what the business
+// earned, Branch Transfer Sales is stock moved between its own registrations,
+// and only the two together reconcile to the outward supplies in the return.
+router.get("/reports/gst-transfers", requireModuleView(["Reports", "GST Returns"]), async (req, res): Promise<void> => {
+  if ((req as any).employee?.branchType !== 'headoffice') {
+    res.status(403).json({ error: "GST reporting is available at Head Office only" });
+    return;
+  }
+  const range = parseRange(req);
+  if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD" }); return; }
+
+  const [{ rows: transfers }, { rows: [cust] }, maps] = await Promise.all([
+    // Driven from the transfer, not from `sales`, so a transfer still in transit
+    // or since rejected is visible with its document — an invoice raised and
+    // then credited is exactly what a reviewer needs to see.
+    pool.query<any>(
+      `SELECT t.id, t.challan_number, t.transfer_date, t.status,
+              t.from_type, t.from_id, t.to_type, t.to_id,
+              t.from_gstin, t.to_gstin, t.transfer_type, t.tax_type,
+              COALESCE(t.transfer_value, 0) AS taxable,
+              COALESCE(t.gst_amount, 0)     AS tax,
+              t.transfer_invoice_number, t.sale_id, t.purchase_id, t.credit_note_voucher_id,
+              t.document_mode,
+              s.cancelled_at
+         FROM stock_transfers t
+         LEFT JOIN sales s ON s.id = t.sale_id
+        -- EVERY cross-GSTIN transfer, invoiced or not. A taxable movement that
+        -- carries no invoice is the one thing a reviewer most needs to see, so
+        -- it is listed and quantified rather than filtered out.
+        WHERE COALESCE(t.transfer_type, 'internal') <> 'internal'
+          AND ($1 = '' OR t.transfer_date >= $1::date)
+          AND ($2 = '' OR t.transfer_date <= $2::date)
+        ORDER BY t.transfer_date DESC, t.id DESC`,
+      [range.from, range.to],
+    ),
+    pool.query<any>(
+      `SELECT COUNT(*) AS invoices,
+              COALESCE(SUM(COALESCE(subtotal, 0)), 0)  AS taxable,
+              COALESCE(SUM(COALESCE(tax_total, 0)), 0) AS tax,
+              COALESCE(SUM(total_amount), 0)           AS total
+         FROM sales
+        WHERE branch_transfer_id IS NULL AND cancelled_at IS NULL
+          AND ($1 = '' OR sale_date >= $1::date)
+          AND ($2 = '' OR sale_date <= $2::date)`,
+      [range.from, range.to],
+    ),
+    locationMaps(),
+  ]);
+
+  const rows = transfers.map((t: any) => {
+    const taxable = r2(Number(t.taxable));
+    const tax = r2(Number(t.tax));
+    const half = r2(tax / 2);
+    return {
+      id: Number(t.id),
+      challanNumber: t.challan_number,
+      invoiceNumber: t.transfer_invoice_number ?? null,
+      date: t.transfer_date,
+      status: t.status,
+      fromName: locName(maps, t.from_type, Number(t.from_id)),
+      toName: locName(maps, t.to_type, Number(t.to_id)),
+      fromGstin: t.from_gstin ?? "",
+      toGstin: t.to_gstin ?? "",
+      supplyType: t.transfer_type === 'interstate' ? 'Inter-State' : 'Intra-State',
+      taxType: t.tax_type ?? 'none',
+      taxable,
+      cgst: t.tax_type === 'cgst_sgst' ? half : 0,
+      sgst: t.tax_type === 'cgst_sgst' ? r2(tax - half) : 0,
+      igst: t.tax_type === 'igst' ? tax : 0,
+      tax,
+      total: r2(taxable + tax),
+      // A credited invoice is reported so nobody wonders where the number went;
+      // it is excluded from the totals below because the credit note reversed it.
+      creditNoted: t.credit_note_voucher_id != null || t.cancelled_at != null,
+      inwardBooked: t.purchase_id != null,
+      // Transfers that moved under the old voucher treatment (or with invoicing
+      // switched off) are taxable supplies with no invoice behind them. They
+      // cannot be added to the GST figures, so they are counted separately.
+      invoiced: String(t.document_mode ?? 'voucher') === 'invoice' && t.transfer_invoice_number != null,
+    };
+  });
+
+  const invoiced = rows.filter(r => r.invoiced);
+  const live = invoiced.filter(r => !r.creditNoted);
+  const sum = (f: (r: typeof rows[number]) => number) => r2(live.reduce((a, r) => a + f(r), 0));
+  const branchTransfer = {
+    invoices: live.length,
+    taxable: sum(r => r.taxable),
+    cgst: sum(r => r.cgst),
+    sgst: sum(r => r.sgst),
+    igst: sum(r => r.igst),
+    tax: sum(r => r.tax),
+    total: sum(r => r.total),
+  };
+  const uninvoiced = rows.filter(r => !r.invoiced);
+  const notInvoiced = {
+    transfers: uninvoiced.length,
+    taxable: r2(uninvoiced.reduce((a, r) => a + r.taxable, 0)),
+    tax: r2(uninvoiced.reduce((a, r) => a + r.tax, 0)),
+    total: r2(uninvoiced.reduce((a, r) => a + r.total, 0)),
+  };
+  const customerSales = {
+    invoices: Number(cust?.invoices ?? 0),
+    taxable: r2(Number(cust?.taxable ?? 0)),
+    tax: r2(Number(cust?.tax ?? 0)),
+    total: r2(Number(cust?.total ?? 0)),
+  };
+
+  res.json({
+    from: range.from, to: range.to,
+    customerSales,
+    branchTransfer,
+    combined: {
+      taxable: r2(customerSales.taxable + branchTransfer.taxable),
+      tax: r2(customerSales.tax + branchTransfer.tax),
+      total: r2(customerSales.total + branchTransfer.total),
+    },
+    creditNoted: {
+      invoices: invoiced.length - live.length,
+      total: r2(invoiced.filter(r => r.creditNoted).reduce((a, r) => a + r.total, 0)),
+    },
+    notInvoiced,
+    rows,
   });
 });
 

@@ -308,6 +308,13 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   const stdCash = idOf("STD-CASH"), stdBank = idOf("STD-BANK"), stdSales = idOf("STD-SALES"),
         stdDtx = idOf("STD-DTX"), stdPur = idOf("STD-PUR"), elecClr = idOf("STD-ELEC-CLR"),
         debtors = idOf("SYS-DEBTORS"), creditors = idOf("SYS-CREDITORS");
+  // Inter-branch transfer ledgers. A cross-GSTIN transfer raises a real tax
+  // invoice, but it is a movement of own stock, not turnover — so its value
+  // parks in the balance-sheet clearing ledger instead of Sales/Purchases,
+  // which is what keeps transfers out of the P&L entirely.
+  const branchTrf = idOf("STD-BRANCH-TRF"),
+        branchDebtor = idOf("STD-BRANCH-DEBTOR"),
+        branchCreditor = idOf("STD-BRANCH-CREDITOR");
 
   // Location → cash / sales / purchase ledger mapping. A location's purchases
   // debit its own purchase ledger, so each warehouse's buying shows separately
@@ -399,7 +406,8 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   const sp: any[] = [];
   const { rows: sales } = await pool.query(
     `SELECT id, invoice_number, sale_date, total_amount, tax_total, amount_paid,
-            payment_mode, customer_id, location_type, location_id, line_items
+            payment_mode, customer_id, location_type, location_id, line_items,
+            branch_transfer_id
      FROM sales WHERE 1=1${upTo("sale_date", sp)}`, sp
   );
   const spp: any[] = [];
@@ -420,10 +428,16 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     const net = round2(total - tax);
     const inv = s.invoice_number || `Sale #${s.id}`;
     const loc = locMap.get(`${s.location_type}:${s.location_id}`);
-    const salesLedger = loc?.sales_ledger_id ?? stdSales;
+    // A branch-transfer invoice credits the inter-branch clearing ledger, never
+    // a sales ledger. It replaces the dispatch journal voucher that used to be
+    // raised for the same transfer — both would double the revenue and the tax.
+    const isBranchTransfer = s.branch_transfer_id != null;
+    const salesLedger = isBranchTransfer
+      ? (branchTrf || stdSales)
+      : (loc?.sales_ledger_id ?? stdSales);
     const cashLedger = loc?.cash_ledger_id ?? stdCash;
 
-    push({ date: s.sale_date, ledgerId: salesLedger, debit: 0, credit: net, source: "sale", voucherNumber: s.invoice_number, description: `Sales ${inv}` });
+    push({ date: s.sale_date, ledgerId: salesLedger, debit: 0, credit: net, source: "sale", voucherNumber: s.invoice_number, description: isBranchTransfer ? `Branch transfer out — ${inv}` : `Sales ${inv}` });
     if (tax > 0) {
       const sLines = (s.line_items ?? []) as any[];
       let cg = 0, sg = 0, ig = 0;
@@ -440,6 +454,16 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
       } else {
         push({ date: s.sale_date, ledgerId: stdDtx, debit: 0, credit: tax, source: "sale", voucherNumber: s.invoice_number, description: `GST on ${inv}` });
       }
+    }
+
+    // Branch transfers are never settled in cash and never sit against a
+    // customer: the whole invoice is owed by the receiving branch. Note that a
+    // CANCELLED transfer invoice is still posted here on purpose — the credit
+    // note raised at rejection is what reverses it, and skipping the invoice
+    // as well would subtract the same amount twice.
+    if (isBranchTransfer) {
+      push({ date: s.sale_date, ledgerId: branchDebtor || debtors, debit: total, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Due from branch — ${inv}` });
+      continue;
     }
 
     let paidViaSp = 0;
@@ -470,18 +494,27 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   const pup: any[] = [];
   const { rows: purchases } = await pool.query(
     `SELECT id, vendor_id, purchase_date, invoice_number, total_amount, tax_total, line_items,
-            location_type, location_id
+            location_type, location_id, branch_transfer_id
      FROM purchases WHERE 1=1${upTo("purchase_date", pup)}`, pup
   );
   for (const p of purchases) {
     const amt = Number(p.total_amount);
     const bill = p.invoice_number || `Purchase #${p.id}`;
-    const vendLedger = byCode.get(`VEND-${p.vendor_id}`)?.id ?? creditors;
+    // The inward leg of a branch transfer: owed to the sending branch, and its
+    // value goes to the inter-branch clearing ledger rather than Purchases, so
+    // it offsets the outward leg instead of inflating cost of goods. Replaces
+    // the receive journal voucher for the same transfer.
+    const isBranchTransfer = p.branch_transfer_id != null;
+    const vendLedger = isBranchTransfer
+      ? (branchCreditor || creditors)
+      : (byCode.get(`VEND-${p.vendor_id}`)?.id ?? creditors);
     // A warehouse's bill debits that warehouse's own purchase ledger; Head
     // Office bills (and anything without a location) keep the standard one.
     const pLoc = locMap.get(`${p.location_type}:${p.location_id}`);
-    const purLedger = (p.location_type && p.location_type !== 'headoffice' && pLoc?.purchase_ledger_id)
-      ? Number(pLoc.purchase_ledger_id) : stdPur;
+    const purLedger = isBranchTransfer
+      ? (branchTrf || stdPur)
+      : ((p.location_type && p.location_type !== 'headoffice' && pLoc?.purchase_ledger_id)
+        ? Number(pLoc.purchase_ledger_id) : stdPur);
     const pLines = (p.line_items ?? []) as any[];
     let cg = 0, sg = 0, ig = 0;
     for (const li of pLines) { const h = lineTaxHeads(li); cg += h.cgst; sg += h.sgst; ig += h.igst; }
@@ -504,7 +537,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     } else {
       push({ date: p.purchase_date, ledgerId: purLedger, debit: amt, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}` });
     }
-    push({ date: p.purchase_date, ledgerId: vendLedger, debit: 0, credit: amt, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}` });
+    push({ date: p.purchase_date, ledgerId: vendLedger, debit: 0, credit: amt, source: "purchase", voucherNumber: p.invoice_number, description: isBranchTransfer ? `Due to branch — ${bill}` : `Purchase ${bill}` });
   }
 
   return postings;

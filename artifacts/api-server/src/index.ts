@@ -591,6 +591,12 @@ async function runMigrations() {
   const productionLedgers: [string, string, string, string, string, string][] = [
     ['Finished Goods Inventory', 'asset',   'STD-FG-INV',   'balance_sheet', 'SYS-CURA',   'Manufactured stock held at cost — debited when a production batch is recorded'],
     ['Production Cost Absorbed', 'expense', 'STD-PROD-ABS', 'profit_loss',   'SYS-DIREXP', 'Contra to purchases, wages and overhead for costs capitalised into manufactured stock'],
+    // Inter-branch transfer clearing. A transfer between two GSTINs raises a tax
+    // invoice, but it is not turnover — so its value must NOT land in Sales or
+    // Purchases. It parks here instead: credited when goods leave, debited when
+    // they land, netting to zero once both legs post. Sitting in the balance
+    // sheet is what keeps the P&L completely untouched by transfers.
+    ['Inter-Branch Transfer',    'liability', 'STD-BRANCH-TRF', 'balance_sheet', 'SYS-CURL', 'Value of taxable stock transferred between own GSTINs — credited on dispatch, debited on receipt, nets to zero'],
   ];
   for (const [name, type, code, section, parentCode, desc] of productionLedgers) {
     const { rows: [parent] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1`, [parentCode]);
@@ -602,6 +608,22 @@ async function runMigrations() {
         [name, type, code, section, parent.id, desc],
       );
     }
+  }
+
+  // The two inter-branch party ledgers were created with no parent, which left
+  // them outside every balance-sheet group — their balances fell into the
+  // statement's "difference" line instead of Current Assets/Liabilities. It
+  // never showed because no transfer had ever been taxable. Taxable transfers
+  // now post real balances here, so re-parent them.
+  for (const [code, parentCode] of [
+    ['STD-BRANCH-DEBTOR',   'SYS-CURA'],
+    ['STD-BRANCH-CREDITOR', 'SYS-CURL'],
+  ] as const) {
+    await pool.query(
+      `UPDATE account_ledgers SET parent_id = (SELECT id FROM account_ledgers WHERE code = $2)
+        WHERE code = $1 AND parent_id IS NULL`,
+      [code, parentCode],
+    );
   }
 
   // ── GST ledgers under Duty & Tax (Output = liability, Input = ITC asset) ──
@@ -1027,7 +1049,11 @@ async function runMigrations() {
                  ROUND((SUM((li->>'quantity')::numeric * (li->>'unitCost')::numeric)
                         / NULLIF(SUM((li->>'quantity')::numeric), 0))::numeric, 4) AS wavg
           FROM purchases p, jsonb_array_elements(p.line_items) li
-          WHERE li->>'materialType' = $1
+          -- Branch-transfer inward invoices carry the sending branch's own cost,
+          -- not a vendor price. Blending them into the purchase weighted average
+          -- would let a transfer restate a material's cost.
+          WHERE p.branch_transfer_id IS NULL
+            AND li->>'materialType' = $1
             AND (li->>'quantity')::numeric > 0
             AND (li->>'unitCost')::numeric > 0
           GROUP BY (li->>'materialId')::int
@@ -1303,6 +1329,67 @@ await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS transfer_
 await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS gst_amount        NUMERIC(14,2)`);
 await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS dispatch_voucher_id INTEGER`);
 await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS receive_voucher_id  INTEGER`);
+
+// ── GST transfer invoicing ────────────────────────────────────────────────────
+// A transfer between two different GSTINs is a taxable supply, so it needs a
+// real tax invoice at the sender and a purchase invoice at the receiver — GST
+// returns read the sales/purchases tables and cannot see journal vouchers.
+//
+// `document_mode` is the forward-only gate. Transfers raised before this
+// existed are stamped 'voucher' by the backfill below and keep their original
+// journal-voucher treatment forever; only new transfers get 'invoice'. NULL is
+// read as 'voucher' everywhere as a second line of defence.
+await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS document_mode           TEXT`);
+await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS transfer_invoice_number TEXT`);
+await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS sale_id                 INTEGER`);
+await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS purchase_id             INTEGER`);
+await pool.query(`ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS credit_note_voucher_id  INTEGER`);
+await pool.query(`UPDATE stock_transfers SET document_mode = 'voucher' WHERE document_mode IS NULL`);
+
+// Transfer invoices live in the sales/purchases tables so GSTR-1, GSTR-3B and
+// the HSN summary pick them up. `branch_transfer_id` is what every revenue and
+// spend report filters on to keep them out of business turnover — the user's
+// requirement is that these are statutory documents, not sales.
+for (const t of ['sales', 'purchases']) {
+  await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS branch_transfer_id INTEGER`);
+  await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS party_name  TEXT`);
+  await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS party_gstin TEXT`);
+  await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS party_state TEXT`);
+  await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_${t}_branch_transfer ON ${t} (branch_transfer_id) WHERE branch_transfer_id IS NOT NULL`);
+}
+// The receiving branch is not a vendor in the masters, so a transfer purchase
+// invoice has no vendor_id. Party details live in the party_* columns above.
+await pool.query(`ALTER TABLE purchases ALTER COLUMN vendor_id DROP NOT NULL`).catch(() => {});
+
+// Master switch plus a dedicated invoice series. Transfer invoices must not
+// consume customer invoice numbers — gaps in the customer sales register are
+// exactly what an auditor queries.
+await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS gst_transfer_invoicing   BOOLEAN NOT NULL DEFAULT TRUE`);
+await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS branch_transfer_prefix   TEXT    NOT NULL DEFAULT 'BTR'`);
+await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS branch_transfer_sequence INTEGER NOT NULL DEFAULT 0`);
+
+// The invoice series lives ON the settings row, so on a fresh database the row
+// has to exist before the first transfer is dispatched or the sequence has
+// nowhere to persist. The customer INV series has the same dependency.
+await pool.query(`
+  INSERT INTO company_settings (company_name)
+  SELECT 'My Company'
+   WHERE NOT EXISTS (SELECT 1 FROM company_settings)
+`);
+
+// Two transfers must never share a statutory invoice number. Scoped to transfer
+// rows because the customer series predates this and already contains duplicates
+// from earlier test data — a global unique index would fail to create.
+// The receiver's purchase invoice deliberately reuses the sender's number, so
+// this guard belongs on `sales` only.
+await pool.query(
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_branch_transfer_invoice_uq
+     ON sales (invoice_number)
+   WHERE branch_transfer_id IS NOT NULL AND invoice_number IS NOT NULL`,
+).catch((e) => {
+  console.warn('[migrate] transfer invoice uniqueness index not created:', e?.message ?? e);
+});
 
 // ── Outlet GST fields ─────────────────────────────────────────────────────────
 await pool.query(`ALTER TABLE outlets ADD COLUMN IF NOT EXISTS gstin       TEXT`);

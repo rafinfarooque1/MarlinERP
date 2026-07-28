@@ -6,7 +6,7 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   customFetch, useGetStockValuation, useGetExpiryReport, useGetReorderReport,
-  useGetMovementAnalysis, useListWarehouses, useListOutlets,
+  useGetMovementAnalysis, useListWarehouses, useListOutlets, useGstTransfersReport,
   type StockProductKind,
 } from '@workspace/api-client-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -19,7 +19,7 @@ import {
   periodLabel, type Col,
 } from '../shared';
 
-type InvReport = 'valuation' | 'near_expiry' | 'expired' | 'movement' | 'reorder' | 'transfers';
+type InvReport = 'valuation' | 'near_expiry' | 'expired' | 'movement' | 'reorder' | 'transfers' | 'gst_transfers';
 
 const today = () => new Date().toLocaleDateString('en-IN');
 
@@ -713,6 +713,153 @@ function TransfersReport() {
   );
 }
 
+// ── GST Transfers ─────────────────────────────────────────────────────────────
+// Transfers between two of the company's own GSTINs are taxable supplies: they
+// carry a real tax invoice and appear in GSTR-1. They are NOT sales, so every
+// other report excludes them — this is the one view that shows both figures, so
+// the outward supplies in the return can be reconciled.
+function GstTransfersReport() {
+  const range = useDateRange('month');
+  const { data, isLoading } = useGstTransfersReport({ from: range.from, to: range.to });
+  const rows = data?.rows ?? [];
+  const cs = data?.customerSales;
+  const bt = data?.branchTransfer;
+  const cb = data?.combined;
+  const cn = data?.creditNoted;
+  const ni = data?.notInvoiced;
+
+  const statusBadge = (r: (typeof rows)[number]) => {
+    if (!r.invoiced) return <Badge className="text-[10px] bg-slate-500/10 text-slate-500 border-slate-500/20">Not Invoiced</Badge>;
+    if (r.creditNoted) return <Badge className="text-[10px] bg-red-500/10 text-red-600 border-red-500/20">Credit Noted</Badge>;
+    if (r.status === 'completed') return <Badge className="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Received</Badge>;
+    if (r.status === 'in_transit') return <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">In Transit</Badge>;
+    return <Badge className="text-[10px] bg-muted/20 text-muted-foreground capitalize">{titleCase(r.status)}</Badge>;
+  };
+  const rowStatus = (r: (typeof rows)[number]) =>
+    !r.invoiced ? 'Not Invoiced' : r.creditNoted ? 'Credit Noted' : titleCase(r.status);
+
+  return (
+    <div className="space-y-4">
+      <RangeBar range={range}>
+        <ExportButtons
+          disabled={isLoading || rows.length === 0}
+          onCSV={() => downloadCSV('gst-transfers.csv', rows.map((r) => ({
+            Invoice: r.invoiceNumber ?? '—', Challan: r.challanNumber, Date: fmtDate(r.date),
+            From: r.fromName, 'From GSTIN': r.fromGstin, To: r.toName, 'To GSTIN': r.toGstin,
+            Supply: r.supplyType, Taxable: r.taxable, CGST: r.cgst, SGST: r.sgst, IGST: r.igst,
+            'Total GST': r.tax, 'Invoice Value': r.total,
+            Status: rowStatus(r), 'In GST Return': r.invoiced && !r.creditNoted ? 'Yes' : 'No',
+          })))}
+          onPDF={() => exportReportPdf({
+            title: 'GST Transfer Register',
+            subtitle: `Period: ${periodLabel(range.from, range.to)}`,
+            metaRows: [
+              ['Period', periodLabel(range.from, range.to)],
+              ['Customer Sales', pdfMoney(cs?.total ?? 0)],
+              ['Branch Transfer Sales', pdfMoney(bt?.total ?? 0)],
+              ['Total GST Transfer Value', pdfMoney(bt?.total ?? 0)],
+            ],
+            sections: [{
+              columns: [
+                { label: 'Invoice', width: 1.5 }, { label: 'Date' }, { label: 'From', width: 1.6 },
+                { label: 'To', width: 1.6 }, { label: 'Supply' },
+                { label: 'Taxable', align: 'right' }, { label: 'GST', align: 'right' },
+                { label: 'Value', align: 'right' }, { label: 'Status' },
+              ],
+              rows: rows.map((r) => [
+                r.invoiceNumber ?? r.challanNumber, fmtDate(r.date), r.fromName, r.toName, r.supplyType,
+                pdfMoney(r.taxable), pdfMoney(r.tax), pdfMoney(r.total), rowStatus(r),
+              ]),
+              totalsRow: ['TOTAL', '', '', '', '', pdfMoney(bt?.taxable ?? 0), pdfMoney(bt?.tax ?? 0), pdfMoney(bt?.total ?? 0), ''],
+            }],
+          })}
+        />
+      </RangeBar>
+
+      {/* The three figures the user needs kept apart: what was earned, what was
+          merely moved, and the tax-invoice value of the movement. */}
+      <div className="grid gap-3 md:grid-cols-3">
+        <div className="bg-card border border-border rounded-lg p-3">
+          <p className="text-xs text-muted-foreground mb-1">Customer Sales</p>
+          <p className="font-bold font-mono text-lg">{fmt(cs?.total)}</p>
+          <p className="text-[11px] text-muted-foreground mt-1">
+            {cs?.invoices ?? 0} invoices · taxable {fmt(cs?.taxable)} · GST {fmt(cs?.tax)}
+          </p>
+          <p className="text-[10px] text-muted-foreground mt-1.5">Real revenue — the only figure that reaches the P&amp;L and dashboards.</p>
+        </div>
+        <div className="bg-card border border-border rounded-lg p-3">
+          <p className="text-xs text-muted-foreground mb-1">Branch Transfer Sales</p>
+          <p className="font-bold font-mono text-lg text-primary">{fmt(bt?.total)}</p>
+          <p className="text-[11px] text-muted-foreground mt-1">
+            {bt?.invoices ?? 0} invoices · taxable {fmt(bt?.taxable)} · GST {fmt(bt?.tax)}
+          </p>
+          <p className="text-[10px] text-muted-foreground mt-1.5">Own stock moved between your GSTINs. Reported to GST, never counted as revenue.</p>
+        </div>
+        <div className="bg-card border border-border rounded-lg p-3">
+          <p className="text-xs text-muted-foreground mb-1">Total GST Transfer Value</p>
+          <p className="font-bold font-mono text-lg">{fmt(cb?.total)}</p>
+          <p className="text-[11px] text-muted-foreground mt-1">
+            taxable {fmt(cb?.taxable)} · GST {fmt(cb?.tax)}
+          </p>
+          <p className="text-[10px] text-muted-foreground mt-1.5">Customer sales + branch transfers — reconciles to outward supplies in GSTR-1.</p>
+        </div>
+      </div>
+
+      <SummaryCards cards={[
+        { label: 'CGST', value: fmt(bt?.cgst), tone: 'accent' },
+        { label: 'SGST', value: fmt(bt?.sgst), tone: 'accent' },
+        { label: 'IGST', value: fmt(bt?.igst), tone: 'accent' },
+        {
+          label: 'Credit Noted',
+          value: `${cn?.invoices ?? 0} · ${fmt(cn?.total)}`,
+          tone: (cn?.invoices ?? 0) > 0 ? 'warn' : 'default',
+        },
+      ]} />
+
+      {/* Taxable movements with no invoice behind them. Not added to any figure
+          above — shown because a silent gap is worse than a visible one. */}
+      {(ni?.transfers ?? 0) > 0 && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
+          <p className="text-sm font-medium text-amber-700 dark:text-amber-500">
+            {ni!.transfers} cross-GSTIN {ni!.transfers === 1 ? 'transfer carries' : 'transfers carry'} no tax invoice
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            Taxable value {fmt(ni!.taxable)} · GST {fmt(ni!.tax)} that is not in your returns. These moved before
+            transfer invoicing was switched on, or while it was off. They are listed below as “Not Invoiced” and are
+            excluded from every total above. Existing transfers are left as they were — only new ones are invoiced.
+          </p>
+        </div>
+      )}
+
+      <RTable
+        cols={[
+          { key: 'invoiceNumber', label: 'Tax Invoice', render: (r) => <span className="font-mono text-xs text-primary font-bold">{r.invoiceNumber ?? '—'}</span> },
+          { key: 'challanNumber', label: 'Challan', render: (r) => <span className="font-mono text-[11px] text-muted-foreground">{r.challanNumber}</span> },
+          { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
+          { key: 'fromName', label: 'From', render: (r) => (
+            <div><span className="font-medium">{r.fromName}</span><br /><span className="font-mono text-[10px] text-muted-foreground">{r.fromGstin}</span></div>
+          ) },
+          { key: 'toName', label: 'To', render: (r) => (
+            <div><span className="font-medium">{r.toName}</span><br /><span className="font-mono text-[10px] text-muted-foreground">{r.toGstin}</span></div>
+          ) },
+          { key: 'supplyType', label: 'Supply', render: (r) => (
+            <Badge variant="outline" className="text-[10px]">{r.supplyType}</Badge>
+          ) },
+          { key: 'taxable', label: 'Taxable', align: 'right', render: (r) => fmt(r.taxable) },
+          { key: 'cgst', label: 'CGST', align: 'right', render: (r) => fmt(r.cgst) },
+          { key: 'sgst', label: 'SGST', align: 'right', render: (r) => fmt(r.sgst) },
+          { key: 'igst', label: 'IGST', align: 'right', render: (r) => fmt(r.igst) },
+          { key: 'total', label: 'Invoice Value', align: 'right', render: (r) => <b>{fmt(r.total)}</b> },
+          { key: 'status', label: 'Status', render: statusBadge },
+        ] satisfies Col<(typeof rows)[number]>[]}
+        rows={rows} loading={isLoading} rowKey={(r) => r.id}
+        empty="No cross-GSTIN transfers in this period. Transfers within the same GSTIN are stock movements only and carry no tax."
+        footer={['TOTAL', '', '', '', '', '', fmt(bt?.taxable), fmt(bt?.cgst), fmt(bt?.sgst), fmt(bt?.igst), fmt(bt?.total), '']}
+      />
+    </div>
+  );
+}
+
 // ── Section root ──────────────────────────────────────────────────────────────
 export default function InventorySection() {
   const [report, setReport] = useState<InvReport>('valuation');
@@ -726,6 +873,7 @@ export default function InventorySection() {
           { value: 'movement', label: 'Slow / Dead Stock' },
           { value: 'reorder', label: 'Reorder Alerts' },
           { value: 'transfers', label: 'Transfer Register' },
+          { value: 'gst_transfers', label: 'GST Transfers' },
         ]}
         value={report} onChange={setReport}
       />
@@ -735,6 +883,7 @@ export default function InventorySection() {
       {report === 'movement' && <MovementReport />}
       {report === 'reorder' && <ReorderReport />}
       {report === 'transfers' && <TransfersReport />}
+      {report === 'gst_transfers' && <GstTransfersReport />}
     </div>
   );
 }

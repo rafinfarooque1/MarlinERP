@@ -148,7 +148,9 @@ router.get("/purchases", async (req, res): Promise<void> => {
   const paginated = 'page' in req.query || 'limit' in req.query;
   const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
 
-  const conds: string[] = [];
+  // Inward branch-transfer invoices are not vendor bills — they carry no vendor
+  // and must not appear in the purchase register or its spend totals.
+  const conds: string[] = ['p.branch_transfer_id IS NULL'];
   const params: unknown[] = [];
   if (q) {
     params.push(`%${q}%`);

@@ -7,7 +7,12 @@ import { logActivity } from "../lib/audit";
 import { pool } from "@workspace/db";
 import { consumeBatches, restoreBatches, creditBatch, updateAvgCostOnInbound, validateBatchOverride, type BatchBreakdownEntry } from "../lib/batches";
 import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
-import { resolveLocationGst, classifyTransfer, computeTransferGst, createDispatchVoucher, createReceiveVoucher, type TaxType, type GstTotals } from "../lib/gstTransfer";
+import {
+  resolveLocationGst, classifyTransfer, computeTransferGst, createDispatchVoucher, createReceiveVoucher,
+  buildTransferInvoiceLines, totalsFromLines, isTransferInvoicingEnabled, nextTransferInvoiceNumber,
+  createTransferSaleInvoice, createTransferPurchaseInvoice, createTransferCreditNote,
+  type TaxType, type GstTotals, type TransferInvoiceLine,
+} from "../lib/gstTransfer";
 import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
 import { deductMaterialAt, creditMaterialAt } from "../lib/materialStock";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
@@ -398,6 +403,9 @@ router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), as
     resolveLocationGst(pool, parsed.data.toType, parsed.data.toId),
   ]);
   const { transferType, taxType, isInterstate } = classifyTransfer(fromGst, toGst);
+  // Read once, outside the transaction: the switch decides which document this
+  // transfer gets, and it must not change halfway through.
+  const invoicingEnabled = await isTransferInvoicingEnabled(pool);
 
   // All stock effects happen in ONE transaction: manual batch picks are
   // validated server-side (ownership + availability + exact total), the source
@@ -410,6 +418,7 @@ router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), as
   const branchFn = await buildBranchMaps();
   const enrichedLines: any[] = [];
   const dispatchLedgerEntries: any[] = [];
+  let transferInvoiceNumber: string | null = null;
   try {
     await client.query("BEGIN");
 
@@ -623,12 +632,39 @@ router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), as
     }
     await writeStockLedger(client, dispatchLedgerEntries);
 
-    // Taxable inter-branch transfer: create source-side accounting JV inside the transaction
+    // ── Taxable inter-branch transfer: source-side document ─────────────────
+    // Same GSTIN ('internal') is a delivery challan only — no supply, no tax,
+    // no document. Different GSTIN is a taxable supply and gets EITHER a tax
+    // invoice (the default) OR the legacy journal voucher (module switched
+    // off), never both: the invoice and the voucher record the same postings,
+    // so raising both would double revenue, tax and the inter-branch balance.
     if (transferType !== 'internal') {
-      const itemLines = enrichedLines.filter((l: any) => (l.materialType ?? 'item') === 'item');
-      if (itemLines.length > 0) {
-        const gst = await computeTransferGst(pool, itemLines.map((l: any) => ({ itemId: l.itemId, quantity: l.quantity, costPrice: l.costPrice ?? 0 })), taxType);
-        if (gst.taxableValue > 0) {
+      // All dispatched kinds are priced, not just finished goods — a packing
+      // material crossing a GSTIN boundary is just as taxable.
+      const invLines = await buildTransferInvoiceLines(
+        client,
+        enrichedLines.map((l: any) => ({ itemId: l.itemId, quantity: l.quantity, costPrice: l.costPrice ?? 0, materialType: l.materialType ?? 'item' })),
+        taxType,
+      );
+      const gst = totalsFromLines(invLines);
+      if (gst.taxableValue > 0) {
+        if (invoicingEnabled) {
+          const invoiceNumber = await nextTransferInvoiceNumber(client);
+          const saleId = await createTransferSaleInvoice({
+            client, transferId: row.id, invoiceNumber,
+            transferDate: parsed.data.transferDate,
+            fromLocation: fromGst, toLocation: toGst,
+            lines: invLines, totals: gst, challanNumber,
+          });
+          await client.query(
+            `UPDATE stock_transfers
+                SET transfer_value = $1, gst_amount = $2, document_mode = 'invoice',
+                    transfer_invoice_number = $3, sale_id = $4
+              WHERE id = $5`,
+            [gst.taxableValue, gst.totalGst, invoiceNumber, saleId, row.id],
+          );
+          transferInvoiceNumber = invoiceNumber;
+        } else {
           const dispatchVoucherId = await createDispatchVoucher({
             client,
             challanNumber,
@@ -639,8 +675,16 @@ router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), as
             narration: `Inter-branch transfer ${challanNumber}: ${fromGst.name} → ${toGst.name}`,
             createdBy: null,
           });
+          // Stamp 'voucher' explicitly. The receive/reject legs read the stamp,
+          // not the current setting, so a transfer dispatched while invoicing is
+          // off must never be received as an invoice if someone flips the switch
+          // mid-flight. NULL is read as 'voucher' too, but leaving it NULL makes
+          // "never invoiced" indistinguishable from "predates the column".
           await client.query(
-            `UPDATE stock_transfers SET transfer_value = $1, gst_amount = $2, dispatch_voucher_id = $3 WHERE id = $4`,
+            `UPDATE stock_transfers
+                SET transfer_value = $1, gst_amount = $2, document_mode = 'voucher',
+                    dispatch_voucher_id = $3
+              WHERE id = $4`,
             [gst.taxableValue, gst.totalGst, dispatchVoucherId, row.id],
           );
         }
@@ -677,6 +721,9 @@ router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), as
     status: row.status,   // will be 'in_transit'
     notes: row.notes,
     createdAt: row.created_at,
+    transferType,
+    taxType,
+    transferInvoiceNumber,
   });
 });
 
@@ -715,7 +762,8 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"
       `UPDATE stock_transfers SET status = 'completed', approved_by = $1, approved_at = now()
        WHERE id = $2 AND status = 'in_transit'
        RETURNING id, from_type, from_id, to_type, to_id, line_items, challan_number,
-                 transfer_type, tax_type, transfer_date, transfer_value, gst_amount`,
+                 transfer_type, tax_type, transfer_date, transfer_value, gst_amount,
+                 document_mode, transfer_invoice_number`,
       [approvedBy || 'admin', id]
     );
     row = claim.rows[0];
@@ -886,31 +934,62 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"
       }
     }
 
-    // Taxable inter-branch transfer: create destination-side accounting JV inside the transaction
+    // ── Taxable inter-branch transfer: destination-side document ────────────
+    // Mirrors whichever document the dispatch raised. The stamp on the transfer
+    // decides, not the current setting — a transfer that left as a voucher must
+    // land as a voucher even if the module was switched on mid-flight, or the
+    // two legs would post to different ledgers and never offset.
     let receiveVoucherId: number | null = null;
+    let purchaseInvoiceId: number | null = null;
     if (row.transfer_type && row.transfer_type !== 'internal' && Number(row.transfer_value ?? 0) > 0) {
-      const toLocGst = await resolveLocationGst(pool, row.to_type, Number(row.to_id));
-      const gstAmt = Number(row.gst_amount ?? 0);
-      const storedGst: GstTotals = {
-        taxableValue: Number(row.transfer_value),
-        cgst:  row.tax_type === 'cgst_sgst' ? gstAmt / 2 : 0,
-        sgst:  row.tax_type === 'cgst_sgst' ? gstAmt / 2 : 0,
-        igst:  row.tax_type === 'igst'       ? gstAmt     : 0,
-        totalGst: gstAmt,
-        totalWithGst: Number(row.transfer_value) + gstAmt,
-      };
-      receiveVoucherId = await createReceiveVoucher({
-        client,
-        challanNumber: row.challan_number,
-        transferDate: row.transfer_date
-          ? new Date(row.transfer_date).toISOString().slice(0, 10)
-          : new Date().toISOString().slice(0, 10),
-        toLocation: toLocGst,
-        gst: storedGst,
-        taxType: (row.tax_type ?? 'none') as TaxType,
-        narration: `Inter-branch transfer ${row.challan_number} — received at ${toLocGst.name}`,
-        createdBy: approvedBy ?? null,
-      });
+      const txnDate = row.transfer_date
+        ? new Date(row.transfer_date).toISOString().slice(0, 10)
+        : new Date().toISOString().slice(0, 10);
+      const taxType = (row.tax_type ?? 'none') as TaxType;
+
+      if (String(row.document_mode ?? 'voucher') === 'invoice' && row.transfer_invoice_number) {
+        const [fromLocGst, toLocGst] = await Promise.all([
+          resolveLocationGst(pool, row.from_type, Number(row.from_id)),
+          resolveLocationGst(pool, row.to_type, Number(row.to_id)),
+        ]);
+        // Priced from the DISPATCHED lines so the inward invoice is the same
+        // document as the sender's outward one. Short receipts do not shrink it
+        // (see createTransferPurchaseInvoice).
+        const invLines: TransferInvoiceLine[] = await buildTransferInvoiceLines(
+          client,
+          dispatchedLines.map(l => ({ itemId: Number(l.itemId), quantity: Number(l.quantity), costPrice: Number(l.costPrice ?? 0), materialType: l.materialType ?? 'item' })),
+          taxType,
+        );
+        purchaseInvoiceId = await createTransferPurchaseInvoice({
+          client, transferId: id,
+          invoiceNumber: String(row.transfer_invoice_number),
+          transferDate: txnDate,
+          fromLocation: fromLocGst, toLocation: toLocGst,
+          lines: invLines, totals: totalsFromLines(invLines),
+          challanNumber: row.challan_number,
+        });
+      } else {
+        const toLocGst = await resolveLocationGst(pool, row.to_type, Number(row.to_id));
+        const gstAmt = Number(row.gst_amount ?? 0);
+        const storedGst: GstTotals = {
+          taxableValue: Number(row.transfer_value),
+          cgst:  row.tax_type === 'cgst_sgst' ? gstAmt / 2 : 0,
+          sgst:  row.tax_type === 'cgst_sgst' ? gstAmt / 2 : 0,
+          igst:  row.tax_type === 'igst'       ? gstAmt     : 0,
+          totalGst: gstAmt,
+          totalWithGst: Number(row.transfer_value) + gstAmt,
+        };
+        receiveVoucherId = await createReceiveVoucher({
+          client,
+          challanNumber: row.challan_number,
+          transferDate: txnDate,
+          toLocation: toLocGst,
+          gst: storedGst,
+          taxType,
+          narration: `Inter-branch transfer ${row.challan_number} — received at ${toLocGst.name}`,
+          createdBy: approvedBy ?? null,
+        });
+      }
     }
 
     // ── Short receipt: goods dispatched that never arrived ───────────────────
@@ -950,7 +1029,10 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"
       });
     }
 
-    await client.query(`UPDATE stock_transfers SET received_line_items = $1, receive_voucher_id = $2 WHERE id = $3`, [JSON.stringify(linesToCredit), receiveVoucherId, id]);
+    await client.query(
+      `UPDATE stock_transfers SET received_line_items = $1, receive_voucher_id = $2, purchase_id = $3 WHERE id = $4`,
+      [JSON.stringify(linesToCredit), receiveVoucherId, purchaseInvoiceId, id],
+    );
 
     // ── Stock ledger — inside the transaction so it rolls back with everything ─
     const approveLedgerLines = (linesToCredit as any[]).filter((l: any) => l.quantity > 0);
@@ -1010,7 +1092,9 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction(["HO Transfers"]
     const claim = await client.query(
       `UPDATE stock_transfers SET status = 'rejected', rejection_reason = $1
        WHERE id = $2 AND status = 'in_transit'
-       RETURNING id, from_type, from_id, to_type, to_id, line_items, challan_number`,
+       RETURNING id, from_type, from_id, to_type, to_id, line_items, challan_number,
+                 transfer_type, tax_type, transfer_date, transfer_value, gst_amount,
+                 document_mode, transfer_invoice_number, sale_id`,
       [rejectionReason || null, id]
     );
     row = claim.rows[0];
@@ -1074,6 +1158,44 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction(["HO Transfers"]
       return { txnType: 'transfer_in', materialType: mt, refId: Number(l.itemId), itemName: info.name, unit: info.unit, branchType: row.from_type, branchId: Number(row.from_id), branchName: fromName, qtyChange: Number(l.quantity), unitCost: Number(l.costPrice ?? 0), docType: 'stock_transfer', docId: id, notes: 'Transfer rejected — stock returned to source' };
     }));
 
+    // ── Rejected after a tax invoice was raised → credit note ────────────────
+    // The stock has gone back, but the invoice is a filed-or-filable document:
+    // it cannot just vanish. Reversing it needs its own numbered voucher, and
+    // the invoice has to stop feeding the GST returns. Voucher-mode transfers
+    // are untouched here — that hole is pre-existing and outside this change.
+    if (String(row.document_mode ?? 'voucher') === 'invoice' && row.sale_id && Number(row.transfer_value ?? 0) > 0) {
+      const [fromLocGst, toLocGst] = await Promise.all([
+        resolveLocationGst(pool, row.from_type, Number(row.from_id)),
+        resolveLocationGst(pool, row.to_type, Number(row.to_id)),
+      ]);
+      const gstAmt = Number(row.gst_amount ?? 0);
+      const taxable = Number(row.transfer_value);
+      const cnHalf = Math.round(gstAmt / 2 * 100) / 100;
+      const cnTotals: GstTotals = {
+        taxableValue: taxable,
+        cgst: row.tax_type === 'cgst_sgst' ? cnHalf : 0,
+        sgst: row.tax_type === 'cgst_sgst' ? Math.round((gstAmt - cnHalf) * 100) / 100 : 0,
+        igst: row.tax_type === 'igst' ? gstAmt : 0,
+        totalGst: gstAmt,
+        totalWithGst: Math.round((taxable + gstAmt) * 100) / 100,
+      };
+      const cnId = await createTransferCreditNote({
+        client, transferId: id, saleId: Number(row.sale_id),
+        invoiceNumber: String(row.transfer_invoice_number ?? `#${row.sale_id}`),
+        transferDate: row.transfer_date
+          ? new Date(row.transfer_date).toISOString().slice(0, 10)
+          : new Date().toISOString().slice(0, 10),
+        fromLocation: fromLocGst, toLocation: toLocGst,
+        totals: cnTotals, taxType: (row.tax_type ?? 'none') as TaxType,
+        challanNumber: row.challan_number,
+        reason: rejectionReason || null,
+        createdBy: null,
+      });
+      if (cnId) {
+        await client.query(`UPDATE stock_transfers SET credit_note_voucher_id = $1 WHERE id = $2`, [cnId, id]);
+      }
+    }
+
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK");
@@ -1128,6 +1250,11 @@ router.get("/stock/transfers/:id", async (req, res): Promise<void> => {
     taxType: r.tax_type ?? 'none',
     transferValue: r.transfer_value != null ? Number(r.transfer_value) : null,
     gstAmount: r.gst_amount != null ? Number(r.gst_amount) : null,
+    documentMode: r.document_mode ?? 'voucher',
+    transferInvoiceNumber: r.transfer_invoice_number ?? null,
+    saleId: r.sale_id ?? null,
+    purchaseId: r.purchase_id ?? null,
+    creditNoteVoucherId: r.credit_note_voucher_id ?? null,
     fromName: branchName(r.from_type, r.from_id),
     toName: branchName(r.to_type, r.to_id),
   });

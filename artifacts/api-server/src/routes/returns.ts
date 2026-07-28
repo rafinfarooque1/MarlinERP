@@ -1011,6 +1011,7 @@ router.get("/outstanding/collections", async (req: Request, res: Response) => {
        FROM sales s
        LEFT JOIN customers c ON c.id = s.customer_id
        WHERE (s.total_amount::numeric - COALESCE(s.amount_paid, 0)::numeric) > 0.009
+         AND s.branch_transfer_id IS NULL
          AND ${colScopeCond}
        ORDER BY s.sale_date ASC, s.id ASC`,
       colParams

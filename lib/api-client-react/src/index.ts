@@ -17,6 +17,7 @@ export * from "./location-expenses";
 export * from "./inventory-batches";
 export * from "./returns";
 export * from "./reports";
+export * from "./gst-transfers";
 export * from "./quick-search";
 export * from "./stock-ledger";
 export * from "./login-history";

@@ -32,3 +32,4 @@
 - [Verifying costing on live data](verifying-costing-on-live-data.md) — create+delete of a batch permanently lowers item avg cost; a balanced TB does NOT prove the test left no trace.
 - [Stock reservations](stock-reservations.md) — hold reduces available, in_transit does NOT (already deducted); lock the stock row inside the deducting txn; `hold` has no producer yet, keep it.
 - [Inventory valuation & ageing](inventory-valuation-ageing.md) — ONE at-cost valuation (3 kinds + in-transit, sender-owned) feeds report+dashboard+P&L; movement class = last OUTBOUND only.
+- [GST transfer invoicing](gst-transfer-invoicing.md) — cross-GSTIN transfers write REAL sales/purchase rows that replace the dispatch/receive JVs; every revenue/spend query must exclude branch_transfer_id.

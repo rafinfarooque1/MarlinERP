@@ -185,7 +185,9 @@ router.get("/sales", async (req, res): Promise<void> => {
     res.status(400).json({ error: "from/to must be YYYY-MM-DD" }); return;
   }
 
-  const conds: string[] = [];
+  // Branch-transfer tax invoices are not customer sales — they must never show
+  // in the sales register (see gstTransfer.ts).
+  const conds: string[] = ['s.branch_transfer_id IS NULL'];
   const params: unknown[] = [];
   if (q) {
     params.push(`%${q}%`);

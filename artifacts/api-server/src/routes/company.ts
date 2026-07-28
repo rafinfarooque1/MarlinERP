@@ -35,11 +35,12 @@ async function extraSettingsFields(id: number): Promise<{
   paymentTerms: string | null; invoiceFooter: string | null; productionOverheadPercent: number;
   passwordMinLength: number; passwordRequireUppercase: boolean; passwordRequireNumber: boolean; passwordRequireSpecial: boolean;
   generalSettings: Record<string, any> | null;
+  gstTransferInvoicing: boolean; branchTransferPrefix: string;
 }> {
   const { rows: [r] } = await pool.query<any>(
     `SELECT payment_terms, invoice_footer, production_overhead_percent,
             password_min_length, password_require_uppercase, password_require_number, password_require_special,
-            general_settings
+            general_settings, gst_transfer_invoicing, branch_transfer_prefix
      FROM company_settings WHERE id = $1`, [id]
   );
   return {
@@ -51,6 +52,8 @@ async function extraSettingsFields(id: number): Promise<{
     passwordRequireNumber: !!r?.password_require_number,
     passwordRequireSpecial: !!r?.password_require_special,
     generalSettings: r?.general_settings ?? null,
+    gstTransferInvoicing: r?.gst_transfer_invoicing !== false,
+    branchTransferPrefix: r?.branch_transfer_prefix ?? 'BTR',
   };
 }
 
@@ -99,6 +102,27 @@ router.patch("/company/settings", requireModuleAction("Settings", "edit"), async
     overheadUpdate = Math.round(v * 100) / 100;
   }
 
+  // GST transfer invoicing (raw columns). The switch controls WHETHER a
+  // cross-GSTIN transfer raises a tax invoice — it never changes how a transfer
+  // is classified: that is decided automatically from the two GSTINs and is not
+  // a user choice. Turning it off reverts to journal-voucher-only treatment,
+  // which keeps the books balanced but leaves the supply out of GSTR-1.
+  // Transfers already invoiced are untouched; each transfer remembers the
+  // document it was raised with.
+  const transferUpdates: Array<[column: string, value: boolean | string]> = [];
+  if ('gstTransferInvoicing' in req.body) {
+    const v = (req.body as any).gstTransferInvoicing;
+    if (typeof v !== 'boolean') { res.status(400).json({ error: 'gstTransferInvoicing must be a boolean' }); return; }
+    transferUpdates.push(['gst_transfer_invoicing', v]);
+  }
+  if ('branchTransferPrefix' in req.body) {
+    const v = (req.body as any).branchTransferPrefix;
+    if (typeof v !== 'string' || !/^[A-Za-z0-9-]{1,10}$/.test(v.trim())) {
+      res.status(400).json({ error: 'branchTransferPrefix must be 1–10 letters, digits or hyphens' }); return;
+    }
+    transferUpdates.push(['branch_transfer_prefix', v.trim().toUpperCase()]);
+  }
+
   // Password policy (raw columns) — minLength 6–32, three boolean complexity flags
   const policyUpdates: Array<[column: string, value: number | boolean]> = [];
   if ('passwordMinLength' in req.body) {
@@ -121,7 +145,7 @@ router.patch("/company/settings", requireModuleAction("Settings", "edit"), async
     }
   }
 
-  if (Object.keys(data).length === 0 && pdfUpdates.length === 0 && overheadUpdate === undefined && policyUpdates.length === 0 && generalSettingsUpdate === undefined) { res.status(400).json({ error: "No valid fields to update" }); return; }
+  if (Object.keys(data).length === 0 && pdfUpdates.length === 0 && overheadUpdate === undefined && policyUpdates.length === 0 && generalSettingsUpdate === undefined && transferUpdates.length === 0) { res.status(400).json({ error: "No valid fields to update" }); return; }
 
   const rows = await db.select().from(companySettingsTable).limit(1);
   let row;
@@ -142,6 +166,9 @@ router.patch("/company/settings", requireModuleAction("Settings", "edit"), async
     await pool.query(`UPDATE company_settings SET ${column} = $1 WHERE id = $2`, [value, row.id]);
   }
   if (policyUpdates.length > 0) invalidatePolicyCache();
+  for (const [column, value] of transferUpdates) {
+    await pool.query(`UPDATE company_settings SET ${column} = $1 WHERE id = $2`, [value, row.id]);
+  }
   if (generalSettingsUpdate !== undefined) {
     await pool.query(`UPDATE company_settings SET general_settings = $1 WHERE id = $2`, [JSON.stringify(generalSettingsUpdate), row.id]);
   }
