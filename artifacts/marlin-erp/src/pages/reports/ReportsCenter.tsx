@@ -37,25 +37,22 @@ export default function ReportsCenter() {
   // Derive active category from URL path: /reports/:cat
   const catFromUrl = location.split('/')[2] as Category | undefined;
 
-  // Category → module gating (module names must match the Permissions page)
-  const sales = usePermission('Sales');
-  const purchases = usePermission('Purchases');
-  const stock = usePermission('Stock');
-  const production = usePermission('Production');
-  const customers = usePermission('Customers');
-  const vendors = usePermission('Vendors');
-  const accounts = usePermission('Chart of Accounts');
+  // Reports is a single sidebar link, so it is a single permission row: seeing
+  // the page means seeing its categories. The categories used to be gated by
+  // seven unrelated module rows, which meant an admin could not actually grant
+  // "Reports" — they had to reverse-engineer which other modules it borrowed.
+  const perm = usePermission('page:/reports/sales');
 
   const visible: Record<Category, boolean> = {
-    sales: sales.canView,
-    purchases: purchases.canView,
-    inventory: stock.canView,
-    production: production.canView,
-    parties: customers.canView || vendors.canView,
-    financial: accounts.canView,
-    profitability: accounts.canView,
+    sales: perm.canView,
+    purchases: perm.canView,
+    inventory: perm.canView,
+    production: perm.canView,
+    parties: perm.canView,
+    financial: perm.canView,
+    profitability: perm.canView,
   };
-  const isLoading = sales.isLoading || accounts.isLoading;
+  const isLoading = perm.isLoading;
 
   const visibleCats = CATEGORIES.filter((c) => visible[c.value]);
   // Drive active category from URL; fall back to first permitted category
@@ -108,7 +105,7 @@ export default function ReportsCenter() {
             {active === 'inventory' && <InventorySection />}
             {active === 'production' && <ProductionSection />}
             {active === 'parties' && (
-              <PartiesSection canCustomers={customers.canView} canVendors={vendors.canView} />
+              <PartiesSection canCustomers={perm.canView} canVendors={perm.canView} />
             )}
             {active === 'financial' && <FinancialSection />}
             {active === 'profitability' && <ProfitabilitySection />}

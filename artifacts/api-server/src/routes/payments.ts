@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireModuleAction } from "../middleware/permissions";
+import { requireModuleAction, requireModuleView } from "../middleware/permissions";
 import { pool } from "@workspace/db";
 import { logActivity } from "../lib/audit";
 import { nextVoucherNumber } from "../lib/voucherNumber";
@@ -27,7 +27,8 @@ async function getOutletCashLedgerId(outletId: number): Promise<number | null> {
 }
 
 // ── GET /sales/:id/payments ────────────────────────────────────────────────────
-router.get("/sales/:id/payments", async (req, res): Promise<void> => {
+// Serves HO Sales and Payments pages (both under POS).
+router.get("/sales/:id/payments", requireModuleView("page:/sales/pos"), async (req, res): Promise<void> => {
   const saleId = parseInt(req.params.id, 10);
   if (!Number.isFinite(saleId)) { res.status(400).json({ error: "Invalid sale id" }); return; }
 
@@ -73,7 +74,7 @@ router.get("/sales/:id/payments", async (req, res): Promise<void> => {
 });
 
 // ── POST /sales/:id/payments ───────────────────────────────────────────────────
-router.post("/sales/:id/payments", requireModuleAction(["Sales", "Point of Sale", "Payments"], "add"), async (req, res): Promise<void> => {
+router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page:/outstanding"], "add"), async (req, res): Promise<void> => {
   const saleId = parseInt(req.params.id, 10);
   if (!Number.isFinite(saleId)) { res.status(400).json({ error: "Invalid sale id" }); return; }
 

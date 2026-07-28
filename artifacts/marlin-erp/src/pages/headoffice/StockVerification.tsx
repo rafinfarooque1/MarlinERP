@@ -382,7 +382,7 @@ function HistoryTab() {
 }
 
 export default function StockVerification() {
-  const perms = usePermission('Stock Verification');
+  const perms = usePermission('page:/headoffice/stock-verification');
   const [tab, setTab] = useState('new');
 
   if (!perms.isLoading && !perms.canView) {

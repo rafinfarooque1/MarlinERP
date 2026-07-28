@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireModuleAction } from "../middleware/permissions";
+import { requireModuleAction, requireModuleView, hasModuleAction, hasAnyModuleAction, type ModuleAction } from "../middleware/permissions";
 import { db, salesTable, outletsTable, customersTable, stockEntriesTable, itemsTable, itemPricesTable, companySettingsTable } from "@workspace/db";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import { CreateSaleBody, GetSaleParams, SetItemPriceBody, ListItemPricesQueryParams } from "@workspace/api-zod";
@@ -28,6 +28,18 @@ const router = Router();
  */
 const ITEM_ROWS_ONLY = sql`stock_entries.material_type = 'item'`;
 
+/**
+ * Who may sell past a customer's credit limit.
+ *
+ * These are the receivables pages — the people who chase the money are the
+ * people who get to decide it is safe to extend more of it. Deliberately NOT
+ * the Point of Sale page: edit rights there belong to every cashier, and
+ * credit control that any cashier can wave through is not credit control.
+ */
+const CREDIT_OVERRIDE_PAGES = ["page:/outstanding", "page:/returns"];
+const CREDIT_OVERRIDE_DENIED_MESSAGE =
+  'You are not authorized to override the credit limit. Ask a manager with edit access to the Outstanding page.';
+
 // ── Tax computation helpers ───────────────────────────────────────────────────
 
 function computeInvoiceNumber(prefix: string, fy: string, seq: number): string {
@@ -53,7 +65,8 @@ function computeLineTax(
 
 // ── Item Prices ───────────────────────────────────────────────────────────────
 
-router.get("/item-prices", async (req, res): Promise<void> => {
+// Serves Item Prices and HO Sales (POS) pages.
+router.get("/item-prices", requireModuleView(["page:/headoffice/item-price", "page:/sales/pos"]), async (req, res): Promise<void> => {
   const { pool: pgPool } = await import("@workspace/db");
   const qp = ListItemPricesQueryParams.safeParse(req.query);
 
@@ -96,7 +109,7 @@ router.get("/item-prices", async (req, res): Promise<void> => {
   res.json(result);
 });
 
-router.post("/item-prices", requireModuleAction("Item Prices", "add"), async (req, res): Promise<void> => {
+router.post("/item-prices", requireModuleAction("page:/headoffice/item-price", "add"), async (req, res): Promise<void> => {
   const { pool: pgPool } = await import("@workspace/db");
   const parsed = SetItemPriceBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
@@ -174,7 +187,8 @@ router.post("/item-prices", requireModuleAction("Item Prices", "add"), async (re
 // (YYYY-MM-DD), locationType+locationId, warehouseScope=<warehouseId>
 // (warehouse itself + its child outlets — replaces client-side filtering),
 // legacy outletId.
-router.get("/sales", async (req, res): Promise<void> => {
+// Serves HO Sales/Payments (POS), Returns and the Sales Dashboard.
+router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "page:/"]), async (req, res): Promise<void> => {
   const { pool: pgPool } = await import("@workspace/db");
   const paginated = 'page' in req.query || 'limit' in req.query;
   const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
@@ -288,7 +302,7 @@ router.get("/sales", async (req, res): Promise<void> => {
   }
 });
 
-router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), async (req, res): Promise<void> => {
+router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req, res): Promise<void> => {
   const parsed = CreateSaleBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
@@ -460,24 +474,12 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
     return;
   }
 
-  // Server-side authorization for the override flag: hierarchy level 1 (top
-  // authority) or an explicit Sales-module can_edit permission. The client
-  // gates the override dialog the same way, but the API must not trust it.
+  // Server-side authorization for the override flag. The dialog is offered to
+  // everyone, so this check is the only thing standing between a cashier and
+  // selling past a customer's credit limit.
   let overrideAllowed = false;
   if (isCreditControlled && overrideRequested) {
-    const hierarchyId = req.employee?.hierarchyId ?? -1;
-    const { rows: [h] } = await pgPool.query<{ level: number }>(
-      `SELECT level FROM hierarchies WHERE id = $1`, [hierarchyId]
-    );
-    if (Number(h?.level) === 1) {
-      overrideAllowed = true;
-    } else {
-      const { rows: [p] } = await pgPool.query<{ can_edit: boolean }>(
-        `SELECT can_edit FROM permissions WHERE hierarchy_id = $1 AND module = 'Sales' LIMIT 1`,
-        [hierarchyId]
-      );
-      overrideAllowed = p?.can_edit === true;
-    }
+    overrideAllowed = await hasModuleAction(req.employee?.hierarchyId, CREDIT_OVERRIDE_PAGES, "edit");
   }
 
   const txClient = await pgPool.connect();
@@ -525,7 +527,7 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
           };
           if (overrideRequested && !overrideAllowed) {
             res.status(403).json({
-              error: 'You are not authorized to override the credit limit. Ask a manager with Sales edit permission.',
+              error: CREDIT_OVERRIDE_DENIED_MESSAGE,
               code: 'CREDIT_OVERRIDE_FORBIDDEN',
               ...figures,
             });
@@ -726,7 +728,7 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
 });
 
 // ── Edit Sale ─────────────────────────────────────────────────────────────────
-router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit"), async (req, res): Promise<void> => {
+router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (req, res): Promise<void> => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid sale id" }); return; }
 
@@ -867,14 +869,10 @@ router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit")
       if (projectedOutstanding > editCreditLimit + 0.009) {
         const editOverrideRequested = (req.body as any).creditOverride === true;
         if (editOverrideRequested) {
-          const { rows: [ep] } = await pgPool.query<{ can_edit: boolean }>(
-            `SELECT can_edit FROM permissions WHERE hierarchy_id = $1 AND module = 'Sales' LIMIT 1`,
-            [req.employee!.hierarchyId]
-          );
-          const overrideAllowed = ep?.can_edit === true;
+          const overrideAllowed = await hasModuleAction(req.employee?.hierarchyId, CREDIT_OVERRIDE_PAGES, "edit");
           if (!overrideAllowed) {
             res.status(403).json({
-              error: 'You are not authorized to override the credit limit. Ask a manager with Sales edit permission.',
+              error: CREDIT_OVERRIDE_DENIED_MESSAGE,
               code: 'CREDIT_LIMIT_OVERRIDE_DENIED',
             });
             return;
@@ -1124,7 +1122,8 @@ router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit")
 // location_id are startup-migration columns invisible to drizzle — the old
 // drizzle version grouped warehouse sales under their fallback outlet_id,
 // losing them from the breakdown (bug #37).
-router.get("/sales/summary", async (req, res): Promise<void> => {
+// No mapped consumer; serves the POS and Dashboard sales figures.
+router.get("/sales/summary", requireModuleView(["page:/sales/pos", "page:/"]), async (req, res): Promise<void> => {
   // LBAC: scope summary to the employee's assigned location
   const { getUserDataScope, scopeSalesWhere } = await import("../lib/dataScope");
   const summEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
@@ -1183,10 +1182,39 @@ router.get("/sales/summary", async (req, res): Promise<void> => {
 // The backend verifies the sale exists (and thereby the customer linkage)
 // before issuing a token — the frontend never passes phone numbers or IDs
 // that could be tampered with into the PDF pipeline.
+//
+// This token IS the document: whoever holds it can fetch the invoice PDF for a
+// month without signing in. So the right to mint one is a document right, and
+// the caller says which one it is exercising. It used to require `add` on the
+// sales pages — recording a sale and releasing a copy of it are different
+// things, and the roles that print invoices are frequently not the ones that
+// write them.
+const SHARE_INTENT_ACTIONS: Record<string, ModuleAction[]> = {
+  download: ["download"],
+  print: ["print"],
+  // Reading it on screen, or sending the customer their copy, is satisfied by
+  // either right — both pages offer those buttons to both kinds of user.
+  preview: ["download", "print"],
+  share: ["download", "print"],
+};
+const SHARE_PAGES = ["page:/sales/pos", "page:/outstanding"];
+
 router.post("/sales/:id/share-token", async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid sale id" }); return; }
+
+  // An unknown or absent intent falls back to the widest requirement (either
+  // right), so an older client keeps working without being handed a new one.
+  const intent = String((req.body as any)?.intent ?? "preview");
+  const required = SHARE_INTENT_ACTIONS[intent] ?? SHARE_INTENT_ACTIONS.preview;
+  const mayShare = await hasAnyModuleAction(req.employee?.hierarchyId, SHARE_PAGES, required);
+  if (!mayShare) {
+    res.status(403).json({
+      error: `You don't have permission to ${required.join(" or ")} invoices`,
+    });
+    return;
+  }
   // LBAC: a share link is a public, month-long window onto one invoice, so only
   // someone who can see the sale may mint one. Scoped through the same rule the
   // sales list uses, otherwise a branch user could publish any invoice by id.
@@ -1201,7 +1229,7 @@ router.post("/sales/:id/share-token", async (req, res): Promise<void> => {
   res.json({ token, expiresAt });
 });
 
-router.get("/sales/:id", async (req, res): Promise<void> => {
+router.get("/sales/:id", requireModuleView("page:/sales/pos"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   const { pool: pgPool } = await import("@workspace/db");

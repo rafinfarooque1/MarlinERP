@@ -8,6 +8,7 @@ import { addMaterialBatches } from "./migrations/materialBatches";
 import { PasswordService } from "./lib/password";
 import { PRODUCT_KINDS, PRODUCT_TABLE, nextProductIdentity } from "./lib/productIdentity";
 import { nextVoucherNumber } from "./lib/voucherNumber";
+import { PAGE_PERM_KEYS, LEGACY_MODULE_TO_PAGES } from "./lib/pagePermissions";
 
 async function runMigrations() {
   // Existing migrations
@@ -1584,56 +1585,166 @@ await pool.query(`CREATE INDEX IF NOT EXISTS idx_receipts_location ON receipts (
   }
 }
 
-// ── Default-deny permission seeding ──────────────────────────────────────────
-// Ensures every existing non-level-1 hierarchy has an explicit permissions row
-// for every registered module, so the switch from default-allow to default-deny
-// does not accidentally lock out existing users.
-// New hierarchies created after this point start with no rows → denied until an
-// admin explicitly grants access on the Permissions page.
+// ── Print permission column ───────────────────────────────────────────────────
+// Download and print are separate rights: an accountant may need a PDF to email
+// out, while a warehouse clerk should only be able to put a sheet on the printer
+// and never carry a file off the premises.
+await pool.query(`ALTER TABLE permissions ADD COLUMN IF NOT EXISTS can_print BOOLEAN NOT NULL DEFAULT false`);
+
+// ── One permission row per (role, page) — enforced by the database ────────────
+// Without this, two server instances booting at once can both pass the
+// "does a row exist?" check and each insert one, leaving two rows for the same
+// role and page. The guards read permissions with json_object_agg(module, ...),
+// so a duplicate makes the effective rights whichever row the planner happened
+// to emit last — authorisation would stop being deterministic.
+//
+// Any pre-existing duplicates are merged rather than dropped: the surviving row
+// takes the OR of every duplicate's flags, so nobody loses access on upgrade.
+await pool.query(`
+  WITH dupes AS (
+    SELECT hierarchy_id, module, MIN(id) AS keep_id,
+           bool_or(can_view) v, bool_or(can_add) a, bool_or(can_edit) e,
+           bool_or(can_delete) d, bool_or(can_download) dl, bool_or(can_print) p
+      FROM permissions GROUP BY hierarchy_id, module HAVING COUNT(*) > 1
+  ), merged AS (
+    UPDATE permissions SET can_view = dupes.v, can_add = dupes.a, can_edit = dupes.e,
+           can_delete = dupes.d, can_download = dupes.dl, can_print = dupes.p
+      FROM dupes WHERE permissions.id = dupes.keep_id RETURNING permissions.id
+  )
+  DELETE FROM permissions p USING dupes
+   WHERE p.hierarchy_id = dupes.hierarchy_id AND p.module = dupes.module AND p.id <> dupes.keep_id
+`);
+await pool.query(`
+  CREATE UNIQUE INDEX IF NOT EXISTS permissions_hierarchy_module_uq
+    ON permissions (hierarchy_id, module)
+`);
+
+// ── Per-link permission rows ──────────────────────────────────────────────────
+// Permissions used to be grouped: one "Books" row governed Day Book, Cash Book,
+// Bank Book and Trial Balance together, so granting a cashier the Cash Book also
+// handed them the Trial Balance. Every sidebar link now gets its own row.
+//
+// Existing access is preserved rather than reset. For each link, the flags of
+// every old row that covered it are OR-ed together, so nobody loses anything
+// they had. Print starts equal to download, which is the closest existing right
+// and what the old UI implicitly allowed.
+//
+// The important safety property is the fallback direction: if a link has no old
+// row covering it at all, it is GRANTED, not denied. Getting this backwards
+// would lock administrators out of the Permissions page itself, and the only way
+// back in would be a hand-written SQL statement.
 {
-  const ALL_MODULES = [
-    'Point of Sale', 'Location Stock', 'HO Transfers', 'Location Expenses',
-    'Cash Balance', 'Units', 'Items', 'Production', 'Purchases',
-    'Stock', 'Stock Ledger', 'Inventory Reports', 'Stock Verification',
-    'Warehouses', 'Outlets', 'Item Prices', 'Sales', 'Customers',
-    'Vendors', 'Coupons', 'Employees', 'Attendance', 'Leave',
-    'Payroll', 'Hierarchy', 'Chart of Accounts', 'Ledger', 'Payments',
-    'Cash & Bank', 'Vouchers', 'Books', 'Expenses', 'GST Summary',
-    'GST Returns', 'Reconciliation', 'Accounts Cash Balance', 'Reports',
-    'Dashboard', 'Settings', 'Permissions', 'Login History',
-    // Additional modules used in backend guards
-    'Materials', 'Raw Materials', 'Stock Transfers', 'Location Transfers',
-    'Sales Dashboard', 'Profile',
-  ];
-  // Get all non-level-1 hierarchies
-  const { rows: hRows } = await pool.query(
-    `SELECT id FROM hierarchies WHERE level != 1`
+  const { rows: mlRows } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'per_link_permissions_v1'`,
   );
-  for (const h of hRows) {
-    for (const mod of ALL_MODULES) {
-      await pool.query(
-        `INSERT INTO permissions (hierarchy_id, module, can_view, can_add, can_edit, can_delete)
-         SELECT $1, $2, true, true, true, true
-         WHERE NOT EXISTS (
-           SELECT 1 FROM permissions WHERE hierarchy_id = $1 AND module = $2
-         )`,
-        [h.id, mod]
+  if (mlRows.length === 0) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const { rows: hRows } = await client.query(`SELECT id FROM hierarchies WHERE level != 1`);
+      let expanded = 0;
+      let granted = 0;
+
+      for (const h of hRows) {
+        const { rows: legacyRows } = await client.query(
+          `SELECT module, can_view, can_add, can_edit, can_delete, can_download
+             FROM permissions WHERE hierarchy_id = $1`,
+          [h.id],
+        );
+        const byModule = new Map(legacyRows.map((r: any) => [r.module, r]));
+
+        for (const pageKey of PAGE_PERM_KEYS) {
+          // Every old module whose pages include this link.
+          const sources = Object.entries(LEGACY_MODULE_TO_PAGES)
+            .filter(([, pages]) => pages.includes(pageKey))
+            .map(([legacy]) => byModule.get(legacy))
+            .filter(Boolean) as any[];
+
+          let flags;
+          if (sources.length === 0) {
+            // Nothing covered this link. Grant — see the note above on why the
+            // fallback must not be deny.
+            flags = { v: true, a: true, e: true, d: true, dl: true };
+            granted++;
+          } else {
+            flags = {
+              v:  sources.some(s => s.can_view === true),
+              a:  sources.some(s => s.can_add === true),
+              e:  sources.some(s => s.can_edit === true),
+              d:  sources.some(s => s.can_delete === true),
+              dl: sources.some(s => s.can_download === true),
+            };
+            expanded++;
+          }
+
+          await client.query(
+            `INSERT INTO permissions
+               (hierarchy_id, module, can_view, can_add, can_edit, can_delete, can_download, can_print)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+             ON CONFLICT (hierarchy_id, module) DO NOTHING`,
+            [h.id, pageKey, flags.v, flags.a, flags.e, flags.d, flags.dl],
+          );
+        }
+      }
+
+      // Drop the old grouped rows in the same transaction. Leaving them would be
+      // worse than untidy: the gap-fill below reads DISTINCT module from this
+      // table, so any survivor would be re-created for every hierarchy forever.
+      const del = await client.query(
+        `DELETE FROM permissions WHERE module <> ALL($1::text[])`,
+        [PAGE_PERM_KEYS],
       );
+
+      await client.query(`INSERT INTO migration_log (name) VALUES ('per_link_permissions_v1')`);
+      await client.query("COMMIT");
+      console.log(
+        `[migration] per_link_permissions_v1 — ${hRows.length} roles × ${PAGE_PERM_KEYS.length} pages: ` +
+        `${expanded} carried over, ${granted} granted (no old row covered them), ${del.rowCount} grouped rows removed`,
+      );
+    } catch (e) {
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {
+      client.release();
     }
   }
-  // Dynamic pass: also fill any gaps for modules that have rows for some
-  // hierarchies but not others (catches future module additions automatically).
-  await pool.query(`
-    INSERT INTO permissions (hierarchy_id, module, can_view, can_add, can_edit, can_delete)
-    SELECT h.id, all_mods.module, true, true, true, true
-    FROM hierarchies h
-    CROSS JOIN (SELECT DISTINCT module FROM permissions) all_mods
-    WHERE h.level != 1
-    AND NOT EXISTS (
-      SELECT 1 FROM permissions p
-      WHERE p.hierarchy_id = h.id AND p.module = all_mods.module
-    )
-  `);
+}
+
+// ── Default-deny permission seeding (ONE TIME) ───────────────────────────────
+// When enforcement switched from default-allow to default-deny, roles that had
+// never been configured would have lost everything overnight. This gives each
+// role that existed at that moment an explicit all-true row per page, so the
+// change is invisible to them and an admin can then take rights away.
+//
+// It must run exactly once, which is why it is behind migration_log. It used to
+// run on every boot, and that quietly destroyed the permission model: a role
+// created today with three pages granted came back from the next server restart
+// holding all forty-five, because the gap-fill treats "no row" as "needs an
+// all-true row". A role created after this point starts with no rows and is
+// therefore denied until an admin grants something — which is the whole promise
+// of per-page permissions.
+{
+  const { rows: seeded } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'permission_seed_existing_v1'`,
+  );
+  if (seeded.length === 0) {
+    const { rows: hRows } = await pool.query(
+      `SELECT id FROM hierarchies WHERE level != 1`
+    );
+    for (const h of hRows) {
+      for (const mod of PAGE_PERM_KEYS) {
+        await pool.query(
+          `INSERT INTO permissions (hierarchy_id, module, can_view, can_add, can_edit, can_delete, can_download, can_print)
+           VALUES ($1, $2, true, true, true, true, true, true)
+           ON CONFLICT (hierarchy_id, module) DO NOTHING`,
+          [h.id, mod]
+        );
+      }
+    }
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('permission_seed_existing_v1')`);
+    console.log(`[migration] permission_seed_existing_v1 — seeded ${hRows.length} pre-existing roles`);
+  }
 }
 
 // ── Negative stock prevention ─────────────────────────────────────────────────

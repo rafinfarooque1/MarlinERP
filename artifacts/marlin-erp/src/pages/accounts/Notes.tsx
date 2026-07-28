@@ -36,7 +36,7 @@ const today = () => new Date().toISOString().split('T')[0];
 
 function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
   const isCN = noteType === 'credit_note';
-  const perm = usePermission('Vouchers');
+  const perm = usePermission('page:/accounts/vouchers');
   const { data: vouchers = [], isLoading } = useListJournalVouchers({ type: noteType });
   const { data: allAccounts = [] } = useListAccountsFlat();
   const { data: customers = [] } = useListCustomers();
@@ -238,7 +238,7 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
 }
 
 export default function Notes() {
-  const perm = usePermission('Vouchers');
+  const perm = usePermission('page:/accounts/vouchers');
 
   if (!perm.isLoading && !perm.canView) {
     return (

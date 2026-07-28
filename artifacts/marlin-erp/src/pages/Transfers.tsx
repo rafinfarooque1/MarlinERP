@@ -354,7 +354,7 @@ function ApproveDialog({
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function Transfers() {
   // Single permission module controls all transfer access
-  const perm = usePermission('HO Transfers');
+  const perm = usePermission('page:/transfers');
   const permLoading = perm.isLoading;
   const canView     = perm.canView;
   const canAdd      = perm.canAdd;

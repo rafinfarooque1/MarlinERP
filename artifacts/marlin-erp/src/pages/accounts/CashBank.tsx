@@ -28,7 +28,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function CashBank() {
-  const perm = usePermission('Cash & Bank');
+  const perm = usePermission('page:/accounts/cash-bank');
   const { data: accounts = [], isLoading } = useListCashBankAccounts();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -82,9 +82,11 @@ export default function CashBank() {
             <p className="text-muted-foreground mt-1">Payment account balances and details</p>
           </div>
           <div className="flex gap-2">
+            {perm.canDownload && (
             <Button variant="outline" size="sm" onClick={() => downloadCSV('cash-bank.csv', filtered.map(a => ({ Name: a.name, Type: a.accountType, Bank: a.bankName || '', 'Account No': a.accountNumber || '', Balance: (a as any).currentBalance || 0 })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
+            )}
             <Button onClick={() => { form.reset(); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Account</Button>
           </div>
         </div>

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireModuleAction } from "../middleware/permissions";
+import { requireModuleAction, requireModuleView } from "../middleware/permissions";
 import { pool } from "@workspace/db";
 import { logActivity } from "../lib/audit";
 import { nextVoucherNumber } from "../lib/voucherNumber";
@@ -28,7 +28,8 @@ async function getLedgerBalance(client: any, ledgerId: number): Promise<number> 
 // ── GET /cash-in-outlet ───────────────────────────────────────────────────────
 // Returns cash balances scoped to the requesting employee's location.
 // Head-office sees all; warehouse sees their own + child outlets; outlet sees only itself.
-router.get("/cash-in-outlet", async (req, res): Promise<void> => {
+// Serves Cash Balance (accounts + sales) and Sales Expenses pages.
+router.get("/cash-in-outlet", requireModuleView(["page:/accounts/cash-in-outlet", "page:/sales/expenses"]), async (req, res): Promise<void> => {
   const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
   let allowedOutletIds: number[] | null = null;   // null = unrestricted
   let allowedWarehouseIds: number[] | null = null;
@@ -112,7 +113,7 @@ router.get("/cash-in-outlet", async (req, res): Promise<void> => {
 });
 
 // ── GET /cash-in-outlet/deposits ──────────────────────────────────────────────
-router.get("/cash-in-outlet/deposits", async (req, res): Promise<void> => {
+router.get("/cash-in-outlet/deposits", requireModuleView("page:/accounts/cash-in-outlet"), async (req, res): Promise<void> => {
   const { status, outletId } = req.query as Record<string, string | undefined>;
 
   const params: any[] = [];
@@ -187,7 +188,7 @@ router.get("/cash-in-outlet/deposits", async (req, res): Promise<void> => {
 });
 
 // ── POST /cash-in-outlet/deposits ─────────────────────────────────────────────
-router.post("/cash-in-outlet/deposits", requireModuleAction("Cash Balance", "add"), async (req, res): Promise<void> => {
+router.post("/cash-in-outlet/deposits", requireModuleAction("page:/accounts/cash-in-outlet", "add"), async (req, res): Promise<void> => {
   const { outletId, warehouseId, amount, depositDate, depositReference, destinationBankLedgerId, notes } = req.body as {
     outletId?: number;
     warehouseId?: number;
@@ -299,7 +300,7 @@ router.post("/cash-in-outlet/deposits", requireModuleAction("Cash Balance", "add
 });
 
 // ── POST /cash-in-outlet/deposits/:id/reconcile ───────────────────────────────
-router.post("/cash-in-outlet/deposits/:id/reconcile", requireModuleAction(["Cash Balance", "Reconciliation"], "edit"), async (req, res): Promise<void> => {
+router.post("/cash-in-outlet/deposits/:id/reconcile", requireModuleAction(["page:/accounts/cash-in-outlet", "page:/accounts/reconciliation"], "edit"), async (req, res): Promise<void> => {
   const depositId = parseInt(req.params.id, 10);
   if (!Number.isFinite(depositId)) { res.status(400).json({ error: "Invalid deposit id" }); return; }
 

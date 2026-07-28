@@ -45,7 +45,7 @@ function fmt(n: number) {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function Reconciliation() {
-  const perm = usePermission('Reconciliation');
+  const perm = usePermission('page:/accounts/reconciliation');
   const [tab, setTab] = useState<'pending' | 'batches'>('pending');
 
   if (!perm.isLoading && !perm.canView) {

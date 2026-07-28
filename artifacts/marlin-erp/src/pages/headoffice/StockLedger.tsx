@@ -50,7 +50,7 @@ function TxnBadge({ type }: { type: string }) {
 }
 
 export default function StockLedger() {
-  const perm = usePermission('Stock');
+  const perm = usePermission('page:/headoffice/stock-ledger');
   const [search,    setSearch]    = useState('');
   const [debSearch, setDebSearch] = useState('');
   const [from,      setFrom]      = useState('');
@@ -110,6 +110,7 @@ export default function StockLedger() {
               Immutable history of every inventory movement — purchase, production, transfer, return
             </p>
           </div>
+          {perm.canDownload && (
           <Button variant="outline" size="sm" onClick={() => downloadCSV('stock-ledger.csv', rows.map(r => ({
             Date: dtIN(r.createdAt),
             'Transaction Type': TXN_LABELS[r.txnType] ?? r.txnType,
@@ -126,6 +127,7 @@ export default function StockLedger() {
           })))}>
             <Download className="w-4 h-4 mr-2" /> Export
           </Button>
+          )}
         </div>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">

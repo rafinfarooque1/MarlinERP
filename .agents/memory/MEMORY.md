@@ -1,7 +1,7 @@
 - [Marlin ERP architecture](marlin-erp-arch.md) — Full ERP stack: api-server (Express+Drizzle), marlin-erp (React+Vite), shared libs; dev login = admin + DEFAULT_INITIAL_PASSWORD constant in api-server passwordPolicy.ts
 - [Security hardening](security-hardening.md) — bcryptjs, global requireAuth, rate limiting, mustChangePassword, HMAC v2 tokens (legacy REJECTED), requireModuleAction write guards. See file.
 - [API client hook names](api-client-hooks.md) — Many hook names differ from intuition; several entities are create-only (no update/delete). Always grep the generated file first.
-- [Permission system](permissions.md) — moduleRegistry.ts is the single source of truth for module names; unregistered guard/hook names are silently ungovernable; level 1 = always full access.
+- [Permission system](permissions.md) — one row per sidebar link keyed `page:<href>`; hierarchies/permissions GETs must stay unguarded; migration fallback must GRANT; duplicates break authz determinism.
 - [Custom API client hooks](custom-hooks.md) — New hooks go in lib/api-client-react/src/<name>.ts + export from index.ts; must run `pnpm tsc` in lib/api-client-react after adding files to generate .d.ts types.
 - [Item prices date range](item-prices-dates.md) — valid_from/valid_to added as text columns via startup migration in api-server/src/index.ts; ItemPrice type from generated code lacks these fields, use (ip as any).validFrom casts.
 - [Raw-migration columns](raw-migration-columns.md) — startup-migration columns are invisible to drizzle: db.select() silently drops them (fields read as 0/undefined); read AND write them via raw SQL.
@@ -14,7 +14,7 @@
 - [Codegen staleness trap](codegen-staleness.md) — cuts BOTH ways: codegen can flip optional→required, AND generated types under-declare what routes really return (auditing UI reads against them yields mass false positives).
 - [CREATE TABLE IF NOT EXISTS drift](migration-ddl-drift.md) — constraints added to an existing CREATE TABLE IF NOT EXISTS never apply to live DBs; a 42P10 is almost always this. Dedupe before adding a unique index.
 - [Sales settlement & discounts](sales-settlement.md) — cash/upi/card settle at creation; only 'credit' is credit-controlled; dues = total−paid; line discounts net into GST pre-tax, discount_total = bill-level coupon ONLY (post-tax).
-- [RBAC & branch scoping](rbac-branch-scoping.md) — branch_type 'headoffice' is a string, not null; backend default-ALLOWS missing perm rows; most GETs unguarded, scoping is client-side.
+- [RBAC & branch scoping](rbac-branch-scoping.md) — branch_type 'headoffice' is a string, not null; permissions are default-DENY (a missing row denies); branch scoping is still client-side.
 - [Sales location gate](location-context-gate.md) — /sales/* pages render blank (null) in fresh sessions until a location is picked at /sales; not a crash — navigate via the picker in tests.
 - [Stock Ledger](stock-ledger.md) — append-only audit table; write strategy varies by route (fire-and-forget vs inside txn); running balance via window function at query time.
 - [GST transfer classification](gst-transfer-classification.md) — auto-detects internal/intrastate/interstate from GSTIN; JVs created inside transactions at dispatch+approve; STD-BRANCH-DEBTOR/CREDITOR auto-provisioned.

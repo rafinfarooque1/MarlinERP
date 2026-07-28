@@ -3,6 +3,7 @@ import { db, pool, itemsTable, salesTable, stockEntriesTable, employeesTable, st
 import { count, sum, eq, and, sql, inArray } from "drizzle-orm";
 import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 import { stockValuation } from "../lib/valuation";
+import { requireModuleView } from "../middleware/permissions";
 
 const router = Router();
 
@@ -12,7 +13,7 @@ const router = Router();
  *  unrelated items and invent both value and alerts. */
 const ITEM_ROWS_ONLY = sql`stock_entries.material_type = 'item'`;
 
-router.get("/dashboard/summary", async (req, res): Promise<void> => {
+router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): Promise<void> => {
   const today = new Date().toISOString().split("T")[0];
 
   // ── COA ledger-based bank & cash balances ─────────────────────────────
@@ -119,7 +120,7 @@ router.get("/dashboard/summary", async (req, res): Promise<void> => {
   });
 });
 
-router.get("/dashboard/stock-alerts", async (req, res): Promise<void> => {
+router.get("/dashboard/stock-alerts", requireModuleView("page:/"), async (req, res): Promise<void> => {
   const alerts = await db
     .select({
       id: stockEntriesTable.id,
@@ -145,7 +146,7 @@ router.get("/dashboard/stock-alerts", async (req, res): Promise<void> => {
   })));
 });
 
-router.get("/dashboard/recent-activity", async (req, res): Promise<void> => {
+router.get("/dashboard/recent-activity", requireModuleView("page:/"), async (req, res): Promise<void> => {
   const { activityLogTable } = await import("@workspace/db");
   const { desc } = await import("drizzle-orm");
   const activities = await db.select().from(activityLogTable).orderBy(desc(activityLogTable.createdAt)).limit(15);
@@ -202,7 +203,7 @@ function salesWhere(query: Record<string, unknown>): { conds: string[]; params: 
   return { conds, params };
 }
 
-router.get("/dashboard/sales-trend", async (req, res): Promise<void> => {
+router.get("/dashboard/sales-trend", requireModuleView("page:/"), async (req, res): Promise<void> => {
   const f = salesWhere(req.query as Record<string, unknown>);
   if (f.error) { res.status(400).json({ error: f.error }); return; }
   const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
@@ -223,7 +224,7 @@ router.get("/dashboard/sales-trend", async (req, res): Promise<void> => {
   res.json(rows);
 });
 
-router.get("/dashboard/top-items", async (req, res): Promise<void> => {
+router.get("/dashboard/top-items", requireModuleView("page:/"), async (req, res): Promise<void> => {
   const f = salesWhere(req.query as Record<string, unknown>);
   if (f.error) { res.status(400).json({ error: f.error }); return; }
   const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
@@ -251,7 +252,7 @@ router.get("/dashboard/top-items", async (req, res): Promise<void> => {
 
 // Per-location sales breakdown for the dashboard (Phase 7). Includes
 // warehouse-located sales correctly (bug #37).
-router.get("/dashboard/sales-by-location", async (req, res): Promise<void> => {
+router.get("/dashboard/sales-by-location", requireModuleView("page:/"), async (req, res): Promise<void> => {
   const f = salesWhere(req.query as Record<string, unknown>);
   if (f.error) { res.status(400).json({ error: f.error }); return; }
   const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
@@ -281,7 +282,7 @@ router.get("/dashboard/sales-by-location", async (req, res): Promise<void> => {
   })));
 });
 
-router.get("/dashboard/production-trend", async (req, res): Promise<void> => {
+router.get("/dashboard/production-trend", requireModuleView("page:/"), async (req, res): Promise<void> => {
   const days = Math.min(Math.max(parseInt(req.query.days as string) || 30, 1), 365);
   const rows = await db.execute(sql`
     SELECT

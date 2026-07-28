@@ -9,6 +9,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Building2, Store } from 'lucide-react';
+import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
 import { paymentModeLabel } from '@/lib/paymentModes';
 import {
@@ -246,7 +247,7 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 // ── Register ──────────────────────────────────────────────────────────────────
-function RegisterReport({ range }: { range: RangeState }) {
+function RegisterReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
   const [loc, setLoc] = useState('all');
   const { data: outlets = [] } = useListOutlets();
   const { data: warehouses = [] } = useListWarehouses();
@@ -291,6 +292,7 @@ function RegisterReport({ range }: { range: RangeState }) {
           </SelectContent>
         </Select>
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('sales-register.csv', rows.map((r) => ({
             Invoice: r.invoiceNumber, Date: r.date, Location: r.locationName, 'Location Type': r.locationType,
@@ -337,7 +339,7 @@ function RegisterReport({ range }: { range: RangeState }) {
 }
 
 // ── Discounts ─────────────────────────────────────────────────────────────────
-function DiscountsReport({ range }: { range: RangeState }) {
+function DiscountsReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
   const [loc, setLoc] = useState('all');
   const { data: outlets = [] } = useListOutlets();
   const { data: warehouses = [] } = useListWarehouses();
@@ -384,6 +386,7 @@ function DiscountsReport({ range }: { range: RangeState }) {
           </SelectContent>
         </Select>
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('discount-report.csv', rows.map((r) => ({
             Invoice: r.invoiceNumber, Date: r.date, Location: r.locationName, Customer: r.customerName,
@@ -435,7 +438,7 @@ function DiscountsReport({ range }: { range: RangeState }) {
 }
 
 // ── By item ───────────────────────────────────────────────────────────────────
-function ByItemReport({ range }: { range: RangeState }) {
+function ByItemReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
   const { data, isLoading } = useSalesByItem({ from: range.from || undefined, to: range.to || undefined });
   const rows = data?.rows ?? [];
   const t = data?.totals;
@@ -444,6 +447,7 @@ function ByItemReport({ range }: { range: RangeState }) {
     <div className="space-y-4">
       <RangeBar range={range}>
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('sales-by-item.csv', rows.map((r) => ({
             Item: r.itemName, Unit: r.unit, Invoices: r.invoices, Qty: r.qty,
@@ -491,7 +495,7 @@ function ByItemReport({ range }: { range: RangeState }) {
 }
 
 // ── By location ───────────────────────────────────────────────────────────────
-function ByLocationReport({ range }: { range: RangeState }) {
+function ByLocationReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
   const { data, isLoading } = useSalesByLocation({ from: range.from || undefined, to: range.to || undefined });
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
@@ -534,6 +538,7 @@ function ByLocationReport({ range }: { range: RangeState }) {
     <div className="space-y-4">
       <RangeBar range={range}>
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('sales-by-location.csv', exportRows.map((r) => ({
             Location: r.locationName, Type: r.locationType === 'subtotal' ? 'SUBTOTAL' : r.locationType,
@@ -590,7 +595,7 @@ function ByLocationReport({ range }: { range: RangeState }) {
 }
 
 // ── Combined sales & stock handout ───────────────────────────────────────────
-function CombinedReport({ range }: { range: RangeState }) {
+function CombinedReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
   const { data, isLoading } = useSalesStockCombined({ from: range.from || undefined, to: range.to || undefined });
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
@@ -639,7 +644,7 @@ function CombinedReport({ range }: { range: RangeState }) {
   return (
     <div className="space-y-4">
       <RangeBar range={range}>
-        <ExportButtons disabled={isLoading || !data} onPDF={onPDF} />
+        <ExportButtons canDownload={canDownload} disabled={isLoading || !data} onPDF={onPDF} />
       </RangeBar>
 
       <SummaryCards cards={[
@@ -694,6 +699,7 @@ function CombinedReport({ range }: { range: RangeState }) {
 
 // ── Section root ──────────────────────────────────────────────────────────────
 export default function SalesSection() {
+  const { canDownload } = usePermission('page:/reports/sales');
   const range = useDateRange('month');
   const [report, setReport] = useState<SalesReport>('register');
   return (
@@ -708,11 +714,11 @@ export default function SalesSection() {
         ]}
         value={report} onChange={setReport}
       />
-      {report === 'register' && <RegisterReport range={range} />}
-      {report === 'byItem' && <ByItemReport range={range} />}
-      {report === 'byLocation' && <ByLocationReport range={range} />}
-      {report === 'discounts' && <DiscountsReport range={range} />}
-      {report === 'combined' && <CombinedReport range={range} />}
+      {report === 'register' && <RegisterReport range={range} canDownload={canDownload} />}
+      {report === 'byItem' && <ByItemReport range={range} canDownload={canDownload} />}
+      {report === 'byLocation' && <ByLocationReport range={range} canDownload={canDownload} />}
+      {report === 'discounts' && <DiscountsReport range={range} canDownload={canDownload} />}
+      {report === 'combined' && <CombinedReport range={range} canDownload={canDownload} />}
     </div>
   );
 }

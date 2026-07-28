@@ -6,6 +6,7 @@
  * The caller sends pre-assembled data as JSON; the server renders it with jsPDF.
  */
 import { Router } from "express";
+import { requireModuleAction } from "../middleware/permissions";
 import { generateChallanPdf } from "../services/challanPdf";
 import { generatePayslipPdf } from "../services/payslipPdf";
 import { generateReportPdf, type ReportPdfInput } from "../services/reportPdf";
@@ -34,7 +35,7 @@ async function companyHeader(): Promise<any> {
 const router = Router();
 
 // ── Delivery Challan ──────────────────────────────────────────────────────────
-router.post("/pdf/challan", async (req, res) => {
+router.post("/pdf/challan", requireModuleAction("page:/transfers", "download"), async (req, res) => {
   try {
     const buffer = generateChallanPdf(req.body);
     const safe = (req.body.challanNo || "Challan").replace(/[^A-Za-z0-9_-]+/g, "-");
@@ -51,7 +52,7 @@ router.post("/pdf/challan", async (req, res) => {
 // ── Generic tabular report (Reports Center exports) ──────────────────────────
 const MAX_REPORT_ROWS = 3000;
 
-router.post("/pdf/report", async (req, res) => {
+router.post("/pdf/report", requireModuleAction("page:/reports/sales", "download"), async (req, res) => {
   try {
     const body = req.body as Partial<ReportPdfInput>;
     if (!body || typeof body.title !== "string" || !body.title.trim()) {
@@ -113,7 +114,11 @@ router.post("/pdf/report", async (req, res) => {
 // selects which of the two expense surfaces the id belongs to — a Head Office
 // expense paid from a company cash/bank account, or a location expense paid out
 // of a warehouse's own cash.
-router.post("/pdf/expense-voucher", async (req, res) => {
+// Gated on PRINT, not download: both expense pages offer this as "Print payment
+// voucher" and nothing else calls it. Guarding it on download would block the
+// print-only clerk this permission exists for, and hand the file to a role that
+// was never shown the button.
+router.post("/pdf/expense-voucher", requireModuleAction(["page:/accounts/expenses", "page:/sales/expenses"], "print"), async (req, res) => {
   try {
     const source = String(req.body?.source ?? "");
     const id = Number(req.body?.id);
@@ -241,7 +246,7 @@ async function branchLabel(branchType?: string | null, branchId?: number | null)
   } catch { return branchType; }
 }
 
-router.post("/pdf/payslip", async (req, res) => {
+router.post("/pdf/payslip", requireModuleAction("page:/hr/payroll", "download"), async (req, res) => {
   try {
     const payrollId = Number(req.body?.payrollId);
     if (!Number.isInteger(payrollId) || payrollId <= 0) {

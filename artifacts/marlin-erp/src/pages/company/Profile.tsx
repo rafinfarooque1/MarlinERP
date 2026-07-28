@@ -36,7 +36,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function Profile() {
-  const perm = usePermission('Settings');
+  const perm = usePermission('page:/company/profile');
   const { data: profile, isLoading } = useGetCompanySettings();
   const updateMutation = useUpdateCompanySettings();
   const [saved, setSaved] = useState(false);
@@ -152,6 +152,7 @@ export default function Profile() {
                 </div>
               )}
             </div>
+            {perm.canEdit && (
             <div className="flex flex-col gap-2">
               <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" className="hidden" onChange={handleLogoChange} />
               <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
@@ -163,6 +164,7 @@ export default function Profile() {
                 </Button>
               )}
             </div>
+            )}
           </div>
         </div>
 
@@ -253,11 +255,13 @@ export default function Profile() {
                 </div>
               </Section>
 
+              {perm.canEdit && (
               <div className="flex justify-end">
                 <Button type="submit" size="lg" disabled={updateMutation.isPending} className={saved ? 'bg-emerald-600 hover:bg-emerald-700' : ''}>
                   {updateMutation.isPending ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> {saved ? 'Saved!' : 'Save Profile'}</>}
                 </Button>
               </div>
+              )}
             </form>
           </Form>
         )}

@@ -4,6 +4,7 @@
  */
 import { useState } from 'react';
 import { useProductionReports } from '@workspace/api-client-react';
+import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
 import {
   fmt, num, pdfMoney, fmtDate, periodLabel,
@@ -17,6 +18,7 @@ const money = (n: number | null) => (n === null || n === undefined ? '—' : fmt
 const pdfM = (n: number | null) => (n === null || n === undefined ? '-' : pdfMoney(n));
 
 export default function ProductionSection() {
+  const { canDownload } = usePermission('page:/reports/sales');
   const range = useDateRange('month');
   const [report, setReport] = useState<ProdReport>('output');
   const { data, isLoading } = useProductionReports(range.from || undefined, range.to || undefined);
@@ -49,6 +51,7 @@ export default function ProductionSection() {
       <RangeBar range={range}>
         {report === 'output' && (
           <ExportButtons
+            canDownload={canDownload}
             disabled={isLoading || output.length === 0}
             onCSV={() => downloadCSV('production-output.csv', output.map((r) => ({
               Item: r.itemName, Unit: r.unit, Batches: r.batchCount, 'Produced Qty': r.producedQty,
@@ -72,6 +75,7 @@ export default function ProductionSection() {
         )}
         {report === 'consumption' && (
           <ExportButtons
+            canDownload={canDownload}
             disabled={isLoading || consumption.length === 0}
             onCSV={() => downloadCSV('material-consumption.csv', consumption.map((r) => ({
               Material: r.materialName, Type: r.materialType === 'raw_material' ? 'Packing Material' : 'Material',
@@ -95,6 +99,7 @@ export default function ProductionSection() {
         )}
         {report === 'batches' && (
           <ExportButtons
+            canDownload={canDownload}
             disabled={isLoading || batches.length === 0}
             onCSV={() => downloadCSV('batch-costs.csv', batches.map((r) => ({
               'Batch No': r.batchNumber, Date: r.productionDate, Item: r.itemName, Unit: r.unit,
@@ -119,6 +124,7 @@ export default function ProductionSection() {
         )}
         {report === 'wastage' && (
           <ExportButtons
+            canDownload={canDownload}
             disabled={isLoading || wastage.length === 0}
             onCSV={() => downloadCSV('production-wastage.csv', wastage.map((r) => ({
               'Batch No': r.batchNumber, Date: r.productionDate, Item: r.itemName, Unit: r.unit,

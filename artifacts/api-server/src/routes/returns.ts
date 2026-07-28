@@ -105,7 +105,7 @@ const userOf = (req: Request): string | null =>
 // ═════════════════════════════════════════════════════════════════════════════
 
 // POST /sales-returns — body: { saleId, returnDate, reason?, lines: [{ lineIndex, quantity }] }
-router.post("/sales-returns", requireModuleAction(["Sales", "Point of Sale"], "add"), async (req: Request, res: Response) => {
+router.post("/sales-returns", requireModuleAction(["page:/returns", "page:/sales/pos"], "add"), async (req: Request, res: Response) => {
   const body = req.body ?? {};
   const saleId = Number(body.saleId);
   const returnDate = body.returnDate;
@@ -412,7 +412,7 @@ router.post("/sales-returns", requireModuleAction(["Sales", "Point of Sale"], "a
 });
 
 // GET /sales-returns — list (optionally ?saleId= for per-invoice history)
-router.get("/sales-returns", async (req: Request, res: Response) => {
+router.get("/sales-returns", requireModuleView("page:/returns"), async (req: Request, res: Response) => {
   try {
     const emp = (req as any).employee as { branchType: string; branchId: number } | undefined;
     const { getUserDataScope, scopeLocationTypeWhere } = await import("../lib/dataScope");
@@ -465,7 +465,7 @@ router.get("/sales-returns", async (req: Request, res: Response) => {
 // ═════════════════════════════════════════════════════════════════════════════
 
 // POST /purchase-returns — body: { purchaseId, returnDate, reason?, lines: [{ lineIndex, quantity }] }
-router.post("/purchase-returns", requireModuleAction(["Sales", "Purchases"], "add"), async (req: Request, res: Response) => {
+router.post("/purchase-returns", requireModuleAction(["page:/returns", "page:/production/purchase"], "add"), async (req: Request, res: Response) => {
   const body = req.body ?? {};
   const purchaseId = Number(body.purchaseId);
   const returnDate = body.returnDate;
@@ -728,7 +728,7 @@ router.post("/purchase-returns", requireModuleAction(["Sales", "Purchases"], "ad
 
 // GET /purchase-returns — list (optionally ?purchaseId=)
 // LBAC: purchases are headoffice-only; non-HO users get an empty list
-router.get("/purchase-returns", async (req: Request, res: Response) => {
+router.get("/purchase-returns", requireModuleView("page:/returns"), async (req: Request, res: Response) => {
   try {
     const purchRetEmp = (req as any).employee as { branchType: string } | undefined;
     if (purchRetEmp && purchRetEmp.branchType !== 'headoffice') {
@@ -796,7 +796,7 @@ const addDays = (iso: string, days: number): string =>
 // GET /outstanding/receivables — per-customer aging on unpaid invoice balances,
 // aged by days PAST DUE (due = sale date + customer credit days), with issued
 // credit notes shown as unallocated credits.
-router.get("/outstanding/receivables", requireModuleView(["Customers", "Sales"]), async (req: Request, res: Response) => {
+router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "page:/customers"]), async (req: Request, res: Response) => {
   try {
     const asOf = todayISO();
     const { getUserDataScope, scopeSalesWhere } = await import("../lib/dataScope");
@@ -892,7 +892,7 @@ router.get("/outstanding/receivables", requireModuleView(["Customers", "Sales"])
 // GET /outstanding/payables — per-vendor aging. Purchases have no amount_paid,
 // so vendor payments + debit notes are FIFO-allocated against bills oldest-first;
 // unallocated remainder ages by days since the bill date.
-router.get("/outstanding/payables", requireModuleView(["Vendors", "Sales"]), async (req: Request, res: Response) => {
+router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "page:/vendors"]), async (req: Request, res: Response) => {
   try {
     // LBAC: purchases/payables are Head Office only
     const payEmp = (req as any).employee as { branchType: string } | undefined;
@@ -995,7 +995,7 @@ router.get("/outstanding/payables", requireModuleView(["Vendors", "Sales"]), asy
 
 // GET /outstanding/collections — flat worklist of unpaid/partial invoices,
 // most-overdue first, ready for inline payment collection.
-router.get("/outstanding/collections", async (req: Request, res: Response) => {
+router.get("/outstanding/collections", requireModuleView("page:/outstanding"), async (req: Request, res: Response) => {
   try {
     const asOf = todayISO();
     const { getUserDataScope, scopeSalesWhere } = await import("../lib/dataScope");

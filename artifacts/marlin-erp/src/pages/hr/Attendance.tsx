@@ -75,7 +75,7 @@ type LeaveFormValues = z.infer<typeof leaveSchema>;
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function Attendance() {
-  const perm = usePermission('Attendance');
+  const perm = usePermission('page:/hr/attendance');
   const { data: user } = useGetMe();
   const isAdmin = (user as any)?.branchType === 'headoffice';
 
@@ -264,7 +264,7 @@ export default function Attendance() {
                 <span className="font-medium">{v}</span>
               </div>
             ))}
-            {isAdmin && (viewLeave.status === 'pending' || !viewLeave.status) && (
+            {isAdmin && perm.canEdit && (viewLeave.status === 'pending' || !viewLeave.status) && (
               <div className="flex gap-2 pt-2">
                 <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => handleApproveLeave(viewLeave.id, true)} disabled={approveMutation.isPending}>
                   <CheckCircle className="w-4 h-4 mr-2" /> Approve
@@ -296,6 +296,7 @@ export default function Attendance() {
               <p className="text-muted-foreground mt-1">Daily check-in / check-out register with location</p>
             </div>
             <div className="flex gap-2">
+              {perm.canDownload && (
               <Button variant="outline" size="sm" onClick={() =>
                 downloadCSV('attendance.csv', filtered.map((a: any) => ({
                   Employee: a.employeeName, Date: a.date,
@@ -307,6 +308,7 @@ export default function Attendance() {
                 })))}>
                 <Download className="w-4 h-4 mr-2" /> Export
               </Button>
+              )}
               <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-40 bg-card border-border" />
             </div>
           </div>
@@ -388,16 +390,20 @@ export default function Attendance() {
                     <TableCell><StatusBadge status={a.status} /></TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
+                        {perm.canAdd && (
                         <Button variant="outline" size="sm" className="h-7 text-xs gap-1"
                           disabled={!!a.checkIn || locLoading === a.employeeId || a.status === 'leave'}
                           onClick={() => handleMark(a.employeeId, 'checkin')}>
                           {locLoading === a.employeeId ? <Loader2 className="w-3 h-3 animate-spin" /> : <LogIn className="w-3 h-3" />} In
                         </Button>
+                        )}
+                        {perm.canAdd && (
                         <Button variant="outline" size="sm" className="h-7 text-xs gap-1"
                           disabled={!a.checkIn || !!a.checkOut || locLoading === a.employeeId}
                           onClick={() => handleMark(a.employeeId, 'checkout')}>
                           {locLoading === a.employeeId ? <Loader2 className="w-3 h-3 animate-spin" /> : <LogOut className="w-3 h-3" />} Out
                         </Button>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -429,9 +435,11 @@ export default function Attendance() {
             <p className="text-muted-foreground mt-1">Your daily attendance and leave records</p>
           </div>
           <div className="flex gap-2">
+            {perm.canAdd && (
             <Button onClick={() => { leaveForm.reset(); setApplyLeaveOpen(true); }}>
               <Plus className="w-4 h-4 mr-2" /> Apply Leave
             </Button>
+            )}
             <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-40 bg-card border-border" />
           </div>
         </div>
@@ -478,16 +486,20 @@ export default function Attendance() {
                   <TableCell><StatusBadge status={myRow.status} /></TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
+                      {perm.canAdd && (
                       <Button variant="outline" size="sm" className="h-7 text-xs gap-1"
                         disabled={!!myRow.checkIn || locLoading === myRow.employeeId || myRow.status === 'leave'}
                         onClick={() => myId && handleMark(myId, 'checkin')}>
                         {locLoading === myRow.employeeId ? <Loader2 className="w-3 h-3 animate-spin" /> : <LogIn className="w-3 h-3" />} Check In
                       </Button>
+                      )}
+                      {perm.canAdd && (
                       <Button variant="outline" size="sm" className="h-7 text-xs gap-1"
                         disabled={!myRow.checkIn || !!myRow.checkOut || locLoading === myRow.employeeId}
                         onClick={() => myId && handleMark(myId, 'checkout')}>
                         {locLoading === myRow.employeeId ? <Loader2 className="w-3 h-3 animate-spin" /> : <LogOut className="w-3 h-3" />} Check Out
                       </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>

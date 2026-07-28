@@ -147,7 +147,7 @@ interface SalesProps {
 }
 
 export default function Sales({ forceLocationType, forceLocationId, forceLocationName, permissionModule }: SalesProps = {}) {
-  const perm = usePermission(permissionModule ?? 'Sales');
+  const perm = usePermission(permissionModule ?? 'page:/sales/pos');
   const { data: outlets = [] } = useListOutlets();
   const { outletsEnabled } = useOutletsEnabled();
   // 'all' | 'warehouse:<id>' | 'outlet:<id>'
@@ -524,19 +524,27 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // The PDF is served over HTTPS with proper application/pdf headers and a
   // sanitized ASCII filename, which keeps antivirus software happy (blob:
   // URLs with no HTTP provenance were what triggered false positives before).
-  const requestInvoicePdfUrl = async (saleId: number, download: boolean): Promise<string> => {
+  //
+  // The intent travels with the request because the token is the document: the
+  // server grants a download link to a role with Download, a print link to a
+  // role with Print, and refuses the rest. Sending the wrong intent would ask
+  // for the wrong right, so each caller names what its button actually does.
+  const requestInvoicePdfUrl = async (
+    saleId: number,
+    intent: 'download' | 'print' | 'preview' | 'share',
+  ): Promise<string> => {
     const { token } = await customFetch<{ token: string; expiresAt: string }>(
       `/api/sales/${saleId}/share-token`,
-      { method: 'POST' },
+      { method: 'POST', body: JSON.stringify({ intent }), headers: { 'Content-Type': 'application/json' } },
     );
-    return `${window.location.origin}/api/public/invoices/${token}.pdf${download ? '?download=1' : ''}`;
+    return `${window.location.origin}/api/public/invoices/${token}.pdf${intent === 'download' ? '?download=1' : ''}`;
   };
 
   // Download: navigate to the attachment URL — the browser saves exactly one
   // file (Content-Disposition: attachment) and the page stays where it is.
   const handleDownloadPDF = async (sale: any) => {
     try {
-      window.location.assign(await requestInvoicePdfUrl(sale.id, true));
+      window.location.assign(await requestInvoicePdfUrl(sale.id, 'download'));
     } catch {
       toast.error('Unable to prepare the invoice PDF. Please try again.');
     }
@@ -547,7 +555,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const handlePreviewPDF = async (sale: any) => {
     const tab = window.open('', '_blank');
     try {
-      const url = await requestInvoicePdfUrl(sale.id, false);
+      const url = await requestInvoicePdfUrl(sale.id, 'preview');
       if (tab) tab.location.replace(url);
       else window.open(url, '_blank');
     } catch {
@@ -561,7 +569,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const handlePrintPDF = async (sale: any) => {
     const tab = window.open('', '_blank');
     try {
-      const url = await requestInvoicePdfUrl(sale.id, false);
+      const url = await requestInvoicePdfUrl(sale.id, 'print');
       if (!tab) { window.open(url, '_blank'); return; }
       tab.location.replace(url);
       // Same-origin PDF, so the print dialog can be triggered once it loads.
@@ -593,7 +601,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     const waTab = window.open('', '_blank'); // sync open — popup-blocker safe
 
     try {
-      const pdfUrl = await requestInvoicePdfUrl(sale.id, false);
+      const pdfUrl = await requestInvoicePdfUrl(sale.id, 'share');
       const cs = companySettings as any;
       const message = composeInvoiceMessage({
         sale,
@@ -758,7 +766,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(sale)} title="View"><Eye className="w-4 h-4" /></Button>
                       {perm.canEdit && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500" onClick={() => openEdit(sale)} title="Edit sale"><Pencil className="w-4 h-4" /></Button>}
                       {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => void handleDownloadPDF(sale)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>}
-                      {(sale as any).customerPhone && (
+                      {(perm.canDownload || perm.canPrint) && (sale as any).customerPhone && (
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-[#25D366] hover:text-[#128C7E] hover:bg-[#25D366]/10" onClick={() => void handleWhatsApp(sale)} title={`Send invoice to ${(sale as any).customerPhone} via WhatsApp`}>
                           <WhatsAppIcon className="w-4 h-4" />
                         </Button>
@@ -1262,12 +1270,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <FileDown className="w-3.5 h-3.5" /> PDF
                   </Button>
                 )}
-                {perm.canDownload && viewItem && (
+                {perm.canPrint && viewItem && (
                   <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void handlePrintPDF(viewItem)} title="Print invoice">
                     <Printer className="w-3.5 h-3.5" /> Print
                   </Button>
                 )}
-                {viewItem && (viewItem as any).customerPhone && (
+                {(perm.canDownload || perm.canPrint) && viewItem && (viewItem as any).customerPhone && (
                   <Button
                     variant="outline" size="sm"
                     className="gap-1.5 border-[#25D366] text-[#25D366] hover:bg-[#25D366]/10 hover:text-[#128C7E]"
@@ -1575,8 +1583,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               ) : null}
 
               <div className="flex flex-col gap-2">
-                {/* WhatsApp — only when customer has a phone number */}
-                {(viewItem as any)?.customerPhone && (
+                {/* WhatsApp — needs a phone number AND the right to release a
+                    copy of the invoice (Download or Print), because the share
+                    link is the invoice. */}
+                {(perm.canDownload || perm.canPrint) && (viewItem as any)?.customerPhone && (
                   <Button
                     className="w-full bg-[#25D366] hover:bg-[#128C7E] text-white border-0"
                     onClick={() => void handleWhatsApp(viewItem)}
@@ -1586,17 +1596,23 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <span className="ml-2 text-xs opacity-80 font-normal">{(viewItem as any).customerPhone}</span>
                   </Button>
                 )}
-                {perm.canDownload && (
+                {(perm.canDownload || perm.canPrint) && (
                   <div className="grid grid-cols-3 gap-2">
-                    <Button variant="outline" onClick={() => void handlePreviewPDF(viewItem)}>
-                      <Eye className="w-4 h-4 mr-2" /> Preview
-                    </Button>
-                    <Button variant="outline" onClick={() => void handleDownloadPDF(viewItem)}>
-                      <FileDown className="w-4 h-4 mr-2" /> Download
-                    </Button>
-                    <Button variant="outline" onClick={() => void handlePrintPDF(viewItem)}>
-                      <Printer className="w-4 h-4 mr-2" /> Print
-                    </Button>
+                    {perm.canDownload && (
+                      <Button variant="outline" onClick={() => void handlePreviewPDF(viewItem)}>
+                        <Eye className="w-4 h-4 mr-2" /> Preview
+                      </Button>
+                    )}
+                    {perm.canDownload && (
+                      <Button variant="outline" onClick={() => void handleDownloadPDF(viewItem)}>
+                        <FileDown className="w-4 h-4 mr-2" /> Download
+                      </Button>
+                    )}
+                    {perm.canPrint && (
+                      <Button variant="outline" onClick={() => void handlePrintPDF(viewItem)}>
+                        <Printer className="w-4 h-4 mr-2" /> Print
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>

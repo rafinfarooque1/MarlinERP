@@ -203,7 +203,7 @@ function PayStructureEditor({ employee }: { employee: any }) {
 type StatusFilter = 'all' | 'active' | 'inactive';
 
 export default function Employees() {
-  const perm = usePermission('Employees');
+  const perm = usePermission('page:/hr/employees');
   const { data: employees = [], isLoading } = useListEmployees();
   const { data: hierarchies = [] } = useListHierarchies();
   const { data: warehouses = [] } = useListWarehouses();

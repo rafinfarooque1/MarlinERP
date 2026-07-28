@@ -57,7 +57,7 @@ const OUTLET_COLOR    = 'hsl(var(--chart-2))';
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const dashPerm = usePermission('Dashboard');
+  const dashPerm = usePermission('page:/');
   const [salesPeriod, setSalesPeriod] = useState<30 | 90>(30);
   const [fromDate, setFromDate]   = useState('');
   const [toDate, setToDate]       = useState('');

@@ -29,7 +29,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function Leave() {
-  const perm = usePermission('Leave');
+  const perm = usePermission('page:/hr/attendance');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const { data: leaves = [], isLoading } = useListLeaves(statusFilter !== 'all' ? { status: statusFilter as any } : undefined);
   const [search, setSearch] = useState('');
@@ -121,10 +121,12 @@ export default function Leave() {
             <p className="text-muted-foreground mt-1">Apply, approve, and track employee leaves</p>
           </div>
           <div className="flex gap-2">
+            {perm.canDownload && (
             <Button variant="outline" size="sm" onClick={() => downloadCSV('leaves.csv', filtered.map(l => ({ Employee: l.employeeName, Type: l.leaveType, From: l.fromDate, To: l.toDate, Days: leaveDays(l), Status: l.status })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
-            <Button onClick={() => { form.reset(); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Apply Leave</Button>
+            )}
+            {perm.canAdd && <Button onClick={() => { form.reset(); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Apply Leave</Button>}
           </div>
         </div>
 
@@ -266,7 +268,7 @@ export default function Leave() {
                   <span className="font-medium">{v}</span>
                 </div>
               ))}
-              {(viewItem.status === 'pending' || !viewItem.status) && (
+              {perm.canEdit && (viewItem.status === 'pending' || !viewItem.status) && (
                 <div className="flex gap-2 pt-2">
                   <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => handleApprove(viewItem.id, true)} disabled={approveMutation.isPending}>
                     <CheckCircle className="w-4 h-4 mr-2" /> Approve

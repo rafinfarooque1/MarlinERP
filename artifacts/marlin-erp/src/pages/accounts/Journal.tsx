@@ -25,7 +25,7 @@ const today = () => new Date().toISOString().split('T')[0];
 const EMPTY_LINE: LineDraft = { ledgerId: 0, debit: '', credit: '' };
 
 export default function Journal() {
-  const perm = usePermission('Vouchers');
+  const perm = usePermission('page:/accounts/vouchers');
   const { data: vouchers = [], isLoading } = useListJournalVouchers({ type: 'journal' });
   const { data: allAccounts = [] } = useListAccountsFlat();
   const createMutation = useCreateJournalVoucher();

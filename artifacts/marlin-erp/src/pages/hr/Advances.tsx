@@ -120,7 +120,7 @@ function NewAdvanceDialog({ onClose }: { onClose: () => void }) {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function Advances() {
-  const perm = usePermission('Payroll');
+  const perm = usePermission('page:/hr/advances');
   const { data: advances = [], isLoading } = useListAdvances();
   const { data: cs } = useGetCompanySettings();
   const list = advances as any[];
@@ -285,6 +285,7 @@ export default function Advances() {
                       )}
                     </TableCell>
                     <TableCell>
+                      {perm.canDownload && (
                       <Button
                         variant="ghost" size="icon"
                         className="h-7 w-7 text-muted-foreground hover:text-primary"
@@ -300,6 +301,7 @@ export default function Advances() {
                       >
                         <FileDown className="h-3.5 w-3.5" />
                       </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}

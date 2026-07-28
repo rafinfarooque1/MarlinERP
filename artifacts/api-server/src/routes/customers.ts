@@ -62,7 +62,8 @@ async function creditFieldsRow(id: number): Promise<{ creditLimit: number; credi
 }
 
 // ── Customers ─────────────────────────────────────────────────────────────
-router.get("/customers", async (req, res): Promise<void> => {
+// Serves HO Sales (POS), Notes (Vouchers) and Customers pages.
+router.get("/customers", requireModuleView(["page:/sales/pos", "page:/accounts/vouchers", "page:/customers"]), async (req, res): Promise<void> => {
   const emp = (req as any).employee as { branchType: string; branchId: number } | undefined;
   if (!emp) { res.status(401).json({ error: "Authentication required" }); return; }
   const { getUserDataScope, scopeLocationTypeWhere } = await import("../lib/dataScope");
@@ -89,7 +90,7 @@ router.get("/customers", async (req, res): Promise<void> => {
   })));
 });
 
-router.post("/customers", requireModuleAction("Customers", "add"), async (req, res): Promise<void> => {
+router.post("/customers", requireModuleAction("page:/customers", "add"), async (req, res): Promise<void> => {
   const data = pickCustomer(req.body);
   if (!data.name || typeof data.name !== 'string') {
     res.status(400).json({ error: "name is required" });
@@ -132,7 +133,7 @@ router.post("/customers", requireModuleAction("Customers", "add"), async (req, r
   res.status(201).json({ ...row, ...credit, totalPurchases: Number(row.totalPurchases) });
 });
 
-router.get("/customers/:id", async (req, res): Promise<void> => {
+router.get("/customers/:id", requireModuleView("page:/customers"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   const [row] = await db.select().from(customersTable).where(eq(customersTable.id, id)).limit(1);
@@ -141,7 +142,7 @@ router.get("/customers/:id", async (req, res): Promise<void> => {
   res.json({ ...row, ...credit, totalPurchases: Number(row.totalPurchases) });
 });
 
-router.patch("/customers/:id", requireModuleAction("Customers", "edit"), async (req, res): Promise<void> => {
+router.patch("/customers/:id", requireModuleAction("page:/customers", "edit"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   const data = pickCustomer(req.body);
@@ -169,7 +170,7 @@ router.patch("/customers/:id", requireModuleAction("Customers", "edit"), async (
   res.json({ ...row, ...credit, totalPurchases: Number(row.totalPurchases) });
 });
 
-router.delete("/customers/:id", requireModuleAction("Customers", "delete"), async (req, res): Promise<void> => {
+router.delete("/customers/:id", requireModuleAction("page:/customers", "delete"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
 
@@ -208,7 +209,8 @@ router.delete("/customers/:id", requireModuleAction("Customers", "delete"), asyn
 });
 
 // ── Vendors ────────────────────────────────────────────────────────────────
-router.get("/vendors", async (req, res): Promise<void> => {
+// Serves Purchases, Notes (Vouchers), Vendors and Parties Reports pages.
+router.get("/vendors", requireModuleView(["page:/production/purchase", "page:/accounts/vouchers", "page:/vendors", "page:/reports/sales"]), async (req, res): Promise<void> => {
   const emp = (req as any).employee as { branchType: string; branchId: number } | undefined;
   if (!emp) { res.status(401).json({ error: "Authentication required" }); return; }
   const { getUserDataScope, scopeLocationTypeWhere } = await import("../lib/dataScope");
@@ -252,7 +254,7 @@ router.get("/vendors", async (req, res): Promise<void> => {
   })));
 });
 
-router.post("/vendors", requireModuleAction("Vendors", "add"), async (req, res): Promise<void> => {
+router.post("/vendors", requireModuleAction("page:/vendors", "add"), async (req, res): Promise<void> => {
   const data = pickVendor(req.body);
   if (!data.name || typeof data.name !== 'string') {
     res.status(400).json({ error: "name is required" });
@@ -291,7 +293,7 @@ router.post("/vendors", requireModuleAction("Vendors", "add"), async (req, res):
   res.status(201).json(row);
 });
 
-router.get("/vendors/:id", async (req, res): Promise<void> => {
+router.get("/vendors/:id", requireModuleView("page:/vendors"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   const [row] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, id)).limit(1);
@@ -299,7 +301,7 @@ router.get("/vendors/:id", async (req, res): Promise<void> => {
   res.json(row);
 });
 
-router.patch("/vendors/:id", requireModuleAction("Vendors", "edit"), async (req, res): Promise<void> => {
+router.patch("/vendors/:id", requireModuleAction("page:/vendors", "edit"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   const data = pickVendor(req.body);
@@ -316,7 +318,7 @@ router.patch("/vendors/:id", requireModuleAction("Vendors", "edit"), async (req,
   res.json(row);
 });
 
-router.delete("/vendors/:id", requireModuleAction("Vendors", "delete"), async (req, res): Promise<void> => {
+router.delete("/vendors/:id", requireModuleAction("page:/vendors", "delete"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
 
@@ -354,7 +356,7 @@ router.delete("/vendors/:id", requireModuleAction("Vendors", "delete"), async (r
 });
 
 // ── Customer ledger (sales history as Dr/Cr statement) ────────────────────
-router.get("/customers/:id/ledger", requireModuleView("Customers"), async (req, res): Promise<void> => {
+router.get("/customers/:id/ledger", requireModuleView(["page:/customers", "page:/outstanding"]), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { rows } = await pool.query<any>(
     `SELECT
@@ -419,7 +421,7 @@ router.get("/customers/:id/ledger", requireModuleView("Customers"), async (req, 
 });
 
 // ── Vendor ledger (purchases + payments as Dr/Cr statement) ───────────────
-router.get("/vendors/:id/ledger", requireModuleView("Vendors"), async (req, res): Promise<void> => {
+router.get("/vendors/:id/ledger", requireModuleView(["page:/vendors", "page:/outstanding"]), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
 
   const { rows: purchaseRows } = await pool.query<any>(
@@ -485,7 +487,7 @@ router.get("/vendors/:id/ledger", requireModuleView("Vendors"), async (req, res)
 });
 
 // ── Record vendor payment ─────────────────────────────────────────────────
-router.post("/vendors/:id/payment", requireModuleAction(["Vendors", "Payments"], "add"), async (req, res): Promise<void> => {
+router.post("/vendors/:id/payment", requireModuleAction(["page:/vendors", "page:/accounts/vouchers"], "add"), async (req, res): Promise<void> => {
   const vendorId = parseInt(req.params.id, 10);
   const { date, amount, cashBankLedgerId, narration } = req.body as {
     date: string; amount: number; cashBankLedgerId: number; narration?: string;
@@ -518,12 +520,12 @@ router.post("/vendors/:id/payment", requireModuleAction(["Vendors", "Payments"],
 });
 
 // ── Coupons ────────────────────────────────────────────────────────────────
-router.get("/coupons", async (_req, res): Promise<void> => {
+router.get("/coupons", requireModuleView("page:/coupons"), async (_req, res): Promise<void> => {
   const rows = await db.select().from(couponsTable).orderBy(couponsTable.id);
   res.json(rows.map((r) => ({ ...r, discountValue: Number(r.discountValue) })));
 });
 
-router.post("/coupons", requireModuleAction("Coupons", "add"), async (req, res): Promise<void> => {
+router.post("/coupons", requireModuleAction("page:/coupons", "add"), async (req, res): Promise<void> => {
   const parsed = CreateCouponBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const expiryDate = new Date();
@@ -536,7 +538,7 @@ router.post("/coupons", requireModuleAction("Coupons", "add"), async (req, res):
   res.status(201).json({ ...row, discountValue: Number(row.discountValue) });
 });
 
-router.patch("/coupons/:id", requireModuleAction("Coupons", "edit"), async (req, res): Promise<void> => {
+router.patch("/coupons/:id", requireModuleAction("page:/coupons", "edit"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   const parsed = UpdateCouponBody.safeParse(req.body);
@@ -548,7 +550,7 @@ router.patch("/coupons/:id", requireModuleAction("Coupons", "edit"), async (req,
   res.json({ ...row, discountValue: Number(row.discountValue) });
 });
 
-router.delete("/coupons/:id", requireModuleAction("Coupons", "delete"), async (req, res): Promise<void> => {
+router.delete("/coupons/:id", requireModuleAction("page:/coupons", "delete"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   await db.delete(couponsTable).where(eq(couponsTable.id, id));

@@ -1,0 +1,221 @@
+{
+  "standalone": [
+    {
+      "name": "Dashboard",
+      "href": "/"
+    }
+  ],
+  "groups": [
+    {
+      "name": "Operations",
+      "children": [
+        {
+          "name": "Point of Sale",
+          "href": "/sales/pos"
+        },
+        {
+          "name": "Stock Transfer",
+          "href": "/transfers"
+        },
+        {
+          "name": "Expenses",
+          "href": "/sales/expenses"
+        },
+        {
+          "name": "Cash Balance",
+          "href": "/accounts/cash-in-outlet"
+        },
+        {
+          "name": "Stock",
+          "href": "/headoffice/stock"
+        },
+        {
+          "name": "Customers",
+          "href": "/customers"
+        }
+      ]
+    },
+    {
+      "name": "Production",
+      "children": [
+        {
+          "name": "Batches",
+          "href": "/production/production"
+        },
+        {
+          "name": "Reports",
+          "href": "/production/reports"
+        },
+        {
+          "name": "Purchases",
+          "href": "/production/purchase"
+        },
+        {
+          "name": "Vendors",
+          "href": "/vendors"
+        }
+      ]
+    },
+    {
+      "name": "Inventory",
+      "children": [
+        {
+          "name": "Units",
+          "href": "/production/units"
+        },
+        {
+          "name": "Item Master",
+          "href": "/production/item-master"
+        },
+        {
+          "name": "Stock Ledger",
+          "href": "/headoffice/stock-ledger"
+        },
+        {
+          "name": "Reports",
+          "href": "/headoffice/inventory-reports"
+        },
+        {
+          "name": "Verification",
+          "href": "/headoffice/stock-verification"
+        },
+        {
+          "name": "Warehouses",
+          "href": "/headoffice/warehouses"
+        },
+        {
+          "name": "Outlets",
+          "href": "/headoffice/outlets"
+        },
+        {
+          "name": "Item Prices",
+          "href": "/headoffice/item-price"
+        }
+      ]
+    },
+    {
+      "name": "Sales",
+      "children": [
+        {
+          "name": "Returns",
+          "href": "/returns"
+        },
+        {
+          "name": "Outstanding",
+          "href": "/outstanding"
+        },
+        {
+          "name": "Coupons",
+          "href": "/coupons"
+        }
+      ]
+    },
+    {
+      "name": "HR",
+      "children": [
+        {
+          "name": "Employees",
+          "href": "/hr/employees"
+        },
+        {
+          "name": "Attendance",
+          "href": "/hr/attendance"
+        },
+        {
+          "name": "Payroll",
+          "href": "/hr/payroll"
+        },
+        {
+          "name": "Advances",
+          "href": "/hr/advances"
+        },
+        {
+          "name": "Hierarchy",
+          "href": "/hr/hierarchy"
+        }
+      ]
+    },
+    {
+      "name": "Accounts",
+      "children": [
+        {
+          "name": "Chart of Accounts",
+          "href": "/accounts/chart"
+        },
+        {
+          "name": "Ledger Statement",
+          "href": "/accounts/ledger"
+        },
+        {
+          "name": "Cash & Bank",
+          "href": "/accounts/cash-bank"
+        },
+        {
+          "name": "Vouchers",
+          "href": "/accounts/vouchers"
+        },
+        {
+          "name": "Day Book",
+          "href": "/accounts/day-book"
+        },
+        {
+          "name": "Cash Book",
+          "href": "/accounts/cash-book"
+        },
+        {
+          "name": "Bank Book",
+          "href": "/accounts/bank-book"
+        },
+        {
+          "name": "Trial Balance",
+          "href": "/accounts/trial-balance"
+        },
+        {
+          "name": "Expenses",
+          "href": "/accounts/expenses"
+        },
+        {
+          "name": "GST Summary",
+          "href": "/accounts/gst"
+        },
+        {
+          "name": "GST Returns",
+          "href": "/accounts/gst-returns"
+        },
+        {
+          "name": "Reconciliation",
+          "href": "/accounts/reconciliation"
+        },
+        {
+          "name": "Reports",
+          "href": "/reports/sales"
+        }
+      ]
+    },
+    {
+      "name": "Company",
+      "children": [
+        {
+          "name": "Settings",
+          "href": "/company/settings"
+        },
+        {
+          "name": "Company Profile",
+          "href": "/company/profile"
+        },
+        {
+          "name": "Audit Log",
+          "href": "/company/audit"
+        },
+        {
+          "name": "Permissions",
+          "href": "/company/permissions"
+        },
+        {
+          "name": "Login History",
+          "href": "/company/login-history"
+        }
+      ]
+    }
+  ]
+}

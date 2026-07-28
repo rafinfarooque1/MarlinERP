@@ -34,7 +34,7 @@ description: Branch type system, sidebar visibility rules, permission semantics,
 - After editing generated lib sources, rebuild dist (`npx tsc` in lib/api-zod and lib/api-client-react) or consumers typecheck against stale dist .d.ts.
 
 # Backend authorization semantics (verified in api-server/src/middleware/permissions.ts)
-- No permission row in `permissions` table → backend ALLOWS (default-allow). Frontend uses level-based defaults instead → UI hides what the API permits.
+- No permission row in `permissions` table → backend DENIES (default-deny, both ends). A missing row is an answer, not a gap; nothing may backfill it at boot.
 - Level-1 hierarchy bypasses all checks on both ends (consistent); branchGroups gating still applies to level-1 in the sidebar.
 - Most GET endpoints are unguarded (no requireModuleView); only some reports/ledgers/outstanding/login-history GETs are guarded.
 - Backend guard keys include stale modules not in the frontend registry: 'Materials', 'Raw Materials', 'Cash & Bank' (DB permissions rows also exist for these + 'Profile').

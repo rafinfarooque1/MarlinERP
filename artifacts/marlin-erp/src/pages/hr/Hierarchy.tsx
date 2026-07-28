@@ -26,7 +26,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function Hierarchy() {
-  const perm = usePermission('Hierarchy');
+  const perm = usePermission('page:/hr/hierarchy');
   const { data: hierarchies = [], isLoading } = useListHierarchies();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -77,10 +77,12 @@ export default function Hierarchy() {
             <p className="text-muted-foreground mt-1">Roles and designations structure</p>
           </div>
           <div className="flex gap-2">
+            {perm.canDownload && (
             <Button variant="outline" size="sm" onClick={() => downloadCSV('hierarchy.csv', filtered.map(h => ({ Name: h.name, Level: h.level, Description: h.description || '' })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
-            <Button onClick={() => { form.reset(); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Role</Button>
+            )}
+            {perm.canAdd && <Button onClick={() => { form.reset(); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Role</Button>}
           </div>
         </div>
 

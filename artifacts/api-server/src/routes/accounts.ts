@@ -21,7 +21,8 @@ import {
 const router = Router();
 
 // ── Chart of Accounts (tree) ───────────────────────────────────────────────
-router.get("/accounts/chart", async (_req, res): Promise<void> => {
+// Consumers: Chart of Accounts page, and the Expenses page's ledger dropdown.
+router.get("/accounts/chart", requireModuleView(["page:/accounts/chart", "page:/accounts/expenses"]), async (_req, res): Promise<void> => {
   const result = await pool.query(`SELECT * FROM account_ledgers ORDER BY id`);
   const rows = result.rows;
 
@@ -54,7 +55,8 @@ router.get("/accounts/chart", async (_req, res): Promise<void> => {
 });
 
 // Also expose flat list for dropdowns
-router.get("/accounts/chart/flat", async (_req, res): Promise<void> => {
+// Fills account dropdowns on Journal, Contra/Notes, Vouchers and Ledger.
+router.get("/accounts/chart/flat", requireModuleView(["page:/accounts/vouchers", "page:/accounts/ledger"]), async (_req, res): Promise<void> => {
   const result = await pool.query(`SELECT * FROM account_ledgers ORDER BY id`);
   res.json(result.rows.map((r: any) => ({
     id: r.id,
@@ -72,7 +74,8 @@ router.get("/accounts/chart/flat", async (_req, res): Promise<void> => {
 });
 
 // Cash/Bank ledgers only — for Received In / Paid From dropdowns
-router.get("/accounts/cash-bank-ledgers", async (req, res): Promise<void> => {
+// Serves Cash & Bank and Expenses pages.
+router.get("/accounts/cash-bank-ledgers", requireModuleView(["page:/accounts/cash-bank", "page:/accounts/expenses", "page:/accounts/vouchers", "page:/vendors"]), async (req, res): Promise<void> => {
   const { rows } = await pool.query(`SELECT * FROM account_ledgers ORDER BY id`);
   const bankRoot = rows.find((r: any) => r.code === 'STD-BANK');
   const cashRoot = rows.find((r: any) => r.code === 'STD-CASH');
@@ -100,7 +103,7 @@ router.get("/accounts/cash-bank-ledgers", async (req, res): Promise<void> => {
   })));
 });
 
-router.post("/accounts/chart", requireModuleAction("Chart of Accounts", "add"), async (req, res): Promise<void> => {
+router.post("/accounts/chart", requireModuleAction("page:/accounts/chart", "add"), async (req, res): Promise<void> => {
   const parsed = CreateAccountLedgerBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const code = (req.body as any).code ?? null;
@@ -124,7 +127,7 @@ router.post("/accounts/chart", requireModuleAction("Chart of Accounts", "add"), 
   res.status(201).json({ ...row, code, bankDetails, isGroup, parentName, children: [], balance: 0 });
 });
 
-router.patch("/accounts/chart/:id", requireModuleAction("Chart of Accounts", "edit"), async (req, res): Promise<void> => {
+router.patch("/accounts/chart/:id", requireModuleAction("page:/accounts/chart", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const parsed = UpdateAccountLedgerBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
@@ -145,7 +148,7 @@ router.patch("/accounts/chart/:id", requireModuleAction("Chart of Accounts", "ed
 });
 
 // ── Move account to a different parent (drag-and-drop reparent) ───────────────
-router.patch("/accounts/chart/:id/move", requireModuleAction("Chart of Accounts", "edit"), async (req, res): Promise<void> => {
+router.patch("/accounts/chart/:id/move", requireModuleAction("page:/accounts/chart", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid id" }); return; }
 
@@ -183,7 +186,7 @@ router.patch("/accounts/chart/:id/move", requireModuleAction("Chart of Accounts"
   res.json({ success: true });
 });
 
-router.delete("/accounts/chart/:id", requireModuleAction("Chart of Accounts", "delete"), async (req, res): Promise<void> => {
+router.delete("/accounts/chart/:id", requireModuleAction("page:/accounts/chart", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { rows: [row] } = await pool.query(`SELECT is_system_group, code FROM account_ledgers WHERE id = $1`, [id]);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
@@ -213,7 +216,7 @@ router.delete("/accounts/chart/:id", requireModuleAction("Chart of Accounts", "d
 // LBAC: each location keeps its own payment book — a branch sees the vouchers
 // that belong to it (stamped location, or a leg on one of its own ledgers) and
 // Head Office sees everything. See lib/moneyScope.ts for the ownership rule.
-router.get("/accounts/payments", requireModuleView("Payments"), async (req, res): Promise<void> => {
+router.get("/accounts/payments", requireModuleView("page:/accounts/vouchers"), async (req, res): Promise<void> => {
   const scope = ownLocationScope((req as any).employee);
   const ledgerIds = await scopeLedgerIds(scope);
   const params: unknown[] = [];
@@ -244,7 +247,7 @@ router.get("/accounts/payments", requireModuleView("Payments"), async (req, res)
   })));
 });
 
-router.post("/accounts/payments", requireModuleAction("Payments", "add"), async (req, res): Promise<void> => {
+router.post("/accounts/payments", requireModuleAction("page:/accounts/vouchers", "add"), async (req, res): Promise<void> => {
   const { paymentDate, paidFromLedgerId, paidToLedgerId, amount, narration } = req.body as {
     paymentDate: string; paidFromLedgerId: number; paidToLedgerId: number; amount: number; narration?: string;
   };
@@ -277,7 +280,7 @@ router.post("/accounts/payments", requireModuleAction("Payments", "add"), async 
   });
 });
 
-router.delete("/accounts/payments/:id", requireModuleAction("Payments", "delete"), async (req, res): Promise<void> => {
+router.delete("/accounts/payments/:id", requireModuleAction("page:/accounts/vouchers", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid payment id" }); return; }
   // Scope the DELETE itself: a branch user must not be able to remove another
@@ -295,7 +298,7 @@ router.delete("/accounts/payments/:id", requireModuleAction("Payments", "delete"
 
 // ── Receipts ──────────────────────────────────────────────────────────────
 // LBAC: same ownership rule as payments — a branch sees its own receipts only.
-router.get("/accounts/receipts", requireModuleView("Payments"), async (req, res): Promise<void> => {
+router.get("/accounts/receipts", requireModuleView("page:/accounts/vouchers"), async (req, res): Promise<void> => {
   const scope = ownLocationScope((req as any).employee);
   const ledgerIds = await scopeLedgerIds(scope);
   const params: unknown[] = [];
@@ -326,7 +329,7 @@ router.get("/accounts/receipts", requireModuleView("Payments"), async (req, res)
   })));
 });
 
-router.post("/accounts/receipts", requireModuleAction("Payments", "add"), async (req, res): Promise<void> => {
+router.post("/accounts/receipts", requireModuleAction("page:/accounts/vouchers", "add"), async (req, res): Promise<void> => {
   const { receiptDate, receivedFromLedgerId, receivedInLedgerId, amount, narration } = req.body as {
     receiptDate: string; receivedFromLedgerId: number; receivedInLedgerId: number; amount: number; narration?: string;
   };
@@ -358,7 +361,7 @@ router.post("/accounts/receipts", requireModuleAction("Payments", "add"), async 
   });
 });
 
-router.delete("/accounts/receipts/:id", requireModuleAction("Payments", "delete"), async (req, res): Promise<void> => {
+router.delete("/accounts/receipts/:id", requireModuleAction("page:/accounts/vouchers", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid receipt id" }); return; }
   const scope = ownLocationScope((req as any).employee);
@@ -377,7 +380,7 @@ router.delete("/accounts/receipts/:id", requireModuleAction("Payments", "delete"
 // vouchers it owns, its own sales and its own purchase bills. Head-Office-only
 // sources (the expenses table, journal-family vouchers) are left out for branch
 // users because they carry no location dimension.
-router.get("/accounts/ledger-statement", requireModuleView("Ledger"), async (req, res): Promise<void> => {
+router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledger"), async (req, res): Promise<void> => {
   const qp = GetLedgerStatementQueryParams.safeParse(req.query);
   if (!qp.success) { res.status(400).json({ error: qp.error.message }); return; }
 
@@ -542,12 +545,12 @@ router.get("/accounts/ledger-statement", requireModuleView("Ledger"), async (req
 });
 
 // ── Cash & Bank (kept for backward compat) ────────────────────────────────
-router.get("/accounts/cash-bank", requireModuleView("Cash & Bank"), async (_req, res): Promise<void> => {
+router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"), async (_req, res): Promise<void> => {
   const rows = await db.select().from(cashBankAccountsTable).orderBy(cashBankAccountsTable.id);
   res.json(rows.map(r => ({ ...r, balance: Number(r.balance) })));
 });
 
-router.post("/accounts/cash-bank", requireModuleAction("Cash & Bank", "add"), async (req, res): Promise<void> => {
+router.post("/accounts/cash-bank", requireModuleAction("page:/accounts/cash-bank", "add"), async (req, res): Promise<void> => {
   const parsed = CreateCashBankAccountBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const { openingBalance, ...rest } = parsed.data as typeof parsed.data & { openingBalance?: number };
@@ -556,7 +559,8 @@ router.post("/accounts/cash-bank", requireModuleAction("Cash & Bank", "add"), as
 });
 
 // ── Expenses (merged: expenses table + location expense payments) ──────────
-router.get("/expenses", async (req, res): Promise<void> => {
+// No mapped consumer; serves the Expenses pages (accounts + sales).
+router.get("/expenses", requireModuleView(["page:/accounts/expenses", "page:/sales/expenses"]), async (req, res): Promise<void> => {
   const expEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
   const isHO = !expEmp || expEmp.branchType === 'headoffice';
 
@@ -719,7 +723,7 @@ function readExpenseExtras(body: any): { category: string; attachmentUrl: string
   return { category, attachmentUrl };
 }
 
-router.post("/expenses", requireModuleAction("Expenses", "add"), async (req, res): Promise<void> => {
+router.post("/expenses", requireModuleAction("page:/accounts/expenses", "add"), async (req, res): Promise<void> => {
   const parsed = CreateExpenseBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
@@ -780,7 +784,7 @@ router.post("/expenses", requireModuleAction("Expenses", "add"), async (req, res
 });
 
 // Category list for the pickers — one source of truth, shared by both pages.
-router.get("/expenses/categories", async (_req, res): Promise<void> => {
+router.get("/expenses/categories", requireModuleView(["page:/accounts/expenses", "page:/sales/expenses"]), async (_req, res): Promise<void> => {
   res.json(EXPENSE_CATEGORIES.map((name) => ({ name })));
 });
 
@@ -815,7 +819,8 @@ async function resolveLocationCashLedger(locationType: string, locationId: numbe
 }
 
 // Returns only Direct Expense + Indirect Expense leaf ledgers for the dropdown
-router.get("/accounts/expense-ledgers", async (_req, res): Promise<void> => {
+// No mapped consumer; serves the Expenses page.
+router.get("/accounts/expense-ledgers", requireModuleView(["page:/accounts/expenses", "page:/sales/expenses"]), async (_req, res): Promise<void> => {
   const ids = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
   if (ids.length === 0) { res.json([]); return; }
   const { rows } = await pool.query(
@@ -826,7 +831,7 @@ router.get("/accounts/expense-ledgers", async (_req, res): Promise<void> => {
 });
 
 // Summary: all locations with expense count + total, for the "By Location" overview tab
-router.get("/accounts/location-expenses/summary", async (req, res): Promise<void> => {
+router.get("/accounts/location-expenses/summary", requireModuleView("page:/accounts/expenses"), async (req, res): Promise<void> => {
   const expenseLedgerIds = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
 
   // LBAC: non-HO users see only their own location
@@ -899,7 +904,8 @@ router.get("/accounts/location-expenses/summary", async (req, res): Promise<void
 // List expenses for a specific location (payments where paid_from = location's cash ledger
 // AND paid_to belongs to Direct/Indirect Expense ledger subtree)
 // ── GET /accounts/location-expenses/all — all locations combined ──────────────
-router.get("/accounts/location-expenses/all", async (req, res): Promise<void> => {
+// No mapped consumer; serves the Expenses page.
+router.get("/accounts/location-expenses/all", requireModuleView(["page:/accounts/expenses", "page:/sales/expenses"]), async (req, res): Promise<void> => {
   const expenseLedgerIds = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
   if (expenseLedgerIds.length === 0) { res.json([]); return; }
 
@@ -956,7 +962,7 @@ router.get("/accounts/location-expenses/all", async (req, res): Promise<void> =>
   })));
 });
 
-router.get("/accounts/location-expenses", async (req, res): Promise<void> => {
+router.get("/accounts/location-expenses", requireModuleView(["page:/accounts/expenses", "page:/sales/expenses"]), async (req, res): Promise<void> => {
   const { locationType, locationId } = req.query as { locationType?: string; locationId?: string };
   if (!locationType || !locationId) {
     res.status(400).json({ error: "locationType and locationId are required" }); return;
@@ -1037,7 +1043,7 @@ async function getLocationCashBalance(ledgerId: number): Promise<number> {
 }
 
 // Create a location-scoped expense (Dr expenseLedger, Cr location cashLedger via payments)
-router.post("/accounts/location-expenses", requireModuleAction("Location Expenses", "add"), async (req, res): Promise<void> => {
+router.post("/accounts/location-expenses", requireModuleAction("page:/sales/expenses", "add"), async (req, res): Promise<void> => {
   const { locationType, locationId, expenseLedgerId, amount, expenseDate, description, reference } = req.body as {
     locationType: string; locationId: number; expenseLedgerId: number;
     amount: number; expenseDate: string; description: string; reference?: string;
@@ -1103,7 +1109,7 @@ router.post("/accounts/location-expenses", requireModuleAction("Location Expense
 // Guards: the payment row must actually BE a location expense — paid_from must
 // be a location's cash ledger and paid_to must sit in the Direct/Indirect
 // Expense subtree. Anything else must be deleted from its own page.
-router.delete("/accounts/location-expenses/:id", requireModuleAction("Location Expenses", "delete"), async (req, res): Promise<void> => {
+router.delete("/accounts/location-expenses/:id", requireModuleAction("page:/sales/expenses", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid expense id" }); return; }
 
@@ -1140,7 +1146,7 @@ router.delete("/accounts/location-expenses/:id", requireModuleAction("Location E
 });
 
 // ── Financial Statements (Balance Sheet + P&L) ────────────────────────────
-router.get("/accounts/financial-statements", requireModuleView("Chart of Accounts"), async (req, res): Promise<void> => {
+router.get("/accounts/financial-statements", requireModuleView(["page:/accounts/chart", "page:/reports/sales"]), async (req, res): Promise<void> => {
   // LBAC: P&L and Balance Sheet are Head Office accounting
   if ((req as any).employee?.branchType !== 'headoffice') { res.json({ pl: null, bs: null }); return; }
   const { fromDate, toDate, outletId } = req.query as {
@@ -1412,7 +1418,7 @@ router.get("/accounts/financial-statements", requireModuleView("Chart of Account
 // ── Ledger Statement ──────────────────────────────────────────────────────
 // LBAC: branch users get their own movements on the requested ledger; the
 // expenses table and journal-family vouchers stay Head Office (no location).
-router.get("/accounts/ledger/:id/statement", async (req, res): Promise<void> => {
+router.get("/accounts/ledger/:id/statement", requireModuleView("page:/accounts/ledger"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid ledger id" }); return; }
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
@@ -1571,7 +1577,7 @@ router.get("/accounts/ledger/:id/statement", async (req, res): Promise<void> => 
 });
 
 // ── GST Summary ───────────────────────────────────────────────────────────
-router.get("/gst/summary", requireModuleView(["GST Summary", "GST Returns"]), async (req, res): Promise<void> => {
+router.get("/gst/summary", requireModuleView(["page:/accounts/gst", "page:/accounts/gst-returns"]), async (req, res): Promise<void> => {
   // LBAC: GST summary is Head Office accounting
   if ((req as any).employee?.branchType !== 'headoffice') {
     res.json({ salesByRate: [], purchasesByRate: [], totals: {} }); return;
@@ -1675,7 +1681,7 @@ router.get("/gst/summary", requireModuleView(["GST Summary", "GST Returns"]), as
 // Opening balances allow the COA to reflect historical account positions so
 // the Trial Balance, P&L and Balance Sheet are accurate from day one.
 
-router.get("/accounts/opening-balances", requireModuleView("Chart of Accounts"), async (_req, res): Promise<void> => {
+router.get("/accounts/opening-balances", requireModuleView("page:/accounts/chart"), async (_req, res): Promise<void> => {
   const { rows } = await pool.query(`
     SELECT ob.id, ob.ledger_id, ob.balance::float AS balance, ob.balance_type,
            ob.as_of_date, ob.financial_year, ob.notes, ob.created_by, ob.created_at, ob.updated_at,
@@ -1700,7 +1706,7 @@ router.get("/accounts/opening-balances", requireModuleView("Chart of Accounts"),
   })));
 });
 
-router.post("/accounts/opening-balances", requireModuleAction("Chart of Accounts", "add"), async (req, res): Promise<void> => {
+router.post("/accounts/opening-balances", requireModuleAction("page:/accounts/chart", "add"), async (req, res): Promise<void> => {
   const body = req.body as any;
   const ledgerId = Number(body.ledgerId);
   const balance = Number(body.balance);
@@ -1752,7 +1758,7 @@ router.post("/accounts/opening-balances", requireModuleAction("Chart of Accounts
   res.status(201).json({ id: row.id, ledgerId, balance, balanceType, asOfDate, financialYear, notes });
 });
 
-router.delete("/accounts/opening-balances/:id", requireModuleAction("Chart of Accounts", "delete"), async (req, res): Promise<void> => {
+router.delete("/accounts/opening-balances/:id", requireModuleAction("page:/accounts/chart", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { rows: [deleted] } = await pool.query(
     `DELETE FROM opening_balances WHERE id = $1 RETURNING ledger_id`, [id]

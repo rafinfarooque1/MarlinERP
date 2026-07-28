@@ -33,7 +33,7 @@ const inr = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigi
 const today = () => new Date().toISOString().split('T')[0];
 
 export default function Contra() {
-  const perm = usePermission('Vouchers');
+  const perm = usePermission('page:/accounts/vouchers');
   const { data: vouchers = [], isLoading } = useListJournalVouchers({ type: 'contra' });
   const { data: cashBankAccounts = [] } = useCashBankLedgersFlat();
   const createMutation = useCreateJournalVoucher();

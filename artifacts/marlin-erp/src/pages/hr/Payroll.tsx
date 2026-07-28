@@ -176,13 +176,14 @@ function PayDialog({ item, onClose }: { item: EnrichedPayrollRecord; onClose: ()
 
 // ── Payslip detail sheet ───────────────────────────────────────────────────
 function PayslipSheet({
-  item, onClose, isAdmin, onApprove, onPay,
+  item, onClose, isAdmin, onApprove, onPay, canDownload,
 }: {
   item: EnrichedPayrollRecord;
   onClose: () => void;
   isAdmin: boolean;
   onApprove: () => void;
   onPay: () => void;
+  canDownload: boolean;
 }) {
   const totalNet = (item.netPay ?? 0) + (item.extraAmount ?? 0);
   const handleDownload = () => downloadPayslip(item);
@@ -214,10 +215,10 @@ function PayslipSheet({
             {item.status === 'approved' && (item.paidAmount ?? 0) > 0 && (item.paidAmount ?? 0) < totalNet - 0.005 && (
               <Button size="sm" onClick={onPay}><Wallet className="h-3 w-3 mr-1" />Pay Remaining</Button>
             )}
-            <Button size="sm" variant="outline" onClick={handleDownload}><FileDown className="h-3 w-3 mr-1" />PDF</Button>
+            {canDownload && <Button size="sm" variant="outline" onClick={handleDownload}><FileDown className="h-3 w-3 mr-1" />PDF</Button>}
           </div>
         )}
-        {!isAdmin && (
+        {!isAdmin && canDownload && (
           <Button size="sm" variant="outline" className="mt-4" onClick={handleDownload}><FileDown className="h-3 w-3 mr-1" />Download Payslip</Button>
         )}
 
@@ -450,7 +451,7 @@ function AdvancesSection({ isAdmin, employees }: { isAdmin: boolean; employees: 
 
 // ── Main Payroll page ──────────────────────────────────────────────────────
 export default function Payroll() {
-  const perm = usePermission('Payroll');
+  const perm = usePermission('page:/hr/payroll');
   const { data: me } = useGetMe();
   const isAdmin = (me as any)?.branchType === 'headoffice';
 
@@ -596,9 +597,11 @@ export default function Payroll() {
                 </Button>
               </>
             )}
+            {perm.canDownload && (
             <Button variant="outline" size="sm" onClick={handleExport}>
               <Download className="h-4 w-4 mr-1" />Export
             </Button>
+            )}
           </div>
         </div>
 
@@ -678,9 +681,11 @@ export default function Payroll() {
                           <DollarSign className="h-4 w-4" />
                         </Button>
                       )}
+                      {perm.canDownload && (
                       <Button size="sm" variant="ghost" onClick={() => downloadPayslip(p)} title="Download payslip">
                         <FileDown className="h-4 w-4" />
                       </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -703,6 +708,7 @@ export default function Payroll() {
           isAdmin={isAdmin}
           onApprove={() => handleApprove(viewItem)}
           onPay={() => { setPayItem(viewItem); setViewItem(null); }}
+          canDownload={perm.canDownload}
         />
       )}
 

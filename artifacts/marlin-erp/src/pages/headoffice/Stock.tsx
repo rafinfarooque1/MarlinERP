@@ -38,7 +38,7 @@ function ExpiryBadge({ batch }: { batch: StockBatch }) {
 }
 
 export default function Stock() {
-  const perm = usePermission('Stock');
+  const perm = usePermission('page:/headoffice/stock');
   const [branchType,       setBranchType]       = useState<string>('all');
   const [branchId,         setBranchId]         = useState<string>('');
   const [materialType,     setMaterialType]     = useState<string>('all');
@@ -139,6 +139,7 @@ export default function Stock() {
               All inventory — Item Name (SKU), Raw Materials, and Packing Materials across all locations
             </p>
           </div>
+          {perm.canDownload && (
           <Button variant="outline" size="sm" onClick={() => downloadCSV('stock.csv', filtered.map(s => ({
             Item: s.itemName,
             'Item Type': MAT_TYPE_LABELS[s.materialType ?? 'item'] ?? s.materialType,
@@ -154,6 +155,7 @@ export default function Stock() {
           })))}>
             <Download className="w-4 h-4 mr-2" /> Export
           </Button>
+          )}
         </div>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">

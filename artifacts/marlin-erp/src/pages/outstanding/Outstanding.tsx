@@ -132,7 +132,7 @@ function CollectPaymentDialog({ item, onOpenChange }: { item: any | null; onOpen
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Outstanding() {
-  const perm = usePermission('Sales');
+  const perm = usePermission('page:/outstanding');
   const [tab, setTab] = useState<'receivables' | 'payables' | 'collections'>('receivables');
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<number | null>(null);

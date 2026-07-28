@@ -16,7 +16,7 @@ const TYPE_LABEL: Record<string, string> = {
 };
 
 export default function TrialBalance() {
-  const perm = usePermission('Books');
+  const perm = usePermission('page:/accounts/trial-balance');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const { data, isLoading } = useTrialBalance(fromDate || undefined, toDate || undefined);

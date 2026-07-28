@@ -127,7 +127,7 @@ function LocationSection({ type, name, children }: { type: string; name: string;
 type Section = 'sales' | 'transfers' | 'expenses' | null;
 
 export default function SalesDashboard() {
-  const perm = usePermission('Sales Dashboard');
+  const perm = usePermission('page:/');
   const [, navigate] = useLocation();
   const { locationState } = useLocationContext();
   const { locationType, locationId, locationName } = locationState;

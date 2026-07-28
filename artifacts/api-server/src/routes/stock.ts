@@ -92,7 +92,8 @@ async function reserveDispatchedInTransit(
 // used to be read from their own global counters here, which is why they always
 // appeared at Head Office with no real location.
 // Optional query params: branchType, branchId, q (search), materialType (item|material|raw_material)
-router.get("/stock", async (req, res): Promise<void> => {
+// Serves Dashboard, Item Master, Stock Verification, HO Sales (POS), Stock and Transfers.
+router.get("/stock", requireModuleView(["page:/", "page:/production/item-master", "page:/headoffice/stock-verification", "page:/sales/pos", "page:/headoffice/stock", "page:/transfers"]), async (req, res): Promise<void> => {
   const qp = ListStockQueryParams.safeParse(req.query);
   const paginated = 'page' in req.query || 'limit' in req.query;
   const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
@@ -221,7 +222,7 @@ router.get("/stock", async (req, res): Promise<void> => {
   }
 });
 
-router.get("/stock/ledger", requireModuleView(["Stock", "Inventory Reports"]), async (req, res): Promise<void> => {
+router.get("/stock/ledger", requireModuleView(["page:/headoffice/stock-ledger", "page:/headoffice/inventory-reports", "page:/headoffice/stock"]), async (req, res): Promise<void> => {
   const page  = Math.max(1, parseInt(String(req.query.page  ?? 1), 10));
   const limit = Math.max(1, Math.min(500, parseInt(String(req.query.limit ?? 50), 10)));
   const offset = (page - 1) * limit;
@@ -288,7 +289,7 @@ router.get("/stock/ledger", requireModuleView(["Stock", "Inventory Reports"]), a
   res.json({ total, page, limit, rows });
 });
 
-router.get("/stock/transfers", requireModuleView(["HO Transfers"]), async (req, res): Promise<void> => {
+router.get("/stock/transfers", requireModuleView("page:/transfers"), async (req, res): Promise<void> => {
   // Optional ?from&to (YYYY-MM-DD, inclusive), ?status and ?limit filters so
   // heavy consumers (e.g. the Reports Center) don't pull the entire history.
   // Without params the full list is returned (existing pages unchanged).
@@ -359,7 +360,7 @@ router.get("/stock/transfers", requireModuleView(["HO Transfers"]), async (req, 
   res.json(enriched);
 });
 
-router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), async (req, res): Promise<void> => {
+router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), async (req, res): Promise<void> => {
   const parsed = CreateStockTransferBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
@@ -745,7 +746,7 @@ function allocateReceived(breakdown: BatchBreakdownEntry[], receivedQty: number)
 }
 
 // Approve a transfer — receiver verifies physical stock and enters actual received quantities
-router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"], "edit"), async (req, res): Promise<void> => {
+router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfers", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { receivedLineItems, approvedBy } = req.body as { receivedLineItems?: Array<{ itemId: number; quantity: number; costPrice?: number }>; approvedBy?: string };
 
@@ -1078,7 +1079,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"
 });
 
 // Reject a transfer — reverses the source deduction
-router.patch("/stock/transfers/:id/reject", requireModuleAction(["HO Transfers"], "edit"), async (req, res): Promise<void> => {
+router.patch("/stock/transfers/:id/reject", requireModuleAction("page:/transfers", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { rejectionReason } = req.body as { rejectionReason?: string };
 
@@ -1213,7 +1214,7 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction(["HO Transfers"]
   res.json({ success: true, id, status: "rejected" });
 });
 
-router.get("/stock/transfers/:id", async (req, res): Promise<void> => {
+router.get("/stock/transfers/:id", requireModuleView("page:/transfers"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   const result = await pool.query(

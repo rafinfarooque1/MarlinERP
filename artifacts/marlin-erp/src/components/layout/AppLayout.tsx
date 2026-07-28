@@ -49,6 +49,7 @@ import { toast } from 'sonner';
 import {
   MODULE_REGISTRY,
   getNavGroups,
+  pagePermKey,
   type SidebarNavItem,
 } from '@/lib/moduleRegistry';
 import { canViewModule as checkCanView } from '@/lib/usePermission';
@@ -66,10 +67,11 @@ const OUTLETS_HREF = '/headoffice/outlets';
 const _standaloneNavItems = MODULE_REGISTRY
   .filter(m => m.navGroup === '__standalone__')
   .map(m => ({
-    name:   m.navEntries[0].name,
-    icon:   m.icon!,
-    href:   m.navEntries[0].href,
-    module: m.key,
+    name:    m.navEntries[0].name,
+    icon:    m.icon!,
+    href:    m.navEntries[0].href,
+    module:  m.key,
+    permKey: pagePermKey(m.navEntries[0].href),
   }));
 
 const navigation: SidebarNavItem[] = [
@@ -259,7 +261,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     .filter(item => {
       if (isAdmin) return true; // Level 1 always sees everything
 
-      // For leaf-level items, check canView directly
+      // For leaf-level items, check canView directly.
+      // `permKey` is the per-link permission row; `module` is only a fallback
+      // for nav items that predate per-link rows.
       if (item.href) {
         // any-of `modules` list (e.g. Reports Center): visible if any is viewable
         if ('modules' in item && item.modules) {
@@ -267,9 +271,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             checkCanView(m, (user as any)?.hierarchyId, userLevel, allPerms as any[]),
           );
         }
-        // single-module leaf item
-        if ('module' in item && item.module) {
-          return checkCanView(item.module as string, (user as any)?.hierarchyId, userLevel, allPerms as any[]);
+        const leafKey = (item as any).permKey ?? item.module;
+        if (leafKey) {
+          return checkCanView(leafKey as string, (user as any)?.hierarchyId, userLevel, allPerms as any[]);
         }
         return true;
       }
@@ -277,7 +281,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       // For group items: show if at least one child is accessible (canView)
       if (item.children) {
         return item.children.some((child: any) =>
-          checkCanView(child.module, (user as any)?.hierarchyId, userLevel, allPerms as any[])
+          checkCanView(child.permKey ?? child.module, (user as any)?.hierarchyId, userLevel, allPerms as any[])
         );
       }
       return true;
@@ -288,7 +292,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       return {
         ...item,
         children: item.children.filter((child: any) =>
-          checkCanView(child.module, (user as any)?.hierarchyId, userLevel, allPerms as any[])
+          checkCanView(child.permKey ?? child.module, (user as any)?.hierarchyId, userLevel, allPerms as any[])
         ),
       };
     })

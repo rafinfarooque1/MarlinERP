@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db, activityLogTable } from "@workspace/db";
 import { desc, and, gte, lte, eq, ilike, sql } from "drizzle-orm";
+import { requireModuleView } from "../middleware/permissions";
 
 const router = Router();
 
@@ -16,7 +17,7 @@ const router = Router();
  *   dateTo     ISO date string (inclusive, end-of-day)
  *   search     full-text search against description
  */
-router.get("/audit/logs", async (req, res): Promise<void> => {
+router.get("/audit/logs", requireModuleView("page:/company/audit"), async (req, res): Promise<void> => {
   const page  = Math.max(1, parseInt(String(req.query.page  ?? "1"),   10) || 1);
   const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? "50"), 10) || 50));
   const offset = (page - 1) * limit;
@@ -69,7 +70,7 @@ router.get("/audit/logs", async (req, res): Promise<void> => {
 /**
  * GET /audit/logs/:id — single log entry with full metadata
  */
-router.get("/audit/logs/:id", async (req, res): Promise<void> => {
+router.get("/audit/logs/:id", requireModuleView("page:/company/audit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const [row] = await db.select().from(activityLogTable).where(eq(activityLogTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }

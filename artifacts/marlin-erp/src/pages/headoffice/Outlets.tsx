@@ -34,7 +34,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function Outlets() {
-  const perm = usePermission('Outlets');
+  const perm = usePermission('page:/headoffice/outlets');
   // Outlets were folded into warehouses. While the module is off this page is a
   // historical archive: fully readable and exportable, but every write is
   // withdrawn (the backend refuses them too, so this is convenience not
@@ -114,10 +114,12 @@ export default function Outlets() {
             </p>
           </div>
           <div className="flex gap-2">
+            {perm.canDownload && (
             <Button variant="outline" size="sm" onClick={() => downloadCSV('outlets.csv', filtered.map(o => ({ Name: o.name, Warehouse: o.warehouseName || '', Contact: o.contactPerson || '', Phone: o.phone || '', Address: o.address || '' })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
-            {!readOnly && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Outlet</Button>}
+            )}
+            {!readOnly && perm.canAdd && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Outlet</Button>}
           </div>
         </div>
 
@@ -162,8 +164,8 @@ export default function Outlets() {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(o)}><Eye className="w-4 h-4" /></Button>
-                      {!readOnly && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(o)}><Edit2 className="w-4 h-4" /></Button>}
-                      {!readOnly && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => handleDelete(o.id, o.name)}><Trash2 className="w-4 h-4" /></Button>}
+                      {!readOnly && perm.canEdit && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(o)}><Edit2 className="w-4 h-4" /></Button>}
+                      {!readOnly && perm.canDelete && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => handleDelete(o.id, o.name)}><Trash2 className="w-4 h-4" /></Button>}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -236,7 +238,7 @@ export default function Outlets() {
                   <span className="font-medium">{v}</span>
                 </div>
               ))}
-              {!readOnly && <Button className="w-full" onClick={() => { setViewItem(null); openEdit(viewItem); }}><Edit2 className="w-4 h-4 mr-2" /> Edit</Button>}
+              {!readOnly && perm.canEdit && <Button className="w-full" onClick={() => { setViewItem(null); openEdit(viewItem); }}><Edit2 className="w-4 h-4 mr-2" /> Edit</Button>}
             </div>
           )}
         </SheetContent>

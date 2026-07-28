@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireModuleAction } from "../middleware/permissions";
+import { requireModuleAction, requireModuleView } from "../middleware/permissions";
 import { db, pool, bomTemplatesTable, itemsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logActivity } from "../lib/audit";
@@ -40,14 +40,14 @@ function validateLines(raw: unknown): { ok: true; lines: BomLine[] } | { ok: fal
   return { ok: true, lines };
 }
 
-router.get("/bom-templates", async (_req, res): Promise<void> => {
+router.get("/bom-templates", requireModuleView("page:/production/item-master"), async (_req, res): Promise<void> => {
   const rows = await db.select().from(bomTemplatesTable).orderBy(bomTemplatesTable.id);
   const items = await db.select().from(itemsTable);
   const iMap = new Map(items.map((i) => [i.id, i.name]));
   res.json(rows.map((r) => ({ ...r, itemName: iMap.get(r.itemId) ?? `Item #${r.itemId}` })));
 });
 
-router.get("/bom-templates/item/:itemId", async (req, res): Promise<void> => {
+router.get("/bom-templates/item/:itemId", requireModuleView("page:/production/production"), async (req, res): Promise<void> => {
   const itemId = parseInt(req.params.itemId, 10);
   if (!Number.isFinite(itemId)) { res.status(400).json({ error: "Invalid item id" }); return; }
   const [row] = await db.select().from(bomTemplatesTable).where(eq(bomTemplatesTable.itemId, itemId)).limit(1);
@@ -56,7 +56,7 @@ router.get("/bom-templates/item/:itemId", async (req, res): Promise<void> => {
   res.json({ ...row, itemName: item?.name ?? `Item #${itemId}` });
 });
 
-router.post("/bom-templates", requireModuleAction("Production", "add"), async (req, res): Promise<void> => {
+router.post("/bom-templates", requireModuleAction("page:/production/production", "add"), async (req, res): Promise<void> => {
   const itemId = Number(req.body?.itemId);
   if (!Number.isInteger(itemId) || itemId <= 0) { res.status(400).json({ error: "itemId required" }); return; }
   const [item] = await db.select().from(itemsTable).where(eq(itemsTable.id, itemId)).limit(1);
@@ -80,7 +80,7 @@ router.post("/bom-templates", requireModuleAction("Production", "add"), async (r
   res.status(201).json({ ...row, itemName: item.name });
 });
 
-router.put("/bom-templates/:id", requireModuleAction("Production", "edit"), async (req, res): Promise<void> => {
+router.put("/bom-templates/:id", requireModuleAction("page:/production/production", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid id" }); return; }
   const [existing] = await db.select().from(bomTemplatesTable).where(eq(bomTemplatesTable.id, id)).limit(1);
@@ -109,7 +109,7 @@ router.put("/bom-templates/:id", requireModuleAction("Production", "edit"), asyn
   res.json({ ...row, itemName: item?.name ?? `Item #${row.itemId}` });
 });
 
-router.delete("/bom-templates/:id", requireModuleAction("Production", "delete"), async (req, res): Promise<void> => {
+router.delete("/bom-templates/:id", requireModuleAction("page:/production/production", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid id" }); return; }
   const [existing] = await db.select().from(bomTemplatesTable).where(eq(bomTemplatesTable.id, id)).limit(1);

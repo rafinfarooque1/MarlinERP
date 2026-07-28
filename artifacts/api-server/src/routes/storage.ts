@@ -17,6 +17,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
 
 import { ObjectNotFoundError, ObjectStorageService } from "../lib/objectStorage";
+import { requireModuleAction } from "../middleware/permissions";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
@@ -30,7 +31,8 @@ const ALLOWED_CONTENT_TYPES = new Set([
 ]);
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
 
-router.post("/storage/uploads/request-url", async (req: Request, res: Response) => {
+// Only the bill/receipt attachment picker on the Expenses pages uses this.
+router.post("/storage/uploads/request-url", requireModuleAction(["page:/accounts/expenses", "page:/sales/expenses"], "add"), async (req: Request, res: Response) => {
   const employee = (req as any).employee;
   if (!employee) { res.status(401).json({ error: "Unauthorized" }); return; }
 

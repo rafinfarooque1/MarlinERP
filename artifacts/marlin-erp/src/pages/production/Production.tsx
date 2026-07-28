@@ -82,7 +82,7 @@ const inr = (n: number | null | undefined, dashWhenNull = true) =>
 const fmtQty = (n: number) => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 3 });
 
 export default function ProductionList() {
-  const perm = usePermission('Production');
+  const perm = usePermission('page:/production/production');
   const { data: productions = [], isLoading } = useListProductions();
   const { data: items = [] } = useListItems();
   const { data: rawMaterials = [] } = useListRawMaterials();

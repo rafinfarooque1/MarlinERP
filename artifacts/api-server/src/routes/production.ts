@@ -134,7 +134,7 @@ const locKey = (ex: any) => `${ex?.location_type ?? "headoffice"}:${Number(ex?.l
 const ledgerBranchId = (loc: ProdLocation, materialType: string) =>
   loc.type === "headoffice" ? (materialType === "item" ? 1 : 0) : loc.id;
 
-router.get("/productions", async (req, res): Promise<void> => {
+router.get("/productions", requireModuleView("page:/production/production"), async (req, res): Promise<void> => {
   // LBAC: a location sees its own runs; Head Office sees every location's.
   const scope = await getUserDataScope((req as any).employee ?? { branchType: "headoffice", branchId: 0 });
   const params: unknown[] = [];
@@ -176,7 +176,7 @@ router.get("/productions", async (req, res): Promise<void> => {
 
 // ── Production reports (must be registered before /productions/:id) ──────────
 // GET /productions/reports?from=YYYY-MM-DD&to=YYYY-MM-DD
-router.get("/productions/reports", requireModuleView("Production"), async (req, res): Promise<void> => {
+router.get("/productions/reports", requireModuleView("page:/production/reports"), async (req, res): Promise<void> => {
   const from = typeof req.query.from === "string" ? req.query.from : "";
   const to = typeof req.query.to === "string" ? req.query.to : "";
   const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -341,7 +341,7 @@ router.get("/productions/reports", requireModuleView("Production"), async (req, 
   });
 });
 
-router.post("/productions", requireModuleAction("Production", "add"), async (req, res): Promise<void> => {
+router.post("/productions", requireModuleAction("page:/production/production", "add"), async (req, res): Promise<void> => {
   const parsed = CreateProductionBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
@@ -715,7 +715,7 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
   });
 });
 
-router.get("/productions/:id", async (req, res): Promise<void> => {
+router.get("/productions/:id", requireModuleView("page:/production/production"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid production id" }); return; }
@@ -748,7 +748,7 @@ router.get("/productions/:id", async (req, res): Promise<void> => {
 });
 
 // ── Update (metadata only — date and notes) ───────────────────────────────────
-router.patch("/productions/:id", requireModuleAction("Production", "edit"), async (req, res): Promise<void> => {
+router.patch("/productions/:id", requireModuleAction("page:/production/production", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid production id" }); return; }
   const { productionDate, notes } = req.body as { productionDate?: string; notes?: string };
@@ -848,7 +848,7 @@ router.patch("/productions/:id", requireModuleAction("Production", "edit"), asyn
 });
 
 // ── Delete (with full stock reversal) ────────────────────────────────────────
-router.delete("/productions/:id", requireModuleAction("Production", "delete"), async (req, res): Promise<void> => {
+router.delete("/productions/:id", requireModuleAction("page:/production/production", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid production id" }); return; }
   // ── Full reversal in one transaction ─────────────────────────────────────

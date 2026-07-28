@@ -130,7 +130,7 @@ function VendorLedger({ vendorId }: { vendorId: number }) {
 }
 
 // ── VendorSheet ───────────────────────────────────────────────────────────────
-function VendorSheet({ vendor, onClose, onPay }: { vendor: any; onClose: () => void; onPay: (v: any) => void }) {
+function VendorSheet({ vendor, onClose, onPay, canPay }: { vendor: any; onClose: () => void; onPay: (v: any) => void; canPay: boolean }) {
   const [activeTab, setActiveTab] = useState<'details' | 'ledger'>('details');
   const { data: ledger } = useGetVendorLedger(vendor.id);
 
@@ -165,9 +165,11 @@ function VendorSheet({ vendor, onClose, onPay }: { vendor: any; onClose: () => v
               </div>
               <div className="flex flex-col items-end gap-2">
                 <button onClick={() => setActiveTab('ledger')} className="text-xs text-primary underline">View ledger →</button>
+                {canPay && (
                 <Button size="sm" variant="outline" className="border-amber-500/40 text-amber-600 hover:bg-amber-50" onClick={() => onPay(vendor)}>
                   <IndianRupee className="w-3.5 h-3.5 mr-1" /> Record Payment
                 </Button>
+                )}
               </div>
             </div>
             <Separator />
@@ -184,9 +186,11 @@ function VendorSheet({ vendor, onClose, onPay }: { vendor: any; onClose: () => v
           <div>
             <div className="flex items-center justify-between mb-2">
               <p className="text-xs text-muted-foreground">Account: <span className="font-mono">VEND-{vendor.id}</span> · Current Liability — Sundry Creditors</p>
+              {canPay && (
               <Button size="sm" variant="outline" className="border-amber-500/40 text-amber-600 hover:bg-amber-50 h-7 text-xs" onClick={() => onPay(vendor)}>
                 <IndianRupee className="w-3 h-3 mr-1" /> Pay
               </Button>
+              )}
             </div>
             <VendorLedger vendorId={vendor.id} />
           </div>
@@ -292,7 +296,7 @@ function PaymentDialog({ vendor, onClose }: { vendor: any; onClose: () => void }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function Vendors() {
-  const perm = usePermission('Vendors');
+  const perm = usePermission('page:/vendors');
   const { data: vendors = [], isLoading } = useListVendors();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -362,10 +366,14 @@ export default function Vendors() {
             <p className="text-muted-foreground mt-1">Raw material and packaging suppliers</p>
           </div>
           <div className="flex gap-2">
+            {perm.canDownload && (
             <Button variant="outline" size="sm" onClick={() => downloadCSV('vendors.csv', filtered.map(v => ({ Name: v.name, Phone: v.phone || '', State: (v as any).state || '', GST: v.gstNumber || '', Balance: (v as any).outstandingBalance || 0 })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
+            )}
+            {perm.canAdd && (
             <Button onClick={() => { form.reset(); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Vendor</Button>
+            )}
           </div>
         </div>
 
@@ -405,12 +413,16 @@ export default function Vendors() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-1">
+                      {perm.canAdd && (
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-600" title="Record payment" onClick={() => setPayItem(v)}>
                         <IndianRupee className="w-4 h-4" />
                       </Button>
+                      )}
+                      {perm.canEdit && (
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(v)}>
                         <Pencil className="w-4 h-4" />
                       </Button>
+                      )}
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(v)}>
                         <Eye className="w-4 h-4" />
                       </Button>
@@ -479,6 +491,7 @@ export default function Vendors() {
           vendor={viewItem}
           onClose={() => setViewItem(null)}
           onPay={v => { setViewItem(null); setPayItem(v); }}
+          canPay={perm.canAdd}
         />
       )}
 

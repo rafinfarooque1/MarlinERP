@@ -73,7 +73,7 @@ type BomFormValues = z.infer<typeof bomSchema>;
 const defaultBomLine = { materialType: 'raw_material' as const, materialId: 0, quantity: 1 };
 
 export default function ItemMaster() {
-  const perm = usePermission('Items');
+  const perm = usePermission('page:/production/item-master');
   // Item masters are company-wide, so only Head Office may change them. The
   // server enforces this; here we simply stop offering the controls.
   const { isHeadOffice } = useIsHeadOffice();
@@ -297,6 +297,7 @@ export default function ItemMaster() {
             </p>
           </div>
           <div className="flex gap-2">
+            {perm.canDownload && (
             <Button variant="outline" size="sm" onClick={() => downloadCSV('items.csv', filtered.map(i => ({
               Code: (i as any).itemCode || '', Barcode: (i as any).barcode || '',
               Type: (TYPE_LABELS as any)[i._type] ?? i._type, Name: i.name, Unit: i.unit,
@@ -306,7 +307,8 @@ export default function ItemMaster() {
             })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
-            {isHeadOffice && <Button onClick={() => openAdd()}><Plus className="w-4 h-4 mr-2" /> Add Item</Button>}
+            )}
+            {isHeadOffice && perm.canAdd && <Button onClick={() => openAdd()}><Plus className="w-4 h-4 mr-2" /> Add Item</Button>}
           </div>
         </div>
 
@@ -483,17 +485,17 @@ export default function ItemMaster() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      {item._type === 'item' && (
+                      {item._type === 'item' && perm.canEdit && (
                         <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title={bomByItem.has(item.id) ? 'Edit BOM template' : 'Set BOM template'} onClick={() => openBom(item)}>
                           <ClipboardList className="w-4 h-4" />
                         </Button>
                       )}
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(item)}><Eye className="w-4 h-4" /></Button>
-                      {isHeadOffice && (
-                        <>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(item)}><Edit2 className="w-4 h-4" /></Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => setDeleteTarget({ id: item.id, name: item.name, type: item._type })}><Trash2 className="w-4 h-4" /></Button>
-                        </>
+                      {isHeadOffice && perm.canEdit && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(item)}><Edit2 className="w-4 h-4" /></Button>
+                      )}
+                      {isHeadOffice && perm.canDelete && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => setDeleteTarget({ id: item.id, name: item.name, type: item._type })}><Trash2 className="w-4 h-4" /></Button>
                       )}
                     </div>
                   </TableCell>
@@ -786,21 +788,27 @@ export default function ItemMaster() {
                 {viewItem.description && <div className="py-2"><p className="text-muted-foreground mb-1">Description</p><p>{viewItem.description}</p></div>}
               </div>
               <div className="flex flex-col gap-2 mt-6">
-                {viewItem._type === 'item' && (
+                {viewItem._type === 'item' && perm.canEdit && (
                   <div className="flex gap-2">
                     <Button className="flex-1" variant="outline" onClick={() => { const it = viewItem; setViewItem(null); openBom(it); }}>
                       <ClipboardList className="w-4 h-4 mr-2" /> BOM
                     </Button>
                   </div>
                 )}
-                <div className="flex gap-2">
-                  <Button className="flex-1" variant="outline" onClick={() => { setViewItem(null); openEdit(viewItem); }}>
-                    <Edit2 className="w-4 h-4 mr-2" /> Edit
-                  </Button>
-                  <Button className="flex-1" variant="destructive" onClick={() => { setViewItem(null); setDeleteTarget({ id: viewItem.id, name: viewItem.name, type: viewItem._type }); }}>
-                    <Trash2 className="w-4 h-4 mr-2" /> Delete
-                  </Button>
-                </div>
+                {isHeadOffice && (perm.canEdit || perm.canDelete) && (
+                  <div className="flex gap-2">
+                    {perm.canEdit && (
+                      <Button className="flex-1" variant="outline" onClick={() => { setViewItem(null); openEdit(viewItem); }}>
+                        <Edit2 className="w-4 h-4 mr-2" /> Edit
+                      </Button>
+                    )}
+                    {perm.canDelete && (
+                      <Button className="flex-1" variant="destructive" onClick={() => { setViewItem(null); setDeleteTarget({ id: viewItem.id, name: viewItem.name, type: viewItem._type }); }}>
+                        <Trash2 className="w-4 h-4 mr-2" /> Delete
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
             </>
           )}

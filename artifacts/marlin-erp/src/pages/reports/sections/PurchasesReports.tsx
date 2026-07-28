@@ -7,6 +7,7 @@ import {
 } from '@workspace/api-client-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
 import {
   fmt, num, pdfMoney, fmtDate, periodLabel,
@@ -17,7 +18,7 @@ import {
 type PurchaseReport = 'register' | 'byVendor' | 'byMaterial';
 
 // ── Register ──────────────────────────────────────────────────────────────────
-function RegisterReport({ range }: { range: RangeState }) {
+function RegisterReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
   const [vendor, setVendor] = useState('all');
   const { data: vendors = [] } = useListVendors();
   const { data, isLoading } = usePurchaseRegister({
@@ -40,6 +41,7 @@ function RegisterReport({ range }: { range: RangeState }) {
           </SelectContent>
         </Select>
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('purchase-register.csv', rows.map((r) => ({
             'Bill No': r.billNumber, Date: r.date, Vendor: r.vendorName,
@@ -89,7 +91,7 @@ function RegisterReport({ range }: { range: RangeState }) {
 }
 
 // ── By vendor ─────────────────────────────────────────────────────────────────
-function ByVendorReport({ range }: { range: RangeState }) {
+function ByVendorReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
   const { data, isLoading } = usePurchasesByVendor({ from: range.from || undefined, to: range.to || undefined });
   const rows = data?.rows ?? [];
   const t = data?.totals;
@@ -98,6 +100,7 @@ function ByVendorReport({ range }: { range: RangeState }) {
     <div className="space-y-4">
       <RangeBar range={range}>
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('purchases-by-vendor.csv', rows.map((r) => ({
             Vendor: r.vendorName, Bills: r.bills, 'Taxable (₹)': r.taxable.toFixed(2),
@@ -143,7 +146,7 @@ function ByVendorReport({ range }: { range: RangeState }) {
 }
 
 // ── By material ───────────────────────────────────────────────────────────────
-function ByMaterialReport({ range }: { range: RangeState }) {
+function ByMaterialReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
   const { data, isLoading } = usePurchasesByMaterial({ from: range.from || undefined, to: range.to || undefined });
   const rows = data?.rows ?? [];
   const t = data?.totals;
@@ -152,6 +155,7 @@ function ByMaterialReport({ range }: { range: RangeState }) {
     <div className="space-y-4">
       <RangeBar range={range}>
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('purchases-by-material.csv', rows.map((r) => ({
             Material: r.materialName, Category: r.materialTypeLabel, Unit: r.unit, Bills: r.bills, Qty: r.qty,
@@ -203,6 +207,7 @@ function ByMaterialReport({ range }: { range: RangeState }) {
 
 // ── Section root ──────────────────────────────────────────────────────────────
 export default function PurchasesSection() {
+  const { canDownload } = usePermission('page:/reports/sales');
   const range = useDateRange('month');
   const [report, setReport] = useState<PurchaseReport>('register');
   return (
@@ -215,9 +220,9 @@ export default function PurchasesSection() {
         ]}
         value={report} onChange={setReport}
       />
-      {report === 'register' && <RegisterReport range={range} />}
-      {report === 'byVendor' && <ByVendorReport range={range} />}
-      {report === 'byMaterial' && <ByMaterialReport range={range} />}
+      {report === 'register' && <RegisterReport range={range} canDownload={canDownload} />}
+      {report === 'byVendor' && <ByVendorReport range={range} canDownload={canDownload} />}
+      {report === 'byMaterial' && <ByMaterialReport range={range} canDownload={canDownload} />}
     </div>
   );
 }

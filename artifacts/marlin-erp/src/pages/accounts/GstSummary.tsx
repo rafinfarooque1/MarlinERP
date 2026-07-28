@@ -11,7 +11,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { usePermission } from '@/lib/usePermission';
 
 export default function GstSummary() {
-  const perm = usePermission('GST Summary');
+  const perm = usePermission('page:/accounts/gst');
   const now = new Date();
   const [fromDate, setFromDate] = useState(`${now.getFullYear()}-04-01`);
   const [toDate, setToDate] = useState(now.toISOString().split('T')[0]);
@@ -55,6 +55,7 @@ export default function GstSummary() {
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Receipt className="w-6 h-6 text-primary" /> GST Summary</h1>
             <p className="text-muted-foreground mt-1">Output tax liability vs input tax credit, broken down by rate slab</p>
           </div>
+          {perm.canDownload && (
           <Button variant="outline" size="sm" onClick={() => {
             const rows = [
               ...salesData.map((r: any) => ({ Type: 'Output (Sales)', 'Tax Rate': `${r.taxRate}%`, 'Taxable Value': r.taxableValue, 'CGST': r.cgst, 'SGST': r.sgst, 'IGST': r.igst, 'Tax Amount': r.taxAmount })),
@@ -64,6 +65,7 @@ export default function GstSummary() {
           }}>
             <Download className="w-4 h-4 mr-2" /> Export
           </Button>
+          )}
         </div>
 
         {/* Date Filters */}

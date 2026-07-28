@@ -286,10 +286,14 @@ export function exportReportPdf(opts: {
 }
 
 // ── Export buttons ────────────────────────────────────────────────────────────
-export function ExportButtons({ onCSV, onPDF, disabled }: {
+// `canDownload` is the caller's download capability — the parent page owns its
+// own permission key and passes the resolved flag here, so this shared toolbar
+// never hardcodes a module name. When false the toolbar renders nothing.
+export function ExportButtons({ onCSV, onPDF, disabled, canDownload = true }: {
   onCSV?: () => void;
   onPDF?: () => Promise<void> | void;
   disabled?: boolean;
+  canDownload?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const handlePdf = () => {
@@ -303,6 +307,7 @@ export function ExportButtons({ onCSV, onPDF, disabled }: {
         .finally(() => setBusy(false));
     }
   };
+  if (!canDownload) return null;
   return (
     <div className="flex items-center gap-2 ml-auto">
       {onCSV && (

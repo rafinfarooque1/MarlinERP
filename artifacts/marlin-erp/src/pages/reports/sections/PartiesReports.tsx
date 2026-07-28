@@ -9,6 +9,7 @@ import {
 } from '@workspace/api-client-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
 import {
   fmt, pdfMoney, fmtDate, titleCase, periodLabel,
@@ -32,7 +33,7 @@ interface VendorLedger { balance: number; totalPurchased: number; totalPaid: num
 const dkey = (d: string) => String(d).slice(0, 10);
 
 // ── Statement (shared for customer & vendor) ─────────────────────────────────
-function Statement({ kind, range }: { kind: 'customer' | 'vendor'; range: RangeState }) {
+function Statement({ kind, range, canDownload }: { kind: 'customer' | 'vendor'; range: RangeState; canDownload: boolean }) {
   const [partyId, setPartyId] = useState('');
   const { data: customers = [] } = useListCustomers();
   const { data: vendors = [] } = useListVendors();
@@ -104,7 +105,7 @@ function Statement({ kind, range }: { kind: 'customer' | 'vendor'; range: RangeS
             {parties.map((p) => <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>)}
           </SelectContent>
         </Select>
-        <ExportButtons disabled={!partyId || isLoading} onCSV={csv} onPDF={pdf} />
+        <ExportButtons canDownload={canDownload} disabled={!partyId || isLoading} onCSV={csv} onPDF={pdf} />
       </RangeBar>
 
       {!partyId ? (
@@ -141,7 +142,7 @@ function Statement({ kind, range }: { kind: 'customer' | 'vendor'; range: RangeS
 }
 
 // ── Receivables aging ─────────────────────────────────────────────────────────
-function ReceivablesReport() {
+function ReceivablesReport({ canDownload }: { canDownload: boolean }) {
   const { data, isLoading } = useReceivablesAging();
   const rows = data?.customers ?? [];
   const t = data?.totals;
@@ -151,6 +152,7 @@ function ReceivablesReport() {
       <div className="flex flex-wrap items-center gap-2">
         <p className="text-xs text-muted-foreground">As of {fmtDate(data?.asOf)} — aging is always current, not date-filtered</p>
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('receivables-aging.csv', rows.map((r) => ({
             Customer: r.name, Phone: r.phone ?? '', '0-30 (₹)': r.b0_30.toFixed(2), '31-60 (₹)': r.b31_60.toFixed(2),
@@ -206,7 +208,7 @@ function ReceivablesReport() {
 }
 
 // ── Payables aging ────────────────────────────────────────────────────────────
-function PayablesReport() {
+function PayablesReport({ canDownload }: { canDownload: boolean }) {
   const { data, isLoading } = usePayablesAging();
   const rows = data?.vendors ?? [];
   const t = data?.totals;
@@ -218,6 +220,7 @@ function PayablesReport() {
       <div className="flex flex-wrap items-center gap-2">
         <p className="text-xs text-muted-foreground">As of {fmtDate(data?.asOf)} — aging is always current, not date-filtered</p>
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('payables-aging.csv', rows.map((r) => ({
             Vendor: r.name, Phone: r.phone ?? '', '0-30 (₹)': r.b0_30.toFixed(2), '31-60 (₹)': r.b31_60.toFixed(2),
@@ -277,6 +280,7 @@ export default function PartiesSection({ canCustomers = true, canVendors = true 
   canCustomers?: boolean;
   canVendors?: boolean;
 }) {
+  const { canDownload } = usePermission('page:/reports/sales');
   const range = useDateRange('fy');
   const [report, setReport] = useState<PartyReport>('customerStatement');
   // Sub-tabs are permission-gated: customer-side needs 'Customers', vendor-side 'Vendors'
@@ -295,10 +299,10 @@ export default function PartiesSection({ canCustomers = true, canVendors = true 
         ]}
         value={active} onChange={setReport}
       />
-      {active === 'customerStatement' && <Statement kind="customer" range={range} />}
-      {active === 'vendorStatement' && <Statement kind="vendor" range={range} />}
-      {active === 'receivables' && <ReceivablesReport />}
-      {active === 'payables' && <PayablesReport />}
+      {active === 'customerStatement' && <Statement kind="customer" range={range} canDownload={canDownload} />}
+      {active === 'vendorStatement' && <Statement kind="vendor" range={range} canDownload={canDownload} />}
+      {active === 'receivables' && <ReceivablesReport canDownload={canDownload} />}
+      {active === 'payables' && <PayablesReport canDownload={canDownload} />}
     </div>
   );
 }

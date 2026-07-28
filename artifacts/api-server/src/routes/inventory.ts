@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireModuleAction, requireHeadOffice } from "../middleware/permissions";
+import { requireModuleAction, requireModuleView, requireHeadOffice } from "../middleware/permissions";
 import { db, itemsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { GetItemParams, DeleteItemParams } from "@workspace/api-zod";
@@ -133,7 +133,8 @@ const fmtItem = (r: any) => ({
 });
 
 // ── Materials ─────────────────────────────────────────────────────────────
-router.get("/materials", async (req, res): Promise<void> => {
+// Fills item/material pickers on Item Master, Production, Purchases, Transfers.
+router.get("/materials", requireModuleView(["page:/production/item-master", "page:/production/production", "page:/production/purchase", "page:/transfers"]), async (req, res): Promise<void> => {
   const filter = statusFilter(req, res);
   if (!filter) return;
   const result = await pool.query(
@@ -144,7 +145,7 @@ router.get("/materials", async (req, res): Promise<void> => {
   res.json(result.rows.map(fmtMaterial));
 });
 
-router.post("/materials", hoOnly, requireModuleAction("Materials", "add"), async (req, res): Promise<void> => {
+router.post("/materials", hoOnly, requireModuleAction("page:/production/item-master", "add"), async (req, res): Promise<void> => {
   // cost intentionally excluded — auto-derived from weighted-avg purchase price
   const { name, unit, description, hsnCode, taxRate, mrp } = req.body;
   if (!name || !unit) { res.status(400).json({ error: "name and unit are required" }); return; }
@@ -162,14 +163,14 @@ router.post("/materials", hoOnly, requireModuleAction("Materials", "add"), async
   });
 });
 
-router.get("/materials/:id", async (req, res): Promise<void> => {
+router.get("/materials/:id", requireModuleView("page:/production/item-master"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const result = await pool.query(`SELECT * FROM materials WHERE id = $1 LIMIT 1`, [id]);
   if (!result.rows[0]) { res.status(404).json({ error: "Not found" }); return; }
   res.json(fmtMaterial(result.rows[0]));
 });
 
-router.patch("/materials/:id", hoOnly, requireModuleAction("Materials", "edit"), async (req, res): Promise<void> => {
+router.patch("/materials/:id", hoOnly, requireModuleAction("page:/production/item-master", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   // cost intentionally excluded — managed by purchase weighted-avg, not manual entry
   const { name, unit, description, hsnCode, taxRate, mrp } = req.body;
@@ -200,14 +201,15 @@ router.patch("/materials/:id", hoOnly, requireModuleAction("Materials", "edit"),
   });
 });
 
-router.delete("/materials/:id", hoOnly, requireModuleAction("Materials", "delete"), async (req, res): Promise<void> => {
+router.delete("/materials/:id", hoOnly, requireModuleAction("page:/production/item-master", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   await pool.query(`DELETE FROM materials WHERE id = $1`, [id]);
   res.status(204).send();
 });
 
 // ── Raw Materials ──────────────────────────────────────────────────────────
-router.get("/raw-materials", async (req, res): Promise<void> => {
+// Fills item/material pickers on Item Master, Production, Purchases, Transfers.
+router.get("/raw-materials", requireModuleView(["page:/production/item-master", "page:/production/production", "page:/production/purchase", "page:/transfers"]), async (req, res): Promise<void> => {
   const filter = statusFilter(req, res);
   if (!filter) return;
   const result = await pool.query(
@@ -220,7 +222,7 @@ router.get("/raw-materials", async (req, res): Promise<void> => {
   res.json(result.rows.map(fmtMaterial));
 });
 
-router.post("/raw-materials", hoOnly, requireModuleAction("Raw Materials", "add"), async (req, res): Promise<void> => {
+router.post("/raw-materials", hoOnly, requireModuleAction("page:/production/item-master", "add"), async (req, res): Promise<void> => {
   const { name, unit, description, hsnCode, taxRate, cost, mrp } = req.body;
   if (!name || !unit) { res.status(400).json({ error: "name and unit are required" }); return; }
   if (slabViolation(taxRate, res)) return;
@@ -237,14 +239,14 @@ router.post("/raw-materials", hoOnly, requireModuleAction("Raw Materials", "add"
   });
 });
 
-router.get("/raw-materials/:id", async (req, res): Promise<void> => {
+router.get("/raw-materials/:id", requireModuleView("page:/production/item-master"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const result = await pool.query(`SELECT * FROM raw_materials WHERE id = $1 LIMIT 1`, [id]);
   if (!result.rows[0]) { res.status(404).json({ error: "Not found" }); return; }
   res.json(fmtMaterial(result.rows[0]));
 });
 
-router.patch("/raw-materials/:id", hoOnly, requireModuleAction("Raw Materials", "edit"), async (req, res): Promise<void> => {
+router.patch("/raw-materials/:id", hoOnly, requireModuleAction("page:/production/item-master", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { name, unit, description, hsnCode, taxRate, cost, mrp } = req.body;
   if (slabViolation(taxRate, res)) return;
@@ -275,14 +277,16 @@ router.patch("/raw-materials/:id", hoOnly, requireModuleAction("Raw Materials", 
   });
 });
 
-router.delete("/raw-materials/:id", hoOnly, requireModuleAction("Raw Materials", "delete"), async (req, res): Promise<void> => {
+router.delete("/raw-materials/:id", hoOnly, requireModuleAction("page:/production/item-master", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   await pool.query(`DELETE FROM raw_materials WHERE id = $1`, [id]);
   res.status(204).send();
 });
 
 // ── Items (Finished SKUs) ──────────────────────────────────────────────────
-router.get("/items", async (req, res): Promise<void> => {
+// Fills item pickers across Item Master, Production, Purchases, Item Prices,
+// HO Sales (POS), Returns, Stock and Transfers.
+router.get("/items", requireModuleView(["page:/production/item-master", "page:/production/production", "page:/production/purchase", "page:/headoffice/item-price", "page:/sales/pos", "page:/returns", "page:/headoffice/stock", "page:/transfers"]), async (req, res): Promise<void> => {
   const filter = statusFilter(req, res);
   if (!filter) return;
   const result = await pool.query(
@@ -295,7 +299,7 @@ router.get("/items", async (req, res): Promise<void> => {
   res.json(result.rows.map(fmtItem));
 });
 
-router.post("/items", hoOnly, requireModuleAction("Items", "add"), async (req, res): Promise<void> => {
+router.post("/items", hoOnly, requireModuleAction("page:/production/item-master", "add"), async (req, res): Promise<void> => {
   const { name, hsnCode, taxRate, unit, description, cost, reorderLevel, mrp } = req.body;
   if (!name || !unit) { res.status(400).json({ error: "name and unit are required" }); return; }
   if (slabViolation(taxRate, res)) return;
@@ -312,7 +316,7 @@ router.post("/items", hoOnly, requireModuleAction("Items", "add"), async (req, r
   });
 });
 
-router.get("/items/:id", async (req, res): Promise<void> => {
+router.get("/items/:id", requireModuleView("page:/production/item-master"), async (req, res): Promise<void> => {
   const { id: rawId } = GetItemParams.parse(req.params);
   const result = await pool.query(
     `SELECT items.*,
@@ -323,7 +327,7 @@ router.get("/items/:id", async (req, res): Promise<void> => {
   res.json(fmtItem(result.rows[0]));
 });
 
-router.patch("/items/:id", hoOnly, requireModuleAction("Items", "edit"), async (req, res): Promise<void> => {
+router.patch("/items/:id", hoOnly, requireModuleAction("page:/production/item-master", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { name, hsnCode, taxRate, unit, description, cost, reorderLevel, mrp } = req.body;
   if (slabViolation(taxRate, res)) return;
@@ -357,7 +361,7 @@ router.patch("/items/:id", hoOnly, requireModuleAction("Items", "edit"), async (
   });
 });
 
-router.delete("/items/:id", hoOnly, requireModuleAction("Items", "delete"), async (req, res): Promise<void> => {
+router.delete("/items/:id", hoOnly, requireModuleAction("page:/production/item-master", "delete"), async (req, res): Promise<void> => {
   const { id } = DeleteItemParams.parse(req.params);
   await db.delete(itemsTable).where(eq(itemsTable.id, id));
   res.status(204).send();

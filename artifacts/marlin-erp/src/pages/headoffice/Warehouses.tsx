@@ -31,7 +31,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function Warehouses() {
-  const perm = usePermission('Warehouses');
+  const perm = usePermission('page:/headoffice/warehouses');
   const { data: warehouses = [], isLoading } = useListWarehouses();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -95,10 +95,12 @@ export default function Warehouses() {
             <p className="text-muted-foreground mt-1">Regional distribution centre management</p>
           </div>
           <div className="flex gap-2">
+            {perm.canDownload && (
             <Button variant="outline" size="sm" onClick={() => downloadCSV('warehouses.csv', filtered.map(w => ({ Name: w.name, State: w.state, GST: w.gstNumber || '', Contact: w.contactPerson || '', Phone: w.phone || '' })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
-            <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Warehouse</Button>
+            )}
+            {perm.canAdd && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Warehouse</Button>}
           </div>
         </div>
 
@@ -135,8 +137,8 @@ export default function Warehouses() {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(w)}><Eye className="w-4 h-4" /></Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(w)}><Edit2 className="w-4 h-4" /></Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => handleDelete(w.id, w.name)}><Trash2 className="w-4 h-4" /></Button>
+                      {perm.canEdit && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(w)}><Edit2 className="w-4 h-4" /></Button>}
+                      {perm.canDelete && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => handleDelete(w.id, w.name)}><Trash2 className="w-4 h-4" /></Button>}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -200,7 +202,7 @@ export default function Warehouses() {
                   <span className="font-medium">{v}</span>
                 </div>
               ))}
-              <Button className="w-full" onClick={() => { setViewItem(null); openEdit(viewItem); }}><Edit2 className="w-4 h-4 mr-2" /> Edit</Button>
+              {perm.canEdit && <Button className="w-full" onClick={() => { setViewItem(null); openEdit(viewItem); }}><Edit2 className="w-4 h-4 mr-2" /> Edit</Button>}
             </div>
           )}
         </SheetContent>

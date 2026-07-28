@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 import { usePermission } from '@/lib/usePermission';
 
 export default function Units() {
-  const perm = usePermission('Units');
+  const perm = usePermission('page:/production/units');
   const { units, addUnit, removeUnit } = useUnits();
   const [newUnit, setNewUnit] = useState('');
 
@@ -54,6 +54,7 @@ export default function Units() {
         </div>
 
         {/* Add unit */}
+        {perm.canAdd && (
         <div className="bg-card border border-border rounded-xl p-5 space-y-4">
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider border-b border-border pb-2">Add New Unit</h3>
           <div className="flex gap-2">
@@ -69,6 +70,7 @@ export default function Units() {
             </Button>
           </div>
         </div>
+        )}
 
         {/* Units list */}
         <div className="bg-card border border-border rounded-xl p-5 space-y-4">
@@ -82,6 +84,7 @@ export default function Units() {
               {units.map(unit => (
                 <div key={unit} className="flex items-center gap-1 bg-muted/40 border border-border rounded-md px-3 py-1.5">
                   <span className="font-mono text-sm font-medium">{unit}</span>
+                  {perm.canDelete && (
                   <button
                     onClick={() => handleRemove(unit)}
                     className="ml-1 text-muted-foreground hover:text-destructive transition-colors"
@@ -89,6 +92,7 @@ export default function Units() {
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
+                  )}
                 </div>
               ))}
             </div>

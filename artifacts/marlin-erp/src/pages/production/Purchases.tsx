@@ -69,7 +69,7 @@ function calcLine(q: number, rate: number, disc: number, gst: number, taxType: s
 function fmt(n: number) { return n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
 export default function Purchases() {
-  const perm = usePermission('Purchases');
+  const perm = usePermission('page:/production/purchase');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);

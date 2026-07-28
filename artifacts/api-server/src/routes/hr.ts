@@ -417,19 +417,24 @@ async function postSalaryApproval(opts: {
 }
 
 // ── Hierarchies ───────────────────────────────────────────────────────────
+// Serves the Hierarchy, Employees and Permissions pages.
+// Deliberately UNGUARDED, like GET /company/permissions. usePermission() and the
+// app shell read the hierarchy list on every page to work out what the signed-in
+// user is allowed to see — guarding it makes permission resolution itself require
+// a permission, and every page 403s for everyone below top level.
 router.get("/hr/hierarchies", async (_req, res): Promise<void> => {
   const rows = await db.select().from(hierarchiesTable).orderBy(hierarchiesTable.level);
   res.json(rows);
 });
 
-router.post("/hr/hierarchies", requireModuleAction("Hierarchy", "add"), async (req, res): Promise<void> => {
+router.post("/hr/hierarchies", requireModuleAction("page:/hr/hierarchy", "add"), async (req, res): Promise<void> => {
   const parsed = CreateHierarchyBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const [row] = await db.insert(hierarchiesTable).values(parsed.data).returning();
   res.status(201).json(row);
 });
 
-router.patch("/hr/hierarchies/:id", requireModuleAction("Hierarchy", "edit"), async (req, res): Promise<void> => {
+router.patch("/hr/hierarchies/:id", requireModuleAction("page:/hr/hierarchy", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const parsed = UpdateHierarchyBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
@@ -438,14 +443,14 @@ router.patch("/hr/hierarchies/:id", requireModuleAction("Hierarchy", "edit"), as
   res.json(row);
 });
 
-router.delete("/hr/hierarchies/:id", requireModuleAction("Hierarchy", "delete"), async (req, res): Promise<void> => {
+router.delete("/hr/hierarchies/:id", requireModuleAction("page:/hr/hierarchy", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   await db.delete(hierarchiesTable).where(eq(hierarchiesTable.id, id));
   res.status(204).send();
 });
 
 // ── Employees ─────────────────────────────────────────────────────────────
-router.get("/hr/employees", requireModuleView("Employees"), async (req, res): Promise<void> => {
+router.get("/hr/employees", requireModuleView("page:/hr/employees"), async (req, res): Promise<void> => {
   const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
 
   const scopeParams: unknown[] = [];
@@ -497,7 +502,7 @@ async function readProductionStaffFlag(id: number): Promise<boolean> {
   return rows[0]?.is_production_staff ?? false;
 }
 
-router.post("/hr/employees", requireModuleAction("Employees", "add"), async (req, res): Promise<void> => {
+router.post("/hr/employees", requireModuleAction("page:/hr/employees", "add"), async (req, res): Promise<void> => {
   const parsed = CreateEmployeeBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const [row] = await db.insert(employeesTable).values({
@@ -534,7 +539,7 @@ router.post("/hr/employees", requireModuleAction("Employees", "add"), async (req
   });
 });
 
-router.get("/hr/employees/:id", requireModuleView("Employees"), async (req, res): Promise<void> => {
+router.get("/hr/employees/:id", requireModuleView("page:/hr/employees"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const [row] = await db.select().from(employeesTable).where(eq(employeesTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
@@ -549,7 +554,7 @@ router.get("/hr/employees/:id", requireModuleView("Employees"), async (req, res)
   });
 });
 
-router.patch("/hr/employees/:id", requireModuleAction("Employees", "edit"), async (req, res): Promise<void> => {
+router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const [before] = await db.select().from(employeesTable).where(eq(employeesTable.id, id)).limit(1);
   const parsed = UpdateEmployeeBody.safeParse(req.body);
@@ -587,7 +592,7 @@ router.patch("/hr/employees/:id", requireModuleAction("Employees", "edit"), asyn
   });
 });
 
-router.delete("/hr/employees/:id", requireModuleAction("Employees", "delete"), async (req, res): Promise<void> => {
+router.delete("/hr/employees/:id", requireModuleAction("page:/hr/employees", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, id)).limit(1);
   await db.delete(employeesTable).where(eq(employeesTable.id, id));
@@ -601,7 +606,7 @@ router.delete("/hr/employees/:id", requireModuleAction("Employees", "delete"), a
 
 // ── Pay Components (per-employee pay structure) ───────────────────────────
 
-router.get("/hr/pay-components/:employeeId", async (req, res): Promise<void> => {
+router.get("/hr/pay-components/:employeeId", requireModuleView("page:/hr/employees"), async (req, res): Promise<void> => {
   const employeeId = parseInt(req.params.employeeId, 10);
   // Non-headoffice employees may only read their own pay structure
   const scopeEmp = (req as any).employee as { id: number; branchType: string } | undefined;
@@ -631,7 +636,7 @@ router.get("/hr/pay-components/:employeeId", async (req, res): Promise<void> => 
   res.json(row);
 });
 
-router.put("/hr/pay-components/:employeeId", requireModuleAction("Payroll", "edit"), async (req, res): Promise<void> => {
+router.put("/hr/pay-components/:employeeId", requireModuleAction(["page:/hr/employees", "page:/hr/payroll"], "edit"), async (req, res): Promise<void> => {
   const employeeId = parseInt(req.params.employeeId, 10);
   const { workingDaysPerMonth, allowances, deductions } = req.body;
 
@@ -667,7 +672,7 @@ router.put("/hr/pay-components/:employeeId", requireModuleAction("Payroll", "edi
 
 // ── Payroll ───────────────────────────────────────────────────────────────
 
-router.get("/hr/payroll", requireModuleView("Payroll"), async (req, res): Promise<void> => {
+router.get("/hr/payroll", requireModuleView("page:/hr/payroll"), async (req, res): Promise<void> => {
   const qp = ListPayrollQueryParams.safeParse(req.query);
   const scopeEmp = (req as any).employee as { id: number; branchType: string; branchId: number } | undefined;
 
@@ -706,7 +711,7 @@ router.get("/hr/payroll", requireModuleView("Payroll"), async (req, res): Promis
 });
 
 // Generate payroll for a month — creates or updates records for all employees (or one)
-router.post("/hr/payroll/generate", requireModuleAction("Payroll", "add"), async (req, res): Promise<void> => {
+router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add"), async (req, res): Promise<void> => {
   const { month, year, employeeId, forceRegenerate = false } = req.body;
   if (!month || !year) { res.status(400).json({ error: "month and year are required" }); return; }
 
@@ -903,7 +908,7 @@ router.post("/hr/payroll/generate", requireModuleAction("Payroll", "add"), async
 });
 
 // Edit extra amount / note (for authorised managers before approval)
-router.patch("/hr/payroll/:id", requireModuleAction("Payroll", "edit"), async (req, res): Promise<void> => {
+router.patch("/hr/payroll/:id", requireModuleAction("page:/hr/payroll", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { extraAmount = 0, extraNote = null } = req.body;
   // Draft only. An extra amount changes net pay, and approval has already posted
@@ -945,7 +950,7 @@ router.patch("/hr/payroll/:id", requireModuleAction("Payroll", "edit"), async (r
 // Both sides come to gross + extra + employer contributions, so the voucher
 // balances. The two employer ledgers and the per-employee salary ledger all sit
 // under Indirect Expenses, which is what carries salary into the P&L.
-router.post("/hr/payroll/:id/approve", requireModuleAction("Payroll", "edit"), async (req, res): Promise<void> => {
+router.post("/hr/payroll/:id/approve", requireModuleAction("page:/hr/payroll", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const today = new Date().toISOString().split("T")[0];
 
@@ -983,7 +988,7 @@ router.post("/hr/payroll/:id/approve", requireModuleAction("Payroll", "edit"), a
 });
 
 // Pay payroll — supports partial payments and payment mode
-router.post("/hr/payroll/:id/pay", requireModuleAction("Payroll", "edit"), async (req, res): Promise<void> => {
+router.post("/hr/payroll/:id/pay", requireModuleAction("page:/hr/payroll", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const today = new Date().toISOString().split("T")[0];
   const payAmount = Number(req.body.amount ?? 0);
@@ -1095,7 +1100,7 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("Payroll", "edit"), async
 });
 
 // ── Employee Advances ──────────────────────────────────────────────────────
-router.get("/hr/advances", requireModuleView("Payroll"), async (req, res): Promise<void> => {
+router.get("/hr/advances", requireModuleView("page:/hr/advances"), async (req, res): Promise<void> => {
   const scopeEmp = (req as any).employee as { id: number; branchType: string } | undefined;
   let empFilter = '';
   const params: unknown[] = [];
@@ -1117,7 +1122,7 @@ router.get("/hr/advances", requireModuleView("Payroll"), async (req, res): Promi
   })));
 });
 
-router.post("/hr/advances", requireModuleAction("Payroll", "add"), async (req, res): Promise<void> => {
+router.post("/hr/advances", requireModuleAction("page:/hr/advances", "add"), async (req, res): Promise<void> => {
   const { employeeId, amount, date, note } = req.body;
   if (!employeeId || !amount) { res.status(400).json({ error: "employeeId and amount are required" }); return; }
   const today = new Date().toISOString().split("T")[0];
@@ -1169,7 +1174,7 @@ router.post("/hr/advances", requireModuleAction("Payroll", "add"), async (req, r
 });
 
 // ── Attendance ────────────────────────────────────────────────────────────
-router.get("/hr/attendance", async (req, res): Promise<void> => {
+router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (req, res): Promise<void> => {
   const scopeEmp = (req as any).employee as { id: number; branchType: string } | undefined;
 
   // ── Month-range mode: ?year=YYYY&month=M returns all records for the month ──
@@ -1275,7 +1280,7 @@ router.get("/hr/attendance", async (req, res): Promise<void> => {
   res.json(result);
 });
 
-router.post("/hr/attendance/check-in", async (req, res): Promise<void> => {
+router.post("/hr/attendance/check-in", requireModuleAction("page:/hr/attendance", "add"), async (req, res): Promise<void> => {
   const parsed = CheckInBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   // Non-headoffice employees may only check in for themselves
@@ -1310,7 +1315,7 @@ router.post("/hr/attendance/check-in", async (req, res): Promise<void> => {
   });
 });
 
-router.post("/hr/attendance/check-out", async (req, res): Promise<void> => {
+router.post("/hr/attendance/check-out", requireModuleAction("page:/hr/attendance", "add"), async (req, res): Promise<void> => {
   const parsed = CheckOutBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   // Non-headoffice employees may only check out for themselves
@@ -1339,7 +1344,7 @@ router.post("/hr/attendance/check-out", async (req, res): Promise<void> => {
 });
 
 // ── Leave ─────────────────────────────────────────────────────────────────
-router.get("/hr/leaves", requireModuleView("Leave"), async (req, res): Promise<void> => {
+router.get("/hr/leaves", requireModuleView("page:/hr/attendance"), async (req, res): Promise<void> => {
   const qp = ListLeavesQueryParams.safeParse(req.query);
   let rows = await db.select().from(leavesTable).orderBy(leavesTable.id);
   if (qp.success) {
@@ -1356,7 +1361,7 @@ router.get("/hr/leaves", requireModuleView("Leave"), async (req, res): Promise<v
   res.json(rows.map((r) => ({ ...r, employeeName: eMap.get(r.employeeId) ?? "", approverName: null })));
 });
 
-router.post("/hr/leaves", async (req, res): Promise<void> => {
+router.post("/hr/leaves", requireModuleAction("page:/hr/attendance", "add"), async (req, res): Promise<void> => {
   const parsed = ApplyLeaveBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
@@ -1391,7 +1396,7 @@ router.post("/hr/leaves", async (req, res): Promise<void> => {
   res.status(201).json({ ...row, employeeName: emp?.name ?? "", approverName: null });
 });
 
-router.post("/hr/leaves/:id/approve", requireModuleAction("Leave", "edit"), async (req, res): Promise<void> => {
+router.post("/hr/leaves/:id/approve", requireModuleAction("page:/hr/attendance", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const parsed = ApproveLeaveBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
@@ -1404,7 +1409,7 @@ router.post("/hr/leaves/:id/approve", requireModuleAction("Leave", "edit"), asyn
 });
 
 // ── Password Reset (admin action) ─────────────────────────────────────────────
-router.post("/hr/employees/:id/reset-password", requireModuleAction("Employees", "edit"), async (req, res): Promise<void> => {
+router.post("/hr/employees/:id/reset-password", requireModuleAction("page:/hr/employees", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, id)).limit(1);
   if (!emp) { res.status(404).json({ error: "Employee not found" }); return; }

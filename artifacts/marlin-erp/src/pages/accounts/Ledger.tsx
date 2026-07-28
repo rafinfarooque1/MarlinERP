@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 
 export default function Ledger() {
-  const perm = usePermission('Ledger');
+  const perm = usePermission('page:/accounts/ledger');
   const { data: accounts = [] } = useListAccountsFlat();
   const [accountId, setAccountId] = useState<string>('');
   const now = new Date();
@@ -52,9 +52,11 @@ export default function Ledger() {
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><FileText className="w-6 h-6 text-primary" /> Ledger Statement</h1>
             <p className="text-muted-foreground mt-1">Account-wise debit / credit statement</p>
           </div>
+          {perm.canDownload && (
           <Button variant="outline" size="sm" disabled={!entries.length} onClick={() => downloadCSV('ledger.csv', entries.map((e: any) => ({ Date: e.date, Description: e.description, Debit: e.debit || 0, Credit: e.credit || 0, Balance: e.balance || 0 })))}>
             <Download className="w-4 h-4 mr-2" /> Export
           </Button>
+          )}
         </div>
 
         {/* Filters */}

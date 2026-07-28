@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireModuleAction } from "../middleware/permissions";
+import { requireModuleAction, requireModuleView } from "../middleware/permissions";
 import { db, warehousesTable, outletsTable, pool } from "@workspace/db";
 import { eq, count } from "drizzle-orm";
 import {
@@ -132,7 +132,10 @@ async function hasLedgerEntries(ledgerIds: (number | null)[]): Promise<boolean> 
 }
 
 // ── Warehouses ─────────────────────────────────────────────────────────────
-router.get("/warehouses", async (_req, res): Promise<void> => {
+// Cross-cutting location dropdown consumed by most pages (Dashboard, Inventory,
+// HR, Expenses, Reports, Transfers …). Kept deliberately wide to avoid blanking
+// out pages for users with any of these permissions.
+router.get("/warehouses", requireModuleView(["page:/", "page:/production/item-master", "page:/headoffice/stock-verification", "page:/headoffice/warehouses", "page:/headoffice/outlets", "page:/headoffice/item-price", "page:/headoffice/inventory-reports", "page:/headoffice/stock", "page:/hr/attendance", "page:/hr/payroll", "page:/hr/employees", "page:/accounts/expenses", "page:/reports/sales", "page:/transfers"]), async (_req, res): Promise<void> => {
   const rows = await db.select().from(warehousesTable).orderBy(warehousesTable.id);
   const outletCounts = await db
     .select({ warehouseId: outletsTable.warehouseId, cnt: count() })
@@ -147,7 +150,7 @@ router.get("/warehouses", async (_req, res): Promise<void> => {
   res.json(rows.map((r) => ({ ...r, outletCount: countMap.get(r.id) ?? 0, ...ledgerMap.get(r.id) })));
 });
 
-router.post("/warehouses", requireModuleAction("Warehouses", "add"), async (req, res): Promise<void> => {
+router.post("/warehouses", requireModuleAction("page:/headoffice/warehouses", "add"), async (req, res): Promise<void> => {
   const parsed = CreateWarehouseBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const [row] = await db.insert(warehousesTable).values(parsed.data).returning();
@@ -162,7 +165,7 @@ router.post("/warehouses", requireModuleAction("Warehouses", "add"), async (req,
   res.status(201).json({ ...row, outletCount: 0, cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, purchaseLedgerId: ledgers?.purchase_ledger_id ?? null, stateCode: ledgers?.state_code ?? '' });
 });
 
-router.get("/warehouses/:id", async (req, res): Promise<void> => {
+router.get("/warehouses/:id", requireModuleView("page:/headoffice/warehouses"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const [row] = await db.select().from(warehousesTable).where(eq(warehousesTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
@@ -173,7 +176,7 @@ router.get("/warehouses/:id", async (req, res): Promise<void> => {
   res.json({ ...row, outletCount: cnt?.cnt ?? 0, cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, purchaseLedgerId: ledgers?.purchase_ledger_id ?? null, stateCode: ledgers?.state_code ?? '' });
 });
 
-router.patch("/warehouses/:id", requireModuleAction("Warehouses", "edit"), async (req, res): Promise<void> => {
+router.patch("/warehouses/:id", requireModuleAction("page:/headoffice/warehouses", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const parsed = UpdateWarehouseBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
@@ -195,7 +198,7 @@ router.patch("/warehouses/:id", requireModuleAction("Warehouses", "edit"), async
   res.json({ ...row, outletCount: cnt?.cnt ?? 0, cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, purchaseLedgerId: ledgers?.purchase_ledger_id ?? null, stateCode: ledgers?.state_code ?? '' });
 });
 
-router.delete("/warehouses/:id", requireModuleAction("Warehouses", "delete"), async (req, res): Promise<void> => {
+router.delete("/warehouses/:id", requireModuleAction("page:/headoffice/warehouses", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   // Fetch linked ledger IDs
   const { rows: [wh] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null }>(
@@ -211,7 +214,9 @@ router.delete("/warehouses/:id", requireModuleAction("Warehouses", "delete"), as
 });
 
 // ── Outlets ────────────────────────────────────────────────────────────────
-router.get("/outlets", async (_req, res): Promise<void> => {
+// Cross-cutting location dropdown consumed by most pages (as /warehouses, plus
+// POS and Sales Expenses). Kept deliberately wide to avoid blanking out pages.
+router.get("/outlets", requireModuleView(["page:/", "page:/production/item-master", "page:/headoffice/stock-verification", "page:/headoffice/warehouses", "page:/headoffice/outlets", "page:/headoffice/item-price", "page:/headoffice/inventory-reports", "page:/headoffice/stock", "page:/hr/attendance", "page:/hr/payroll", "page:/hr/employees", "page:/accounts/expenses", "page:/reports/sales", "page:/transfers", "page:/sales/pos", "page:/sales/expenses"]), async (_req, res): Promise<void> => {
   const rows = await db.select().from(outletsTable).orderBy(outletsTable.id);
   const warehouses = await db.select().from(warehousesTable);
   const wMap = new Map(warehouses.map((w) => [w.id, w.name]));
@@ -222,7 +227,7 @@ router.get("/outlets", async (_req, res): Promise<void> => {
   res.json(rows.map((r) => ({ ...r, warehouseName: wMap.get(r.warehouseId) ?? "", ...ledgerMap.get(r.id) })));
 });
 
-router.post("/outlets", requireModuleAction("Outlets", "add"), async (req, res): Promise<void> => {
+router.post("/outlets", requireModuleAction("page:/headoffice/outlets", "add"), async (req, res): Promise<void> => {
   if (await outletWritesBlocked(pool)) {
     res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
   }
@@ -241,7 +246,7 @@ router.post("/outlets", requireModuleAction("Outlets", "add"), async (req, res):
   res.status(201).json({ ...row, warehouseName: wh?.name ?? "", cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, gstin: ledgers?.gstin ?? '', state: ledgers?.state ?? '', stateCode: ledgers?.state_code ?? '' });
 });
 
-router.get("/outlets/:id", async (req, res): Promise<void> => {
+router.get("/outlets/:id", requireModuleView("page:/headoffice/outlets"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const [row] = await db.select().from(outletsTable).where(eq(outletsTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
@@ -252,7 +257,7 @@ router.get("/outlets/:id", async (req, res): Promise<void> => {
   res.json({ ...row, warehouseName: wh?.name ?? "", cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, gstin: ledgers?.gstin ?? '', state: ledgers?.state ?? '', stateCode: ledgers?.state_code ?? '' });
 });
 
-router.patch("/outlets/:id", requireModuleAction("Outlets", "edit"), async (req, res): Promise<void> => {
+router.patch("/outlets/:id", requireModuleAction("page:/headoffice/outlets", "edit"), async (req, res): Promise<void> => {
   if (await outletWritesBlocked(pool)) {
     res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
   }
@@ -278,7 +283,7 @@ router.patch("/outlets/:id", requireModuleAction("Outlets", "edit"), async (req,
   res.json({ ...row, warehouseName: wh?.name ?? "", cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, gstin: ledgers?.gstin ?? '', state: ledgers?.state ?? '', stateCode: ledgers?.state_code ?? '' });
 });
 
-router.delete("/outlets/:id", requireModuleAction("Outlets", "delete"), async (req, res): Promise<void> => {
+router.delete("/outlets/:id", requireModuleAction("page:/headoffice/outlets", "delete"), async (req, res): Promise<void> => {
   // Historical integrity outranks tidiness: while the module is off, outlet rows
   // are frozen, not removable, so no report or audit can lose its subject.
   if (await outletWritesBlocked(pool)) {

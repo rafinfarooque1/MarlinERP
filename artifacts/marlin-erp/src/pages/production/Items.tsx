@@ -32,7 +32,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function Items() {
-  const perm = usePermission('Items');
+  const perm = usePermission('page:/production/item-master');
   // Item masters belong to Head Office. Codes, barcodes and status are shown
   // read-only here — the full editor lives on the combined Item Master page.
   const { isHeadOffice } = useIsHeadOffice();
@@ -104,10 +104,12 @@ export default function Items() {
             <p className="text-muted-foreground mt-1">{isHeadOffice ? 'Finished goods / SKU catalogue' : HEAD_OFFICE_ONLY_HINT}</p>
           </div>
           <div className="flex gap-2">
+            {perm.canDownload && (
             <Button variant="outline" size="sm" onClick={() => downloadCSV('items.csv', filtered.map(i => ({ Code: (i as any).itemCode || '', Barcode: (i as any).barcode || '', Name: i.name, HSN: i.hsnCode, 'Tax%': i.taxRate, Unit: i.unit, 'Production Stock': i.productionStock, Status: isActiveProduct(i) ? 'Active' : 'Inactive' })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
-            {isHeadOffice && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Item</Button>}
+            )}
+            {isHeadOffice && perm.canAdd && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Item</Button>}
           </div>
         </div>
 
@@ -159,11 +161,11 @@ export default function Items() {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(item)}><Eye className="w-4 h-4" /></Button>
-                      {isHeadOffice && (
-                        <>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(item)}><Edit2 className="w-4 h-4" /></Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => handleDelete(item.id, item.name)}><Trash2 className="w-4 h-4" /></Button>
-                        </>
+                      {isHeadOffice && perm.canEdit && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(item)}><Edit2 className="w-4 h-4" /></Button>
+                      )}
+                      {isHeadOffice && perm.canDelete && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => handleDelete(item.id, item.name)}><Trash2 className="w-4 h-4" /></Button>
                       )}
                     </div>
                   </TableCell>
@@ -243,7 +245,9 @@ export default function Items() {
                   <span className="font-medium">{v}</span>
                 </div>
               ))}
-              <Button className="w-full mt-2" onClick={() => { setViewItem(null); openEdit(viewItem); }}><Edit2 className="w-4 h-4 mr-2" /> Edit</Button>
+              {isHeadOffice && perm.canEdit && (
+                <Button className="w-full mt-2" onClick={() => { setViewItem(null); openEdit(viewItem); }}><Edit2 className="w-4 h-4 mr-2" /> Edit</Button>
+              )}
             </div>
           )}
         </SheetContent>

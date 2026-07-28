@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireModuleAction } from "../middleware/permissions";
+import { requireModuleAction, requireModuleView } from "../middleware/permissions";
 import { db, pool, purchasesTable, vendorsTable, materialsTable, rawMaterialsTable, itemsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { CreatePurchaseBody, GetPurchaseParams } from "@workspace/api-zod";
@@ -142,7 +142,8 @@ async function locationNameMap(): Promise<Map<string, string>> {
   return m;
 }
 
-router.get("/purchases", async (req, res): Promise<void> => {
+// Serves Purchases and Returns pages.
+router.get("/purchases", requireModuleView(["page:/production/purchase", "page:/returns"]), async (req, res): Promise<void> => {
   // LBAC: a location sees its own bills; Head Office sees every location's.
   const scope = await getUserDataScope((req as any).employee ?? { branchType: 'headoffice', branchId: 0 });
   const paginated = 'page' in req.query || 'limit' in req.query;
@@ -203,7 +204,7 @@ router.get("/purchases", async (req, res): Promise<void> => {
   }
 });
 
-router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, res): Promise<void> => {
+router.post("/purchases", requireModuleAction("page:/production/purchase", "add"), async (req, res): Promise<void> => {
   const parsed = CreatePurchaseBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
@@ -374,7 +375,7 @@ router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, r
   });
 });
 
-router.get("/purchases/:id", async (req, res): Promise<void> => {
+router.get("/purchases/:id", requireModuleView("page:/production/purchase"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const [row] = await db.select().from(purchasesTable).where(eq(purchasesTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
@@ -402,7 +403,7 @@ router.get("/purchases/:id", async (req, res): Promise<void> => {
   });
 });
 
-router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (req, res): Promise<void> => {
+router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const [current] = await db.select().from(purchasesTable).where(eq(purchasesTable.id, id)).limit(1);
   if (!current) { res.status(404).json({ error: "Not found" }); return; }
@@ -654,7 +655,7 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
   res.json({ ...row, vendorName: vendor?.name ?? "", totalAmount: Number(row.totalAmount), lineItems: row.lineItems ?? [] });
 });
 
-router.delete("/purchases/:id", requireModuleAction("Purchases", "delete"), async (req, res): Promise<void> => {
+router.delete("/purchases/:id", requireModuleAction("page:/production/purchase", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const scope = await getUserDataScope((req as any).employee ?? { branchType: 'headoffice', branchId: 0 });
 

@@ -76,7 +76,7 @@ router.get("/company/settings", async (_req, res): Promise<void> => {
   res.json({ ...row, ...(await extraSettingsFields(row.id)) });
 });
 
-router.patch("/company/settings", requireModuleAction("Settings", "edit"), async (req, res): Promise<void> => {
+router.patch("/company/settings", requireModuleAction("page:/company/settings", "edit"), async (req, res): Promise<void> => {
   const data = pickCompanyFields(req.body);
 
   // paymentTerms / invoiceFooter are handled via raw SQL (columns added by
@@ -222,7 +222,7 @@ router.patch("/company/settings", requireModuleAction("Settings", "edit"), async
 // Server-paginated login attempts + live lockout status. Guarded by the
 // 'Login History' module (any-of with Settings so admins keep access even
 // before the new module is saved on the Permissions page).
-router.get("/company/login-history", requireModuleView(["Login History", "Settings"]), async (req, res): Promise<void> => {
+router.get("/company/login-history", requireModuleView(["page:/company/login-history", "page:/company/settings"]), async (req, res): Promise<void> => {
   const page = Math.max(parseInt(String(req.query.page ?? '1'), 10) || 1, 1);
   const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '25'), 10) || 25, 1), 200);
   const username = typeof req.query.username === 'string' ? req.query.username.trim() : '';
@@ -278,32 +278,28 @@ router.get("/company/permissions", async (_req, res): Promise<void> => {
   })));
 });
 
-router.post("/company/permissions", requireModuleAction("Permissions", "edit"), async (req, res): Promise<void> => {
+router.post("/company/permissions", requireModuleAction("page:/company/permissions", "edit"), async (req, res): Promise<void> => {
   const parsed = SetPermissionBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
   // Upsert must match on hierarchy AND module — matching hierarchy alone
-  // would make every module save overwrite the same single row.
-  const [existing] = await db.select().from(permissionsTable)
-    .where(and(
-      eq(permissionsTable.hierarchyId, parsed.data.hierarchyId),
-      eq(permissionsTable.module, parsed.data.module),
-    ))
-    .limit(1);
-
-  let row;
-  if (existing) {
-    [row] = await db.update(permissionsTable).set(parsed.data).where(eq(permissionsTable.id, existing.id)).returning();
-  } else {
-    [row] = await db.insert(permissionsTable).values(parsed.data).returning();
-  }
+  // would make every module save overwrite the same single row. Done as a
+  // single ON CONFLICT statement so two admins saving the same page at once
+  // cannot both miss an existing row and insert a duplicate.
+  const [row] = await db.insert(permissionsTable)
+    .values(parsed.data)
+    .onConflictDoUpdate({
+      target: [permissionsTable.hierarchyId, permissionsTable.module],
+      set: parsed.data,
+    })
+    .returning();
 
   const [h] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, row.hierarchyId)).limit(1);
   res.json({ ...row, hierarchyName: h?.name ?? "" });
 });
 
 // ── Reset all company data (dangerous — wipes all transactional records) ──────
-router.post("/company/reset", requireModuleAction("Settings", "delete"), async (_req, res): Promise<void> => {
+router.post("/company/reset", requireModuleAction("page:/company/settings", "delete"), async (_req, res): Promise<void> => {
   const TRUNCATE_TABLES = [
     // Payments & reconciliation (most dependent — clear first)
     'sale_payments',

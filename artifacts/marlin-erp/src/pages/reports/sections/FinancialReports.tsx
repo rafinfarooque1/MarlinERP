@@ -9,6 +9,7 @@ import { Link } from 'wouter';
 import {
   BookOpen, Scale, FileSpreadsheet, Landmark, Wallet, Percent, ArrowRight, Clock,
 } from 'lucide-react';
+import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
 import {
   fmt, pdfMoney, periodLabel,
@@ -76,7 +77,7 @@ function LineTable({ lines, total, totalLabel, loading }: { lines: Line[]; total
 }
 
 // ── Profit & Loss ─────────────────────────────────────────────────────────────
-function PnlReport({ range }: { range: RangeState }) {
+function PnlReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
   const { data, isLoading } = useFinancialStatements(range);
   const pl = data?.profitAndLoss;
 
@@ -99,6 +100,7 @@ function PnlReport({ range }: { range: RangeState }) {
     <div className="space-y-4">
       <RangeBar range={range}>
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || !pl}
           onCSV={() => downloadCSV('profit-and-loss.csv', [
             ...expenseLines.map((l) => ({ Side: 'Expenses', Particulars: l.name, 'Amount (₹)': l.amount.toFixed(2) })),
@@ -157,7 +159,7 @@ function PnlReport({ range }: { range: RangeState }) {
 }
 
 // ── Balance Sheet ─────────────────────────────────────────────────────────────
-function BalanceSheetReport({ range }: { range: RangeState }) {
+function BalanceSheetReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
   const { data, isLoading } = useFinancialStatements(range);
   const bs = data?.balanceSheet;
 
@@ -179,6 +181,7 @@ function BalanceSheetReport({ range }: { range: RangeState }) {
     <div className="space-y-4">
       <RangeBar range={range}>
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || !bs}
           onCSV={() => downloadCSV('balance-sheet.csv', [
             ...liabilityLines.map((l) => ({ Side: 'Liabilities', Particulars: l.name, 'Amount (₹)': l.amount.toFixed(2) })),
@@ -270,6 +273,7 @@ function BooksLinks() {
 
 // ── Section root ──────────────────────────────────────────────────────────────
 export default function FinancialSection() {
+  const { canDownload } = usePermission('page:/reports/sales');
   const range = useDateRange('fy');
   const [report, setReport] = useState<FinReport>('pnl');
   return (
@@ -282,8 +286,8 @@ export default function FinancialSection() {
         ]}
         value={report} onChange={setReport}
       />
-      {report === 'pnl' && <PnlReport range={range} />}
-      {report === 'balanceSheet' && <BalanceSheetReport range={range} />}
+      {report === 'pnl' && <PnlReport range={range} canDownload={canDownload} />}
+      {report === 'balanceSheet' && <BalanceSheetReport range={range} canDownload={canDownload} />}
       {report === 'books' && <BooksLinks />}
     </div>
   );

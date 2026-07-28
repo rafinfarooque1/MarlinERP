@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { pool } from "@workspace/db";
 import { getUserDataScope, scopeSalesWhere, scopeLocationTypeWhere } from "../lib/dataScope";
+import { hasModuleAction } from "../middleware/permissions";
 
 const router: IRouter = Router();
 
@@ -8,20 +9,21 @@ const router: IRouter = Router();
  * Global quick search (Cmd+K palette, Phase 7).
  *
  * GET /search?q= — searches items, customers, vendors and sale invoices
- * (LIMIT 8 per group). Permission-aware: a result group is only populated
- * when the employee's hierarchy can view the corresponding module, using the
- * same default-allow semantics as requireModuleView (level 1 = everything,
- * missing permission row = visible).
+ * (LIMIT 8 per group). Permission-aware: a result group is only populated when
+ * the employee may view a page that shows that kind of record, with the same
+ * default-DENY semantics as requireModuleView (level 1 = everything, missing
+ * permission row = hidden). Search must never be a side door to records the
+ * role cannot open from the sidebar.
  *
  * LBAC: results are automatically scoped to the employee's assigned location —
  * customers and vendors by their location_type/location_id, sales by
  * their location columns.
  */
 const GROUP_MODULES: Record<string, string[]> = {
-  items: ["Items"],
-  customers: ["Customers"],
-  vendors: ["Vendors"],
-  sales: ["Sales", "Point of Sale"],
+  items: ["page:/production/item-master"],
+  customers: ["page:/customers"],
+  vendors: ["page:/vendors"],
+  sales: ["page:/sales/pos", "page:/outstanding", "page:/returns"],
 };
 
 router.get("/search", async (req, res): Promise<void> => {
@@ -34,17 +36,12 @@ router.get("/search", async (req, res): Promise<void> => {
 
   const hierarchyId = employee.hierarchyId;
 
-  const allModules = Object.values(GROUP_MODULES).flat();
-  const { rows: permRows } = await pool.query<any>(
-    `SELECT (SELECT level FROM hierarchies WHERE id = $1) AS level,
-            (SELECT json_object_agg(module, can_view) FROM permissions
-              WHERE hierarchy_id = $1 AND module = ANY($2::text[])) AS flags`,
-    [hierarchyId, allModules],
+  const groups = Object.keys(GROUP_MODULES);
+  const visible = await Promise.all(
+    groups.map((g) => hasModuleAction(hierarchyId, GROUP_MODULES[g], "view")),
   );
-  const level = Number(permRows[0]?.level ?? 99);
-  const flags: Record<string, boolean | null> = permRows[0]?.flags ?? {};
-  const canView = (group: keyof typeof GROUP_MODULES): boolean =>
-    level === 1 || GROUP_MODULES[group].some((m) => flags[m] !== false);
+  const visibleGroups = new Set(groups.filter((_, i) => visible[i]));
+  const canView = (group: keyof typeof GROUP_MODULES): boolean => visibleGroups.has(group);
 
   // Resolve data scope once; all queries below will use it
   const scope = await getUserDataScope(employee);

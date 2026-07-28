@@ -42,7 +42,8 @@ const BATCH_NAME_COLS = `
   NULLIF(COALESCE(sb.mrp, i.mrp, m.mrp, rm.mrp), 0) AS mrp`;
 
 // ── Batch listing (drill-down for stock pages) ────────────────────────────────
-router.get("/stock/batches", async (req, res): Promise<void> => {
+// Serves Stock (HO + sales), Transfers pages.
+router.get("/stock/batches", requireModuleView(["page:/headoffice/stock", "page:/transfers"]), async (req, res): Promise<void> => {
   const { branchType, branchId, itemId, materialType } = req.query as Record<string, string | undefined>;
   const nearDays = Math.max(1, Number(req.query.nearDays ?? 30) || 30);
 
@@ -129,7 +130,7 @@ router.get("/stock/batches", async (req, res): Promise<void> => {
 });
 
 // ── FEFO suggestion for a planned outbound ───────────────────────────────────
-router.get("/stock/batches/suggest", async (req, res): Promise<void> => {
+router.get("/stock/batches/suggest", requireModuleView("page:/transfers"), async (req, res): Promise<void> => {
   const itemId = Number(req.query.itemId);
   const branchType = String(req.query.branchType ?? "");
   const branchId = Number(req.query.branchId);
@@ -157,7 +158,7 @@ router.get("/stock/batches/suggest", async (req, res): Promise<void> => {
 //   near_expiry → dated ahead of today, inside the window
 //   expired     → already past, regardless of how long ago
 //   all         → both (default)
-router.get("/stock/expiry-report", requireModuleView("Stock"), async (req, res): Promise<void> => {
+router.get("/stock/expiry-report", requireModuleView(["page:/headoffice/inventory-reports", "page:/headoffice/stock"]), async (req, res): Promise<void> => {
   const widest = EXPIRY_TIER_DAYS[EXPIRY_TIER_DAYS.length - 1];
   const days = Math.max(1, Number(req.query.days ?? widest) || widest);
   const status = String(req.query.status ?? "all");
@@ -279,7 +280,7 @@ router.get("/stock/expiry-report", requireModuleView("Stock"), async (req, res):
 // finished goods only; raw and packing materials are stock the business owns and
 // are now included, as is stock dispatched but not yet received (valued as the
 // sender's until it lands, because it belongs to nobody else).
-router.get("/stock/valuation", requireModuleView("Stock"), async (req, res): Promise<void> => {
+router.get("/stock/valuation", requireModuleView(["page:/headoffice/inventory-reports", "page:/headoffice/stock"]), async (req, res): Promise<void> => {
   const { branchType, branchId, materialType } = req.query as Record<string, string | undefined>;
   if (materialType && !BATCH_KINDS.includes(materialType as any)) {
     res.status(400).json({ error: `materialType must be one of: ${BATCH_KINDS.join(", ")}` }); return;
@@ -346,7 +347,7 @@ router.get("/stock/valuation", requireModuleView("Stock"), async (req, res): Pro
 // Classified on days since the last OUTBOUND movement, because that is what
 // "moving" means for stock: receiving more of something that never leaves does
 // not make it alive. Both dates are returned so the UI can show either.
-router.get("/stock/movement-analysis", requireModuleView("Stock"), async (req, res): Promise<void> => {
+router.get("/stock/movement-analysis", requireModuleView(["page:/headoffice/inventory-reports", "page:/headoffice/stock"]), async (req, res): Promise<void> => {
   const { branchType, branchId, materialType, itemId } = req.query as Record<string, string | undefined>;
   const cls = String(req.query.class ?? "all");
   if (materialType && !BATCH_KINDS.includes(materialType as any)) {
@@ -464,7 +465,7 @@ router.get("/stock/movement-analysis", requireModuleView("Stock"), async (req, r
 });
 
 // ── Reorder report (per-item reorder levels) ─────────────────────────────────
-router.get("/stock/reorder-report", requireModuleView("Stock"), async (_req, res): Promise<void> => {
+router.get("/stock/reorder-report", requireModuleView(["page:/headoffice/inventory-reports", "page:/headoffice/stock"]), async (_req, res): Promise<void> => {
   const [result, branchName] = await Promise.all([
     pool.query(
       `SELECT se.branch_type, se.branch_id, se.item_id, se.quantity::numeric AS qty,
@@ -492,7 +493,7 @@ router.get("/stock/reorder-report", requireModuleView("Stock"), async (_req, res
 });
 
 // ── Physical stock verification ──────────────────────────────────────────────
-router.post("/stock/verifications", requireModuleAction("Stock Verification", "add"), async (req, res): Promise<void> => {
+router.post("/stock/verifications", requireModuleAction("page:/headoffice/stock-verification", "add"), async (req, res): Promise<void> => {
   const { branchType, branchId, verifyDate, notes, createdBy, lines } = req.body as {
     branchType?: string; branchId?: number; verifyDate?: string; notes?: string; createdBy?: string;
     lines?: Array<{ itemId: number; countedQty: number; reason?: string }>;
@@ -621,7 +622,7 @@ router.post("/stock/verifications", requireModuleAction("Stock Verification", "a
   }
 });
 
-router.get("/stock/verifications", async (req, res): Promise<void> => {
+router.get("/stock/verifications", requireModuleView("page:/headoffice/stock-verification"), async (req, res): Promise<void> => {
   const { branchType, branchId } = req.query as Record<string, string | undefined>;
   const conds: string[] = ["true"];
   const params: any[] = [];
@@ -655,7 +656,7 @@ router.get("/stock/verifications", async (req, res): Promise<void> => {
   }));
 });
 
-router.get("/stock/verifications/:id", async (req, res): Promise<void> => {
+router.get("/stock/verifications/:id", requireModuleView("page:/headoffice/stock-verification"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { rows: [v] } = await pool.query(
     `SELECT id, branch_type, branch_id, verify_date, notes, created_by, lines, created_at

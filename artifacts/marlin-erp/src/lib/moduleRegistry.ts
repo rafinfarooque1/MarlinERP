@@ -116,6 +116,81 @@ export const PERM_GROUP_ORDER: string[] = [
   'Operations', 'Production', 'Inventory', 'Sales', 'HR', 'Accounts', 'Dashboard', 'Company',
 ];
 
+// ── Per-link (page) permissions ───────────────────────────────────────────────
+//
+// Every sidebar link gets its own permission row. The href is the identifier:
+// link NAMES collide across sections ("Reports" appears under Production,
+// Inventory and Accounts; "Expenses" under both Operations and Accounts), so a
+// name could never address a single row. The href is unique and stable, and it
+// is already the thing the sidebar renders.
+//
+// The `page:` prefix keeps these rows visually distinct from the old grouped
+// module rows and lets the build-time guard check recognise them.
+
+export const PAGE_PERM_PREFIX = 'page:';
+
+/** Permission key for one sidebar link. */
+export function pagePermKey(href: string): string {
+  return `${PAGE_PERM_PREFIX}${href}`;
+}
+
+/** One row on the Permissions page — exactly one sidebar link. */
+export interface PagePermRow {
+  /** Key stored in the permissions table, e.g. `page:/accounts/day-book` */
+  key: string;
+  /** The sidebar link name, verbatim */
+  name: string;
+  /** Sidebar section the link sits in. Empty for the standalone Dashboard. */
+  section: string;
+  href: string;
+}
+
+/**
+ * Every sidebar link, flat, in sidebar order — standalone items first, then
+ * each section in NAV_GROUP_ORDER with its links in registry order.
+ *
+ * Derived from the same data `getNavGroups()` renders from, so the two can
+ * never drift. Adding a link to the registry adds a permission row for free.
+ */
+export function getPagePermRows(): PagePermRow[] {
+  const rows: PagePermRow[] = [];
+  const seen = new Set<string>();
+  const push = (name: string, href: string, section: string) => {
+    const key = pagePermKey(href);
+    if (seen.has(key)) return; // same href twice = one permission row
+    seen.add(key);
+    rows.push({ key, name, section, href });
+  };
+
+  for (const mod of MODULE_REGISTRY) {
+    if (mod.navGroup !== '__standalone__') continue;
+    for (const entry of mod.navEntries) push(entry.name, entry.href, '');
+  }
+  for (const group of getNavGroups()) {
+    for (const child of group.children ?? []) push(child.name, child.href, group.name);
+  }
+  return rows;
+}
+
+/**
+ * Pages that are reachable but have no sidebar link of their own, mapped to the
+ * link that owns them. A page must be governed by something, and inventing a
+ * row the sidebar never shows would be a permission nobody could find.
+ */
+export const SATELLITE_PAGE_OWNER: Record<string, string> = {
+  '/production/items':      '/production/item-master',
+  '/hr/leave':              '/hr/attendance',
+  '/accounts/journal':      '/accounts/vouchers',
+  '/accounts/contra':       '/accounts/vouchers',
+  '/accounts/notes':        '/accounts/vouchers',
+  '/accounts/payments':     '/accounts/vouchers',
+  '/accounts/receipts':     '/accounts/vouchers',
+  '/sales/dashboard':       '/',
+  '/sales/stock':           '/headoffice/stock',
+  '/sales/cash-balance':    '/accounts/cash-in-outlet',
+  '/sales/transfers':       '/transfers',
+};
+
 /** One row in the permissions table — maps to a nav link the user can see */
 export interface PermNavRow {
   moduleKey: string;
@@ -443,8 +518,55 @@ export const MODULE_REGISTRY: ModuleDef[] = [
 
 // ── Derived exports ───────────────────────────────────────────────────────────
 
-/** All unique permission keys in registry order (used by Permissions page) */
+/** All unique legacy module keys in registry order (pre per-link permissions) */
 export const ALL_MODULE_KEYS: string[] = MODULE_REGISTRY.map(m => m.key);
+
+/** All per-link permission keys, in sidebar order. */
+export const PAGE_PERM_KEYS: string[] = getPagePermRows().map(r => r.key);
+
+/** Fast lookup for the build-time guard-name check and runtime validation. */
+export const PAGE_PERM_KEY_SET: ReadonlySet<string> = new Set(PAGE_PERM_KEYS);
+
+/**
+ * Old grouped module names → the per-link keys that replace them.
+ *
+ * Most entries derive straight from the registry. The rest are modules that
+ * never had a sidebar link of their own: four kept only for backward-compatible
+ * rows, two used exclusively by backend guards, and four that exist purely as
+ * historical rows in the permissions table.
+ */
+const LEGACY_FOLD_INS: Record<string, string[]> = {
+  // Registry modules with intentionally empty navEntries
+  'Location Stock':        ['/headoffice/stock'],
+  'Leave':                 ['/hr/attendance'],     // Leave is worked from Attendance
+  'Payments':              ['/accounts/vouchers'], // Payment/Receipt open from Vouchers
+  'Accounts Cash Balance': ['/accounts/cash-in-outlet'],
+  // Backend-only guard names that were never in the registry
+  'Materials':             ['/production/item-master'],
+  'Raw Materials':         ['/production/item-master'],
+  // Names that only ever existed as rows in the permissions table
+  'Stock Transfers':       ['/transfers'],
+  'Location Transfers':    ['/transfers'],
+  'Sales Dashboard':       ['/'],
+  'Profile':               ['/company/profile'],
+};
+
+export const LEGACY_MODULE_TO_PAGES: Record<string, string[]> = (() => {
+  const map: Record<string, string[]> = {};
+  const add = (legacy: string, hrefs: string[]) => {
+    const keys = hrefs.map(pagePermKey).filter(k => PAGE_PERM_KEY_SET.has(k));
+    if (keys.length === 0) return;
+    map[legacy] = Array.from(new Set([...(map[legacy] ?? []), ...keys]));
+  };
+  for (const mod of MODULE_REGISTRY) add(mod.key, mod.navEntries.map(e => e.href));
+  for (const [legacy, hrefs] of Object.entries(LEGACY_FOLD_INS)) add(legacy, hrefs);
+  return map;
+})();
+
+/** Per-link key for any reachable route, sidebar link or satellite page. */
+export function permKeyForRoute(href: string): string {
+  return pagePermKey(SATELLITE_PAGE_OWNER[href] ?? href);
+}
 
 // ── Permissions page helpers ──────────────────────────────────────────────────
 
@@ -493,7 +615,10 @@ export function getPermissionSegments(): PermSegmentDef[] {
 export interface AccountsNavChildDef {
   name: string;
   href: string;
+  /** Legacy grouped module key. Kept so the rendered sidebar is byte-identical. */
   module: string;
+  /** Per-link permission key — what actually governs visibility. */
+  permKey: string;
   matchPrefix?: string;
 }
 
@@ -506,8 +631,10 @@ export interface SidebarNavItem {
   icon: LucideIcon;
   /** Present for standalone (leaf) nav items */
   href?: string;
-  /** Permission key for standalone items */
+  /** Legacy grouped module key for standalone items */
   module?: string;
+  /** Per-link permission key for standalone items */
+  permKey?: string;
   /** Present for grouped nav sections */
   children?: AccountsNavChildDef[];
 }
@@ -541,6 +668,7 @@ export function getNavGroups(): SidebarNavItem[] {
         name:        entry.name,
         href:        entry.href,
         module:      mod.key,
+        permKey:     pagePermKey(entry.href),
         ...(entry.matchPrefix ? { matchPrefix: entry.matchPrefix } : {}),
       });
     }

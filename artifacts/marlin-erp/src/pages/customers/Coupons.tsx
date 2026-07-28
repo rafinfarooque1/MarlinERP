@@ -29,7 +29,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function Coupons() {
-  const perm = usePermission('Coupons');
+  const perm = usePermission('page:/coupons');
   const { data: coupons = [], isLoading } = useListCoupons();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -88,12 +88,16 @@ export default function Coupons() {
             <p className="text-muted-foreground mt-1">Discount codes and promotional offers</p>
           </div>
           <div className="flex gap-2">
+            {perm.canDownload && (
             <Button variant="outline" size="sm" onClick={() => downloadCSV('coupons.csv', (filtered as any[]).map(c => ({ Code: c.code, Type: c.discountType, Value: c.discountValue, ValidDays: c.validDays, Used: c.usageCount ?? 0, ExpiresOn: c.expiryDate ?? '' })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
+            )}
+            {perm.canAdd && (
             <Button onClick={() => { form.reset({ code: '', discountType: 'percentage', discountValue: 10, validDays: 30 }); setIsOpen(true); }}>
               <Plus className="w-4 h-4 mr-2" /> Create Coupon
             </Button>
+            )}
           </div>
         </div>
 

@@ -26,7 +26,7 @@ function fmtTime(iso: string) {
 }
 
 export default function LoginHistory() {
-  const perm = usePermission('Login History');
+  const perm = usePermission('page:/company/login-history');
   const [page, setPage] = useState(1);
   const [usernameFilter, setUsernameFilter] = useState('');
   const [usernameInput, setUsernameInput] = useState('');

@@ -953,6 +953,7 @@ export interface Permission {
   canEdit?: boolean;
   canDelete?: boolean;
   canDownload?: boolean;
+  canPrint?: boolean;
 }
 
 export interface PermissionInput {
@@ -963,6 +964,7 @@ export interface PermissionInput {
   canEdit?: boolean;
   canDelete?: boolean;
   canDownload?: boolean;
+  canPrint?: boolean;
 }
 
 export type ListStockParams = {

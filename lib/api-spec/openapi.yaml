@@ -2786,6 +2786,8 @@ components:
           type: boolean
         canDownload:
           type: boolean
+        canPrint:
+          type: boolean
 
     PermissionInput:
       type: object
@@ -2804,4 +2806,6 @@ components:
         canDelete:
           type: boolean
         canDownload:
+          type: boolean
+        canPrint:
           type: boolean

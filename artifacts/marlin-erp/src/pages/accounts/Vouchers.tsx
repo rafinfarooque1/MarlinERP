@@ -408,8 +408,8 @@ function NewVoucherDialog({ onClose, defaultType }: { onClose: () => void; defau
 
 // ── Main page ──────────────────────────────────────────────────────────────
 export default function Vouchers() {
-  const perm       = usePermission('Vouchers');
-  const permPay    = usePermission('Payments');
+  const perm       = usePermission('page:/accounts/vouchers');
+  const permPay    = usePermission('page:/accounts/vouchers');
 
   const { data: payments = [],   isLoading: l1 } = useListPayments();
   const { data: receipts = [],   isLoading: l2 } = useListReceipts();
@@ -491,6 +491,7 @@ export default function Vouchers() {
   const canView = perm.canView || permPay.canView;
   const canAdd  = perm.canAdd  || permPay.canAdd;
   const canDel  = perm.canDelete || permPay.canDelete;
+  const canDownload = perm.canDownload || permPay.canDownload;
 
   const handleExport = () => {
     downloadCSV('vouchers.csv', filtered.map(r => ({
@@ -524,9 +525,11 @@ export default function Vouchers() {
             <p className="text-muted-foreground mt-0.5 text-sm">All accounting vouchers in one place</p>
           </div>
           <div className="flex gap-2">
+            {canDownload && (
             <Button variant="outline" size="sm" onClick={handleExport}>
               <Download className="w-4 h-4 mr-1" /> Export
             </Button>
+            )}
             {canAdd && (
               <Button onClick={() => { setNewType('payment'); setNewOpen(true); }}>
                 <Plus className="w-4 h-4 mr-1" /> New Voucher
@@ -650,6 +653,7 @@ export default function Vouchers() {
                       </TableCell>
                       <TableCell onClick={e => e.stopPropagation()}>
                         <div className="flex items-center gap-0.5 justify-end">
+                          {canDownload && (
                           <Button
                             variant="ghost" size="icon"
                             className="h-7 w-7 text-muted-foreground hover:text-primary"
@@ -658,6 +662,7 @@ export default function Vouchers() {
                           >
                             <FileDown className="h-3.5 w-3.5" />
                           </Button>
+                          )}
                           {canDel && (
                             <Button
                               variant="ghost" size="icon"

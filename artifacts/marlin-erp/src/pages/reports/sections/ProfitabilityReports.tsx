@@ -4,6 +4,7 @@
  */
 import { useState } from 'react';
 import { useProfitability } from '@workspace/api-client-react';
+import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
 import {
   fmt, num, pdfMoney, periodLabel,
@@ -12,6 +13,7 @@ import {
 } from '../shared';
 
 export default function ProfitabilitySection() {
+  const { canDownload } = usePermission('page:/reports/sales');
   const range = useDateRange('month');
   const [groupBy, setGroupBy] = useState<'item' | 'location'>('item');
   const { data, isLoading } = useProfitability({ from: range.from || undefined, to: range.to || undefined, groupBy });
@@ -30,6 +32,7 @@ export default function ProfitabilitySection() {
       />
       <RangeBar range={range}>
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV(`profitability-by-${groupBy}.csv`, rows.map((r) => ({
             [entity]: r.label, ...(groupBy === 'item' ? { Unit: r.unit } : {}), Qty: r.qty,

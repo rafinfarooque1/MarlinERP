@@ -12,6 +12,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
 import {
   fmt, num, pdfMoney, fmtDate, titleCase,
@@ -24,7 +25,7 @@ type InvReport = 'valuation' | 'near_expiry' | 'expired' | 'movement' | 'reorder
 const today = () => new Date().toLocaleDateString('en-IN');
 
 // ── Stock valuation ───────────────────────────────────────────────────────────
-function ValuationReport() {
+function ValuationReport({ canDownload }: { canDownload: boolean }) {
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
   const [materialType, setMaterialType] = useState<string>('all');
@@ -92,6 +93,7 @@ function ValuationReport() {
           </Select>
         )}
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('stock-valuation.csv', rows.map((r) => ({
             'Product Type': r.typeLabel, Item: r.itemName, Unit: r.unit, Location: r.branchName, 'Location Type': titleCase(r.branchType),
@@ -189,7 +191,7 @@ function ValuationReport() {
 }
 
 // ── Near Expiry report ────────────────────────────────────────────────────────
-function NearExpiryReport() {
+function NearExpiryReport({ canDownload }: { canDownload: boolean }) {
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
   const [branchType, setBranchType] = useState<string>('');
@@ -241,6 +243,7 @@ function NearExpiryReport() {
           <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-8 text-xs w-36" />
         </div>
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('near-expiry.csv', rows.map((r) => ({
             Type: r.typeLabel, Item: r.itemName, Batch: r.batchNumber, Location: r.branchName,
@@ -313,7 +316,7 @@ function NearExpiryReport() {
 }
 
 // ── Expired Stock report ──────────────────────────────────────────────────────
-function ExpiredReport() {
+function ExpiredReport({ canDownload }: { canDownload: boolean }) {
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
   const [branchType, setBranchType] = useState<string>('');
@@ -364,6 +367,7 @@ function ExpiredReport() {
           <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-8 text-xs w-36" />
         </div>
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('expired-stock.csv', rows.map((r) => ({
             Type: r.typeLabel, Item: r.itemName, Batch: r.batchNumber, Location: r.branchName,
@@ -421,7 +425,7 @@ function ExpiredReport() {
 }
 
 // ── Slow / Dead Stock ─────────────────────────────────────────────────────────
-function MovementReport() {
+function MovementReport({ canDownload }: { canDownload: boolean }) {
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
   const [branchType, setBranchType] = useState<string>('');
@@ -481,6 +485,7 @@ function MovementReport() {
           </SelectContent>
         </Select>
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('movement-analysis.csv', rows.map((r) => ({
             Type: r.typeLabel, Item: r.itemName, Location: r.branchName,
@@ -559,7 +564,7 @@ function MovementReport() {
 }
 
 // ── Reorder alerts ────────────────────────────────────────────────────────────
-function ReorderReport() {
+function ReorderReport({ canDownload }: { canDownload: boolean }) {
   const { data: rows = [], isLoading } = useGetReorderReport();
 
   return (
@@ -567,6 +572,7 @@ function ReorderReport() {
       <div className="flex flex-wrap items-center gap-2">
         <p className="text-xs text-muted-foreground">Items at or below their reorder level (live snapshot)</p>
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('reorder-report.csv', rows.map((r) => ({
             Item: r.itemName, Unit: r.unit, Location: r.branchName, 'Current Qty': r.quantity,
@@ -626,7 +632,7 @@ interface TransferRow {
 
 const TRANSFER_STATUSES = ['pending', 'in_transit', 'completed', 'rejected'];
 
-function TransfersReport() {
+function TransfersReport({ canDownload }: { canDownload: boolean }) {
   const range = useDateRange('month');
   const [status, setStatus] = useState('all');
   // Filtering happens server-side (?from&to&status) so large histories stay fast.
@@ -666,6 +672,7 @@ function TransfersReport() {
           </SelectContent>
         </Select>
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('stock-transfers.csv', rows.map((t) => ({
             Challan: t.challanNumber ?? `#${t.id}`, Date: dkey(t.transferDate), From: t.fromName, To: t.toName,
@@ -718,7 +725,7 @@ function TransfersReport() {
 // carry a real tax invoice and appear in GSTR-1. They are NOT sales, so every
 // other report excludes them — this is the one view that shows both figures, so
 // the outward supplies in the return can be reconciled.
-function GstTransfersReport() {
+function GstTransfersReport({ canDownload }: { canDownload: boolean }) {
   const range = useDateRange('month');
   const { data, isLoading } = useGstTransfersReport({ from: range.from, to: range.to });
   const rows = data?.rows ?? [];
@@ -742,6 +749,7 @@ function GstTransfersReport() {
     <div className="space-y-4">
       <RangeBar range={range}>
         <ExportButtons
+          canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           onCSV={() => downloadCSV('gst-transfers.csv', rows.map((r) => ({
             Invoice: r.invoiceNumber ?? '—', Challan: r.challanNumber, Date: fmtDate(r.date),
@@ -862,6 +870,7 @@ function GstTransfersReport() {
 
 // ── Section root ──────────────────────────────────────────────────────────────
 export default function InventorySection() {
+  const { canDownload } = usePermission('page:/reports/sales');
   const [report, setReport] = useState<InvReport>('valuation');
   return (
     <div className="space-y-4">
@@ -877,13 +886,13 @@ export default function InventorySection() {
         ]}
         value={report} onChange={setReport}
       />
-      {report === 'valuation' && <ValuationReport />}
-      {report === 'near_expiry' && <NearExpiryReport />}
-      {report === 'expired' && <ExpiredReport />}
-      {report === 'movement' && <MovementReport />}
-      {report === 'reorder' && <ReorderReport />}
-      {report === 'transfers' && <TransfersReport />}
-      {report === 'gst_transfers' && <GstTransfersReport />}
+      {report === 'valuation' && <ValuationReport canDownload={canDownload} />}
+      {report === 'near_expiry' && <NearExpiryReport canDownload={canDownload} />}
+      {report === 'expired' && <ExpiredReport canDownload={canDownload} />}
+      {report === 'movement' && <MovementReport canDownload={canDownload} />}
+      {report === 'reorder' && <ReorderReport canDownload={canDownload} />}
+      {report === 'transfers' && <TransfersReport canDownload={canDownload} />}
+      {report === 'gst_transfers' && <GstTransfersReport canDownload={canDownload} />}
     </div>
   );
 }

@@ -31,7 +31,7 @@ function PaymentStatusBadge({ status }: { status: string }) {
 // ── Collect Payment Panel ─────────────────────────────────────────────────────
 
 function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: () => void; onDone: (newStatus: string, newPaid: number) => void }) {
-  const perm = usePermission('Payments');
+  const perm = usePermission('page:/accounts/vouchers');
   const { data: payments = [], isLoading } = useGetSalePayments(sale.id);
   const createPaymentMutation = useCreateSalePayment();
 
@@ -177,7 +177,7 @@ function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: ()
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function Payments() {
-  const perm = usePermission('Payments');
+  const perm = usePermission('page:/accounts/vouchers');
   const qc = useQueryClient();
 
   const [outletFilter, setOutletFilter] = useState('all');

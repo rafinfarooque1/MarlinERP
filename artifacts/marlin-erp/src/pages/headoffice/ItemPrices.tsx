@@ -45,7 +45,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function ItemPrices() {
-  const perm = usePermission('Item Prices');
+  const perm = usePermission('page:/headoffice/item-price');
   const [search, setSearch]         = useState('');
   const [itemFilter, setItemFilter] = useState<string>('all');
   const [isOpen, setIsOpen]         = useState(false);

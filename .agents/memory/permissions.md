@@ -1,36 +1,56 @@
 ---
 name: Permission system
-description: How role-based permission enforcement works, module-name registry rules, and defaults
+description: Per-sidebar-link permission model — key format, the endpoints that must stay unguarded, migration lockout rules, and what a build check can and cannot catch
 ---
 
-## Single source of truth: moduleRegistry.ts
-`artifacts/marlin-erp/src/lib/moduleRegistry.ts` (MODULE_REGISTRY) drives the sidebar nav, the Permissions page groups, and the set of valid module names.
+## One permission row per sidebar link, keyed by href
 
-**Rule:** every name passed to frontend `usePermission('X')` or backend `requireModuleAction("X", ...)` MUST be a registry key, spelled identically. An unregistered name is *silently ungovernable*: no permission row can ever be saved for it, so the backend guard default-allows every write while the UI hides buttons. (This exact bug shipped for 'Materials', 'Raw Materials', 'Cash & Bank' — fixed by registering them.)
+Permission keys are `page:<href>` — `page:/accounts/cash-book`, `page:/hr/payroll`. Six flags each: view / add / edit / delete / download / print.
 
-**How to apply:** when adding a module or guard, add the registry entry first, then grep both repos for the name to confirm alignment.
+**Why href and not the link name:** link *names* collide across sections ("Reports" appears three times, "Expenses" twice). The href is the only stable unique identifier for a sidebar link.
 
-## Hook & shared helpers
-`artifacts/marlin-erp/src/lib/usePermission.ts`
-- `usePermission('Module')` → `{ canView, canAdd, canEdit, canDelete, canDownload, isLoading }`
-- Pure helpers exported for non-hook use: `resolvePermissions()`, `canViewModule()`. AppLayout imports `canViewModule` for nav filtering — do NOT reintroduce duplicate local copies of this logic.
-- Level 1 hierarchy → always full access (locked in Permissions UI too).
-- No DB row for a module → view-only default: canView=true, writes=false, canDownload=true.
-- While loading → isLoading=true with FULL_ACCESS values (avoids flash of denied).
+**Why per-link and not grouped:** grouped modules silently over-granted — one "Books" row handed out Day Book, Cash Book, Bank Book *and* Trial Balance together, so a cashier who needed the Cash Book also got the Trial Balance.
 
-**Why:** one code path = display can't drift from enforcement; view-only is the safe no-row default.
+`artifacts/marlin-erp/src/lib/moduleRegistry.ts` remains the single source of truth: the same registry renders the sidebar and derives the permission rows, so the two cannot drift. The backend gets a generated mirror; a build check (`scripts/src/check-permissions.ts`, also wired into `typecheck`) fails when a guard or a frontend literal names a key that is not registered, or when the sidebar changes against its golden snapshot.
 
-## Enforced vs backend default (asymmetry, kept deliberately)
-- Frontend no-row default: view-only. Backend `requireModuleAction` no-row default: ALLOW (compatibility with roles never configured; flipping to deny risks lockouts in live data). Writes are only really blocked once an admin saves rows for that hierarchy.
-- The Permissions page shows the *enforced* view-only default for unsaved roles. The old aspirational `defaultAccess`/`getDefaultAccess` registry config was deleted — never re-add display-only defaults that enforcement ignores.
-- `canDownload` is persisted as a copy of canView and ~28 PDF/export buttons consume it; UI subtitle documents "Download and PDF buttons follow View access."
+**How to apply:** add the sidebar link first, regenerate the backend mirror and the snapshot, then write guards. Keys must be raw string literals in guards — the check greps for them, so a computed key is invisible to it.
 
-## Server-side enforcement
-- `requireModuleView(module | modules[])` (any-of) in api-server `middleware/permissions.ts`: level-1 allow; no row → allow; can_view=false → 403. Applied to Reports Center data paths, stock valuation/expiry/reorder, /stock/transfers, /productions/reports, /outstanding/*, party ledgers, financial statements.
-- `requireModuleAction(module, 'add'|'edit'|'delete')` guards writes across routers; names must match registry keys.
-- Shared endpoints need any-of lists matching every UI surface that calls them (e.g. /stock/transfers → Stock, Stock Transfers, HO Transfers, Location Transfers).
-- Most other GETs are still requireAuth-only (follow-up task exists).
+## Endpoints that must never be guarded
+
+`GET /hr/hierarchies` and `GET /company/permissions` are how the app *resolves* permissions, and the shell reads them on every page for every user.
+
+**Why:** guarding them makes permission resolution itself require a permission. That 403s every page for every non-top-level user — the failure looks like a total outage, not a permission problem. This was shipped once and caught only in E2E.
+
+**How to apply:** before adding a guard to a GET, ask whether the app shell or `usePermission` calls it on every route. If yes, leave it open.
+
+## A registered key can still be the wrong key
+
+The build check proves a guard name *exists*; it cannot prove it is the *right* name for that endpoint. Real instances found in review: the Chart of Accounts tree guarded on the Expenses page key, and the shared cash/bank ledger dropdown missing the Vouchers and Vendors pages that also open it.
+
+**Why:** shared read endpoints feed dropdowns on pages far from where they live. Over-guarding blanks a page for a legitimate user, which is worse than a slightly wide any-of list.
+
+**How to apply:** for any shared GET, grep the frontend for the URL, collect *every* page that calls it, and list them all as an any-of. Verifying this needs an endpoint→consumer test; static registration checks will not catch it.
+
+## Migration rules that prevent lockouts
+
+- **Fallback direction is GRANT, not deny.** When expanding legacy grouped rows into per-link rows, a link no old row covered is granted. Getting this backwards locks administrators out of the Permissions page itself, and the only way back in is hand-written SQL.
+- **Flags are OR-ed** across every legacy row that covered the link; print seeds from download.
+- **Delete the legacy rows in the same transaction.** The dynamic gap-fill pass reads `SELECT DISTINCT module FROM permissions`, so any survivor is re-created for every hierarchy forever.
+- Migrating destroys the old rows, so **a role's pre-migration permissions cannot be recovered** — there is no audit table for permission changes.
+- **Backfill seeding must be one-time (migration-log guarded), never per-boot.** A boot-time "give every role a row for every page" pass treats *no row* as *needs an all-true row*, so a role configured with three pages comes back from the next restart holding all of them. Under default-deny, a missing row is the answer, not a gap to fill.
+
+## Uniqueness is an authorization requirement
+
+`permissions (hierarchy_id, module)` carries a unique index. Guards fold rows with `json_object_agg(module, ...)`, so a duplicate row makes effective rights depend on which row the planner emits last — authorization stops being deterministic. All seeding and the save endpoint use `ON CONFLICT`, not check-then-insert, because two instances booting at once both pass a `WHERE NOT EXISTS` check.
+
+## Defaults
+
+- Level-1 hierarchy → always full access, everywhere, not overridable in the UI.
+- **Missing row → denied**, both server-side and on the Permissions page. (Earlier the UI showed missing rows as view-allowed while the server denied them; that misrepresentation is gone.)
+- While permissions load → full-access values with `isLoading=true`, to avoid a flash of "denied".
 
 ## Testing lessons
-- Before insert/delete of permissions rows in curl tests, snapshot existing rows for that hierarchy (pre-existing deny rows would duplicate and get wiped by cleanup DELETEs). Best: create a throwaway hierarchy+employee, test against it, then delete perm rows via SQL (no DELETE endpoint) before deleting the hierarchy — FK blocks hierarchy delete (500) while rows exist.
-- API auth is bearer-token (`Authorization: Bearer v2....` from POST /api/auth/login), NOT cookies. New employees get DEFAULT_INITIAL_PASSWORD + mustChangePassword; change it via /api/auth/change-password before exercising the account.
+
+- API auth is bearer-token (`Authorization: Bearer v2....` from `POST /api/auth/login`), NOT cookies — a cookie jar silently yields 401 on every call.
+- Test against a throwaway hierarchy + employee, never a real role: the migration deleted the old rows, so overwriting a real role's permissions during a test is unrecoverable.
+- FK blocks deleting a hierarchy while its permission rows exist (500); delete the rows by SQL first — there is no DELETE endpoint.

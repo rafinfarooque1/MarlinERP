@@ -51,7 +51,7 @@ async function printVoucher(source: 'direct' | 'location', id: number, label?: s
 }
 
 // ── By-Location drilldown panel ───────────────────────────────────────────────
-function LocationDrilldown({ loc, onBack }: { loc: LocationExpenseSummary; onBack: () => void }) {
+function LocationDrilldown({ loc, onBack, canPrint }: { loc: LocationExpenseSummary; onBack: () => void; canPrint: boolean }) {
   const { data, isLoading } = useLocationExpenses(loc.locationType, loc.locationId);
   const expenses = data?.expenses ?? [];
   const [viewItem, setViewItem] = useState<any>(null);
@@ -144,6 +144,7 @@ function LocationDrilldown({ loc, onBack }: { loc: LocationExpenseSummary; onBac
                   ₹{e.amount.toLocaleString('en-IN')}
                 </TableCell>
                 <TableCell className="text-right whitespace-nowrap">
+                  {canPrint && (
                   <Button
                     variant="ghost" size="icon" className="h-8 w-8 hover:text-primary"
                     title="Print payment voucher"
@@ -151,6 +152,7 @@ function LocationDrilldown({ loc, onBack }: { loc: LocationExpenseSummary; onBac
                   >
                     <Printer className="w-4 h-4" />
                   </Button>
+                  )}
                   <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(e)}>
                     <Eye className="w-4 h-4" />
                   </Button>
@@ -202,12 +204,14 @@ function LocationDrilldown({ loc, onBack }: { loc: LocationExpenseSummary; onBac
                 )}
               </div>
 
+              {canPrint && (
               <Button
                 variant="outline" className="w-full"
                 onClick={() => printVoucher('location', viewItem.id, viewItem.voucherNumber)}
               >
                 <Printer className="w-4 h-4 mr-2" /> Print Payment Voucher
               </Button>
+              )}
             </div>
           )}
         </SheetContent>
@@ -217,12 +221,12 @@ function LocationDrilldown({ loc, onBack }: { loc: LocationExpenseSummary; onBac
 }
 
 // ── By-Location summary tab ───────────────────────────────────────────────────
-function ByLocationTab() {
+function ByLocationTab({ canPrint }: { canPrint: boolean }) {
   const { data: summary = [], isLoading } = useLocationExpensesSummary();
   const [drilldown, setDrilldown] = useState<LocationExpenseSummary | null>(null);
 
   if (drilldown) {
-    return <LocationDrilldown loc={drilldown} onBack={() => setDrilldown(null)} />;
+    return <LocationDrilldown loc={drilldown} onBack={() => setDrilldown(null)} canPrint={canPrint} />;
   }
 
   const grandTotal = (summary as LocationExpenseSummary[]).reduce((s, l) => s + l.total, 0);
@@ -332,7 +336,7 @@ function ByLocationTab() {
 
 // ── Main Expenses page ────────────────────────────────────────────────────────
 export default function Expenses() {
-  const perm = usePermission('Expenses');
+  const perm = usePermission('page:/accounts/expenses');
   const { data: expenses = [], isLoading } = useListExpenses();
   const { data: accounts = [] } = useListChartOfAccounts();
   const { data: cashBanks = [] } = useListCashBankAccounts();
@@ -420,6 +424,7 @@ export default function Expenses() {
             <p className="text-muted-foreground mt-1">All business expenditure — head office and locations</p>
           </div>
           <div className="flex gap-2">
+            {perm.canDownload && (
             <Button variant="outline" size="sm" onClick={() => downloadCSV('expenses.csv', filtered.map(e => ({
               Voucher: e.expenseNumber ?? e.voucherNumber ?? '',
               Date: e.expenseDate,
@@ -434,6 +439,8 @@ export default function Expenses() {
             })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
+            )}
+            {perm.canAdd && (
             <Button onClick={() => {
               form.reset(blankForm);
               setAttachmentUrl(null);
@@ -441,6 +448,7 @@ export default function Expenses() {
             }}>
               <Plus className="w-4 h-4 mr-2" /> Add Expense
             </Button>
+            )}
           </div>
         </div>
 
@@ -546,6 +554,7 @@ export default function Expenses() {
                         ₹{Number(e.amount).toLocaleString('en-IN')}
                       </TableCell>
                       <TableCell className="text-right whitespace-nowrap">
+                        {perm.canPrint && (
                         <Button
                           variant="ghost" size="icon" className="h-8 w-8 hover:text-primary"
                           title="Print payment voucher"
@@ -553,6 +562,7 @@ export default function Expenses() {
                         >
                           <Printer className="w-4 h-4" />
                         </Button>
+                        )}
                         <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(e)}>
                           <Eye className="w-4 h-4" />
                         </Button>
@@ -566,7 +576,7 @@ export default function Expenses() {
 
           {/* ── By Location tab ── */}
           <TabsContent value="by-location" className="mt-4">
-            <ByLocationTab />
+            <ByLocationTab canPrint={perm.canPrint} />
           </TabsContent>
         </Tabs>
       </div>
@@ -723,6 +733,7 @@ export default function Expenses() {
                 )}
               </div>
 
+              {perm.canPrint && (
               <Button
                 variant="outline" className="w-full"
                 onClick={() => printVoucher(
@@ -733,6 +744,7 @@ export default function Expenses() {
               >
                 <Printer className="w-4 h-4 mr-2" /> Print Payment Voucher
               </Button>
+              )}
             </div>
           )}
         </SheetContent>

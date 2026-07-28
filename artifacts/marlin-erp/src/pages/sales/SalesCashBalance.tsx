@@ -34,7 +34,7 @@ function DepositStatusBadge({ status }: { status: string }) {
 }
 
 export default function SalesCashBalance() {
-  const perm = usePermission('Cash Balance');
+  const perm = usePermission('page:/accounts/cash-in-outlet');
   const { locationState } = useLocationContext();
   const { locationType, locationId, locationName } = locationState;
   const [, navigate] = useWouter();

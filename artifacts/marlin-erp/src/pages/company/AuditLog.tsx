@@ -110,7 +110,7 @@ function MetaViewer({ entry }: { entry: AuditLogEntry }) {
 }
 
 export default function AuditLog() {
-  const perm = usePermission('Settings');
+  const perm = usePermission('page:/company/audit');
   const [page,        setPage]        = useState(1);
   const [module,      setModule]      = useState('all');
   const [action,      setAction]      = useState('all');

@@ -64,7 +64,7 @@ async function materialNameMaps(): Promise<Record<string, Map<number, { name: st
 // ═════════════════════════════════════════════════════════════════════════════
 
 // ── Sales register — one row per invoice ────────────────────────────────────
-router.get("/reports/sales-register", requireModuleView("Sales"), async (req, res): Promise<void> => {
+router.get("/reports/sales-register", requireModuleView("page:/reports/sales"), async (req, res): Promise<void> => {
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
   const locationType = typeof req.query.locationType === "string" ? req.query.locationType : "";
@@ -137,7 +137,7 @@ router.get("/reports/sales-register", requireModuleView("Sales"), async (req, re
 });
 
 // ── Sales by item ────────────────────────────────────────────────────────────
-router.get("/reports/sales-by-item", requireModuleView("Sales"), async (req, res): Promise<void> => {
+router.get("/reports/sales-by-item", requireModuleView("page:/reports/sales"), async (req, res): Promise<void> => {
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
 
@@ -190,7 +190,7 @@ router.get("/reports/sales-by-item", requireModuleView("Sales"), async (req, res
 });
 
 // ── Sales by location (includes warehouse sales) ────────────────────────────
-router.get("/reports/sales-by-location", requireModuleView("Sales"), async (req, res): Promise<void> => {
+router.get("/reports/sales-by-location", requireModuleView("page:/reports/sales"), async (req, res): Promise<void> => {
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
 
@@ -244,7 +244,7 @@ router.get("/reports/sales-by-location", requireModuleView("Sales"), async (req,
 // into subtotal/tax at sale time); billDiscount = discount_total (bill-level
 // coupon, subtracted after tax). gross = subtotal + tax + itemDiscount, i.e.
 // what the customer would have paid at full MRP.
-router.get("/reports/discounts", requireModuleView("Sales"), async (req, res): Promise<void> => {
+router.get("/reports/discounts", requireModuleView("page:/reports/sales"), async (req, res): Promise<void> => {
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
   const locationType = typeof req.query.locationType === "string" ? req.query.locationType : "";
@@ -348,7 +348,7 @@ router.get("/reports/discounts", requireModuleView("Sales"), async (req, res): P
 
 // ── Purchase register — one row per bill ────────────────────────────────────
 // LBAC: all purchases are at Head Office; non-HO users receive an empty report.
-router.get("/reports/purchase-register", requireModuleView("Purchases"), async (req, res): Promise<void> => {
+router.get("/reports/purchase-register", requireModuleView("page:/reports/sales"), async (req, res): Promise<void> => {
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
   const prEmp = (req as any).employee as { branchType: string } | undefined;
@@ -395,7 +395,7 @@ router.get("/reports/purchase-register", requireModuleView("Purchases"), async (
 
 // ── Purchases by vendor ──────────────────────────────────────────────────────
 // LBAC: purchases are Head Office only.
-router.get("/reports/purchases-by-vendor", requireModuleView("Purchases"), async (req, res): Promise<void> => {
+router.get("/reports/purchases-by-vendor", requireModuleView("page:/reports/sales"), async (req, res): Promise<void> => {
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
   const pvEmp = (req as any).employee as { branchType: string } | undefined;
@@ -437,7 +437,7 @@ router.get("/reports/purchases-by-vendor", requireModuleView("Purchases"), async
 
 // ── Purchases by material ────────────────────────────────────────────────────
 // LBAC: purchases are Head Office only.
-router.get("/reports/purchases-by-material", requireModuleView("Purchases"), async (req, res): Promise<void> => {
+router.get("/reports/purchases-by-material", requireModuleView("page:/reports/sales"), async (req, res): Promise<void> => {
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
   const pmEmp = (req as any).employee as { branchType: string } | undefined;
@@ -493,7 +493,7 @@ router.get("/reports/purchases-by-material", requireModuleView("Purchases"), asy
 // Revenue  = ex-tax line subtotal.
 // COGS     = Σ batchBreakdown(qty × unitCost); any un-tracked remainder is
 //            costed at the item's moving average cost (fallback: standard cost).
-router.get("/reports/profitability", requireModuleView("Chart of Accounts"), async (req, res): Promise<void> => {
+router.get("/reports/profitability", requireModuleView("page:/reports/sales"), async (req, res): Promise<void> => {
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
   const groupBy = typeof req.query.groupBy === "string" ? req.query.groupBy : "item";
@@ -590,7 +590,7 @@ router.get("/reports/profitability", requireModuleView("Chart of Accounts"), asy
 // ═════════════════════════════════════════════════════════════════════════════
 // COMBINED SALES & STOCK SUMMARY (management handout)
 // ═════════════════════════════════════════════════════════════════════════════
-router.get("/reports/sales-stock-combined", requireModuleView("Sales"), async (req, res): Promise<void> => {
+router.get("/reports/sales-stock-combined", requireModuleView("page:/reports/sales"), async (req, res): Promise<void> => {
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
 
@@ -702,7 +702,7 @@ router.get("/reports/sales-stock-combined", requireModuleView("Sales"), async (r
 // everywhere else they must never be mixed: Customer Sales is what the business
 // earned, Branch Transfer Sales is stock moved between its own registrations,
 // and only the two together reconcile to the outward supplies in the return.
-router.get("/reports/gst-transfers", requireModuleView(["Reports", "GST Returns"]), async (req, res): Promise<void> => {
+router.get("/reports/gst-transfers", requireModuleView("page:/reports/sales"), async (req, res): Promise<void> => {
   if ((req as any).employee?.branchType !== 'headoffice') {
     res.status(403).json({ error: "GST reporting is available at Head Office only" });
     return;

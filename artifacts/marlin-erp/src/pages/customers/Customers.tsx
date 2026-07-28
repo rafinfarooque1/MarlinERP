@@ -117,7 +117,7 @@ function CustomerLedger({ customerId }: { customerId: number }) {
 }
 
 export default function Customers() {
-  const perm = usePermission('Customers');
+  const perm = usePermission('page:/customers');
   const { data: customers = [], isLoading } = useListCustomers();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -186,10 +186,14 @@ export default function Customers() {
             <p className="text-muted-foreground mt-1">Registered customer accounts</p>
           </div>
           <div className="flex gap-2">
+            {perm.canDownload && (
             <Button variant="outline" size="sm" onClick={() => downloadCSV('customers.csv', filtered.map(c => ({ Name: c.name, Phone: c.phone || '', Email: c.email || '', State: (c as any).state || '', GST: c.gstNumber || '', Address: c.address || '', Balance: c.totalPurchases || 0 })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
+            )}
+            {perm.canAdd && (
             <Button onClick={() => { form.reset(); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Customer</Button>
+            )}
           </div>
         </div>
 
@@ -226,7 +230,9 @@ export default function Customers() {
                     ₹{Number((c as any).outstandingBalance ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </TableCell>
                   <TableCell className="text-right flex items-center justify-end gap-1">
+                    {perm.canEdit && (
                     <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(c)}><Pencil className="w-4 h-4" /></Button>
+                    )}
                     <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => { setViewItem(c); setActiveTab('details'); }}><Eye className="w-4 h-4" /></Button>
                   </TableCell>
                 </TableRow>

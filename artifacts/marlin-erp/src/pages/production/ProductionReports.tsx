@@ -32,7 +32,7 @@ function today(): string {
 }
 
 export default function ProductionReports() {
-  const perm = usePermission('Production');
+  const perm = usePermission('page:/production/reports');
   const [from, setFrom] = useState(monthStart());
   const [to, setTo] = useState(today());
   const [tab, setTab] = useState<Tab>('output');

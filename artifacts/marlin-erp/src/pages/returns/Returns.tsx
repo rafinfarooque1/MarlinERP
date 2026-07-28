@@ -343,7 +343,7 @@ function NewPurchaseReturnDialog({ open, onOpenChange }: { open: boolean; onOpen
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Returns() {
-  const perm = usePermission('Sales');
+  const perm = usePermission('page:/returns');
   const [tab, setTab] = useState<'sales' | 'purchase'>('sales');
   const [search, setSearch] = useState('');
   const [createOpen, setCreateOpen] = useState(false);

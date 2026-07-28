@@ -61,7 +61,7 @@ export default function SalesExpenses() {
   const queryClient = useQueryClient();
   const [isOpen, setIsOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const perm = usePermission('Location Expenses');
+  const perm = usePermission('page:/sales/expenses');
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
   const deleteMutation = useDeleteLocationExpense();
   const [attachmentUrl, setAttachmentUrl] = useState<string | null>(null);
@@ -268,7 +268,7 @@ export default function SalesExpenses() {
             )}
           </div>
           {/* Only allow adding expenses on a specific location */}
-          {isSpecific && (
+          {isSpecific && perm.canAdd && (
             <Button onClick={openAdd} disabled={!cashLedgerName}>
               <Plus className="w-4 h-4 mr-2" /> Add Expense
             </Button>
@@ -380,6 +380,7 @@ export default function SalesExpenses() {
                         <TableCell className="text-right font-mono font-bold text-red-500 text-sm">
                           {fmt(Number(e.amount))}
                         </TableCell>
+                        {perm.canPrint && (
                         <TableCell className="w-10">
                           <Button
                             variant="ghost" size="icon"
@@ -390,6 +391,7 @@ export default function SalesExpenses() {
                             <Printer className="w-3.5 h-3.5" />
                           </Button>
                         </TableCell>
+                        )}
                         {perm.canDelete && (
                           <TableCell className="w-10">
                             <Button
@@ -468,6 +470,7 @@ export default function SalesExpenses() {
                     <TableCell className="text-right font-mono font-bold text-red-500">
                       {fmt(Number(e.amount))}
                     </TableCell>
+                    {perm.canPrint && (
                     <TableCell className="w-10">
                       <Button
                         variant="ghost" size="icon"
@@ -478,6 +481,7 @@ export default function SalesExpenses() {
                         <Printer className="w-3.5 h-3.5" />
                       </Button>
                     </TableCell>
+                    )}
                     {perm.canDelete && (
                       <TableCell className="w-10">
                         <Button

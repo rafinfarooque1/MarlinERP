@@ -22,7 +22,7 @@ const SOURCE_LABEL: Record<string, string> = {
 
 export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
   const isCash = kind === 'cash';
-  const perm = usePermission('Books');
+  const perm = usePermission(isCash ? 'page:/accounts/cash-book' : 'page:/accounts/bank-book');
   const { data: ledgers = [] } = useCashBankBookLedgers(kind);
   const [ledgerId, setLedgerId] = useState(0);
   const [fromDate, setFromDate] = useState(monthStart());

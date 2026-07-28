@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireModuleAction } from "../middleware/permissions";
+import { requireModuleAction, requireModuleView } from "../middleware/permissions";
 import { pool } from "@workspace/db";
 import { logActivity } from "../lib/audit";
 import { nextVoucherNumber } from "../lib/voucherNumber";
@@ -9,7 +9,8 @@ const router = Router();
 
 // ── GET /reconciliation/bank-ledgers ─────────────────────────────────────────
 // Returns all active ledgers under STD-BANK hierarchy (for destination dropdown)
-router.get("/reconciliation/bank-ledgers", async (_req, res): Promise<void> => {
+// Serves Reconciliation, Cash Balance (accounts + sales) pages.
+router.get("/reconciliation/bank-ledgers", requireModuleView(["page:/accounts/reconciliation", "page:/accounts/cash-in-outlet"]), async (_req, res): Promise<void> => {
   const { rows: allLedgers } = await pool.query(`SELECT id, name, parent_id, code, bank_details FROM account_ledgers ORDER BY id`);
   const bankRoot = allLedgers.find((r: any) => r.code === "STD-BANK");
   if (!bankRoot) { res.json([]); return; }
@@ -36,7 +37,7 @@ router.get("/reconciliation/bank-ledgers", async (_req, res): Promise<void> => {
 
 // ── GET /reconciliation/pending ───────────────────────────────────────────────
 // Lists all pending electronic sale_payments
-router.get("/reconciliation/pending", async (req, res): Promise<void> => {
+router.get("/reconciliation/pending", requireModuleView("page:/accounts/reconciliation"), async (req, res): Promise<void> => {
   const { outletId, method, fromDate, toDate, search } = req.query as Record<string, string | undefined>;
 
   const params: any[] = ["pending"];
@@ -96,7 +97,7 @@ router.get("/reconciliation/pending", async (req, res): Promise<void> => {
 });
 
 // ── GET /reconciliation/batches ───────────────────────────────────────────────
-router.get("/reconciliation/batches", async (_req, res): Promise<void> => {
+router.get("/reconciliation/batches", requireModuleView("page:/accounts/reconciliation"), async (_req, res): Promise<void> => {
   const { rows } = await pool.query(
     `SELECT rb.*,
             rb.gross_amount::numeric AS gross_amount,
@@ -130,7 +131,7 @@ router.get("/reconciliation/batches", async (_req, res): Promise<void> => {
 });
 
 // ── GET /reconciliation/batches/:id ──────────────────────────────────────────
-router.get("/reconciliation/batches/:id", async (req, res): Promise<void> => {
+router.get("/reconciliation/batches/:id", requireModuleView("page:/accounts/reconciliation"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid batch id" }); return; }
 
@@ -193,7 +194,7 @@ router.get("/reconciliation/batches/:id", async (req, res): Promise<void> => {
 });
 
 // ── POST /reconciliation/batches ──────────────────────────────────────────────
-router.post("/reconciliation/batches", requireModuleAction("Reconciliation", "add"), async (req, res): Promise<void> => {
+router.post("/reconciliation/batches", requireModuleAction("page:/accounts/reconciliation", "add"), async (req, res): Promise<void> => {
   const {
     salePaymentIds, charges, settlementDate,
     destinationBankLedgerId, externalReference, notes,

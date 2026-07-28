@@ -127,7 +127,7 @@ function currentFyLabel(fyStartMonth: number): string {
   return `${startYear}-${String((startYear + 1) % 100).padStart(2, '0')}`;
 }
 
-function FinancialYearSection() {
+function FinancialYearSection({ canEdit }: { canEdit: boolean }) {
   const [fyStartMonth, setFyStartMonth] = useState(4);
   const [prefixes, setPrefixes] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -213,9 +213,11 @@ function FinancialYearSection() {
             <p className="text-xs text-muted-foreground">Leave blank to use the defaults. Changing a prefix affects new vouchers only — existing numbers stay as they are.</p>
           </div>
           <div className="p-4 flex justify-end">
+            {canEdit && (
             <Button onClick={save} disabled={saving}>
               {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> Save FY Settings</>}
             </Button>
+            )}
           </div>
         </div>
       )}
@@ -225,7 +227,7 @@ function FinancialYearSection() {
 
 // ─── Invoice PDF: payment terms & footer (server-persisted) ──────────────────
 
-function InvoicePdfSection() {
+function InvoicePdfSection({ canEdit }: { canEdit: boolean }) {
   const [paymentTerms, setPaymentTerms] = useState('');
   const [invoiceFooter, setInvoiceFooter] = useState('');
   const [loading, setLoading] = useState(true);
@@ -294,9 +296,11 @@ function InvoicePdfSection() {
             <p className="text-xs text-muted-foreground">Printed under the “Thank You” bar at the bottom of the invoice. Leave blank to omit.</p>
           </div>
           <div className="p-4 flex justify-end">
+            {canEdit && (
             <Button onClick={save} disabled={saving}>
               {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> Save Invoice Settings</>}
             </Button>
+            )}
           </div>
         </div>
       )}
@@ -314,7 +318,7 @@ function InvoicePdfSection() {
 // each payroll row keeps a snapshot of the rates it was computed with — so
 // changing a rate here affects future runs only and never rewrites history.
 
-function StatutoryPayrollSection() {
+function StatutoryPayrollSection({ canEdit }: { canEdit: boolean }) {
   const [s, setS] = useState({
     pfEnabled: true, pfEmployeePercent: '12', pfEmployerPercent: '12',
     esiEnabled: true, esiEmployeePercent: '0.75', esiEmployerPercent: '3.25',
@@ -428,9 +432,11 @@ function StatutoryPayrollSection() {
           {pctRow('ESI — employer share (%)', 'Paid by the company on top of salary. Posted as an expense.', 'esiEmployerPercent', !s.esiEnabled)}
 
           <div className="p-4 flex justify-end">
+            {canEdit && (
             <Button onClick={save} disabled={saving}>
               {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> Save Statutory Settings</>}
             </Button>
+            )}
           </div>
         </div>
       )}
@@ -438,7 +444,7 @@ function StatutoryPayrollSection() {
   );
 }
 
-function ProductionCostingSection() {
+function ProductionCostingSection({ canEdit }: { canEdit: boolean }) {
   const [overheadPct, setOverheadPct] = useState('0');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -497,9 +503,11 @@ function ProductionCostingSection() {
             />
           </div>
           <div className="p-4 flex justify-end">
+            {canEdit && (
             <Button onClick={save} disabled={saving}>
               {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> Save Costing Settings</>}
             </Button>
+            )}
           </div>
         </div>
       )}
@@ -515,7 +523,7 @@ function ProductionCostingSection() {
 // state is IGST. Letting anyone choose per transfer would mean choosing whether
 // to follow tax law, so that choice is not offered.
 
-function GstTransferSection() {
+function GstTransferSection({ canEdit }: { canEdit: boolean }) {
   const [enabled, setEnabled] = useState(true);
   const [prefix, setPrefix] = useState('BTR');
   const [loading, setLoading] = useState(true);
@@ -597,9 +605,11 @@ function GstTransferSection() {
             />
           </div>
           <div className="p-4 flex justify-end">
+            {canEdit && (
             <Button onClick={save} disabled={saving}>
               {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> Save GST Transfer Settings</>}
             </Button>
+            )}
           </div>
         </div>
       )}
@@ -615,7 +625,7 @@ const POLICY_TOGGLES = [
   { key: 'passwordRequireSpecial',   label: 'Require a special character', hint: 'e.g. ! @ # $ % &' },
 ] as const;
 
-function SecuritySection() {
+function SecuritySection({ canEdit }: { canEdit: boolean }) {
   const [minLength, setMinLength] = useState('8');
   const [flags, setFlags] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
@@ -699,9 +709,11 @@ function SecuritySection() {
             </div>
           ))}
           <div className="p-4 flex justify-end">
+            {canEdit && (
             <Button onClick={save} disabled={saving}>
               {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> Save Password Policy</>}
             </Button>
+            )}
           </div>
         </div>
       )}
@@ -710,7 +722,7 @@ function SecuritySection() {
 }
 
 export default function Settings() {
-  const perm = usePermission('Settings');
+  const perm = usePermission('page:/company/settings');
   const [values, setValues] = useState<Record<string, any>>(getDefaults);
   const [loadingGeneral, setLoadingGeneral] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -827,30 +839,33 @@ export default function Settings() {
           </div>
         ))}
 
+        {perm.canEdit && (
         <div className="flex justify-end">
           <Button size="lg" onClick={save} disabled={saving || loadingGeneral}>
             {saving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Saving…</> : <><Save className="w-4 h-4 mr-2" /> Save Settings</>}
           </Button>
         </div>
+        )}
 
         {/* ── Financial Year & Voucher Numbering (server-persisted) ────────── */}
-        <FinancialYearSection />
+        <FinancialYearSection canEdit={perm.canEdit} />
 
         {/* ── Invoice PDF: payment terms & footer (server-persisted) ───────── */}
-        <InvoicePdfSection />
+        <InvoicePdfSection canEdit={perm.canEdit} />
 
         {/* ── Production costing: default overhead % (server-persisted) ────── */}
-        <StatutoryPayrollSection />
+        <StatutoryPayrollSection canEdit={perm.canEdit} />
 
-        <ProductionCostingSection />
+        <ProductionCostingSection canEdit={perm.canEdit} />
 
         {/* ── GST transfer invoicing (server-persisted) ────────────────────── */}
-        <GstTransferSection />
+        <GstTransferSection canEdit={perm.canEdit} />
 
         {/* ── Security: password policy (server-persisted) ─────────────────── */}
-        <SecuritySection />
+        <SecuritySection canEdit={perm.canEdit} />
 
         {/* ── Danger Zone ──────────────────────────────────────────────────── */}
+        {perm.canDelete && (
         <div className="border border-destructive/40 rounded-xl overflow-hidden">
           <div className="p-4 border-b border-destructive/30 bg-destructive/5 flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-destructive/10 flex items-center justify-center">
@@ -879,6 +894,7 @@ export default function Settings() {
             </Button>
           </div>
         </div>
+        )}
       </div>
 
       {/* Reset confirmation dialog */}

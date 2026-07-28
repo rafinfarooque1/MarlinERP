@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 
 export default function SalesStock() {
-  const perm = usePermission('Stock');
+  const perm = usePermission('page:/headoffice/stock');
   const { locationState } = useLocationContext();
   const [search, setSearch] = useState('');
   const [filterLoc, setFilterLoc] = useState('all');

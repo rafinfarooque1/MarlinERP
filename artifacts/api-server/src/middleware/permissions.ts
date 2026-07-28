@@ -13,9 +13,15 @@
  * New hierarchies created after the migration start with no rows → denied until
  * an admin explicitly grants access on the Permissions page.
  *
- * Accepts one module name or an any-of list (for endpoints shared by several
- * UI surfaces, e.g. /stock/transfers). Module names must EXACTLY match a `key`
- * in the frontend module registry (marlin-erp src/lib/moduleRegistry.ts).
+ * Accepts one page key or an any-of list. An any-of list is the norm, not the
+ * exception: one endpoint often feeds several pages (e.g. /items fills dropdowns
+ * on nine of them), and the user needs only one of those pages to have a
+ * legitimate reason to call it.
+ *
+ * Names must EXACTLY match a key in PAGE_PERM_KEYS — `page:` plus a sidebar
+ * link's href. A name that is not a registered page can never be granted or
+ * revoked, because the Permissions page only lists registered keys; the
+ * build-time check (scripts/src/check-permissions.ts) fails on one.
  */
 import { RequestHandler } from "express";
 import { pool } from "@workspace/db";
@@ -67,18 +73,22 @@ export function requireModuleView(modules: string | string[]): RequestHandler<an
   };
 }
 
-export type ModuleAction = "add" | "edit" | "delete";
+export type ModuleAction = "add" | "edit" | "delete" | "download" | "print";
 
 const ACTION_COLUMN: Record<ModuleAction, string> = {
   add: "can_add",
   edit: "can_edit",
   delete: "can_delete",
+  download: "can_download",
+  print: "can_print",
 };
 
 const ACTION_VERB: Record<ModuleAction, string> = {
   add: "create records in",
   edit: "edit records in",
   delete: "delete records in",
+  download: "download",
+  print: "print",
 };
 
 /**
@@ -139,6 +149,57 @@ export function requireModuleAction(modules: string | string[], action: ModuleAc
       next(e);
     }
   };
+}
+
+/**
+ * The same decision the two guards above make, for the handful of places that
+ * cannot be expressed as middleware — a permission checked halfway through a
+ * request (credit-limit overrides) or one that shapes a response instead of
+ * rejecting it (quick search hides groups the role cannot see).
+ *
+ * Those checks used to be written out by hand, and each hand-written copy
+ * drifted: they kept legacy module names and default-ALLOW long after the
+ * middleware moved to page keys and default-deny. Route code must call this
+ * rather than query the permissions table itself.
+ */
+export async function hasModuleAction(
+  hierarchyId: number | undefined,
+  modules: string | string[],
+  action: ModuleAction | "view",
+): Promise<boolean> {
+  if (!hierarchyId) return false;
+  const list = Array.isArray(modules) ? modules : [modules];
+  const col = action === "view" ? "can_view" : ACTION_COLUMN[action];
+  const { rows } = await pool.query<any>(
+    `SELECT (SELECT level FROM hierarchies WHERE id = $1) AS level,
+            (SELECT json_object_agg(module, ${col}) FROM permissions
+              WHERE hierarchy_id = $1 AND module = ANY($2::text[])) AS flags`,
+    [hierarchyId, list],
+  );
+  if (Number(rows[0]?.level ?? 99) === 1) return true;
+  const flags: Record<string, boolean | null> = rows[0]?.flags ?? {};
+  return list.some((m) => flags[m] === true);
+}
+
+/**
+ * "Does this role hold ANY of these actions on ANY of these pages?"
+ *
+ * Documents are why this exists. One endpoint mints the invoice PDF for
+ * preview, download, print and WhatsApp alike, and the right that justifies the
+ * call depends on which button was pressed — download for a saved file, print
+ * for the print dialog, either one for a plain look at it. Expressing that as a
+ * single action would either lock print-only roles out of printing or hand
+ * download-only roles a print path the UI never offered them.
+ */
+export async function hasAnyModuleAction(
+  hierarchyId: number | undefined,
+  modules: string | string[],
+  actions: ModuleAction[],
+): Promise<boolean> {
+  for (const action of actions) {
+    if (await hasModuleAction(hierarchyId, modules, action)) return true;
+  }
+  return false;
 }
 
 export const HEAD_OFFICE_ONLY_CODE = "HEAD_OFFICE_ONLY";

@@ -98,7 +98,7 @@ function Gstr3bCard({ title, heads, total, totalLabel, accent }: {
 }
 
 export default function GstReturns() {
-  const perms = usePermission('GST Returns');
+  const perms = usePermission('page:/accounts/gst-returns');
   const now = new Date();
   const fyStart = `${now.getMonth() + 1 < 4 ? now.getFullYear() - 1 : now.getFullYear()}-04-01`;
   const [fromDate, setFromDate] = useState(fyStart);

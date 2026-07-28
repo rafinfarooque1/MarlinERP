@@ -31,7 +31,7 @@ function shiftDate(date: string, days: number): string {
 }
 
 export default function DayBook() {
-  const perm = usePermission('Books');
+  const perm = usePermission('page:/accounts/day-book');
   const [date, setDate] = useState(today());
   const { data, isLoading } = useDayBook(date);
 

@@ -30,7 +30,7 @@ function StatCard({ label, value, accent }: { label: string; value: string; acce
 }
 
 export default function InventoryReports() {
-  const perms = usePermission('Inventory Reports');
+  const perms = usePermission('page:/headoffice/inventory-reports');
   const [tab, setTab] = useState('valuation');
   const [search, setSearch] = useState('');
   
