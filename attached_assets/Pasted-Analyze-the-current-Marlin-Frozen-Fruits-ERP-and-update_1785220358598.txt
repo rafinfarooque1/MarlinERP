@@ -1,0 +1,219 @@
+Analyze the current Marlin Frozen Fruits ERP and update the documentation ONLY.
+
+IMPORTANT RULES
+
+1. DO NOT modify any source code.
+2. DO NOT modify the database.
+3. DO NOT modify APIs.
+4. DO NOT change business logic.
+5. DO NOT refactor anything.
+6. DO NOT create new modules.
+7. DO NOT remove any modules.
+8. This is DOCUMENTATION ONLY.
+
+MOST IMPORTANT
+
+The sidebar structure, navigation hierarchy, menu names, grouping, ordering, and arrangement must remain EXACTLY as they currently exist in the ERP.
+
+Do NOT suggest a new sidebar.
+Do NOT rename any module.
+Do NOT reorganize any menu.
+Do NOT move modules between sections.
+Do NOT merge sections.
+Do NOT split sections.
+
+The documentation must reflect the CURRENT implementation exactly as it exists today.
+
+Update the documentation after performing a complete analysis of the entire project.
+
+Include:
+
+1. Complete Project Overview
+
+2. Complete Folder Structure
+- Frontend
+- Backend
+- Shared packages
+- Assets
+- Documentation
+- Scripts
+
+3. Frontend Architecture
+- Application flow
+- Routing
+- Layout
+- Sidebar (exact current structure)
+- Navigation
+- Components
+- Context providers
+- React Query
+- State management
+- Authentication
+- Permission handling
+- Location handling
+- UI architecture
+- Hooks
+- Utilities
+
+4. Backend Architecture
+- Express structure
+- Middleware
+- Authentication
+- Authorization
+- Services
+- Route organization
+- Startup process
+- Database initialization
+- Logging
+- Validation
+- Error handling
+- Audit logging
+- Business logic flow
+
+5. Database Documentation
+- Every table
+- Purpose
+- Relationships
+- Fields
+- Data flow
+
+6. ERP Modules
+
+Document every module currently available.
+
+For every module include:
+- Purpose
+- Features
+- Business flow
+- Pages
+- Backend APIs
+- Database tables used
+- Permissions used
+- Related modules
+
+7. Business Workflow
+
+Document every workflow exactly as implemented.
+
+Examples:
+Purchase
+Production
+Inventory
+Stock Transfer
+Sales
+Payment
+Accounts
+GST
+Payroll
+HR
+
+8. Permission Structure
+
+Explain:
+- Hierarchy
+- Roles
+- Module permissions
+- Branch permissions
+- Frontend permission checks
+- Backend permission checks
+
+9. Accounting Structure
+
+Document:
+- Chart of Accounts
+- Ledgers
+- Voucher flow
+- Journal flow
+- GST posting
+- Purchase posting
+- Sales posting
+- Payroll posting
+- Expense posting
+- Financial reports
+
+10. Inventory Structure
+
+Document:
+- Raw materials
+- Materials
+- Finished goods
+- Production stock
+- Head Office stock
+- Warehouse stock
+- Outlet stock
+- Batch management
+- FEFO
+- Stock transfer
+- Stock ledger
+- Stock verification
+- Item pricing
+
+11. Complete Page Documentation
+
+For every page include:
+- URL
+- Module
+- Purpose
+- Features
+- Permissions
+- APIs used
+- Tables used
+
+12. Complete API Documentation
+
+For every endpoint include:
+- Method
+- URL
+- Authentication
+- Permission required
+- Purpose
+- Request
+- Response
+- Tables used
+
+13. Current Sidebar Documentation
+
+Document the sidebar EXACTLY as it exists today.
+
+Use the current order only.
+
+Do NOT redesign it.
+Do NOT improve it.
+Do NOT recommend changes.
+
+14. Current Navigation Flow
+
+Explain how users navigate through the ERP using the existing sidebar only.
+
+15. Current Business Architecture
+
+Explain how all existing modules interact.
+
+16. Module Dependency Diagram
+
+Explain how each existing module connects to others.
+
+17. Complete Summary
+
+Include:
+- Number of modules
+- Number of pages
+- Number of APIs
+- Number of database tables
+- Number of reports
+- Number of permission modules
+- Number of workflows
+
+FINAL REQUIREMENT
+
+This documentation must describe ONLY the CURRENT ERP implementation.
+
+Do NOT redesign anything.
+Do NOT optimize anything.
+Do NOT recommend improvements.
+Do NOT suggest architectural changes.
+Do NOT change the sidebar structure.
+Do NOT change the menu order.
+Do NOT change the grouping.
+
+The output should serve as the official documentation of the current Marlin Frozen Fruits ERP exactly as implemented.
