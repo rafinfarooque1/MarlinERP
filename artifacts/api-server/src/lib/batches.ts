@@ -36,20 +36,27 @@ export async function creditBatch(c: Queryable, args: {
   batchNumber: string; mfgDate?: string | null; expiryDate?: string | null;
   quantity: number; unitCost?: number; source?: string; sourceId?: number | null;
   materialType?: BatchKind;
+  /** Parent product identity, stamped so a scanned lot needs no second lookup.
+   *  `barcode` is stable identity (first write wins); `mrp` is the price the lot
+   *  was created at (latest inbound wins, since that is what is on the pack). */
+  barcode?: string | null; mrp?: number | null;
 }): Promise<void> {
   if (!(args.quantity > 0)) return;
   await c.query(
-    `INSERT INTO stock_batches (item_id, material_type, branch_type, branch_id, batch_number, mfg_date, expiry_date, quantity, unit_cost, source, source_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+    `INSERT INTO stock_batches (item_id, material_type, branch_type, branch_id, batch_number, mfg_date, expiry_date, quantity, unit_cost, source, source_id, barcode, mrp)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
      ON CONFLICT (item_id, material_type, branch_type, branch_id, batch_number) DO UPDATE SET
        quantity    = stock_batches.quantity + EXCLUDED.quantity,
        mfg_date    = COALESCE(stock_batches.mfg_date, EXCLUDED.mfg_date),
        expiry_date = COALESCE(stock_batches.expiry_date, EXCLUDED.expiry_date),
        unit_cost   = CASE WHEN EXCLUDED.unit_cost > 0 THEN EXCLUDED.unit_cost ELSE stock_batches.unit_cost END,
+       barcode     = COALESCE(stock_batches.barcode, EXCLUDED.barcode),
+       mrp         = COALESCE(EXCLUDED.mrp, stock_batches.mrp),
        updated_at  = now()`,
     [args.itemId, args.materialType ?? "item", args.branchType, args.branchId, args.batchNumber,
      args.mfgDate ?? null, args.expiryDate ?? null, r3(args.quantity), r2(args.unitCost ?? 0),
-     args.source ?? null, args.sourceId ?? null]
+     args.source ?? null, args.sourceId ?? null,
+     args.barcode ?? null, args.mrp != null && args.mrp > 0 ? r2(args.mrp) : null]
   );
 }
 

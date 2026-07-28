@@ -110,6 +110,28 @@ The production report and the stock status report currently value the same item 
 one from a batch-time snapshot and one from current average cost. After this, one function
 serves both.
 
+## 6a. Product identity
+
+**Truth:** the product master row — the item code, barcode and active/inactive status on the
+finished-SKU, raw-material and packing-material tables. One code and one barcode per product,
+issued from a per-type sequence so a number is never reused.
+
+**Rule:** identity is issued in exactly one place. No module invents its own code format, and
+nothing derives a code from a display name or a row count.
+
+**Batch identity is a snapshot, not a second source.** A lot copies its parent's barcode and
+the MRP that applied when the lot was created, so a historical lot keeps the price it was
+made under. Reads may fall back to the parent's current MRP for display, but a lot's stored
+MRP is never rewritten after the fact, and an unpriced lot reads as *no MRP* — never as zero.
+
+**Status governs new activity only.** An inactive product is refused on new sales, purchases,
+transfers and production runs. It stays fully readable, keeps its history, and open documents
+that already reference it can still be edited, approved, dispatched, received, rejected and
+paid to a terminal state.
+
+**Item master writes are Head-Office-only**, enforced on the server. Reads stay open to every
+location, so warehouses keep full visibility of what they hold.
+
 ## 7. Dashboard and reports
 
 **Truth:** dashboard widgets and all reports are **pure readers**. Each figure comes from the

@@ -11,6 +11,7 @@ import { resolveLocationGst, classifyTransfer, computeTransferGst, createDispatc
 import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
 import { deductMaterialAt, creditMaterialAt } from "../lib/materialStock";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
+import { productBatchIdentity, blockedByInactiveProducts, INACTIVE_PRODUCT_CODE, isProductKind } from "../lib/productIdentity";
 
 const router = Router();
 
@@ -320,6 +321,19 @@ router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), as
   if ((parsed.data.fromType === 'outlet' || parsed.data.toType === 'outlet') && await outletWritesBlocked(pool)) {
     res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
   }
+  // Discontinued products take no part in NEW movement. Transfers already in
+  // flight are unaffected — dispatch, receive and reject stay open so nothing
+  // gets stranded mid-journey. materialType rides on the raw body (zod strips it).
+  const inactiveMsg = await blockedByInactiveProducts(
+    pool,
+    rawLines
+      .map((li, i) => ({
+        kind: ((rawLines[i] as any)?.materialType ?? 'item') as any,
+        id: Number(li.itemId),
+      }))
+      .filter(ref => isProductKind(ref.kind)),
+  );
+  if (inactiveMsg) { res.status(400).json({ error: inactiveMsg, code: INACTIVE_PRODUCT_CODE }); return; }
   const challanNumber = `CHN-${Date.now()}`;
 
   // GST-aware transfer classification — compare source + destination GSTINs
@@ -593,7 +607,12 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"
         res.status(400).json({ error: "receivedLineItems must be an array" });
         return;
       }
-      const seen = new Set<number>();
+      // Items, materials and packing materials share one id space, so a single
+      // transfer can legitimately carry the same numeric id twice under two
+      // different kinds. Every lookup below therefore resolves on the
+      // (materialType, itemId) pair — keying on the id alone would reject valid
+      // transfers and credit the wrong lots.
+      const seen = new Set<string>();
       const validated: Array<{ itemId: number; quantity: number; costPrice: number; materialType?: string }> = [];
       for (const li of receivedLineItems) {
         const itemId = Number(li?.itemId);
@@ -603,18 +622,27 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"
           res.status(400).json({ error: "Each received line needs a valid itemId and a non-negative quantity" });
           return;
         }
-        if (seen.has(itemId)) {
+        const rawType = typeof (li as any)?.materialType === 'string' ? (li as any).materialType : null;
+        const candidates = dispatchedLines.filter(x => Number(x.itemId) === itemId);
+        const d = rawType
+          ? candidates.find(x => (x.materialType ?? 'item') === rawType)
+          : candidates.length === 1 ? candidates[0] : undefined;
+        if (!d) {
+          await client.query("ROLLBACK");
+          res.status(400).json({
+            error: candidates.length > 1
+              ? `This transfer carries item ${itemId} under more than one product type — each received line must name its materialType`
+              : `Item ${itemId} was not part of this transfer`,
+          });
+          return;
+        }
+        const key = `${d.materialType ?? 'item'}:${itemId}`;
+        if (seen.has(key)) {
           await client.query("ROLLBACK");
           res.status(400).json({ error: `Duplicate received line for item ${itemId}` });
           return;
         }
-        seen.add(itemId);
-        const d = dispatchedLines.find(x => Number(x.itemId) === itemId);
-        if (!d) {
-          await client.query("ROLLBACK");
-          res.status(400).json({ error: `Item ${itemId} was not part of this transfer` });
-          return;
-        }
+        seen.add(key);
         if (qty > Number(d.quantity) + 0.001) {
           await client.query("ROLLBACK");
           res.status(400).json({ error: `Received quantity for item ${itemId} (${qty}) exceeds dispatched quantity (${d.quantity})` });
@@ -657,6 +685,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"
               branchType: destType, branchId: destId,
               batchNumber: b.batchNumber, mfgDate: b.mfgDate, expiryDate: b.expiryDate,
               quantity: b.quantity, unitCost: b.unitCost, source: "transfer", sourceId: id,
+              ...(await productBatchIdentity(client, matType as any, Number(li.itemId))),
             });
           }
         } else {
@@ -665,6 +694,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"
             branchType: destType, branchId: destId,
             batchNumber: `TRF-${row.challan_number}`, quantity: Number(li.quantity),
             unitCost: Number(li.costPrice ?? 0), source: "transfer", sourceId: id,
+            ...(await productBatchIdentity(client, matType as any, Number(li.itemId))),
           });
         }
       } else {
@@ -685,8 +715,12 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"
             [li.itemId, destType, destId, li.quantity, String(li.costPrice ?? 0)]
           );
         }
-        // Batches travel with the goods
-        const dispatched = dispatchedLines.find(d => Number(d.itemId) === Number(li.itemId));
+        // Batches travel with the goods. Match on the (kind, id) pair: a
+        // material line can share this numeric id, and inheriting its lots
+        // would credit the finished item with another product's provenance.
+        const dispatched = dispatchedLines.find(
+          d => Number(d.itemId) === Number(li.itemId) && (d.materialType ?? 'item') === 'item'
+        );
         const breakdown = dispatched?.batchBreakdown ?? [];
         if (breakdown.length > 0) {
           const allocation = allocateReceived(breakdown, Number(li.quantity));
@@ -695,6 +729,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"
               itemId: li.itemId, branchType: destType, branchId: destId,
               batchNumber: b.batchNumber, mfgDate: b.mfgDate, expiryDate: b.expiryDate,
               quantity: b.quantity, unitCost: b.unitCost, source: "transfer", sourceId: id,
+              ...(await productBatchIdentity(client, "item", Number(li.itemId))),
             });
           }
         } else {
@@ -702,6 +737,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"
             itemId: li.itemId, branchType: destType, branchId: destId,
             batchNumber: `TRF-${row.challan_number}`, quantity: Number(li.quantity),
             unitCost: Number(li.costPrice ?? 0), source: "transfer", sourceId: id,
+            ...(await productBatchIdentity(client, "item", Number(li.itemId))),
           });
         }
         // Update destination average cost (same formula as a regular inbound purchase)

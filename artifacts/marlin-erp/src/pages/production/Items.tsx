@@ -20,6 +20,7 @@ import { Badge } from '@/components/ui/badge';
 import { useUnits } from '@/lib/useUnits';
 import { Link } from 'wouter';
 import { usePermission } from '@/lib/usePermission';
+import { useIsHeadOffice, HEAD_OFFICE_ONLY_HINT, isActiveProduct } from '@/lib/productStatus';
 
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
@@ -32,6 +33,9 @@ type FormValues = z.infer<typeof schema>;
 
 export default function Items() {
   const perm = usePermission('Items');
+  // Item masters belong to Head Office. Codes, barcodes and status are shown
+  // read-only here — the full editor lives on the combined Item Master page.
+  const { isHeadOffice } = useIsHeadOffice();
   const { data: items = [], isLoading } = useListItems();
   const { units } = useUnits();
   const [search, setSearch] = useState('');
@@ -97,13 +101,13 @@ export default function Items() {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Package className="w-6 h-6 text-primary" /> Item Master</h1>
-            <p className="text-muted-foreground mt-1">Finished goods / SKU catalogue</p>
+            <p className="text-muted-foreground mt-1">{isHeadOffice ? 'Finished goods / SKU catalogue' : HEAD_OFFICE_ONLY_HINT}</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('items.csv', filtered.map(i => ({ Name: i.name, HSN: i.hsnCode, 'Tax%': i.taxRate, Unit: i.unit, 'Production Stock': i.productionStock })))}>
+            <Button variant="outline" size="sm" onClick={() => downloadCSV('items.csv', filtered.map(i => ({ Code: (i as any).itemCode || '', Barcode: (i as any).barcode || '', Name: i.name, HSN: i.hsnCode, 'Tax%': i.taxRate, Unit: i.unit, 'Production Stock': i.productionStock, Status: isActiveProduct(i) ? 'Active' : 'Inactive' })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
-            <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Item</Button>
+            {isHeadOffice && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Item</Button>}
           </div>
         </div>
 
@@ -115,37 +119,57 @@ export default function Items() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
+                <TableHead>Code</TableHead>
                 <TableHead>Name</TableHead>
                 <TableHead>HSN Code</TableHead>
                 <TableHead>Tax Rate</TableHead>
                 <TableHead>Unit</TableHead>
                 <TableHead>Production Stock</TableHead>
+                <TableHead>Status</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
+                <TableRow><TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
                   <Package className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No items found</p>
                 </TableCell></TableRow>
-              ) : filtered.map(item => (
-                <TableRow key={item.id} className="hover:bg-muted/10">
+              ) : filtered.map(item => {
+                const active = isActiveProduct(item);
+                return (
+                <TableRow key={item.id} className={`hover:bg-muted/10 ${active ? '' : 'opacity-60'}`}>
+                  <TableCell className="whitespace-nowrap">
+                    <div className="font-mono text-sm font-semibold">{(item as any).itemCode || '—'}</div>
+                    {(item as any).barcode && <div className="font-mono text-[10px] text-muted-foreground">{(item as any).barcode}</div>}
+                  </TableCell>
                   <TableCell className="font-semibold">{item.name}</TableCell>
                   <TableCell><Badge variant="secondary" className="font-mono text-xs">{item.hsnCode}</Badge></TableCell>
                   <TableCell><Badge variant="outline" className="text-xs">{item.taxRate}%</Badge></TableCell>
                   <TableCell className="text-muted-foreground">{item.unit}</TableCell>
                   <TableCell className="font-mono text-primary font-bold">{Number(item.productionStock || 0).toLocaleString()}</TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className={`text-xs ${active
+                      ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
+                      : 'bg-muted text-muted-foreground border-border'}`}>
+                      {active ? 'Active' : 'Inactive'}
+                    </Badge>
+                  </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(item)}><Eye className="w-4 h-4" /></Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(item)}><Edit2 className="w-4 h-4" /></Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => handleDelete(item.id, item.name)}><Trash2 className="w-4 h-4" /></Button>
+                      {isHeadOffice && (
+                        <>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(item)}><Edit2 className="w-4 h-4" /></Button>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => handleDelete(item.id, item.name)}><Trash2 className="w-4 h-4" /></Button>
+                        </>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
         </div>

@@ -20,6 +20,7 @@ import {
 } from '@workspace/api-client-react';
 import { useApproveTransfer, useRejectTransfer } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
+import { isActiveProduct } from '@/lib/productStatus';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -180,9 +181,13 @@ function ApproveDialog({
   const qc = useQueryClient();
   const { data: me } = useGetMe();
 
-  const [received, setReceived] = useState<Record<number, number>>(() => {
-    const init: Record<number, number> = {};
-    (transfer?.lineItems ?? []).forEach((li: any) => { init[li.itemId] = li.quantity; });
+  // Keyed by "materialType:itemId", never by id alone: the three product tables
+  // share an id space, so an id-only key would let two lines overwrite each
+  // other's received quantity.
+  const lineKey = (li: any) => `${li.materialType ?? 'item'}:${li.itemId}`;
+  const [received, setReceived] = useState<Record<string, number>>(() => {
+    const init: Record<string, number> = {};
+    (transfer?.lineItems ?? []).forEach((li: any) => { init[lineKey(li)] = li.quantity; });
     return init;
   });
   const [rejectReason, setRejectReason] = useState('');
@@ -193,7 +198,7 @@ function ApproveDialog({
   const handleApprove = () => {
     const receivedLineItems = (transfer.lineItems ?? []).map((li: any) => ({
       itemId: li.itemId,
-      quantity: received[li.itemId] ?? li.quantity,
+      quantity: received[lineKey(li)] ?? li.quantity,
       costPrice: li.costPrice ?? 0,
       materialType: li.materialType ?? 'item',
     }));
@@ -264,10 +269,10 @@ function ApproveDialog({
             <div className="space-y-2">
               {(transfer.lineItems ?? []).map((li: any) => {
                 const item = allItemsMap.get(`${li.materialType ?? 'item'}:${li.itemId}`);
-                const recvQty = received[li.itemId] ?? li.quantity;
+                const recvQty = received[lineKey(li)] ?? li.quantity;
                 const isShort = recvQty < li.quantity;
                 return (
-                  <div key={li.itemId}
+                  <div key={lineKey(li)}
                     className={`grid grid-cols-12 gap-3 items-center p-3 rounded-lg border ${isShort ? 'border-amber-500/40 bg-amber-500/5' : 'border-border bg-muted/20'}`}>
                     <div className="col-span-5">
                       <p className="font-medium text-sm">{item?.name ?? `Item #${li.itemId}`}</p>
@@ -287,7 +292,7 @@ function ApproveDialog({
                       <p className="text-xs text-muted-foreground mb-1">Received <span className="text-destructive">*</span></p>
                       <Input
                         type="number" min={0} max={li.quantity} value={recvQty}
-                        onChange={e => setReceived(r => ({ ...r, [li.itemId]: Number(e.target.value) }))}
+                        onChange={e => setReceived(r => ({ ...r, [lineKey(li)]: Number(e.target.value) }))}
                         className={`h-8 text-sm font-mono ${isShort ? 'border-amber-500 focus-visible:ring-amber-500' : ''}`}
                       />
                       {isShort && (
@@ -502,15 +507,18 @@ export default function Transfers() {
         ...(rawMaterials as any[]).filter(m => Number(m.currentStock) > 0).map(m => [`raw_material:${m.id}`, Number(m.currentStock)] as [string, number]),
         ...(materials  as any[]).filter(m => Number(m.currentStock) > 0).map(m => [`material:${m.id}`, Number(m.currentStock)] as [string, number]),
       ]);
+      // Discontinued products are excluded from new transfers, matching the
+      // server-side create guard. Stock they still hold shows up in reports and
+      // can be cleared by a stock verification rather than a transfer.
       return [
-        ...(items        as any[]).filter(i => (stockMap.get(`item:${i.id}`)          ?? 0) > 0).map(i => ({ id: i.id, name: i.name, unit: i.unit, materialType: 'item'         as const, availQty: stockMap.get(`item:${i.id}`)          ?? 0 })),
-        ...(materials    as any[]).filter(m => (stockMap.get(`material:${m.id}`)      ?? 0) > 0).map(m => ({ id: m.id, name: m.name, unit: m.unit, materialType: 'material'      as const, availQty: stockMap.get(`material:${m.id}`)      ?? 0 })),
-        ...(rawMaterials as any[]).filter(m => (stockMap.get(`raw_material:${m.id}`)  ?? 0) > 0).map(m => ({ id: m.id, name: m.name, unit: m.unit, materialType: 'raw_material'  as const, availQty: stockMap.get(`raw_material:${m.id}`)  ?? 0 })),
+        ...(items        as any[]).filter(i => isActiveProduct(i) && (stockMap.get(`item:${i.id}`)          ?? 0) > 0).map(i => ({ id: i.id, name: i.name, unit: i.unit, materialType: 'item'         as const, availQty: stockMap.get(`item:${i.id}`)          ?? 0 })),
+        ...(materials    as any[]).filter(m => isActiveProduct(m) && (stockMap.get(`material:${m.id}`)      ?? 0) > 0).map(m => ({ id: m.id, name: m.name, unit: m.unit, materialType: 'material'      as const, availQty: stockMap.get(`material:${m.id}`)      ?? 0 })),
+        ...(rawMaterials as any[]).filter(m => isActiveProduct(m) && (stockMap.get(`raw_material:${m.id}`)  ?? 0) > 0).map(m => ({ id: m.id, name: m.name, unit: m.unit, materialType: 'raw_material'  as const, availQty: stockMap.get(`raw_material:${m.id}`)  ?? 0 })),
       ];
     }
     // Warehouse / outlet source — items only
     const sMap = new Map<number, number>((branchStock as any[]).map(s => [s.itemId!, Number(s.quantity ?? 0)]));
-    return (items as any[]).filter(i => (sMap.get(i.id) ?? 0) > 0).map(i => ({
+    return (items as any[]).filter(i => isActiveProduct(i) && (sMap.get(i.id) ?? 0) > 0).map(i => ({
       id: i.id, name: i.name, unit: i.unit, materialType: 'item' as const, availQty: sMap.get(i.id) ?? 0,
     }));
   }, [isFromHO, productionStock, branchStock, items, materials, rawMaterials]);

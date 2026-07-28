@@ -26,6 +26,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { useUnits } from '@/lib/useUnits';
+import { useIsHeadOffice, HEAD_OFFICE_ONLY_HINT, isActiveProduct } from '@/lib/productStatus';
 
 type ItemType = 'raw_material' | 'material' | 'item';
 
@@ -51,6 +52,11 @@ const schema = z.object({
   mrp:         z.coerce.number().min(0).optional(),
   reorderLevel: z.coerce.number().min(0).optional(),
   description: z.string().optional(),
+  // Left blank, the server issues both from a per-type sequence (FG/RM/PM-0001
+  // and a scannable in-store EAN-13). Typed in, they must be unique.
+  itemCode:    z.string().trim().max(32, 'Max 32 characters').regex(/^\S*$/, 'No spaces allowed').optional(),
+  barcode:     z.string().trim().max(64, 'Max 64 characters').regex(/^\S*$/, 'No spaces allowed').optional(),
+  status:      z.enum(['active', 'inactive']),
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -68,6 +74,9 @@ const defaultBomLine = { materialType: 'raw_material' as const, materialId: 0, q
 
 export default function ItemMaster() {
   const perm = usePermission('Items');
+  // Item masters are company-wide, so only Head Office may change them. The
+  // server enforces this; here we simply stop offering the controls.
+  const { isHeadOffice } = useIsHeadOffice();
   const { data: rawMaterials = [], isLoading: rmLoading } = useListRawMaterials();
   const { data: materials = [], isLoading: mLoading } = useListMaterials();
   const { data: items = [], isLoading: iLoading } = useListItems();
@@ -77,6 +86,7 @@ export default function ItemMaster() {
 
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
   const [locType, setLocType] = useState<'all' | 'headoffice' | 'warehouse' | 'outlet'>('all');
   const [locId, setLocId] = useState<number | null>(null);
   const [isOpen, setIsOpen] = useState(false);
@@ -135,16 +145,24 @@ export default function ItemMaster() {
     ...(items as any[]).map(i => ({ ...i, _type: 'item' as ItemType, stock: Number(i.productionStock || 0) })),
   ];
 
+  const q = search.trim().toLowerCase();
   const filtered = allItems.filter(i =>
     (typeFilter === 'all' || i._type === typeFilter) &&
-    (i.name.toLowerCase().includes(search.toLowerCase()) || (i.hsnCode || '').includes(search))
+    (statusFilter === 'all' || (isActiveProduct(i) ? 'active' : 'inactive') === statusFilter) &&
+    (q === '' ||
+      i.name.toLowerCase().includes(q) ||
+      (i.hsnCode || '').toLowerCase().includes(q) ||
+      // Codes and barcodes are how the warehouse actually refers to a product,
+      // so searching for either has to land.
+      (i.itemCode || '').toLowerCase().includes(q) ||
+      (i.barcode || '').toLowerCase().includes(q))
   );
 
   const isLoading = rmLoading || mLoading || iLoading;
 
   const openAdd = (type?: ItemType) => {
     setEditTarget(null);
-    form.reset({ itemType: type || 'raw_material', name: '', unit: units[0] || '', hsnCode: '', taxRate: 5, cost: 0, mrp: 0, reorderLevel: 10, description: '' });
+    form.reset({ itemType: type || 'raw_material', name: '', unit: units[0] || '', hsnCode: '', taxRate: 5, cost: 0, mrp: 0, reorderLevel: 10, description: '', itemCode: '', barcode: '', status: 'active' });
     setIsOpen(true);
   };
 
@@ -160,6 +178,9 @@ export default function ItemMaster() {
       mrp: Number(item.mrp ?? 0),
       reorderLevel: Number(item.reorderLevel ?? 10),
       description: item.description || '',
+      itemCode: item.itemCode || '',
+      barcode: item.barcode || '',
+      status: isActiveProduct(item) ? 'active' : 'inactive',
     });
     setIsOpen(true);
   };
@@ -211,7 +232,14 @@ export default function ItemMaster() {
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     };
     // raw_material / material: production cost auto-derives from purchases; mrp is manually set
-    const sharedData = { name: data.name, unit: data.unit, description: data.description, hsnCode: data.hsnCode || '', taxRate: Number(data.taxRate ?? 5), mrp: Number(data.mrp ?? 0) };
+    // Blank code/barcode are omitted, not sent as '' — on create that asks the
+    // server to issue them, and on edit it leaves the existing values alone.
+    const identity = {
+      ...(data.itemCode?.trim() ? { itemCode: data.itemCode.trim() } : {}),
+      ...(data.barcode?.trim() ? { barcode: data.barcode.trim() } : {}),
+      status: data.status,
+    };
+    const sharedData = { name: data.name, unit: data.unit, description: data.description, hsnCode: data.hsnCode || '', taxRate: Number(data.taxRate ?? 5), mrp: Number(data.mrp ?? 0), ...identity };
     const itemData = { ...sharedData, cost: Number(data.cost ?? 0), reorderLevel: Number(data.reorderLevel ?? 10) };
 
     if (editTarget) {
@@ -262,17 +290,23 @@ export default function ItemMaster() {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Layers className="w-6 h-6 text-primary" /> Item Master</h1>
-            <p className="text-muted-foreground mt-1">All packing materials, raw materials and Item Name (SKU) in one place</p>
+            <p className="text-muted-foreground mt-1">
+              {isHeadOffice
+                ? 'All packing materials, raw materials and Item Name (SKU) in one place'
+                : HEAD_OFFICE_ONLY_HINT}
+            </p>
           </div>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => downloadCSV('items.csv', filtered.map(i => ({
+              Code: (i as any).itemCode || '', Barcode: (i as any).barcode || '',
               Type: (TYPE_LABELS as any)[i._type] ?? i._type, Name: i.name, Unit: i.unit,
               HSN: (i as any).hsnCode || '', 'Tax%': (i as any).taxRate || '',
-              Stock: i.stock, Description: i.description || '',
+              Stock: i.stock, Status: isActiveProduct(i) ? 'Active' : 'Inactive',
+              Description: i.description || '',
             })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
-            <Button onClick={() => openAdd()}><Plus className="w-4 h-4 mr-2" /> Add Item</Button>
+            {isHeadOffice && <Button onClick={() => openAdd()}><Plus className="w-4 h-4 mr-2" /> Add Item</Button>}
           </div>
         </div>
 
@@ -360,12 +394,24 @@ export default function ItemMaster() {
                 <SelectItem value="item">Item Name (SKU)</SelectItem>
               </SelectContent>
             </Select>
+
+            {/* Status filter — inactive products stay listed here but are kept
+                out of every new sale, purchase, transfer and production run. */}
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="w-36"><SelectValue placeholder="All Statuses" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Statuses</SelectItem>
+                <SelectItem value="active">Active only</SelectItem>
+                <SelectItem value="inactive">Inactive only</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
                 <TableHead>Type</TableHead>
+                <TableHead>Code</TableHead>
                 <TableHead>Name</TableHead>
                 <TableHead>Unit</TableHead>
                 <TableHead>HSN</TableHead>
@@ -378,25 +424,33 @@ export default function ItemMaster() {
                    locType === 'outlet' && locId != null ? `${(outlets as any[]).find((o: any) => o.id === locId)?.name ?? 'Outlet'} Stock` :
                    'Stock'}
                 </TableHead>
+                <TableHead>Status</TableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(5)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={10}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
+                <TableRow><TableCell colSpan={10} className="text-center py-16 text-muted-foreground">
                   <Layers className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No items found</p>
                 </TableCell></TableRow>
               ) : filtered.map(item => {
                 // Show mrp for all types
                 const displayCost = Number((item as any).mrp ?? 0);
+                const active = isActiveProduct(item);
                 return (
-                <TableRow key={`${item._type}-${item.id}`} className="hover:bg-muted/10">
+                <TableRow key={`${item._type}-${item.id}`} className={`hover:bg-muted/10 ${active ? '' : 'opacity-60'}`}>
                   <TableCell>
                     <Badge variant="outline" className={`text-xs ${(TYPE_COLORS as any)[item._type] ?? ''}`}>
                       {item._type === 'raw_material' ? 'Packing Material' : item._type === 'material' ? 'Raw Material' : 'Item Name (SKU)'}
                     </Badge>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    <div className="font-mono text-sm font-semibold">{(item as any).itemCode || '—'}</div>
+                    {(item as any).barcode && (
+                      <div className="font-mono text-[10px] text-muted-foreground tracking-tight">{(item as any).barcode}</div>
+                    )}
                   </TableCell>
                   <TableCell className="font-medium">
                     {item.name}
@@ -420,6 +474,13 @@ export default function ItemMaster() {
                         : <span className="text-muted-foreground font-normal">0</span>;
                     })()}
                   </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className={`text-xs ${active
+                      ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
+                      : 'bg-muted text-muted-foreground border-border'}`}>
+                      {active ? 'Active' : 'Inactive'}
+                    </Badge>
+                  </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       {item._type === 'item' && (
@@ -428,8 +489,12 @@ export default function ItemMaster() {
                         </Button>
                       )}
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(item)}><Eye className="w-4 h-4" /></Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(item)}><Edit2 className="w-4 h-4" /></Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => setDeleteTarget({ id: item.id, name: item.name, type: item._type })}><Trash2 className="w-4 h-4" /></Button>
+                      {isHeadOffice && (
+                        <>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(item)}><Edit2 className="w-4 h-4" /></Button>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => setDeleteTarget({ id: item.id, name: item.name, type: item._type })}><Trash2 className="w-4 h-4" /></Button>
+                        </>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -529,6 +594,44 @@ export default function ItemMaster() {
                   )} />
                 )}
               </div>
+              {/* Identification — left blank, the server issues both */}
+              <div className="grid grid-cols-2 gap-4">
+                <FormField control={form.control} name="itemCode" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Item Code</FormLabel>
+                    <FormControl>
+                      <Input className="font-mono" placeholder={editTarget ? '' : 'Auto (FG/RM/PM-0001)'} {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                <FormField control={form.control} name="barcode" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Barcode</FormLabel>
+                    <FormControl>
+                      <Input className="font-mono" placeholder={editTarget ? '' : 'Auto (EAN-13)'} {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                <FormField control={form.control} name="status" render={({ field }) => (
+                  <FormItem className="col-span-2">
+                    <FormLabel>Status</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        <SelectItem value="active">Active — available everywhere</SelectItem>
+                        <SelectItem value="inactive">Inactive — kept out of new entries</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[11px] text-muted-foreground">
+                      Inactive products stay on past records and reports; they just can't be added to a new sale, purchase, transfer or production run.
+                    </p>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+              </div>
+
               <FormField control={form.control} name="description" render={({ field }) => (
                 <FormItem><FormLabel>Description</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
               )} />
@@ -627,11 +730,19 @@ export default function ItemMaster() {
             <>
               <SheetHeader className="mb-4">
                 <SheetTitle>{viewItem.name}</SheetTitle>
-                <SheetDescription>
+                {/* asChild → renders a div: Badge is a div and can't sit inside a p */}
+                <SheetDescription asChild className="flex flex-wrap items-center gap-2"><div>
                   <Badge variant="outline" className={`text-xs ${(TYPE_COLORS as any)[viewItem._type] ?? ''}`}>{(TYPE_LABELS as any)[viewItem._type] ?? viewItem._type}</Badge>
-                </SheetDescription>
+                  <Badge variant="outline" className={`text-xs ${isActiveProduct(viewItem)
+                    ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
+                    : 'bg-muted text-muted-foreground border-border'}`}>
+                    {isActiveProduct(viewItem) ? 'Active' : 'Inactive'}
+                  </Badge>
+                </div></SheetDescription>
               </SheetHeader>
               <div className="space-y-3 text-sm">
+                <div className="flex justify-between py-2 border-b border-border"><span className="text-muted-foreground">Item Code</span><span className="font-mono font-semibold">{viewItem.itemCode || '—'}</span></div>
+                <div className="flex justify-between py-2 border-b border-border"><span className="text-muted-foreground">Barcode</span><span className="font-mono">{viewItem.barcode || '—'}</span></div>
                 <div className="flex justify-between py-2 border-b border-border"><span className="text-muted-foreground">Unit</span><span>{viewItem.unit}</span></div>
                 {viewItem.hsnCode && <div className="flex justify-between py-2 border-b border-border"><span className="text-muted-foreground">HSN Code</span><span className="font-mono">{viewItem.hsnCode}</span></div>}
                 {viewItem.taxRate !== undefined && <div className="flex justify-between py-2 border-b border-border"><span className="text-muted-foreground">GST Rate</span><span>{Number(viewItem.taxRate)}%</span></div>}
@@ -700,8 +811,9 @@ export default function ItemMaster() {
       <Dialog open={!!deleteTarget} onOpenChange={v => !v && setDeleteTarget(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader><DialogTitle className="text-destructive flex items-center gap-2"><Trash2 className="w-5 h-5" />Delete Item</DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground py-2">Delete <Badge variant="outline" className={`text-xs mr-1 ${deleteTarget ? ((TYPE_COLORS as any)[deleteTarget.type] ?? '') : ''}`}>{deleteTarget ? ((TYPE_LABELS as any)[deleteTarget.type] ?? deleteTarget.type) : ''}</Badge>
-            <span className="font-semibold text-foreground">{deleteTarget?.name}</span>? This cannot be undone.</p>
+          {/* div, not p: Badge renders a div and nesting one inside a p is invalid HTML */}
+          <div className="text-sm text-muted-foreground py-2">Delete <Badge variant="outline" className={`text-xs mr-1 ${deleteTarget ? ((TYPE_COLORS as any)[deleteTarget.type] ?? '') : ''}`}>{deleteTarget ? ((TYPE_LABELS as any)[deleteTarget.type] ?? deleteTarget.type) : ''}</Badge>
+            <span className="font-semibold text-foreground">{deleteTarget?.name}</span>? This cannot be undone.</div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
             <Button variant="destructive" onClick={handleDelete}

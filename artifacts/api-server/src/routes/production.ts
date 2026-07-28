@@ -7,6 +7,7 @@ import { logActivity } from "../lib/audit";
 import { creditBatch, consumeBatches, debitBatchByNumber, restoreBatches, updateAvgCostOnInbound, inboundCostForItem, inboundCostForMaterial, type BatchBreakdownEntry } from "../lib/batches";
 import { writeStockLedger } from "../lib/stockLedger";
 import { deductMaterialAt, creditMaterialAt, isMaterialKind } from "../lib/materialStock";
+import { productBatchIdentity, blockedByInactiveProducts, INACTIVE_PRODUCT_CODE } from "../lib/productIdentity";
 
 // ── Phase 5: batch costing & wastage ─────────────────────────────────────────
 // Every new batch snapshots, at save time:
@@ -315,6 +316,17 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
       return;
     }
   }
+
+  // A discontinued product can neither be produced nor consumed by a NEW batch.
+  // Existing batches are untouched, so their materials stay visible and
+  // reversible even after the product is retired.
+  const inactiveMsg = await blockedByInactiveProducts(pool, [
+    { kind: "item", id: Number(parsed.data.itemId) },
+    ...((parsed.data.materialUsed ?? []) as UsedLine[]).map(mat => ({
+      kind: mat.materialType as any, id: Number(mat.materialId),
+    })),
+  ]);
+  if (inactiveMsg) { res.status(400).json({ error: inactiveMsg, code: INACTIVE_PRODUCT_CODE }); return; }
   const materialUsed: UsedLine[] = (parsed.data.materialUsed as UsedLine[]).map((mat) => {
     const info = maps[mat.materialType]?.get(mat.materialId);
     const unitCost = r4(Math.max(0, info?.cost ?? 0));
@@ -437,6 +449,9 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
       batchNumber, mfgDate, expiryDate,
       quantity: produced, unitCost,
       source: "production", sourceId: rowId,
+      // The produced lot inherits the SKU's barcode and MRP, so a scan on the
+      // pack identifies both the product and the price it was made to sell at.
+      ...(await productBatchIdentity(client, "item", parsed.data.itemId)),
     });
     await updateAvgCostOnInbound(client, parsed.data.itemId, produced, unitCost);
 
@@ -590,6 +605,7 @@ router.delete("/productions/:id", requireModuleAction("Production", "delete"), a
             batchNumber: `REV-PROD-${id}`, quantity: residual,
             unitCost: await inboundCostForMaterial(client, mat.materialType, mat.materialId),
             source: "production_reversal", sourceId: id,
+            ...(await productBatchIdentity(client, mat.materialType as any, mat.materialId)),
           });
         }
       }

@@ -5,6 +5,7 @@ import { requireModuleView, requireModuleAction } from "../middleware/permission
 import { logActivity } from "../lib/audit";
 import { buildBranchMaps } from "./stock";
 import { consumeBatches, creditBatch, planFEFO, inboundCostForItem } from "../lib/batches";
+import { productBatchIdentity } from "../lib/productIdentity";
 import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
 import { ITEM_UNIT_COST_SQL } from "../lib/valuation";
 
@@ -26,7 +27,13 @@ const BATCH_NAME_JOIN = `
   LEFT JOIN raw_materials rm ON rm.id = sb.item_id AND sb.material_type = 'raw_material'`;
 const BATCH_NAME_COLS = `
   COALESCE(i.name, m.name, rm.name)          AS item_name,
-  COALESCE(i.unit, m.unit, rm.unit)          AS unit`;
+  COALESCE(i.unit, m.unit, rm.unit)          AS unit,
+  COALESCE(i.item_code, m.item_code, rm.item_code) AS item_code,
+  -- Lots created before batch identity existed carry no barcode/MRP of their
+  -- own. Fall back to the parent product for DISPLAY only: identity is stable,
+  -- and an unstamped price is shown as today's list price rather than blank.
+  COALESCE(NULLIF(sb.barcode, ''), i.barcode, m.barcode, rm.barcode) AS barcode,
+  NULLIF(COALESCE(sb.mrp, i.mrp, m.mrp, rm.mrp), 0) AS mrp`;
 
 function expiryStatus(daysToExpiry: number | null, nearDays: number): "ok" | "near_expiry" | "expired" | "no_expiry" {
   if (daysToExpiry == null) return "no_expiry";
@@ -97,6 +104,11 @@ router.get("/stock/batches", async (req, res): Promise<void> => {
       quantity: Number(b.quantity),
       unitCost: Number(b.unit_cost),
       source: b.source,
+      itemCode: b.item_code ?? "",
+      barcode: b.barcode ?? "",
+      // A zero MRP means "never priced", not "free" — keep it null so the UI
+      // can say so instead of printing ₹0.00.
+      mrp: b.mrp == null ? null : Number(b.mrp),
       daysToExpiry: days,
       status: expiryStatus(days, nearDays),
     };
@@ -348,6 +360,7 @@ router.post("/stock/verifications", requireModuleAction("Stock Verification", "a
             itemId, materialType: "item", branchType, branchId: bId,
             batchNumber: `ADJ-${verif.id}`, quantity: variance, unitCost,
             source: "adjustment", sourceId: verif.id,
+            ...(await productBatchIdentity(client, "item", itemId)),
           });
         }
       }

@@ -25,3 +25,4 @@
 - [LBAC implementation](lbac-implementation.md) — full location-scoping across all routes; decisions on HO-only endpoints; vendor/customer location stamping; dataScope helpers.
 - [Polymorphic stock_entries](polymorphic-stock-entries.md) — items AND materials share the table with OVERLAPPING ids; every query must scope material_type; boot-time dedupe blocks destroy data when the key widens.
 - [Module retirement pattern](module-retirement-pattern.md) — backend 409s enforce, frontend only withdraws affordances; retire a nav entry by filtering href in the layout, never by editing the frozen registry.
+- [Product identity](product-identity.md) — code prefixes follow the DISPLAY label (materials="Raw Material"→RM); EAN-13 in the `2` in-store range; inactive blocks CREATE only; HO-only is a location rule.

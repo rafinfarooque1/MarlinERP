@@ -49,6 +49,38 @@ rather than hardcoding it, and gate re-creation of a superseded index on the
 absence of the newer discriminator column. Never assume a boot-time migration
 that was safe at write time is still safe after the key changes.
 
+## The overlap reaches API payloads too, not just SQL
+
+A single document can legitimately carry the same numeric id twice under two
+different kinds (e.g. a transfer holding `item:1` and `material:1`). Any payload
+that echoes lines back — a receive/approve confirmation, a partial-receipt list,
+frontend per-line UI state — must key on the **(materialType, itemId) pair**.
+
+**Why:** an id-only key silently collapses the two lines: duplicate-detection
+rejects a valid document, a `find(x => x.itemId === id)` returns the wrong line's
+cost and lot breakdown, and an id-keyed React state object lets one line
+overwrite the other's quantity. None of these fail loudly.
+
+**How to apply:** when a payload line omits the kind, resolve it only if exactly
+one dispatched line matches that id; if several do, reject with a message asking
+for the kind rather than guessing. Fixing the *validation* lookup is never
+enough — grep the whole handler for `.find(` and fix **every** downstream lookup
+in the write path too. A validated line that is later re-matched by id alone
+still inherits the other kind's lot breakdown, and `find()` returning the first
+hit means the bug only shows up when the other kind's line comes first in the
+array. Test with the lines deliberately ordered against you.
+
+## Short receipts leak the shortfall
+
+Dispatch debits the source for the full dispatched quantity; approve credits the
+destination with the *received* quantity. The difference is not recorded anywhere,
+so per-location truth drops while the company-wide mirror does not — the
+integrity verifier reports it as a mirror mismatch.
+
+**How to apply:** after any test that short-receives a transfer, reconcile the
+mirror to the per-location sum, or the next verifier run shows a FAIL that looks
+like a code bug.
+
 ## Mirrors, not truth
 
 `materials.current_stock` and `raw_materials.current_stock` are retained as

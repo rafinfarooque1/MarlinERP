@@ -140,3 +140,41 @@ export function requireModuleAction(modules: string | string[], action: ModuleAc
     }
   };
 }
+
+export const HEAD_OFFICE_ONLY_CODE = "HEAD_OFFICE_ONLY";
+
+/**
+ * Location guard for company-wide master data.
+ *
+ * Orthogonal to the module permissions above: those ask "may this ROLE write
+ * here?", this asks "may this LOCATION write here?". Both must pass.
+ *
+ * Item masters are shared by every location — a warehouse renaming an item or
+ * flipping its GST rate would silently change what all other locations sell and
+ * invoice. Head Office owns them; everyone else reads them. Read routes are
+ * deliberately untouched, so warehouses keep full visibility.
+ */
+export function requireHeadOffice(what = "these records"): RequestHandler<any> {
+  return (req, res, next) => {
+    const branchType = req.employee?.branchType;
+    if (!branchType) {
+      res.status(401).json({ error: "Authentication required" });
+      return;
+    }
+    if (branchType !== "headoffice") {
+      logActivity({
+        action: "PERMISSION_DENIED",
+        module: "Items",
+        entityType: "location_check",
+        description: `Head-Office-only write blocked for a ${branchType} user`,
+        metadata: { branchType, branchId: req.employee?.branchId, path: req.path, method: req.method },
+      }).catch(() => {});
+      res.status(403).json({
+        error: `Only Head Office can add, edit or delete ${what}. Ask Head Office to make the change — you can still view everything here.`,
+        code: HEAD_OFFICE_ONLY_CODE,
+      });
+      return;
+    }
+    next();
+  };
+}

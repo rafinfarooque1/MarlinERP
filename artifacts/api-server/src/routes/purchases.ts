@@ -6,6 +6,7 @@ import { CreatePurchaseBody, GetPurchaseParams } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
 import { isValidGstSlab, gstSlabErrorMessage } from "../lib/gst";
 import { creditBatch, debitBatchByNumber, updateAvgCostOnInbound } from "../lib/batches";
+import { productBatchIdentity, blockedByInactiveProducts, INACTIVE_PRODUCT_CODE, isProductKind } from "../lib/productIdentity";
 import { writeStockLedger } from "../lib/stockLedger";
 import { deductMaterialAt, creditMaterialAt, isMaterialKind } from "../lib/materialStock";
 
@@ -15,6 +16,10 @@ const router = Router();
  *  The mirror counter is maintained by the caller's own UPDATE (which also
  *  rolls avg_cost), so these only move the authoritative location row. */
 const HO = { type: "headoffice", id: 1 } as const;
+
+/** Parent product identity (barcode + MRP) stamped onto the batch a line creates. */
+const lineIdentity = (li: any) =>
+  productBatchIdentity(pool, (li.materialType ?? "item") as any, Number(li.materialId));
 
 function calcLineItems(rawLineItems: any[]) {
   let subtotal = 0, discountTotal = 0, taxTotal = 0;
@@ -171,6 +176,16 @@ router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, r
       return;
     }
   }
+  // A discontinued product cannot be bought again. Checked on create only:
+  // existing purchases stay editable so a historical bill can still be corrected.
+  const inactiveMsg = await blockedByInactiveProducts(
+    pool,
+    rawLineItems
+      .filter(li => isProductKind(li?.materialType ?? "material"))
+      .map(li => ({ kind: (li?.materialType ?? "material") as any, id: Number(li?.materialId) })),
+  );
+  if (inactiveMsg) { res.status(400).json({ error: inactiveMsg, code: INACTIVE_PRODUCT_CODE }); return; }
+
   const { enriched, subtotal, discountTotal, taxTotal, roundOff, totalAmount } = calcLineItems(rawLineItems);
 
   const [row] = await db.insert(purchasesTable).values({
@@ -204,6 +219,7 @@ router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, r
         mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
         quantity: li.quantity, unitCost: li.unitCost,
         source: "purchase", sourceId: row.id,
+        ...(await lineIdentity(li)),
       });
     } else if (li.materialType === "raw_material") {
       await pool.query(
@@ -224,6 +240,7 @@ router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, r
         mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
         quantity: li.quantity, unitCost: li.unitCost,
         source: "purchase", sourceId: row.id,
+        ...(await lineIdentity(li)),
       });
     } else if (li.materialType === "item") {
       await db.update(itemsTable).set({ productionStock: sql`${itemsTable.productionStock}::numeric + ${li.quantity}` }).where(eq(itemsTable.id, li.materialId));
@@ -247,6 +264,7 @@ router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, r
         mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
         quantity: li.quantity, unitCost: li.unitCost,
         source: "purchase", sourceId: row.id,
+        ...(await lineIdentity(li)),
       });
     }
   }
@@ -384,6 +402,7 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
           mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
           quantity: li.quantity, unitCost: li.unitCost,
           source: "purchase", sourceId: id,
+          ...(await lineIdentity(li)),
         });
       } else if (li.materialType === "raw_material") {
         await pool.query(
@@ -404,6 +423,7 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
           mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
           quantity: li.quantity, unitCost: li.unitCost,
           source: "purchase", sourceId: id,
+          ...(await lineIdentity(li)),
         });
       } else if (li.materialType === "item") {
         await db.update(itemsTable)
@@ -425,6 +445,7 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
           mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
           quantity: li.quantity, unitCost: li.unitCost,
           source: "purchase", sourceId: id,
+          ...(await lineIdentity(li)),
         });
       }
     }

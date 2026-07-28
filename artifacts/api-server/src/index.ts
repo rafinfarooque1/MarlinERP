@@ -6,6 +6,7 @@ import { repairOpeningBatches } from "./migrations/repairOpeningBatches";
 import { addMaterialLocations } from "./migrations/materialLocations";
 import { addMaterialBatches } from "./migrations/materialBatches";
 import { PasswordService } from "./lib/password";
+import { PRODUCT_KINDS, PRODUCT_TABLE, nextProductIdentity } from "./lib/productIdentity";
 
 async function runMigrations() {
   // Existing migrations
@@ -306,6 +307,107 @@ async function runMigrations() {
     ALTER TABLE productions ADD COLUMN IF NOT EXISTS wastage_qty numeric(10,3) NOT NULL DEFAULT 0;
     ALTER TABLE productions ADD COLUMN IF NOT EXISTS wastage_value numeric(12,2) NOT NULL DEFAULT 0;
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS production_overhead_percent numeric(5,2) NOT NULL DEFAULT 0;
+  `);
+
+  // ── Item & batch identification (additive, idempotent) ────────────────────
+  // Every product gets a human code, a scannable EAN-13 barcode and an
+  // active/inactive status. The three master tables stay separate (their id
+  // spaces overlap from 1), so each carries its own copy of the columns and its
+  // own code sequence. Batches inherit the parent product's barcode and MRP so
+  // a scanned lot resolves to a price without a second lookup.
+  await pool.query(`
+    ALTER TABLE items         ADD COLUMN IF NOT EXISTS item_code text;
+    ALTER TABLE items         ADD COLUMN IF NOT EXISTS barcode   text;
+    ALTER TABLE items         ADD COLUMN IF NOT EXISTS status    text NOT NULL DEFAULT 'active';
+    ALTER TABLE materials     ADD COLUMN IF NOT EXISTS item_code text;
+    ALTER TABLE materials     ADD COLUMN IF NOT EXISTS barcode   text;
+    ALTER TABLE materials     ADD COLUMN IF NOT EXISTS status    text NOT NULL DEFAULT 'active';
+    ALTER TABLE raw_materials ADD COLUMN IF NOT EXISTS item_code text;
+    ALTER TABLE raw_materials ADD COLUMN IF NOT EXISTS barcode   text;
+    ALTER TABLE raw_materials ADD COLUMN IF NOT EXISTS status    text NOT NULL DEFAULT 'active';
+    ALTER TABLE stock_batches ADD COLUMN IF NOT EXISTS barcode text;
+    ALTER TABLE stock_batches ADD COLUMN IF NOT EXISTS mrp     numeric(10,2);
+    CREATE SEQUENCE IF NOT EXISTS item_code_seq_item;
+    CREATE SEQUENCE IF NOT EXISTS item_code_seq_material;
+    CREATE SEQUENCE IF NOT EXISTS item_code_seq_raw_material;
+  `);
+
+  // One-time backfill of codes and barcodes for products that predate the
+  // columns. Done in JS through the same helper the create routes use, so a
+  // backfilled code is indistinguishable in format from a freshly issued one.
+  // Status defaults to 'active' at the column level, so nothing is left invalid.
+  const { rows: [productIdApplied] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'product_identification_backfill_v1'`
+  );
+  if (!productIdApplied) {
+    const idClient = await pool.connect();
+    try {
+      await idClient.query('BEGIN');
+      let issued = 0;
+      for (const kind of PRODUCT_KINDS) {
+        const table = PRODUCT_TABLE[kind];
+        const { rows } = await idClient.query(
+          `SELECT id FROM ${table} WHERE item_code IS NULL OR item_code = '' ORDER BY id`
+        );
+        for (const r of rows) {
+          const { itemCode, barcode } = await nextProductIdentity(idClient, kind);
+          await idClient.query(
+            `UPDATE ${table} SET
+               item_code = $1,
+               barcode   = CASE WHEN barcode IS NULL OR barcode = '' THEN $2 ELSE barcode END,
+               status    = COALESCE(NULLIF(status, ''), 'active'),
+               updated_at = now()
+             WHERE id = $3`,
+            [itemCode, barcode, r.id]
+          );
+          issued++;
+        }
+      }
+      await idClient.query(`INSERT INTO migration_log (name) VALUES ('product_identification_backfill_v1')`);
+      await idClient.query('COMMIT');
+      console.log(`[migration] product_identification_backfill_v1 applied — ${issued} product code(s) issued`);
+    } catch (e) {
+      await idClient.query('ROLLBACK').catch(() => {});
+      console.error('[migration] product_identification_backfill_v1 FAILED:', e);
+    } finally {
+      idClient.release();
+    }
+  }
+
+  // Codes and barcodes must identify exactly one product per master table.
+  // Partial indexes so rows that somehow hold no code stay legal, and a
+  // pre-existing duplicate is reported instead of crashing the boot.
+  for (const kind of PRODUCT_KINDS) {
+    const table = PRODUCT_TABLE[kind];
+    for (const col of ['item_code', 'barcode'] as const) {
+      try {
+        await pool.query(
+          `CREATE UNIQUE INDEX IF NOT EXISTS uq_${table}_${col}
+             ON ${table} (${col}) WHERE ${col} IS NOT NULL AND ${col} <> ''`
+        );
+      } catch (e) {
+        console.error(`[migration] CRITICAL: could not make ${table}.${col} unique — duplicates exist:`, e);
+      }
+    }
+  }
+
+  // Existing lots get their parent product's barcode: identity is stable, so
+  // this is a lookup, not a rewrite of history. `mrp` is deliberately NOT
+  // backfilled — a price is a point-in-time fact we don't have for old lots, so
+  // it stays NULL ("not stamped") and the batch views fall back to the parent's
+  // current MRP for display, exactly as the Phase 5 cost columns do.
+  await pool.query(`
+    UPDATE stock_batches sb SET barcode = p.barcode
+      FROM (
+        SELECT id, 'item'::text AS material_type, barcode FROM items         WHERE barcode IS NOT NULL AND barcode <> ''
+        UNION ALL
+        SELECT id, 'material',                    barcode FROM materials     WHERE barcode IS NOT NULL AND barcode <> ''
+        UNION ALL
+        SELECT id, 'raw_material',                barcode FROM raw_materials WHERE barcode IS NOT NULL AND barcode <> ''
+      ) p
+     WHERE sb.item_id = p.id
+       AND sb.material_type = p.material_type
+       AND (sb.barcode IS NULL OR sb.barcode = '')
   `);
 
   // One-time backfill: mark all PRE-EXISTING sales (those created before the payment

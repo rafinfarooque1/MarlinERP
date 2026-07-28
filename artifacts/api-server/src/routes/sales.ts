@@ -11,6 +11,7 @@ import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
 import { buildBranchMaps } from "./stock";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
+import { blockedByInactiveProducts, INACTIVE_PRODUCT_CODE } from "../lib/productIdentity";
 
 const router = Router();
 
@@ -308,6 +309,14 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
       return;
     }
   }
+
+  // ── Discontinued items can't be billed again ──────────────────────────────
+  // Create-only: an existing invoice stays editable and refundable after the
+  // item is retired, so history and returns are never stranded.
+  const inactiveMsg = await blockedByInactiveProducts(
+    pgPool, rawLineItems.map(li => ({ kind: "item" as const, id: Number(li.itemId) })),
+  );
+  if (inactiveMsg) { res.status(400).json({ error: inactiveMsg, code: INACTIVE_PRODUCT_CODE }); return; }
 
   // ── Determine location (warehouse or outlet) ──────────────────────────────
   const rawBody = req.body as any;

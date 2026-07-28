@@ -22,6 +22,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
+import { activeProductsWithSelection } from '@/lib/productStatus';
 import { Separator } from '@/components/ui/separator';
 
 const GST_RATES = [0, 5, 12, 18, 28] as const;
@@ -382,7 +383,12 @@ export default function Purchases() {
                           <Select onValueChange={v => form.setValue(`lineItems.${index}.materialId`, Number(v))} value={form.watch(`lineItems.${index}.materialId`) ? String(form.watch(`lineItems.${index}.materialId`)) : ''}>
                             <SelectTrigger className="h-8 text-xs flex-1 min-w-0"><SelectValue placeholder="Select" /></SelectTrigger>
                             <SelectContent>
-                              {(form.watch(`lineItems.${index}.materialType`) === 'raw_material' ? rawMaterials : form.watch(`lineItems.${index}.materialType`) === 'item' ? finishedItems : materials).map((m: any) => (
+                              {/* Active only for new picks; an already-chosen product stays
+                                  listed so editing an old bill can't blank the line. */}
+                              {activeProductsWithSelection(
+                                (form.watch(`lineItems.${index}.materialType`) === 'raw_material' ? rawMaterials : form.watch(`lineItems.${index}.materialType`) === 'item' ? finishedItems : materials) as any[],
+                                Number(form.watch(`lineItems.${index}.materialId`)),
+                              ).map((m: any) => (
                                 <SelectItem key={m.id} value={String(m.id)}>{m.name}</SelectItem>
                               ))}
                             </SelectContent>

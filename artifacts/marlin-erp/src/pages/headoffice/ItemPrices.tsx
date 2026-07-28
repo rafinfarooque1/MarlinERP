@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
+import { activeProductsWithSelection } from '@/lib/productStatus';
 import { Badge } from '@/components/ui/badge';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 
@@ -257,7 +258,10 @@ export default function ItemPrices() {
                   <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
                     <FormControl><SelectTrigger><SelectValue placeholder="Select item" /></SelectTrigger></FormControl>
                     <SelectContent>
-                      {items.map((i: any) => <SelectItem key={i.id} value={String(i.id)}>{i.name}</SelectItem>)}
+                      {/* Active only for new prices; an item already on the row
+                          being edited stays listed. The filter dropdown above
+                          still shows every item so old prices stay reviewable. */}
+                      {activeProductsWithSelection(items as any[], Number(field.value)).map((i: any) => <SelectItem key={i.id} value={String(i.id)}>{i.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
                   <FormMessage />

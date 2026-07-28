@@ -23,6 +23,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
+import { activeProducts } from '@/lib/productStatus';
 
 const schema = z.object({
   itemId: z.coerce.number().min(1, 'Item required'),
@@ -371,7 +372,8 @@ export default function ProductionList() {
                     <FormLabel>Item Name (SKU) <span className="text-destructive">*</span></FormLabel>
                     <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
                       <FormControl><SelectTrigger><SelectValue placeholder="Select item" /></SelectTrigger></FormControl>
-                      <SelectContent>{items.map(i => <SelectItem key={i.id} value={String(i.id)}>{i.name}</SelectItem>)}</SelectContent>
+                      {/* Active only: a discontinued SKU can't be produced again */}
+                      <SelectContent>{activeProducts(items).map(i => <SelectItem key={i.id} value={String(i.id)}>{i.name}</SelectItem>)}</SelectContent>
                     </Select><FormMessage />
                   </FormItem>
                 )} />
@@ -419,7 +421,7 @@ export default function ProductionList() {
                               <FormItem><FormLabel className="text-xs">Raw Material</FormLabel>
                                 <Select onValueChange={v => f.onChange(Number(v))} value={f.value ? String(f.value) : ''}>
                                   <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger></FormControl>
-                                  <SelectContent>{(materials as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}</SelectContent>
+                                  <SelectContent>{activeProducts(materials as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}</SelectContent>
                                 </Select><FormMessage /></FormItem>
                             )} />
                           </div>
@@ -456,7 +458,7 @@ export default function ProductionList() {
                               <FormItem><FormLabel className="text-xs">Packing Material</FormLabel>
                                 <Select onValueChange={v => f.onChange(Number(v))} value={f.value ? String(f.value) : ''}>
                                   <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger></FormControl>
-                                  <SelectContent>{(rawMaterials as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}</SelectContent>
+                                  <SelectContent>{activeProducts(rawMaterials as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}</SelectContent>
                                 </Select><FormMessage /></FormItem>
                             )} />
                           </div>

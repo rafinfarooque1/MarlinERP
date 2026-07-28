@@ -7,6 +7,7 @@ import {
   useGetSalePayments, useCreateSalePayment, useUpdateSale,
 } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
+import { isActiveProduct } from '@/lib/productStatus';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -337,7 +338,19 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   );
 
   const stockMap = new Map<number, number>(locationStock.map(s => [s.itemId!, Number(s.quantity ?? 0)]));
-  const availableItems = items.filter(it => (stockMap.get(it.id) ?? 0) > 0);
+  // Discontinued items can't be billed — the server rejects them on create, so
+  // they never reach the picker here either.
+  const availableItems = items.filter(it => isActiveProduct(it) && (stockMap.get(it.id) ?? 0) > 0);
+
+  // Editing an old bill must never blank a line: whatever that line already
+  // points at stays selectable even if the item has since gone inactive or run
+  // out of stock. New picks are still limited to availableItems.
+  const lineItemOptions = (selectedId: number) => {
+    const id = Number(selectedId);
+    if (!id || availableItems.some(it => it.id === id)) return availableItems;
+    const selected = items.find(it => it.id === id);
+    return selected ? [...availableItems, selected] : availableItems;
+  };
 
   // Price comes from item MRP (set in Item Master) — not outlet-specific
   const getPrice = (itemId: number) => Number((items.find(i => i.id === itemId) as any)?.mrp ?? 0);
@@ -1003,7 +1016,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                 >
                                   <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select item" /></SelectTrigger></FormControl>
                                   <SelectContent>
-                                    {availableItems.map(it => {
+                                    {lineItemOptions(Number(f.value)).map(it => {
                                       const avail = stockMap.get(it.id) ?? 0;
                                       const mrp   = getPrice(it.id);
                                       const r     = Number((it as any).taxRate ?? 0);

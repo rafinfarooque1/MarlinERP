@@ -289,10 +289,12 @@ export default function Stock() {
                                 <thead>
                                   <tr className="bg-muted/20 text-muted-foreground">
                                     <th className="text-left px-3 py-1.5 font-medium">Batch</th>
+                                    <th className="text-left px-3 py-1.5 font-medium">Barcode</th>
                                     <th className="text-left px-3 py-1.5 font-medium">Mfg</th>
                                     <th className="text-left px-3 py-1.5 font-medium">Expiry</th>
                                     <th className="text-left px-3 py-1.5 font-medium">Shelf Life</th>
                                     <th className="text-right px-3 py-1.5 font-medium">Qty</th>
+                                    <th className="text-right px-3 py-1.5 font-medium">MRP</th>
                                     <th className="text-right px-3 py-1.5 font-medium">Unit Cost</th>
                                     <th className="text-left px-3 py-1.5 font-medium">Source</th>
                                   </tr>
@@ -301,19 +303,23 @@ export default function Stock() {
                                   {rowBatches.map(b => (
                                     <tr key={b.id} className="border-t border-border/60">
                                       <td className="px-3 py-1.5 font-mono">{b.batchNumber}</td>
+                                      <td className="px-3 py-1.5 font-mono text-[11px] text-muted-foreground">{(b as any).barcode || '—'}</td>
                                       <td className="px-3 py-1.5">{dateIN(b.mfgDate)}</td>
                                       <td className="px-3 py-1.5">{dateIN(b.expiryDate)}</td>
                                       <td className="px-3 py-1.5"><ExpiryBadge batch={b} /></td>
                                       <td className="px-3 py-1.5 text-right font-mono">{Number(b.quantity).toLocaleString('en-IN')}</td>
+                                      {/* Null MRP = never priced. Lots created before MRP was
+                                          tracked fall back to the item's current MRP. */}
+                                      <td className="px-3 py-1.5 text-right font-mono">{(b as any).mrp != null ? money((b as any).mrp) : '—'}</td>
                                       <td className="px-3 py-1.5 text-right font-mono">{Number(b.unitCost) > 0 ? money(b.unitCost) : '—'}</td>
                                       <td className="px-3 py-1.5 capitalize text-muted-foreground">{b.source}</td>
                                     </tr>
                                   ))}
                                   {untracked > 0 && (
                                     <tr className="border-t border-border/60 text-muted-foreground">
-                                      <td className="px-3 py-1.5 italic" colSpan={4}>Untracked (no batch record)</td>
+                                      <td className="px-3 py-1.5 italic" colSpan={5}>Untracked (no batch record)</td>
                                       <td className="px-3 py-1.5 text-right font-mono">{untracked.toLocaleString('en-IN')}</td>
-                                      <td colSpan={2} />
+                                      <td colSpan={3} />
                                     </tr>
                                   )}
                                 </tbody>
