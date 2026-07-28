@@ -5,7 +5,7 @@ import { eq, sql } from "drizzle-orm";
 import { CreatePurchaseBody, GetPurchaseParams } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
 import { isValidGstSlab, gstSlabErrorMessage } from "../lib/gst";
-import { creditBatch, updateAvgCostOnInbound } from "../lib/batches";
+import { creditBatch, debitBatchByNumber, updateAvgCostOnInbound } from "../lib/batches";
 import { writeStockLedger } from "../lib/stockLedger";
 import { deductMaterialAt, creditMaterialAt, isMaterialKind } from "../lib/materialStock";
 
@@ -197,6 +197,14 @@ router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, r
         [li.materialId, li.quantity, li.unitCost]
       );
       await creditMaterialAt(pool, "material", li.materialId, HO.type, HO.id, Number(li.quantity), Number(li.unitCost));
+      await creditBatch(pool, {
+        itemId: li.materialId, materialType: "material",
+        branchType: HO.type, branchId: HO.id,
+        batchNumber: li.batchNumber || `PUR-${row.id}`,
+        mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
+        quantity: li.quantity, unitCost: li.unitCost,
+        source: "purchase", sourceId: row.id,
+      });
     } else if (li.materialType === "raw_material") {
       await pool.query(
         `UPDATE raw_materials SET
@@ -209,6 +217,14 @@ router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, r
         [li.materialId, li.quantity, li.unitCost]
       );
       await creditMaterialAt(pool, "raw_material", li.materialId, HO.type, HO.id, Number(li.quantity), Number(li.unitCost));
+      await creditBatch(pool, {
+        itemId: li.materialId, materialType: "raw_material",
+        branchType: HO.type, branchId: HO.id,
+        batchNumber: li.batchNumber || `PUR-${row.id}`,
+        mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
+        quantity: li.quantity, unitCost: li.unitCost,
+        source: "purchase", sourceId: row.id,
+      });
     } else if (li.materialType === "item") {
       await db.update(itemsTable).set({ productionStock: sql`${itemsTable.productionStock}::numeric + ${li.quantity}` }).where(eq(itemsTable.id, li.materialId));
       // Purchased finished goods arrive at the production unit: keep the
@@ -298,11 +314,19 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
           .set({ currentStock: sql`GREATEST(0, ${materialsTable.currentStock}::numeric - ${li.quantity})` })
           .where(eq(materialsTable.id, li.materialId));
         await deductMaterialAt(pool, "material", li.materialId, HO.type, HO.id, Number(li.quantity), { floor: true });
+        await debitBatchByNumber(pool, {
+          itemId: li.materialId, materialType: "material", branchType: HO.type, branchId: HO.id,
+          batchNumber: li.batchNumber || `PUR-${id}`, quantity: Number(li.quantity),
+        });
       } else if (li.materialType === "raw_material") {
         await db.update(rawMaterialsTable)
           .set({ currentStock: sql`GREATEST(0, ${rawMaterialsTable.currentStock}::numeric - ${li.quantity})` })
           .where(eq(rawMaterialsTable.id, li.materialId));
         await deductMaterialAt(pool, "raw_material", li.materialId, HO.type, HO.id, Number(li.quantity), { floor: true });
+        await debitBatchByNumber(pool, {
+          itemId: li.materialId, materialType: "raw_material", branchType: HO.type, branchId: HO.id,
+          batchNumber: li.batchNumber || `PUR-${id}`, quantity: Number(li.quantity),
+        });
       } else if (li.materialType === "item") {
         await db.update(itemsTable)
           .set({ productionStock: sql`GREATEST(0, ${itemsTable.productionStock}::numeric - ${li.quantity})` })
@@ -312,11 +336,10 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
            WHERE item_id = $2 AND material_type = 'item' AND branch_type = 'headoffice' AND branch_id = 1`,
           [li.quantity, li.materialId],
         );
-        await pool.query(
-          `UPDATE stock_batches SET quantity = GREATEST(0, quantity - $1), updated_at = now()
-           WHERE item_id = $2 AND branch_type = 'headoffice' AND branch_id = 1 AND batch_number = $3`,
-          [li.quantity, li.materialId, li.batchNumber || `PUR-${id}`],
-        );
+        await debitBatchByNumber(pool, {
+          itemId: li.materialId, materialType: "item", branchType: "headoffice", branchId: 1,
+          batchNumber: li.batchNumber || `PUR-${id}`, quantity: Number(li.quantity),
+        });
       }
     }
 
@@ -354,6 +377,14 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
           [li.materialId, li.quantity, li.unitCost]
         );
         await creditMaterialAt(pool, "material", li.materialId, HO.type, HO.id, Number(li.quantity), Number(li.unitCost));
+        await creditBatch(pool, {
+          itemId: li.materialId, materialType: "material",
+          branchType: HO.type, branchId: HO.id,
+          batchNumber: li.batchNumber || `PUR-${id}`,
+          mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
+          quantity: li.quantity, unitCost: li.unitCost,
+          source: "purchase", sourceId: id,
+        });
       } else if (li.materialType === "raw_material") {
         await pool.query(
           `UPDATE raw_materials SET
@@ -366,6 +397,14 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
           [li.materialId, li.quantity, li.unitCost]
         );
         await creditMaterialAt(pool, "raw_material", li.materialId, HO.type, HO.id, Number(li.quantity), Number(li.unitCost));
+        await creditBatch(pool, {
+          itemId: li.materialId, materialType: "raw_material",
+          branchType: HO.type, branchId: HO.id,
+          batchNumber: li.batchNumber || `PUR-${id}`,
+          mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
+          quantity: li.quantity, unitCost: li.unitCost,
+          source: "purchase", sourceId: id,
+        });
       } else if (li.materialType === "item") {
         await db.update(itemsTable)
           .set({ productionStock: sql`${itemsTable.productionStock}::numeric + ${li.quantity}` })
@@ -448,9 +487,17 @@ router.delete("/purchases/:id", requireModuleAction("Purchases", "delete"), asyn
     if (li.materialType === "material") {
       await db.update(materialsTable).set({ currentStock: sql`GREATEST(0, ${materialsTable.currentStock}::numeric - ${li.quantity})` }).where(eq(materialsTable.id, li.materialId));
       await deductMaterialAt(pool, "material", li.materialId, HO.type, HO.id, Number(li.quantity), { floor: true });
+      await debitBatchByNumber(pool, {
+        itemId: li.materialId, materialType: "material", branchType: HO.type, branchId: HO.id,
+        batchNumber: li.batchNumber || `PUR-${id}`, quantity: Number(li.quantity),
+      });
     } else if (li.materialType === "raw_material") {
       await db.update(rawMaterialsTable).set({ currentStock: sql`GREATEST(0, ${rawMaterialsTable.currentStock}::numeric - ${li.quantity})` }).where(eq(rawMaterialsTable.id, li.materialId));
       await deductMaterialAt(pool, "raw_material", li.materialId, HO.type, HO.id, Number(li.quantity), { floor: true });
+      await debitBatchByNumber(pool, {
+        itemId: li.materialId, materialType: "raw_material", branchType: HO.type, branchId: HO.id,
+        batchNumber: li.batchNumber || `PUR-${id}`, quantity: Number(li.quantity),
+      });
     } else if (li.materialType === "item") {
       await db.update(itemsTable).set({ productionStock: sql`GREATEST(0, ${itemsTable.productionStock}::numeric - ${li.quantity})` }).where(eq(itemsTable.id, li.materialId));
       // Reverse the stock-entry credit and the inbound batch (floored)
@@ -459,11 +506,10 @@ router.delete("/purchases/:id", requireModuleAction("Purchases", "delete"), asyn
          WHERE item_id = $2 AND material_type = 'item' AND branch_type = 'headoffice' AND branch_id = 1`,
         [li.quantity, li.materialId]
       );
-      await pool.query(
-        `UPDATE stock_batches SET quantity = GREATEST(0, quantity - $1), updated_at = now()
-         WHERE item_id = $2 AND branch_type = 'headoffice' AND branch_id = 1 AND batch_number = $3`,
-        [li.quantity, li.materialId, li.batchNumber || `PUR-${id}`]
-      );
+      await debitBatchByNumber(pool, {
+        itemId: li.materialId, materialType: "item", branchType: "headoffice", branchId: 1,
+        batchNumber: li.batchNumber || `PUR-${id}`, quantity: Number(li.quantity),
+      });
     }
   }
   writeStockLedger(pool, lineItems.map(li => ({

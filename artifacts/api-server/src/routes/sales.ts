@@ -7,6 +7,9 @@ import { logActivity } from "../lib/audit";
 import { createInvoiceShareToken } from "../lib/shareToken";
 import { pool } from "@workspace/db";
 import { consumeBatches, restoreBatches } from "../lib/batches";
+import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
+import { buildBranchMaps } from "./stock";
+import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 
 const router = Router();
@@ -98,6 +101,12 @@ router.post("/item-prices", requireModuleAction("Item Prices", "add"), async (re
   const body = req.body as { validFrom?: string; validTo?: string; locationType?: string };
   const locationType = body.locationType ?? 'outlet';
   const locationId   = parsed.data.outletId; // reused field: holds warehouse/HO id too
+
+  // No new or amended pricing for a retired outlet; existing outlet prices stay
+  // readable so historical bills still explain themselves.
+  if (locationType === 'outlet' && await outletWritesBlocked(pgPool)) {
+    res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+  }
 
   // For headoffice there's no sub-id — store 0
   const storedId = locationType === 'headoffice' ? 0 : locationId;
@@ -321,6 +330,11 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
     locationName = wh.name;
     locationUpiId = wh.upi_id ?? '';
   } else {
+    // Retired outlets are readable but frozen — no new bills may be raised at
+    // one, otherwise the "no new outlet activity" rule leaks through the till.
+    if (await outletWritesBlocked(pgPool)) {
+      res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+    }
     const [outlet] = await db.select().from(outletsTable).where(eq(outletsTable.id, locationId)).limit(1);
     if (!outlet) { res.status(400).json({ error: 'Outlet not found' }); return; }
     const { rows: [ol] } = await pgPool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null }>(
@@ -575,6 +589,32 @@ router.post("/sales", requireModuleAction(["Sales", "Point of Sale"], "add"), as
   // Persist which batches served this sale (traceability + exact reversal on edit)
   await pool.query(`UPDATE sales SET line_items = $1::jsonb WHERE id = $2`, [JSON.stringify(lineItemsWithBatches), row.id]);
 
+  // ── Stock ledger: sales are the largest source of stock movement, so they
+  // have to appear in the audit trail alongside purchases, transfers and
+  // production. Fire-and-forget: the ledger is a record of what happened, and
+  // a logging failure must never void a completed sale.
+  void (async () => {
+    const [meta, branchFn] = await Promise.all([
+      batchResolveMeta(pool, lineItems.map(li => ({ materialType: 'item' as const, refId: li.itemId }))),
+      buildBranchMaps(),
+    ]);
+    await writeStockLedger(pool, lineItems.map(li => {
+      const m = meta.get(`item:${li.itemId}`);
+      return {
+        txnType: 'sale', materialType: 'item' as const, refId: li.itemId,
+        itemName: m?.name ?? '', unit: m?.unit ?? '',
+        branchType: locationType, branchId: locationId,
+        branchName: branchFn(locationType, locationId),
+        qtyChange: -Number(li.quantity),
+        unitCost: Number(li.unitPrice ?? 0),
+        docType: 'sale', docId: row.id,
+        // The table has no doc_number column, so the invoice number rides in
+        // notes — without it the trail can't be tied back to a bill.
+        notes: invoiceNumber,
+      };
+    }));
+  })().catch(() => {});
+
   // ── Update customer total purchases ───────────────────────────────────────
   if (parsed.data.customerId) {
     await db.update(customersTable)
@@ -691,6 +731,14 @@ router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit")
   // Old location (for stock reversal)
   const oldLocationType: string = existingRaw.location_type ?? 'outlet';
   const oldLocationId: number = existingRaw.location_id ?? existingRaw.outlet_id;
+
+  // Retired outlets are read-only: a bill may not be moved ONTO an outlet, and a
+  // historical outlet bill may not be rewritten (editing it would re-post that
+  // outlet's stock and ledgers). Both ends are checked because either one is an
+  // outlet write.
+  if ((newLocationType === 'outlet' || oldLocationType === 'outlet') && await outletWritesBlocked(pgPool)) {
+    res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+  }
 
   // Determine inter-state
   let company = (await db.select().from(companySettingsTable).limit(1))[0];
@@ -818,6 +866,33 @@ router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit")
     // stored breakdown leave batches untouched (residual shows as untracked).
     await restoreBatches(pool, li.itemId, oldLocationType, oldLocationId, li.batchBreakdown, "sale", id);
   }
+  // Ledger the reversal before the re-apply so the trail reads
+  // out → back-in → out again, and the running balance stays truthful.
+  // Awaited (not fire-and-forget) so the two writes cannot interleave and land
+  // out of order. A ledger failure is logged rather than thrown: the ledger is
+  // an append-only audit trail, so losing an entry must not fail a sale the
+  // stock tables have already accepted — but it must never fail *silently*.
+  try {
+    const [meta, branchFn] = await Promise.all([
+      batchResolveMeta(pool, oldLineItems.map(li => ({ materialType: 'item' as const, refId: li.itemId }))),
+      buildBranchMaps(),
+    ]);
+    await writeStockLedger(pool, oldLineItems.map(li => {
+      const m = meta.get(`item:${li.itemId}`);
+      return {
+        txnType: 'sale_reversal', materialType: 'item' as const, refId: li.itemId,
+        itemName: m?.name ?? '', unit: m?.unit ?? '',
+        branchType: oldLocationType, branchId: oldLocationId,
+        branchName: branchFn(oldLocationType, oldLocationId),
+        qtyChange: Number(li.quantity),
+        unitCost: Number((li as any).unitPrice ?? 0),
+        docType: 'sale', docId: id,
+        notes: `${existingRaw.invoice_number} — reversed for edit`,
+      };
+    }));
+  } catch (err) {
+    console.error(`[stock-ledger] sale ${id} reversal entries failed to write:`, err);
+  }
 
   // Update the sale row via raw SQL to include location columns.
   // Settlement fields: counter-settled modes (cash/upi/card) stay fully paid;
@@ -861,6 +936,28 @@ router.put("/sales/:id", requireModuleAction(["Sales", "Point of Sale"], "edit")
     newLineItemsWithBatches.push({ ...li, batchBreakdown });
   }
   await pool.query(`UPDATE sales SET line_items = $1::jsonb WHERE id = $2`, [JSON.stringify(newLineItemsWithBatches), id]);
+
+  try {
+    const [meta, branchFn] = await Promise.all([
+      batchResolveMeta(pool, lineItems.map(li => ({ materialType: 'item' as const, refId: li.itemId }))),
+      buildBranchMaps(),
+    ]);
+    await writeStockLedger(pool, lineItems.map(li => {
+      const m = meta.get(`item:${li.itemId}`);
+      return {
+        txnType: 'sale', materialType: 'item' as const, refId: li.itemId,
+        itemName: m?.name ?? '', unit: m?.unit ?? '',
+        branchType: newLocationType, branchId: newLocationId,
+        branchName: branchFn(newLocationType, newLocationId),
+        qtyChange: -Number(li.quantity),
+        unitCost: Number(li.unitPrice ?? 0),
+        docType: 'sale', docId: id,
+        notes: `${existingRaw.invoice_number} — re-applied after edit`,
+      };
+    }));
+  } catch (err) {
+    console.error(`[stock-ledger] sale ${id} re-apply entries failed to write:`, err);
+  }
 
   // Adjust customer total purchases
   const oldTotal = Number(existingRaw.total_amount);

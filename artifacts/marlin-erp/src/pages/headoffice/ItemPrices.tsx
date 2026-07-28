@@ -16,6 +16,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
 import { Badge } from '@/components/ui/badge';
+import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 
 type LocationType = 'headoffice' | 'warehouse' | 'outlet';
 
@@ -24,6 +25,10 @@ const LOCATION_TYPES: { value: LocationType; label: string; icon: React.ElementT
   { value: 'warehouse',  label: 'Warehouse',   icon: Warehouse,  desc: 'Warehouse-specific pricing' },
   { value: 'outlet',     label: 'Outlet',      icon: Store,      desc: 'Retail outlet pricing' },
 ];
+
+/** While outlets are retired no new outlet price can be set, but prices already
+ *  recorded against an outlet stay listed so history reads correctly. */
+const NON_OUTLET_LOCATION_TYPES = LOCATION_TYPES.filter(t => t.value !== 'outlet');
 
 const schema = z.object({
   itemId:       z.coerce.number().min(1, 'Item required'),
@@ -51,9 +56,12 @@ export default function ItemPrices() {
   const { data: warehouses = [] }            = useListWarehouses();
   const upsertMutation                       = useSetItemPrice();
 
+  const { outletsEnabled } = useOutletsEnabled();
+  const locationTypeChoices = outletsEnabled ? LOCATION_TYPES : NON_OUTLET_LOCATION_TYPES;
+
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { itemId: 0, locationType: 'outlet', locationId: 0, price: 0, validFrom: '', validTo: '' },
+    defaultValues: { itemId: 0, locationType: outletsEnabled ? 'outlet' : 'warehouse', locationId: 0, price: 0, validFrom: '', validTo: '' },
   });
 
   const watchedLocationType = form.watch('locationType');
@@ -69,7 +77,7 @@ export default function ItemPrices() {
         validTo:      ip.validTo    || '',
       });
     } else {
-      form.reset({ itemId: 0, locationType: 'outlet', locationId: 0, price: 0, validFrom: '', validTo: '' });
+      form.reset({ itemId: 0, locationType: outletsEnabled ? 'outlet' : 'warehouse', locationId: 0, price: 0, validFrom: '', validTo: '' });
     }
     setIsOpen(true);
   };
@@ -261,7 +269,7 @@ export default function ItemPrices() {
                 <FormItem>
                   <FormLabel>Location Type <span className="text-destructive">*</span></FormLabel>
                   <div className="grid grid-cols-3 gap-2">
-                    {LOCATION_TYPES.map(lt => {
+                    {locationTypeChoices.map(lt => {
                       const Icon = lt.icon;
                       const active = field.value === lt.value;
                       return (

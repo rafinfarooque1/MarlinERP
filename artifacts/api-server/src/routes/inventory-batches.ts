@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { pool } from "@workspace/db";
+import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 import { logActivity } from "../lib/audit";
 import { buildBranchMaps } from "./stock";
@@ -11,6 +12,21 @@ const router = Router();
 
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 const VERIFY_REASONS = ["damage", "wastage", "count_correction", "expired"] as const;
+const BATCH_KINDS = ["item", "material", "raw_material"] as const;
+
+/**
+ * stock_batches is polymorphic: item_id points at items, materials or
+ * raw_materials depending on material_type, and those id spaces overlap from 1.
+ * Every join therefore has to carry the discriminator, or a lot of material #1
+ * renders under item #1's name.
+ */
+const BATCH_NAME_JOIN = `
+  LEFT JOIN items         i  ON i.id  = sb.item_id AND sb.material_type = 'item'
+  LEFT JOIN materials     m  ON m.id  = sb.item_id AND sb.material_type = 'material'
+  LEFT JOIN raw_materials rm ON rm.id = sb.item_id AND sb.material_type = 'raw_material'`;
+const BATCH_NAME_COLS = `
+  COALESCE(i.name, m.name, rm.name)          AS item_name,
+  COALESCE(i.unit, m.unit, rm.unit)          AS unit`;
 
 function expiryStatus(daysToExpiry: number | null, nearDays: number): "ok" | "near_expiry" | "expired" | "no_expiry" {
   if (daysToExpiry == null) return "no_expiry";
@@ -21,14 +37,27 @@ function expiryStatus(daysToExpiry: number | null, nearDays: number): "ok" | "ne
 
 // ── Batch listing (drill-down for stock pages) ────────────────────────────────
 router.get("/stock/batches", async (req, res): Promise<void> => {
-  const { branchType, branchId, itemId } = req.query as Record<string, string | undefined>;
+  const { branchType, branchId, itemId, materialType } = req.query as Record<string, string | undefined>;
   const nearDays = Math.max(1, Number(req.query.nearDays ?? 30) || 30);
+
+  if (materialType && !BATCH_KINDS.includes(materialType as any)) {
+    res.status(400).json({ error: `materialType must be one of: ${BATCH_KINDS.join(", ")}` });
+    return;
+  }
 
   const conds: string[] = ["sb.quantity > 0"];
   const params: any[] = [];
   if (branchType) { params.push(branchType); conds.push(`sb.branch_type = $${params.length}`); }
   if (branchId != null && branchId !== "") { params.push(Number(branchId)); conds.push(`sb.branch_id = $${params.length}`); }
-  if (itemId) { params.push(Number(itemId)); conds.push(`sb.item_id = $${params.length}`); }
+  // itemId is only meaningful alongside a kind — the id spaces overlap. When no
+  // kind is given it defaults to items, preserving the previous behaviour of
+  // every caller that passes itemId on its own.
+  if (itemId) {
+    params.push(Number(itemId)); conds.push(`sb.item_id = $${params.length}`);
+    params.push(materialType ?? "item"); conds.push(`sb.material_type = $${params.length}`);
+  } else if (materialType) {
+    params.push(materialType); conds.push(`sb.material_type = $${params.length}`);
+  }
   // ── Server-side data scope ─────────────────────────────────────────────────
   const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
   if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
@@ -38,12 +67,12 @@ router.get("/stock/batches", async (req, res): Promise<void> => {
 
   const [result, branchName] = await Promise.all([
     pool.query(
-      `SELECT sb.id, sb.item_id, sb.branch_type, sb.branch_id, sb.batch_number,
+      `SELECT sb.id, sb.item_id, sb.material_type, sb.branch_type, sb.branch_id, sb.batch_number,
               sb.mfg_date, sb.expiry_date, sb.quantity, sb.unit_cost, sb.source,
               (sb.expiry_date::date - CURRENT_DATE) AS days_to_expiry,
-              i.name AS item_name, i.unit
+              ${BATCH_NAME_COLS}
        FROM stock_batches sb
-       LEFT JOIN items i ON i.id = sb.item_id
+       ${BATCH_NAME_JOIN}
        WHERE ${conds.join(" AND ")}
        ORDER BY sb.expiry_date ASC NULLS LAST, sb.id ASC`,
       params
@@ -56,6 +85,7 @@ router.get("/stock/batches", async (req, res): Promise<void> => {
     return {
       id: b.id,
       itemId: b.item_id,
+      materialType: b.material_type ?? "item",
       itemName: b.item_name ?? "",
       unit: b.unit ?? "",
       branchType: b.branch_type,
@@ -79,11 +109,16 @@ router.get("/stock/batches/suggest", async (req, res): Promise<void> => {
   const branchType = String(req.query.branchType ?? "");
   const branchId = Number(req.query.branchId);
   const quantity = Number(req.query.quantity);
+  const materialType = String(req.query.materialType ?? "item");
   if (!itemId || !branchType || !Number.isFinite(branchId) || !(quantity > 0)) {
     res.status(400).json({ error: "itemId, branchType, branchId and quantity are required" });
     return;
   }
-  const { plan, shortfall } = await planFEFO(pool, itemId, branchType, branchId, quantity);
+  if (!BATCH_KINDS.includes(materialType as any)) {
+    res.status(400).json({ error: `materialType must be one of: ${BATCH_KINDS.join(", ")}` });
+    return;
+  }
+  const { plan, shortfall } = await planFEFO(pool, itemId, branchType, branchId, quantity, false, materialType as any);
   res.json({ plan, shortfall });
 });
 
@@ -92,12 +127,14 @@ router.get("/stock/expiry-report", requireModuleView("Stock"), async (req, res):
   const days = Math.max(1, Number(req.query.days ?? 30) || 30);
   const [result, branchName] = await Promise.all([
     pool.query(
-      `SELECT sb.id, sb.item_id, sb.branch_type, sb.branch_id, sb.batch_number,
+      // Raw and packing materials expire too, so the report spans all three
+      // kinds rather than finished goods alone.
+      `SELECT sb.id, sb.item_id, sb.material_type, sb.branch_type, sb.branch_id, sb.batch_number,
               sb.mfg_date, sb.expiry_date, sb.quantity, sb.unit_cost,
               (sb.expiry_date::date - CURRENT_DATE) AS days_to_expiry,
-              i.name AS item_name, i.unit
+              ${BATCH_NAME_COLS}
        FROM stock_batches sb
-       LEFT JOIN items i ON i.id = sb.item_id
+       ${BATCH_NAME_JOIN}
        WHERE sb.quantity > 0 AND sb.expiry_date IS NOT NULL
          AND sb.expiry_date::date <= CURRENT_DATE + $1::int
        ORDER BY sb.expiry_date ASC, sb.id ASC`,
@@ -113,6 +150,7 @@ router.get("/stock/expiry-report", requireModuleView("Stock"), async (req, res):
     return {
       id: b.id,
       itemId: b.item_id,
+      materialType: b.material_type ?? "item",
       itemName: b.item_name ?? "",
       unit: b.unit ?? "",
       branchType: b.branch_type,
@@ -236,6 +274,12 @@ router.post("/stock/verifications", requireModuleAction("Stock Verification", "a
   if (branchId == null || !Number.isFinite(Number(branchId))) {
     res.status(400).json({ error: "branchId is required" }); return;
   }
+  // A stock count adjusts stock. A retired outlet must not gain or lose stock,
+  // so counting one is blocked while the module is off — otherwise this route
+  // becomes a side door for creating outlet inventory.
+  if (branchType === 'outlet' && await outletWritesBlocked(pool)) {
+    res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+  }
   if (!verifyDate) { res.status(400).json({ error: "verifyDate is required" }); return; }
   if (!Array.isArray(lines) || lines.length === 0) {
     res.status(400).json({ error: "At least one counted line is required" }); return;
@@ -297,11 +341,11 @@ router.post("/stock/verifications", requireModuleAction("Stock Verification", "a
         // Batches: shrinkage consumes FEFO (oldest stock is what spoils/breaks);
         // surplus lands in an explicit, auditable adjustment batch.
         if (variance < 0) {
-          await consumeBatches(client, { itemId, branchType, branchId: bId, quantity: -variance });
+          await consumeBatches(client, { itemId, materialType: "item", branchType, branchId: bId, quantity: -variance });
         } else {
           const unitCost = await inboundCostForItem(client, itemId);
           await creditBatch(client, {
-            itemId, branchType, branchId: bId,
+            itemId, materialType: "item", branchType, branchId: bId,
             batchNumber: `ADJ-${verif.id}`, quantity: variance, unitCost,
             source: "adjustment", sourceId: verif.id,
           });

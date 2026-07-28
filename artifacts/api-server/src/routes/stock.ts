@@ -10,6 +10,7 @@ import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
 import { resolveLocationGst, classifyTransfer, computeTransferGst, createDispatchVoucher, createReceiveVoucher, type TaxType, type GstTotals } from "../lib/gstTransfer";
 import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
 import { deductMaterialAt, creditMaterialAt } from "../lib/materialStock";
+import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 
 const router = Router();
 
@@ -315,6 +316,10 @@ router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), as
       res.status(400).json({ error: "Each line item needs a valid itemId and a quantity greater than zero" }); return;
     }
   }
+  // Retired outlets take no part in new stock movement, in either direction.
+  if ((parsed.data.fromType === 'outlet' || parsed.data.toType === 'outlet') && await outletWritesBlocked(pool)) {
+    res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+  }
   const challanNumber = `CHN-${Date.now()}`;
 
   // GST-aware transfer classification — compare source + destination GSTINs
@@ -348,6 +353,7 @@ router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), as
       }
       const v = await validateBatchOverride(client, {
         itemId: lineItems[i].itemId,
+        materialType: ((rawLines[i] as any)?.materialType ?? 'item') as any,
         branchType: parsed.data.fromType,
         branchId: parsed.data.fromId,
         quantity: lineItems[i].quantity,
@@ -407,7 +413,15 @@ router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), as
           res.status(400).json({ error: `Insufficient stock of ${mat.name} at the source location (available ${moved.available}, requested ${li.quantity})` });
           return;
         }
-        enrichedLines.push({ ...li, materialType, batchBreakdown: [] });
+        // Materials carry lots too: pull FEFO so mfg/expiry dates travel with
+        // the goods and a rejection can restore the exact lots.
+        const matBreakdown = await consumeBatches(client, {
+          itemId: li.itemId, materialType: 'material',
+          branchType: parsed.data.fromType, branchId: parsed.data.fromId,
+          quantity: Number(li.quantity),
+          override: rawLines[i]?.batchOverride,
+        });
+        enrichedLines.push({ ...li, materialType, batchBreakdown: matBreakdown });
         dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'material', refId: li.itemId, itemName: mat.name ?? '', unit: mat.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id });
       } else if (materialType === 'raw_material') {
         // Packing Material: availability is now per location, not a global counter.
@@ -424,7 +438,13 @@ router.post("/stock/transfers", requireModuleAction(["HO Transfers"], "add"), as
           res.status(400).json({ error: `Insufficient stock of ${rm.name} at the source location (available ${moved.available}, requested ${li.quantity})` });
           return;
         }
-        enrichedLines.push({ ...li, materialType, batchBreakdown: [] });
+        const rmBreakdown = await consumeBatches(client, {
+          itemId: li.itemId, materialType: 'raw_material',
+          branchType: parsed.data.fromType, branchId: parsed.data.fromId,
+          quantity: Number(li.quantity),
+          override: rawLines[i]?.batchOverride,
+        });
+        enrichedLines.push({ ...li, materialType, batchBreakdown: rmBreakdown });
         dispatchLedgerEntries.push({ txnType: 'transfer_out', materialType: 'raw_material', refId: li.itemId, itemName: rm.name ?? '', unit: rm.unit ?? '', branchType: row.from_type, branchId: row.from_id, branchName: branchFn(row.from_type, row.from_id), qtyChange: -Number(li.quantity), unitCost: Number(li.costPrice ?? 0), docType: 'stock_transfer', docId: row.id });
       } else {
         // Item (SKU): deduct from stock_entries
@@ -622,6 +642,31 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction(["HO Transfers"
         await creditMaterialAt(
           client, matType, li.itemId, destType, destId, Number(li.quantity), Number(li.costPrice ?? 0)
         );
+        // Material lots travel with the goods, same rule as finished items:
+        // land the dispatched lots at the destination, allocated across a
+        // partial receipt, and fall back to a challan-named lot when the
+        // dispatch predates material lot tracking.
+        const matDispatched = dispatchedLines.find(
+          d => Number(d.itemId) === Number(li.itemId) && (d.materialType ?? 'item') === matType
+        );
+        const matBreakdown = matDispatched?.batchBreakdown ?? [];
+        if (matBreakdown.length > 0) {
+          for (const b of allocateReceived(matBreakdown, Number(li.quantity))) {
+            await creditBatch(client, {
+              itemId: li.itemId, materialType: matType,
+              branchType: destType, branchId: destId,
+              batchNumber: b.batchNumber, mfgDate: b.mfgDate, expiryDate: b.expiryDate,
+              quantity: b.quantity, unitCost: b.unitCost, source: "transfer", sourceId: id,
+            });
+          }
+        } else {
+          await creditBatch(client, {
+            itemId: li.itemId, materialType: matType,
+            branchType: destType, branchId: destId,
+            batchNumber: `TRF-${row.challan_number}`, quantity: Number(li.quantity),
+            unitCost: Number(li.costPrice ?? 0), source: "transfer", sourceId: id,
+          });
+        }
       } else {
         // Item (SKU): credit stock_entries + batches
         const { rows: [dstExisting] } = await client.query(
@@ -766,6 +811,7 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction(["HO Transfers"]
         await creditMaterialAt(
           client, matType, li.itemId, row.from_type, row.from_id, Number(li.quantity), Number(li.costPrice ?? 0)
         );
+        await restoreBatches(client, li.itemId, row.from_type, row.from_id, li.batchBreakdown, "transfer", id, matType);
       } else {
         const { rows: [srcExisting] } = await client.query(
           `SELECT id FROM stock_entries

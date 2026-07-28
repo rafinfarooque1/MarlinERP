@@ -52,8 +52,12 @@ import {
   type SidebarNavItem,
 } from '@/lib/moduleRegistry';
 import { canViewModule as checkCanView } from '@/lib/usePermission';
+import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 
 const LOGO_KEY = 'marlin_company_logo';
+/** The retired Outlet module's sidebar link, matched by href so
+ *  moduleRegistry's navEntries stay untouched. */
+const OUTLETS_HREF = '/headoffice/outlets';
 
 // ─── Navigation — derived from module registry ────────────────────────────────
 // To add, rename, or reorder modules edit src/lib/moduleRegistry.ts only.
@@ -182,7 +186,17 @@ function NavItem({ item, isActive, currentPath, collapsed }: any) {
                 href={child.href}
                 className={`block px-3 py-2 rounded-md transition-colors text-sm ${isChildActive ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
               >
-                {child.name}
+                <span className="flex items-center gap-2">
+                  {child.name}
+                  {child.legacy && (
+                    <span
+                      title="Legacy module — disabled. Existing records stay readable for reports and audits."
+                      className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border border-border bg-muted text-muted-foreground font-medium shrink-0 whitespace-nowrap"
+                    >
+                      Legacy · Disabled
+                    </span>
+                  )}
+                </span>
               </Link>
             );
           })}
@@ -202,6 +216,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const { data: allPerms = [] } = useListPermissions();
   const { data: hierarchies = [] } = useListHierarchies();
   const { theme, toggleTheme } = useTheme();
+  const { outletsEnabled } = useOutletsEnabled();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
   const [logo, setLogo] = useState<string | null>(() => localStorage.getItem(LOGO_KEY));
@@ -278,6 +293,25 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       };
     })
     .filter(item => !item.children || item.children.length > 0);
+
+  // ── Retired Outlet module visibility ───────────────────────────────────────
+  // Outlets were folded into warehouses. While the module is off the link stays
+  // reachable for Head Office administrators only — they are the people who run
+  // historical reports and audits — and is badged so nobody mistakes it for a
+  // live part of the business. Warehouse and outlet staff never see it.
+  // Enforcement lives in the backend; this only controls what is offered.
+  const isHeadOfficeAdmin = isAdmin && !isLocationEmployee;
+  const navWithLegacyOutlets = outletsEnabled
+    ? filteredNavigation
+    : filteredNavigation
+        .map(item => {
+          if (!item.children) return item;
+          const children = item.children
+            .filter((c: any) => c.href !== OUTLETS_HREF || isHeadOfficeAdmin)
+            .map((c: any) => (c.href === OUTLETS_HREF ? { ...c, legacy: true } : c));
+          return { ...item, children };
+        })
+        .filter(item => !item.children || item.children.length > 0);
 
   // Location-locked employees cannot change their location context
   const canChangeLocation = !isLocationEmployee;
@@ -446,7 +480,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             )}
 
             {/* Unified nav groups */}
-            {filteredNavigation.map((item) => {
+            {navWithLegacyOutlets.map((item) => {
               const isActive = item.href
                 ? location === item.href
                 : item.children?.some((c: any) =>

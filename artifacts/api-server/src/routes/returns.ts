@@ -12,8 +12,9 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 import { nextVoucherNumber } from "../lib/voucherNumber";
-import { restoreBatches, type BatchBreakdownEntry } from "../lib/batches";
+import { restoreBatches, consumeBatches, debitBatchByNumber, type BatchBreakdownEntry } from "../lib/batches";
 import { logActivity } from "../lib/audit";
+import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
 import { deductMaterialAt, isMaterialKind } from "../lib/materialStock";
 
@@ -141,6 +142,15 @@ router.post("/sales-returns", requireModuleAction(["Sales", "Point of Sale"], "a
     const saleLines: any[] = Array.isArray(sale.line_items) ? sale.line_items : [];
     const locationType: string = sale.location_type === "warehouse" ? "warehouse" : "outlet";
     const locationId: number = Number(sale.location_id ?? sale.outlet_id ?? 0);
+
+    // A return against an outlet bill would push stock and a credit note back
+    // into a retired outlet. Blocked while the module is off; the original bill
+    // and any past returns stay readable.
+    if (locationType === "outlet" && await outletWritesBlocked(client)) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE });
+      return;
+    }
 
     // Aggregate prior returns for this sale: qty per lineIndex + restored per batch
     const { rows: priorRows } = await client.query(
@@ -545,6 +555,12 @@ router.post("/purchase-returns", requireModuleAction(["Sales", "Purchases"], "ad
           return;
         }
         await client.query(`UPDATE ${tbl} SET current_stock = current_stock::numeric - $1, updated_at = now() WHERE id = $2`, [rq, materialId]);
+        // Send the material back out of its own lots (FEFO), so the lot layer
+        // keeps matching the located quantity after a purchase return.
+        await consumeBatches(client, {
+          itemId: materialId, materialType,
+          branchType: "headoffice", branchId: 1, quantity: rq,
+        });
       } else {
         // Finished item bought into production stock
         const { rows: [se] } = await client.query(
@@ -561,11 +577,11 @@ router.post("/purchase-returns", requireModuleAction(["Sales", "Purchases"], "ad
         await client.query(`UPDATE stock_entries SET quantity = quantity::numeric - $1, updated_at = now() WHERE id = $2`, [rq, se.id]);
         await client.query(`UPDATE items SET production_stock = GREATEST(0, COALESCE(production_stock, 0)::numeric - $1), updated_at = now() WHERE id = $2`, [rq, materialId]);
         const batchNumber = li.batchNumber || `PUR-${purchaseId}`;
-        await client.query(
-          `UPDATE stock_batches SET quantity = GREATEST(0, quantity::numeric - $1), updated_at = now()
-           WHERE item_id = $2 AND branch_type = 'headoffice' AND branch_id = 1 AND batch_number = $3`,
-          [rq, materialId, batchNumber]
-        );
+        await debitBatchByNumber(client, {
+          itemId: materialId, materialType: "item",
+          branchType: "headoffice", branchId: 1,
+          batchNumber, quantity: rq,
+        });
       }
 
       // ── Money (exclusive GST): prorate stored line values by quantity ────

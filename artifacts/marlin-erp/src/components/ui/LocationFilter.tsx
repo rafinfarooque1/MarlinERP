@@ -12,10 +12,12 @@
  *   'outlet:all'     — all outlets
  *   'outlet:<id>'    — specific outlet
  */
+import { useState, useEffect, useRef } from 'react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useListWarehouses, useListOutlets } from '@workspace/api-client-react';
-import { Building2, Warehouse, Store } from 'lucide-react';
+import { Building2, Warehouse, Store, Archive } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 
 interface LocationFilterProps {
   value: string;
@@ -28,11 +30,31 @@ interface LocationFilterProps {
 export function LocationFilter({ value, onChange, className, warehouseId }: LocationFilterProps) {
   const { data: wh = [] } = useListWarehouses();
   const { data: ol = [] } = useListOutlets();
+  const { outletsEnabled } = useOutletsEnabled();
+
+  // Outlets are retired. Operational views default to Head Office + Warehouses
+  // only; legacy outlet transactions stay one deliberate click away so audits
+  // and historical comparisons can still reach them.
+  const [includeLegacyOutlets, setIncludeLegacyOutlets] = useState(false);
+  const showOutlets = outletsEnabled || includeLegacyOutlets;
 
   const warehouses = wh as any[];
   const outlets    = warehouseId
     ? (ol as any[]).filter(o => Number(o.warehouseId) === warehouseId)
     : (ol as any[]);
+
+  // If outlets get hidden while an outlet filter is active, fall back to "All"
+  // rather than leaving the report pinned to an invisible selection.
+  const outletSelected = value === 'outlet' || !!value?.startsWith('outlet:');
+  // Callers often pass an inline arrow, so onChange identity changes every
+  // render. Hold it in a ref and depend on the flags only — depending on
+  // onChange itself would re-fire this effect on every parent render.
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  useEffect(() => {
+    if (!showOutlets && outletSelected) onChangeRef.current('all');
+  }, [showOutlets, outletSelected]);
 
   // ── Parse current value ──────────────────────────────────────────────────
   const parsedType: 'all' | 'headoffice' | 'warehouse' | 'outlet' =
@@ -73,9 +95,29 @@ export function LocationFilter({ value, onChange, className, warehouseId }: Loca
           <SelectItem value="all">All</SelectItem>
           <SelectItem value="headoffice">Head Office</SelectItem>
           <SelectItem value="warehouse">Warehouse</SelectItem>
-          <SelectItem value="outlet">Outlet</SelectItem>
+          {showOutlets && (
+            <SelectItem value="outlet">{outletsEnabled ? 'Outlet' : 'Outlet (Legacy)'}</SelectItem>
+          )}
         </SelectContent>
       </Select>
+
+      {/* ── Legacy outlet opt-in (only while the module is retired) ───────── */}
+      {!outletsEnabled && (
+        <button
+          type="button"
+          onClick={() => setIncludeLegacyOutlets(v => !v)}
+          title="Outlets are retired. Turn this on to include historical outlet transactions in this view."
+          className={cn(
+            'h-8 px-2 rounded-md border text-xs font-medium flex items-center gap-1.5 shrink-0 transition-colors',
+            includeLegacyOutlets
+              ? 'border-primary/40 bg-primary/10 text-primary'
+              : 'border-border bg-transparent text-muted-foreground hover:bg-muted',
+          )}
+        >
+          <Archive className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">Include Legacy Outlets</span>
+        </button>
+      )}
 
       {/* ── Step 2: specific location (only for warehouse / outlet) ──────── */}
       {(parsedType === 'warehouse' || parsedType === 'outlet') && (

@@ -9,7 +9,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Trash2, TriangleAlert, CalendarRange, FileText, ShieldCheck, ShieldOff } from 'lucide-react';
+import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Store, Trash2, TriangleAlert, CalendarRange, FileText, ShieldCheck, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { customFetch } from '@workspace/api-client-react';
 import { Textarea } from '@/components/ui/textarea';
@@ -27,6 +27,8 @@ interface Setting {
   type: 'toggle' | 'text' | 'select' | 'number';
   options?: string[];
   defaultValue: any;
+  /** Shown under the label — for settings whose consequences aren't obvious. */
+  description?: string;
 }
 
 const SETTING_GROUPS: SettingGroup[] = [
@@ -64,6 +66,21 @@ const SETTING_GROUPS: SettingGroup[] = [
       { key: 'lowStockThreshold', label: 'Low Stock Threshold (units)', type: 'number', defaultValue: 50 },
       { key: 'leaveApprovalNotify', label: 'Leave Approval Notifications', type: 'toggle', defaultValue: true },
       { key: 'payrollDueNotify', label: 'Payroll Due Reminders', type: 'toggle', defaultValue: true },
+    ],
+  },
+  {
+    icon: Store,
+    title: 'Location Structure',
+    description: 'Which kinds of business location this company operates',
+    settings: [
+      {
+        key: 'outletsEnabled',
+        label: 'Outlet Management',
+        type: 'toggle',
+        defaultValue: false,
+        description:
+          'Off by default: the business runs on Head Office and Warehouses only. Existing outlets stay fully visible in reports, audits and past transactions, but no outlet can be created, edited, deleted, sold from or transferred to. Turning this on reactivates outlets immediately — nothing in your data is changed either way.',
+      },
     ],
   },
   {
@@ -549,7 +566,12 @@ export default function Settings() {
               <div className="divide-y divide-border">
                 {group.settings.map(setting => (
                   <div key={setting.key} className="p-4 flex items-center justify-between gap-4">
-                    <label className="text-sm font-medium flex-1">{setting.label}</label>
+                    <div className="flex-1">
+                      <label className="text-sm font-medium">{setting.label}</label>
+                      {setting.description && (
+                        <p className="text-xs text-muted-foreground mt-1 max-w-lg">{setting.description}</p>
+                      )}
+                    </div>
                     {setting.type === 'toggle' && (
                       <Switch checked={!!values[setting.key]} onCheckedChange={v => set(setting.key, v)} />
                     )}

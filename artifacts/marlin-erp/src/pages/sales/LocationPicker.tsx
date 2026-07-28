@@ -4,12 +4,14 @@ import { useLocation } from 'wouter';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { customFetch, useGetMe } from '@workspace/api-client-react';
 import { useLocationContext } from '@/lib/locationContext';
+import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 import { buildPickerHierarchy } from '@/lib/locationHierarchy';
 import { MapPin, Warehouse, Store, ChevronRight, Layers } from 'lucide-react';
 
 export default function LocationPicker() {
   const [, navigate] = useLocation();
   const { setLocation } = useLocationContext();
+  const { outletsEnabled } = useOutletsEnabled();
   const { data: user } = useGetMe();
 
   const userBranchType = (user as any)?.branchType as 'warehouse' | 'outlet' | null | undefined;
@@ -42,9 +44,12 @@ export default function LocationPicker() {
     ? warehouses.filter(w => w.id === userBranchId)
     : warehouses;
 
-  const visibleOutlets = isWarehouseEmployee
+  // Retired outlets cannot be sold from, so they are not offered as a selling
+  // location. Their past sales stay intact and visible in reports.
+  const branchVisibleOutlets = isWarehouseEmployee
     ? outlets.filter(o => o.warehouseId === userBranchId)
     : outlets;
+  const visibleOutlets = outletsEnabled ? branchVisibleOutlets : [];
 
   const { nodes, orphanOutlets } = buildPickerHierarchy(visibleWarehouses, visibleOutlets);
   const totalCount = visibleWarehouses.length + visibleOutlets.length;
@@ -95,7 +100,8 @@ export default function LocationPicker() {
                 <div className="flex-1 min-w-0">
                   <p className="font-semibold text-sm">All Locations</p>
                   <p className="text-xs text-muted-foreground">
-                    Dashboard totals across all {warehouses.length} warehouse{warehouses.length !== 1 ? 's' : ''} &amp; {outlets.length} outlet{outlets.length !== 1 ? 's' : ''}
+                    Dashboard totals across all {warehouses.length} warehouse{warehouses.length !== 1 ? 's' : ''}
+                    {outletsEnabled && <> &amp; {outlets.length} outlet{outlets.length !== 1 ? 's' : ''}</>}
                   </p>
                 </div>
                 <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors shrink-0" />
@@ -169,7 +175,11 @@ export default function LocationPicker() {
             {totalCount === 0 && (
               <div className="text-center py-16 text-muted-foreground">
                 <MapPin className="w-10 h-10 mx-auto mb-3 opacity-20" />
-                <p>No warehouses or outlets found. Add them under Accounts → Warehouses / Outlets.</p>
+                <p>
+                  {outletsEnabled
+                    ? 'No warehouses or outlets found. Add them under Accounts → Warehouses / Outlets.'
+                    : 'No warehouses found. Add them under Accounts → Warehouses.'}
+                </p>
               </div>
             )}
           </div>

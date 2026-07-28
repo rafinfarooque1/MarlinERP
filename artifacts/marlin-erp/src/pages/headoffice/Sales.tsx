@@ -7,6 +7,7 @@ import {
   useGetSalePayments, useCreateSalePayment, useUpdateSale,
 } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
+import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -140,6 +141,7 @@ interface SalesProps {
 export default function Sales({ forceLocationType, forceLocationId, forceLocationName, permissionModule }: SalesProps = {}) {
   const perm = usePermission(permissionModule ?? 'Sales');
   const { data: outlets = [] } = useListOutlets();
+  const { outletsEnabled } = useOutletsEnabled();
   // 'all' | 'warehouse:<id>' | 'outlet:<id>'
   const [locationFilter, setLocationFilter] = useState<string>('all');
   const { type: locFilterType, id: locFilterId } = parseLocationFilter(locationFilter);
@@ -819,7 +821,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       }}
                       value={field.value && field.value > 0 ? `${form.watch('locationType')}:${field.value}` : ''}
                     >
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select outlet or warehouse" /></SelectTrigger></FormControl>
+                      <FormControl><SelectTrigger><SelectValue placeholder={outletsEnabled ? 'Select outlet or warehouse' : 'Select warehouse'} /></SelectTrigger></FormControl>
                       <SelectContent>
                         {(warehouses as any[]).length > 0 && (
                           <SelectGroup>
@@ -829,7 +831,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                             ))}
                           </SelectGroup>
                         )}
-                        {outlets.length > 0 && (
+                        {/* No new bill can be raised at a retired outlet; past
+                            outlet bills stay listed and editable-in-place. */}
+                        {outletsEnabled && outlets.length > 0 && (
                           <SelectGroup>
                             <SelectLabel>Outlets</SelectLabel>
                             {outlets.map(o => (

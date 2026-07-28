@@ -1,13 +1,22 @@
 // ── Batch-level inventory helpers (Phase 3) ─────────────────────────────────
 // stock_entries stays the quantity source of truth. stock_batches is an
-// additive breakdown per (location, item) into batches with mfg/expiry dates
+// additive breakdown per (location, product) into batches with mfg/expiry dates
 // and unit cost. Batches floor at 0 and may total less than the stock entry
 // (untracked legacy residual) but must never exceed real movements.
+//
+// Both tables are POLYMORPHIC: `material_type` discriminates items, packing
+// materials and raw materials, whose id spaces overlap from 1. Every helper
+// here therefore carries the discriminator, defaulting to 'item' so existing
+// finished-goods callers keep working unchanged. Omitting it on a material
+// path silently reads and writes the identically-numbered item's lots.
 //
 // All helpers accept a query-able client (pool or a transaction client) so
 // callers can choose their atomicity.
 
 export type Queryable = { query: (text: string, params?: any[]) => Promise<{ rows: any[] }> };
+
+/** Discriminator shared with stock_entries and stock_ledger. */
+export type BatchKind = "item" | "material" | "raw_material";
 
 export interface BatchBreakdownEntry {
   batchId?: number;
@@ -26,18 +35,19 @@ export async function creditBatch(c: Queryable, args: {
   itemId: number; branchType: string; branchId: number;
   batchNumber: string; mfgDate?: string | null; expiryDate?: string | null;
   quantity: number; unitCost?: number; source?: string; sourceId?: number | null;
+  materialType?: BatchKind;
 }): Promise<void> {
   if (!(args.quantity > 0)) return;
   await c.query(
-    `INSERT INTO stock_batches (item_id, branch_type, branch_id, batch_number, mfg_date, expiry_date, quantity, unit_cost, source, source_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-     ON CONFLICT (item_id, branch_type, branch_id, batch_number) DO UPDATE SET
+    `INSERT INTO stock_batches (item_id, material_type, branch_type, branch_id, batch_number, mfg_date, expiry_date, quantity, unit_cost, source, source_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     ON CONFLICT (item_id, material_type, branch_type, branch_id, batch_number) DO UPDATE SET
        quantity    = stock_batches.quantity + EXCLUDED.quantity,
        mfg_date    = COALESCE(stock_batches.mfg_date, EXCLUDED.mfg_date),
        expiry_date = COALESCE(stock_batches.expiry_date, EXCLUDED.expiry_date),
        unit_cost   = CASE WHEN EXCLUDED.unit_cost > 0 THEN EXCLUDED.unit_cost ELSE stock_batches.unit_cost END,
        updated_at  = now()`,
-    [args.itemId, args.branchType, args.branchId, args.batchNumber,
+    [args.itemId, args.materialType ?? "item", args.branchType, args.branchId, args.batchNumber,
      args.mfgDate ?? null, args.expiryDate ?? null, r3(args.quantity), r2(args.unitCost ?? 0),
      args.source ?? null, args.sourceId ?? null]
   );
@@ -46,16 +56,16 @@ export async function creditBatch(c: Queryable, args: {
 /** FEFO plan: earliest expiry first (NULL expiry last), then oldest batch.
  *  Read-only unless `lock` is set (pass true inside a transaction that will
  *  consume the planned batches, to serialize concurrent consumers). */
-export async function planFEFO(c: Queryable, itemId: number, branchType: string, branchId: number, quantity: number, lock = false): Promise<{
+export async function planFEFO(c: Queryable, itemId: number, branchType: string, branchId: number, quantity: number, lock = false, materialType: BatchKind = "item"): Promise<{
   plan: Array<BatchBreakdownEntry & { batchId: number; available: number }>;
   shortfall: number;
 }> {
   const { rows } = await c.query(
     `SELECT id, batch_number, mfg_date, expiry_date, quantity, unit_cost
      FROM stock_batches
-     WHERE item_id = $1 AND branch_type = $2 AND branch_id = $3 AND quantity > 0
+     WHERE item_id = $1 AND material_type = $4 AND branch_type = $2 AND branch_id = $3 AND quantity > 0
      ORDER BY expiry_date ASC NULLS LAST, id ASC${lock ? " FOR UPDATE" : ""}`,
-    [itemId, branchType, branchId]
+    [itemId, branchType, branchId, materialType]
   );
   const plan: Array<BatchBreakdownEntry & { batchId: number; available: number }> = [];
   let remaining = quantity;
@@ -74,13 +84,14 @@ export async function planFEFO(c: Queryable, itemId: number, branchType: string,
 }
 
 /** Decrement a single batch by up to `want`; returns what was actually taken.
- *  The owner predicate (item + location) is mandatory so a crafted batch id can
- *  never decrement someone else's stock. Row-locked for transactional callers. */
-async function takeFromBatch(c: Queryable, batchRowId: number, want: number, owner: { itemId: number; branchType: string; branchId: number }): Promise<BatchBreakdownEntry | null> {
+ *  The owner predicate (product + kind + location) is mandatory so a crafted
+ *  batch id can never decrement someone else's stock. Row-locked for
+ *  transactional callers. */
+async function takeFromBatch(c: Queryable, batchRowId: number, want: number, owner: { itemId: number; branchType: string; branchId: number; materialType: BatchKind }): Promise<BatchBreakdownEntry | null> {
   const { rows: [b] } = await c.query(
     `SELECT id, batch_number, mfg_date, expiry_date, quantity, unit_cost FROM stock_batches
-     WHERE id = $1 AND item_id = $2 AND branch_type = $3 AND branch_id = $4 FOR UPDATE`,
-    [batchRowId, owner.itemId, owner.branchType, owner.branchId]
+     WHERE id = $1 AND item_id = $2 AND material_type = $5 AND branch_type = $3 AND branch_id = $4 FOR UPDATE`,
+    [batchRowId, owner.itemId, owner.branchType, owner.branchId, owner.materialType]
   );
   if (!b) return null;
   const take = r3(Math.min(Number(b.quantity), want));
@@ -98,10 +109,12 @@ async function takeFromBatch(c: Queryable, batchRowId: number, want: number, own
 export async function consumeBatches(c: Queryable, args: {
   itemId: number; branchType: string; branchId: number; quantity: number;
   override?: Array<{ batchId: number; quantity: number }>;
+  materialType?: BatchKind;
 }): Promise<BatchBreakdownEntry[]> {
   const consumed: BatchBreakdownEntry[] = [];
   let remaining = r3(Math.max(0, args.quantity));
-  const owner = { itemId: args.itemId, branchType: args.branchType, branchId: args.branchId };
+  const kind = args.materialType ?? "item";
+  const owner = { itemId: args.itemId, branchType: args.branchType, branchId: args.branchId, materialType: kind };
 
   if (Array.isArray(args.override)) {
     for (const ov of args.override) {
@@ -114,7 +127,7 @@ export async function consumeBatches(c: Queryable, args: {
   }
 
   if (remaining > 0) {
-    const { plan } = await planFEFO(c, args.itemId, args.branchType, args.branchId, remaining, true);
+    const { plan } = await planFEFO(c, args.itemId, args.branchType, args.branchId, remaining, true, kind);
     for (const p of plan) {
       const took = await takeFromBatch(c, p.batchId, p.quantity, owner);
       if (took) { consumed.push(took); remaining = r3(remaining - took.quantity); }
@@ -126,13 +139,14 @@ export async function consumeBatches(c: Queryable, args: {
 /**
  * Server-side validation of a manual batch override for one transfer line.
  * Rules: entries well-formed, no duplicate batches, batches must exist at the
- * given location for the given item with enough quantity, and the override
+ * given location for the given product with enough quantity, and the override
  * total must equal the line quantity exactly (±0.001).
  * Locks the batch rows (call inside the consuming transaction).
  */
 export async function validateBatchOverride(c: Queryable, args: {
   itemId: number; branchType: string; branchId: number; quantity: number;
   override: Array<{ batchId: number; quantity: number }>;
+  materialType?: BatchKind;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const seen = new Set<number>();
   let total = 0;
@@ -149,8 +163,8 @@ export async function validateBatchOverride(c: Queryable, args: {
 
     const { rows: [b] } = await c.query(
       `SELECT id, batch_number, quantity FROM stock_batches
-       WHERE id = $1 AND item_id = $2 AND branch_type = $3 AND branch_id = $4 FOR UPDATE`,
-      [batchId, args.itemId, args.branchType, args.branchId]
+       WHERE id = $1 AND item_id = $2 AND material_type = $5 AND branch_type = $3 AND branch_id = $4 FOR UPDATE`,
+      [batchId, args.itemId, args.branchType, args.branchId, args.materialType ?? "item"]
     );
     if (!b) return { ok: false, error: `Batch #${batchId} not found for this item at the source location` };
     if (qty > Number(b.quantity) + 0.001) {
@@ -165,11 +179,11 @@ export async function validateBatchOverride(c: Queryable, args: {
 }
 
 /** Credit a previously-consumed breakdown back to a location (reversals). */
-export async function restoreBatches(c: Queryable, itemId: number, branchType: string, branchId: number, breakdown: BatchBreakdownEntry[] | null | undefined, source?: string, sourceId?: number | null): Promise<void> {
+export async function restoreBatches(c: Queryable, itemId: number, branchType: string, branchId: number, breakdown: BatchBreakdownEntry[] | null | undefined, source?: string, sourceId?: number | null, materialType: BatchKind = "item"): Promise<void> {
   for (const b of breakdown ?? []) {
     if (!b || !(Number(b.quantity) > 0)) continue;
     await creditBatch(c, {
-      itemId, branchType, branchId,
+      itemId, branchType, branchId, materialType,
       batchNumber: b.batchNumber, mfgDate: b.mfgDate ?? null, expiryDate: b.expiryDate ?? null,
       quantity: Number(b.quantity), unitCost: Number(b.unitCost ?? 0),
       source: source ?? "transfer", sourceId: sourceId ?? null,
@@ -178,9 +192,29 @@ export async function restoreBatches(c: Queryable, itemId: number, branchType: s
 }
 
 /**
+ * Reduce a named batch at a location without needing the consumed breakdown.
+ * Used by reversal paths that only know the document's batch number (purchase
+ * edit/delete). Floors at zero — a reversal must never fail on arithmetic.
+ */
+export async function debitBatchByNumber(c: Queryable, args: {
+  itemId: number; branchType: string; branchId: number;
+  batchNumber: string; quantity: number; materialType?: BatchKind;
+}): Promise<void> {
+  if (!(args.quantity > 0) || !args.batchNumber) return;
+  await c.query(
+    `UPDATE stock_batches SET quantity = GREATEST(0, quantity::numeric - $1), updated_at = now()
+      WHERE item_id = $2 AND material_type = $3 AND branch_type = $4 AND branch_id = $5 AND batch_number = $6`,
+    [r3(args.quantity), args.itemId, args.materialType ?? "item", args.branchType, args.branchId, args.batchNumber]
+  );
+}
+
+/**
  * Weighted-average cost update. Call AFTER the inbound quantity has been
  * applied to stock_entries: prevQty is derived as (current total − inQty).
  * Zero-cost inbounds are ignored so they never drag the average to 0.
+ *
+ * Items only — material averages are rolled by the purchase route against the
+ * material master directly.
  */
 export async function updateAvgCostOnInbound(c: Queryable, itemId: number, inQty: number, inCost: number): Promise<void> {
   if (!(inQty > 0) || !(inCost > 0)) return;
@@ -208,4 +242,14 @@ export async function inboundCostForItem(c: Queryable, itemId: number): Promise<
   );
   if (!it) return 0;
   return Number(it.avg_cost) > 0 ? Number(it.avg_cost) : Number(it.cost);
+}
+
+/** Same idea for materials: weighted-average cost, falling back to the master's manual cost. */
+export async function inboundCostForMaterial(c: Queryable, kind: "material" | "raw_material", refId: number): Promise<number> {
+  const table = kind === "raw_material" ? "raw_materials" : "materials";
+  const { rows: [m] } = await c.query(
+    `SELECT COALESCE(avg_cost, 0) AS avg_cost, COALESCE(cost, 0) AS cost FROM ${table} WHERE id = $1`, [refId]
+  );
+  if (!m) return 0;
+  return Number(m.avg_cost) > 0 ? Number(m.avg_cost) : Number(m.cost);
 }

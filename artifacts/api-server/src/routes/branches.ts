@@ -6,6 +6,7 @@ import {
   CreateWarehouseBody, UpdateWarehouseBody,
   CreateOutletBody, UpdateOutletBody,
 } from "@workspace/api-zod";
+import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 
 const router = Router();
 
@@ -222,6 +223,9 @@ router.get("/outlets", async (_req, res): Promise<void> => {
 });
 
 router.post("/outlets", requireModuleAction("Outlets", "add"), async (req, res): Promise<void> => {
+  if (await outletWritesBlocked(pool)) {
+    res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+  }
   const parsed = CreateOutletBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const [row] = await db.insert(outletsTable).values(parsed.data).returning();
@@ -249,6 +253,9 @@ router.get("/outlets/:id", async (req, res): Promise<void> => {
 });
 
 router.patch("/outlets/:id", requireModuleAction("Outlets", "edit"), async (req, res): Promise<void> => {
+  if (await outletWritesBlocked(pool)) {
+    res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+  }
   const id = parseInt(req.params.id, 10);
   const parsed = UpdateOutletBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
@@ -272,6 +279,11 @@ router.patch("/outlets/:id", requireModuleAction("Outlets", "edit"), async (req,
 });
 
 router.delete("/outlets/:id", requireModuleAction("Outlets", "delete"), async (req, res): Promise<void> => {
+  // Historical integrity outranks tidiness: while the module is off, outlet rows
+  // are frozen, not removable, so no report or audit can lose its subject.
+  if (await outletWritesBlocked(pool)) {
+    res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+  }
   const id = parseInt(req.params.id, 10);
   const { rows: [outlet] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null }>(
     `SELECT cash_ledger_id, sales_ledger_id FROM outlets WHERE id = $1`, [id]

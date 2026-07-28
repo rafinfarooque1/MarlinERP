@@ -11,6 +11,7 @@ import { nextVoucherNumber, VOUCHER_TYPE_LABELS } from "../lib/voucherNumber";
 import { lineTaxHeads } from "../lib/gst";
 import { logActivity } from "../lib/audit";
 import { itemStockValuation } from "../lib/valuation";
+import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 
 const router = Router();
 
@@ -807,6 +808,11 @@ router.post("/accounts/location-expenses", requireModuleAction("Location Expense
   if (!parsedAmount || parsedAmount <= 0) {
     res.status(400).json({ error: "Amount must be positive." }); return;
   }
+  // A retired outlet cannot take on new spending — that would be fresh outlet
+  // activity in the books. Past outlet expenses stay readable.
+  if (locationType === 'outlet' && await outletWritesBlocked(pool)) {
+    res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+  }
   // Server-side validation: expenseLedgerId must be within Direct/Indirect Expense subtree
   const allowedExpenseIds = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
   if (!allowedExpenseIds.includes(Number(expenseLedgerId))) {
@@ -852,7 +858,8 @@ router.delete("/accounts/location-expenses/:id", requireModuleAction("Location E
   const { rows: [row] } = await pool.query(`
     SELECT p.id, p.voucher_number, p.amount, p.paid_to_ledger_id,
            pt.name AS expense_name,
-           COALESCE(w.name, o.name) AS location_name
+           COALESCE(w.name, o.name) AS location_name,
+           o.id AS outlet_id
     FROM payments p
     LEFT JOIN account_ledgers pt ON pt.id = p.paid_to_ledger_id
     LEFT JOIN warehouses w ON w.cash_ledger_id = p.paid_from_ledger_id
@@ -863,6 +870,11 @@ router.delete("/accounts/location-expenses/:id", requireModuleAction("Location E
   if (!row.location_name || !expenseLedgerIds.includes(Number(row.paid_to_ledger_id))) {
     res.status(400).json({ error: "This voucher is not a location expense. Delete it from Accounts → Vouchers instead." });
     return;
+  }
+  // Outlet history is never destroyed while the module is retired — deleting an
+  // outlet's expense voucher would silently rewrite an audited past period.
+  if (row.outlet_id != null && await outletWritesBlocked(pool)) {
+    res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
   }
 
   await pool.query(`DELETE FROM payments WHERE id = $1`, [id]);

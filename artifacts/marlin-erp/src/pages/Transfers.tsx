@@ -28,6 +28,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -356,6 +357,7 @@ export default function Transfers() {
 
   // User identity
   const { data: user } = useGetMe();
+  const { outletsEnabled } = useOutletsEnabled();
   const userBranchType = (user as any)?.branchType as 'headoffice' | 'warehouse' | 'outlet' | undefined;
   const userBranchId   = (user as any)?.branchId   as number | undefined;
   const userBranchName = (user as any)?.branchName as string | undefined;
@@ -438,20 +440,26 @@ export default function Transfers() {
   const watchToType   = form.watch('toType');
   const isFromHO      = watchFromType === 'headoffice';
 
-  // From location options (admin only — employees have it locked)
+  // From location options (admin only — employees have it locked).
+  // Retired outlets take no part in new stock movement, in either direction, so
+  // they disappear from both ends of the picker while the module is off.
   const fromTypeOptions = [
     { value: 'headoffice', label: 'Head Office (Production)' },
     { value: 'warehouse',  label: 'Warehouse' },
-    { value: 'outlet',     label: 'Outlet' },
+    ...(outletsEnabled ? [{ value: 'outlet', label: 'Outlet' }] : []),
   ];
   const fromLocationOptions = watchFromType === 'warehouse' ? warehouses : watchFromType === 'outlet' ? outlets : [];
 
   // To options based on from
   const toTypeOptions = useMemo(() => {
     if (isFromHO) return [{ value: 'warehouse', label: 'Warehouse' }]; // HO always → Warehouse
-    if (watchFromType === 'warehouse') return [{ value: 'outlet', label: 'Outlet' }, { value: 'warehouse', label: 'Warehouse' }];
+    if (watchFromType === 'warehouse') {
+      return outletsEnabled
+        ? [{ value: 'outlet', label: 'Outlet' }, { value: 'warehouse', label: 'Warehouse' }]
+        : [{ value: 'warehouse', label: 'Warehouse' }];
+    }
     return [{ value: 'warehouse', label: 'Warehouse' }]; // outlet → warehouse only
-  }, [isFromHO, watchFromType]);
+  }, [isFromHO, watchFromType, outletsEnabled]);
 
   const toOptions = useMemo(() => {
     if (watchToType === 'outlet') {

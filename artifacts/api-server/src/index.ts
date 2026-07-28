@@ -4,6 +4,7 @@ import { pool } from "@workspace/db";
 import { migrateOutletsToWarehouses } from "./migrations/outletToWarehouse";
 import { repairOpeningBatches } from "./migrations/repairOpeningBatches";
 import { addMaterialLocations } from "./migrations/materialLocations";
+import { addMaterialBatches } from "./migrations/materialBatches";
 import { PasswordService } from "./lib/password";
 
 async function runMigrations() {
@@ -854,10 +855,24 @@ async function runMigrations() {
   // ("no unique or exclusion constraint matching the ON CONFLICT
   // specification"). That broke batch credits, and with them sales returns.
   // Merge any duplicate rows first so the index can be created on live data.
+  //
+  // DANGEROUS ON A WIDENED KEY: once stock_batches carries `material_type`,
+  // item #1 and material #1 legitimately share
+  // (item_id, branch_type, branch_id, batch_number) — the master tables have
+  // overlapping id spaces. Running the dedupe below would merge two unrelated
+  // products' lots and destroy stock. If the discriminator is present, the v2
+  // key already provides the conflict target, so this block is retired instead.
   const { rows: [batchKeyDone] } = await pool.query(
     `SELECT 1 FROM migration_log WHERE name = 'stock_batches_natural_key_v1'`
   );
-  if (!batchKeyDone) {
+  const { rows: [batchDiscriminator] } = await pool.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'stock_batches' AND column_name = 'material_type'`
+  );
+  if (!batchKeyDone && batchDiscriminator) {
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('stock_batches_natural_key_v1')`);
+    console.log('[migration] stock_batches_natural_key_v1 skipped — material_type is present, the wider v2 key supersedes it');
+  } else if (!batchKeyDone) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -1241,6 +1256,10 @@ await repairOpeningBatches(pool);
 // rows land on the final warehouse/head-office layout, and after the opening
 // repair so the batch layer is already consistent for items.
 await addMaterialLocations(pool);
+
+// Materials gain a batch/expiry layer. Must follow addMaterialLocations: it
+// seeds opening lots from the located material rows that migration creates.
+await addMaterialBatches(pool);
 
 const rawPort = process.env["PORT"];
 if (!rawPort) throw new Error("PORT environment variable is required but was not provided.");

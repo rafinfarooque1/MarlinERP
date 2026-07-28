@@ -7,6 +7,7 @@ import {
   useListWarehouses, useListOutlets, useListStock,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -87,6 +88,7 @@ export default function ItemMaster() {
   // Location filter data
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
+  const { outletsEnabled } = useOutletsEnabled();
   const locStockEnabled = locType !== 'all' && (locType === 'headoffice' || locId != null);
   const locStockParams = locType === 'headoffice'
     ? { branchType: 'headoffice' as const }
@@ -310,7 +312,9 @@ export default function ItemMaster() {
                 <SelectItem value="all">All Locations</SelectItem>
                 <SelectItem value="headoffice">Head Office</SelectItem>
                 <SelectItem value="warehouse">Warehouse</SelectItem>
-                <SelectItem value="outlet">Outlet</SelectItem>
+                {/* Retired outlets hold no stock of their own — it moved to their
+                    parent warehouses — so the filter is withdrawn while off. */}
+                {outletsEnabled && <SelectItem value="outlet">Outlet</SelectItem>}
               </SelectContent>
             </Select>
 

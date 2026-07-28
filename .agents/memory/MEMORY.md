@@ -24,3 +24,4 @@
 - [Payroll workflow](payroll-workflow.md) — draft→approved→paid; per-employee ledgers (SAL-EMP/SAL-PAY/ADV-EMP); hours-based attendance; advances auto-deducted at generate time.
 - [LBAC implementation](lbac-implementation.md) — full location-scoping across all routes; decisions on HO-only endpoints; vendor/customer location stamping; dataScope helpers.
 - [Polymorphic stock_entries](polymorphic-stock-entries.md) — items AND materials share the table with OVERLAPPING ids; every query must scope material_type; boot-time dedupe blocks destroy data when the key widens.
+- [Module retirement pattern](module-retirement-pattern.md) — backend 409s enforce, frontend only withdraws affordances; retire a nav entry by filtering href in the layout, never by editing the frozen registry.

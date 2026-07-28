@@ -17,6 +17,8 @@ import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
+import { useOutletsEnabled, OUTLETS_LEGACY_NOTE } from '@/lib/useFeatureFlags';
+import { Archive } from 'lucide-react';
 
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
@@ -33,6 +35,12 @@ type FormValues = z.infer<typeof schema>;
 
 export default function Outlets() {
   const perm = usePermission('Outlets');
+  // Outlets were folded into warehouses. While the module is off this page is a
+  // historical archive: fully readable and exportable, but every write is
+  // withdrawn (the backend refuses them too, so this is convenience not
+  // security).
+  const { outletsEnabled } = useOutletsEnabled();
+  const readOnly = !outletsEnabled;
   const { data: outlets = [], isLoading } = useListOutlets();
   const { data: warehouses = [] } = useListWarehouses();
   const [search, setSearch] = useState('');
@@ -93,16 +101,35 @@ export default function Outlets() {
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Store className="w-6 h-6 text-primary" /> Retail Outlets</h1>
-            <p className="text-muted-foreground mt-1">Point-of-sale locations management</p>
+            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+              <Store className="w-6 h-6 text-primary" /> Retail Outlets
+              {readOnly && (
+                <span className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded border border-border bg-muted text-muted-foreground font-semibold">
+                  Legacy · Read-only
+                </span>
+              )}
+            </h1>
+            <p className="text-muted-foreground mt-1">
+              {readOnly ? 'Historical outlet records, kept for reports and audits' : 'Point-of-sale locations management'}
+            </p>
           </div>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => downloadCSV('outlets.csv', filtered.map(o => ({ Name: o.name, Warehouse: o.warehouseName || '', Contact: o.contactPerson || '', Phone: o.phone || '', Address: o.address || '' })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
-            <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Outlet</Button>
+            {!readOnly && <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Outlet</Button>}
           </div>
         </div>
+
+        {readOnly && (
+          <div className="flex items-start gap-3 p-4 rounded-xl border border-border bg-muted/30">
+            <Archive className="w-5 h-5 text-muted-foreground shrink-0 mt-0.5" />
+            <div className="text-sm text-muted-foreground">
+              <p className="font-medium text-foreground">This module is retired</p>
+              <p className="mt-1">{OUTLETS_LEGACY_NOTE}</p>
+            </div>
+          </div>
+        )}
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
@@ -135,8 +162,8 @@ export default function Outlets() {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(o)}><Eye className="w-4 h-4" /></Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(o)}><Edit2 className="w-4 h-4" /></Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => handleDelete(o.id, o.name)}><Trash2 className="w-4 h-4" /></Button>
+                      {!readOnly && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(o)}><Edit2 className="w-4 h-4" /></Button>}
+                      {!readOnly && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => handleDelete(o.id, o.name)}><Trash2 className="w-4 h-4" /></Button>}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -209,7 +236,7 @@ export default function Outlets() {
                   <span className="font-medium">{v}</span>
                 </div>
               ))}
-              <Button className="w-full" onClick={() => { setViewItem(null); openEdit(viewItem); }}><Edit2 className="w-4 h-4 mr-2" /> Edit</Button>
+              {!readOnly && <Button className="w-full" onClick={() => { setViewItem(null); openEdit(viewItem); }}><Edit2 className="w-4 h-4 mr-2" /> Edit</Button>}
             </div>
           )}
         </SheetContent>

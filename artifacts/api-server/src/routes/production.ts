@@ -4,7 +4,7 @@ import { requireModuleView, requireModuleAction } from "../middleware/permission
 import { eq } from "drizzle-orm";
 import { CreateProductionBody } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
-import { creditBatch, updateAvgCostOnInbound, inboundCostForItem } from "../lib/batches";
+import { creditBatch, consumeBatches, debitBatchByNumber, restoreBatches, updateAvgCostOnInbound, inboundCostForItem, inboundCostForMaterial, type BatchBreakdownEntry } from "../lib/batches";
 import { writeStockLedger } from "../lib/stockLedger";
 import { deductMaterialAt, creditMaterialAt, isMaterialKind } from "../lib/materialStock";
 
@@ -28,6 +28,8 @@ const r4 = (n: number) => Math.round(n * 10000) / 10000;
 type UsedLine = {
   materialType: string; materialId: number; usedQuantity: number;
   materialName?: string; unit?: string; unitCost?: number; lineCost?: number;
+  /** Lots this line drew from, recorded so a reversal restores the same lots. */
+  batchBreakdown?: BatchBreakdownEntry[];
 };
 type WastageLine = { quantity: number; reason: string };
 type MatInfo = { name: string; unit: string; cost: number };
@@ -394,8 +396,21 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
           });
           return;
         }
+        // Draw the material from its own lots, earliest expiry first, and keep
+        // the breakdown on the line so a later reversal restores the exact lots
+        // (and their mfg/expiry dates) rather than inventing a new one.
+        mat.batchBreakdown = await consumeBatches(client, {
+          itemId: mat.materialId, materialType: mat.materialType,
+          branchType: "headoffice", branchId: 1,
+          quantity: Number(mat.usedQuantity),
+        });
       }
     }
+    // Persist the lot allocations recorded above onto the stored line items.
+    await client.query(
+      `UPDATE productions SET material_used = $1::jsonb WHERE id = $2`,
+      [JSON.stringify(materialUsed), rowId]
+    );
 
     // Add to item production stock (good units only — wastage never enters stock)
     await client.query(
@@ -558,6 +573,25 @@ router.delete("/productions/:id", requireModuleAction("Production", "delete"), a
         await creditMaterialAt(
           client, mat.materialType, mat.materialId, "headoffice", 1, Number(mat.usedQuantity)
         );
+        // Return the exact lots this batch consumed. Batches recorded before
+        // material lots existed carry no breakdown; credit a reversal lot so
+        // the batch layer still reconciles with the located quantity.
+        const alloc = (mat as any).batchBreakdown as BatchBreakdownEntry[] | undefined;
+        const allocTotal = (alloc ?? []).reduce((s, b) => s + Number(b?.quantity ?? 0), 0);
+        await restoreBatches(
+          client, mat.materialId, "headoffice", 1, alloc,
+          "production_reversal", id, mat.materialType
+        );
+        const residual = Number(mat.usedQuantity) - allocTotal;
+        if (residual > 0.001) {
+          await creditBatch(client, {
+            itemId: mat.materialId, materialType: mat.materialType,
+            branchType: "headoffice", branchId: 1,
+            batchNumber: `REV-PROD-${id}`, quantity: residual,
+            unitCost: await inboundCostForMaterial(client, mat.materialType, mat.materialId),
+            source: "production_reversal", sourceId: id,
+          });
+        }
       }
     }
 
@@ -573,11 +607,10 @@ router.delete("/productions/:id", requireModuleAction("Production", "delete"), a
     );
 
     // Reverse this production's own batch (floored — it may be partly consumed)
-    await client.query(
-      `UPDATE stock_batches SET quantity = GREATEST(0, quantity - $1), updated_at = now()
-       WHERE item_id = $2 AND branch_type = 'headoffice' AND branch_id = 1 AND batch_number = $3`,
-      [qty, itemId, delBatchNumber]
-    );
+    await debitBatchByNumber(client, {
+      itemId, materialType: "item", branchType: "headoffice", branchId: 1,
+      batchNumber: delBatchNumber, quantity: qty,
+    });
 
     // ── Stock ledger (production delete reversals) ────────────────────────────
     await writeStockLedger(client, [

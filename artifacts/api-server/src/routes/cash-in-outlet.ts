@@ -4,6 +4,7 @@ import { pool } from "@workspace/db";
 import { logActivity } from "../lib/audit";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import { getUserDataScope } from "../lib/dataScope";
+import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 
 const router = Router();
 
@@ -203,6 +204,11 @@ router.post("/cash-in-outlet/deposits", requireModuleAction("Cash Balance", "add
   if (!depositDate) { res.status(400).json({ error: "depositDate is required" }); return; }
 
   const isWarehouse = !!warehouseId;
+  // Cash cannot be banked out of a retired outlet — its till is frozen along
+  // with the rest of the module. Historical deposits stay readable.
+  if (!isWarehouse && await outletWritesBlocked(pool)) {
+    res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+  }
   const locationId  = isWarehouse ? warehouseId! : outletId!;
   const cashCode    = isWarehouse ? `WH-CASH-${locationId}` : `OUTLET-CASH-${locationId}`;
   const locLabel    = isWarehouse ? `warehouse ${locationId}` : `outlet ${locationId}`;
