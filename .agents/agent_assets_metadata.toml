@@ -6,3 +6,9 @@ id = "bQ1j-oEOO-ni4rUDpRYU4"
 uri = "file://docs/ERP_STRUCTURE.md"
 type = "text"
 title = "Marlin ERP — Complete Structure Documentation"
+
+[[outputs]]
+id = "Xt2ukZumm4xO9KjvbupX_"
+uri = "file://ERP_SYSTEM_GUIDE.md"
+type = "text"
+title = "Marlin ERP — Full System Guide"
