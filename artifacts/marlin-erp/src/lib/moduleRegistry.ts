@@ -198,7 +198,7 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     // but also appears in the Operations sidebar section so branch
     // employees can access it without needing any Inventory permission.
     key: 'HO Transfers', permGroup: 'Inventory',
-    navGroup: 'Stock',
+    navGroup: 'Operations',
     navEntries: [
       { name: 'Stock Transfer', href: '/transfers' },
     ],
@@ -251,7 +251,7 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     key: 'Stock', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [
-      { name: 'Stock', href: '/headoffice/stock', navGroup: 'Stock' },
+      { name: 'Stock', href: '/headoffice/stock', navGroup: 'Operations' },
     ],
     icon: Package,
   },
