@@ -23,6 +23,7 @@ import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { activeProductsWithSelection } from '@/lib/productStatus';
+import { useActingLocations, decodeLocation, encodeLocation } from '@/lib/useActingLocation';
 import { Separator } from '@/components/ui/separator';
 
 const GST_RATES = [0, 5, 12, 18, 28] as const;
@@ -45,6 +46,7 @@ const schema = z.object({
   vendorId: z.coerce.number().min(1, 'Vendor required'),
   purchaseDate: z.string().min(1, 'Date required'),
   invoiceNumber: z.string().optional(),
+  location: z.string().min(1, 'Location required'),
   lineItems: z.array(lineSchema).min(1, 'Add at least one item'),
   notes: z.string().optional(),
 });
@@ -94,6 +96,7 @@ export default function Purchases() {
   const { data: materials = [] } = useListMaterials();
   const { data: rawMaterials = [] } = useListRawMaterials();
   const { data: finishedItems = [] } = useListItems();
+  const locations = useActingLocations();
   const [isOpen, setIsOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [viewItem, setViewItem] = useState<any>(null);
@@ -133,7 +136,7 @@ export default function Purchases() {
     }
   };
 
-  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', lineItems: [defaultLine], notes: '' } });
+  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', location: 'headoffice:1', lineItems: [defaultLine], notes: '' } });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
   const watchLines = form.watch('lineItems');
 
@@ -154,9 +157,13 @@ export default function Purchases() {
   const roundOff = Math.round(rawTotal) - rawTotal;
   const grandTotal = Math.round(rawTotal);
 
-  const resetForm = () => form.reset({ vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', lineItems: [defaultLine], notes: '' });
+  const resetForm = () => form.reset({ vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', location: locations.defaultValue, lineItems: [defaultLine], notes: '' });
 
-  const onSubmit = (data: FormValues) => {
+  const onSubmit = (form0: FormValues) => {
+    const { location, ...rest } = form0;
+    // A user who cannot choose is always pinned to their own location, even if
+    // the picker had not resolved `me` yet when the dialog opened.
+    const data = { ...rest, ...decodeLocation(locations.canChoose ? location : locations.defaultValue) };
     if (editingId !== null) {
       updateMutation.mutate({ id: editingId, data: data as any }, {
         onSuccess: () => {
@@ -218,6 +225,7 @@ export default function Purchases() {
             {perm.canDownload && (
               <Button variant="outline" size="sm" onClick={() => downloadCSV('purchases.csv', filtered.map(p => ({
                 'Bill #': p.id, Date: p.purchaseDate, Vendor: p.vendorName, Invoice: p.invoiceNumber || '',
+                Location: (p as any).locationName ?? '',
                 Items: (p.lineItems as any[])?.length || 0,
                 'Taxable': Number((p as any).discountTotal ? Number(p.totalAmount) - Number((p as any).taxTotal || 0) : p.totalAmount),
                 'Tax': Number((p as any).taxTotal || 0),
@@ -246,6 +254,7 @@ export default function Purchases() {
                 <TableHead>Date</TableHead>
                 <TableHead>Vendor</TableHead>
                 <TableHead>Invoice Ref</TableHead>
+                {locations.isHeadOffice && <TableHead>Location</TableHead>}
                 <TableHead>Items</TableHead>
                 <TableHead className="text-right">Tax</TableHead>
                 <TableHead className="text-right">Total</TableHead>
@@ -254,9 +263,9 @@ export default function Purchases() {
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={locations.isHeadOffice ? 9 : 8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
+                <TableRow><TableCell colSpan={locations.isHeadOffice ? 9 : 8} className="text-center py-16 text-muted-foreground">
                   <ShoppingCart className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No purchase bills yet</p>
                 </TableCell></TableRow>
               ) : filtered.map(p => (
@@ -267,6 +276,9 @@ export default function Purchases() {
                   </TableCell>
                   <TableCell className="font-medium">{p.vendorName}</TableCell>
                   <TableCell className="text-muted-foreground text-sm">{p.invoiceNumber || '—'}</TableCell>
+                  {locations.isHeadOffice && (
+                    <TableCell className="text-muted-foreground text-sm">{(p as any).locationName ?? 'Head Office'}</TableCell>
+                  )}
                   <TableCell><Badge variant="secondary">{(p.lineItems as any[])?.length || 0} items</Badge></TableCell>
                   <TableCell className="text-right font-mono text-xs text-muted-foreground">
                     {Number((p as any).taxTotal || 0) > 0 ? `₹${fmt(Number((p as any).taxTotal || 0))}` : '—'}
@@ -282,6 +294,7 @@ export default function Purchases() {
                             vendorId: p.vendorId,
                             purchaseDate: (p.purchaseDate ?? '').substring(0, 10) || new Date().toISOString().split('T')[0],
                             invoiceNumber: p.invoiceNumber || '',
+                            location: encodeLocation((p as any).locationType ?? 'headoffice', Number((p as any).locationId ?? 1)),
                             notes: (p as any).notes || '',
                             lineItems: ((p.lineItems as any[]) || []).map((li: any) => ({
                               materialType: li.materialType || 'raw_material',
@@ -341,7 +354,7 @@ export default function Purchases() {
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6 pt-2">
               {/* Header */}
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 <FormField control={form.control} name="vendorId" render={({ field }) => (
                   <FormItem><FormLabel>Vendor <span className="text-destructive">*</span></FormLabel>
                     <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
@@ -355,11 +368,41 @@ export default function Purchases() {
                 <FormField control={form.control} name="invoiceNumber" render={({ field }) => (
                   <FormItem><FormLabel>Invoice Ref #</FormLabel><FormControl><Input placeholder="Vendor's invoice no." {...field} /></FormControl></FormItem>
                 )} />
+                {/* Receiving location. Fixed once the bill exists: stock, the
+                    vendor payable and input GST all landed there already. */}
+                <FormField control={form.control} name="location" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Receiving Location <span className="text-destructive">*</span></FormLabel>
+                    {locations.canChoose && editingId === null ? (
+                      <>
+                        <Select onValueChange={field.onChange} value={field.value || locations.defaultValue}>
+                          <FormControl><SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger></FormControl>
+                          <SelectContent>{locations.options.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+                        </Select>
+                        <p className="text-[10px] text-muted-foreground">Stock, input GST and the vendor payable are booked here.</p>
+                      </>
+                    ) : (
+                      <>
+                        <div className="h-9 flex items-center px-3 rounded-md border border-border bg-muted/30 text-sm font-medium">
+                          {locations.labelFor(field.value)}
+                        </div>
+                        {editingId !== null && <p className="text-[10px] text-muted-foreground">Cannot be moved after the bill is saved.</p>}
+                      </>
+                    )}
+                    <FormMessage />
+                  </FormItem>
+                )} />
               </div>
 
               {/* Line Items */}
               <div>
-                <div className="text-sm font-medium mb-2">Line Items</div>
+                <div className="flex flex-wrap items-baseline justify-between gap-2 mb-2">
+                  <div className="text-sm font-medium">Line Items</div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Batch number, mfg date and expiry date are required on every line.
+                    {editingId !== null && ' Older bills may have been saved without them — fill them in to save.'}
+                  </p>
+                </div>
                 <div className="border border-border rounded-lg overflow-hidden">
                   <div className="grid bg-muted/30 text-xs font-medium text-muted-foreground uppercase tracking-wide px-3 py-2" style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr 1fr auto' }}>
                     <span>Item</span><span>HSN</span><span>Qty</span><span>Rate ₹</span><span>Disc %</span><span>GST %</span><span className="text-right">Total ₹</span><span />
@@ -416,16 +459,22 @@ export default function Purchases() {
                           <X className="w-3.5 h-3.5" />
                         </Button>
                       </div>
-                      {form.watch(`lineItems.${index}.materialType`) === 'item' && (
-                        <div className="flex flex-wrap items-center gap-2 px-3 pb-2 bg-emerald-500/[0.03]">
-                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Batch</span>
-                          <Input className="h-7 text-xs font-mono w-40" placeholder="Vendor lot (auto if blank)" {...form.register(`lineItems.${index}.batchNumber`)} />
-                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground ml-2">Mfg</span>
-                          <Input className="h-7 text-xs w-36" type="date" {...form.register(`lineItems.${index}.mfgDate`)} />
-                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground ml-2">Expiry</span>
-                          <Input className="h-7 text-xs w-36" type="date" {...form.register(`lineItems.${index}.expiryDate`)} />
-                        </div>
-                      )}
+                      {/* Batch identity — required on every line, whatever the kind.
+                          Frozen food cannot be traced or expiry-checked without it. */}
+                      <div className="flex flex-wrap items-center gap-2 px-3 pb-2 bg-emerald-500/[0.03]">
+                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                          Batch <span className="text-destructive">*</span>
+                        </span>
+                        <Input className="h-7 text-xs font-mono w-40" placeholder="Vendor lot / batch no." {...form.register(`lineItems.${index}.batchNumber`)} />
+                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground ml-2">
+                          Mfg <span className="text-destructive">*</span>
+                        </span>
+                        <Input className="h-7 text-xs w-36" type="date" {...form.register(`lineItems.${index}.mfgDate`)} />
+                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground ml-2">
+                          Expiry <span className="text-destructive">*</span>
+                        </span>
+                        <Input className="h-7 text-xs w-36" type="date" {...form.register(`lineItems.${index}.expiryDate`)} />
+                      </div>
                       </Fragment>
                     );
                   })}
@@ -477,6 +526,7 @@ export default function Purchases() {
                 <SheetDescription>
                   {viewItem.vendorName} · {new Date(viewItem.purchaseDate).toLocaleDateString('en-IN')}
                   {viewItem.invoiceNumber && ` · Ref: ${viewItem.invoiceNumber}`}
+                  {` · received at ${(viewItem as any).locationName ?? 'Head Office'}`}
                 </SheetDescription>
               </SheetHeader>
 

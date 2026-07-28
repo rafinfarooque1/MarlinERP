@@ -75,18 +75,29 @@ export default function ProductionReports() {
     } else {
       downloadCSV(`production-batch-costs-${from}-to-${to}.csv`, data.batches.map(b => ({
         Batch: b.batchNumber, Date: b.productionDate, Item: b.itemName,
+        Location: (b as any).locationName ?? '',
         'Produced Qty': b.producedQty, 'Wastage Qty': b.wastageQty,
-        'Material Cost': b.materialCost ?? '', 'Overhead %': b.overheadPercent ?? '',
+        'Raw Material Cost': (b as any).rmCost ?? '', 'Packing Material Cost': (b as any).pmCost ?? '',
+        'Material Cost': b.materialCost ?? '',
+        'Labour Cost': (b as any).labourCost ?? '', 'Labour Method': (b as any).labourMethod ?? '',
+        'Overhead %': b.overheadPercent ?? '',
         'Overhead Amount': b.overheadAmount ?? '', 'Total Cost': b.totalCost ?? '', 'Cost/Unit': b.costPerUnit ?? '',
       })));
     }
   };
 
+  const t = totals as any;
   const summaryCards = [
-    { icon: Factory, label: 'Batches', value: totals ? String(totals.batchCount) : '—' },
-    { icon: Scale, label: 'Units Produced', value: totals ? qty(totals.producedQty) : '—' },
-    { icon: Trash2, label: 'Wastage', value: totals ? `${qty(totals.wastageQty)} · ${inr(totals.wastageValue)}` : '—' },
-    { icon: IndianRupee, label: 'Total Production Cost', value: totals ? inr(totals.totalCost) : '—' },
+    { icon: Factory, label: 'Batches', value: totals ? String(totals.batchCount) : '—', sub: '' },
+    { icon: Scale, label: 'Units Produced', value: totals ? qty(totals.producedQty) : '—', sub: '' },
+    { icon: Trash2, label: 'Wastage', value: totals ? `${qty(totals.wastageQty)} · ${inr(totals.wastageValue)}` : '—', sub: '' },
+    {
+      icon: IndianRupee, label: 'Total Production Cost', value: totals ? inr(totals.totalCost) : '—',
+      // Where the batch cost came from: raw material, packing, labour, overheads.
+      sub: totals
+        ? `RM ${inr(t.rmCost ?? 0)} · PM ${inr(t.pmCost ?? 0)} · Labour ${inr(t.labourCost ?? 0)} · OH ${inr(t.overheadAmount ?? 0)}`
+        : '',
+    },
   ];
 
   return (
@@ -134,6 +145,7 @@ export default function ProductionReports() {
                 <c.icon className="w-3.5 h-3.5" /> {c.label}
               </div>
               <p className="text-xl font-bold font-mono mt-2">{c.value}</p>
+              {c.sub && <p className="text-[10px] text-muted-foreground font-mono mt-1">{c.sub}</p>}
             </div>
           ))}
         </div>
@@ -264,8 +276,11 @@ export default function ProductionReports() {
                   <TableHead>Batch</TableHead>
                   <TableHead>Date</TableHead>
                   <TableHead>Item</TableHead>
+                  <TableHead>Location</TableHead>
                   <TableHead className="text-right">Produced</TableHead>
-                  <TableHead className="text-right">Material Cost</TableHead>
+                  <TableHead className="text-right">Raw Mat.</TableHead>
+                  <TableHead className="text-right">Packing</TableHead>
+                  <TableHead className="text-right">Labour</TableHead>
                   <TableHead className="text-right">Overhead</TableHead>
                   <TableHead className="text-right">Total Cost</TableHead>
                   <TableHead className="text-right">Cost/Unit</TableHead>
@@ -273,7 +288,7 @@ export default function ProductionReports() {
               </TableHeader>
               <TableBody>
                 {!data || data.batches.length === 0 ? (
-                  <TableRow><TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
+                  <TableRow><TableCell colSpan={11} className="text-center py-16 text-muted-foreground">
                     <Factory className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No batches in this period</p>
                   </TableCell></TableRow>
                 ) : data.batches.map(b => (
@@ -281,8 +296,18 @@ export default function ProductionReports() {
                     <TableCell className="font-mono text-primary font-bold">{b.batchNumber}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{new Date(b.productionDate).toLocaleDateString('en-IN')}</TableCell>
                     <TableCell className="font-medium">{b.itemName}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{(b as any).locationName ?? 'Head Office'}</TableCell>
                     <TableCell className="text-right font-mono">{qty(b.producedQty)}{b.wastageQty > 0 && <span className="text-destructive text-xs ml-1">(+{qty(b.wastageQty)} waste)</span>}</TableCell>
-                    <TableCell className="text-right font-mono">{inr(b.materialCost)}</TableCell>
+                    <TableCell className="text-right font-mono">{(b as any).rmCost == null ? inr(b.materialCost) : inr((b as any).rmCost)}</TableCell>
+                    <TableCell className="text-right font-mono">{(b as any).pmCost == null ? '—' : inr((b as any).pmCost)}</TableCell>
+                    <TableCell className="text-right font-mono">
+                      {(b as any).labourCost == null ? '—' : (
+                        <>
+                          {inr((b as any).labourCost)}
+                          {(b as any).labourMethod === 'manual' && <span className="block text-[9px] text-muted-foreground font-sans">manual</span>}
+                        </>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right font-mono text-muted-foreground">
                       {b.overheadAmount === null ? '—' : `${inr(b.overheadAmount)}${b.overheadPercent ? ` (${Number(b.overheadPercent)}%)` : ''}`}
                     </TableCell>

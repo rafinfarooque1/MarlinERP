@@ -211,7 +211,9 @@ router.get("/raw-materials", async (req, res): Promise<void> => {
   const filter = statusFilter(req, res);
   if (!filter) return;
   const result = await pool.query(
-    `SELECT id, name, unit, description, current_stock, hsn_code, tax_rate, cost, mrp,
+    // avg_cost must be selected: fmtMaterial derives the usable cost from it,
+    // and the packing-material `cost` column is left at 0 (purchases only roll avg_cost).
+    `SELECT id, name, unit, description, current_stock, hsn_code, tax_rate, cost, avg_cost, mrp,
             item_code, barcode, status, created_at, updated_at
        FROM raw_materials${filter.sql} ORDER BY id`, filter.params
   );

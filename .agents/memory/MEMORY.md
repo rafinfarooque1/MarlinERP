@@ -26,3 +26,5 @@
 - [Polymorphic stock_entries](polymorphic-stock-entries.md) — items AND materials share the table with OVERLAPPING ids; every query must scope material_type; boot-time dedupe blocks destroy data when the key widens.
 - [Module retirement pattern](module-retirement-pattern.md) — backend 409s enforce, frontend only withdraws affordances; retire a nav entry by filtering href in the layout, never by editing the frozen registry.
 - [Product identity](product-identity.md) — code prefixes follow the DISPLAY label (materials="Raw Material"→RM); EAN-13 in the `2` in-store range; inactive blocks CREATE only; HO-only is a location rule.
+- [ERP write-path concurrency](erp-write-path-concurrency.md) — lock order = labour day+location, then item, then rows; reversals must read their lines from a row locked inside the txn.
+- [Verifying costing on live data](verifying-costing-on-live-data.md) — create+delete of a batch permanently lowers item avg cost; a balanced TB does NOT prove the test left no trace.

@@ -24,11 +24,15 @@ import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { activeProducts } from '@/lib/productStatus';
+import { useActingLocations, decodeLocation } from '@/lib/useActingLocation';
 
 const schema = z.object({
   itemId: z.coerce.number().min(1, 'Item required'),
   producedQuantity: z.coerce.number().min(1, 'Quantity > 0'),
   productionDate: z.string().min(1, 'Date required'),
+  location: z.string().min(1, 'Location required'),
+  labourMode: z.enum(['payroll', 'manual']).default('payroll'),
+  labourCost: z.coerce.number().min(0, 'Labour ≥ 0').optional(),
   batchNumber: z.string().optional(),
   mfgDate: z.string().optional(),
   expiryDate: z.string().optional(),
@@ -59,6 +63,9 @@ const defaultValues: FormValues = {
   itemId: 0,
   producedQuantity: 1,
   productionDate: new Date().toISOString().split('T')[0],
+  location: 'headoffice:1',
+  labourMode: 'payroll',
+  labourCost: 0,
   batchNumber: '',
   mfgDate: '',
   expiryDate: '',
@@ -81,6 +88,7 @@ export default function ProductionList() {
   const { data: rawMaterials = [] } = useListRawMaterials();
   const { data: materials = [] } = useListMaterials();
   const { data: companySettings } = useGetCompanySettings();
+  const locations = useActingLocations();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
@@ -106,6 +114,9 @@ export default function ProductionList() {
   const wMaterials = form.watch('materialUsed');
   const wWastage = form.watch('wastage');
   const wOverhead = Number(form.watch('overheadPercent')) || 0;
+  const wLocation = form.watch('location');
+  const wLabourMode = form.watch('labourMode');
+  const wLabourCost = Number(form.watch('labourCost')) || 0;
 
   const { data: bomTemplate } = useGetBomTemplateByItem(wItemId, { enabled: isOpen && wItemId > 0 });
 
@@ -118,12 +129,28 @@ export default function ProductionList() {
   const wastageQty = (wWastage ?? []).reduce((s, w) => s + (Number(w?.quantity) || 0), 0);
   const grossOut = wProduced + wastageQty;
 
-  const estMaterialCost = (wMaterials ?? []).reduce((s, l) => {
-    const info = matInfo(l?.materialType, Number(l?.materialId));
-    return s + (Number(l?.usedQuantity) || 0) * Math.max(0, Number(info?.cost ?? 0));
+  // Valuation rate per material, matching the server: the moving-average
+  // purchase cost when there is one, else the manually-entered standard cost.
+  // (Reading `cost` alone showed ₹0 for every purchased material.)
+  const matRate = (type: string | undefined, id: number) => {
+    const info: any = matInfo(type, id);
+    const avg = Number(info?.avgCost ?? 0);
+    return Math.max(0, avg > 0 ? avg : Number(info?.cost ?? 0));
+  };
+
+  const estLineCost = (kind: 'material' | 'raw_material') => (wMaterials ?? []).reduce((s, l) => {
+    if ((l?.materialType ?? 'material') !== kind) return s;
+    return s + (Number(l?.usedQuantity) || 0) * matRate(l?.materialType, Number(l?.materialId));
   }, 0);
+
+  const estRmCost = estLineCost('material');
+  const estPmCost = estLineCost('raw_material');
+  const estMaterialCost = estRmCost + estPmCost;
   const estOverhead = estMaterialCost * wOverhead / 100;
-  const estTotal = estMaterialCost + estOverhead;
+  // Payroll-allocated labour is spread across the whole day's batches at this
+  // location, so only a hand-entered amount is knowable before saving.
+  const estLabour = wLabourMode === 'manual' ? wLabourCost : 0;
+  const estTotal = estMaterialCost + estOverhead + estLabour;
   const estPerUnit = wProduced > 0 ? estTotal / wProduced : 0;
 
   // Over-consumption vs BOM (allowed = per-unit qty × gross output incl. wastage)
@@ -168,6 +195,7 @@ export default function ProductionList() {
     form.reset({
       ...defaultValues,
       productionDate: new Date().toISOString().split('T')[0],
+      location: locations.defaultValue,
       overheadPercent: Number((companySettings as any)?.productionOverheadPercent ?? 0),
     });
     setIsOpen(true);
@@ -184,9 +212,14 @@ export default function ProductionList() {
     });
 
   const onSubmit = (data: FormValues) => {
+    const { location, labourMode, labourCost, ...rest } = data;
     const payload = {
-      ...data,
+      ...rest,
+      ...decodeLocation(location),
       wastage: (data.wastage ?? []).filter(w => Number(w.quantity) > 0),
+      // Omit labourCost entirely on the payroll path — sending it would switch
+      // the batch to the manual method and exclude it from the payroll spread.
+      ...(labourMode === 'manual' ? { labourCost: Number(labourCost) || 0 } : {}),
     };
     createMutation.mutate({ data: payload as any }, {
       onSuccess: () => {
@@ -254,7 +287,12 @@ export default function ProductionList() {
               <Button variant="outline" size="sm" onClick={() => downloadCSV('production.csv', filtered.map(p => ({
                 Batch: (p as any).batchNumber || `B-${String(p.id).padStart(4, '0')}`,
                 Date: p.productionDate, Item: p.itemName, Qty: p.producedQuantity,
+                Location: (p as any).locationName ?? '',
                 'Wastage Qty': (p as any).wastageQty || 0,
+                'Raw Material Cost': (p as any).rmCost ?? '',
+                'Packing Material Cost': (p as any).pmCost ?? '',
+                'Labour Cost': (p as any).labourCost ?? '',
+                'Labour Method': (p as any).labourMethod ?? '',
                 'Material Cost': (p as any).materialCost ?? '',
                 'Overhead': (p as any).overheadAmount ?? '',
                 'Total Cost': (p as any).totalCost ?? '',
@@ -283,6 +321,7 @@ export default function ProductionList() {
                 <TableHead>Batch</TableHead>
                 <TableHead>Date</TableHead>
                 <TableHead>Item</TableHead>
+                {locations.isHeadOffice && <TableHead>Location</TableHead>}
                 <TableHead>Qty Produced</TableHead>
                 <TableHead className="text-right">Cost/Unit</TableHead>
                 <TableHead className="text-right">Wastage</TableHead>
@@ -293,9 +332,9 @@ export default function ProductionList() {
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={locations.isHeadOffice ? 10 : 9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
+                <TableRow><TableCell colSpan={locations.isHeadOffice ? 10 : 9} className="text-center py-16 text-muted-foreground">
                   <Factory className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No production batches yet</p>
                 </TableCell></TableRow>
               ) : filtered.map(p => (
@@ -305,6 +344,9 @@ export default function ProductionList() {
                     <Calendar className="w-3 h-3" />{new Date(p.productionDate).toLocaleDateString('en-IN')}
                   </TableCell>
                   <TableCell className="font-medium">{p.itemName}</TableCell>
+                  {locations.isHeadOffice && (
+                    <TableCell className="text-sm text-muted-foreground">{(p as any).locationName ?? 'Head Office'}</TableCell>
+                  )}
                   <TableCell className="font-mono font-bold text-emerald-500">{Number(p.producedQuantity).toLocaleString()}</TableCell>
                   <TableCell className="text-right font-mono">
                     {(p as any).costPerUnit != null
@@ -382,6 +424,25 @@ export default function ProductionList() {
                 )} />
                 <FormField control={form.control} name="productionDate" render={({ field }) => (
                   <FormItem><FormLabel>Production Date <span className="text-destructive">*</span></FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
+                )} />
+                <FormField control={form.control} name="location" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Manufacturing Location <span className="text-destructive">*</span></FormLabel>
+                    {locations.canChoose ? (
+                      <>
+                        <Select onValueChange={field.onChange} value={field.value || locations.defaultValue}>
+                          <FormControl><SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger></FormControl>
+                          <SelectContent>{locations.options.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+                        </Select>
+                        <p className="text-[10px] text-muted-foreground">Materials are consumed and finished goods deposited here.</p>
+                      </>
+                    ) : (
+                      <div className="h-9 flex items-center px-3 rounded-md border border-border bg-muted/30 text-sm font-medium">
+                        {locations.labelFor(field.value)}
+                      </div>
+                    )}
+                    <FormMessage />
+                  </FormItem>
                 )} />
                 <FormField control={form.control} name="batchNumber" render={({ field }) => (
                   <FormItem><FormLabel>Batch # <span className="text-[10px] font-normal text-muted-foreground">(auto if blank)</span></FormLabel><FormControl><Input placeholder="e.g. LOT-A1" className="font-mono" {...field} /></FormControl></FormItem>
@@ -531,21 +592,56 @@ export default function ProductionList() {
                 )}
               </div>
 
-              {/* Overhead + live cost estimate */}
+              {/* Labour, overhead + live cost estimate */}
               <div className="grid grid-cols-2 gap-4 items-start">
-                <FormField control={form.control} name="overheadPercent" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Overhead % <span className="text-[10px] font-normal text-muted-foreground">(power, labor, rent — default from Settings)</span></FormLabel>
-                    <FormControl><Input type="number" min={0} max={100} step="0.5" className="font-mono" {...field} /></FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )} />
+                <div className="space-y-4">
+                  <FormField control={form.control} name="overheadPercent" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Overhead % <span className="text-[10px] font-normal text-muted-foreground">(power, rent — default from Settings)</span></FormLabel>
+                      <FormControl><Input type="number" min={0} max={100} step="0.5" className="font-mono" {...field} /></FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                  <FormField control={form.control} name="labourMode" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Labour</FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value || 'payroll'}>
+                        <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
+                        <SelectContent>
+                          <SelectItem value="payroll">From payroll (attendance)</SelectItem>
+                          <SelectItem value="manual">Enter manually</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[10px] text-muted-foreground">
+                        {field.value === 'manual'
+                          ? 'This batch keeps the amount you enter and takes no share of the payroll spread.'
+                          : "Today's production wages at this location, spread across its batches by quantity."}
+                      </p>
+                    </FormItem>
+                  )} />
+                  {wLabourMode === 'manual' && (
+                    <FormField control={form.control} name="labourCost" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Labour cost for this batch ₹</FormLabel>
+                        <FormControl><Input type="number" min={0} step="0.01" className="font-mono" {...field} /></FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+                  )}
+                </div>
                 <div className="rounded-lg border border-border bg-muted/20 p-3 text-sm space-y-1">
-                  <div className="flex justify-between"><span className="text-muted-foreground text-xs">Material cost</span><span className="font-mono">{inr(estMaterialCost, false)}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground text-xs">Raw material</span><span className="font-mono">{inr(estRmCost, false)}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground text-xs">Packing material</span><span className="font-mono">{inr(estPmCost, false)}</span></div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground text-xs">Labour</span>
+                    <span className="font-mono">{wLabourMode === 'manual' ? inr(estLabour, false) : <span className="text-[10px] text-muted-foreground">from payroll on save</span>}</span>
+                  </div>
                   <div className="flex justify-between"><span className="text-muted-foreground text-xs">Overhead ({wOverhead}%)</span><span className="font-mono">{inr(estOverhead, false)}</span></div>
                   <div className="flex justify-between border-t border-border pt-1"><span className="text-xs font-semibold">Batch cost</span><span className="font-mono font-bold">{inr(estTotal, false)}</span></div>
                   <div className="flex justify-between"><span className="text-xs font-semibold text-primary">Cost / unit</span><span className="font-mono font-bold text-primary">{inr(estPerUnit, false)}</span></div>
-                  {estMaterialCost === 0 && <p className="text-[10px] text-muted-foreground pt-1">Set purchase costs on materials to get batch costing.</p>}
+                  {estMaterialCost === 0
+                    ? <p className="text-[10px] text-muted-foreground pt-1">No material cost yet — purchase these materials (or set a standard cost) to get batch costing.</p>
+                    : wLabourMode === 'payroll' && <p className="text-[10px] text-muted-foreground pt-1">Labour is added when you save, so the saved cost per unit will be higher than shown.</p>}
                 </div>
               </div>
 
@@ -620,6 +716,7 @@ export default function ProductionList() {
                 {[
                   ['Item', viewItem.itemName],
                   ['Date', new Date(viewItem.productionDate).toLocaleDateString('en-IN')],
+                  ['Location', (viewItem as any).locationName ?? 'Head Office'],
                   ['Qty Produced', viewItem.producedQuantity],
                   ['Batch #', (viewItem as any).batchNumber || `B-${String(viewItem.id).padStart(4, '0')}`],
                   ['Mfg Date', (viewItem as any).mfgDate ? new Date((viewItem as any).mfgDate).toLocaleDateString('en-IN') : '—'],
@@ -637,7 +734,25 @@ export default function ProductionList() {
                 <p className="text-sm font-semibold mb-2">Batch Costing</p>
                 {(viewItem as any).totalCost != null ? (
                   <div className="rounded-lg border border-border bg-muted/20 p-3 text-sm space-y-1.5">
-                    <div className="flex justify-between"><span className="text-muted-foreground">Material cost</span><span className="font-mono">{inr((viewItem as any).materialCost)}</span></div>
+                    {/* Raw and packing material are costed separately so a spike
+                        in packaging can't hide inside a single material figure. */}
+                    {(viewItem as any).rmCost != null || (viewItem as any).pmCost != null ? (
+                      <>
+                        <div className="flex justify-between"><span className="text-muted-foreground">Raw material</span><span className="font-mono">{inr((viewItem as any).rmCost)}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">Packing material</span><span className="font-mono">{inr((viewItem as any).pmCost)}</span></div>
+                        <div className="flex justify-between text-xs"><span className="text-muted-foreground">Material cost</span><span className="font-mono">{inr((viewItem as any).materialCost)}</span></div>
+                      </>
+                    ) : (
+                      <div className="flex justify-between"><span className="text-muted-foreground">Material cost</span><span className="font-mono">{inr((viewItem as any).materialCost)}</span></div>
+                    )}
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">
+                        Labour
+                        {(viewItem as any).labourMethod === 'payroll' && <span className="text-[10px] ml-1">(from payroll)</span>}
+                        {(viewItem as any).labourMethod === 'manual' && <span className="text-[10px] ml-1">(entered manually)</span>}
+                      </span>
+                      <span className="font-mono">{inr((viewItem as any).labourCost)}</span>
+                    </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Overhead{(viewItem as any).overheadPercent != null ? ` (${Number((viewItem as any).overheadPercent)}%)` : ''}</span>
                       <span className="font-mono">{inr((viewItem as any).overheadAmount)}</span>

@@ -308,11 +308,15 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
         stdDtx = idOf("STD-DTX"), stdPur = idOf("STD-PUR"), elecClr = idOf("STD-ELEC-CLR"),
         debtors = idOf("SYS-DEBTORS"), creditors = idOf("SYS-CREDITORS");
 
-  // Location → cash / sales ledger mapping
+  // Location → cash / sales / purchase ledger mapping. A location's purchases
+  // debit its own purchase ledger, so each warehouse's buying shows separately
+  // in the books instead of being lumped into one company-wide Purchases total.
+  // Outlets have no purchase ledger of their own (they are sales points, stocked
+  // by transfer), so theirs is NULL and falls back to the company Purchases ledger.
   const { rows: locRows } = await pool.query(`
-    SELECT 'warehouse' AS lt, id, cash_ledger_id, sales_ledger_id FROM warehouses
+    SELECT 'warehouse' AS lt, id, cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses
     UNION ALL
-    SELECT 'outlet' AS lt, id, cash_ledger_id, sales_ledger_id FROM outlets
+    SELECT 'outlet' AS lt, id, cash_ledger_id, sales_ledger_id, NULL::integer AS purchase_ledger_id FROM outlets
   `);
   const locMap = new Map<string, any>(locRows.map((r: any) => [`${r.lt}:${r.id}`, r]));
 
@@ -463,13 +467,19 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   //    Legacy rows without line-level GST detail stay as a single lump debit.
   const pup: any[] = [];
   const { rows: purchases } = await pool.query(
-    `SELECT id, vendor_id, purchase_date, invoice_number, total_amount, tax_total, line_items
+    `SELECT id, vendor_id, purchase_date, invoice_number, total_amount, tax_total, line_items,
+            location_type, location_id
      FROM purchases WHERE 1=1${upTo("purchase_date", pup)}`, pup
   );
   for (const p of purchases) {
     const amt = Number(p.total_amount);
     const bill = p.invoice_number || `Purchase #${p.id}`;
     const vendLedger = byCode.get(`VEND-${p.vendor_id}`)?.id ?? creditors;
+    // A warehouse's bill debits that warehouse's own purchase ledger; Head
+    // Office bills (and anything without a location) keep the standard one.
+    const pLoc = locMap.get(`${p.location_type}:${p.location_id}`);
+    const purLedger = (p.location_type && p.location_type !== 'headoffice' && pLoc?.purchase_ledger_id)
+      ? Number(pLoc.purchase_ledger_id) : stdPur;
     const pLines = (p.line_items ?? []) as any[];
     let cg = 0, sg = 0, ig = 0;
     for (const li of pLines) { const h = lineTaxHeads(li); cg += h.cgst; sg += h.sgst; ig += h.igst; }
@@ -485,12 +495,12 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
       (lineTaxSum <= 0.004 || Math.abs(inputTax - lineTaxSum) <= 0.05) &&
       (pTaxTotal <= 0.004 || Math.abs(inputTax - pTaxTotal) <= 0.05);
     if (inpCgst && inpSgst && inpIgst && inputTax > 0.004 && inputTax < amt && consistent) {
-      push({ date: p.purchase_date, ledgerId: stdPur, debit: round2(amt - inputTax), credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}` });
+      push({ date: p.purchase_date, ledgerId: purLedger, debit: round2(amt - inputTax), credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}` });
       if (cg > 0.004) push({ date: p.purchase_date, ledgerId: inpCgst, debit: cg, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Input CGST — ${bill}` });
       if (sg > 0.004) push({ date: p.purchase_date, ledgerId: inpSgst, debit: sg, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Input SGST — ${bill}` });
       if (ig > 0.004) push({ date: p.purchase_date, ledgerId: inpIgst, debit: ig, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Input IGST — ${bill}` });
     } else {
-      push({ date: p.purchase_date, ledgerId: stdPur, debit: amt, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}` });
+      push({ date: p.purchase_date, ledgerId: purLedger, debit: amt, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}` });
     }
     push({ date: p.purchase_date, ledgerId: vendLedger, debit: 0, credit: amt, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}` });
   }

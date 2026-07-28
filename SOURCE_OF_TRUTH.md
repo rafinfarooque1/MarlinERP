@@ -51,9 +51,11 @@ and stock verification all skip it. A ledger with holes is not an audit trail.
 **Material unit cost — truth:** the material's weighted-average cost, rolled on every inbound
 receipt.
 
-> **This is the live defect.** Purchases write the weighted-average column. Production reads a
-> *different*, never-written column, which sits at zero. Material cost, total cost and cost per
-> unit therefore all compute to zero. One authoritative column, read by everyone.
+> **Fixed.** Purchases roll the weighted-average column; production used to read a *different*,
+> never-written column, so material cost, total cost and cost per unit all computed to zero.
+> Every reader now resolves cost as weighted-average first, falling back to the legacy column
+> only when the average is zero. Any new query that reads a material cost must do the same —
+> and must actually **select** the weighted-average column, or it silently reports zero again.
 
 **Produced batch cost — truth:** the batch's unit cost, set from the production run's computed
 cost per unit.
@@ -169,7 +171,9 @@ Each of these has already been verified as a live or imminent double-count. None
 | Expenses reachable via two tables | One route is authoritative; the other stops posting. |
 | Sale-linked receipts | Deliberately excluded from one posting source. Do not "fix" this. |
 | Payroll expensed **and** capitalised into inventory | Charge cost of production and credit the movement in stock, so a cost held in closing inventory is not also a period expense. Test: produce a batch, sell none, gross profit must not move. |
-| Labour allocated across batches | Allocations must sum exactly to the day's payroll cost. |
+| Production capitalisation voucher **plus** closing stock | Production now posts a real journal voucher (finished-goods inventory debited, production absorbed credited) inside the stock transaction. The profit & loss does not read journal vouchers yet, so it is invisible there today. The moment statements read vouchers, the absorbed credit **and** the closing-stock credit describe the same batch: take the batch through closing stock, not through both. |
+| Closing stock values finished goods only | Raw and packing material stock is not valued, so consuming material reduces profit even though nothing was sold. Producing therefore moves profit on its own. Valuation must cover all three item types before profitability can be trusted. |
+| Labour allocated across batches | Allocations must sum exactly to the day's payroll cost — including when two batches are recorded at the same moment. Locks are taken in one order everywhere: day+location labour lock (sorted by date), then the per-item lock, then row locks. Reversals read their lines from a row locked inside the transaction, never from a snapshot taken before it. |
 | Same item counted in stock rows and batch rows | They are one quantity expressed two ways, reconciled by invariant — never added together. |
 
 ## Enforcement

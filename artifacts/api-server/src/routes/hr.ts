@@ -217,7 +217,8 @@ router.get("/hr/employees", requireModuleView("Employees"), async (req, res): Pr
       `SELECT e.id, e.name, e.username, e.email, e.phone,
               e.hierarchy_id AS "hierarchyId", e.branch_type AS "branchType", e.branch_id AS "branchId",
               e.salary, e.join_date AS "joinDate", e.photo_url AS "photoUrl",
-              e.is_active AS "isActive", e.must_change_password AS "mustChangePassword"
+              e.is_active AS "isActive", e.must_change_password AS "mustChangePassword",
+              e.is_production_staff AS "isProductionStaff"
        FROM employees e WHERE ${scopeCond} ORDER BY e.id`,
       scopeParams,
     ),
@@ -231,9 +232,27 @@ router.get("/hr/employees", requireModuleView("Employees"), async (req, res): Pr
     branchType: e.branchType, branchId: e.branchId,
     branchName: await getBranchName(e.branchType, e.branchId),
     salary: Number(e.salary), joinDate: e.joinDate, photoUrl: e.photoUrl ?? null, isActive: e.isActive, mustChangePassword: e.mustChangePassword ?? false,
+    isProductionStaff: e.isProductionStaff ?? false,
   })));
   res.json(enriched);
 });
+
+/** Marks whether an employee works on the factory floor. Their salary for a day
+ *  is what gets spread across that day's batches as labour cost, so this flag
+ *  decides who is counted. `is_production_staff` is a raw-migration column and
+ *  invisible to drizzle, so it is read and written with explicit SQL. */
+async function saveProductionStaffFlag(id: number, body: any): Promise<boolean | undefined> {
+  const raw = body?.isProductionStaff;
+  if (raw === undefined || raw === null) return undefined;
+  const flag = raw === true || raw === "true" || raw === 1 || raw === "1";
+  await pool.query(`UPDATE employees SET is_production_staff = $1 WHERE id = $2`, [flag, id]);
+  return flag;
+}
+
+async function readProductionStaffFlag(id: number): Promise<boolean> {
+  const { rows } = await pool.query(`SELECT is_production_staff FROM employees WHERE id = $1`, [id]);
+  return rows[0]?.is_production_staff ?? false;
+}
 
 router.post("/hr/employees", requireModuleAction("Employees", "add"), async (req, res): Promise<void> => {
   const parsed = CreateEmployeeBody.safeParse(req.body);
@@ -245,11 +264,12 @@ router.post("/hr/employees", requireModuleAction("Employees", "add"), async (req
     mustChangePassword: true,
   }).returning();
   const [h] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, row.hierarchyId)).limit(1);
+  const isProductionStaff = (await saveProductionStaffFlag(row.id, req.body)) ?? false;
 
   logActivity({
     action: "CREATE", module: "hr", entityType: "employee", entityId: row.id,
     description: `New employee ${row.name} added (${h?.name ?? "role"}) — salary ₹${Number(row.salary).toLocaleString("en-IN")}`,
-    metadata: { after: { id: row.id, name: row.name, salary: Number(row.salary), hierarchyName: h?.name } },
+    metadata: { after: { id: row.id, name: row.name, salary: Number(row.salary), hierarchyName: h?.name, isProductionStaff } },
   }).catch(() => {});
 
   res.status(201).json({
@@ -259,6 +279,7 @@ router.post("/hr/employees", requireModuleAction("Employees", "add"), async (req
     branchName: await getBranchName(row.branchType, row.branchId),
     salary: Number(row.salary), joinDate: row.joinDate, photoUrl: row.photoUrl ?? null,
     isActive: row.isActive, mustChangePassword: row.mustChangePassword ?? true,
+    isProductionStaff,
   });
 });
 
@@ -273,6 +294,7 @@ router.get("/hr/employees/:id", requireModuleView("Employees"), async (req, res)
     branchType: row.branchType, branchId: row.branchId,
     branchName: await getBranchName(row.branchType, row.branchId),
     salary: Number(row.salary), joinDate: row.joinDate, photoUrl: row.photoUrl ?? null, isActive: row.isActive,
+    isProductionStaff: await readProductionStaffFlag(id),
   });
 });
 
@@ -283,16 +305,23 @@ router.patch("/hr/employees/:id", requireModuleAction("Employees", "edit"), asyn
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   const updateData: Record<string, unknown> = { ...parsed.data };
   if (parsed.data.salary !== undefined) updateData.salary = String(parsed.data.salary);
-  const [row] = await db.update(employeesTable).set(updateData).where(eq(employeesTable.id, id)).returning();
+  const beforeFlag = await readProductionStaffFlag(id);
+  // The production-staff flag lives outside the validated body, so a request
+  // that only toggles it has nothing for drizzle to set — read the row instead
+  // of asking for an empty UPDATE.
+  const [row] = Object.keys(updateData).length > 0
+    ? await db.update(employeesTable).set(updateData).where(eq(employeesTable.id, id)).returning()
+    : await db.select().from(employeesTable).where(eq(employeesTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const [h] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, row.hierarchyId)).limit(1);
+  const isProductionStaff = (await saveProductionStaffFlag(id, req.body)) ?? beforeFlag;
 
   logActivity({
     action: "UPDATE", module: "hr", entityType: "employee", entityId: row.id,
     description: `Employee ${row.name} updated`,
     metadata: {
-      before: before ? { name: before.name, salary: Number(before.salary), isActive: before.isActive } : undefined,
-      after: { name: row.name, salary: Number(row.salary), isActive: row.isActive },
+      before: before ? { name: before.name, salary: Number(before.salary), isActive: before.isActive, isProductionStaff: beforeFlag } : undefined,
+      after: { name: row.name, salary: Number(row.salary), isActive: row.isActive, isProductionStaff },
       changes: Object.keys(parsed.data),
     },
   }).catch(() => {});
@@ -303,6 +332,7 @@ router.patch("/hr/employees/:id", requireModuleAction("Employees", "edit"), asyn
     branchType: row.branchType, branchId: row.branchId,
     branchName: await getBranchName(row.branchType, row.branchId),
     salary: Number(row.salary), joinDate: row.joinDate, photoUrl: row.photoUrl ?? null, isActive: row.isActive, mustChangePassword: row.mustChangePassword ?? false,
+    isProductionStaff,
   });
 });
 

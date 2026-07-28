@@ -8,18 +8,36 @@ import { creditBatch, consumeBatches, debitBatchByNumber, restoreBatches, update
 import { writeStockLedger } from "../lib/stockLedger";
 import { deductMaterialAt, creditMaterialAt, isMaterialKind } from "../lib/materialStock";
 import { productBatchIdentity, blockedByInactiveProducts, INACTIVE_PRODUCT_CODE } from "../lib/productIdentity";
+import {
+  reallocateDayLabour, lockLabourDay, postProductionCostJv, postReallocationAdjustment,
+  resolveActingLocation, locationLabel, type ProdLocation,
+} from "../lib/productionCosting";
+import { getUserDataScope, scopeLocationTypeWhere } from "../lib/dataScope";
 
-// ── Phase 5: batch costing & wastage ─────────────────────────────────────────
+// ── Batch costing & wastage ──────────────────────────────────────────────────
 // Every new batch snapshots, at save time:
-//   materialCost   = Σ usedQuantity × material's current cost (valuation basis)
+//   rmCost         = Σ usedQuantity × cost   of RAW material lines
+//   pmCost         = Σ usedQuantity × cost   of PACKING material lines
+//   materialCost   = rmCost + pmCost                 (valuation basis)
 //   overheadAmount = materialCost × overheadPercent / 100
-//   totalCost      = materialCost + overheadAmount
+//   labourCost     = share of the day's production payroll at this location
+//   totalCost      = materialCost + overheadAmount + labourCost
 //   costPerUnit    = totalCost / producedQuantity   (absorption: good units
 //                    carry the full batch cost, including what was wasted)
 //   wastageValue   = wastageQty × totalCost / (producedQuantity + wastageQty)
 //                    (informational: cost sunk into scrapped units)
 // producedQuantity remains the GOOD output that enters stock; wastage lines
 // are scrapped units that never reach stock. Legacy rows keep NULL costs.
+//
+// LOCATION: a run belongs to the location that made it — Head Office or any
+// warehouse. Materials are consumed and output deposited AT that location, so a
+// warehouse's production never touches Head Office stock. Labour allocation and
+// the capitalisation posting live in lib/productionCosting.ts, which owns the
+// rule that labour is a daily pool shared across the day's batches.
+//
+// NAMING (fixed by the masters, do not "correct" it): materialType 'material'
+// is the RAW material master, displayed as "Raw Material" → rm_cost.
+// materialType 'raw_material' is the PACKING material master → pm_cost.
 
 const defaultBatchNumber = (id: number) => `B-${String(id).padStart(4, "0")}`;
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -36,11 +54,18 @@ type WastageLine = { quantity: number; reason: string };
 type MatInfo = { name: string; unit: string; cost: number };
 
 async function materialMaps(): Promise<Record<string, Map<number, MatInfo>>> {
-  // `cost` was added via raw migration and is absent from the drizzle schema,
-  // so a raw query is required — db.select() would silently drop it.
+  // `cost` and `avg_cost` were added via raw migration and are absent from the
+  // drizzle schema, so a raw query is required — db.select() would silently
+  // drop them.
+  //
+  // COSTING BASIS: `avg_cost` is the weighted-average cost that purchases
+  // maintain on every inbound — it is the real valuation cost. `cost` is a
+  // manually-entered standard rate that nothing keeps current and which is 0
+  // for materials that were only ever purchased. Reading `cost` first is why
+  // produced batches used to come out costing nothing at all.
   const [mats, raws] = await Promise.all([
-    pool.query(`SELECT id, name, unit, cost FROM materials`),
-    pool.query(`SELECT id, name, unit, cost FROM raw_materials`),
+    pool.query(`SELECT id, name, unit, COALESCE(NULLIF(avg_cost, 0), cost, 0) AS cost FROM materials`),
+    pool.query(`SELECT id, name, unit, COALESCE(NULLIF(avg_cost, 0), cost, 0) AS cost FROM raw_materials`),
   ]);
   const toMap = (rows: any[]) =>
     new Map<number, MatInfo>(rows.map((x: any) => [x.id, { name: x.name, unit: x.unit ?? "", cost: Number(x.cost ?? 0) }]));
@@ -66,6 +91,10 @@ const num = (v: unknown): number | null => (v === null || v === undefined ? null
 function costFields(ex: any) {
   return {
     materialCost: num(ex?.material_cost),
+    rmCost: num(ex?.rm_cost),
+    pmCost: num(ex?.pm_cost),
+    labourCost: num(ex?.labour_cost),
+    labourMethod: (ex?.labour_method ?? null) as string | null,
     overheadPercent: num(ex?.overhead_percent),
     overheadAmount: num(ex?.overhead_amount),
     totalCost: num(ex?.total_cost),
@@ -76,23 +105,57 @@ function costFields(ex: any) {
   };
 }
 
-const EXTRA_COLS = `id, batch_number, mfg_date, expiry_date, material_cost, overhead_percent,
-  overhead_amount, total_cost, cost_per_unit, wastage, wastage_qty, wastage_value`;
+const EXTRA_COLS = `id, batch_number, mfg_date, expiry_date, material_cost, rm_cost, pm_cost,
+  labour_cost, labour_method, overhead_percent,
+  overhead_amount, total_cost, cost_per_unit, wastage, wastage_qty, wastage_value,
+  location_type, location_id`;
 
 const router = Router();
 
+/** Names for every location that can manufacture, for list/report labels. */
+async function locationNameMap(): Promise<Map<string, string>> {
+  const [whs, outs] = await Promise.all([
+    pool.query(`SELECT id, name FROM warehouses`),
+    pool.query(`SELECT id, name FROM outlets`),
+  ]);
+  const m = new Map<string, string>([["headoffice:1", "Head Office"]]);
+  for (const w of whs.rows) m.set(`warehouse:${w.id}`, w.name);
+  for (const o of outs.rows) m.set(`outlet:${o.id}`, o.name);
+  return m;
+}
+
+const locKey = (ex: any) => `${ex?.location_type ?? "headoffice"}:${Number(ex?.location_id ?? 1)}`;
+
+/** Stock-ledger branch id. Head Office has always ledgered materials at 0 and
+ *  finished items at 1; keeping that split means a location's ledger stays one
+ *  continuous series instead of splitting into two running balances. Every
+ *  other location uses its own id for both. */
+const ledgerBranchId = (loc: ProdLocation, materialType: string) =>
+  loc.type === "headoffice" ? (materialType === "item" ? 1 : 0) : loc.id;
+
 router.get("/productions", async (req, res): Promise<void> => {
-  // LBAC: production data is Head Office only
-  if ((req as any).employee?.branchType !== 'headoffice') { res.json([]); return; }
+  // LBAC: a location sees its own runs; Head Office sees every location's.
+  const scope = await getUserDataScope((req as any).employee ?? { branchType: "headoffice", branchId: 0 });
+  const params: unknown[] = [];
+  const where = scopeLocationTypeWhere(scope, params, "p");
+  if (where === "FALSE") { res.json([]); return; }
+
+  // batch/costing/location columns are migration-added (not in the Drizzle
+  // schema), so the raw query drives the list and carries the scoping.
+  const extra = await pool.query(
+    `SELECT ${EXTRA_COLS} FROM productions p WHERE ${where} ORDER BY id`, params
+  );
+  if (extra.rows.length === 0) { res.json([]); return; }
+  const ids = extra.rows.map((e: any) => Number(e.id));
 
   const rows = await db.select().from(productionsTable).orderBy(productionsTable.id);
   const items = await db.select().from(itemsTable);
   const iMap = new Map(items.map((i) => [i.id, i.name]));
   const maps = await materialMaps();
-  // batch/costing columns are migration-added (not in the Drizzle schema) — fetch raw
-  const extra = await pool.query(`SELECT ${EXTRA_COLS} FROM productions`);
+  const locNames = await locationNameMap();
   const eMap = new Map(extra.rows.map((e: any) => [e.id, e]));
-  res.json(rows.map((r) => {
+  const idSet = new Set(ids);
+  res.json(rows.filter((r) => idSet.has(r.id)).map((r) => {
     const ex = eMap.get(r.id);
     return {
       ...r,
@@ -102,6 +165,9 @@ router.get("/productions", async (req, res): Promise<void> => {
       batchNumber: ex?.batch_number ?? defaultBatchNumber(r.id),
       mfgDate: ex?.mfg_date ?? null,
       expiryDate: ex?.expiry_date ?? null,
+      locationType: ex?.location_type ?? "headoffice",
+      locationId: Number(ex?.location_id ?? 1),
+      locationName: locNames.get(locKey(ex)) ?? "Head Office",
       ...costFields(ex),
     };
   }));
@@ -110,10 +176,6 @@ router.get("/productions", async (req, res): Promise<void> => {
 // ── Production reports (must be registered before /productions/:id) ──────────
 // GET /productions/reports?from=YYYY-MM-DD&to=YYYY-MM-DD
 router.get("/productions/reports", requireModuleView("Production"), async (req, res): Promise<void> => {
-  // LBAC: production data is Head Office only
-  if ((req as any).employee?.branchType !== 'headoffice') {
-    res.json({ rows: [], totals: {} }); return;
-  }
   const from = typeof req.query.from === "string" ? req.query.from : "";
   const to = typeof req.query.to === "string" ? req.query.to : "";
   const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -122,15 +184,27 @@ router.get("/productions/reports", requireModuleView("Production"), async (req, 
     return;
   }
 
+  // LBAC: a location reports on its own production; Head Office on all of it.
+  const scope = await getUserDataScope((req as any).employee ?? { branchType: "headoffice", branchId: 0 });
+  const params: unknown[] = [from, to];
+  const where = scopeLocationTypeWhere(scope, params, "p");
+  if (where === "FALSE") {
+    res.json({ from: from || null, to: to || null, totals: { batchCount: 0, producedQty: 0, wastageQty: 0, wastageValue: 0, totalCost: 0, rmCost: 0, pmCost: 0, labourCost: 0, overheadAmount: 0 }, output: [], consumption: [], wastage: [], batches: [] });
+    return;
+  }
+
   const { rows } = await pool.query(
     `SELECT id, item_id, produced_quantity, to_char(production_date, 'YYYY-MM-DD') AS production_date,
-            material_used, batch_number, material_cost, overhead_percent, overhead_amount,
-            total_cost, cost_per_unit, wastage, wastage_qty, wastage_value
-     FROM productions
+            material_used, batch_number, material_cost, rm_cost, pm_cost, labour_cost, labour_method,
+            overhead_percent, overhead_amount,
+            total_cost, cost_per_unit, wastage, wastage_qty, wastage_value,
+            location_type, location_id
+     FROM productions p
      WHERE ($1 = '' OR production_date >= $1::date)
        AND ($2 = '' OR production_date <= $2::date)
+       AND ${where}
      ORDER BY production_date, id`,
-    [from, to]
+    params
   );
 
   const items = await db.select().from(itemsTable);
@@ -146,7 +220,13 @@ router.get("/productions/reports", requireModuleView("Production"), async (req, 
   const consumption = new Map<string, ConsAgg>();
   const wastageRows: any[] = [];
   const batchRows: any[] = [];
-  const totals = { batchCount: 0, producedQty: 0, wastageQty: 0, wastageValue: 0, totalCost: 0 };
+  const locNames = await locationNameMap();
+  // Cost components are reported separately so a rising batch cost can be
+  // traced to the input that moved — material, packing, labour or overhead.
+  const totals = {
+    batchCount: 0, producedQty: 0, wastageQty: 0, wastageValue: 0, totalCost: 0,
+    rmCost: 0, pmCost: 0, labourCost: 0, overheadAmount: 0,
+  };
 
   for (const p of rows) {
     const produced = Number(p.produced_quantity);
@@ -161,6 +241,10 @@ router.get("/productions/reports", requireModuleView("Production"), async (req, 
     totals.wastageQty = r3(totals.wastageQty + wastageQty);
     totals.wastageValue = r2(totals.wastageValue + Number(p.wastage_value ?? 0));
     if (totalCost !== null) totals.totalCost = r2(totals.totalCost + totalCost);
+    totals.rmCost = r2(totals.rmCost + Number(p.rm_cost ?? 0));
+    totals.pmCost = r2(totals.pmCost + Number(p.pm_cost ?? 0));
+    totals.labourCost = r2(totals.labourCost + Number(p.labour_cost ?? 0));
+    totals.overheadAmount = r2(totals.overheadAmount + Number(p.overhead_amount ?? 0));
 
     // Output summary by item
     let out = outputByItem.get(p.item_id);
@@ -220,10 +304,17 @@ router.get("/productions/reports", requireModuleView("Production"), async (req, 
       producedQty: produced,
       wastageQty,
       materialCost: num(p.material_cost),
+      rmCost: num(p.rm_cost),
+      pmCost: num(p.pm_cost),
+      labourCost: num(p.labour_cost),
+      labourMethod: p.labour_method ?? null,
       overheadPercent: num(p.overhead_percent),
       overheadAmount: num(p.overhead_amount),
       totalCost,
       costPerUnit: num(p.cost_per_unit),
+      locationType: p.location_type ?? "headoffice",
+      locationId: Number(p.location_id ?? 1),
+      locationName: locNames.get(locKey(p)) ?? "Head Office",
     });
   }
 
@@ -265,7 +356,32 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
   const rawBody = req.body as {
     batchNumber?: string; mfgDate?: string; expiryDate?: string;
     overheadPercent?: unknown; wastage?: unknown;
+    locationType?: unknown; locationId?: unknown; labourCost?: unknown;
   };
+
+  // ── Which location is manufacturing ──────────────────────────────────────
+  // Head Office may record for any location; a warehouse only for itself.
+  const resolved = await resolveActingLocation(pool, {
+    employee: (req as any).employee,
+    requested: { type: rawBody.locationType, id: rawBody.locationId },
+  });
+  if ("error" in resolved) { res.status(400).json({ error: resolved.error }); return; }
+  const loc: ProdLocation = resolved.loc;
+
+  // ── Manual labour fallback ───────────────────────────────────────────────
+  // Labour normally comes from the day's production payroll. When attendance
+  // cannot answer (contract gang, piece-rate crew), an explicit amount may be
+  // given for this batch; it is then excluded from the payroll spread and the
+  // batch records that it was entered by hand.
+  let manualLabour: number | null = null;
+  if (rawBody.labourCost !== undefined && rawBody.labourCost !== null && rawBody.labourCost !== "") {
+    const v = Number(rawBody.labourCost);
+    if (!Number.isFinite(v) || v < 0) {
+      res.status(400).json({ error: "Labour cost must be zero or more" });
+      return;
+    }
+    manualLabour = r2(v);
+  }
 
   // ── Validate passthrough fields (zod strips unknown keys) ────────────────
   let overheadPercent: number | null = null;
@@ -341,32 +457,49 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
     };
   });
 
-  const materialCost = r2(materialUsed.reduce((s, l) => s + (l.lineCost ?? 0), 0));
+  // Raw material and packing material are costed and reported separately so a
+  // batch cost can be explained. 'material' is the raw-material master,
+  // 'raw_material' is the packing-material master (see the header note).
+  const sumLines = (kind: string) =>
+    r2(materialUsed.filter((l) => l.materialType === kind).reduce((s, l) => s + (l.lineCost ?? 0), 0));
+  const rmCost = sumLines("material");
+  const pmCost = sumLines("raw_material");
+  const materialCost = r2(rmCost + pmCost);
   const overheadAmount = r2(materialCost * overheadPercent / 100);
-  const totalCost = r2(materialCost + overheadAmount);
   const wastageQty = r3(wastageLines.reduce((s, w) => s + w.quantity, 0));
-  const gross = r3(produced + wastageQty);
-  const costPerUnit = produced > 0 && totalCost > 0 ? r4(totalCost / produced) : 0;
-  const wastageValue = wastageQty > 0 && gross > 0 && totalCost > 0 ? r2(totalCost * wastageQty / gross) : 0;
+
+  const locName = await locationLabel(pool, loc);
 
   // ── All writes in one transaction, serialized per item ───────────────────
   // (advisory lock removes the first-production stock-entry race; any
-  //  mid-flow failure rolls back every stock/cost side effect together)
+  //  mid-flow failure rolls back every stock/cost side effect together —
+  //  including the labour allocation and the accounting posting, so the books
+  //  can never disagree with the stock move)
   const client = await pool.connect();
   let rowId = 0;
   let createdAt: Date | null = null;
   let batchNumber = "";
   let mfgDate: string | null = null;
   let expiryDate: string | null = null;
+  let labourCost = 0;
+  let labourMethod = "none";
+  let totalCost = 0;
+  let costPerUnit = 0;
+  let wastageValue = 0;
   try {
     await client.query("BEGIN");
+    // Lock order: labour day+location first, then the per-item lock (see
+    // lockLabourDay). Taking them in the other order here would deadlock against
+    // the edit/delete paths, which cannot know the item until they read the row.
+    await lockLabourDay(client, parsed.data.productionDate, loc);
     await client.query(`SELECT pg_advisory_xact_lock(hashtext('production-stock'), $1)`, [parsed.data.itemId]);
 
     const { rows: [inserted] } = await client.query(
-      `INSERT INTO productions (item_id, produced_quantity, production_date, material_used, notes)
-       VALUES ($1, $2, $3, $4::jsonb, $5)
+      `INSERT INTO productions (item_id, produced_quantity, production_date, material_used, notes, location_type, location_id)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
        RETURNING id, created_at`,
-      [parsed.data.itemId, produced, parsed.data.productionDate, JSON.stringify(materialUsed), parsed.data.notes ?? null]
+      [parsed.data.itemId, produced, parsed.data.productionDate, JSON.stringify(materialUsed), parsed.data.notes ?? null,
+       loc.type, loc.id]
     );
     rowId = inserted.id;
     createdAt = inserted.created_at;
@@ -377,17 +510,34 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
     expiryDate = rawBody.expiryDate || null;
     await client.query(
       `UPDATE productions SET batch_number = $1, mfg_date = $2, expiry_date = $3,
-         material_cost = $4, overhead_percent = $5, overhead_amount = $6,
-         total_cost = $7, cost_per_unit = $8,
-         wastage = $9::jsonb, wastage_qty = $10, wastage_value = $11
-       WHERE id = $12`,
+         material_cost = $4, rm_cost = $5, pm_cost = $6,
+         overhead_percent = $7, overhead_amount = $8,
+         labour_cost = $9, labour_method = $10,
+         wastage = $11::jsonb, wastage_qty = $12
+       WHERE id = $13`,
       [batchNumber, mfgDate, expiryDate,
-       materialCost, overheadPercent, overheadAmount, totalCost, costPerUnit,
-       JSON.stringify(wastageLines), wastageQty, wastageValue, rowId]
+       materialCost, rmCost, pmCost, overheadPercent, overheadAmount,
+       manualLabour ?? 0, manualLabour === null ? "none" : "manual",
+       JSON.stringify(wastageLines), wastageQty, rowId]
     );
 
+    // ── Labour, then the derived totals ──────────────────────────────────────
+    // Labour is the day's production wage cost at this location, shared across
+    // every batch made that day — so recording this batch re-spreads labour
+    // over its siblings. reallocateDayLabour() writes total_cost, cost_per_unit
+    // and wastage_value for all of them and returns what each now carries.
+    const alloc = await reallocateDayLabour(client, parsed.data.productionDate, loc);
+    const mine = alloc.rows.find((r) => r.id === rowId);
+    if (!mine) throw new Error("Labour allocation did not include the new batch");
+    labourCost = mine.labourCost;
+    labourMethod = mine.labourMethod;
+    totalCost = mine.totalCost;
+    costPerUnit = mine.costPerUnit;
+    wastageValue = mine.wastageValue;
+
     // Deduct materials used. The mirror counter and the location row move
-    // together: production consumes at Head Office, where materials are held.
+    // together: production consumes at the location that is manufacturing, so
+    // a warehouse's run never draws down Head Office material.
     for (const mat of materialUsed) {
       const table = mat.materialType === "material" ? "materials" : "raw_materials";
       await client.query(
@@ -396,15 +546,15 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
       );
       if (isMaterialKind(mat.materialType)) {
         // Forward consumption must NOT clamp: a shortfall here means the batch
-        // is claiming more material than Head Office holds, and silently
+        // is claiming more material than this location holds, and silently
         // flooring it at zero would manufacture stock out of nothing.
         const taken = await deductMaterialAt(
-          client, mat.materialType, mat.materialId, "headoffice", 1, Number(mat.usedQuantity)
+          client, mat.materialType, mat.materialId, loc.type, loc.id, Number(mat.usedQuantity)
         );
         if (!taken.ok) {
           await client.query("ROLLBACK");
           res.status(400).json({
-            error: `Insufficient stock for ${mat.materialName ?? `#${mat.materialId}`}: available ${taken.available}, batch needs ${mat.usedQuantity}`,
+            error: `Insufficient stock for ${mat.materialName ?? `#${mat.materialId}`} at ${locName}: available ${taken.available}, batch needs ${mat.usedQuantity}`,
           });
           return;
         }
@@ -413,7 +563,7 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
         // (and their mfg/expiry dates) rather than inventing a new one.
         mat.batchBreakdown = await consumeBatches(client, {
           itemId: mat.materialId, materialType: mat.materialType,
-          branchType: "headoffice", branchId: 1,
+          branchType: loc.type, branchId: loc.id,
           quantity: Number(mat.usedQuantity),
         });
       }
@@ -430,13 +580,14 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
       [produced, parsed.data.itemId]
     );
 
-    // Production stock entry (atomic upsert on uq_stock_entries_ref_branch)
+    // Production stock entry, at the manufacturing location
+    // (atomic upsert on uq_stock_entries_ref_branch)
     await client.query(
       `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price)
-       VALUES ($1, 'item', 'headoffice', 1, $2, '0')
+       VALUES ($1, 'item', $3, $4, $2, '0')
        ON CONFLICT (item_id, material_type, branch_type, branch_id)
        DO UPDATE SET quantity = stock_entries.quantity::numeric + EXCLUDED.quantity::numeric, updated_at = now()`,
-      [parsed.data.itemId, produced]
+      [parsed.data.itemId, produced, loc.type, loc.id]
     );
 
     // Track the produced batch and roll the item's weighted-average cost.
@@ -445,7 +596,7 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
     // so the average is never dragged to zero.
     const unitCost = costPerUnit > 0 ? costPerUnit : await inboundCostForItem(client, parsed.data.itemId);
     await creditBatch(client, {
-      itemId: parsed.data.itemId, branchType: "headoffice", branchId: 1,
+      itemId: parsed.data.itemId, branchType: loc.type, branchId: loc.id,
       batchNumber, mfgDate, expiryDate,
       quantity: produced, unitCost,
       source: "production", sourceId: rowId,
@@ -463,9 +614,9 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
         refId: mat.materialId,
         itemName: mat.materialName ?? '',
         unit: mat.unit ?? '',
-        branchType: 'headoffice',
-        branchId: 0,
-        branchName: 'Head Office',
+        branchType: loc.type,
+        branchId: ledgerBranchId(loc, mat.materialType),
+        branchName: locName,
         qtyChange: -Number(mat.usedQuantity),
         unitCost: Number(mat.unitCost ?? 0),
         docType: 'production',
@@ -477,15 +628,36 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
         refId: parsed.data.itemId,
         itemName: itemRow.name,
         unit: (itemRow as any).unit ?? '',
-        branchType: 'headoffice',
-        branchId: 1,
-        branchName: 'Head Office',
+        branchType: loc.type,
+        branchId: ledgerBranchId(loc, 'item'),
+        branchName: locName,
         qtyChange: produced,
         unitCost,
         docType: 'production',
         docId: rowId,
       },
     ]);
+
+    // ── Books: capitalise the batch cost into stock ──────────────────────────
+    // Same transaction as the stock move, so stock and books commit together.
+    //   Dr Finished Goods Inventory / Cr Production Cost Absorbed
+    // The absorbed contra relieves the purchases and wages already expensed, so
+    // manufacturing a batch does not move profit — only selling it does.
+    await postProductionCostJv(client, {
+      date: parsed.data.productionDate,
+      narration: `Production ${batchNumber} — ${produced} × ${itemRow.name} at ${locName}`,
+      amount: totalCost,
+      direction: "capitalise",
+      createdBy: (req as any).employee?.name ?? "system",
+    });
+    // Siblings whose labour share moved need their capitalised value moved too.
+    await postReallocationAdjustment(client, {
+      date: parsed.data.productionDate,
+      rows: alloc.rows,
+      excludeId: rowId,
+      reason: `Production ${batchNumber} at ${locName}`,
+      createdBy: (req as any).employee?.name ?? "system",
+    });
 
     await client.query("COMMIT");
   } catch (e) {
@@ -497,10 +669,11 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
 
   logActivity({
     action: "CREATE", module: "production", entityType: "production", entityId: rowId,
-    description: `Produced ${produced} × ${itemRow.name} on ${parsed.data.productionDate}` +
+    description: `Produced ${produced} × ${itemRow.name} at ${locName} on ${parsed.data.productionDate}` +
       (totalCost > 0 ? ` — cost ₹${totalCost.toFixed(2)} (₹${costPerUnit.toFixed(2)}/unit)` : "") +
+      (labourCost > 0 ? `, labour ₹${labourCost.toFixed(2)} (${labourMethod})` : "") +
       (wastageQty > 0 ? `, wastage ${wastageQty}` : ""),
-    metadata: { after: { itemId: parsed.data.itemId, itemName: itemRow.name, producedQuantity: produced, materialCount: materialUsed.length, totalCost, costPerUnit, wastageQty } },
+    metadata: { after: { itemId: parsed.data.itemId, itemName: itemRow.name, producedQuantity: produced, materialCount: materialUsed.length, locationType: loc.type, locationId: loc.id, rmCost, pmCost, labourCost, labourMethod, totalCost, costPerUnit, wastageQty } },
   }).catch(() => {});
 
   res.status(201).json({
@@ -508,7 +681,9 @@ router.post("/productions", requireModuleAction("Production", "add"), async (req
     producedQuantity: produced, productionDate: parsed.data.productionDate,
     materialUsed, notes: parsed.data.notes ?? null, createdAt,
     batchNumber, mfgDate, expiryDate,
-    materialCost, overheadPercent, overheadAmount, totalCost, costPerUnit,
+    locationType: loc.type, locationId: loc.id, locationName: locName,
+    materialCost, rmCost, pmCost, labourCost, labourMethod,
+    overheadPercent, overheadAmount, totalCost, costPerUnit,
     wastage: wastageLines, wastageQty, wastageValue,
   });
 });
@@ -519,13 +694,28 @@ router.get("/productions/:id", async (req, res): Promise<void> => {
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid production id" }); return; }
   const [row] = await db.select().from(productionsTable).where(eq(productionsTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
+  const { rows: [ex] } = await pool.query(`SELECT ${EXTRA_COLS} FROM productions WHERE id = $1`, [id]);
+
+  // LBAC: only the location that made the batch (and Head Office) may read it.
+  const scope = await getUserDataScope((req as any).employee ?? { branchType: "headoffice", branchId: 0 });
+  if (!scope.isHeadOffice) {
+    const t = ex?.location_type ?? "headoffice";
+    const lid = Number(ex?.location_id ?? 1);
+    const allowed = (t === "warehouse" && scope.warehouseIds.includes(lid))
+      || (t === "outlet" && scope.outletIds.includes(lid));
+    if (!allowed) { res.status(404).json({ error: "Not found" }); return; }
+  }
+
   const [item] = await db.select().from(itemsTable).where(eq(itemsTable.id, row.itemId)).limit(1);
   const maps = await materialMaps();
-  const { rows: [ex] } = await pool.query(`SELECT ${EXTRA_COLS} FROM productions WHERE id = $1`, [id]);
+  const locNames = await locationNameMap();
   res.json({
     ...row, itemName: item?.name ?? "", producedQuantity: Number(row.producedQuantity),
     materialUsed: enrichUsedLines((row.materialUsed ?? []) as UsedLine[], maps),
     batchNumber: ex?.batch_number ?? defaultBatchNumber(id), mfgDate: ex?.mfg_date ?? null, expiryDate: ex?.expiry_date ?? null,
+    locationType: ex?.location_type ?? "headoffice",
+    locationId: Number(ex?.location_id ?? 1),
+    locationName: locNames.get(locKey(ex)) ?? "Head Office",
     ...costFields(ex),
   });
 });
@@ -540,7 +730,91 @@ router.patch("/productions/:id", requireModuleAction("Production", "edit"), asyn
   if (notes !== undefined) updateData.notes = notes;
   if (Object.keys(updateData).length === 0) { res.status(400).json({ error: "No fields to update" }); return; }
 
-  const [row] = await db.update(productionsTable).set(updateData).where(eq(productionsTable.id, id)).returning();
+  // Moving a batch to another date moves it into another day's labour pool, so
+  // both days must be re-spread and the value difference posted. Done in one
+  // transaction with the edit so costs and books never drift apart.
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // An unlocked peek first, only to learn which day+location locks this edit
+    // needs. Locks must be taken before the row lock (see lockLabourDay), and the
+    // authoritative read below re-checks everything under the lock.
+    const { rows: [peek] } = await client.query(
+      `SELECT to_char(production_date, 'YYYY-MM-DD') AS day, location_type, location_id
+       FROM productions WHERE id = $1`, [id]
+    );
+    if (!peek) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Not found" }); return;
+    }
+    const peekLoc: ProdLocation = {
+      type: peek.location_type ?? "headoffice",
+      id: Number(peek.location_id ?? 1),
+    };
+    // Sorted so two edits moving batches in opposite directions take the two day
+    // locks in the same order and cannot deadlock against each other.
+    const daysToLock = Array.from(new Set([peek.day, productionDate ?? peek.day])).sort();
+    for (const day of daysToLock) await lockLabourDay(client, day, peekLoc);
+
+    const { rows: [before] } = await client.query(
+      `SELECT to_char(production_date, 'YYYY-MM-DD') AS day, location_type, location_id, batch_number
+       FROM productions WHERE id = $1 FOR UPDATE`, [id]
+    );
+    if (!before) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Not found" }); return;
+    }
+    // If the row moved day or location between the peek and the lock, the locks
+    // held are the wrong ones. Bail out rather than reallocate the wrong pools.
+    if (before.day !== peek.day
+      || (before.location_type ?? "headoffice") !== peekLoc.type
+      || Number(before.location_id ?? 1) !== peekLoc.id) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: "This batch was changed by someone else. Reload and try again." }); return;
+    }
+    // LBAC: a batch belonging to another location must not be editable by id.
+    const editLoc: ProdLocation = {
+      type: before.location_type ?? "headoffice",
+      id: Number(before.location_id ?? 1),
+    };
+    const editScope = await getUserDataScope((req as any).employee ?? { branchType: "headoffice", branchId: 0 });
+    if (!editScope.isHeadOffice) {
+      const allowed = (editLoc.type === "warehouse" && editScope.warehouseIds.includes(editLoc.id))
+        || (editLoc.type === "outlet" && editScope.outletIds.includes(editLoc.id));
+      if (!allowed) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ error: "Not found" }); return;
+      }
+    }
+    if (productionDate !== undefined) {
+      await client.query(`UPDATE productions SET production_date = $1 WHERE id = $2`, [productionDate, id]);
+    }
+    if (notes !== undefined) {
+      await client.query(`UPDATE productions SET notes = $1 WHERE id = $2`, [notes, id]);
+    }
+
+    const loc: ProdLocation = editLoc;
+    const newDay = productionDate ?? before.day;
+    if (newDay !== before.day) {
+      const label = before.batch_number || defaultBatchNumber(id);
+      for (const day of daysToLock) {
+        const realloc = await reallocateDayLabour(client, day, loc);
+        await postReallocationAdjustment(client, {
+          date: day, rows: realloc.rows,
+          reason: `Production ${label} moved to ${newDay}`,
+          createdBy: (req as any).employee?.name ?? "system",
+        });
+      }
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+
+  const [row] = await db.select().from(productionsTable).where(eq(productionsTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const [item] = await db.select().from(itemsTable).where(eq(itemsTable.id, row.itemId)).limit(1);
   res.json({ ...row, itemName: item?.name ?? "", producedQuantity: Number(row.producedQuantity), materialUsed: row.materialUsed ?? [] });
@@ -553,27 +827,80 @@ router.delete("/productions/:id", requireModuleAction("Production", "delete"), a
   // ── Full reversal in one transaction ─────────────────────────────────────
   // Row-lock the production BEFORE reading its data: a concurrent DELETE of
   // the same batch blocks on FOR UPDATE, then sees zero rows → 404, so stock
-  // can never be reversed twice from a stale snapshot. The per-item advisory
-  // lock (shared with POST) then serializes the stock writes themselves.
+  // can never be reversed twice from a stale snapshot. The day+location and
+  // per-item advisory locks are taken first, in the order lockLabourDay
+  // documents, so this path cannot deadlock against a concurrent create or edit.
   const client = await pool.connect();
   let itemId = 0;
   let qty = 0;
+  let delLocName = "Head Office";
   try {
     await client.query("BEGIN");
-    const { rows: [row] } = await client.query(`SELECT * FROM productions WHERE id = $1 FOR UPDATE`, [id]);
+    // Unlocked peek purely to learn which locks are needed; everything is
+    // re-read and re-validated under the locks below.
+    const { rows: [peek] } = await client.query(
+      `SELECT item_id, location_type, location_id, to_char(production_date, 'YYYY-MM-DD') AS day
+       FROM productions WHERE id = $1`, [id]
+    );
+    if (!peek) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const peekLoc: ProdLocation = {
+      type: peek.location_type ?? "headoffice",
+      id: Number(peek.location_id ?? 1),
+    };
+    await lockLabourDay(client, peek.day, peekLoc);
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext('production-stock'), $1)`, [Number(peek.item_id)]);
+
+    const { rows: [row] } = await client.query(
+      `SELECT *, to_char(production_date, 'YYYY-MM-DD') AS production_date_str
+       FROM productions WHERE id = $1 FOR UPDATE`, [id]
+    );
     if (!row) {
       await client.query("ROLLBACK");
       res.status(404).json({ error: "Not found" });
       return;
     }
 
+    // Reverse at the location that produced it, never a hardcoded Head Office.
+    const delLoc: ProdLocation = {
+      type: row.location_type ?? "headoffice",
+      id: Number(row.location_id ?? 1),
+    };
+    // Locks were chosen from the peek; if the row moved since, they are the
+    // wrong ones and this reversal would touch pools it does not hold.
+    if (row.production_date_str !== peek.day
+      || delLoc.type !== peekLoc.type || delLoc.id !== peekLoc.id
+      || Number(row.item_id) !== Number(peek.item_id)) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: "This batch was changed by someone else. Reload and try again." });
+      return;
+    }
+    delLocName = await locationLabel(client, delLoc);
+
+    // LBAC: a location may only delete its own runs.
+    const scope = await getUserDataScope((req as any).employee ?? { branchType: "headoffice", branchId: 0 });
+    if (!scope.isHeadOffice) {
+      const allowed = (delLoc.type === "warehouse" && scope.warehouseIds.includes(delLoc.id))
+        || (delLoc.type === "outlet" && scope.outletIds.includes(delLoc.id));
+      if (!allowed) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ error: "Not found" });
+        return;
+      }
+    }
+
     const materialUsed = (row.material_used ?? []) as Array<{ materialType: string; materialId: number; usedQuantity: number }>;
     qty = Number(row.produced_quantity);
     itemId = Number(row.item_id);
     const delBatchNumber = row.batch_number || defaultBatchNumber(id);
+    const delDate = row.production_date_str as string;
+    const delTotalCost = Number(row.total_cost ?? 0);
     const { rows: [delItemInfo] } = await client.query(`SELECT name, unit FROM items WHERE id = $1`, [itemId]);
 
-    await client.query(`SELECT pg_advisory_xact_lock(hashtext('production-stock'), $1)`, [itemId]);
+    // (the per-item lock for this row was already taken above, before the row lock)
 
     // Reverse material deductions
     for (const mat of materialUsed) {
@@ -586,7 +913,7 @@ router.delete("/productions/:id", requireModuleAction("Production", "delete"), a
       );
       if (isMaterialKind(mat.materialType)) {
         await creditMaterialAt(
-          client, mat.materialType, mat.materialId, "headoffice", 1, Number(mat.usedQuantity)
+          client, mat.materialType, mat.materialId, delLoc.type, delLoc.id, Number(mat.usedQuantity)
         );
         // Return the exact lots this batch consumed. Batches recorded before
         // material lots existed carry no breakdown; credit a reversal lot so
@@ -594,14 +921,14 @@ router.delete("/productions/:id", requireModuleAction("Production", "delete"), a
         const alloc = (mat as any).batchBreakdown as BatchBreakdownEntry[] | undefined;
         const allocTotal = (alloc ?? []).reduce((s, b) => s + Number(b?.quantity ?? 0), 0);
         await restoreBatches(
-          client, mat.materialId, "headoffice", 1, alloc,
+          client, mat.materialId, delLoc.type, delLoc.id, alloc,
           "production_reversal", id, mat.materialType
         );
         const residual = Number(mat.usedQuantity) - allocTotal;
         if (residual > 0.001) {
           await creditBatch(client, {
             itemId: mat.materialId, materialType: mat.materialType,
-            branchType: "headoffice", branchId: 1,
+            branchType: delLoc.type, branchId: delLoc.id,
             batchNumber: `REV-PROD-${id}`, quantity: residual,
             unitCost: await inboundCostForMaterial(client, mat.materialType, mat.materialId),
             source: "production_reversal", sourceId: id,
@@ -618,13 +945,13 @@ router.delete("/productions/:id", requireModuleAction("Production", "delete"), a
     );
     await client.query(
       `UPDATE stock_entries SET quantity = GREATEST(0, quantity::numeric - $1), updated_at = now()
-       WHERE item_id = $2 AND material_type = 'item' AND branch_type = 'headoffice' AND branch_id = 1`,
-      [qty, itemId]
+       WHERE item_id = $2 AND material_type = 'item' AND branch_type = $3 AND branch_id = $4`,
+      [qty, itemId, delLoc.type, delLoc.id]
     );
 
     // Reverse this production's own batch (floored — it may be partly consumed)
     await debitBatchByNumber(client, {
-      itemId, materialType: "item", branchType: "headoffice", branchId: 1,
+      itemId, materialType: "item", branchType: delLoc.type, branchId: delLoc.id,
       batchNumber: delBatchNumber, quantity: qty,
     });
 
@@ -636,9 +963,9 @@ router.delete("/productions/:id", requireModuleAction("Production", "delete"), a
         refId: mat.materialId,
         itemName: mat.materialName ?? '',
         unit: mat.unit ?? '',
-        branchType: 'headoffice',
-        branchId: 0,
-        branchName: 'Head Office',
+        branchType: delLoc.type,
+        branchId: ledgerBranchId(delLoc, mat.materialType),
+        branchName: delLocName,
         qtyChange: Number(mat.usedQuantity),
         unitCost: Number(mat.unitCost ?? 0),
         docType: 'production',
@@ -651,9 +978,9 @@ router.delete("/productions/:id", requireModuleAction("Production", "delete"), a
         refId: itemId,
         itemName: delItemInfo?.name ?? '',
         unit: delItemInfo?.unit ?? '',
-        branchType: 'headoffice',
-        branchId: 1,
-        branchName: 'Head Office',
+        branchType: delLoc.type,
+        branchId: ledgerBranchId(delLoc, 'item'),
+        branchName: delLocName,
         qtyChange: -qty,
         unitCost: 0,
         docType: 'production',
@@ -663,6 +990,28 @@ router.delete("/productions/:id", requireModuleAction("Production", "delete"), a
     ]);
 
     await client.query(`DELETE FROM productions WHERE id = $1`, [id]);
+
+    // ── Books: relieve the capitalised cost ──────────────────────────────────
+    // Mirror image of the create posting, so what stays capitalised always
+    // equals the value of the batches still on the books.
+    await postProductionCostJv(client, {
+      date: delDate,
+      narration: `Production ${delBatchNumber} deleted — ${qty} × ${delItemInfo?.name ?? `item #${itemId}`} at ${delLocName}`,
+      amount: delTotalCost,
+      direction: "relieve",
+      createdBy: (req as any).employee?.name ?? "system",
+    });
+
+    // The day's labour pool now spreads over one batch fewer, so the siblings'
+    // costs (and their capitalised value) move. Runs after the DELETE so the
+    // removed batch is excluded from the re-spread.
+    const realloc = await reallocateDayLabour(client, delDate, delLoc);
+    await postReallocationAdjustment(client, {
+      date: delDate,
+      rows: realloc.rows,
+      reason: `Production ${delBatchNumber} deleted at ${delLocName}`,
+      createdBy: (req as any).employee?.name ?? "system",
+    });
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
@@ -673,7 +1022,7 @@ router.delete("/productions/:id", requireModuleAction("Production", "delete"), a
 
   logActivity({
     action: "DELETE", module: "production", entityType: "production", entityId: id,
-    description: `Production batch B-${String(id).padStart(4, "0")} deleted (${qty} units reversed)`,
+    description: `Production batch B-${String(id).padStart(4, "0")} deleted at ${delLocName} (${qty} units reversed)`,
     metadata: { before: { itemId, producedQuantity: qty } },
   }).catch(() => {});
 

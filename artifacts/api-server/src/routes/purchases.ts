@@ -9,17 +9,57 @@ import { creditBatch, debitBatchByNumber, updateAvgCostOnInbound } from "../lib/
 import { productBatchIdentity, blockedByInactiveProducts, INACTIVE_PRODUCT_CODE, isProductKind } from "../lib/productIdentity";
 import { writeStockLedger } from "../lib/stockLedger";
 import { deductMaterialAt, creditMaterialAt, isMaterialKind } from "../lib/materialStock";
+import { resolveActingLocation, locationLabel, type ProdLocation } from "../lib/productionCosting";
+import { getUserDataScope, scopeLocationTypeWhere } from "../lib/dataScope";
 
 const router = Router();
 
-/** Purchased materials land at Head Office, the location that holds them.
- *  The mirror counter is maintained by the caller's own UPDATE (which also
- *  rolls avg_cost), so these only move the authoritative location row. */
-const HO = { type: "headoffice", id: 1 } as const;
+/** Purchased goods land at the location that bought them: Head Office or any
+ *  warehouse. The bill records that location, and every stock effect — location
+ *  quantity, lot, ledger — uses it, so a warehouse's purchase never inflates
+ *  Head Office stock. The mirror counter on the master row is company-wide and
+ *  is maintained by the caller's own UPDATE (which also rolls avg_cost).
+ *
+ *  Stock-ledger branch id. Head Office has always ledgered materials at 0 and
+ *  finished items at 1; every other location uses its own id for both. */
+const ledgerBranchId = (loc: ProdLocation, materialType: string) =>
+  loc.type === "headoffice" ? (materialType === "item" ? 1 : 0) : loc.id;
 
 /** Parent product identity (barcode + MRP) stamped onto the batch a line creates. */
 const lineIdentity = (li: any) =>
   productBatchIdentity(pool, (li.materialType ?? "item") as any, Number(li.materialId));
+
+const KIND_LABEL: Record<string, string> = {
+  material: "Raw Material", raw_material: "Packing Material", item: "Item",
+};
+
+/**
+ * Batch identity is mandatory on every purchase line — raw material, packing
+ * material and finished goods alike. Without a batch number and dates, stock
+ * cannot be traced back to the bill it arrived on, expiry cannot be warned
+ * about, and a recall cannot be answered. The message names the exact field and
+ * line so it can be fixed without guessing.
+ */
+function batchIdentityError(lines: any[], maps: NameMaps): string | null {
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  for (let i = 0; i < lines.length; i++) {
+    const li = lines[i];
+    const kind = String(li?.materialType ?? "material");
+    const name = maps[kind as keyof NameMaps]?.get(Number(li?.materialId))
+      ?? `${KIND_LABEL[kind] ?? "Item"} #${li?.materialId}`;
+    const at = `Line ${i + 1} (${name})`;
+    const batchNumber = String(li?.batchNumber ?? "").trim();
+    const mfgDate = String(li?.mfgDate ?? "").trim();
+    const expiryDate = String(li?.expiryDate ?? "").trim();
+    if (!batchNumber) return `${at}: batch number is required`;
+    if (!mfgDate) return `${at}: manufacturing date is required`;
+    if (!expiryDate) return `${at}: expiry date is required`;
+    if (!dateRe.test(mfgDate)) return `${at}: manufacturing date must be a date (YYYY-MM-DD)`;
+    if (!dateRe.test(expiryDate)) return `${at}: expiry date must be a date (YYYY-MM-DD)`;
+    if (expiryDate < mfgDate) return `${at}: expiry date cannot be before the manufacturing date`;
+  }
+  return null;
+}
 
 function calcLineItems(rawLineItems: any[]) {
   let subtotal = 0, discountTotal = 0, taxTotal = 0;
@@ -90,45 +130,37 @@ function enrichLines(lineItems: unknown, maps: NameMaps): any[] {
   }));
 }
 
-// GET /purchases — optionally server-paginated (Phase 7). Without `page`/
-// `limit` the legacy full-array response is returned. `q` searches invoice
-// number and vendor name (works in both modes).
-router.get("/purchases", async (req, res): Promise<void> => {
-  // LBAC: all purchases are recorded at Head Office; non-HO users see nothing
-  const purchEmp = (req as any).employee as { branchType: string } | undefined;
-  if (purchEmp && purchEmp.branchType !== 'headoffice') {
-    const paginated = 'page' in req.query || 'limit' in req.query;
-    res.json(paginated ? { total: 0, page: 1, limit: 25, rows: [] } : []);
-    return;
-  }
+/** Names for every location that can purchase, for list labels. */
+async function locationNameMap(): Promise<Map<string, string>> {
+  const [whs, outs] = await Promise.all([
+    pool.query(`SELECT id, name FROM warehouses`),
+    pool.query(`SELECT id, name FROM outlets`),
+  ]);
+  const m = new Map<string, string>([["headoffice:1", "Head Office"]]);
+  for (const w of whs.rows) m.set(`warehouse:${w.id}`, w.name);
+  for (const o of outs.rows) m.set(`outlet:${o.id}`, o.name);
+  return m;
+}
 
+router.get("/purchases", async (req, res): Promise<void> => {
+  // LBAC: a location sees its own bills; Head Office sees every location's.
+  const scope = await getUserDataScope((req as any).employee ?? { branchType: 'headoffice', branchId: 0 });
   const paginated = 'page' in req.query || 'limit' in req.query;
   const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
 
-  if (!paginated && !q) {
-    const rows = await db.select().from(purchasesTable).orderBy(purchasesTable.id);
-    const vendors = await db.select().from(vendorsTable);
-    const vMap = new Map(vendors.map(v => [v.id, v.name]));
-    const nameMaps = await buildNameMaps();
-    res.json(rows.map(r => ({
-      ...r,
-      vendorName: vMap.get(r.vendorId) ?? "",
-      totalAmount: Number(r.totalAmount),
-      taxTotal: Number((r as any).taxTotal ?? 0),
-      discountTotal: Number((r as any).discountTotal ?? 0),
-      roundOff: Number((r as any).roundOff ?? 0),
-      lineItems: enrichLines(r.lineItems, nameMaps),
-    })));
-    return;
-  }
-
-  const { pool } = await import("@workspace/db");
   const conds: string[] = [];
   const params: unknown[] = [];
   if (q) {
     params.push(`%${q}%`);
     conds.push(`(p.invoice_number ILIKE $${params.length} OR v.name ILIKE $${params.length})`);
   }
+  const scopeWhere = scopeLocationTypeWhere(scope, params, 'p');
+  if (scopeWhere === 'FALSE') {
+    res.json(paginated ? { total: 0, page: 1, limit: 25, rows: [] } : []);
+    return;
+  }
+  if (scopeWhere !== 'TRUE') conds.push(scopeWhere);
+
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
   const baseFrom = `FROM purchases p LEFT JOIN vendors v ON v.id = p.vendor_id`;
 
@@ -143,6 +175,7 @@ router.get("/purchases", async (req, res): Promise<void> => {
     ORDER BY p.id DESC${limit ? ` LIMIT ${limit} OFFSET ${(page - 1) * limit}` : ''}
   `, params);
   const nameMaps = await buildNameMaps();
+  const locNames = await locationNameMap();
   const mapped = rows.map((r: any) => ({
     id: r.id,
     vendorId: r.vendor_id,
@@ -155,6 +188,9 @@ router.get("/purchases", async (req, res): Promise<void> => {
     taxTotal: Number(r.tax_total ?? 0),
     discountTotal: Number(r.discount_total ?? 0),
     roundOff: Number(r.round_off ?? 0),
+    locationType: r.location_type ?? 'headoffice',
+    locationId: Number(r.location_id ?? 1),
+    locationName: locNames.get(`${r.location_type ?? 'headoffice'}:${Number(r.location_id ?? 1)}`) ?? 'Head Office',
     lineItems: enrichLines(r.line_items, nameMaps),
   }));
 
@@ -186,22 +222,51 @@ router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, r
   );
   if (inactiveMsg) { res.status(400).json({ error: inactiveMsg, code: INACTIVE_PRODUCT_CODE }); return; }
 
+  // Batch number + manufacturing date + expiry date are mandatory on every line.
+  const identityMsg = batchIdentityError(rawLineItems, await buildNameMaps());
+  if (identityMsg) { res.status(400).json({ error: identityMsg }); return; }
+
+  // ── Which location is buying ─────────────────────────────────────────────
+  // Head Office may record a bill for any location; a warehouse only for
+  // itself. Stock, lots and the ledger all follow this location, and the vendor
+  // payable and input GST post against this location's own purchase ledger.
+  const resolved = await resolveActingLocation(pool, {
+    employee: (req as any).employee,
+    requested: { type: (req.body as any).locationType, id: (req.body as any).locationId },
+  });
+  if ("error" in resolved) { res.status(400).json({ error: resolved.error }); return; }
+  const loc = resolved.loc;
+  const locName = await locationLabel(pool, loc);
+
   const { enriched, subtotal, discountTotal, taxTotal, roundOff, totalAmount } = calcLineItems(rawLineItems);
 
-  const [row] = await db.insert(purchasesTable).values({
-    vendorId: parsed.data.vendorId,
-    purchaseDate: parsed.data.purchaseDate,
-    invoiceNumber: parsed.data.invoiceNumber ?? null,
-    lineItems: enriched,
-    totalAmount: String(totalAmount),
-    notes: parsed.data.notes ?? null,
-  }).returning();
+  // Everything below moves stock, lots, weighted-average costs and the stock
+  // ledger. A bill that half-applied would leave the books unreconcilable, so
+  // the whole thing runs in ONE transaction on ONE client — including the
+  // ledger write, which must not be fire-and-forget.
+  const client = await pool.connect();
+  let newId = 0;
+  try {
+    await client.query("BEGIN");
+
+    // location_*, tax_total, discount_total and round_off are raw-migration
+    // columns and invisible to drizzle, so the row is inserted with explicit SQL.
+    const { rows: [ins] } = await client.query(
+      `INSERT INTO purchases (vendor_id, purchase_date, invoice_number, line_items, total_amount,
+                              notes, tax_total, discount_total, round_off, location_type, location_id)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING id`,
+      [parsed.data.vendorId, parsed.data.purchaseDate, parsed.data.invoiceNumber ?? null,
+       JSON.stringify(enriched), String(totalAmount), parsed.data.notes ?? null,
+       taxTotal, discountTotal, roundOff, loc.type, loc.id],
+    );
+    newId = Number(ins.id);
 
   // Update stock for each line item
   for (const li of enriched) {
     if (li.materialType === "material") {
       // Atomically update current_stock AND roll weighted-average cost (avg_cost is a raw-migration column)
-      await pool.query(
+      await client.query(
         `UPDATE materials SET
            avg_cost = ROUND(
              (current_stock::numeric * COALESCE(avg_cost, 0)::numeric + $2::numeric * $3::numeric)
@@ -211,18 +276,18 @@ router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, r
          WHERE id = $1`,
         [li.materialId, li.quantity, li.unitCost]
       );
-      await creditMaterialAt(pool, "material", li.materialId, HO.type, HO.id, Number(li.quantity), Number(li.unitCost));
-      await creditBatch(pool, {
+      await creditMaterialAt(client, "material", li.materialId, loc.type, loc.id, Number(li.quantity), Number(li.unitCost));
+      await creditBatch(client, {
         itemId: li.materialId, materialType: "material",
-        branchType: HO.type, branchId: HO.id,
-        batchNumber: li.batchNumber || `PUR-${row.id}`,
+        branchType: loc.type, branchId: loc.id,
+        batchNumber: li.batchNumber || `PUR-${newId}`,
         mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
         quantity: li.quantity, unitCost: li.unitCost,
-        source: "purchase", sourceId: row.id,
+        source: "purchase", sourceId: newId,
         ...(await lineIdentity(li)),
       });
     } else if (li.materialType === "raw_material") {
-      await pool.query(
+      await client.query(
         `UPDATE raw_materials SET
            avg_cost = ROUND(
              (current_stock::numeric * COALESCE(avg_cost, 0)::numeric + $2::numeric * $3::numeric)
@@ -232,65 +297,77 @@ router.post("/purchases", requireModuleAction("Purchases", "add"), async (req, r
          WHERE id = $1`,
         [li.materialId, li.quantity, li.unitCost]
       );
-      await creditMaterialAt(pool, "raw_material", li.materialId, HO.type, HO.id, Number(li.quantity), Number(li.unitCost));
-      await creditBatch(pool, {
+      await creditMaterialAt(client, "raw_material", li.materialId, loc.type, loc.id, Number(li.quantity), Number(li.unitCost));
+      await creditBatch(client, {
         itemId: li.materialId, materialType: "raw_material",
-        branchType: HO.type, branchId: HO.id,
-        batchNumber: li.batchNumber || `PUR-${row.id}`,
+        branchType: loc.type, branchId: loc.id,
+        batchNumber: li.batchNumber || `PUR-${newId}`,
         mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
         quantity: li.quantity, unitCost: li.unitCost,
-        source: "purchase", sourceId: row.id,
+        source: "purchase", sourceId: newId,
         ...(await lineIdentity(li)),
       });
     } else if (li.materialType === "item") {
-      await db.update(itemsTable).set({ productionStock: sql`${itemsTable.productionStock}::numeric + ${li.quantity}` }).where(eq(itemsTable.id, li.materialId));
+      await client.query(
+        `UPDATE items SET production_stock = production_stock::numeric + $2::numeric WHERE id = $1`,
+        [li.materialId, li.quantity],
+      );
       // Purchased finished goods arrive at the production unit: keep the
       // location-level stock ledger consistent (previously only the item
       // counter was bumped), roll the weighted-average cost, and track the
       // inbound batch.
-      await pool.query(
+      await client.query(
         `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price)
-         VALUES ($1, 'item', 'headoffice', 1, $2, $3)
+         VALUES ($1, 'item', $4, $5, $2, $3)
          ON CONFLICT (item_id, material_type, branch_type, branch_id) DO UPDATE SET
            quantity = stock_entries.quantity::numeric + EXCLUDED.quantity::numeric,
            cost_price = EXCLUDED.cost_price,
            updated_at = now()`,
-        [li.materialId, li.quantity, li.unitCost]
+        [li.materialId, li.quantity, li.unitCost, loc.type, loc.id]
       );
-      await updateAvgCostOnInbound(pool, li.materialId, li.quantity, li.unitCost);
-      await creditBatch(pool, {
-        itemId: li.materialId, branchType: "headoffice", branchId: 1,
-        batchNumber: li.batchNumber || `PUR-${row.id}`,
+      await updateAvgCostOnInbound(client, li.materialId, li.quantity, li.unitCost);
+      await creditBatch(client, {
+        itemId: li.materialId, branchType: loc.type, branchId: loc.id,
+        batchNumber: li.batchNumber || `PUR-${newId}`,
         mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
         quantity: li.quantity, unitCost: li.unitCost,
-        source: "purchase", sourceId: row.id,
+        source: "purchase", sourceId: newId,
         ...(await lineIdentity(li)),
       });
     }
   }
 
-  // ── Stock ledger (purchase inbound) ─────────────────────────────────────────
-  writeStockLedger(pool, (enriched as any[]).map(li => ({
-    txnType: 'purchase', materialType: li.materialType ?? 'item',
-    refId: li.materialId, itemName: li.materialName ?? '', unit: '',
-    branchType: 'headoffice', branchId: li.materialType === 'item' ? 1 : 0, branchName: 'Head Office',
-    qtyChange: Number(li.quantity), unitCost: Number(li.unitCost ?? 0),
-    docType: 'purchase', docId: row.id,
-  }))).catch((e: any) => console.error('[stock-ledger] purchase create failed', e));
+    // ── Stock ledger (purchase inbound) ───────────────────────────────────────
+    // Awaited inside the transaction: an audit trail that can silently fail is
+    // not an audit trail.
+    await writeStockLedger(client, (enriched as any[]).map(li => ({
+      txnType: 'purchase', materialType: li.materialType ?? 'item',
+      refId: li.materialId, itemName: li.materialName ?? '', unit: '',
+      branchType: loc.type, branchId: ledgerBranchId(loc, li.materialType ?? 'item'), branchName: locName,
+      qtyChange: Number(li.quantity), unitCost: Number(li.unitCost ?? 0),
+      docType: 'purchase', docId: newId,
+    })));
 
-  // Patch tax/discount/roundoff columns
-  await db.execute(sql`UPDATE purchases SET tax_total = ${taxTotal}, discount_total = ${discountTotal}, round_off = ${roundOff} WHERE id = ${row.id}`);
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 
+  const [row] = await db.select().from(purchasesTable).where(eq(purchasesTable.id, newId)).limit(1);
   const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, row.vendorId)).limit(1);
 
   logActivity({
     action: "CREATE", module: "purchases", entityType: "purchase", entityId: row.id,
-    description: `New purchase from ${vendor?.name ?? "Vendor"} — ₹${totalAmount.toFixed(2)}${row.invoiceNumber ? ` (Ref: ${row.invoiceNumber})` : ""}`,
-    metadata: { after: { vendorId: row.vendorId, vendorName: vendor?.name, totalAmount, lineCount: enriched.length, invoiceNumber: row.invoiceNumber } },
+    description: `New purchase from ${vendor?.name ?? "Vendor"} at ${locName} — ₹${totalAmount.toFixed(2)}${row.invoiceNumber ? ` (Ref: ${row.invoiceNumber})` : ""}`,
+    metadata: { after: { vendorId: row.vendorId, vendorName: vendor?.name, totalAmount, lineCount: enriched.length, invoiceNumber: row.invoiceNumber, locationType: loc.type, locationId: loc.id } },
   }).catch(() => {});
 
   res.status(201).json({
     ...row, vendorName: vendor?.name ?? "", totalAmount, taxTotal, discountTotal, roundOff,
+    locationType: loc.type, locationId: loc.id, locationName: locName,
     lineItems: enrichLines(enriched, await buildNameMaps()),
   });
 });
@@ -299,12 +376,26 @@ router.get("/purchases/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const [row] = await db.select().from(purchasesTable).where(eq(purchasesTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
+  const { rows: [locRow] } = await pool.query(
+    `SELECT location_type, location_id FROM purchases WHERE id = $1`, [id]);
+  const loc: ProdLocation = { type: locRow?.location_type ?? 'headoffice', id: Number(locRow?.location_id ?? 1) };
+
+  // LBAC: a location may only open its own bills.
+  const scope = await getUserDataScope((req as any).employee ?? { branchType: 'headoffice', branchId: 0 });
+  if (!scope.isHeadOffice) {
+    const allowed = (loc.type === 'warehouse' && scope.warehouseIds.includes(loc.id))
+      || (loc.type === 'outlet' && scope.outletIds.includes(loc.id));
+    if (!allowed) { res.status(404).json({ error: "Not found" }); return; }
+  }
+
   const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, row.vendorId)).limit(1);
   res.json({
     ...row, vendorName: vendor?.name ?? "", totalAmount: Number(row.totalAmount),
     taxTotal: Number((row as any).taxTotal ?? 0),
     discountTotal: Number((row as any).discountTotal ?? 0),
     roundOff: Number((row as any).roundOff ?? 0),
+    locationType: loc.type, locationId: loc.id,
+    locationName: await locationLabel(pool, loc),
     lineItems: enrichLines(row.lineItems, await buildNameMaps()),
   });
 });
@@ -319,72 +410,122 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
     vendorId?: number; lineItems?: any[];
   };
 
+  // An edit stays at the location that recorded the bill: both the reversal of
+  // the old lines and the re-apply of the new ones happen there, so an edit can
+  // never quietly move stock between locations (that is a transfer).
+  const { rows: [curLocRow] } = await pool.query(
+    `SELECT location_type, location_id FROM purchases WHERE id = $1`, [id]);
+  const loc: ProdLocation = { type: curLocRow?.location_type ?? 'headoffice', id: Number(curLocRow?.location_id ?? 1) };
+  const locName = await locationLabel(pool, loc);
+
+  // LBAC: a location may only edit its own bills.
+  const scope = await getUserDataScope((req as any).employee ?? { branchType: 'headoffice', branchId: 0 });
+  if (!scope.isHeadOffice) {
+    const allowed = (loc.type === 'warehouse' && scope.warehouseIds.includes(loc.id))
+      || (loc.type === 'outlet' && scope.outletIds.includes(loc.id));
+    if (!allowed) { res.status(404).json({ error: "Not found" }); return; }
+  }
+
   if (lineItems !== undefined) {
-    // ── Full edit: reverse old stock, validate new lines, apply new stock ──
-    const oldLines = (current.lineItems ?? []) as Array<{
-      materialType: string; materialId: number; quantity: number; batchNumber?: string | null;
-    }>;
-
-    // 1. Reverse stock from the old lines (mirror of the delete handler)
-    for (const li of oldLines) {
-      if (li.materialType === "material") {
-        await db.update(materialsTable)
-          .set({ currentStock: sql`GREATEST(0, ${materialsTable.currentStock}::numeric - ${li.quantity})` })
-          .where(eq(materialsTable.id, li.materialId));
-        await deductMaterialAt(pool, "material", li.materialId, HO.type, HO.id, Number(li.quantity), { floor: true });
-        await debitBatchByNumber(pool, {
-          itemId: li.materialId, materialType: "material", branchType: HO.type, branchId: HO.id,
-          batchNumber: li.batchNumber || `PUR-${id}`, quantity: Number(li.quantity),
-        });
-      } else if (li.materialType === "raw_material") {
-        await db.update(rawMaterialsTable)
-          .set({ currentStock: sql`GREATEST(0, ${rawMaterialsTable.currentStock}::numeric - ${li.quantity})` })
-          .where(eq(rawMaterialsTable.id, li.materialId));
-        await deductMaterialAt(pool, "raw_material", li.materialId, HO.type, HO.id, Number(li.quantity), { floor: true });
-        await debitBatchByNumber(pool, {
-          itemId: li.materialId, materialType: "raw_material", branchType: HO.type, branchId: HO.id,
-          batchNumber: li.batchNumber || `PUR-${id}`, quantity: Number(li.quantity),
-        });
-      } else if (li.materialType === "item") {
-        await db.update(itemsTable)
-          .set({ productionStock: sql`GREATEST(0, ${itemsTable.productionStock}::numeric - ${li.quantity})` })
-          .where(eq(itemsTable.id, li.materialId));
-        await pool.query(
-          `UPDATE stock_entries SET quantity = GREATEST(0, quantity::numeric - $1), updated_at = now()
-           WHERE item_id = $2 AND material_type = 'item' AND branch_type = 'headoffice' AND branch_id = 1`,
-          [li.quantity, li.materialId],
-        );
-        await debitBatchByNumber(pool, {
-          itemId: li.materialId, materialType: "item", branchType: "headoffice", branchId: 1,
-          batchNumber: li.batchNumber || `PUR-${id}`, quantity: Number(li.quantity),
-        });
-      }
-    }
-
-    // ── Stock ledger (purchase edit reversal) ────────────────────────────────
-    writeStockLedger(pool, (oldLines as any[]).map(li => ({
-      txnType: 'purchase_reversal', materialType: li.materialType ?? 'item',
-      refId: li.materialId, itemName: '', unit: '',
-      branchType: 'headoffice', branchId: li.materialType === 'item' ? 1 : 0, branchName: 'Head Office',
-      qtyChange: -Number(li.quantity), unitCost: 0,
-      docType: 'purchase', docId: id,
-      notes: 'Purchase edit — old lines reversed',
-    }))).catch((e: any) => console.error('[stock-ledger] purchase edit reversal failed', e));
-
-    // 2. Validate GST slabs on incoming lines
+    // Batch identity is mandatory. Validated before any stock is touched so a
+    // rejected edit leaves the bill and its stock exactly as they were.
+    const identityMsg = batchIdentityError(lineItems, await buildNameMaps());
+    if (identityMsg) { res.status(400).json({ error: identityMsg }); return; }
     for (const li of lineItems) {
       if (!isValidGstSlab(li.gstRate ?? 0)) {
         res.status(400).json({ error: gstSlabErrorMessage(li.gstRate) }); return;
       }
     }
 
-    // 3. Calculate and enrich the new lines
+    // 2. Calculate and enrich the new lines (before any write, so a bad line
+    //    cannot leave the reversal applied)
     const { enriched, subtotal, discountTotal, taxTotal, roundOff, totalAmount } = calcLineItems(lineItems);
 
-    // 4. Apply stock for the new lines (mirror of the create handler)
+    // An edit is a reversal plus a re-apply: both halves, the lot layer, the
+    // weighted-average costs, the bill row and the stock ledger commit together
+    // or not at all.
+    const client = await pool.connect();
+    let beforeTotal = Number(current.totalAmount);
+    try {
+      await client.query("BEGIN");
+
+      // Row-lock the bill and take the old lines FROM THE LOCKED ROW. Reading
+      // them before BEGIN would let two concurrent edits (or an edit racing a
+      // delete) each reverse the same lines from the same stale snapshot.
+      const { rows: [locked] } = await client.query(
+        `SELECT line_items, vendor_id, to_char(purchase_date, 'YYYY-MM-DD') AS purchase_date,
+                invoice_number, notes, total_amount, location_type, location_id
+         FROM purchases WHERE id = $1 FOR UPDATE`, [id]);
+      if (!locked) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ error: "Not found" }); return;
+      }
+      // Location is immutable, so a mismatch means the row is not what the LBAC
+      // check above cleared. Refuse rather than post to the wrong warehouse.
+      if ((locked.location_type ?? 'headoffice') !== loc.type || Number(locked.location_id ?? 1) !== loc.id) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: "This bill was changed by someone else. Reload and try again." }); return;
+      }
+      beforeTotal = Number(locked.total_amount ?? 0);
+
+      // ── Full edit: reverse old stock, then apply the new lines ──
+      const oldLines = (locked.line_items ?? []) as Array<{
+        materialType: string; materialId: number; quantity: number; batchNumber?: string | null;
+      }>;
+
+    // 1. Reverse stock from the old lines (mirror of the delete handler)
+    for (const li of oldLines) {
+      if (li.materialType === "material") {
+        await client.query(
+          `UPDATE materials SET current_stock = GREATEST(0, current_stock::numeric - $2::numeric) WHERE id = $1`,
+          [li.materialId, li.quantity],
+        );
+        await deductMaterialAt(client, "material", li.materialId, loc.type, loc.id, Number(li.quantity), { floor: true });
+        await debitBatchByNumber(client, {
+          itemId: li.materialId, materialType: "material", branchType: loc.type, branchId: loc.id,
+          batchNumber: li.batchNumber || `PUR-${id}`, quantity: Number(li.quantity),
+        });
+      } else if (li.materialType === "raw_material") {
+        await client.query(
+          `UPDATE raw_materials SET current_stock = GREATEST(0, current_stock::numeric - $2::numeric) WHERE id = $1`,
+          [li.materialId, li.quantity],
+        );
+        await deductMaterialAt(client, "raw_material", li.materialId, loc.type, loc.id, Number(li.quantity), { floor: true });
+        await debitBatchByNumber(client, {
+          itemId: li.materialId, materialType: "raw_material", branchType: loc.type, branchId: loc.id,
+          batchNumber: li.batchNumber || `PUR-${id}`, quantity: Number(li.quantity),
+        });
+      } else if (li.materialType === "item") {
+        await client.query(
+          `UPDATE items SET production_stock = GREATEST(0, production_stock::numeric - $2::numeric) WHERE id = $1`,
+          [li.materialId, li.quantity],
+        );
+        await client.query(
+          `UPDATE stock_entries SET quantity = GREATEST(0, quantity::numeric - $1), updated_at = now()
+           WHERE item_id = $2 AND material_type = 'item' AND branch_type = $3 AND branch_id = $4`,
+          [li.quantity, li.materialId, loc.type, loc.id],
+        );
+        await debitBatchByNumber(client, {
+          itemId: li.materialId, materialType: "item", branchType: loc.type, branchId: loc.id,
+          batchNumber: li.batchNumber || `PUR-${id}`, quantity: Number(li.quantity),
+        });
+      }
+    }
+
+    // ── Stock ledger (purchase edit reversal) ────────────────────────────────
+    await writeStockLedger(client, (oldLines as any[]).map(li => ({
+      txnType: 'purchase_reversal', materialType: li.materialType ?? 'item',
+      refId: li.materialId, itemName: '', unit: '',
+      branchType: loc.type, branchId: ledgerBranchId(loc, li.materialType ?? 'item'), branchName: locName,
+      qtyChange: -Number(li.quantity), unitCost: 0,
+      docType: 'purchase', docId: id,
+      notes: 'Purchase edit — old lines reversed',
+    })));
+
+    // 3. Apply stock for the new lines (mirror of the create handler)
     for (const li of enriched) {
       if (li.materialType === "material") {
-        await pool.query(
+        await client.query(
           `UPDATE materials SET
              avg_cost = ROUND(
                (current_stock::numeric * COALESCE(avg_cost, 0)::numeric + $2::numeric * $3::numeric)
@@ -394,10 +535,10 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
            WHERE id = $1`,
           [li.materialId, li.quantity, li.unitCost]
         );
-        await creditMaterialAt(pool, "material", li.materialId, HO.type, HO.id, Number(li.quantity), Number(li.unitCost));
-        await creditBatch(pool, {
+        await creditMaterialAt(client, "material", li.materialId, loc.type, loc.id, Number(li.quantity), Number(li.unitCost));
+        await creditBatch(client, {
           itemId: li.materialId, materialType: "material",
-          branchType: HO.type, branchId: HO.id,
+          branchType: loc.type, branchId: loc.id,
           batchNumber: li.batchNumber || `PUR-${id}`,
           mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
           quantity: li.quantity, unitCost: li.unitCost,
@@ -405,7 +546,7 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
           ...(await lineIdentity(li)),
         });
       } else if (li.materialType === "raw_material") {
-        await pool.query(
+        await client.query(
           `UPDATE raw_materials SET
              avg_cost = ROUND(
                (current_stock::numeric * COALESCE(avg_cost, 0)::numeric + $2::numeric * $3::numeric)
@@ -415,10 +556,10 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
            WHERE id = $1`,
           [li.materialId, li.quantity, li.unitCost]
         );
-        await creditMaterialAt(pool, "raw_material", li.materialId, HO.type, HO.id, Number(li.quantity), Number(li.unitCost));
-        await creditBatch(pool, {
+        await creditMaterialAt(client, "raw_material", li.materialId, loc.type, loc.id, Number(li.quantity), Number(li.unitCost));
+        await creditBatch(client, {
           itemId: li.materialId, materialType: "raw_material",
-          branchType: HO.type, branchId: HO.id,
+          branchType: loc.type, branchId: loc.id,
           batchNumber: li.batchNumber || `PUR-${id}`,
           mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
           quantity: li.quantity, unitCost: li.unitCost,
@@ -426,21 +567,22 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
           ...(await lineIdentity(li)),
         });
       } else if (li.materialType === "item") {
-        await db.update(itemsTable)
-          .set({ productionStock: sql`${itemsTable.productionStock}::numeric + ${li.quantity}` })
-          .where(eq(itemsTable.id, li.materialId));
-        await pool.query(
+        await client.query(
+          `UPDATE items SET production_stock = production_stock::numeric + $2::numeric WHERE id = $1`,
+          [li.materialId, li.quantity],
+        );
+        await client.query(
           `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price)
-           VALUES ($1, 'item', 'headoffice', 1, $2, $3)
+           VALUES ($1, 'item', $4, $5, $2, $3)
            ON CONFLICT (item_id, material_type, branch_type, branch_id) DO UPDATE SET
              quantity = stock_entries.quantity::numeric + EXCLUDED.quantity::numeric,
              cost_price = EXCLUDED.cost_price,
              updated_at = now()`,
-          [li.materialId, li.quantity, li.unitCost],
+          [li.materialId, li.quantity, li.unitCost, loc.type, loc.id],
         );
-        await updateAvgCostOnInbound(pool, li.materialId, li.quantity, li.unitCost);
-        await creditBatch(pool, {
-          itemId: li.materialId, branchType: "headoffice", branchId: 1,
+        await updateAvgCostOnInbound(client, li.materialId, li.quantity, li.unitCost);
+        await creditBatch(client, {
+          itemId: li.materialId, branchType: loc.type, branchId: loc.id,
           batchNumber: li.batchNumber || `PUR-${id}`,
           mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
           quantity: li.quantity, unitCost: li.unitCost,
@@ -451,37 +593,48 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
     }
 
     // ── Stock ledger (purchase edit re-apply) ────────────────────────────────
-    writeStockLedger(pool, (enriched as any[]).map(li => ({
+    await writeStockLedger(client, (enriched as any[]).map(li => ({
       txnType: 'purchase', materialType: li.materialType ?? 'item',
       refId: li.materialId, itemName: li.materialName ?? '', unit: '',
-      branchType: 'headoffice', branchId: li.materialType === 'item' ? 1 : 0, branchName: 'Head Office',
+      branchType: loc.type, branchId: ledgerBranchId(loc, li.materialType ?? 'item'), branchName: locName,
       qtyChange: Number(li.quantity), unitCost: Number(li.unitCost ?? 0),
       docType: 'purchase', docId: id,
       notes: 'Purchase edit — new lines applied',
-    }))).catch((e: any) => console.error('[stock-ledger] purchase edit re-apply failed', e));
+    })));
 
-    // 5. Persist the updated record
-    const [row] = await db.update(purchasesTable).set({
-      vendorId: vendorId ?? current.vendorId,
-      purchaseDate: purchaseDate ?? current.purchaseDate,
-      invoiceNumber: invoiceNumber !== undefined ? invoiceNumber : current.invoiceNumber,
-      notes: notes !== undefined ? notes : current.notes,
-      lineItems: enriched,
-      totalAmount: String(totalAmount),
-    }).where(eq(purchasesTable.id, id)).returning();
+    // 4. Persist the updated record
+      await client.query(
+        `UPDATE purchases SET vendor_id = $2, purchase_date = $3, invoice_number = $4, notes = $5,
+                              line_items = $6::jsonb, total_amount = $7,
+                              tax_total = $8, discount_total = $9, round_off = $10
+         WHERE id = $1`,
+        [id, vendorId ?? locked.vendor_id, purchaseDate ?? locked.purchase_date,
+         invoiceNumber !== undefined ? invoiceNumber : locked.invoice_number,
+         notes !== undefined ? notes : locked.notes,
+         JSON.stringify(enriched), String(totalAmount), taxTotal, discountTotal, roundOff],
+      );
 
-    await db.execute(sql`UPDATE purchases SET tax_total = ${taxTotal}, discount_total = ${discountTotal}, round_off = ${roundOff} WHERE id = ${id}`);
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    const [row] = await db.select().from(purchasesTable).where(eq(purchasesTable.id, id)).limit(1);
 
     logActivity({
       action: "UPDATE", module: "purchases", entityType: "purchase", entityId: id,
-      description: `Purchase Bill #${id} fully edited — ₹${totalAmount.toFixed(2)}`,
-      metadata: { before: { totalAmount: Number(current.totalAmount) }, after: { totalAmount, lineCount: enriched.length } },
+      description: `Purchase Bill #${id} fully edited at ${locName} — ₹${totalAmount.toFixed(2)}`,
+      metadata: { before: { totalAmount: beforeTotal }, after: { totalAmount, lineCount: enriched.length, locationType: loc.type, locationId: loc.id } },
     }).catch(() => {});
 
     const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, row.vendorId)).limit(1);
     res.json({
       ...row, vendorName: vendor?.name ?? "",
       totalAmount, taxTotal, discountTotal, roundOff,
+      locationType: loc.type, locationId: loc.id, locationName: locName,
       lineItems: enrichLines(enriched, await buildNameMaps()),
     });
     return;
@@ -501,51 +654,110 @@ router.patch("/purchases/:id", requireModuleAction("Purchases", "edit"), async (
 
 router.delete("/purchases/:id", requireModuleAction("Purchases", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
-  const [row] = await db.select().from(purchasesTable).where(eq(purchasesTable.id, id)).limit(1);
-  if (!row) { res.status(404).json({ error: "Not found" }); return; }
-  const lineItems = (row.lineItems ?? []) as Array<{ materialType: string; materialId: number; quantity: number; batchNumber?: string | null }>;
+  const scope = await getUserDataScope((req as any).employee ?? { branchType: 'headoffice', branchId: 0 });
+
+  // Deleting a bill un-does stock, lots and the audit trail. Half a reversal is
+  // worse than none, so it all commits together — and the row is read under a
+  // FOR UPDATE lock inside the transaction, so two concurrent deletes (or a
+  // delete racing an edit) can never reverse the same lines twice.
+  const client = await pool.connect();
+  let loc: ProdLocation = { type: 'headoffice', id: 1 };
+  let locName = "Head Office";
+  let vendorIdBefore = 0;
+  let totalBefore = 0;
+  try {
+    await client.query("BEGIN");
+    const { rows: [locked] } = await client.query(
+      `SELECT line_items, vendor_id, total_amount, location_type, location_id
+       FROM purchases WHERE id = $1 FOR UPDATE`, [id]);
+    if (!locked) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Not found" }); return;
+    }
+
+    // Reverse at the location that bought the goods, never a hardcoded HO.
+    loc = { type: locked.location_type ?? 'headoffice', id: Number(locked.location_id ?? 1) };
+    locName = await locationLabel(client, loc);
+    vendorIdBefore = Number(locked.vendor_id ?? 0);
+    totalBefore = Number(locked.total_amount ?? 0);
+
+    // LBAC: a location may only delete its own bills.
+    if (!scope.isHeadOffice) {
+      const allowed = (loc.type === 'warehouse' && scope.warehouseIds.includes(loc.id))
+        || (loc.type === 'outlet' && scope.outletIds.includes(loc.id));
+      if (!allowed) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ error: "Not found" }); return;
+      }
+    }
+
+    const lineItems = (locked.line_items ?? []) as Array<{ materialType: string; materialId: number; quantity: number; batchNumber?: string | null }>;
   for (const li of lineItems) {
     if (li.materialType === "material") {
-      await db.update(materialsTable).set({ currentStock: sql`GREATEST(0, ${materialsTable.currentStock}::numeric - ${li.quantity})` }).where(eq(materialsTable.id, li.materialId));
-      await deductMaterialAt(pool, "material", li.materialId, HO.type, HO.id, Number(li.quantity), { floor: true });
-      await debitBatchByNumber(pool, {
-        itemId: li.materialId, materialType: "material", branchType: HO.type, branchId: HO.id,
+      await client.query(
+        `UPDATE materials SET current_stock = GREATEST(0, current_stock::numeric - $2::numeric) WHERE id = $1`,
+        [li.materialId, li.quantity],
+      );
+      await deductMaterialAt(client, "material", li.materialId, loc.type, loc.id, Number(li.quantity), { floor: true });
+      await debitBatchByNumber(client, {
+        itemId: li.materialId, materialType: "material", branchType: loc.type, branchId: loc.id,
         batchNumber: li.batchNumber || `PUR-${id}`, quantity: Number(li.quantity),
       });
     } else if (li.materialType === "raw_material") {
-      await db.update(rawMaterialsTable).set({ currentStock: sql`GREATEST(0, ${rawMaterialsTable.currentStock}::numeric - ${li.quantity})` }).where(eq(rawMaterialsTable.id, li.materialId));
-      await deductMaterialAt(pool, "raw_material", li.materialId, HO.type, HO.id, Number(li.quantity), { floor: true });
-      await debitBatchByNumber(pool, {
-        itemId: li.materialId, materialType: "raw_material", branchType: HO.type, branchId: HO.id,
+      await client.query(
+        `UPDATE raw_materials SET current_stock = GREATEST(0, current_stock::numeric - $2::numeric) WHERE id = $1`,
+        [li.materialId, li.quantity],
+      );
+      await deductMaterialAt(client, "raw_material", li.materialId, loc.type, loc.id, Number(li.quantity), { floor: true });
+      await debitBatchByNumber(client, {
+        itemId: li.materialId, materialType: "raw_material", branchType: loc.type, branchId: loc.id,
         batchNumber: li.batchNumber || `PUR-${id}`, quantity: Number(li.quantity),
       });
     } else if (li.materialType === "item") {
-      await db.update(itemsTable).set({ productionStock: sql`GREATEST(0, ${itemsTable.productionStock}::numeric - ${li.quantity})` }).where(eq(itemsTable.id, li.materialId));
-      // Reverse the stock-entry credit and the inbound batch (floored)
-      await pool.query(
-        `UPDATE stock_entries SET quantity = GREATEST(0, quantity::numeric - $1), updated_at = now()
-         WHERE item_id = $2 AND material_type = 'item' AND branch_type = 'headoffice' AND branch_id = 1`,
-        [li.quantity, li.materialId]
+      await client.query(
+        `UPDATE items SET production_stock = GREATEST(0, production_stock::numeric - $2::numeric) WHERE id = $1`,
+        [li.materialId, li.quantity],
       );
-      await debitBatchByNumber(pool, {
-        itemId: li.materialId, materialType: "item", branchType: "headoffice", branchId: 1,
+      // Reverse the stock-entry credit and the inbound batch (floored)
+      await client.query(
+        `UPDATE stock_entries SET quantity = GREATEST(0, quantity::numeric - $1), updated_at = now()
+         WHERE item_id = $2 AND material_type = 'item' AND branch_type = $3 AND branch_id = $4`,
+        [li.quantity, li.materialId, loc.type, loc.id]
+      );
+      await debitBatchByNumber(client, {
+        itemId: li.materialId, materialType: "item", branchType: loc.type, branchId: loc.id,
         batchNumber: li.batchNumber || `PUR-${id}`, quantity: Number(li.quantity),
       });
     }
   }
-  writeStockLedger(pool, lineItems.map(li => ({
-    txnType: 'purchase_reversal', materialType: li.materialType ?? 'item',
-    refId: li.materialId, itemName: '', unit: '',
-    branchType: 'headoffice', branchId: li.materialType === 'item' ? 1 : 0, branchName: 'Head Office',
-    qtyChange: -Number(li.quantity), unitCost: 0,
-    docType: 'purchase', docId: id,
-    notes: 'Purchase deleted — stock reversed',
-  }))).catch((e: any) => console.error('[stock-ledger] purchase delete failed', e));
-  await db.delete(purchasesTable).where(eq(purchasesTable.id, id));
+    await writeStockLedger(client, lineItems.map(li => ({
+      txnType: 'purchase_reversal', materialType: li.materialType ?? 'item',
+      refId: li.materialId, itemName: '', unit: '',
+      branchType: loc.type, branchId: ledgerBranchId(loc, li.materialType ?? 'item'), branchName: locName,
+      qtyChange: -Number(li.quantity), unitCost: 0,
+      docType: 'purchase', docId: id,
+      notes: 'Purchase deleted — stock reversed',
+    })));
+    const del = await client.query(`DELETE FROM purchases WHERE id = $1 RETURNING id`, [id]);
+    if (del.rowCount === 0) {
+      // Belt and braces: the FOR UPDATE above should make this impossible, so if
+      // it ever happens the reversal must not be committed against a bill that
+      // someone else already removed.
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Not found" }); return;
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+
   logActivity({
     action: "DELETE", module: "purchases", entityType: "purchase", entityId: id,
-    description: `Purchase Bill #${id} deleted (stock reversed)`,
-    metadata: { before: { vendorId: row.vendorId, totalAmount: Number(row.totalAmount) } },
+    description: `Purchase Bill #${id} deleted at ${locName} (stock reversed)`,
+    metadata: { before: { vendorId: vendorIdBefore, totalAmount: totalBefore, locationType: loc.type, locationId: loc.id } },
   }).catch(() => {});
   res.status(204).send();
 });

@@ -52,6 +52,12 @@ stock" because there is no per-warehouse raw-material stock — there is one sha
 also means raw materials get **no batch, no manufacturing date and no expiry tracking**,
 which for frozen fruit is exactly where expiry matters most.
 
+**Partially addressed.** Purchases and production runs now carry a location, materials land in
+that location's stock and lot layer, and batch number, manufacturing date and expiry are
+mandatory on every purchase line, whatever the line's kind. The **master-level** counters
+(`raw_materials.current_stock`, `materials.current_stock`) are still a single global pool; per-
+location material valuation belongs to the stock phase.
+
 ### A4 — Batch totals have already drifted, in both directions
 
 Strawberry holds 567 units in batches against 535 in entries — a **surplus of 32** that the
@@ -101,16 +107,33 @@ Day Book re-derives postings independently of the shared builder. GSTR-1, GSTR-3
 summary sum `sales`/`purchases` directly. The dashboard sums `payments`/`receipts` in place.
 Each is a separate opportunity to disagree with the books.
 
-### B5 — Production posts nothing to the accounts
+### B5 — Production posts nothing to the accounts — **FIXED**
 
-Production moves stock and writes the stock ledger but creates **no** accounting entry. The
-value converted from raw material into finished goods never reaches the ledgers.
+Production moved stock and wrote the stock ledger but created **no** accounting entry, so the
+value converted from raw material into finished goods never reached the ledgers.
 
-### B6 — The costing engine has never actually run
+Production now posts a journal voucher inside the same transaction as the stock move:
+finished-goods inventory debited with the batch cost, production absorbed credited. Editing a
+batch re-posts, deleting it posts a reversal, and re-spreading a day's labour across sibling
+batches posts the adjustment. **Caveat carried forward:** the profit & loss and balance sheet
+still ignore journal vouchers (B1), so this posting is invisible in the statements today. When
+B1 is fixed, the absorbed credit and the closing-stock credit will describe the same batch —
+see the duplicate-posting trap table in `SOURCE_OF_TRUTH.md`.
 
-Of 4 production runs: **0** have `material_cost`, **0** have `total_cost`, **0** have
-`cost_per_unit`. The columns exist; nothing populates them. Costing is greenfield work, not
-an extension — and labour is not modelled anywhere.
+### B6 — The costing engine has never actually run — **FIXED**
+
+Costing populated nothing because it read a material-cost column that purchases never wrote.
+Every cost reader now resolves weighted-average cost first and falls back to the legacy column
+only when the average is zero. Batches record raw material, packing material, labour and
+overheads separately, plus total cost and cost per unit; cost per unit is stamped on the lot as
+its valuation cost. Labour comes from that location's production payroll for the day, spread
+across the day's batches weighted by quantity, with manual per-batch entry as the fallback and
+the method recorded on the row. Pre-existing runs keep null costs and are never
+retro-capitalised.
+
+**Watch for:** a cost query that forgets to *select* the weighted-average column reports zero
+silently — that is exactly how the packing-material estimate on the production form regressed
+to ₹0.00 after the rest of the fix was in place.
 
 ### B7 — Expenses can be double-counted
 

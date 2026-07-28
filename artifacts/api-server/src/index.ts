@@ -309,6 +309,84 @@ async function runMigrations() {
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS production_overhead_percent numeric(5,2) NOT NULL DEFAULT 0;
   `);
 
+  // ── Warehouse purchasing + true batch costing (additive, idempotent) ──────
+  // A production run and a purchase bill each record WHICH location performed
+  // it, so a warehouse can buy and manufacture on its own books. 'headoffice'
+  // stays the default; this is a *location* dimension and deliberately does NOT
+  // resurrect the retired `branch_type = 'production'` concept (see
+  // remove_production_branch_type_v1 below) — production remains a department
+  // of whichever location runs it.
+  //
+  // Batch cost is split into its real components so a batch can be explained:
+  //   rm_cost      raw material consumed   (materials table)
+  //   pm_cost      packing material        (raw_materials table)
+  //   labour_cost  allocated from that day's production payroll
+  //   labour_method 'payroll' | 'manual' | 'none' — how labour was arrived at
+  // material_cost stays as rm_cost + pm_cost so existing readers keep working.
+  await pool.query(`
+    ALTER TABLE productions ADD COLUMN IF NOT EXISTS location_type text NOT NULL DEFAULT 'headoffice';
+    ALTER TABLE productions ADD COLUMN IF NOT EXISTS location_id   integer NOT NULL DEFAULT 1;
+    ALTER TABLE productions ADD COLUMN IF NOT EXISTS rm_cost       numeric(12,2);
+    ALTER TABLE productions ADD COLUMN IF NOT EXISTS pm_cost       numeric(12,2);
+    ALTER TABLE productions ADD COLUMN IF NOT EXISTS labour_cost   numeric(12,2);
+    ALTER TABLE productions ADD COLUMN IF NOT EXISTS labour_method text;
+    ALTER TABLE purchases   ADD COLUMN IF NOT EXISTS location_type text NOT NULL DEFAULT 'headoffice';
+    ALTER TABLE purchases   ADD COLUMN IF NOT EXISTS location_id   integer NOT NULL DEFAULT 1;
+    ALTER TABLE employees   ADD COLUMN IF NOT EXISTS is_production_staff boolean NOT NULL DEFAULT false;
+    CREATE INDEX IF NOT EXISTS idx_productions_location ON productions (location_type, location_id);
+    CREATE INDEX IF NOT EXISTS idx_productions_day_loc  ON productions (production_date, location_type, location_id);
+    CREATE INDEX IF NOT EXISTS idx_purchases_location   ON purchases   (location_type, location_id);
+  `);
+
+  // Every run and bill recorded before locations existed happened at Head
+  // Office — the only place that could purchase or manufacture until now.
+  // The column defaults cover new rows; this repairs rows that predate the
+  // column (NULL is impossible thanks to NOT NULL, so only stray 0 ids remain).
+  await pool.query(`
+    UPDATE productions SET location_type = 'headoffice', location_id = 1
+     WHERE location_type IS NULL OR location_type = '' OR location_id IS NULL OR location_id = 0;
+    UPDATE purchases   SET location_type = 'headoffice', location_id = 1
+     WHERE location_type IS NULL OR location_type = '' OR location_id IS NULL OR location_id = 0;
+  `);
+
+  // Split existing single-figure material costs into the RM/PM columns so old
+  // batches read consistently. Runs once: later edits own their own values.
+  {
+    const { rows: [done] } = await pool.query(
+      `SELECT 1 FROM migration_log WHERE name = 'production_cost_split_v1'`
+    );
+    if (!done) {
+      // Legacy rows stored only material_cost. Recover the split from the
+      // stored line snapshots (each line carries materialType + lineCost);
+      // anything unsplittable lands wholly in rm_cost, which is what the
+      // single figure has always represented in reporting.
+      const { rowCount } = await pool.query(`
+        UPDATE productions p SET
+          rm_cost = COALESCE(s.rm, p.material_cost, 0),
+          pm_cost = COALESCE(s.pm, 0),
+          labour_cost = COALESCE(p.labour_cost, 0),
+          labour_method = COALESCE(p.labour_method, 'none')
+        FROM (
+          SELECT id,
+                 SUM(CASE WHEN l->>'materialType' = 'material'     THEN (l->>'lineCost')::numeric ELSE 0 END) AS rm,
+                 SUM(CASE WHEN l->>'materialType' = 'raw_material' THEN (l->>'lineCost')::numeric ELSE 0 END) AS pm
+          FROM productions, jsonb_array_elements(COALESCE(material_used, '[]'::jsonb)) l
+          WHERE l ? 'lineCost'
+          GROUP BY id
+        ) s
+        WHERE s.id = p.id AND p.rm_cost IS NULL
+      `);
+      await pool.query(`
+        UPDATE productions SET rm_cost = COALESCE(material_cost, 0), pm_cost = 0,
+                               labour_cost = COALESCE(labour_cost, 0),
+                               labour_method = COALESCE(labour_method, 'none')
+         WHERE rm_cost IS NULL AND material_cost IS NOT NULL
+      `);
+      await pool.query(`INSERT INTO migration_log (name) VALUES ('production_cost_split_v1')`);
+      console.log(`[migration] production_cost_split_v1: split ${rowCount} costed production rows into RM/PM`);
+    }
+  }
+
   // ── Item & batch identification (additive, idempotent) ────────────────────
   // Every product gets a human code, a scannable EAN-13 barcode and an
   // active/inactive status. The three master tables stay separate (their id
@@ -490,6 +568,31 @@ async function runMigrations() {
     ['Bank & Processor Charges',    'expense', 'STD-PROC-CHG', 'profit_loss',   'SYS-INDEXP', 'Bank and payment processor charges deducted from settlements'],
   ];
   for (const [name, type, code, section, parentCode, desc] of clearingLedgers) {
+    const { rows: [parent] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1`, [parentCode]);
+    if (parent) {
+      await pool.query(
+        `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_system_group, description)
+         SELECT $1, $2, $3, $4, $5, false, $6
+         WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $3)`,
+        [name, type, code, section, parent.id, desc],
+      );
+    }
+  }
+
+  // ── Production costing ledgers ──────────────────────────────────────────
+  // Purchases and payroll are expensed when they happen. When a batch is
+  // manufactured its cost is capitalised into stock, so the expense side must
+  // be relieved by the same amount — otherwise the cost is counted twice.
+  //   Dr Finished Goods Inventory   (asset — the batch now sits in stock)
+  //   Cr Production Cost Absorbed   (contra-expense — relieves purchases,
+  //                                  wages and overhead already booked)
+  // Deleting a batch posts the mirror image, so the pair always nets to the
+  // value actually held in stock.
+  const productionLedgers: [string, string, string, string, string, string][] = [
+    ['Finished Goods Inventory', 'asset',   'STD-FG-INV',   'balance_sheet', 'SYS-CURA',   'Manufactured stock held at cost — debited when a production batch is recorded'],
+    ['Production Cost Absorbed', 'expense', 'STD-PROD-ABS', 'profit_loss',   'SYS-DIREXP', 'Contra to purchases, wages and overhead for costs capitalised into manufactured stock'],
+  ];
+  for (const [name, type, code, section, parentCode, desc] of productionLedgers) {
     const { rows: [parent] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1`, [parentCode]);
     if (parent) {
       await pool.query(
@@ -905,6 +1008,43 @@ async function runMigrations() {
     `);
     await pool.query(`INSERT INTO migration_log (name) VALUES ('items_avg_cost_seed_v2')`);
     console.log('[migration] items_avg_cost_seed_v2 applied');
+  }
+
+  // One-time: the same treatment for raw and packing materials. Bills recorded
+  // before purchases started rolling avg_cost left the masters at 0, which makes
+  // every batch made from them cost nothing. The rate is recovered from the
+  // purchase history that already exists (weighted by quantity bought), and
+  // zero-cost material lots inherit it so batch valuation matches the master.
+  const { rows: [matAvgSeeded] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'materials_avg_cost_seed_v1'`
+  );
+  if (!matAvgSeeded) {
+    for (const [kind, table] of [["material", "materials"], ["raw_material", "raw_materials"]] as const) {
+      await pool.query(`
+        UPDATE ${table} m SET avg_cost = sub.wavg
+        FROM (
+          SELECT (li->>'materialId')::int AS mid,
+                 ROUND((SUM((li->>'quantity')::numeric * (li->>'unitCost')::numeric)
+                        / NULLIF(SUM((li->>'quantity')::numeric), 0))::numeric, 4) AS wavg
+          FROM purchases p, jsonb_array_elements(p.line_items) li
+          WHERE li->>'materialType' = $1
+            AND (li->>'quantity')::numeric > 0
+            AND (li->>'unitCost')::numeric > 0
+          GROUP BY (li->>'materialId')::int
+        ) sub
+        WHERE m.id = sub.mid AND COALESCE(m.avg_cost, 0) = 0 AND sub.wavg > 0
+      `, [kind]);
+      // Fall back to the manual rate where no purchase history exists.
+      await pool.query(`UPDATE ${table} SET avg_cost = cost WHERE COALESCE(avg_cost, 0) = 0 AND COALESCE(cost, 0) > 0`);
+      await pool.query(`
+        UPDATE stock_batches sb SET unit_cost = m.avg_cost
+        FROM ${table} m
+        WHERE m.id = sb.item_id AND sb.material_type = $1
+          AND sb.unit_cost::numeric = 0 AND m.avg_cost::numeric > 0
+      `, [kind]);
+    }
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('materials_avg_cost_seed_v1')`);
+    console.log('[migration] materials_avg_cost_seed_v1 applied');
   }
 
   // One-time: wrap every existing positive stock quantity into an OPENING

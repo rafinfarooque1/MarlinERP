@@ -35,6 +35,7 @@ const schema = z.object({
   branchType: z.enum(['headoffice', 'warehouse', 'outlet']),
   branchId: z.coerce.number().min(0),
   salary: z.coerce.number().min(0),
+  isProductionStaff: z.boolean().default(false),
   joinDate: z.string().min(1, 'Join date required'),
 });
 type FormValues = z.infer<typeof schema>;
@@ -47,6 +48,7 @@ const editSchema = z.object({
   branchType: z.enum(['headoffice', 'warehouse', 'outlet']),
   branchId: z.coerce.number().min(0),
   salary: z.coerce.number().min(0),
+  isProductionStaff: z.boolean().default(false),
 });
 type EditFormValues = z.infer<typeof editSchema>;
 
@@ -213,13 +215,13 @@ export default function Employees() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', username: '', email: '', phone: '', hierarchyId: 0, branchType: 'headoffice', branchId: 0, salary: 0, joinDate: new Date().toISOString().split('T')[0] },
+    defaultValues: { name: '', username: '', email: '', phone: '', hierarchyId: 0, branchType: 'headoffice', branchId: 0, salary: 0, isProductionStaff: false, joinDate: new Date().toISOString().split('T')[0] },
   });
   const watchBranchType = form.watch('branchType');
 
   const editForm = useForm<EditFormValues>({
     resolver: zodResolver(editSchema),
-    defaultValues: { name: '', email: '', phone: '', hierarchyId: 0, branchType: 'headoffice', branchId: 0, salary: 0 },
+    defaultValues: { name: '', email: '', phone: '', hierarchyId: 0, branchType: 'headoffice', branchId: 0, salary: 0, isProductionStaff: false },
   });
   const watchEditBranchType = editForm.watch('branchType');
 
@@ -231,6 +233,7 @@ export default function Employees() {
       // Legacy records may still say 'production' — that branch type was retired into Head Office
       branchType: emp.branchType === 'production' ? 'headoffice' : emp.branchType,
       branchId: emp.branchId, salary: Number(emp.salary),
+      isProductionStaff: !!emp.isProductionStaff,
     });
   };
 
@@ -305,7 +308,7 @@ export default function Employees() {
           </div>
           <div className="flex gap-2">
             {perm.canDownload && (
-              <Button variant="outline" size="sm" onClick={() => downloadCSV('employees.csv', filtered.map(e => ({ Name: e.name, Username: e.username, Role: e.hierarchyName, Branch: e.branchName, Type: e.branchType, Salary: e.salary, Status: e.isActive ? 'Active' : 'Resigned' })))}>
+              <Button variant="outline" size="sm" onClick={() => downloadCSV('employees.csv', filtered.map(e => ({ Name: e.name, Username: e.username, Role: e.hierarchyName, Branch: e.branchName, Type: e.branchType, Salary: e.salary, 'Production Staff': (e as any).isProductionStaff ? 'Yes' : 'No', Status: e.isActive ? 'Active' : 'Resigned' })))}>
                 <Download className="w-4 h-4 mr-2" /> Export
               </Button>
             )}
@@ -528,6 +531,17 @@ export default function Employees() {
                     )}
                     <FormMessage /></FormItem>
                 )} />
+                <FormField control={editForm.control} name="isProductionStaff" render={({ field }) => (
+                  <FormItem className="col-span-2 flex items-center justify-between rounded-lg border border-border p-3">
+                    <div>
+                      <FormLabel className="text-sm">Production staff</FormLabel>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        Their daily wage is charged to the batches produced at their location.
+                      </p>
+                    </div>
+                    <Switch checked={!!field.value} onCheckedChange={field.onChange} />
+                  </FormItem>
+                )} />
               </div>
               <DialogFooter>
                 <Button variant="outline" type="button" onClick={() => setEditItem(null)}>Cancel</Button>
@@ -626,6 +640,17 @@ export default function Employees() {
                     )}
                     <FormMessage /></FormItem>
                 )} />
+                <FormField control={form.control} name="isProductionStaff" render={({ field }) => (
+                  <FormItem className="col-span-2 flex items-center justify-between rounded-lg border border-border p-3">
+                    <div>
+                      <FormLabel className="text-sm">Production staff</FormLabel>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        Their daily wage is charged to the batches produced at their location.
+                      </p>
+                    </div>
+                    <Switch checked={!!field.value} onCheckedChange={field.onChange} />
+                  </FormItem>
+                )} />
               </div>
 
               <DialogFooter>
@@ -659,6 +684,7 @@ export default function Employees() {
                 ['Email', viewItem.email || '—'],
                 ['Phone', viewItem.phone || '—'],
                 ['Basic Salary', `₹${Number(viewItem.salary || 0).toLocaleString('en-IN')}/mo`],
+                ['Production Staff', (viewItem as any).isProductionStaff ? 'Yes — wage charged to batches' : 'No'],
                 ['Join Date', viewItem.joinDate ? new Date(viewItem.joinDate).toLocaleDateString('en-IN') : '—'],
               ].map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
