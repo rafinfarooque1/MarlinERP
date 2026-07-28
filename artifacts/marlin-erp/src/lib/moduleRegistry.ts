@@ -95,6 +95,7 @@ export interface NavGroupMeta {
  */
 export const NAV_GROUP_META: Record<string, NavGroupMeta> = {
   'Operations': { icon: Store },
+  'Stock':      { icon: Package },
   'Production': { icon: Factory },
   'Inventory':  { icon: Building2 },
   'Sales': { icon: Calculator },
@@ -105,7 +106,7 @@ export const NAV_GROUP_META: Record<string, NavGroupMeta> = {
 
 /** Sidebar section display order */
 export const NAV_GROUP_ORDER = [
-  'Operations', 'Production', 'Inventory', 'Sales', 'HR', 'Accounts', 'Company',
+  'Operations', 'Stock', 'Production', 'Inventory', 'Sales', 'HR', 'Accounts', 'Company',
 ] as const;
 
 // ── Permissions page metadata ─────────────────────────────────────────────────
