@@ -57,7 +57,13 @@ export interface InvoiceShareSale {
   totalAmount: number | string;
   amountPaid?: number | string | null;
   paymentMode?: string | null;
+  /** Server-derived: 'unpaid' | 'partially_paid' | 'paid' | 'cancelled'. */
   paymentStatus?: string | null;
+  /** Server-derived position — receipts, credits and what is left to pay. Never
+   *  recomputed here; the invoice, its QR and this message must agree. */
+  amountReceived?: number | string | null;
+  creditAdjustments?: number | string | null;
+  balanceDue?: number | string | null;
 }
 
 export interface ComposeOptions {
@@ -68,6 +74,12 @@ export interface ComposeOptions {
   companyName: string;
   /** Resolves an item name when the line item doesn't carry one. */
   resolveItemName?: (itemId: number) => string | undefined;
+  /**
+   * How long the link works, in days. Stated in the message so the customer knows
+   * to save the PDF now rather than coming back to a dead URL in a month — and so
+   * the expiry is not a surprise they have to ring the office about.
+   */
+  linkValidDays?: number;
 }
 
 const inr = (n: number | string | null | undefined): string =>
@@ -82,7 +94,7 @@ const formatDate = (d: string): string =>
  * the message still reads cleanly in any channel that ignores it.
  */
 export function composeInvoiceMessage({
-  sale, pdfUrl, companyName, resolveItemName,
+  sale, pdfUrl, companyName, resolveItemName, linkValidDays,
 }: ComposeOptions): string {
   const seller = sale.outletName || companyName;
   const lineItems = sale.lineItems ?? [];
@@ -110,14 +122,28 @@ export function composeInvoiceMessage({
   }
   totalsLines.push(`  *Total: ${inr(sale.totalAmount)}*`);
 
-  // Payment line: name the mode, and for anything not fully settled show what
-  // is still due so the customer knows the bill is open.
+  // Payment block. The server sends the authoritative position on the sale, so
+  // the message never recomputes what is owed — it states what was received,
+  // what was credited back, and what is left. A settled or cancelled bill drops
+  // the payment-request wording entirely: asking a customer who has already paid
+  // to pay again is the fastest way to lose their trust.
   const modeLabel = paymentModeLabel(sale.paymentMode);
-  const due = Number(sale.totalAmount || 0) - Number(sale.amountPaid ?? 0);
+  const received = Number(sale.amountReceived ?? sale.amountPaid ?? 0);
+  const credited = Number(sale.creditAdjustments ?? 0);
+  const due = Number(
+    sale.balanceDue ?? Math.max(0, Number(sale.totalAmount || 0) - received - credited),
+  );
+  const cancelled = sale.paymentStatus === 'cancelled';
   const payLines: string[] = [];
-  if (modeLabel) payLines.push(`  Payment: ${modeLabel}`);
-  if (sale.paymentStatus && sale.paymentStatus !== 'paid' && due > 0.004) {
-    payLines.push(`  *Balance due: ${inr(due)}*`);
+  if (cancelled) {
+    payLines.push(`  *This invoice has been cancelled — nothing is payable.*`);
+  } else {
+    if (modeLabel) payLines.push(`  Payment: ${modeLabel}`);
+    if (received > 0.004) payLines.push(`  Amount received: ${inr(received)}`);
+    if (credited > 0.004) payLines.push(`  Credit notes: -${inr(credited)}`);
+    payLines.push(due > 0.004
+      ? `  *Balance due: ${inr(due)}*`
+      : `  *Paid in full — thank you!*`);
   }
 
   return [
@@ -136,6 +162,9 @@ export function composeInvoiceMessage({
     ``,
     `📄 View / download invoice PDF:`,
     pdfUrl,
+    ...(linkValidDays
+      ? [``, `_This link is private to you and valid for ${linkValidDays} days._`]
+      : []),
     ``,
     `— ${seller}`,
   ].join('\n');

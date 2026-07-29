@@ -4,6 +4,7 @@ import {
   useEditPayroll, useApprovePayroll, usePayPayroll,
   useListAdvances, useAddAdvance,
   useListEmployees, useListWarehouses, useListOutlets,
+  useListSalaryAccruals, getSalaryAccrualsQueryKey,
   EnrichedPayrollRecord,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -26,6 +27,7 @@ import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
+import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 import { useGetMe } from '@workspace/api-client-react';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -176,9 +178,11 @@ function PayDialog({ item, onClose }: { item: EnrichedPayrollRecord; onClose: ()
 
 // ── Payslip detail sheet ───────────────────────────────────────────────────
 function PayslipSheet({
-  item, onClose, isAdmin, onApprove, onPay, canDownload,
+  item, accrued, onClose, isAdmin, onApprove, onPay, canDownload,
 }: {
   item: EnrichedPayrollRecord;
+  /** Already charged to the P&L by daily accrual for this employee-month. */
+  accrued: number;
   onClose: () => void;
   isAdmin: boolean;
   onApprove: () => void;
@@ -202,6 +206,20 @@ function PayslipSheet({
           </SheetTitle>
           <SheetDescription>{MONTHS[(item.month ?? 1) - 1]} {item.year} — {item.branchName || '—'}</SheetDescription>
         </SheetHeader>
+
+        {/* Daily accrual — why the expense is already in the books */}
+        {accrued > 0.004 && (
+          <div className="mt-4 rounded-lg border bg-muted/40 p-3 text-xs space-y-1">
+            <div className="flex justify-between font-medium text-sm">
+              <span>Already accrued daily</span><span>{fmt(accrued)}</span>
+            </div>
+            <p className="text-muted-foreground">
+              {item.status === 'draft'
+                ? `This much salary is already an expense in the P&L, booked day by day as it was earned. Approving posts only the ${fmt(Math.abs((item.grossPay ?? 0) + (item.extraAmount ?? 0) - accrued))} difference${((item.grossPay ?? 0) + (item.extraAmount ?? 0)) < accrued ? ' back out' : ''} — not the salary again.`
+                : 'Booked day by day as it was earned; approval posted only the difference up to the figure above.'}
+            </p>
+          </div>
+        )}
 
         {/* Action buttons (admin) */}
         {isAdmin && (
@@ -463,11 +481,20 @@ export default function Payroll() {
   const [payItem, setPayItem]   = useState<EnrichedPayrollRecord | null>(null);
   const [generating, setGenerating] = useState(false);
   const [branchTypeFilter, setBranchTypeFilter] = useState<string>('all');
+  useClearOutletSelection(branchTypeFilter.startsWith('outlet-'), () => setBranchTypeFilter('all'));
 
   const { data: payroll = [], isLoading } = useListEnrichedPayroll({ year: Number(year), month: Number(month) });
+  // What daily accrual has already charged to the P&L for this month. Approving
+  // a payroll posts only the difference up to it, so it is shown beside the run.
+  const { data: accruals = [] } = useListSalaryAccruals({ year: Number(year), month: Number(month) });
+  const accruedByEmployee = useMemo(
+    () => new Map(accruals.map(a => [a.employeeId, a])),
+    [accruals],
+  );
   const { data: employees = [] } = useListEmployees();
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
+  const { outletsEnabled } = useOutletsEnabled();
   const qc = useQueryClient();
   const generateMutation = useGeneratePayroll();
   const approveMutation  = useApprovePayroll();
@@ -485,10 +512,18 @@ export default function Payroll() {
   };
 
   const handleApprove = (item: EnrichedPayrollRecord) => {
+    const already = accruedByEmployee.get(item.employeeId)?.accrued ?? 0;
     approveMutation.mutate({ id: item.id }, {
       onSuccess: () => {
-        toast.success(`Approved payroll for ${item.employeeName}`);
+        // Approval is a true-up, not the moment salary hits the books — say so,
+        // otherwise the ledger looks like it double-counted the month.
+        toast.success(
+          already > 0.004
+            ? `Approved ${item.employeeName} — ${fmt(already)} was already accrued daily, so only the difference was posted`
+            : `Approved payroll for ${item.employeeName}`,
+        );
         qc.invalidateQueries({ queryKey: getEnrichedPayrollQueryKey({ year: Number(year), month: Number(month) }) });
+        qc.invalidateQueries({ queryKey: getSalaryAccrualsQueryKey({ year: Number(year), month: Number(month) }) });
         setViewItem(null);
       },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
@@ -498,9 +533,9 @@ export default function Payroll() {
   // Build branch list for filter
   const branchOptions = useMemo(() => {
     const wOpts = (warehouses as any[]).map((w: any) => ({ label: w.name, value: `warehouse-${w.id}` }));
-    const oOpts = (outlets as any[]).map((o: any) => ({ label: o.name, value: `outlet-${o.id}` }));
+    const oOpts = outletsEnabled ? (outlets as any[]).map((o: any) => ({ label: o.name, value: `outlet-${o.id}` })) : [];
     return [{ label: 'Headoffice', value: 'headoffice' }, ...wOpts, ...oOpts];
-  }, [warehouses, outlets]);
+  }, [warehouses, outlets, outletsEnabled]);
 
   const filtered = useMemo(() => {
     let list = payroll as EnrichedPayrollRecord[];
@@ -521,8 +556,9 @@ export default function Payroll() {
   const totals = useMemo(() => filtered.reduce((acc, p) => ({
     net: acc.net + (p.netPay ?? 0) + (p.extraAmount ?? 0),
     paid: acc.paid + (p.paidAmount ?? 0),
+    accrued: acc.accrued + (accruedByEmployee.get(p.employeeId)?.accrued ?? 0),
     count: acc.count + 1,
-  }), { net: 0, paid: 0, count: 0 }), [filtered]);
+  }), { net: 0, paid: 0, accrued: 0, count: 0 }), [filtered, accruedByEmployee]);
 
   if (!perm.canView) {
     return (
@@ -607,7 +643,7 @@ export default function Payroll() {
 
         {/* Summary strip */}
         {filtered.length > 0 && (
-          <div className="grid grid-cols-3 gap-3 text-sm">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
             <div className="rounded-lg border bg-card p-3">
               <p className="text-xs text-muted-foreground">Total Employees</p>
               <p className="font-semibold text-xl">{totals.count}</p>
@@ -619,6 +655,11 @@ export default function Payroll() {
             <div className="rounded-lg border bg-card p-3">
               <p className="text-xs text-muted-foreground">Total Paid</p>
               <p className="font-semibold text-xl">{fmt(totals.paid)}</p>
+            </div>
+            <div className="rounded-lg border bg-card p-3">
+              <p className="text-xs text-muted-foreground">Already Accrued Daily</p>
+              <p className="font-semibold text-xl">{fmt(totals.accrued)}</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">In the P&amp;L as it was earned</p>
             </div>
           </div>
         )}
@@ -632,6 +673,7 @@ export default function Payroll() {
               <TableHead>Employee</TableHead>
               {isAdmin && <TableHead>Branch</TableHead>}
               <TableHead className="text-center">Days</TableHead>
+              <TableHead className="text-right">Accrued Daily</TableHead>
               <TableHead className="text-right">Gross Pay</TableHead>
               <TableHead className="text-right">Deductions</TableHead>
               {isAdmin && <TableHead className="text-right">Net Pay</TableHead>}
@@ -641,16 +683,17 @@ export default function Payroll() {
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={8} className="text-center py-12 text-muted-foreground">Loading…</TableCell></TableRow>
+              <TableRow><TableCell colSpan={9} className="text-center py-12 text-muted-foreground">Loading…</TableCell></TableRow>
             ) : filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
+                <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
                   No payroll records. {isAdmin && <button className="underline text-primary" onClick={() => handleGenerate()}>Generate now</button>}
                 </TableCell>
               </TableRow>
             ) : filtered.map((p) => {
               const totalNet = (p.netPay ?? 0) + (p.extraAmount ?? 0);
               const totalDed = (p.deductions ?? 0) + (p.advanceDeduction ?? 0);
+              const accrual = accruedByEmployee.get(p.employeeId);
               return (
                 <TableRow key={p.id} className="cursor-pointer hover:bg-muted/30" onClick={() => setViewItem(p)}>
                   <TableCell className="font-medium">{p.employeeName}</TableCell>
@@ -659,6 +702,14 @@ export default function Payroll() {
                     <span className="text-emerald-600">{Number(p.presentDays ?? 0).toFixed(1)}</span>
                     <span className="text-muted-foreground">/{p.workingDays}</span>
                     {(p.lopDays ?? 0) > 0 && <span className="text-red-500 ml-1">({Number(p.lopDays).toFixed(1)} LOP)</span>}
+                  </TableCell>
+                  <TableCell className="text-right text-muted-foreground">
+                    {accrual ? (
+                      <span title={`${accrual.days} day(s) at ${fmt(accrual.dailyAccrual)}/day, already in the P&L`}>
+                        {fmt(accrual.accrued)}
+                        <span className="block text-[11px]">{accrual.days}/{accrual.daysInMonth} days</span>
+                      </span>
+                    ) : '—'}
                   </TableCell>
                   <TableCell className="text-right">{fmt((p.grossPay ?? 0) + (p.extraAmount ?? 0))}</TableCell>
                   <TableCell className="text-right text-red-600">{totalDed > 0 ? fmt(totalDed) : '—'}</TableCell>
@@ -704,6 +755,7 @@ export default function Payroll() {
       {viewItem && (
         <PayslipSheet
           item={viewItem}
+          accrued={accruedByEmployee.get(viewItem.employeeId)?.accrued ?? 0}
           onClose={() => setViewItem(null)}
           isAdmin={isAdmin}
           onApprove={() => handleApprove(viewItem)}

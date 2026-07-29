@@ -16,6 +16,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Plus, Search, Receipt, Download, Eye, Calendar, MapPin, Building2, ChevronRight, ArrowLeft, LayoutList, ShieldOff, Printer, Paperclip, Tag } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
+import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
@@ -343,6 +344,7 @@ export default function Expenses() {
   const { data: categories = [] } = useExpenseCategories();
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
+  const { outletsEnabled } = useOutletsEnabled();
   const expenseAccounts = accounts.filter(a => a.type === 'expense');
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -659,7 +661,7 @@ export default function Expenses() {
                       {(warehouses as any[]).map((w: any) => (
                         <SelectItem key={`w${w.id}`} value={`warehouse:${w.id}`}>{w.name} (warehouse)</SelectItem>
                       ))}
-                      {(outlets as any[]).map((o: any) => (
+                      {outletsEnabled && (outlets as any[]).map((o: any) => (
                         <SelectItem key={`o${o.id}`} value={`outlet:${o.id}`}>{o.name} (outlet)</SelectItem>
                       ))}
                     </SelectContent>

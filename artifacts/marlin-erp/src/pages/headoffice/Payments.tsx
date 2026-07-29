@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
+import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 import { COLLECTION_METHODS, paymentModeLabel } from '@/lib/paymentModes';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -23,14 +24,20 @@ function fmt(n: number) {
 }
 
 function PaymentStatusBadge({ status }: { status: string }) {
+  if (status === 'cancelled') return <Badge className="bg-muted text-muted-foreground border-border">Cancelled</Badge>;
   if (status === 'paid') return <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Paid</Badge>;
   if (status === 'partially_paid') return <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/20">Partial</Badge>;
   return <Badge className="bg-red-500/10 text-red-600 border-red-500/20">Unpaid</Badge>;
 }
 
+/** Money can only be collected where money is owed — a cancelled invoice owes nothing. */
+function collectible(s: any) {
+  return Number(s.balanceDue ?? 0) > 0 && s.paymentStatus !== 'cancelled';
+}
+
 // ── Collect Payment Panel ─────────────────────────────────────────────────────
 
-function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: () => void; onDone: (newStatus: string, newPaid: number) => void }) {
+function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: () => void; onDone: (next: { status: string; amountPaid: number; balanceDue: number; creditAdjustments: number }) => void }) {
   const perm = usePermission('page:/accounts/vouchers');
   const { data: payments = [], isLoading } = useGetSalePayments(sale.id);
   const createPaymentMutation = useCreateSalePayment();
@@ -41,9 +48,14 @@ function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: ()
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [showForm, setShowForm] = useState(Number(sale.balanceDue ?? 0) > 0);
 
+  // Every figure here is the server's. Recomputing the balance as
+  // total − paid would silently drop credit notes and disagree with the
+  // invoice, the PDF and the payment QR.
   const totalAmount = Number(sale.totalAmount);
-  const amountPaid = Number(sale.amountPaid ?? 0);
-  const balanceDue = Math.max(0, totalAmount - amountPaid);
+  const amountPaid = Number(sale.amountReceived ?? sale.amountPaid ?? 0);
+  const creditAdjustments = Number(sale.creditAdjustments ?? 0);
+  const balanceDue = Number(sale.balanceDue ?? 0);
+  const cancelled = sale.paymentStatus === 'cancelled';
 
   async function handleSubmit() {
     const parsedAmount = Number(amount);
@@ -54,7 +66,12 @@ function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: ()
         data: { method, amount: parsedAmount, referenceNumber: ref || undefined, paymentDate: date },
       });
       toast.success(`Payment of ${fmt(parsedAmount)} collected`);
-      onDone(result.newPaymentStatus, result.newAmountPaid);
+      onDone({
+        status: result.newPaymentStatus,
+        amountPaid: Number(result.newAmountPaid ?? 0),
+        balanceDue: Number(result.newBalanceDue ?? 0),
+        creditAdjustments: Number(result.newCreditAdjustments ?? 0),
+      });
       setAmount(''); setRef('');
       setShowForm(false);
     } catch (e: any) {
@@ -82,6 +99,12 @@ function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: ()
           <span className="text-muted-foreground">Paid</span>
           <span className="font-mono text-emerald-600">{fmt(amountPaid)}</span>
         </div>
+        {creditAdjustments > 0 && (
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Credit Notes</span>
+            <span className="font-mono text-amber-600">− {fmt(creditAdjustments)}</span>
+          </div>
+        )}
         <Separator />
         <div className="flex justify-between font-semibold text-red-600">
           <span>Balance Due</span>
@@ -122,7 +145,7 @@ function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: ()
       )}
 
       {/* Collect Payment Form */}
-      {balanceDue > 0 && perm.canAdd && (
+      {balanceDue > 0 && !cancelled && perm.canAdd && (
         <div>
           <p className="text-sm font-semibold mb-3">Collect Payment</p>
           <div className="space-y-3 bg-muted/20 rounded-lg p-3 border border-border">
@@ -165,7 +188,12 @@ function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: ()
         </div>
       )}
 
-      {sale.paymentStatus === 'paid' && (
+      {cancelled && (
+        <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm text-muted-foreground font-medium text-center">
+          This invoice was cancelled — nothing is owed and no payment can be collected
+        </div>
+      )}
+      {!cancelled && sale.paymentStatus === 'paid' && (
         <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 text-sm text-emerald-600 font-medium text-center">
           ✓ This invoice is fully paid
         </div>
@@ -181,10 +209,12 @@ export default function Payments() {
   const qc = useQueryClient();
 
   const [outletFilter, setOutletFilter] = useState('all');
+  useClearOutletSelection(outletFilter !== 'all', () => setOutletFilter('all'));
   const [statusFilter, setStatusFilter] = useState('all');
   const [search, setSearch] = useState('');
 
   const { data: outlets = [] } = useListOutlets();
+  const { outletsEnabled } = useOutletsEnabled();
   const { data: sales = [], isLoading } = useListSales(
     outletFilter !== 'all' ? { outletId: Number(outletFilter) } : undefined
   );
@@ -201,7 +231,7 @@ export default function Payments() {
     })
     .sort((a, b) => {
       // Unpaid first, then partial, then paid
-      const order: Record<string, number> = { unpaid: 0, partially_paid: 1, paid: 2 };
+      const order: Record<string, number> = { unpaid: 0, partially_paid: 1, paid: 2, cancelled: 3 };
       return (order[a.paymentStatus ?? 'paid'] ?? 2) - (order[b.paymentStatus ?? 'paid'] ?? 2);
     });
 
@@ -260,13 +290,15 @@ export default function Payments() {
               className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             />
           </div>
-          <Select value={outletFilter} onValueChange={setOutletFilter}>
-            <SelectTrigger className="h-9 w-40 text-sm"><SelectValue placeholder="All outlets" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All outlets</SelectItem>
-              {outlets.map((o: any) => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
+          {outletsEnabled && (
+            <Select value={outletFilter} onValueChange={setOutletFilter}>
+              <SelectTrigger className="h-9 w-40 text-sm"><SelectValue placeholder="All outlets" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All outlets</SelectItem>
+                {outlets.map((o: any) => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
         </div>
 
         {/* Table */}
@@ -295,7 +327,7 @@ export default function Payments() {
               </TableHeader>
               <TableBody>
                 {filtered.map((s: any) => (
-                  <TableRow key={s.id} className={s.paymentStatus !== 'paid' ? 'bg-red-500/2' : ''}>
+                  <TableRow key={s.id} className={Number(s.balanceDue ?? 0) > 0 ? 'bg-red-500/2' : ''}>
                     <TableCell className="font-mono text-xs font-semibold">{s.invoiceNumber}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{new Date(s.saleDate).toLocaleDateString('en-IN')}</TableCell>
                     <TableCell className="text-sm">{s.customerName || <span className="text-muted-foreground italic">Walk-in</span>}</TableCell>
@@ -307,8 +339,8 @@ export default function Payments() {
                     </TableCell>
                     <TableCell><PaymentStatusBadge status={s.paymentStatus ?? 'paid'} /></TableCell>
                     <TableCell className="text-right">
-                      <Button variant={s.paymentStatus !== 'paid' ? 'default' : 'ghost'} size="sm" onClick={() => setSelectedSale(s)}>
-                        {s.paymentStatus !== 'paid' ? <><IndianRupee className="w-3.5 h-3.5 mr-1" /> Collect</> : 'View'}
+                      <Button variant={collectible(s) ? 'default' : 'ghost'} size="sm" onClick={() => setSelectedSale(s)}>
+                        {collectible(s) ? <><IndianRupee className="w-3.5 h-3.5 mr-1" /> Collect</> : 'View'}
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -336,12 +368,14 @@ export default function Payments() {
             <CollectPaymentPanel
               sale={selectedSale}
               onClose={() => setSelectedSale(null)}
-              onDone={(newStatus, newPaid) => {
+              onDone={(next) => {
                 setSelectedSale((prev: any) => prev ? {
                   ...prev,
-                  paymentStatus: newStatus,
-                  amountPaid: newPaid,
-                  balanceDue: Math.max(0, Number(prev.totalAmount) - newPaid),
+                  paymentStatus: next.status,
+                  amountPaid: next.amountPaid,
+                  amountReceived: next.amountPaid,
+                  creditAdjustments: next.creditAdjustments,
+                  balanceDue: next.balanceDue,
                 } : null);
                 qc.invalidateQueries({ queryKey: getListSalesQueryKey() });
               }}

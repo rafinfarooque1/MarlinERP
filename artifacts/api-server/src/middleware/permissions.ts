@@ -73,7 +73,7 @@ export function requireModuleView(modules: string | string[]): RequestHandler<an
   };
 }
 
-export type ModuleAction = "add" | "edit" | "delete" | "download" | "print";
+export type ModuleAction = "add" | "edit" | "delete" | "download" | "print" | "approve" | "share";
 
 const ACTION_COLUMN: Record<ModuleAction, string> = {
   add: "can_add",
@@ -81,6 +81,8 @@ const ACTION_COLUMN: Record<ModuleAction, string> = {
   delete: "can_delete",
   download: "can_download",
   print: "can_print",
+  approve: "can_approve",
+  share: "can_share",
 };
 
 const ACTION_VERB: Record<ModuleAction, string> = {
@@ -89,6 +91,8 @@ const ACTION_VERB: Record<ModuleAction, string> = {
   delete: "delete records in",
   download: "download",
   print: "print",
+  approve: "approve records in",
+  share: "share documents from",
 };
 
 /**

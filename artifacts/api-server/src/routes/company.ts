@@ -38,13 +38,19 @@ async function extraSettingsFields(id: number): Promise<{
   gstTransferInvoicing: boolean; branchTransferPrefix: string;
   pfEnabled: boolean; pfEmployeePercent: number; pfEmployerPercent: number;
   esiEnabled: boolean; esiEmployeePercent: number; esiEmployerPercent: number;
+  upiEnabled: boolean; upiId: string; upiPayeeName: string;
+  showUpiQrOnInvoice: boolean; showBankDetailsOnInvoice: boolean;
+  bankBranch: string; accountType: string; bankAccountHolder: string;
 }> {
   const { rows: [r] } = await pool.query<any>(
     `SELECT payment_terms, invoice_footer, production_overhead_percent,
             password_min_length, password_require_uppercase, password_require_number, password_require_special,
             general_settings, gst_transfer_invoicing, branch_transfer_prefix,
             pf_enabled, pf_employee_percent, pf_employer_percent,
-            esi_enabled, esi_employee_percent, esi_employer_percent
+            esi_enabled, esi_employee_percent, esi_employer_percent,
+            upi_enabled, upi_id, upi_payee_name,
+            show_upi_qr_on_invoice, show_bank_details_on_invoice,
+            bank_branch, account_type, bank_account_holder
      FROM company_settings WHERE id = $1`, [id]
   );
   return {
@@ -64,6 +70,16 @@ async function extraSettingsFields(id: number): Promise<{
     esiEnabled: r?.esi_enabled !== false,
     esiEmployeePercent: Number(r?.esi_employee_percent ?? 0.75),
     esiEmployerPercent: Number(r?.esi_employer_percent ?? 3.25),
+    // Invoice payment presentation. Defaults are "on" so an existing invoice
+    // keeps printing what it printed before these switches existed.
+    upiEnabled: r?.upi_enabled !== false,
+    upiId: r?.upi_id ?? '',
+    upiPayeeName: r?.upi_payee_name ?? '',
+    showUpiQrOnInvoice: r?.show_upi_qr_on_invoice !== false,
+    showBankDetailsOnInvoice: r?.show_bank_details_on_invoice !== false,
+    bankBranch: r?.bank_branch ?? '',
+    accountType: r?.account_type ?? '',
+    bankAccountHolder: r?.bank_account_holder ?? '',
   };
 }
 
@@ -185,7 +201,47 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
     }
   }
 
-  if (Object.keys(data).length === 0 && pdfUpdates.length === 0 && overheadUpdate === undefined && policyUpdates.length === 0 && generalSettingsUpdate === undefined && transferUpdates.length === 0 && statutoryUpdates.length === 0) { res.status(400).json({ error: "No valid fields to update" }); return; }
+  // Invoice payment presentation (raw columns). These control what an invoice
+  // ASKS FOR — they never touch how a payment is recorded or posted.
+  const invoicePayUpdates: Array<[column: string, value: string | boolean | null]> = [];
+  for (const [bodyKey, column] of [
+    ['upiEnabled', 'upi_enabled'],
+    ['showUpiQrOnInvoice', 'show_upi_qr_on_invoice'],
+    ['showBankDetailsOnInvoice', 'show_bank_details_on_invoice'],
+  ] as const) {
+    if (bodyKey in req.body) {
+      const v = (req.body as any)[bodyKey];
+      if (typeof v !== 'boolean') { res.status(400).json({ error: `${bodyKey} must be a boolean` }); return; }
+      invoicePayUpdates.push([column, v]);
+    }
+  }
+  if ('upiId' in req.body) {
+    const v = (req.body as any).upiId;
+    if (v !== null && typeof v !== 'string') { res.status(400).json({ error: 'upiId must be a string or null' }); return; }
+    const vpa = typeof v === 'string' ? v.trim() : '';
+    // A malformed VPA produces a QR that scans and then fails in the customer's
+    // UPI app, with nothing on the invoice to explain why. Reject it here.
+    if (vpa && !/^[A-Za-z0-9.\-_]{2,64}@[A-Za-z][A-Za-z0-9.\-]{1,63}$/.test(vpa)) {
+      res.status(400).json({ error: 'upiId must be a valid UPI address, e.g. marlin@okhdfcbank' }); return;
+    }
+    invoicePayUpdates.push(['upi_id', vpa || null]);
+  }
+  for (const [bodyKey, column, max] of [
+    ['upiPayeeName',      'upi_payee_name',      60],
+    ['bankBranch',        'bank_branch',         80],
+    ['accountType',       'account_type',        40],
+    ['bankAccountHolder', 'bank_account_holder', 80],
+  ] as const) {
+    if (bodyKey in req.body) {
+      const v = (req.body as any)[bodyKey];
+      if (v !== null && typeof v !== 'string') { res.status(400).json({ error: `${bodyKey} must be a string or null` }); return; }
+      const t = typeof v === 'string' ? v.trim() : '';
+      if (t.length > max) { res.status(400).json({ error: `${bodyKey} must be ${max} characters or fewer` }); return; }
+      invoicePayUpdates.push([column, t || null]);
+    }
+  }
+
+  if (Object.keys(data).length === 0 && pdfUpdates.length === 0 && overheadUpdate === undefined && policyUpdates.length === 0 && generalSettingsUpdate === undefined && transferUpdates.length === 0 && statutoryUpdates.length === 0 && invoicePayUpdates.length === 0) { res.status(400).json({ error: "No valid fields to update" }); return; }
 
   const rows = await db.select().from(companySettingsTable).limit(1);
   let row;
@@ -210,6 +266,9 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
     await pool.query(`UPDATE company_settings SET ${column} = $1 WHERE id = $2`, [value, row.id]);
   }
   for (const [column, value] of statutoryUpdates) {
+    await pool.query(`UPDATE company_settings SET ${column} = $1 WHERE id = $2`, [value, row.id]);
+  }
+  for (const [column, value] of invoicePayUpdates) {
     await pool.query(`UPDATE company_settings SET ${column} = $1 WHERE id = $2`, [value, row.id]);
   }
   if (generalSettingsUpdate !== undefined) {

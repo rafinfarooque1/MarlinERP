@@ -20,6 +20,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
+import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -85,6 +86,7 @@ export default function Attendance() {
   const [locLoading, setLocLoading] = useState<number | null>(null);
   const [branchTypeFilter, setBranchTypeFilter] = useState<string>('all');
   const [branchLocId, setBranchLocId] = useState<string>('all');
+  useClearOutletSelection(branchTypeFilter === 'outlet', () => { setBranchTypeFilter('all'); setBranchLocId('all'); });
   const [applyLeaveOpen, setApplyLeaveOpen] = useState(false);
   const [viewLeave, setViewLeave] = useState<any>(null);
 
@@ -92,6 +94,7 @@ export default function Attendance() {
   const { data: employees = [] } = useListEmployees();
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
+  const { outletsEnabled } = useOutletsEnabled();
   const queryClient = useQueryClient();
   const checkInMutation  = useCheckIn();
   const checkOutMutation = useCheckOut();
@@ -321,7 +324,7 @@ export default function Attendance() {
                 <SelectItem value="all">All Branches</SelectItem>
                 <SelectItem value="headoffice">Head Office</SelectItem>
                 <SelectItem value="warehouse">Warehouse</SelectItem>
-                <SelectItem value="outlet">Outlet</SelectItem>
+                {outletsEnabled && <SelectItem value="outlet">Outlet</SelectItem>}
               </SelectContent>
             </Select>
             {branchTypeFilter === 'warehouse' && (

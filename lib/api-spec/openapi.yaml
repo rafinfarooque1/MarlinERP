@@ -2788,6 +2788,10 @@ components:
           type: boolean
         canPrint:
           type: boolean
+        canApprove:
+          type: boolean
+        canShare:
+          type: boolean
 
     PermissionInput:
       type: object
@@ -2808,4 +2812,8 @@ components:
         canDownload:
           type: boolean
         canPrint:
+          type: boolean
+        canApprove:
+          type: boolean
+        canShare:
           type: boolean

@@ -16,6 +16,7 @@ import { restoreBatches, consumeBatches, debitBatchByNumber, type BatchBreakdown
 import { logActivity } from "../lib/audit";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
+import { outstandingExpr, creditAdjustmentsExpr, computePaymentPosition } from "../lib/salePaymentPosition";
 import { deductMaterialAt, isMaterialKind } from "../lib/materialStock";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 
@@ -374,6 +375,27 @@ router.post("/sales-returns", requireModuleAction(["page:/returns", "page:/sales
     for (const rl of retLines) {
       if (rl._alloc.length > 0) {
         await restoreBatches(client, rl.itemId, locationType, locationId, rl._alloc, "sales_return", ret.id);
+      }
+    }
+
+    // Keep the stored status in step with the derived one. Once a credit note is
+    // allocated to this invoice the customer may owe nothing further, and a
+    // stale 'partially_paid' would leave a settled bill on collection lists.
+    if (refundMode === "credit_note") {
+      const { rows: [posRow] } = await client.query(
+        `SELECT s.total_amount::numeric AS total, COALESCE(s.amount_paid, 0)::numeric AS paid,
+                ${creditAdjustmentsExpr("s")} AS credit_notes
+           FROM sales s WHERE s.id = $1`,
+        [saleId]
+      );
+      if (posRow) {
+        await client.query(`UPDATE sales SET payment_status = $1 WHERE id = $2`, [
+          computePaymentPosition({
+            totalAmount: posRow.total, amountReceived: posRow.paid,
+            creditAdjustments: posRow.credit_notes, cancelledAt: null,
+          }).status,
+          saleId,
+        ]);
       }
     }
 
@@ -815,19 +837,26 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
     const { rows: invoices } = await pool.query(
       `SELECT s.id, s.invoice_number, s.sale_date, s.customer_id,
               s.total_amount::numeric AS total, COALESCE(s.amount_paid, 0)::numeric AS paid,
+              ${creditAdjustmentsExpr("s")} AS credit_notes,
+              ${outstandingExpr("s")} AS outstanding,
               c.name, c.phone, COALESCE(c.credit_days, 0) AS credit_days, COALESCE(c.credit_limit, 0)::numeric AS credit_limit
        FROM sales s
        JOIN customers c ON c.id = s.customer_id
-       WHERE (s.total_amount::numeric - COALESCE(s.amount_paid, 0)::numeric) > 0.009
+       WHERE ${outstandingExpr("s")} > 0.009
+         AND s.branch_transfer_id IS NULL
          AND ${rcvScopeCond}
        ORDER BY s.sale_date ASC, s.id ASC`,
       rcvParams
     );
     const { rows: cnRows } = await pool.query(
+      // UNALLOCATED credits only. A credit note raised by a sales return is
+      // already netted off that invoice's own balance above; counting it here as
+      // well would relieve the customer of the same money twice.
       `SELECT l.code, COALESCE(SUM(v.total_amount::numeric), 0) AS amt
        FROM journal_vouchers v
        JOIN account_ledgers l ON l.id = v.party_ledger_id
        WHERE v.voucher_type = 'credit_note' AND l.code LIKE 'CUST-%'
+         AND NOT EXISTS (SELECT 1 FROM sales_returns sr WHERE sr.credit_note_id = v.id)
        GROUP BY l.code`
     );
     const cnByCustomer = new Map<number, number>();
@@ -841,7 +870,9 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
     let totalDueAll = 0;
 
     for (const inv of invoices) {
-      const balance = r2(Number(inv.total) - Number(inv.paid));
+      // Net of the credit notes raised against this very invoice — the same
+      // figure the invoice, its QR and the PDF quote.
+      const balance = r2(Number(inv.outstanding));
       const creditDays = Number(inv.credit_days) || 0;
       const dueDate = addDays(String(inv.sale_date), creditDays);
       const overdue = Math.max(0, daysBetween(dueDate, asOf));
@@ -874,6 +905,7 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
         bucket,
         total: r2(Number(inv.total)),
         paid: r2(Number(inv.paid)),
+        creditNotes: r2(Number(inv.credit_notes)),
         balance,
       });
       totals[bucket] = r2(totals[bucket] + balance);
@@ -1015,17 +1047,25 @@ router.get("/outstanding/collections", requireModuleView("page:/outstanding"), a
       `SELECT s.id, s.invoice_number, s.sale_date, s.payment_status, s.payment_mode, s.customer_id,
               s.location_type, s.location_id,
               s.total_amount::numeric AS total, COALESCE(s.amount_paid, 0)::numeric AS paid,
+              ${creditAdjustmentsExpr("s")} AS credit_notes,
+              ${outstandingExpr("s")} AS outstanding,
               c.name AS customer_name, c.phone AS customer_phone, COALESCE(c.credit_days, 0) AS credit_days
        FROM sales s
        LEFT JOIN customers c ON c.id = s.customer_id
-       WHERE (s.total_amount::numeric - COALESCE(s.amount_paid, 0)::numeric) > 0.009
+       WHERE ${outstandingExpr("s")} > 0.009
          AND s.branch_transfer_id IS NULL
          AND ${colScopeCond}
        ORDER BY s.sale_date ASC, s.id ASC`,
       colParams
     );
     const items = rows.map((r: any) => {
-      const balance = r2(Number(r.total) - Number(r.paid));
+      // Chase the effective debt, not the gross one: a credit note settles a
+      // bill just as surely as a receipt does.
+      const position = computePaymentPosition({
+        totalAmount: r.total, amountReceived: r.paid,
+        creditAdjustments: r.credit_notes, cancelledAt: null,
+      });
+      const balance = position.outstanding;
       const dueDate = addDays(String(r.sale_date), Number(r.credit_days) || 0);
       const daysOverdue = Math.max(0, daysBetween(dueDate, asOf));
       return {
@@ -1042,7 +1082,7 @@ router.get("/outstanding/collections", requireModuleView("page:/outstanding"), a
         totalAmount: r2(Number(r.total)),
         amountPaid: r2(Number(r.paid)),
         balanceDue: balance,
-        paymentStatus: r.payment_status ?? "unpaid",
+        paymentStatus: position.status,
       };
     }).sort((a, b) => b.daysOverdue - a.daysOverdue || b.balanceDue - a.balanceDue);
 

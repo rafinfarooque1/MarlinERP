@@ -1,0 +1,301 @@
+Implement the following ERP improvements.
+
+==========================================================
+PART 1 – ADD "ADD EXPENSE" BUTTON
+==========================================================
+
+Module
+
+Operations
+→ Expenses
+
+Currently the Expenses page does not provide an option to create a new expense.
+
+Add a prominent
+
++ Add Expense
+
+button in the top-right corner of the Expenses page.
+
+The button should only be visible to users having the appropriate permission.
+
+==========================================================
+EXPENSE ENTRY FORM
+==========================================================
+
+Clicking the button should open the standard Expense Entry form.
+
+Include:
+
+• Date
+• Location
+• Expense Category
+• Expense Ledger
+• Description
+• Amount
+• Payment Method
+    - Cash
+    - Bank
+    - Credit
+• Cash/Bank Account
+• Reference Number
+• Notes
+
+==========================================================
+ACCOUNTING
+==========================================================
+
+When the expense is saved,
+
+Automatically create accounting entries.
+
+Cash Payment
+
+Debit
+Expense Ledger
+
+Credit
+Cash
+
+Bank Payment
+
+Debit
+Expense Ledger
+
+Credit
+Bank
+
+Credit Expense
+
+Debit
+Expense Ledger
+
+Credit
+Accounts Payable / Expense Payable
+
+No manual journal entry should be required.
+
+==========================================================
+UPDATE ALL MODULES
+==========================================================
+
+Saving an expense must immediately update
+
+• Chart of Accounts
+• Trial Balance
+• Profit & Loss
+• Balance Sheet
+• General Ledger
+• Cash Balance
+• Bank Balance
+• Expense Reports
+• Dashboard
+
+==========================================================
+PERMISSIONS
+==========================================================
+
+Respect existing permissions.
+
+Users without Create Expense permission must not see the Add Expense button.
+
+==========================================================
+PART 2 – OUTLET MANAGEMENT TOGGLE
+==========================================================
+
+A UI inconsistency exists.
+
+The ERP already supports
+
+Settings
+→ Company Settings
+→ Location Structure
+→ Outlet Management
+
+ON / OFF
+
+When Outlet Management is OFF,
+
+Outlets should completely disappear from the ERP user interface.
+
+Currently several pages still display Outlets.
+
+Examples
+
+• Cash Balance
+• Expenses
+• Filters
+• Reports
+
+This must be corrected.
+
+==========================================================
+WHEN OUTLET MANAGEMENT = OFF
+==========================================================
+
+Hide every Outlet-related UI element.
+
+Including
+
+• Outlet cards
+• Outlet filters
+• Outlet dropdowns
+• Outlet selectors
+• Outlet tabs
+• Outlet summaries
+• Outlet dashboard widgets
+• Outlet statistics
+• Outlet reports
+• Outlet cash balances
+• Outlet expense summaries
+• Outlet stock information
+• Outlet transfer destinations
+• Outlet employee assignments
+• Outlet references in Operations
+• Outlet references in Accounting
+• Outlet references in Reports
+
+Only enabled location types should be visible.
+
+For the current ERP this means
+
+• Head Office
+• Warehouses
+
+Future location types should also respect the same configuration.
+
+==========================================================
+DATABASE
+==========================================================
+
+Do NOT delete Outlet data.
+
+Historical Outlet records must remain in the database.
+
+When Outlet Management is enabled again,
+
+All historical Outlet information should automatically become visible again.
+
+==========================================================
+LOCATION FILTERS
+==========================================================
+
+Every Location dropdown throughout the ERP must dynamically respect the Location Structure settings.
+
+Example
+
+If Outlets are disabled,
+
+Location dropdowns should never list Outlets.
+
+Only active location types should be selectable.
+
+==========================================================
+CASH BALANCE
+==========================================================
+
+Update Cash Balance page.
+
+When Outlets are disabled,
+
+Only display
+
+• Head Office
+• Warehouses
+
+Do not display
+
+• Outlet cards
+• Outlet totals
+• Outlet balances
+
+==========================================================
+EXPENSES
+==========================================================
+
+Update Expenses page.
+
+When Outlets are disabled,
+
+Hide
+
+• Outlet filter
+• Outlet selection
+• Outlet labels
+
+Expenses should only reference enabled location types.
+
+==========================================================
+GLOBAL LOCATION SERVICE
+==========================================================
+
+Do not implement page-by-page conditions.
+
+Instead,
+
+Use the existing Location Structure configuration as the single source of truth.
+
+Every module should automatically respect this configuration.
+
+==========================================================
+REGRESSION TEST
+==========================================================
+
+Perform a complete ERP audit.
+
+Verify that the Outlet Management toggle is respected in every module.
+
+Check
+
+• Dashboard
+• Sales
+• Purchases
+• Production
+• Inventory
+• Stock Transfers
+• Expenses
+• Cash Balance
+• Deposits
+• Accounting
+• Payroll
+• Reports
+• Employee Assignment
+• Location Filters
+• Search
+• Analytics
+• Notifications
+• Settings
+
+No Outlet-related UI should appear anywhere while Outlet Management is OFF.
+
+==========================================================
+VALIDATION
+==========================================================
+
+Provide a validation report confirming
+
+✓ Add Expense button implemented
+
+✓ Expense accounting automation working
+
+✓ Chart of Accounts updated
+
+✓ Cash and Bank updated
+
+✓ Profit & Loss updated
+
+✓ Trial Balance updated
+
+✓ Balance Sheet updated
+
+✓ Dashboard updated
+
+✓ All Outlet UI hidden when toggle is OFF
+
+✓ Historical Outlet data preserved
+
+✓ Outlets reappear correctly when toggle is ON
+
+✓ Global Location Structure respected across the ERP
+
+No module should require separate maintenance for Outlet visibility in the future.

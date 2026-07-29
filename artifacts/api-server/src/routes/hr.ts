@@ -10,7 +10,14 @@ import { DEFAULT_INITIAL_PASSWORD } from '../lib/passwordPolicy';
 import { eq, and, gte, lte, sql } from "drizzle-orm";
 import { logActivity } from "../lib/audit";
 import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
+import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
+import { resolveChartParentId } from "../lib/chartGroups";
+import { provisionSalaryLedgers } from "../lib/payrollLedgers";
+import {
+  accruedForMonth, lockSalaryAccrual, recalcUnapprovedSalaryAccruals,
+  runSalaryAccrual, dailyAccrualRate, type Querier,
+} from "../lib/salaryAccrual";
 import {
   CreateHierarchyBody, UpdateHierarchyBody, DeleteHierarchyParams,
   CreateEmployeeBody, UpdateEmployeeBody, GetEmployeeParams, DeleteEmployeeParams,
@@ -220,6 +227,9 @@ function computePayroll(opts: {
 function enrichPayroll(r: any, emp?: any) {
   return {
     ...r,
+    // The raw row carries employee_id only; every client reads employeeId, so a
+    // missing alias makes lookups keyed on it silently miss instead of failing.
+    employeeId:   Number(emp?.id ?? r.employeeId ?? r.employee_id ?? 0),
     employeeName: emp?.name ?? r.employeeName ?? r.employee_name ?? "",
     baseSalary:        Number(r.baseSalary       ?? r.base_salary        ?? 0),
     lopDeduction:      Number(r.lopDeduction      ?? r.lop_deduction      ?? 0),
@@ -261,7 +271,10 @@ async function findOrProvisionLedger(
 ): Promise<number | null> {
   const { rows: [existing] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1 LIMIT 1`, [code]);
   if (existing) return existing.id;
-  const { rows: [parent] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1 LIMIT 1`, [parentCode]);
+  // Per-employee ledgers file inside their own sub-group ("Salary Payable",
+  // "Salary Expense", "Employee Advances") rather than as loose siblings of
+  // every other current liability — the container is created on demand.
+  const parentId = await resolveChartParentId(pool, parentCode);
   // Section follows the ledger type. This used to be hard-coded to
   // 'balance_sheet', which stamped every per-employee salary ledger as a
   // balance-sheet account even though it is an expense.
@@ -270,7 +283,7 @@ async function findOrProvisionLedger(
     `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_group, is_system_group, description)
      VALUES ($1, $2, $3, $4, $5, false, false, $6)
      ON CONFLICT DO NOTHING RETURNING id`,
-    [name, type, code, section, parent?.id ?? null, description],
+    [name, type, code, section, parentId, description],
   );
   if (created) return created.id;
   const { rows: [retry] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1 LIMIT 1`, [code]);
@@ -291,6 +304,11 @@ async function requireLedgerId(code: string): Promise<number> {
  * recoveries it closes and the status change. Either the books and the payroll
  * row both move or neither does — approval can no longer be recorded against
  * accounting that failed to post.
+ *
+ * Approval does not recognise the month's salary — daily accrual already did,
+ * day by day, as it was earned. What this posts is the **true-up**: the
+ * difference between the figure payroll finally computed and what has already
+ * been accrued, plus the statutory legs only a payroll run knows.
  */
 async function postSalaryApproval(opts: {
   payroll: any;
@@ -298,7 +316,7 @@ async function postSalaryApproval(opts: {
   voucherDate: string;
   periodLabel: string;
   createdBy: string;
-}): Promise<{ updated: any; netPay: number; salaryCost: number; voucherNumber: string }> {
+}): Promise<{ updated: any; netPay: number; salaryCost: number; voucherNumber: string | null; accrued: number }> {
   const { payroll: pr, empLabel, voucherDate, periodLabel, createdBy } = opts;
   const employeeId = Number(pr.employee_id);
 
@@ -319,16 +337,9 @@ async function postSalaryApproval(opts: {
   // Salary expense carries gross pay plus anything added by hand (arrears,
   // bonus). Employer contributions are separate expenses.
   const salaryCost = round2(grossPay + extraAmt);
-  const debitTotal = round2(salaryCost + pfEmployer + esiEmployer);
 
-  const salExpId = await findOrProvisionLedger(
-    `SAL-EMP-${employeeId}`, `Salary - ${empLabel}`, 'expense', 'SYS-INDEXP',
-    `Salary expense for ${empLabel}`,
-  );
-  const salPayId = await findOrProvisionLedger(
-    `SAL-PAY-${employeeId}`, `Salary Payable - ${empLabel}`, 'liability', 'SYS-CURL',
-    `Salary payable to ${empLabel}`,
-  );
+  const { expenseLedgerId: salExpId, payableLedgerId: salPayId } =
+    await provisionSalaryLedgers(pool, employeeId, empLabel);
   if (!salExpId || !salPayId) throw new Error("Could not provision the employee's salary ledgers");
 
   const advLedgerId = advanceRec > 0.004
@@ -338,25 +349,20 @@ async function postSalaryApproval(opts: {
     : null;
   if (advanceRec > 0.004 && !advLedgerId) throw new Error("Could not provision the employee's advance ledger");
 
-  const debits: Array<[number, number]> = [[salExpId, salaryCost]];
-  const credits: Array<[number, number]> = [];
-  if (pfEmployer  > 0.004) debits.push([await requireLedgerId('STD-PF-EMPR'),  pfEmployer]);
-  if (esiEmployer > 0.004) debits.push([await requireLedgerId('STD-ESI-EMPR'), esiEmployer]);
+  // Statutory legs are recognised for the first time here: only a payroll run
+  // knows PF, ESI, other withholdings and the advance it recovered, so daily
+  // accrual never touches them and they are posted in full.
+  const fixedDebits: Array<[number, number]> = [];
+  const fixedCredits: Array<[number, number]> = [];
+  if (pfEmployer  > 0.004) fixedDebits.push([await requireLedgerId('STD-PF-EMPR'),  pfEmployer]);
+  if (esiEmployer > 0.004) fixedDebits.push([await requireLedgerId('STD-ESI-EMPR'), esiEmployer]);
 
   const pfPayable  = round2(pfEmployee + pfEmployer);
   const esiPayable = round2(esiEmployee + esiEmployer);
-  if (pfPayable      > 0.004) credits.push([await requireLedgerId('STD-PF-PAY'),  pfPayable]);
-  if (esiPayable     > 0.004) credits.push([await requireLedgerId('STD-ESI-PAY'), esiPayable]);
-  if (otherDeductions > 0.004) credits.push([await requireLedgerId('STD-EMP-DED'), otherDeductions]);
-  if (advanceRec      > 0.004 && advLedgerId) credits.push([advLedgerId, advanceRec]);
-  if (netPay          > 0.004) credits.push([salPayId, netPay]);
-
-  const creditTotal = round2(credits.reduce((s, [, amt]) => s + amt, 0));
-  if (Math.abs(creditTotal - debitTotal) > 0.02) {
-    throw new Error(
-      `Salary entry does not balance (debit ${debitTotal.toFixed(2)} vs credit ${creditTotal.toFixed(2)}) — payroll figures are inconsistent`
-    );
-  }
+  if (pfPayable       > 0.004) fixedCredits.push([await requireLedgerId('STD-PF-PAY'),  pfPayable]);
+  if (esiPayable      > 0.004) fixedCredits.push([await requireLedgerId('STD-ESI-PAY'), esiPayable]);
+  if (otherDeductions > 0.004) fixedCredits.push([await requireLedgerId('STD-EMP-DED'), otherDeductions]);
+  if (advanceRec      > 0.004 && advLedgerId) fixedCredits.push([advLedgerId, advanceRec]);
 
   const client = await pool.connect();
   try {
@@ -371,25 +377,75 @@ async function postSalaryApproval(opts: {
       throw new Error("This payroll was already approved by someone else");
     }
 
-    const voucherNumber = await nextVoucherNumber(client, "journal", voucherDate);
-    const narration = `Salary Approved — ${empLabel} — ${periodLabel}`;
-    const { rows: [jv] } = await client.query(
-      `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by)
-       VALUES ('journal', $1, $2, $3, $4, $5) RETURNING id`,
-      [voucherNumber, voucherDate, narration, debitTotal.toFixed(2), createdBy],
+    // Serialise against the accrual sweep for this employee, then read what the
+    // month has already recognised. Both must happen inside this transaction:
+    // reading the accrued figure on the pool would let a sweep insert one more
+    // day between the read and the voucher, and that day would then be charged
+    // twice. Once this commits the month is 'approved', which is also what stops
+    // the sweep adding any further day to it.
+    await lockSalaryAccrual(client as unknown as Querier, employeeId);
+    const accrued = await accruedForMonth(
+      client as unknown as Querier, employeeId, Number(pr.year), Number(pr.month),
     );
 
-    for (const [ledgerId, amt] of debits) {
-      await client.query(
-        `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit) VALUES ($1, $2, $3, 0)`,
-        [jv.id, ledgerId, amt.toFixed(2)],
+    // The true-up. Daily accrual has already booked `accrued` as Dr Salary
+    // Expense / Cr Salary Payable across the month, so approval posts only the
+    // difference up to the figure payroll computed.
+    //
+    // Either leg can go negative — heavy loss of pay, or a month accrued in full
+    // and then approved for less, leaves the accrual overstated — and the true-up
+    // then reverses the excess (Cr Salary Expense / Dr Salary Payable). The
+    // identity that makes this voucher balance survives subtracting the same
+    // figure from one debit and one credit, so it balances in either direction.
+    const debits: Array<[number, number]> = [...fixedDebits];
+    const credits: Array<[number, number]> = [...fixedCredits];
+    const place = (
+      natural: Array<[number, number]>,
+      opposite: Array<[number, number]>,
+      ledgerId: number,
+      signed: number,
+    ) => {
+      if (signed > 0.004) natural.push([ledgerId, signed]);
+      else if (signed < -0.004) opposite.push([ledgerId, round2(-signed)]);
+    };
+    place(debits, credits, salExpId, round2(salaryCost - accrued));
+    place(credits, debits, salPayId, round2(netPay - accrued));
+
+    const debitTotal  = round2(debits.reduce((s, [, amt]) => s + amt, 0));
+    const creditTotal = round2(credits.reduce((s, [, amt]) => s + amt, 0));
+    if (Math.abs(creditTotal - debitTotal) > 0.02) {
+      throw new Error(
+        `Salary entry does not balance (debit ${debitTotal.toFixed(2)} vs credit ${creditTotal.toFixed(2)}) — payroll figures are inconsistent`
       );
     }
-    for (const [ledgerId, amt] of credits) {
-      await client.query(
-        `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit) VALUES ($1, $2, 0, $3)`,
-        [jv.id, ledgerId, amt.toFixed(2)],
+
+    // A month accrued to exactly what payroll computed, with no statutory legs,
+    // has nothing left to post. Approval still locks the month; writing an
+    // empty voucher for it would only put a phantom in the register.
+    let voucherNumber: string | null = null;
+    if (debits.length > 0 || credits.length > 0) {
+      voucherNumber = await nextVoucherNumber(client, "journal", voucherDate);
+      const narration = accrued > 0.004
+        ? `Salary Approved (true-up on ₹${accrued.toFixed(2)} accrued daily) — ${empLabel} — ${periodLabel}`
+        : `Salary Approved — ${empLabel} — ${periodLabel}`;
+      const { rows: [jv] } = await client.query(
+        `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by)
+         VALUES ('journal', $1, $2, $3, $4, $5) RETURNING id`,
+        [voucherNumber, voucherDate, narration, debitTotal.toFixed(2), createdBy],
       );
+
+      for (const [ledgerId, amt] of debits) {
+        await client.query(
+          `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit) VALUES ($1, $2, $3, 0)`,
+          [jv.id, ledgerId, amt.toFixed(2)],
+        );
+      }
+      for (const [ledgerId, amt] of credits) {
+        await client.query(
+          `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit) VALUES ($1, $2, 0, $3)`,
+          [jv.id, ledgerId, amt.toFixed(2)],
+        );
+      }
     }
 
     // Close the advances this run recovered. They were claimed at generation
@@ -409,7 +465,7 @@ async function postSalaryApproval(opts: {
     );
 
     await client.query("COMMIT");
-    return { updated, netPay, salaryCost, voucherNumber };
+    return { updated, netPay, salaryCost, voucherNumber, accrued };
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
     throw e;
@@ -513,6 +569,12 @@ async function readProductionStaffFlag(id: number): Promise<boolean> {
 router.post("/hr/employees", requireModuleAction("page:/hr/employees", "add"), async (req, res): Promise<void> => {
   const parsed = CreateEmployeeBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+  // Posting new staff to an outlet is new outlet activity. People already
+  // assigned to one keep their posting, so historical payroll and attendance
+  // still resolve to a real location.
+  if ((parsed.data as any).branchType === 'outlet' && await outletWritesBlocked(pool)) {
+    res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+  }
   const [row] = await db.insert(employeesTable).values({
     ...parsed.data,
     salary: String(parsed.data.salary),
@@ -567,6 +629,21 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
   const [before] = await db.select().from(employeesTable).where(eq(employeesTable.id, id)).limit(1);
   const parsed = UpdateEmployeeBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+  // Only a *move* to an outlet is blocked. Someone already stationed at one can
+  // still have their phone number or salary corrected, otherwise turning the
+  // module off would freeze those staff records outright.
+  //
+  // The comparison is on the EFFECTIVE destination, not on what the payload
+  // happens to mention: a PATCH carrying only `branchId` would otherwise walk an
+  // employee from one outlet to another without ever naming a branchType.
+  const nextBranchType = (parsed.data as any).branchType ?? (before as any)?.branchType;
+  const nextBranchId   = (parsed.data as any).branchId   ?? (before as any)?.branchId;
+  const stayingPut = (before as any)?.branchType === 'outlet'
+    && Number((before as any)?.branchId) === Number(nextBranchId);
+  const movingToOutlet = nextBranchType === 'outlet' && !stayingPut;
+  if (movingToOutlet && await outletWritesBlocked(pool)) {
+    res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+  }
   const updateData: Record<string, unknown> = { ...parsed.data };
   if (parsed.data.salary !== undefined) updateData.salary = String(parsed.data.salary);
   const beforeFlag = await readProductionStaffFlag(id);
@@ -579,6 +656,73 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const [h] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, row.hierarchyId)).limit(1);
   const isProductionStaff = (await saveProductionStaffFlag(id, req.body)) ?? beforeFlag;
+
+  const prevSalary = before ? Number(before.salary) : 0;
+  const newSalary = Number(row.salary);
+  const salaryChanged = parsed.data.salary !== undefined && Math.abs(newSalary - prevSalary) > 0.004;
+  const reactivated = Boolean(before) && before!.isActive === false && row.isActive === true;
+
+  // Bringing someone back must not backfill the months they spent deactivated as
+  // though they had been employed throughout — accrual resumes from today.
+  if (reactivated) {
+    await pool.query(
+      `UPDATE employees SET salary_accrual_resume_from = CURRENT_DATE WHERE id = $1`, [id],
+    ).catch((e) => console.error("[hr] could not stamp the accrual resume date:", e));
+  }
+
+  if (salaryChanged) {
+    // A revision rewrites every unapproved month's daily accrual at the new
+    // salary: an open month is recalculated in full rather than running at two
+    // rates. Approved and paid months are financially final and are left alone.
+    //
+    // The reason travels outside the validated body because zod strips unknown
+    // keys, so it is read from the raw request.
+    const reason = typeof (req.body as any)?.revisionReason === "string"
+      ? String((req.body as any).revisionReason).trim().slice(0, 500)
+      : "";
+    try {
+      const recalc = await recalcUnapprovedSalaryAccruals(pool, id);
+      const now = new Date();
+      const basis = recalc.monthsRecalculated[0]
+        ?? { year: now.getFullYear(), month: now.getMonth() + 1 };
+      const asLabel = (m: { year: number; month: number }) => `${String(m.month).padStart(2, "0")}/${m.year}`;
+      const months = recalc.monthsRecalculated.map(asLabel);
+
+      logActivity({
+        action: "UPDATE", module: "payroll", entityType: "salary_accrual", entityId: id,
+        user: req.employee?.username ?? "system",
+        description:
+          `Salary revised for ${row.name} — ₹${prevSalary.toLocaleString("en-IN")} → ₹${newSalary.toLocaleString("en-IN")}; `
+          + `${recalc.entriesReversed} daily accrual entr${recalc.entriesReversed === 1 ? "y" : "ies"} reversed, `
+          + `${recalc.entriesRegenerated} regenerated`
+          + (months.length ? ` for ${months.join(", ")}` : " (nothing accrued yet)")
+          + (reason ? ` — reason: ${reason}` : ""),
+        metadata: {
+          employeeId: id, employeeName: row.name,
+          previousAmount: prevSalary, newAmount: newSalary,
+          previousDailyAccrual: dailyAccrualRate(prevSalary, basis.year, basis.month),
+          newDailyAccrual: dailyAccrualRate(newSalary, basis.year, basis.month),
+          dailyRateBasisMonth: asLabel(basis),
+          reason: reason || null,
+          monthsRecalculated: months,
+          entriesReversed: recalc.entriesReversed,
+          entriesRegenerated: recalc.entriesRegenerated,
+          previousAccruedTotal: recalc.previousTotal,
+          newAccruedTotal: recalc.newTotal,
+          revisedBy: req.employee?.username ?? "system",
+          revisedAt: now.toISOString(),
+        },
+      }).catch(() => {});
+    } catch (e) {
+      // The salary itself is saved. Accrual is an idempotent catch-up, so a
+      // failure here self-heals on the next hourly pass — but it must be loud,
+      // because until then the open month is still accruing at the old rate.
+      console.error("[hr] salary accrual recalculation failed:", e);
+    }
+  } else if (reactivated) {
+    try { await runSalaryAccrual(pool, { employeeId: id }); }
+    catch (e) { console.error("[hr] salary accrual after reactivation failed:", e); }
+  }
 
   logActivity({
     action: "UPDATE", module: "hr", entityType: "employee", entityId: row.id,
@@ -943,25 +1087,98 @@ router.patch("/hr/payroll/:id", requireModuleAction("page:/hr/payroll", "edit"),
   res.json({ ...enrichPayroll(row, emp), branchName: emp ? await getBranchName(emp.branchType, emp.branchId) : "" });
 });
 
-// Approve payroll → post the full statutory salary entry.
+// ── Salary accrual register ────────────────────────────────────────────────
 //
-// The old entry debited salary expense with *net* pay, which understated the
-// cost of employing someone by every rupee withheld and hid the PF/ESI
-// liability entirely. The correct entry recognises the whole cost and splits
-// what is owed to whom:
+// What daily accrual has recognised, by employee and month. The mirror of
+// GET /rent/accruals, and the answer to "why does the P&L already show salary
+// for a month nobody has approved?".
+router.get("/hr/salary-accruals", requireModuleView("page:/hr/payroll"), async (req, res): Promise<void> => {
+  const params: unknown[] = [];
+
+  // LBAC: a branch user sees the accrual of the employees they can already see.
+  const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  let scopeCond = 'TRUE';
+  if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
+    const scope = await getUserDataScope(scopeEmp);
+    scopeCond = scopeBranchWhere(scope, params, 'e');
+  }
+
+  const q = req.query as Record<string, unknown>;
+  let filters = '';
+  if (q.employeeId !== undefined && q.employeeId !== '') {
+    params.push(parseInt(String(q.employeeId), 10));
+    filters += ` AND a.employee_id = $${params.length}`;
+  }
+  if (q.year !== undefined && q.year !== '') {
+    params.push(parseInt(String(q.year), 10));
+    filters += ` AND a.year = $${params.length}`;
+  }
+  if (q.month !== undefined && q.month !== '') {
+    params.push(parseInt(String(q.month), 10));
+    filters += ` AND a.month = $${params.length}`;
+  }
+
+  const { rows } = await pool.query(
+    `SELECT a.employee_id, e.name AS employee_name, a.year, a.month,
+            COUNT(*)::int AS days,
+            SUM(a.amount)::numeric(15,2) AS accrued,
+            MAX(a.monthly_salary)::numeric(15,2) AS monthly_salary,
+            MAX(a.days_in_month)::int AS days_in_month,
+            MIN(a.accrual_date) AS first_day, MAX(a.accrual_date) AS last_day,
+            COALESCE(MAX(p.status), 'none') AS payroll_status
+       FROM salary_accruals a
+       JOIN employees e ON e.id = a.employee_id
+       LEFT JOIN payroll p ON p.employee_id = a.employee_id AND p.year = a.year AND p.month = a.month
+      WHERE ${scopeCond}${filters}
+      GROUP BY a.employee_id, e.name, a.year, a.month
+      ORDER BY a.year DESC, a.month DESC, e.name`,
+    params,
+  );
+
+  res.json(rows.map((r: any) => ({
+    employeeId: Number(r.employee_id),
+    employeeName: r.employee_name,
+    year: Number(r.year),
+    month: Number(r.month),
+    days: Number(r.days),
+    accrued: Number(r.accrued),
+    monthlySalary: Number(r.monthly_salary),
+    daysInMonth: Number(r.days_in_month),
+    dailyAccrual: dailyAccrualRate(Number(r.monthly_salary), Number(r.year), Number(r.month)),
+    firstDay: r.first_day instanceof Date ? r.first_day.toISOString().slice(0, 10) : r.first_day,
+    lastDay: r.last_day instanceof Date ? r.last_day.toISOString().slice(0, 10) : r.last_day,
+    payrollStatus: r.payroll_status,
+    // An approved or paid month is financially final: the sweep will not extend
+    // it and a salary revision will not recalculate it.
+    locked: r.payroll_status === 'approved' || r.payroll_status === 'paid',
+  })));
+});
+
+// Approve payroll → true up the month and post the statutory legs.
 //
-//   Dr  Salary - <employee>            gross pay + any extra (arrears/bonus)
+// Salary itself is NOT recognised here. Daily accrual has been booking
+// Dr Salary - <employee> / Cr Salary Payable - <employee> every day of the
+// month as it was earned, so what approval posts is the difference between the
+// figure payroll finally computed and what has already been accrued, plus the
+// legs only a payroll run knows:
+//
+//   Dr  Salary - <employee>            gross + extra MINUS what already accrued
 //   Dr  Employer PF Contribution       employer's PF share
 //   Dr  Employer ESI Contribution      employer's ESI share
 //     Cr  PF Payable                   employee + employer PF
 //     Cr  ESI Payable                  employee + employer ESI
 //     Cr  Employee Deductions Payable  other withholdings (TDS, fines…)
 //     Cr  Advance to <employee>         advance recovered this run
-//     Cr  Salary Payable - <employee>   net take-home pay
+//     Cr  Salary Payable - <employee>   net take-home MINUS what already accrued
 //
-// Both sides come to gross + extra + employer contributions, so the voucher
-// balances. The two employer ledgers and the per-employee salary ledger all sit
-// under Indirect Expenses, which is what carries salary into the P&L.
+// Subtracting the accrued figure from one debit and one credit leaves the two
+// sides equal, so the voucher still balances — and either of those two lines
+// flips side when the accrual overstated the month. The two employer ledgers and
+// the per-employee salary ledger all sit under Indirect Expenses, which is what
+// carries salary into the P&L.
+//
+// Approval also LOCKS the month: from here the accrual sweep adds no further day
+// to it and a salary revision leaves it alone.
 router.post("/hr/payroll/:id/approve", requireModuleAction("page:/hr/payroll", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const today = new Date().toISOString().split("T")[0];
@@ -986,7 +1203,13 @@ router.post("/hr/payroll/:id/approve", requireModuleAction("page:/hr/payroll", "
 
     logActivity({ action: "UPDATE", module: "payroll", entityType: "payroll", entityId: id,
       description: `Payroll approved for ${empLabel} — ${monthStr}/${existing.year}`,
-      metadata: { netPay: posting.netPay, salaryCost: posting.salaryCost, voucherNumber: posting.voucherNumber },
+      metadata: {
+        netPay: posting.netPay, salaryCost: posting.salaryCost, voucherNumber: posting.voucherNumber,
+        // The month was already in the books to this extent before approval; the
+        // voucher above carries only the remainder.
+        alreadyAccrued: posting.accrued,
+        trueUpExpense: round2(posting.salaryCost - posting.accrued),
+      },
     }).catch(() => {});
 
     res.json({ ...enrichPayroll(posting.updated, emp), branchName: emp ? await getBranchName(emp.branchType, emp.branchId) : "" });

@@ -18,6 +18,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
+import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 
 const schema = z.object({
   employeeId: z.coerce.number().min(1, 'Employee required'),
@@ -37,12 +38,14 @@ export default function Leave() {
   const [viewItem, setViewItem] = useState<any>(null);
   const [branchTypeFilter, setBranchTypeFilter] = useState<string>('all');
   const [branchLocId, setBranchLocId] = useState<string>('all');
+  useClearOutletSelection(branchTypeFilter === 'outlet', () => { setBranchTypeFilter('all'); setBranchLocId('all'); });
   const queryClient = useQueryClient();
   const applyMutation = useApplyLeave();
   const approveMutation = useApproveLeave();
   const { data: employees = [] } = useListEmployees();
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
+  const { outletsEnabled } = useOutletsEnabled();
 
   const empBranchMap = useMemo(() => {
     const m = new Map<number, { branchType: string; branchId: number }>();
@@ -138,7 +141,7 @@ export default function Leave() {
               <SelectItem value="all">All Branches</SelectItem>
               <SelectItem value="headoffice">Head Office</SelectItem>
               <SelectItem value="warehouse">Warehouse</SelectItem>
-              <SelectItem value="outlet">Outlet</SelectItem>
+              {outletsEnabled && <SelectItem value="outlet">Outlet</SelectItem>}
             </SelectContent>
           </Select>
           {branchTypeFilter === 'warehouse' && (

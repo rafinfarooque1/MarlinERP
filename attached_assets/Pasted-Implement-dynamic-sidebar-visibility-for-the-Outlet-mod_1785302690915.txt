@@ -1,0 +1,87 @@
+Implement dynamic sidebar visibility for the Outlet module based on the Location Structure setting.
+
+Business Rule:
+
+When:
+Settings
+→ Location Structure
+→ Outlet Management = OFF
+
+Then:
+
+1. Hide "Outlets" completely from the Inventory sidebar.
+2. Hide the Outlets page from navigation.
+3. Hide the Outlets option from all location dropdowns.
+4. Hide Outlet from search/autocomplete.
+5. Hide Outlet from warehouse/location filters.
+6. Hide Outlet from dashboard filters.
+7. Hide Outlet from reports.
+8. Hide Outlet from stock transfer source/destination selection.
+9. Hide Outlet from employee location assignment.
+10. Hide Outlet from customer/vendor location assignment.
+11. Hide every UI element related to Outlet.
+
+The sidebar should immediately become:
+
+Inventory
+• Units
+• Item Master
+• Stock Ledger
+• Reports
+• Verification
+• Warehouses
+• Item Prices
+
+There should be NO placeholder such as "Outlets (Legacy Disabled)" and no empty menu space.
+
+--------------------------------------------------------
+
+When:
+
+Settings
+→ Location Structure
+→ Outlet Management = ON
+
+Then:
+
+1. Restore the Outlet module automatically.
+2. Restore the sidebar item in its original position.
+3. Restore all Outlet dropdowns.
+4. Restore all Outlet reports.
+5. Restore all Outlet filters.
+6. Restore employee assignment to outlets.
+7. Restore stock transfer to/from outlets.
+8. Restore all existing Outlet records.
+9. Do not lose any historical Outlet data.
+
+--------------------------------------------------------
+
+Important
+
+Turning Outlet OFF must NOT:
+
+• Delete outlet records.
+• Delete outlet transactions.
+• Delete outlet stock.
+• Delete outlet customers.
+• Delete outlet history.
+• Delete outlet accounting.
+• Delete outlet reports.
+
+Everything must remain in the database.
+
+The toggle only controls UI visibility and whether new outlet operations are allowed.
+
+When turned ON again, all historical data must be available immediately.
+
+--------------------------------------------------------
+
+Technical Requirements
+
+• The sidebar must be generated dynamically from the Location Structure setting.
+• Do not hardcode the menu.
+• All API endpoints must also respect the setting.
+• Direct URL access to /inventory/outlets when Outlet is OFF should redirect to a 404 or Access Disabled page.
+• Permissions must still apply after the Outlet module is enabled again.
+
+Verify the implementation by toggling the setting OFF and ON without refreshing the application if possible. Confirm that the sidebar, navigation, routes, filters, and dropdowns update correctly while preserving all historical data.

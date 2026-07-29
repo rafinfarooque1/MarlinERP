@@ -9,6 +9,7 @@ import { Search, BarChart3, Download, AlertTriangle, ChevronRight, ChevronDown, 
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
+import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 
 const money = (n: number) => `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const dateIN = (d: string | null) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
@@ -41,6 +42,7 @@ export default function Stock() {
   const perm = usePermission('page:/headoffice/stock');
   const [branchType,       setBranchType]       = useState<string>('all');
   const [branchId,         setBranchId]         = useState<string>('');
+  useClearOutletSelection(branchType === 'outlet', () => { setBranchType('all'); setBranchId(''); });
   const [materialType,     setMaterialType]     = useState<string>('all');
   const [search,           setSearch]           = useState('');
   const [debouncedSearch,  setDebouncedSearch]  = useState('');
@@ -49,6 +51,7 @@ export default function Stock() {
   const [expanded,         setExpanded]         = useState<Set<string>>(new Set());
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets    = [] } = useListOutlets();
+  const { outletsEnabled } = useOutletsEnabled();
 
   // Debounce search — runs on server
   useEffect(() => {
@@ -189,7 +192,7 @@ export default function Stock() {
                 <SelectItem value="all">All Locations</SelectItem>
                 <SelectItem value="headoffice">Head Office</SelectItem>
                 <SelectItem value="warehouse">Warehouse</SelectItem>
-                <SelectItem value="outlet">Outlet</SelectItem>
+                {outletsEnabled && <SelectItem value="outlet">Outlet</SelectItem>}
               </SelectContent>
             </Select>
 

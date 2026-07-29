@@ -17,4 +17,22 @@ Staleness cuts the other way too, and it makes "audit the UI against the API typ
 
 **Why:** An audit comparing UI field reads against `lib/api-zod/src/generated/types/*.ts` reported ~15 "missing field" bugs across production, purchases, sales, outlets, item master and payroll — claiming visible `NaN` / `undefined` / `Invalid Date`. Nearly every one was a **false positive**: the routes really do return `paymentStatus`/`amountPaid`/`balanceDue`, `batchNumber`/`totalCost`/`costPerUnit`, `taxTotal`/`discountTotal`, `mrp`/`hsnCode`/`taxRate`, `gstin`/`state`/`stateCode`, and `branchType`. Only the generated types were behind. "Fixing" them would have broken working features.
 
+## A camelCase field the type declares but the route never emits fails SILENTLY
+
+The mirror image is worse than a missing field: a route that returns only the raw
+snake_case column while the generated interface declares the camelCase name gives a
+`p.employeeId` of `undefined` at runtime with a perfectly clean typecheck. Nothing throws
+— a `Map.get(undefined)` just misses, so the UI renders a dash or a zero, and any *filter*
+keyed on that field quietly matches nothing (which looks like "no results", not a bug).
+
+**Why:** the payroll list route hand-built its camelCase aliases and forgot `employeeId`. A
+brand-new accrual column read blank and the pre-existing branch filter had been silently
+dead for as long as it had existed.
+
+**How to apply:** when a joined/aliased route response feeds a lookup by id, print one real
+response body and check the key exists — do not trust the interface. Fix it at the route by
+adding the alias next to the others (`employeeId: Number(r.employee_id)`), not with a
+defensive `?? r.employee_id` at each call site: the route is where the other twenty aliases
+already live, and one fix repairs every consumer.
+
 **How to apply:** Fields reached through an `as any` cast are a signal the value comes from the raw-SQL layer, **not** evidence of a bug. Before changing any UI field read, confirm against the route's actual `SELECT` / response object (grep the field name in `artifacts/api-server/src/routes/`) and against the drizzle schema — and prefer a passing browser E2E over a type-level audit. Runtime behaviour is the oracle; the generated types are not.

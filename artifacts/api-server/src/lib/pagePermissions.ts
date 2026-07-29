@@ -35,6 +35,7 @@ export const PAGE_PERM_KEYS: readonly string[] = [
   "page:/hr/attendance",               // HR › Attendance
   "page:/hr/payroll",                  // HR › Payroll
   "page:/hr/advances",                 // HR › Advances
+  "page:/hr/rent",                     // HR › Rent Management
   "page:/hr/hierarchy",                // HR › Hierarchy
   "page:/accounts/chart",              // Accounts › Chart of Accounts
   "page:/accounts/ledger",             // Accounts › Ledger Statement
@@ -54,6 +55,7 @@ export const PAGE_PERM_KEYS: readonly string[] = [
   "page:/company/audit",               // Company › Audit Log
   "page:/company/permissions",         // Company › Permissions
   "page:/company/login-history",       // Company › Login History
+  "page:/company/backup",              // Company › Backup & Restore
 ];
 
 /**
@@ -83,6 +85,7 @@ export const LEGACY_MODULE_TO_PAGES: Readonly<Record<string, readonly string[]>>
   "Employees": ["page:/hr/employees"],
   "Attendance": ["page:/hr/attendance"],
   "Payroll": ["page:/hr/payroll", "page:/hr/advances"],
+  "Rent Management": ["page:/hr/rent"],
   "Hierarchy": ["page:/hr/hierarchy"],
   "Chart of Accounts": ["page:/accounts/chart"],
   "Ledger": ["page:/accounts/ledger"],
@@ -98,6 +101,7 @@ export const LEGACY_MODULE_TO_PAGES: Readonly<Record<string, readonly string[]>>
   "Settings": ["page:/company/settings", "page:/company/profile", "page:/company/audit"],
   "Permissions": ["page:/company/permissions"],
   "Login History": ["page:/company/login-history"],
+  "Backup & Restore": ["page:/company/backup"],
   "Location Stock": ["page:/headoffice/stock"],
   "Leave": ["page:/hr/attendance"],
   "Payments": ["page:/accounts/vouchers"],

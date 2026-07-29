@@ -5,10 +5,19 @@ import { migrateOutletsToWarehouses } from "./migrations/outletToWarehouse";
 import { repairOpeningBatches } from "./migrations/repairOpeningBatches";
 import { addMaterialLocations } from "./migrations/materialLocations";
 import { addMaterialBatches } from "./migrations/materialBatches";
+import { addWarehouseRent } from "./migrations/warehouseRent";
+import { addInvoiceShareLinks } from "./migrations/invoiceShareLinks";
+import { startRentAccrualScheduler } from "./lib/rentAccrual";
+import { addSalaryAccrual } from "./migrations/salaryAccrual";
+import { startSalaryAccrualScheduler } from "./lib/salaryAccrual";
+import { addBackupRestore } from "./migrations/backupRestore";
+import { addExpensePaymentModes } from "./migrations/expensePaymentModes";
+import { startBackupScheduler } from "./lib/backup/scheduler";
 import { PasswordService } from "./lib/password";
 import { PRODUCT_KINDS, PRODUCT_TABLE, nextProductIdentity } from "./lib/productIdentity";
 import { nextVoucherNumber } from "./lib/voucherNumber";
 import { PAGE_PERM_KEYS, LEGACY_MODULE_TO_PAGES } from "./lib/pagePermissions";
+import { ensureChartStructure } from "./lib/chartGroups";
 
 async function runMigrations() {
   // Existing migrations
@@ -1669,6 +1678,15 @@ async function runMigrations() {
   } catch (e) {
     console.error('[migration] invoice_sequence_reconcile FAILED:', (e as Error).message);
   }
+
+  // ── Chart of Accounts structure ───────────────────────────────────────────
+  // Runs last, after every ledger backfill above, so the per-entity ledgers
+  // they create are regrouped into their sub-groups in the same boot.
+  try {
+    await ensureChartStructure(pool);
+  } catch (e) {
+    console.error('[migration] chart_structure FAILED:', (e as Error).message);
+  }
 }
 
 // ── Run core migrations first so all tables exist before the top-level awaits ──
@@ -1730,6 +1748,30 @@ await pool.query(`ALTER TABLE purchases ALTER COLUMN vendor_id DROP NOT NULL`).c
 await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS gst_transfer_invoicing   BOOLEAN NOT NULL DEFAULT TRUE`);
 await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS branch_transfer_prefix   TEXT    NOT NULL DEFAULT 'BTR'`);
 await pool.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS branch_transfer_sequence INTEGER NOT NULL DEFAULT 0`);
+
+// ── Invoice payment presentation: UPI collect + bank details ─────────────────
+// What an invoice asks the customer to do. The UPI ID sits here as the company
+// default; a location that collects into its own handle keeps its own
+// `warehouses/outlets.upi_id` and that continues to win, because per-location
+// UPI is what makes electronic collections reconcilable to a location.
+//
+// Defaults preserve the behaviour that existed before these switches: UPI on,
+// QR printed, bank details printed. They exist so a company can turn a payment
+// request OFF, not to make anyone re-enable what already worked.
+//
+// bank_branch / account_type / bank_account_holder complete the bank block the
+// renderer has always tried to print — it referenced these fields while they
+// only ever existed in the template, so those rows silently printed blank.
+await pool.query(`
+  ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS upi_enabled                  BOOLEAN NOT NULL DEFAULT TRUE;
+  ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS upi_id                       TEXT;
+  ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS upi_payee_name               TEXT;
+  ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS show_upi_qr_on_invoice       BOOLEAN NOT NULL DEFAULT TRUE;
+  ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS show_bank_details_on_invoice BOOLEAN NOT NULL DEFAULT TRUE;
+  ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS bank_branch                  TEXT;
+  ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS account_type                 TEXT;
+  ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS bank_account_holder          TEXT;
+`);
 
 // The invoice series lives ON the settings row, so on a fresh database the row
 // has to exist before the first transfer is dispatched or the sequence has
@@ -2282,6 +2324,31 @@ await addMaterialLocations(pool);
 // Materials gain a batch/expiry layer. Must follow addMaterialLocations: it
 // seeds opening lots from the located material rows that migration creates.
 await addMaterialBatches(pool);
+
+// Warehouse rent. Runs after the outlet→warehouse conversion so every converted
+// warehouse is registered for rent, and after the ledger tables exist so the
+// per-warehouse rent ledgers can be provisioned.
+await addWarehouseRent(pool);
+
+// Catch up any rent days missed while the server was down, then keep accruing.
+startRentAccrualScheduler(pool);
+
+// Daily salary accrual. Runs after the ledger tables exist so the per-employee
+// salary ledgers can be provisioned on an employee's first accrued day.
+await addSalaryAccrual(pool);
+startSalaryAccrualScheduler(pool);
+
+// Invoice share links: the stateful layer behind customer-facing invoice URLs.
+await addInvoiceShareLinks(pool);
+
+// Backup catalogue. Runs last: the tables it creates are excluded from every dump,
+// so they must exist independently of whatever a restored archive happens to hold.
+await addBackupRestore(pool);
+await addExpensePaymentModes(pool);
+
+// Automatic backups and retention. Starts after the migrations above so a
+// scheduled backup can never capture a half-upgraded schema.
+startBackupScheduler();
 
 const rawPort = process.env["PORT"];
 if (!rawPort) throw new Error("PORT environment variable is required but was not provided.");

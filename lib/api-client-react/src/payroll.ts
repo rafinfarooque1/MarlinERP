@@ -168,6 +168,51 @@ export const usePayPayroll = () =>
       }),
   });
 
+// ── Salary Accrual Register ────────────────────────────────────────────────
+//
+// What daily accrual has already recognised in the books, by employee-month.
+// Salary reaches the P&L a day at a time as it is earned, so approval is a
+// true-up on this figure rather than the moment the expense appears.
+
+export interface SalaryAccrualSummary {
+  employeeId: number;
+  employeeName: string;
+  year: number;
+  month: number;
+  days: number;
+  accrued: number;
+  monthlySalary: number;
+  daysInMonth: number;
+  dailyAccrual: number;
+  firstDay: string;
+  lastDay: string;
+  payrollStatus: 'none' | 'draft' | 'approved' | 'paid';
+  /** Approved and paid months are financially final: no further accrual, no recalculation. */
+  locked: boolean;
+}
+
+export const getSalaryAccrualsQueryKey = (params?: { employeeId?: number; year?: number; month?: number }) => [
+  "/api/hr/salary-accruals",
+  params,
+];
+
+export const useListSalaryAccruals = (
+  params?: { employeeId?: number; year?: number; month?: number },
+  options?: { query?: UseQueryOptions<SalaryAccrualSummary[], Error> }
+) =>
+  useQuery<SalaryAccrualSummary[], Error>({
+    queryKey: getSalaryAccrualsQueryKey(params),
+    queryFn: async () => {
+      const qs = new URLSearchParams();
+      if (params?.employeeId) qs.set("employeeId", String(params.employeeId));
+      if (params?.year) qs.set("year", String(params.year));
+      if (params?.month) qs.set("month", String(params.month));
+      const q = qs.toString();
+      return customFetch<SalaryAccrualSummary[]>(`/api/hr/salary-accruals${q ? "?" + q : ""}`);
+    },
+    ...options?.query,
+  });
+
 // ── Employee Advances ──────────────────────────────────────────────────────
 
 export const getAdvancesQueryKey = (employeeId?: number) => [

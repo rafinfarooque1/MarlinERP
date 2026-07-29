@@ -581,6 +581,76 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     push({ entryId: eid, date: p.purchase_date, ledgerId: vendLedger, debit: 0, credit: amt, source: "purchase", voucherNumber: p.invoice_number, description: isBranchTransfer ? `Due to branch — ${bill}` : `Purchase ${bill}` });
   }
 
+  // 7. Warehouse rent: Dr Rent Expense / Cr Rent Payable, per accrued day.
+  //
+  // Derived rather than posted as vouchers, for the same reason sales and
+  // purchases are: one row per warehouse per day would add thousands of journal
+  // vouchers a year and bury the voucher register. Deriving them here puts rent
+  // into the trial balance, P&L, balance sheet and ledger statement through the
+  // same single stream every other source uses.
+  //
+  // Ungated by design. Rent is recognised on the day it is incurred, so the
+  // running month shows the rent that belongs to it rather than nothing until
+  // someone signs the month off. Approval no longer changes what the books say:
+  // it locks the month against recalculation and releases the payable for
+  // payment. This replaced an `AND p.status IN ('approved','paid')` filter on
+  // rent_periods, whose consequence was that approving a month silently restated
+  // a P&L that had already been read, reported and acted on.
+  //
+  // Rent *payments* are real vouchers and arrive via section 3, so the payable is
+  // credited here and debited there — no double count.
+  const rap: any[] = [];
+  const { rows: rentRows } = await pool.query(
+    `SELECT r.id, r.accrual_date AS date, r.amount, w.name AS warehouse_name,
+            a.expense_ledger_id, a.payable_ledger_id
+     FROM rent_accruals r
+     JOIN warehouse_rent_agreements a ON a.warehouse_id = r.warehouse_id
+     JOIN warehouses w ON w.id = r.warehouse_id
+     WHERE a.expense_ledger_id IS NOT NULL AND a.payable_ledger_id IS NOT NULL
+       ${upTo("r.accrual_date", rap)}`, rap
+  );
+  for (const r of rentRows) {
+    const amt = Number(r.amount);
+    if (!(amt > 0.004)) continue;
+    const eid = `rent:${r.id}`;
+    const desc = `Rent — ${r.warehouse_name}`;
+    push({ entryId: eid, date: r.date, ledgerId: r.expense_ledger_id, debit: amt, credit: 0, source: "rent", voucherNumber: null, description: desc });
+    push({ entryId: eid, date: r.date, ledgerId: r.payable_ledger_id, debit: 0, credit: amt, source: "rent", voucherNumber: null, description: desc });
+  }
+
+  // 8. Salary: Dr Salary Expense / Cr Salary Payable, per accrued day.
+  //
+  // Same shape as rent above, ungated for the same reason: the cost belongs to
+  // the day it was earned, not to the day someone approved the run.
+  //
+  // Approval does NOT recognise this cost a second time. postSalaryApproval
+  // writes a real voucher that trues the month up to the figure payroll actually
+  // computed — it debits only the difference between that figure and what has
+  // already accrued here — so the month is recognised once. Salary *payments* are
+  // vouchers too, debiting the same payable this credits.
+  //
+  // Months approved before daily accrual existed carry no accrual rows at all,
+  // because the sweep refuses to touch an approved month. Their original
+  // full-value voucher therefore stands alone and history is unchanged.
+  const sap: any[] = [];
+  const { rows: salaryRows } = await pool.query(
+    `SELECT a.id, a.accrual_date AS date, a.amount, e.name AS employee_name,
+            le.id AS expense_ledger_id, lp.id AS payable_ledger_id
+     FROM salary_accruals a
+     JOIN employees e ON e.id = a.employee_id
+     JOIN account_ledgers le ON le.code = 'SAL-EMP-' || a.employee_id
+     JOIN account_ledgers lp ON lp.code = 'SAL-PAY-' || a.employee_id
+     WHERE TRUE ${upTo("a.accrual_date", sap)}`, sap
+  );
+  for (const s of salaryRows) {
+    const amt = Number(s.amount);
+    if (!(amt > 0.004)) continue;
+    const eid = `salary:${s.id}`;
+    const desc = `Salary — ${s.employee_name}`;
+    push({ entryId: eid, date: s.date, ledgerId: s.expense_ledger_id, debit: amt, credit: 0, source: "salary", voucherNumber: null, description: desc });
+    push({ entryId: eid, date: s.date, ledgerId: s.payable_ledger_id, debit: 0, credit: amt, source: "salary", voucherNumber: null, description: desc });
+  }
+
   return postings;
 }
 

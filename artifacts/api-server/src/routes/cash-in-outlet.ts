@@ -25,6 +25,26 @@ async function getLedgerBalance(client: any, ledgerId: number): Promise<number> 
   return Number(recRows[0]?.balance ?? 0) + Number(payRows[0]?.balance ?? 0);
 }
 
+/**
+ * Resolves a location's cash till: its own `cash_ledger_id` first, then the
+ * `WH-CASH-<id>` / `OUTLET-CASH-<id>` naming convention.
+ *
+ * The stored column wins because two locations may share one till — an outlet
+ * that is also kept as a warehouse row points at the same ledger, and that
+ * ledger's code can only name one of them. Reading the code alone therefore
+ * reports the till under one location and ₹0 under the other.
+ */
+async function resolveCashLedger(
+  storedLedgerId: unknown, fallbackCode: string,
+): Promise<{ id: number } | null> {
+  if (storedLedgerId != null) {
+    const { rows } = await pool.query(`SELECT id FROM account_ledgers WHERE id = $1`, [Number(storedLedgerId)]);
+    if (rows[0]) return { id: Number(rows[0].id) };
+  }
+  const { rows } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1`, [fallbackCode]);
+  return rows[0] ? { id: Number(rows[0].id) } : null;
+}
+
 // ── GET /cash-in-outlet ───────────────────────────────────────────────────────
 // Returns cash balances scoped to the requesting employee's location.
 // Head-office sees all; warehouse sees their own + child outlets; outlet sees only itself.
@@ -42,15 +62,16 @@ router.get("/cash-in-outlet", requireModuleView(["page:/accounts/cash-in-outlet"
 
   // ── Outlets ────────────────────────────────────────────────────────────────
   const { rows: outlets } = await pool.query(
-    `SELECT id, name, warehouse_id FROM outlets ORDER BY name`
+    `SELECT id, name, warehouse_id, cash_ledger_id FROM outlets ORDER BY name`
   );
   for (const outlet of outlets) {
     // Skip outlets outside the caller's scope
     if (allowedOutletIds !== null && !allowedOutletIds.includes(Number(outlet.id))) continue;
-    const cashCode = `OUTLET-CASH-${outlet.id}`;
-    const { rows: [ledger] } = await pool.query(
-      `SELECT id FROM account_ledgers WHERE code = $1`, [cashCode]
-    );
+    // The location's own cash_ledger_id is authoritative; the code convention is
+    // only a fallback. Locations that share a till (an outlet also kept as a
+    // warehouse row) point at one ledger whose code names just one of them, so
+    // deriving the ledger from the code alone reports ₹0 for the other.
+    const ledger = await resolveCashLedger(outlet.cash_ledger_id, `OUTLET-CASH-${outlet.id}`);
     if (!ledger) {
       result.push({ locationType: 'outlet', locationId: outlet.id, locationName: outlet.name, outletId: outlet.id, outletName: outlet.name, parentWarehouseId: outlet.warehouse_id ?? null, cashLedgerId: null, cashBalance: 0, pendingDeposits: 0, availableBalance: 0 });
       continue;
@@ -77,15 +98,12 @@ router.get("/cash-in-outlet", requireModuleView(["page:/accounts/cash-in-outlet"
 
   // ── Warehouses ─────────────────────────────────────────────────────────────
   const { rows: warehouses } = await pool.query(
-    `SELECT id, name FROM warehouses ORDER BY name`
+    `SELECT id, name, cash_ledger_id FROM warehouses ORDER BY name`
   );
   for (const wh of warehouses) {
     // Skip warehouses outside the caller's scope
     if (allowedWarehouseIds !== null && !allowedWarehouseIds.includes(Number(wh.id))) continue;
-    const cashCode = `WH-CASH-${wh.id}`;
-    const { rows: [ledger] } = await pool.query(
-      `SELECT id FROM account_ledgers WHERE code = $1`, [cashCode]
-    );
+    const ledger = await resolveCashLedger(wh.cash_ledger_id, `WH-CASH-${wh.id}`);
     if (!ledger) {
       result.push({ locationType: 'warehouse', locationId: wh.id, locationName: wh.name, outletId: null, outletName: null, cashLedgerId: null, cashBalance: 0, pendingDeposits: 0, availableBalance: 0 });
       continue;
@@ -220,10 +238,30 @@ router.post("/cash-in-outlet/deposits", requireModuleAction("page:/accounts/cash
   try {
     await client.query("BEGIN");
 
-    // 1. Resolve cash ledger
-    const { rows: [cashLedger] } = await client.query(
-      `SELECT id FROM account_ledgers WHERE code = $1`, [cashCode]
+    // 1. Resolve cash ledger — from the stored column first, code only as a
+    // fallback. Mirror locations (a warehouse row twinned with an outlet) share
+    // one till and only one of the pair owns the `WH-CASH-<id>` style code, so
+    // the old code-only lookup rejected deposits from the other half. The read
+    // path resolves the same way: a till you can see must be one you can bank.
+    const { rows: [locRow] } = await client.query(
+      isWarehouse
+        ? `SELECT cash_ledger_id FROM warehouses WHERE id = $1`
+        : `SELECT cash_ledger_id FROM outlets WHERE id = $1`,
+      [locationId],
     );
+    if (!locRow) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: `No such ${isWarehouse ? "warehouse" : "outlet"}: ${locationId}` }); return;
+    }
+    let cashLedger: { id: number } | null = null;
+    if (locRow.cash_ledger_id != null) {
+      const { rows } = await client.query(`SELECT id FROM account_ledgers WHERE id = $1`, [Number(locRow.cash_ledger_id)]);
+      if (rows[0]) cashLedger = { id: Number(rows[0].id) };
+    }
+    if (!cashLedger) {
+      const { rows } = await client.query(`SELECT id FROM account_ledgers WHERE code = $1`, [cashCode]);
+      if (rows[0]) cashLedger = { id: Number(rows[0].id) };
+    }
     if (!cashLedger) {
       await client.query("ROLLBACK");
       res.status(400).json({ error: `Cash ledger not found for this ${isWarehouse ? "warehouse" : "outlet"}` }); return;

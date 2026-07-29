@@ -12,10 +12,10 @@
  *   'outlet:all'     — all outlets
  *   'outlet:<id>'    — specific outlet
  */
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useListWarehouses, useListOutlets } from '@workspace/api-client-react';
-import { Building2, Warehouse, Store, Archive } from 'lucide-react';
+import { Building2, Warehouse, Store } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 
@@ -32,11 +32,11 @@ export function LocationFilter({ value, onChange, className, warehouseId }: Loca
   const { data: ol = [] } = useListOutlets();
   const { outletsEnabled } = useOutletsEnabled();
 
-  // Outlets are retired. Operational views default to Head Office + Warehouses
-  // only; legacy outlet transactions stay one deliberate click away so audits
-  // and historical comparisons can still reach them.
-  const [includeLegacyOutlets, setIncludeLegacyOutlets] = useState(false);
-  const showOutlets = outletsEnabled || includeLegacyOutlets;
+  // Outlet Management off ⇒ Outlet is not offered as a filter at all. Hiding
+  // the option never hides data: the default 'all' still aggregates historical
+  // outlet rows, so totals stay complete — only the ability to single out an
+  // outlet goes away.
+  const showOutlets = outletsEnabled;
 
   const warehouses = wh as any[];
   const outlets    = warehouseId
@@ -95,29 +95,9 @@ export function LocationFilter({ value, onChange, className, warehouseId }: Loca
           <SelectItem value="all">All</SelectItem>
           <SelectItem value="headoffice">Head Office</SelectItem>
           <SelectItem value="warehouse">Warehouse</SelectItem>
-          {showOutlets && (
-            <SelectItem value="outlet">{outletsEnabled ? 'Outlet' : 'Outlet (Legacy)'}</SelectItem>
-          )}
+          {showOutlets && <SelectItem value="outlet">Outlet</SelectItem>}
         </SelectContent>
       </Select>
-
-      {/* ── Legacy outlet opt-in (only while the module is retired) ───────── */}
-      {!outletsEnabled && (
-        <button
-          type="button"
-          onClick={() => setIncludeLegacyOutlets(v => !v)}
-          title="Outlets are retired. Turn this on to include historical outlet transactions in this view."
-          className={cn(
-            'h-8 px-2 rounded-md border text-xs font-medium flex items-center gap-1.5 shrink-0 transition-colors',
-            includeLegacyOutlets
-              ? 'border-primary/40 bg-primary/10 text-primary'
-              : 'border-border bg-transparent text-muted-foreground hover:bg-muted',
-          )}
-        >
-          <Archive className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Include Legacy Outlets</span>
-        </button>
-      )}
 
       {/* ── Step 2: specific location (only for warehouse / outlet) ──────── */}
       {(parsedType === 'warehouse' || parsedType === 'outlet') && (

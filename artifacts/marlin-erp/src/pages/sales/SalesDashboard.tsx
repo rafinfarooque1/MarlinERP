@@ -8,8 +8,9 @@ import { useQuery } from '@tanstack/react-query';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useLocationContext } from '@/lib/locationContext';
 import {
-  useListSales, useListStockTransfers, useListOutlets, customFetch,
+  useListSales, useListStockTransfers, customFetch,
 } from '@workspace/api-client-react';
+import { useAllOutlets, useIsLocationKindEnabled } from '@/lib/locationStructure';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -147,7 +148,11 @@ export default function SalesDashboard() {
 
   const { data: allSales = [], isLoading: salesLoading } = useListSales();
   const { data: allTransfers = [], isLoading: transfersLoading } = useListStockTransfers();
-  const { data: allOutlets = [] } = useListOutlets();
+  // Historical aggregation, not a selector: a warehouse's day must keep counting
+  // sales, transfers and expenses at its child outlets even while outlets are
+  // hidden, or the figures on screen quietly drop.
+  const { data: allOutlets = [] } = useAllOutlets();
+  const outletsVisible = useIsLocationKindEnabled('outlet');
 
   // Child outlets of the selected warehouse (empty set when not in warehouse mode)
   const childOutletIds = new Set(
@@ -350,7 +355,7 @@ export default function SalesDashboard() {
                   <span className="text-muted-foreground">Total billed: <strong className="text-foreground">{fmt(salesTotal)}</strong></span>
                   <span className="text-muted-foreground">Collected: <strong className="text-emerald-600">{fmt(salesPaid)}</strong></span>
                   <span className="text-muted-foreground">Balance due: <strong className="text-rose-600">{fmt(salesTotal - salesPaid)}</strong></span>
-                  {isWarehouseMode && childOutlets.length > 0 && (
+                  {isWarehouseMode && outletsVisible && childOutlets.length > 0 && (
                     <span className="text-muted-foreground text-xs">Includes {childOutlets.length} outlet{childOutlets.length !== 1 ? 's' : ''}</span>
                   )}
                 </div>

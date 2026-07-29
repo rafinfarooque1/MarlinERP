@@ -20,13 +20,17 @@ import {
   callerLocation, ownLocationScope, scopeLedgerIds, scopeCashLedgerIds, scopeMoneyWhere,
   checkVoucherLegs, foreignLocationLedgerIds,
 } from "../lib/moneyScope";
+import { loadLedgerUsage, deleteBlockReason } from "../lib/chartGroups";
 
 const router = Router();
 
 // ── Chart of Accounts (tree) ───────────────────────────────────────────────
 // Consumers: Chart of Accounts page, and the Expenses page's ledger dropdown.
 router.get("/accounts/chart", requireModuleView(["page:/accounts/chart", "page:/accounts/expenses"]), async (_req, res): Promise<void> => {
-  const result = await pool.query(`SELECT * FROM account_ledgers ORDER BY id`);
+  const [result, usage] = await Promise.all([
+    pool.query(`SELECT * FROM account_ledgers ORDER BY name`),
+    loadLedgerUsage(pool),
+  ]);
   const rows = result.rows;
 
   // Build tree in memory
@@ -41,6 +45,7 @@ router.get("/accounts/chart", requireModuleView(["page:/accounts/chart", "page:/
     section: r.section ?? null,
     isSystemGroup: r.is_system_group ?? false,
     isGroup: r.is_group ?? false,
+    isActive: r.is_active ?? true,
     createdAt: r.created_at,
     children: [],
     balance: 0,
@@ -54,13 +59,29 @@ router.get("/accounts/chart", requireModuleView(["page:/accounts/chart", "page:/
       roots.push(node);
     }
   });
+
+  // Structure management needs to know what may be edited BEFORE offering the
+  // action: a delete button that fails on click is worse than no button.
+  // Computed after the tree so child counts are known.
+  for (const node of map.values()) {
+    const u = usage.get(node.id);
+    node.transactionCount = u?.transactions ?? 0;
+    node.childCount = node.children.length;
+    node.canRename = !node.code && !node.isSystemGroup;
+    node.deleteBlockedReason = deleteBlockReason(
+      { isSystemGroup: node.isSystemGroup, code: node.code, childCount: node.children.length },
+      u,
+    );
+  }
   res.json(roots);
 });
 
 // Also expose flat list for dropdowns
 // Fills account dropdowns on Journal, Contra/Notes, Vouchers and Ledger.
 router.get("/accounts/chart/flat", requireModuleView(["page:/accounts/vouchers", "page:/accounts/ledger"]), async (_req, res): Promise<void> => {
-  const result = await pool.query(`SELECT * FROM account_ledgers ORDER BY id`);
+  // Deactivated ledgers are withheld: this list exists to be selected from, and
+  // a deactivated ledger must not attract new postings.
+  const result = await pool.query(`SELECT * FROM account_ledgers WHERE COALESCE(is_active, true) ORDER BY id`);
   res.json(result.rows.map((r: any) => ({
     id: r.id,
     name: r.name,
@@ -78,7 +99,7 @@ router.get("/accounts/chart/flat", requireModuleView(["page:/accounts/vouchers",
 
 // Cash/Bank ledgers only — for Received In / Paid From dropdowns
 // Serves Cash & Bank and Expenses pages.
-router.get("/accounts/cash-bank-ledgers", requireModuleView(["page:/accounts/cash-bank", "page:/accounts/expenses", "page:/accounts/vouchers", "page:/vendors"]), async (req, res): Promise<void> => {
+router.get("/accounts/cash-bank-ledgers", requireModuleView(["page:/accounts/cash-bank", "page:/accounts/expenses", "page:/accounts/vouchers", "page:/vendors", "page:/sales/expenses"]), async (req, res): Promise<void> => {
   const { rows } = await pool.query(`SELECT * FROM account_ledgers ORDER BY id`);
   const bankRoot = rows.find((r: any) => r.code === 'STD-BANK');
   const cashRoot = rows.find((r: any) => r.code === 'STD-CASH');
@@ -99,29 +120,123 @@ router.get("/accounts/cash-bank-ledgers", requireModuleView(["page:/accounts/cas
     const own = await scopeCashLedgerIds(cbScope);
     for (const id of Array.from(ids)) if (!own.includes(id)) ids.delete(id);
   }
-  res.json(rows.filter((r: any) => ids.has(r.id)).map((r: any) => ({
+  // Deactivated tills and bank accounts stay out of the picker.
+  res.json(rows.filter((r: any) => ids.has(r.id) && (r.is_active ?? true)).map((r: any) => ({
     id: r.id, name: r.name, type: r.type,
     parentId: r.parent_id ?? null, code: r.code ?? null,
     bankDetails: r.bank_details ?? null,
   })));
 });
 
-// Manual ledger creation is retired. Ledgers are no longer created by hand —
-// they are provisioned automatically alongside the master record they belong to
-// (customers, vendors, employees, locations, standard chart accounts). The route
-// is kept but enforces a 409 so any stale client gets a real answer instead of
-// silently creating an orphan ledger.
-router.post("/accounts/chart", requireModuleAction("page:/accounts/chart", "add"), async (_req, res): Promise<void> => {
-  res.status(409).json({
-    error: "Ledgers are no longer created by hand — they are provisioned automatically. " +
-      "Create the master record instead and its ledger is created with it " +
-      "(e.g. create the customer and its ledger is created with it; the same applies to vendors, employees, locations and standard chart accounts).",
+// Manual creation splits in two.
+//
+// GROUPS and SUB-GROUPS are structure: they hold no postings, so making one is
+// safe and reversible, and organising the chart is exactly what the management
+// mode is for.
+//
+// LEDGERS remain retired. Every postable ledger mirrors a master record
+// (customer, vendor, employee, location, standard chart account) and is
+// provisioned alongside it; a hand-made ledger is an orphan that no module will
+// ever post to. The 409 explains that instead of silently creating one.
+router.post("/accounts/chart", requireModuleAction("page:/accounts/chart", "add"), async (req, res): Promise<void> => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+
+  if (body.isGroup !== true) {
+    res.status(409).json({
+      error: "Ledgers are no longer created by hand — they are provisioned automatically. " +
+        "Create the master record instead and its ledger is created with it " +
+        "(e.g. create the customer and its ledger is created with it; the same applies to vendors, employees, locations and standard chart accounts). " +
+        "You can still add groups and sub-groups here to organise the chart.",
+    });
+    return;
+  }
+
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (name.length < 2) { res.status(400).json({ error: "Give the group a name of at least 2 characters." }); return; }
+  if (name.length > 120) { res.status(400).json({ error: "Group names are limited to 120 characters." }); return; }
+
+  const parentId = Number(body.parentId);
+  if (!Number.isFinite(parentId)) { res.status(400).json({ error: "Choose the group this sits inside." }); return; }
+
+  const { rows: [parent] } = await pool.query(
+    `SELECT id, type, section, is_group, is_system_group FROM account_ledgers WHERE id = $1`, [parentId],
+  );
+  if (!parent) { res.status(404).json({ error: "That parent group no longer exists — reload the page." }); return; }
+  if (!parent.is_group && !parent.is_system_group) {
+    res.status(400).json({ error: "A sub-group can only be added inside a group, not under a ledger." });
+    return;
+  }
+
+  const { rows: [dupe] } = await pool.query(
+    `SELECT id FROM account_ledgers WHERE parent_id = $1 AND lower(name) = lower($2) LIMIT 1`, [parentId, name],
+  );
+  if (dupe) { res.status(409).json({ error: `"${name}" already exists in this group.` }); return; }
+
+  // A user-made group carries no code, which is what keeps it renamable and
+  // deletable — the same rule that protects the system groups.
+  const { rows: [created] } = await pool.query(
+    `INSERT INTO account_ledgers (name, type, parent_id, section, description, is_group, is_system_group, is_active)
+     VALUES ($1, $2, $3, $4, $5, true, false, true)
+     RETURNING id, name, type, parent_id, section, description`,
+    [name, parent.type, parentId, parent.section ?? null,
+     typeof body.description === "string" && body.description.trim() ? body.description.trim() : null],
+  );
+
+  await logActivity({
+    action: "CREATE", module: "accounts", entityType: "account_group", entityId: created.id,
+    description: `Added chart group "${name}"`,
+    user: (req as any).employee?.username ?? "system",
+  });
+
+  res.status(201).json({
+    id: created.id, name: created.name, type: created.type,
+    parentId: created.parent_id ?? null, section: created.section ?? null,
+    description: created.description ?? null,
+    code: null, isGroup: true, isSystemGroup: false, isActive: true,
+    children: [], balance: 0,
   });
 });
 
 router.patch("/accounts/chart/:id", requireModuleAction("page:/accounts/chart", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
-  const parsed = UpdateAccountLedgerBody.safeParse(req.body);
+  const raw = (req.body ?? {}) as Record<string, unknown>;
+
+  // ── Activate / deactivate ─────────────────────────────────────────────────
+  // The sanctioned alternative to deleting a ledger that carries history: it
+  // keeps every posting and every report intact, and only stops the ledger
+  // being offered for new entries. Handled before the zod parse because zod
+  // strips keys it does not declare.
+  if (raw.isActive !== undefined) {
+    const { rows: [target] } = await pool.query(
+      `SELECT is_system_group, name FROM account_ledgers WHERE id = $1`, [id],
+    );
+    if (!target) { res.status(404).json({ error: "Not found" }); return; }
+    if (target.is_system_group) {
+      res.status(400).json({ error: "System groups cannot be deactivated — the statements are built from them." });
+      return;
+    }
+    const active = raw.isActive === true;
+    await pool.query(`UPDATE account_ledgers SET is_active = $1 WHERE id = $2`, [active, id]);
+    await logActivity({
+      action: "UPDATE", module: "accounts", entityType: "account_ledger", entityId: id,
+      description: `${active ? "Reactivated" : "Deactivated"} ledger "${target.name}"`,
+      user: (req as any).employee?.username ?? "system",
+    });
+
+    // Nothing else to change — answer with the fresh row.
+    if (Object.keys(raw).length === 1) {
+      const { rows: [row] } = await pool.query(`SELECT * FROM account_ledgers WHERE id = $1`, [id]);
+      res.json({
+        id: row.id, name: row.name, type: row.type, parentId: row.parent_id ?? null,
+        description: row.description ?? null, code: row.code ?? null, section: row.section ?? null,
+        isGroup: row.is_group ?? false, isSystemGroup: row.is_system_group ?? false,
+        isActive: row.is_active ?? true, children: [], balance: 0,
+      });
+      return;
+    }
+  }
+
+  const parsed = UpdateAccountLedgerBody.safeParse(raw);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
   // Block rename of system ledgers (those with a code)
@@ -131,12 +246,26 @@ router.patch("/accounts/chart/:id", requireModuleAction("page:/accounts/chart", 
     if (ledger.code) { res.status(400).json({ error: "System ledger name cannot be changed." }); return; }
   }
 
-  const [row] = await db.update(accountLedgersTable).set(parsed.data).where(eq(accountLedgersTable.id, id)).returning();
+  // A body holding nothing this route accepts (e.g. only the rejected `code`)
+  // must not reach drizzle — an empty SET is a syntax error, which surfaced as a
+  // 500. Read the row back instead and report it unchanged.
+  const fields = parsed.data;
+  const [row] = Object.keys(fields).length > 0
+    ? await db.update(accountLedgersTable).set(fields).where(eq(accountLedgersTable.id, id)).returning()
+    : await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, id));
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
-  if ((req.body as any).code !== undefined) {
-    await pool.query(`UPDATE account_ledgers SET code = $1 WHERE id = $2`, [(req.body as any).code, id]);
-  }
-  res.json({ ...row, code: (req.body as any).code ?? null, parentName: null, children: [], balance: 0 });
+
+  // `code` is deliberately NOT writable here. It is the marker that makes a
+  // ledger system-owned: it drives the rename block, the delete block, and every
+  // provisioning lookup. Accepting it from the body let a caller with edit
+  // rights strip a system ledger's code and then delete the ledger the
+  // statements are built from. Codes are assigned by provisioning and boot
+  // migrations only.
+  const { rows: [current] } = await pool.query(`SELECT code, is_active FROM account_ledgers WHERE id = $1`, [id]);
+  res.json({
+    ...row, code: current?.code ?? null, isActive: current?.is_active ?? true,
+    parentName: null, children: [], balance: 0,
+  });
 });
 
 // ── Move account to a different parent (drag-and-drop reparent) ───────────────
@@ -180,27 +309,32 @@ router.patch("/accounts/chart/:id/move", requireModuleAction("page:/accounts/cha
 
 router.delete("/accounts/chart/:id", requireModuleAction("page:/accounts/chart", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
-  const { rows: [row] } = await pool.query(`SELECT is_system_group, code FROM account_ledgers WHERE id = $1`, [id]);
+  const { rows: [row] } = await pool.query(`SELECT is_system_group, code, name FROM account_ledgers WHERE id = $1`, [id]);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
-  // Protect system group heads and system ledgers (those with a code)
-  if (row.is_system_group) { res.status(400).json({ error: "System group accounts cannot be deleted." }); return; }
-  if (row.code) { res.status(400).json({ error: "System ledger cannot be deleted." }); return; }
-  // Check for children
-  const children = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.parentId, id));
-  if (children.length > 0) { res.status(400).json({ error: "Cannot delete account with sub-accounts. Delete sub-accounts first." }); return; }
-  // Check for entries in payments and receipts
-  const { rows: payRows } = await pool.query(
-    `SELECT COUNT(*) FROM payments WHERE paid_from_ledger_id = $1 OR paid_to_ledger_id = $1`, [id]
+
+  // One rule, one place: the page disables the action using exactly the reason
+  // computed here, so the button and the route can never disagree.
+  //
+  // The old guard counted payments and receipts only, which let a ledger used
+  // solely on a journal voucher, an expense or a cash deposit be deleted —
+  // orphaning its postings. `loadLedgerUsage` covers every table that holds a
+  // ledger id, because only one of them has a real foreign key.
+  const [{ rows: [kids] }, usage] = await Promise.all([
+    pool.query(`SELECT COUNT(*)::int AS n FROM account_ledgers WHERE parent_id = $1`, [id]),
+    loadLedgerUsage(pool),
+  ]);
+  const reason = deleteBlockReason(
+    { isSystemGroup: row.is_system_group ?? false, code: row.code ?? null, childCount: Number(kids?.n ?? 0) },
+    usage.get(id),
   );
-  const { rows: recRows } = await pool.query(
-    `SELECT COUNT(*) FROM receipts WHERE received_from_ledger_id = $1 OR received_in_ledger_id = $1`, [id]
-  );
-  const entryCount = Number(payRows[0].count) + Number(recRows[0].count);
-  if (entryCount > 0) {
-    res.status(400).json({ error: `Cannot delete: this ledger has ${entryCount} voucher entr${entryCount === 1 ? 'y' : 'ies'}. Remove those entries first.` });
-    return;
-  }
+  if (reason) { res.status(400).json({ error: reason }); return; }
+
   await db.delete(accountLedgersTable).where(eq(accountLedgersTable.id, id));
+  await logActivity({
+    action: "DELETE", module: "accounts", entityType: "account_ledger", entityId: id,
+    description: `Deleted chart account "${row.name}"`,
+    user: (req as any).employee?.username ?? "system",
+  });
   res.status(204).send();
 });
 
@@ -752,6 +886,11 @@ router.post("/expenses", requireModuleAction("page:/accounts/expenses", "add"), 
       const table = locationType === 'warehouse' ? 'warehouses' : 'outlets';
       const { rows: [loc] } = await pool.query(`SELECT id FROM ${table} WHERE id = $1`, [locationId]);
       if (!loc) { res.status(400).json({ error: `No such ${locationType}` }); return; }
+      // Attributing fresh spend to a retired outlet is new outlet activity;
+      // expenses already booked against one stay in the books untouched.
+      if (locationType === 'outlet' && await outletWritesBlocked(pool)) {
+        res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+      }
     }
   }
 
@@ -817,8 +956,11 @@ async function resolveLocationCashLedger(locationType: string, locationId: numbe
 router.get("/accounts/expense-ledgers", requireModuleView(["page:/accounts/expenses", "page:/sales/expenses"]), async (_req, res): Promise<void> => {
   const ids = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
   if (ids.length === 0) { res.json([]); return; }
+  // Groups and deactivated ledgers are not postable, so they are not offered.
   const { rows } = await pool.query(
-    `SELECT id, name, type, code, parent_id FROM account_ledgers WHERE id = ANY($1) ORDER BY name`,
+    `SELECT id, name, type, code, parent_id FROM account_ledgers
+      WHERE id = ANY($1) AND COALESCE(is_active, true) AND NOT COALESCE(is_group, false)
+      ORDER BY name`,
     [ids]
   );
   res.json(rows.map((r: any) => ({ id: r.id, name: r.name, type: r.type, code: r.code ?? null, parentId: r.parent_id ?? null })));
@@ -872,24 +1014,44 @@ router.get("/accounts/location-expenses/summary", requireModuleView("page:/accou
 
   if (allLocations.length === 0) { res.json([]); return; }
 
-  const cashLedgerIds = allLocations.map(l => l.cashLedgerId);
-
-  // One query: count + sum grouped by paid_from_ledger_id
+  // One query: count + sum grouped by the location stamp. Grouping by the
+  // funding ledger would drop every Bank and Credit expense from its location's
+  // total, because neither is funded by that location's till.
   const { rows: stats } = await pool.query(`
-    SELECT paid_from_ledger_id, COUNT(*) AS cnt, SUM(amount) AS total
+    SELECT location_type, location_id, COUNT(*) AS cnt, SUM(amount) AS total
     FROM payments
-    WHERE paid_from_ledger_id = ANY($1)
-      AND paid_to_ledger_id = ANY($2)
-    GROUP BY paid_from_ledger_id
-  `, [cashLedgerIds, expenseLedgerIds]);
+    WHERE is_location_expense = true
+      AND paid_to_ledger_id = ANY($1)
+    GROUP BY location_type, location_id
+  `, [expenseLedgerIds]);
 
-  const statsMap = new Map<number, { count: number; total: number }>(
-    stats.map((r: any) => [Number(r.paid_from_ledger_id), { count: Number(r.cnt), total: Number(r.total) }])
+  const statsMap = new Map<string, { count: number; total: number }>(
+    stats.map((r: any) => [`${r.location_type}:${Number(r.location_id)}`, { count: Number(r.cnt), total: Number(r.total) }])
   );
 
+  // A place mirrored as both an outlet and a warehouse row must report the same
+  // figure on both of its entries, so totals are summed over every identity
+  // sharing the cash ledger rather than over the single stamp on the row.
+  const { rows: identityRows } = await pool.query(`
+    SELECT 'warehouse' AS t, id, cash_ledger_id FROM warehouses WHERE cash_ledger_id IS NOT NULL
+    UNION ALL
+    SELECT 'outlet' AS t, id, cash_ledger_id FROM outlets WHERE cash_ledger_id IS NOT NULL
+  `);
+  const byCashLedger = new Map<number, Array<{ t: string; id: number }>>();
+  for (const r of identityRows) {
+    const k = Number(r.cash_ledger_id);
+    if (!byCashLedger.has(k)) byCashLedger.set(k, []);
+    byCashLedger.get(k)!.push({ t: r.t, id: Number(r.id) });
+  }
+
   for (const loc of allLocations) {
-    const s = statsMap.get(loc.cashLedgerId) ?? { count: 0, total: 0 };
-    locations.push({ ...loc, count: s.count, total: s.total });
+    const ids = byCashLedger.get(Number(loc.cashLedgerId)) ?? [{ t: loc.locationType, id: loc.locationId }];
+    let count = 0, total = 0;
+    for (const i of ids) {
+      const s = statsMap.get(`${i.t}:${i.id}`);
+      if (s) { count += s.count; total += s.total; }
+    }
+    locations.push({ ...loc, count, total });
   }
 
   res.json(locations);
@@ -907,35 +1069,33 @@ router.get("/accounts/location-expenses/all", requireModuleView(["page:/accounts
   const allEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
   const allIsHO = !allEmp || allEmp.branchType === 'headoffice';
 
-  let cashLedgerFilterAll = '';
+  // LBAC scopes on the location stamp rather than the funding ledger: a
+  // bank-paid or unpaid expense belongs to its location without ever touching
+  // that location's till.
+  let locationFilterAll = '';
   const allParams: any[] = [expenseLedgerIds];
   if (!allIsHO && allEmp) {
-    const locTable = allEmp.branchType === 'warehouse' ? 'warehouses' : 'outlets';
-    const { rows: [locRow] } = await pool.query(
-      `SELECT cash_ledger_id FROM ${locTable} WHERE id = $1`, [allEmp.branchId]
-    );
-    if (locRow?.cash_ledger_id) {
-      allParams.push(locRow.cash_ledger_id);
-      cashLedgerFilterAll = ` AND p.paid_from_ledger_id = $${allParams.length}`;
-    } else {
-      res.json([]); return;
-    }
+    const identities = await resolveLocationIdentities(allEmp.branchType, Number(allEmp.branchId));
+    locationFilterAll = ` AND ${locationIdentitySql(identities, allParams)}`;
   }
 
-  // Join warehouses and outlets on their cash ledger to tag each payment with location info
+  // Location comes off the row's own stamp; names are looked up from it. The
+  // funding ledger is reported separately because it is now Cash, Bank or
+  // Expense Payable depending on the payment method.
   const { rows } = await pool.query(`
     SELECT p.id, p.voucher_number, p.payment_date, p.paid_from_ledger_id, p.paid_to_ledger_id,
            p.amount, p.narration, p.created_at, p.expense_category, p.attachment_url,
+           p.payment_mode, p.notes, p.location_type, p.location_id,
            pt.name AS expense_ledger_name,
-           COALESCE(w.name, o.name)         AS location_name,
-           CASE WHEN w.id IS NOT NULL THEN 'warehouse' ELSE 'outlet' END AS location_type,
-           COALESCE(w.id, o.id)             AS location_id
+           pf.name AS paid_from_name,
+           COALESCE(w.name, o.name)         AS location_name
     FROM payments p
     LEFT JOIN account_ledgers pt ON p.paid_to_ledger_id = pt.id
-    LEFT JOIN warehouses w ON w.cash_ledger_id = p.paid_from_ledger_id
-    LEFT JOIN outlets    o ON o.cash_ledger_id = p.paid_from_ledger_id
-    WHERE p.paid_to_ledger_id = ANY($1)
-      AND (w.id IS NOT NULL OR o.id IS NOT NULL)${cashLedgerFilterAll}
+    LEFT JOIN account_ledgers pf ON p.paid_from_ledger_id = pf.id
+    LEFT JOIN warehouses w ON p.location_type = 'warehouse' AND w.id = p.location_id
+    LEFT JOIN outlets    o ON p.location_type = 'outlet'    AND o.id = p.location_id
+    WHERE p.is_location_expense = true
+      AND p.paid_to_ledger_id = ANY($1)${locationFilterAll}
     ORDER BY p.payment_date DESC, p.id DESC
   `, allParams);
 
@@ -947,12 +1107,15 @@ router.get("/accounts/location-expenses/all", requireModuleView(["page:/accounts
     expenseLedgerName: r.expense_ledger_name ?? '',
     amount: Number(r.amount),
     description: r.narration,
-    locationName: r.location_name,
+    locationName: r.location_name ?? `${r.location_type} #${r.location_id}`,
     locationType: r.location_type,
     locationId: Number(r.location_id),
     createdAt: r.created_at,
     category: r.expense_category ?? null,
     attachmentUrl: r.attachment_url ?? null,
+    paymentMode: r.payment_mode ?? 'cash',
+    paidFromName: r.paid_from_name ?? '',
+    notes: r.notes ?? null,
   })));
 });
 
@@ -987,17 +1150,23 @@ router.get("/accounts/location-expenses", requireModuleView(["page:/accounts/exp
     res.json({ cashLedgerId, cashLedgerName, expenses: [] }); return;
   }
 
+  // Keyed on the location stamp, not the till: Bank and Credit expenses belong
+  // to this location's list even though its cash ledger never funded them.
+  const identities = await resolveLocationIdentities(String(locationType), Number(locationId));
+  const singleParams: any[] = [expenseLedgerIds];
+  const identityFilter = locationIdentitySql(identities, singleParams);
   const { rows } = await pool.query(`
     SELECT p.id, p.voucher_number, p.payment_date, p.paid_from_ledger_id, p.paid_to_ledger_id, p.amount, p.narration, p.created_at,
-           p.expense_category, p.attachment_url,
+           p.expense_category, p.attachment_url, p.payment_mode, p.notes,
            pf.name AS paid_from_name, pt.name AS paid_to_name
     FROM payments p
     LEFT JOIN account_ledgers pf ON p.paid_from_ledger_id = pf.id
     LEFT JOIN account_ledgers pt ON p.paid_to_ledger_id = pt.id
-    WHERE p.paid_from_ledger_id = $1
-      AND p.paid_to_ledger_id = ANY($2)
+    WHERE p.is_location_expense = true
+      AND p.paid_to_ledger_id = ANY($1)
+      AND ${identityFilter}
     ORDER BY p.id DESC
-  `, [cashLedgerId, expenseLedgerIds]);
+  `, singleParams);
   // Return wrapper object so cashLedgerName is always available even when no expenses exist
   res.json({
     cashLedgerId,
@@ -1015,6 +1184,9 @@ router.get("/accounts/location-expenses", requireModuleView(["page:/accounts/exp
       createdAt: r.created_at,
       category: r.expense_category ?? null,
       attachmentUrl: r.attachment_url ?? null,
+      paymentMode: r.payment_mode ?? 'cash',
+      paidFromName: r.paid_from_name ?? '',
+      notes: r.notes ?? null,
     })),
   });
 });
@@ -1036,7 +1208,54 @@ async function getLocationCashBalance(ledgerId: number): Promise<number> {
   return Number(recRows[0]?.balance ?? 0) + Number(payRows[0]?.balance ?? 0);
 }
 
-// Create a location-scoped expense (Dr expenseLedger, Cr location cashLedger via payments)
+/**
+ * Every (locationType, locationId) pair that denotes the same physical place.
+ *
+ * Outlets are mirrored as rows in `warehouses` sharing the same cash and sales
+ * ledgers, so "Indiranagar Outlet" exists as both outlet 1 and warehouse 3.
+ * Reads keyed on one stamp would show an expense on one of those pages and hide
+ * it on the other, so a location resolves to every identity that shares its
+ * cash ledger. Rows with no cash ledger resolve to themselves.
+ */
+async function resolveLocationIdentities(
+  locationType: string, locationId: number,
+): Promise<Array<{ type: string; id: number }>> {
+  const out = [{ type: String(locationType), id: Number(locationId) }];
+  const cashLedgerId = await resolveLocationCashLedger(locationType, Number(locationId));
+  if (!cashLedgerId) return out;
+  const { rows } = await pool.query(
+    `SELECT 'warehouse' AS t, id FROM warehouses WHERE cash_ledger_id = $1
+     UNION ALL
+     SELECT 'outlet' AS t, id FROM outlets WHERE cash_ledger_id = $1`,
+    [cashLedgerId],
+  );
+  for (const r of rows) {
+    if (!out.some(o => o.type === r.t && o.id === Number(r.id))) out.push({ type: r.t, id: Number(r.id) });
+  }
+  return out;
+}
+
+/** `(location_type = $n AND location_id = $n+1) OR (…)` for an identity set. */
+function locationIdentitySql(
+  identities: Array<{ type: string; id: number }>, params: any[], alias = 'p',
+): string {
+  const clauses = identities.map(i => {
+    params.push(i.type, i.id);
+    return `(${alias}.location_type = $${params.length - 1} AND ${alias}.location_id = $${params.length})`;
+  });
+  return `(${clauses.join(' OR ')})`;
+}
+
+// Create a location-scoped expense. The debit is always the chosen expense
+// ledger. What gets credited depends on how it was paid:
+//
+//   cash   → that location's own till   (balance-checked, cannot go negative)
+//   bank   → a company bank ledger      (Head Office only — a branch may move
+//                                        only its own cash, per LBAC)
+//   credit → Expense Payable            (no money moves; cleared when settled)
+//
+// The location is stamped on the row in every mode: a bank-paid or unpaid
+// expense still belongs to the location that incurred it.
 router.post("/accounts/location-expenses", requireModuleAction("page:/sales/expenses", "add"), async (req, res): Promise<void> => {
   const { locationType, locationId, expenseLedgerId, amount, expenseDate, description, reference } = req.body as {
     locationType: string; locationId: number; expenseLedgerId: number;
@@ -1049,10 +1268,38 @@ router.post("/accounts/location-expenses", requireModuleAction("page:/sales/expe
   if (!parsedAmount || parsedAmount <= 0) {
     res.status(400).json({ error: "Amount must be positive." }); return;
   }
+  // Payment method. Defaults to 'cash' so existing callers (and the mobile app)
+  // that never send one keep their previous behaviour exactly.
+  const rawMode = req.body?.paymentMode;
+  const paymentMode = rawMode === undefined || rawMode === null || String(rawMode).trim() === ''
+    ? 'cash'
+    : String(rawMode).trim().toLowerCase();
+  if (!['cash', 'bank', 'credit'].includes(paymentMode)) {
+    res.status(400).json({ error: "paymentMode must be one of: cash, bank, credit" }); return;
+  }
+  const rawNotes = req.body?.notes;
+  const notes = rawNotes === undefined || rawNotes === null || String(rawNotes).trim() === ''
+    ? null : String(rawNotes).trim();
   // A retired outlet cannot take on new spending — that would be fresh outlet
   // activity in the books. Past outlet expenses stay readable.
   if (locationType === 'outlet' && await outletWritesBlocked(pool)) {
     res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+  }
+  // The stamp has to name a real location in EVERY mode. Only the cash path
+  // failed closed on its own (no location, no till, nothing to debit); bank and
+  // credit would otherwise stamp an expense onto an id that does not exist,
+  // stranding a live voucher where no location page can ever list it.
+  if (!['warehouse', 'outlet'].includes(String(locationType))) {
+    res.status(400).json({ error: "locationType must be 'warehouse' or 'outlet'" }); return;
+  }
+  const { rows: [locRow] } = await pool.query(
+    String(locationType) === 'warehouse'
+      ? `SELECT id FROM warehouses WHERE id = $1`
+      : `SELECT id FROM outlets WHERE id = $1`,
+    [Number(locationId)],
+  );
+  if (!locRow) {
+    res.status(400).json({ error: `No such ${locationType}: ${locationId}` }); return;
   }
   // Server-side validation: expenseLedgerId must be within Direct/Indirect Expense subtree
   const allowedExpenseIds = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
@@ -1066,29 +1313,61 @@ router.post("/accounts/location-expenses", requireModuleAction("page:/sales/expe
       res.status(403).json({ error: "Access denied: you may only record expenses for your own location" }); return;
     }
   }
+  // ── Funding side: what gets credited ───────────────────────────────────────
+  // The location's own cash ledger is resolved in every mode, because the page
+  // reports it back as the location's till even when this particular expense
+  // was not paid from it.
   const cashLedgerId = await resolveLocationCashLedger(locationType, Number(locationId));
-  if (!cashLedgerId) {
-    res.status(400).json({ error: "This location has no Cash ledger. Provision ledgers under Accounts → Warehouses/Outlets first." }); return;
+  let fundingLedgerId: number;
+
+  if (paymentMode === 'cash') {
+    if (!cashLedgerId) {
+      res.status(400).json({ error: "This location has no Cash ledger. Provision ledgers under Accounts → Warehouses/Outlets first." }); return;
+    }
+    fundingLedgerId = cashLedgerId;
+    // Cash cannot go negative: a till can only spend what it holds.
+    const cashBalance = await getLocationCashBalance(cashLedgerId);
+    if (parsedAmount > cashBalance + 0.001) {
+      res.status(400).json({
+        error: `Insufficient cash. Available balance is ₹${cashBalance.toFixed(2)} but expense is ₹${parsedAmount.toFixed(2)}.`,
+      }); return;
+    }
+  } else if (paymentMode === 'bank') {
+    // A branch may move only its own cash — company bank accounts are Head
+    // Office. Without this the bank mode would be a way around that rule.
+    if (expEmployee && expEmployee.branchType !== 'headoffice') {
+      res.status(403).json({ error: "Access denied: only Head Office can pay an expense from a bank account. Record it as Cash or Credit." }); return;
+    }
+    const bankLedgerId = Number(req.body?.paymentAccountId);
+    if (!Number.isFinite(bankLedgerId) || bankLedgerId <= 0) {
+      res.status(400).json({ error: "paymentAccountId is required when paymentMode is 'bank'" }); return;
+    }
+    const bankIds = await getDescendantLedgerIds(['STD-BANK']);
+    if (!bankIds.includes(bankLedgerId)) {
+      res.status(400).json({ error: "paymentAccountId must be a Bank ledger account" }); return;
+    }
+    fundingLedgerId = bankLedgerId;
+  } else {
+    // Credit: nothing moves now, the liability is recognised instead.
+    const { rows: [payable] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = 'STD-EXP-PAY'`);
+    if (!payable) {
+      res.status(500).json({ error: "Expense Payable ledger is missing. Restart the server to provision standard ledgers." }); return;
+    }
+    fundingLedgerId = Number(payable.id);
   }
-  // ── Cash balance check: expenses must not exceed available cash ──────────────
-  const cashBalance = await getLocationCashBalance(cashLedgerId);
-  if (parsedAmount > cashBalance + 0.001) {
-    res.status(400).json({
-      error: `Insufficient cash. Available balance is ₹${cashBalance.toFixed(2)} but expense is ₹${parsedAmount.toFixed(2)}.`,
-    }); return;
-  }
+
   const extras = readExpenseExtras(req.body);
   if ('error' in extras) { res.status(400).json({ error: extras.error }); return; }
 
   const narration = reference ? `${description} [Ref: ${reference}]` : description;
   const voucherNumber = await nextVoucherNumber(pool, 'payment', expenseDate);
   const { rows: [r] } = await pool.query(
-    `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id, expense_category, attachment_url)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-    [voucherNumber, expenseDate, cashLedgerId, Number(expenseLedgerId), parsedAmount, narration,
-     String(locationType), Number(locationId), extras.category, extras.attachmentUrl]
+    `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id, expense_category, attachment_url, is_location_expense, payment_mode, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, true, $11, $12) RETURNING *`,
+    [voucherNumber, expenseDate, fundingLedgerId, Number(expenseLedgerId), parsedAmount, narration,
+     String(locationType), Number(locationId), extras.category, extras.attachmentUrl, paymentMode, notes]
   );
-  const { rows: [pf] } = await pool.query(`SELECT name FROM account_ledgers WHERE id = $1`, [cashLedgerId]);
+  const { rows: [pf] } = await pool.query(`SELECT name FROM account_ledgers WHERE id = $1`, [fundingLedgerId]);
   const { rows: [pt] } = await pool.query(`SELECT name FROM account_ledgers WHERE id = $1`, [expenseLedgerId]);
   res.status(201).json({
     id: r.id, voucherNumber: r.voucher_number, expenseDate: r.payment_date,
@@ -1096,6 +1375,7 @@ router.post("/accounts/location-expenses", requireModuleAction("page:/sales/expe
     cashLedgerId: r.paid_from_ledger_id, cashLedgerName: pf?.name ?? '',
     amount: Number(r.amount), description: r.narration, createdAt: r.created_at,
     category: extras.category, attachmentUrl: extras.attachmentUrl,
+    paymentMode, notes,
   });
 });
 
@@ -1109,18 +1389,21 @@ router.delete("/accounts/location-expenses/:id", requireModuleAction("page:/sale
 
   const expenseLedgerIds = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
   const { rows: [row] } = await pool.query(`
-    SELECT p.id, p.voucher_number, p.amount, p.paid_to_ledger_id,
+    SELECT p.id, p.voucher_number, p.amount, p.paid_to_ledger_id, p.is_location_expense,
+           p.location_type, p.location_id,
            pt.name AS expense_name,
            COALESCE(w.name, o.name) AS location_name,
-           o.id AS outlet_id
+           CASE WHEN p.location_type = 'outlet' THEN p.location_id END AS outlet_id
     FROM payments p
     LEFT JOIN account_ledgers pt ON pt.id = p.paid_to_ledger_id
-    LEFT JOIN warehouses w ON w.cash_ledger_id = p.paid_from_ledger_id
-    LEFT JOIN outlets    o ON o.cash_ledger_id = p.paid_from_ledger_id
+    LEFT JOIN warehouses w ON p.location_type = 'warehouse' AND w.id = p.location_id
+    LEFT JOIN outlets    o ON p.location_type = 'outlet'    AND o.id = p.location_id
     WHERE p.id = $1
   `, [id]);
   if (!row) { res.status(404).json({ error: "Expense not found" }); return; }
-  if (!row.location_name || !expenseLedgerIds.includes(Number(row.paid_to_ledger_id))) {
+  // The flag is the discriminator, not the funding ledger: a Bank or Credit
+  // expense is still a location expense and must stay deletable here.
+  if (!row.is_location_expense || !expenseLedgerIds.includes(Number(row.paid_to_ledger_id))) {
     res.status(400).json({ error: "This voucher is not a location expense. Delete it from Accounts → Vouchers instead." });
     return;
   }

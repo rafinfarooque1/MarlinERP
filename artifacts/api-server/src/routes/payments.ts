@@ -6,15 +6,9 @@ import { nextVoucherNumber } from "../lib/voucherNumber";
 import { COLLECTION_METHODS, paymentModeLabel } from "../lib/paymentModes";
 import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 import { callerLocation } from "../lib/moneyScope";
+import { loadPaymentPosition, computePaymentPosition } from "../lib/salePaymentPosition";
 
 const router = Router();
-
-// ── Helper: compute payment status from total and paid amounts ────────────────
-function computePaymentStatus(totalAmount: number, amountPaid: number): string {
-  if (amountPaid <= 0) return "unpaid";
-  if (amountPaid >= totalAmount) return "paid";
-  return "partially_paid";
-}
 
 // ── Helper: get-or-assert outlet cash ledger (created at startup) ─────────────
 async function getOutletCashLedgerId(outletId: number): Promise<number | null> {
@@ -129,7 +123,19 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
 
     const totalAmount = Number(sale.total_amount);
     const currentPaid = Number(sale.amount_paid);
-    const balanceDue  = totalAmount - currentPaid;
+
+    // The cap has to be the EFFECTIVE balance. A credit note reduces what the
+    // customer owes, so capping at total-minus-paid would accept a collection
+    // larger than the debt and leave an advance nobody asked for. Read on the
+    // locked row, inside this transaction, so it is the figure being written
+    // against — not one another connection is about to move.
+    const position = await loadPaymentPosition(client, saleId);
+    if (!position) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Sale not found" });
+      return;
+    }
+    const balanceDue = position.outstanding;
 
     if (parsedAmount > balanceDue + 0.001) {
       await client.query("ROLLBACK");
@@ -179,10 +185,31 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
       const cashLedgerCode = locType === 'warehouse'
         ? `WH-CASH-${locId}`
         : `OUTLET-CASH-${locId}`;
-      const { rows: [cashLedger] } = await client.query(
-        `SELECT id FROM account_ledgers WHERE code = $1`,
-        [cashLedgerCode]
+      // The location's own cash_ledger_id is authoritative; the code convention
+      // is only a fallback. Mirror locations (a warehouse row twinned with an
+      // outlet) share one till, and that ledger's code can only name one of the
+      // pair — so a code-only lookup made cash collection impossible at the
+      // other half. Same resolution order as the cash-in-outlet read path: a
+      // till you can see is a till you can collect into.
+      const { rows: [locRow] } = await client.query(
+        locType === 'warehouse'
+          ? `SELECT cash_ledger_id FROM warehouses WHERE id = $1`
+          : `SELECT cash_ledger_id FROM outlets WHERE id = $1`,
+        [locId],
       );
+      let cashLedger: { id: number } | null = null;
+      if (locRow?.cash_ledger_id != null) {
+        const { rows } = await client.query(
+          `SELECT id FROM account_ledgers WHERE id = $1`, [Number(locRow.cash_ledger_id)],
+        );
+        if (rows[0]) cashLedger = { id: Number(rows[0].id) };
+      }
+      if (!cashLedger) {
+        const { rows } = await client.query(
+          `SELECT id FROM account_ledgers WHERE code = $1`, [cashLedgerCode],
+        );
+        if (rows[0]) cashLedger = { id: Number(rows[0].id) };
+      }
       if (!cashLedger) {
         await client.query("ROLLBACK");
         res.status(500).json({ error: `Cash ledger (${cashLedgerCode}) not found for this location. Go to Accounts → Warehouses/Outlets and provision ledgers first.` });
@@ -254,7 +281,13 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
 
     // 5. Update sales.amount_paid and sales.payment_status
     const newAmountPaid = currentPaid + parsedAmount;
-    const newStatus = computePaymentStatus(totalAmount, newAmountPaid);
+    // Derived the same way every read surface derives it, credit notes included,
+    // so the stored aggregate cannot drift from what the invoice shows.
+    const newPosition = computePaymentPosition({
+      totalAmount, amountReceived: newAmountPaid,
+      creditAdjustments: position.creditAdjustments, cancelledAt: null,
+    });
+    const newStatus = newPosition.status;
     await client.query(
       `UPDATE sales SET amount_paid = $1, payment_status = $2 WHERE id = $3`,
       [newAmountPaid, newStatus, saleId]
@@ -282,6 +315,10 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
       createdAt: salePayment.created_at,
       newPaymentStatus: newStatus,
       newAmountPaid,
+      // Hand back the position just computed, so no caller has to recompute a
+      // balance of its own (which would silently drop credit notes).
+      newBalanceDue: newPosition.outstanding,
+      newCreditAdjustments: newPosition.creditAdjustments,
     });
   } catch (err: any) {
     await client.query("ROLLBACK").catch(() => {});

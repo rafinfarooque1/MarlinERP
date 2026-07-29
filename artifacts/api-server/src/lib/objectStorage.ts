@@ -215,7 +215,16 @@ export class ObjectStorageService {
   }
 }
 
-function parseObjectPath(path: string): {
+/**
+ * Split a `/bucket/path/to/object` string into its bucket and object parts.
+ *
+ * Exported because the backup module addresses objects directly (it enumerates
+ * every upload in the bucket and writes archives back). A second copy of this
+ * parsing would be free to drift from the one the upload path uses, and the two
+ * disagreeing about where an object lives is exactly how a backup ends up
+ * pointing at files that cannot be found.
+ */
+export function parseObjectPath(path: string): {
   bucketName: string;
   objectName: string;
 } {

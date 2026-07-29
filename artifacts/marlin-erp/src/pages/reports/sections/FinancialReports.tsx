@@ -24,6 +24,7 @@ import {
   AlertTriangle, Info,
 } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
+import { useEnabledOutlets } from '@/lib/locationStructure';
 import { downloadCSV } from '@/lib/download';
 import {
   fmt, num, pdfMoney, periodLabel, fmtDate,
@@ -74,12 +75,40 @@ interface FinancialStatements {
 
 interface Line { name: string; amount: number; depth: number; bold?: boolean }
 
+/**
+ * Flatten a group into indented lines.
+ *
+ * Recursive on purpose: the chart of accounts nests sub-groups (per-employee
+ * salary ledgers under "Salary Expense", per-location sales under "Location
+ * Sales"…), and a single level of children would print the sub-group's rolled-up
+ * total with the accounts inside it invisible. Zero-balance branches are pruned
+ * whole — a sub-group is only listed when something under it moved.
+ */
 function groupLines(gs: GroupSummary | undefined): Line[] {
   if (!gs) return [];
-  const kids = (gs.children ?? []).filter((c) => Math.abs(c.balance) > 0.005);
+  const printed = (nodes: LedgerNode[] | undefined) =>
+    (nodes ?? []).filter((c) => Math.abs(c.balance) > 0.005);
+
+  const walk = (nodes: LedgerNode[] | undefined, depth: number): Line[] =>
+    printed(nodes).flatMap((c) => {
+      const kids = walk(c.children, depth + 1);
+      const lines: Line[] = [{ name: c.name, amount: c.balance, depth, bold: kids.length > 0 }, ...kids];
+      // Accounts like "Cash" carry entries of their own as well as children, so
+      // the listed accounts need not add up to the parent. Print the remainder
+      // rather than leaving an unexplained gap in the statement.
+      if (kids.length > 0) {
+        const own = c.balance - printed(c.children).reduce((s, x) => s + x.balance, 0);
+        if (Math.abs(own) > 0.005) lines.push({ name: 'Direct entries', amount: own, depth: depth + 1 });
+      }
+      return lines;
+    });
+
+  const kids = walk(gs.children, 1);
+  const ownAtRoot = gs.total - printed(gs.children).reduce((s, x) => s + x.balance, 0);
   return [
     { name: gs.name, amount: gs.total, depth: 0, bold: true },
-    ...kids.map((c) => ({ name: c.name, amount: c.balance, depth: 1 })),
+    ...kids,
+    ...(Math.abs(ownAtRoot) > 0.005 ? [{ name: 'Direct entries', amount: ownAtRoot, depth: 1 }] : []),
   ];
 }
 
@@ -107,10 +136,12 @@ function useFinancialStatements(range: RangeState) {
 
 function useLocationOptions() {
   const wh = useQuery({ queryKey: ['/api/warehouses'], queryFn: () => customFetch<{ id: number; name: string }[]>('/api/warehouses') });
-  const ou = useQuery({ queryKey: ['/api/outlets'], queryFn: () => customFetch<{ id: number; name: string }[]>('/api/outlets') });
+  // Selectable options, so outlets come from the location service and disappear
+  // with the module rather than being listed unconditionally.
+  const ou = useEnabledOutlets();
   const options: LocationOption[] = [
     ...(wh.data ?? []).map((w) => ({ type: 'warehouse' as const, id: w.id, name: w.name })),
-    ...(ou.data ?? []).map((o) => ({ type: 'outlet' as const, id: o.id, name: o.name })),
+    ...ou.data.map((o) => ({ type: 'outlet' as const, id: o.id, name: o.name })),
   ];
   return { options, loading: wh.isLoading || ou.isLoading };
 }

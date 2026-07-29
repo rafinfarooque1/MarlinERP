@@ -6,8 +6,9 @@ import { useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
 import { useLocationContext } from '@/lib/locationContext';
+import { useLocationCashBalances } from '@/lib/locationStructure';
 import {
-  useGetCashInOutlet, useGetCashDeposits, useCreateCashDeposit, useGetBankLedgers,
+  useGetCashDeposits, useCreateCashDeposit, useGetBankLedgers,
 } from '@workspace/api-client-react';
 import { Separator } from '@/components/ui/separator';
 import { Button } from '@/components/ui/button';
@@ -40,7 +41,7 @@ export default function SalesCashBalance() {
   const [, navigate] = useWouter();
   const [depositSuccess, setDepositSuccess] = useState<number | null>(null); // amount of last deposit
 
-  const { data: allBalances = [], isLoading, refetch } = useGetCashInOutlet();
+  const { data: allBalances, isLoading, refetch } = useLocationCashBalances();
   const { data: deposits = [], isLoading: depositsLoading } = useGetCashDeposits(
     locationType === 'outlet' && locationId ? { outletId: locationId } : undefined
   );

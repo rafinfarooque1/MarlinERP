@@ -1,0 +1,449 @@
+Implement a new enterprise module called "Warehouse Rent Management" under the HR module.
+
+This is a new core ERP module. It must integrate with Warehouses, Accounts, Dashboard, Reports, Permissions, Approval Workflow and Payments.
+
+Do NOT create duplicate ledgers manually. Everything should be system-generated.
+
+==========================================
+1. MODULE LOCATION
+==========================================
+
+Sidebar
+
+HR
+   → Attendance
+   → Leave
+   → Payroll
+   → Advances
+   → Rent Management (NEW)
+
+Permission should be independent.
+
+View
+Create
+Edit
+Delete
+Approve
+Download
+
+==========================================
+2. AUTOMATIC WAREHOUSE REGISTRATION
+==========================================
+
+Whenever a new Warehouse is created,
+
+Automatically create a Rent record.
+
+The user should not manually create the warehouse reference.
+
+The Rent module should automatically list every warehouse.
+
+If a warehouse is deleted or archived,
+
+its Rent record should also become inactive.
+
+==========================================
+3. SYSTEM GENERATED LEDGERS
+==========================================
+
+When a warehouse is created,
+
+Automatically generate:
+
+Current Liabilities
+
+Rent Payable
+   └── Warehouse Name
+
+Example
+
+Rent Payable
+   ├── Bangalore Warehouse
+   ├── Kerala Warehouse
+   ├── Chennai Warehouse
+
+Also automatically create
+
+Indirect Expenses
+
+Rent Expense
+   └── Warehouse Name
+
+Example
+
+Rent Expense
+   ├── Bangalore Warehouse
+   ├── Kerala Warehouse
+   ├── Chennai Warehouse
+
+These ledgers are SYSTEM GENERATED.
+
+Users cannot create, edit or delete these ledgers manually.
+
+If warehouse name changes,
+
+ledger name should update automatically.
+
+==========================================
+4. RENT MASTER
+==========================================
+
+Each warehouse should contain
+
+Warehouse
+
+Monthly Rent
+
+Security Deposit
+
+Agreement Number
+
+Landlord Name
+
+Phone
+
+Email
+
+Address
+
+Rent Start Date
+
+Rent End Date
+
+Payment Due Day
+
+Rent Ledger
+
+Rent Payable Ledger
+
+Status
+
+Active
+
+Inactive
+
+==========================================
+5. DAILY RENT ACCRUAL
+==========================================
+
+Rent should work exactly like Payroll.
+
+Example
+
+Monthly Rent
+
+₹30,000
+
+Automatically calculate
+
+Daily Rent
+
+30000 / Days in Month
+
+Every midnight
+
+Automatically generate
+
+Daily Rent Expense
+
+Example
+
+Date
+
+Warehouse
+
+Daily Rent
+
+Status
+
+Pending
+
+Approved
+
+Paid
+
+Each day should accumulate automatically.
+
+==========================================
+6. APPROVAL WORKFLOW
+==========================================
+
+Daily rent entries
+
+↓
+
+Pending
+
+↓
+
+Approve
+
+↓
+
+Payment
+
+↓
+
+Completed
+
+Users should not directly mark Paid.
+
+Approval required.
+
+==========================================
+7. PAYMENT
+==========================================
+
+Exactly like Salary Payment.
+
+Payment Screen
+
+Warehouse
+
+Date
+
+Payable Amount
+
+Already Paid
+
+Balance
+
+Payment Amount (Editable)
+
+Payment Mode
+
+Cash
+
+Bank
+
+UPI
+
+Reference Number
+
+Remarks
+
+Approve
+
+Pay
+
+Partial payment should be supported.
+
+Outstanding balance should carry forward.
+
+==========================================
+8. ACCOUNTING ENTRIES
+==========================================
+
+Daily Accrual
+
+Dr
+
+Rent Expense
+
+Cr
+
+Rent Payable
+
+Payment
+
+Dr
+
+Rent Payable
+
+Cr
+
+Cash / Bank
+
+Everything must be system generated.
+
+No manual journal entry.
+
+==========================================
+9. REPORTS
+==========================================
+
+Create
+
+Rent Register
+
+Warehouse Wise Rent
+
+Monthly Rent Summary
+
+Outstanding Rent
+
+Paid Rent
+
+Pending Approval
+
+Ledger Posting Report
+
+==========================================
+10. DASHBOARD
+==========================================
+
+Add
+
+Today's Rent Expense
+
+Current Month Rent
+
+Outstanding Rent
+
+Paid This Month
+
+Pending Approval
+
+Warehouse Wise Rent Chart
+
+==========================================
+11. LOCATION SECURITY
+==========================================
+
+Warehouse users
+
+Can only see
+
+Their warehouse rent.
+
+Head Office
+
+Can view
+
+Approve
+
+Pay
+
+Edit
+
+All warehouses.
+
+==========================================
+12. PERMISSIONS
+==========================================
+
+Separate permissions
+
+View
+
+Create
+
+Edit
+
+Delete
+
+Approve
+
+Download
+
+Print
+
+==========================================
+13. EXPORTS
+==========================================
+
+Support
+
+PDF
+
+Excel
+
+Print
+
+==========================================
+14. AUDIT LOG
+==========================================
+
+Track
+
+Rent Created
+
+Rent Updated
+
+Approval
+
+Payment
+
+Ledger Posting
+
+Every action must appear in Audit Log.
+
+==========================================
+15. ERP INTEGRATION
+==========================================
+
+Rent must automatically integrate with
+
+Chart of Accounts
+
+Ledger Statement
+
+Cash Book
+
+Bank Book
+
+Trial Balance
+
+Profit & Loss
+
+Balance Sheet
+
+Dashboard
+
+Reports
+
+Audit Log
+
+Approval Workflow
+
+Location Security
+
+Permissions
+
+No duplicate postings.
+
+No manual accounting.
+
+Everything should follow the same enterprise architecture already used for Payroll.
+
+==========================================
+16. VALIDATION
+==========================================
+
+Before marking complete,
+
+perform a complete integration audit.
+
+Verify
+
+✓ Warehouse auto-registration
+
+✓ System ledger creation
+
+✓ Daily accrual
+
+✓ Approval
+
+✓ Payment
+
+✓ Partial payment
+
+✓ Ledger postings
+
+✓ Trial Balance
+
+✓ Profit & Loss
+
+✓ Balance Sheet
+
+✓ Dashboard
+
+✓ Reports
+
+✓ Location security
+
+✓ Permissions
+
+✓ Audit Log
+
+Do not mark the task complete until every integration passes successfully.

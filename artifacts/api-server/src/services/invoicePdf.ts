@@ -21,6 +21,10 @@ import {
 } from "@workspace/db";
 import { eq, inArray } from "drizzle-orm";
 import { paymentModeLabel } from "../lib/paymentModes";
+import {
+  loadPaymentPosition, loadRecordedPayments, loadInvoicePaymentSettings, buildUpiRequest,
+  type PaymentPosition, type RecordedPayment,
+} from "../lib/salePaymentPosition";
 
 // ── Data assembly ─────────────────────────────────────────────────────────────
 
@@ -52,6 +56,7 @@ export interface InvoiceData {
     discountTotal: number;
     totalAmount: number;
     lineItems: InvoiceLineItem[];
+    cancelledAt: string | null;
   };
   outletName: string;
   outletUpiId: string;
@@ -63,6 +68,21 @@ export interface InvoiceData {
     gstNumber: string;
   } | null;
   cs: Record<string, unknown>;
+  /**
+   * What is owed right now, from the one shared helper every other surface uses.
+   * Recomputed on every render — the document is never stamped with an amount
+   * that could go stale between a payment and the next download.
+   */
+  position: PaymentPosition;
+  /** How the invoice was paid, for the settled-invoice panel. */
+  recordedPayments: RecordedPayment[];
+  /**
+   * UPI collect request for the CURRENT outstanding, or null when the invoice
+   * must not ask for money (settled, cancelled, UPI off, or no UPI ID).
+   */
+  upiRequest: { uri: string; amount: number; upiId: string; payeeName: string } | null;
+  /** Whether the bank block may be printed (company setting). */
+  showBankDetails: boolean;
 }
 
 export async function assembleInvoiceData(saleId: number): Promise<InvoiceData | null> {
@@ -74,8 +94,10 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
   // path for older rows.
   let locationName = "";
   let locationUpiId = "";
-  const { rows: [locRow] } = await pool.query<{ location_type: string | null; location_id: number | null }>(
-    `SELECT location_type, location_id FROM sales WHERE id = $1`, [saleId]
+  const { rows: [locRow] } = await pool.query<{
+    location_type: string | null; location_id: number | null; cancelled_at: Date | null;
+  }>(
+    `SELECT location_type, location_id, cancelled_at FROM sales WHERE id = $1`, [saleId]
   );
   if (locRow?.location_type === "warehouse" && locRow.location_id) {
     const { rows: [wh] } = await pool.query<{ name: string; upi_id: string | null }>(
@@ -95,16 +117,44 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
     : null;
   const [cs] = await db.select().from(companySettingsTable).limit(1);
 
-  // Invoice-PDF settings live in raw columns (startup migration)
+  // Invoice-PDF settings live in raw columns (startup migration), which Drizzle's
+  // select() cannot see — including the bank block's branch/type/holder fields.
   let paymentTerms: string | null = null;
   let invoiceFooter: string | null = null;
+  let bankExtras: Record<string, unknown> = {};
   if (cs) {
-    const { rows: [pdfCols] } = await pool.query<{ payment_terms: string | null; invoice_footer: string | null }>(
-      `SELECT payment_terms, invoice_footer FROM company_settings WHERE id = $1`, [cs.id]
+    const { rows: [pdfCols] } = await pool.query<any>(
+      `SELECT payment_terms, invoice_footer, bank_branch, account_type, bank_account_holder
+         FROM company_settings WHERE id = $1`, [cs.id]
     );
     paymentTerms = pdfCols?.payment_terms ?? null;
     invoiceFooter = pdfCols?.invoice_footer ?? null;
+    bankExtras = {
+      bankBranch: pdfCols?.bank_branch ?? null,
+      accountType: pdfCols?.account_type ?? null,
+      bankAccountHolder: pdfCols?.bank_account_holder ?? null,
+    };
   }
+
+  // ── What this invoice must ask the customer for ────────────────────────────
+  // Read on every assembly, so a document downloaded a second after a payment
+  // shows the new balance. Nothing here is stored on the sale.
+  const position = await loadPaymentPosition(pool, saleId);
+  if (!position) return null;
+  const recordedPayments = await loadRecordedPayments(pool, saleId);
+  const paySettings = await loadInvoicePaymentSettings(pool);
+
+  // A location collecting into its own UPI handle wins over the company default:
+  // that is what keeps an electronic collection traceable to the location that
+  // took it. The company ID is the fallback for locations without one.
+  const effectiveUpiId = locationUpiId || paySettings.upiId;
+  const upiRequest = buildUpiRequest({
+    position,
+    upiId: effectiveUpiId,
+    payeeName: paySettings.upiPayeeName || locationName || String((cs as any)?.companyName ?? ""),
+    reference: sale.invoiceNumber ?? "",
+    enabled: paySettings.upiEnabled && paySettings.showUpiQrOnInvoice,
+  });
 
   const lineItems: InvoiceLineItem[] = Array.isArray(sale.lineItems) ? (sale.lineItems as InvoiceLineItem[]) : [];
 
@@ -135,9 +185,10 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
       discountTotal: Number(sale.discountTotal),
       totalAmount: Number(sale.totalAmount),
       lineItems,
+      cancelledAt: locRow?.cancelled_at ? new Date(locRow.cancelled_at).toISOString() : null,
     },
     outletName: locationName,
-    outletUpiId: locationUpiId,
+    outletUpiId: effectiveUpiId,
     customer: customerRow ? {
       name: customerRow.name,
       phone: customerRow.phone ?? "",
@@ -145,7 +196,11 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
       state: customerRow.state ?? "",
       gstNumber: customerRow.gstNumber ?? "",
     } : null,
-    cs: { ...(cs ?? {}), paymentTerms, invoiceFooter } as Record<string, unknown>,
+    cs: { ...(cs ?? {}), paymentTerms, invoiceFooter, ...bankExtras } as Record<string, unknown>,
+    position,
+    recordedPayments,
+    upiRequest,
+    showBankDetails: paySettings.showBankDetailsOnInvoice,
   };
 }
 
@@ -186,11 +241,6 @@ function toIndianWords(amount: number): string {
   return words + " Only";
 }
 
-function buildUpiUri(upiId: string, payeeName: string, amount: number, ref: string): string {
-  const params = new URLSearchParams({ pa: upiId, pn: payeeName, am: amount.toFixed(2), cu: "INR", tn: ref });
-  return `upi://pay?${params.toString()}`;
-}
-
 // ── Colour palette ────────────────────────────────────────────────────────────
 type RGB = [number, number, number];
 const NAVY:   RGB = [13,  42,  83];   // primary dark navy
@@ -212,15 +262,17 @@ const L2 = M + HW;
 // ── Renderer ──────────────────────────────────────────────────────────────────
 
 export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buffer; fileName: string }> {
-  const { sale, outletName, outletUpiId, customer, cs } = data;
+  const { sale, outletName, customer, cs, position, recordedPayments, upiRequest, showBankDetails } = data;
   const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
 
   // ── UPI QR ─────────────────────────────────────────────────────────────────
+  // The request — whether to ask at all, and for how much — was decided during
+  // assembly from the shared payment position. This only turns it into an image,
+  // so the QR cannot encode an amount the invoice does not print.
   let qrDataUrl: string | undefined;
-  if (outletUpiId) {
+  if (upiRequest) {
     try {
-      const uri = buildUpiUri(outletUpiId, outletName, sale.totalAmount, sale.invoiceNumber || "");
-      qrDataUrl = await QRCode.toDataURL(uri, { width: 300, margin: 1, color: { dark: "#000000", light: "#FFFFFF" } });
+      qrDataUrl = await QRCode.toDataURL(upiRequest.uri, { width: 300, margin: 1, color: { dark: "#000000", light: "#FFFFFF" } });
     } catch { /* render without QR */ }
   }
 
@@ -524,58 +576,137 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   y += WORDS_H + 2;
 
   // ══════════════════════════════════════════════════════════════════════════
-  // 5. PAYMENT DETAILS — QR left | Bank details right
+  // 5. PAYMENT POSITION — status strip, then either a request or a receipt
   // ══════════════════════════════════════════════════════════════════════════
-  const QR_SIZE = 34;
-  const PAY_H   = Math.max(QR_SIZE + 18, 55);
-  if (y + PAY_H > PH - 18) { doc.addPage(); y = M; }
+  // The strip states where the invoice stands; the panel below either asks for
+  // the balance or records that nothing is owed. Both read the same position
+  // object, so the QR can never ask for an amount the invoice does not print.
+  const STATUS_LABEL: Record<string, string> = {
+    unpaid: "UNPAID", partially_paid: "PARTIALLY PAID", paid: "PAID", cancelled: "CANCELLED",
+  };
+  const STATUS_RGB: Record<string, RGB> = {
+    unpaid: [176, 42, 42], partially_paid: [166, 108, 12], paid: [17, 110, 76], cancelled: [90, 96, 106],
+  };
+  const statusColor = STATUS_RGB[position.status];
+  const statusText  = STATUS_LABEL[position.status];
 
-  // Left: UPI QR panel
-  bx(M, y, HW, PAY_H, BORDER);
-  fill(M, y, HW, 7, LGRAY);
-  txt("PAYMENT DETAILS", M + 3, y + 5, { bold: true, size: 7, color: NAVY });
+  // Figures across the strip. Credit notes only appear when there are some —
+  // an empty "Less Credit Notes  Rs. 0.00" row invites questions about a
+  // return that never happened.
+  const posCells: Array<[string, string, RGB?]> = [["Invoice Total", `Rs. ${money(position.invoiceTotal)}`]];
+  if (position.creditAdjustments > 0) posCells.push(["Less Credit Notes", `- Rs. ${money(position.creditAdjustments)}`]);
+  posCells.push(["Amount Received", `Rs. ${money(position.amountReceived)}`]);
+  posCells.push(["Balance Due", `Rs. ${money(position.outstanding)}`, statusColor]);
 
-  if (qrDataUrl && outletUpiId) {
-    txt("SCAN TO PAY (UPI)", M + HW/2, y + 13, { bold: true, size: 7, color: TEAL, align: "center" });
-    const qrX = M + (HW - QR_SIZE) / 2;
-    doc.addImage(qrDataUrl, "PNG", qrX, y + 15, QR_SIZE, QR_SIZE);
-    txt(`UPI ID  :  ${outletUpiId}`, M + 3, y + 16 + QR_SIZE, { size: 6.5, color: BK });
-    txt(`Amount  :  Rs. ${money(grandTotal)}`, M + 3, y + 21 + QR_SIZE, { size: 6.5, bold: true, color: NAVY });
-    txt(`Ref       :  ${esc(sale.invoiceNumber)}`, M + 3, y + 26 + QR_SIZE, { size: 6.5, color: MGRAY });
-  } else {
-    // No UPI configured — show payment mode only
-    txt(`Payment Mode : ${esc(paymentModeLabel(sale.paymentMode) || "-")}`,
-        M + 3, y + 18, { size: 7.5, color: BK });
-  }
-  if (sale.paymentMode) {
-    txt(`Payment Mode  :  ${esc(paymentModeLabel(sale.paymentMode))}`,
-        M + 3, y + PAY_H - 5, { size: 7, color: MGRAY });
-  }
+  const STRIP_H = 19;
+  if (y + STRIP_H > PH - 34) { doc.addPage(); y = M; }
+  bx(M, y, CW, STRIP_H, BORDER);
+  fill(M, y, CW, 7, LGRAY);
+  txt("PAYMENT STATUS", M + 3, y + 5, { bold: true, size: 7, color: NAVY });
+  const badgeW = 8 + statusText.length * 1.6;
+  fill(M + CW - badgeW - 2, y + 1.5, badgeW, 4.4, statusColor);
+  txt(statusText, M + CW - badgeW / 2 - 2, y + 4.7, { bold: true, size: 6.5, color: WHITE, align: "center" });
 
-  // Right: Bank account details panel
-  bx(L2, y, HW, PAY_H, BORDER);
-  fill(L2, y, HW, 7, LGRAY);
-  txt("BANK ACCOUNT DETAILS", L2 + 3, y + 5, { bold: true, size: 7, color: NAVY });
-  txt("You can make the payment via bank transfer using the following details.",
-      L2 + 3, y + 10, { size: 6, color: MGRAY, maxWidth: HW - 6 });
-
-  const bankRows: [string, string][] = [];
-  if (companyName)       bankRows.push(["Account Holder Name", companyName]);
-  if (cs.bankName)       bankRows.push(["Bank Name",           esc(cs.bankName)]);
-  if (cs.bankBranch)     bankRows.push(["Branch",              esc(cs.bankBranch)]);
-  if (cs.bankAccount)    bankRows.push(["Account Number",      esc(cs.bankAccount)]);
-  if (cs.accountType)    bankRows.push(["Account Type",        esc(cs.accountType)]);
-  if (cs.ifscCode)       bankRows.push(["IFSC Code",           esc(cs.ifscCode)]);
-
-  bankRows.forEach(([k, v], i) => {
-    const by = y + 16 + i * 5.5;
-    txt(k, L2 + 3, by, { size: 6.5, color: MGRAY });
-    txt(`:  ${v}`, L2 + 38, by, { size: 6.5, color: BK, maxWidth: HW - 44 });
+  const cellW = CW / posCells.length;
+  posCells.forEach(([label, value, color], i) => {
+    if (i > 0) ln(M + i * cellW, y + 7, M + i * cellW, y + STRIP_H, BORDER);
+    txt(label, M + i * cellW + 3, y + 12, { size: 6.5, color: MGRAY });
+    txt(value, M + i * cellW + 3, y + 17, { bold: true, size: 8.5, color: color ?? BK });
   });
+  y += STRIP_H + 2;
 
-  y += PAY_H + 2;
+  if (position.isCancelled) {
+    // Cancelled: the stock, revenue and receivable were all reversed. Asking for
+    // money against it — by QR or by bank transfer — would be a real error.
+    const CAN_H = 18;
+    if (y + CAN_H > PH - 18) { doc.addPage(); y = M; }
+    bx(M, y, CW, CAN_H, BORDER);
+    fill(M, y, CW, 7, LGRAY);
+    txt("PAYMENT DETAILS", M + 3, y + 5, { bold: true, size: 7, color: NAVY });
+    txt("This invoice has been cancelled. No payment is due and no payment should be made against it.",
+        M + 3, y + 12, { size: 7, color: BK, maxWidth: CW - 6 });
+    if (sale.cancelledAt) {
+      txt(`Cancelled on ${String(sale.cancelledAt).slice(0, 10)}`, M + 3, y + 16, { size: 6, color: MGRAY });
+    }
+    y += CAN_H + 2;
+  } else if (position.outstanding > 0) {
+    // Something is owed — ask for exactly that, and show the other way to pay it.
+    const bankRows: [string, string][] = [];
+    if (showBankDetails) {
+      const holder = esc(cs.bankAccountHolder) || companyName;
+      if (holder)         bankRows.push(["Account Holder Name", holder]);
+      if (cs.bankName)    bankRows.push(["Bank Name",      esc(cs.bankName)]);
+      if (cs.bankBranch)  bankRows.push(["Branch",         esc(cs.bankBranch)]);
+      if (cs.bankAccount) bankRows.push(["Account Number", esc(cs.bankAccount)]);
+      if (cs.accountType) bankRows.push(["Account Type",   esc(cs.accountType)]);
+      if (cs.ifscCode)    bankRows.push(["IFSC Code",      esc(cs.ifscCode)]);
+    }
+    const QR_SIZE = 34;
+    const PAY_H = Math.max(qrDataUrl ? QR_SIZE + 22 : 30, 14 + bankRows.length * 5.5);
+    if (y + PAY_H > PH - 18) { doc.addPage(); y = M; }
 
-  // Payment mode badge line (below the two boxes)
+    // Left: the payment request itself
+    const leftW = bankRows.length > 0 ? HW : CW;
+    bx(M, y, leftW, PAY_H, BORDER);
+    fill(M, y, leftW, 7, LGRAY);
+    txt(qrDataUrl ? "SCAN TO PAY (UPI)" : "AMOUNT PAYABLE", M + 3, y + 5, { bold: true, size: 7, color: NAVY });
+    if (qrDataUrl && upiRequest) {
+      doc.addImage(qrDataUrl, "PNG", M + (leftW - QR_SIZE) / 2, y + 9, QR_SIZE, QR_SIZE);
+      txt(`Pay Rs. ${money(upiRequest.amount)}`, M + leftW / 2, y + QR_SIZE + 14,
+          { bold: true, size: 9, color: NAVY, align: "center" });
+      txt(position.status === "partially_paid" ? "Balance outstanding on this invoice" : "Amount outstanding on this invoice",
+          M + leftW / 2, y + QR_SIZE + 18, { size: 6, color: MGRAY, align: "center" });
+      txt(`UPI ID: ${upiRequest.upiId}`, M + 3, y + PAY_H - 2.5, { size: 6, color: MGRAY });
+      txt(`Ref: ${esc(sale.invoiceNumber)}`, M + leftW - 3, y + PAY_H - 2.5, { size: 6, color: MGRAY, align: "right" });
+    } else {
+      // No UPI configured, or the QR was switched off: state the balance plainly
+      // rather than printing a broken or empty code.
+      txt(`Rs. ${money(position.outstanding)}`, M + 3, y + 16, { bold: true, size: 12, color: statusColor });
+      txt(bankRows.length > 0
+            ? "Please settle this balance by bank transfer using the details alongside."
+            : "Please settle this balance with the seller.",
+          M + 3, y + 22, { size: 6.5, color: MGRAY, maxWidth: leftW - 6 });
+    }
+
+    // Right: bank transfer details
+    if (bankRows.length > 0) {
+      bx(L2, y, HW, PAY_H, BORDER);
+      fill(L2, y, HW, 7, LGRAY);
+      txt("BANK ACCOUNT DETAILS", L2 + 3, y + 5, { bold: true, size: 7, color: NAVY });
+      bankRows.forEach(([k, v], i) => {
+        const by = y + 12 + i * 5.5;
+        txt(k, L2 + 3, by, { size: 6.5, color: MGRAY });
+        txt(`:  ${v}`, L2 + 38, by, { size: 6.5, color: BK, maxWidth: HW - 44 });
+      });
+    }
+    y += PAY_H + 2;
+  } else {
+    // Settled: say how it was paid instead of asking for it again.
+    const shown = recordedPayments.slice(0, 6);
+    const REC_H = 13 + Math.max(shown.length, 1) * 5;
+    if (y + REC_H > PH - 18) { doc.addPage(); y = M; }
+    bx(M, y, CW, REC_H, BORDER);
+    fill(M, y, CW, 7, LGRAY);
+    txt("PAYMENT RECEIVED", M + 3, y + 5, { bold: true, size: 7, color: NAVY });
+    txt("Settled in full — no payment is due.", M + CW - 3, y + 5, { size: 6.5, color: MGRAY, align: "right" });
+    if (shown.length === 0) {
+      txt("Settled in full.", M + 3, y + 11.5, { size: 7, color: BK });
+    } else {
+      shown.forEach((p, i) => {
+        const py = y + 11.5 + i * 5;
+        const parts = [paymentModeLabel(p.method ?? "") || "-"];
+        if (p.paymentDate) parts.push(p.paymentDate);
+        if (p.referenceNumber) parts.push(`Ref ${p.referenceNumber}`);
+        if (p.source === "counter") parts.push("received at counter");
+        txt(parts.join("   -   "), M + 3, py, { size: 6.5, color: BK, maxWidth: CW - 40 });
+        txt(`Rs. ${money(p.amount)}`, M + CW - 3, py, { size: 6.5, bold: true, align: "right" });
+      });
+    }
+    y += REC_H + 2;
+  }
+
+  // The payment MODE is the arrangement the bill was raised under ("credit"), not
+  // its status — the strip above owns the status, so the mode is stated once here.
   if (sale.paymentMode) {
     bx(M, y, CW, 7, BORDER);
     fill(M, y, CW, 7, LGRAY);

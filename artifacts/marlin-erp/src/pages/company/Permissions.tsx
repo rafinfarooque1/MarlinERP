@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
   ShieldCheck, ShieldOff, Save, Loader2, ChevronUp, Search,
-  Eye, Plus, Pencil, Trash2, Download, Printer,
+  Eye, Plus, Pencil, Trash2, Download, Printer, BadgeCheck, Share2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useListHierarchies, useListPermissions, setPermission } from '@workspace/api-client-react';
@@ -23,7 +23,7 @@ import type { Hierarchy, Permission } from '@workspace/api-client-react';
 // the two can never drift.
 const PAGE_ROWS = getPagePermRows();
 
-type ActionKey = 'view' | 'add' | 'edit' | 'del' | 'download' | 'print';
+type ActionKey = 'view' | 'add' | 'edit' | 'del' | 'download' | 'print' | 'approve' | 'share';
 type PagePerm = Record<ActionKey, boolean>;
 type PermMap = Record<number, Record<string, PagePerm>>;
 
@@ -34,13 +34,21 @@ const ACTIONS: { key: ActionKey; label: string; icon: React.ElementType }[] = [
   { key: 'del',      label: 'Delete',   icon: Trash2 },
   { key: 'download', label: 'Download', icon: Download },
   { key: 'print',    label: 'Print',    icon: Printer },
+  // Approval is sign-off authority, not editing: approving a month's rent commits
+  // it to the books. A role that may correct a draft is not automatically a role
+  // that may commit it, so this is granted separately.
+  { key: 'approve',  label: 'Approve',  icon: BadgeCheck },
+  // Sharing sends a document out of the company: an invoice share link opens with
+  // no login, for anyone who receives it. That is a different risk from printing
+  // or downloading a copy in the office, so it is granted on its own.
+  { key: 'share',    label: 'Share',    icon: Share2 },
 ];
 
-const GRID = 'grid grid-cols-[1fr_repeat(6,3.25rem)] gap-x-1';
+const GRID = 'grid grid-cols-[1fr_repeat(8,3rem)] gap-x-1';
 
-const NONE: PagePerm = { view: false, add: false, edit: false, del: false, download: false, print: false };
+const NONE: PagePerm = { view: false, add: false, edit: false, del: false, download: false, print: false, approve: false, share: false };
 const allActions = (value: boolean): PagePerm =>
-  ({ view: value, add: value, edit: value, del: value, download: value, print: value });
+  ({ view: value, add: value, edit: value, del: value, download: value, print: value, approve: value, share: value });
 
 /**
  * Build the editable map from DB rows.
@@ -62,6 +70,8 @@ function buildPermMap(hierarchies: Hierarchy[], dbPerms: Permission[]): PermMap 
             del:      row.canDelete   ?? false,
             download: row.canDownload ?? false,
             print:    row.canPrint    ?? false,
+            approve:  row.canApprove  ?? false,
+            share:    row.canShare    ?? false,
           }
         : { ...NONE };
     }
@@ -153,7 +163,8 @@ export default function Permissions() {
             hierarchyId: effectiveId,
             module: key,
             canView: p.view, canAdd: p.add, canEdit: p.edit, canDelete: p.del,
-            canDownload: p.download, canPrint: p.print,
+            canDownload: p.download, canPrint: p.print, canApprove: p.approve,
+            canShare: p.share,
           });
         }),
       );
@@ -291,10 +302,12 @@ export default function Permissions() {
                     disabled={isTopLevel}
                     onClick={() => toggleColumn(a.key)}
                     title={isTopLevel ? undefined : `Toggle ${a.label} for every page listed`}
-                    className="text-[11px] uppercase tracking-wider text-muted-foreground flex flex-col items-center gap-0.5 disabled:cursor-default enabled:hover:text-foreground"
+                    className="uppercase text-muted-foreground flex flex-col items-center gap-0.5 disabled:cursor-default enabled:hover:text-foreground"
                   >
                     <a.icon className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline text-[10px] leading-none">{a.label}</span>
+                    {/* Eight columns in the width that used to hold seven: the labels
+                        have to stay inside their own cell or they read as one word. */}
+                    <span className="hidden sm:inline text-[9px] leading-none tracking-tight">{a.label}</span>
                   </button>
                 ))}
               </div>

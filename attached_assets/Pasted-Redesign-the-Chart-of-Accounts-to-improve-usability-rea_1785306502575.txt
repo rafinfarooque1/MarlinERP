@@ -1,0 +1,347 @@
+Redesign the Chart of Accounts to improve usability, readability, and scalability while preserving all existing accounting logic.
+
+==========================================================
+OBJECTIVE
+==========================================================
+
+The Chart of Accounts should look like a professional ERP accounting system.
+
+It should be easy to understand even when there are hundreds of ledgers.
+
+Do NOT change the accounting engine.
+
+Only improve the hierarchy, presentation, navigation, and management interface.
+
+==========================================================
+ACCOUNT HIERARCHY
+==========================================================
+
+Use a four-level hierarchy.
+
+Group
+
+↓
+
+Sub Group
+
+↓
+
+Ledger
+
+↓
+
+Sub Ledger (if applicable)
+
+Example
+
+LIABILITIES
+
+Current Liabilities
+
+Salary Payable
+
+Administrator
+
+Rafin
+
+Employee A
+
+Employee B
+
+Rent Payable
+
+Head Office
+
+Karnataka Warehouse
+
+Tamil Nadu Warehouse
+
+Warehouse A
+
+Warehouse B
+
+GST Payable
+
+CGST
+
+SGST
+
+IGST
+
+Creditors
+
+Vendor A
+
+Vendor B
+
+Vendor C
+
+----------------------------------------------------------
+
+INDIRECT EXPENSES
+
+Salary Expense
+
+Administrator
+
+Rafin
+
+Employee A
+
+Employee B
+
+Rent Expense
+
+Head Office
+
+Karnataka Warehouse
+
+Tamil Nadu Warehouse
+
+Warehouse A
+
+Warehouse B
+
+Bank Charges
+
+Electricity
+
+Telephone
+
+Internet
+
+Repairs & Maintenance
+
+==========================================================
+EXPAND / COLLAPSE
+==========================================================
+
+Every level must be expandable and collapsible.
+
+Examples
+
+▶ Current Liabilities
+
+▼ Current Liabilities
+
+▶ Salary Payable
+
+▼ Salary Payable
+
+▶ Rent Payable
+
+▼ Rent Payable
+
+Collapsed groups should hide all children.
+
+Expanded groups should display children.
+
+==========================================================
+AMOUNTS
+==========================================================
+
+Display balances at EVERY level.
+
+Show amount beside
+
+Group
+
+Sub Group
+
+Ledger
+
+Sub Ledger
+
+Example
+
+Current Liabilities                 ₹245,600
+
+Salary Payable                      ₹82,500
+
+Administrator                       ₹35,000
+
+Rafin                               ₹47,500
+
+Rent Payable                        ₹65,000
+
+Head Office                         ₹25,000
+
+Warehouse                           ₹40,000
+
+The parent totals must always equal the sum of their children.
+
+==========================================================
+GROUP TOTALS
+==========================================================
+
+Automatically calculate
+
+Group Total
+
+Sub Group Total
+
+Ledger Total
+
+Sub Ledger Total
+
+No manual calculation.
+
+==========================================================
+VISUAL DESIGN
+==========================================================
+
+Improve readability.
+
+Use
+
+• Better spacing
+• Indentation for hierarchy
+• Icons for Group/Sub Group/Ledger
+• Alternate row shading (optional)
+• Clean typography
+• Better alignment
+• Sticky section headers while scrolling
+
+Use subtle colours.
+
+Avoid clutter.
+
+==========================================================
+MANAGEMENT MODE
+==========================================================
+
+By default,
+
+The Chart of Accounts should be
+
+VIEW ONLY.
+
+Users should NOT accidentally modify the accounting structure.
+
+Add one button in the top-right corner.
+
+"Manage Chart of Accounts"
+
+or
+
+"Edit Structure"
+
+==========================================================
+WHEN BUTTON IS CLICKED
+==========================================================
+
+Enable Management Mode.
+
+Only then display options such as
+
++ Add Group
+
++ Add Sub Group
+
++ Add Ledger
+
++ Add Sub Ledger
+
+Edit
+
+Delete
+
+Rename
+
+Merge (optional)
+
+Outside Management Mode,
+
+Hide all editing controls.
+
+==========================================================
+PERMISSIONS
+==========================================================
+
+Only users with Chart of Accounts management permission may enter Management Mode.
+
+All other users have read-only access.
+
+==========================================================
+SEARCH
+==========================================================
+
+Add a search box.
+
+Search should find
+
+Group
+
+Sub Group
+
+Ledger
+
+Sub Ledger
+
+==========================================================
+FILTERS
+==========================================================
+
+Allow filtering by
+
+Assets
+
+Liabilities
+
+Income
+
+Direct Expenses
+
+Indirect Expenses
+
+Current Assets
+
+Current Liabilities
+
+Capital
+
+etc.
+
+==========================================================
+PERFORMANCE
+==========================================================
+
+Large companies may have
+
+Thousands of ledgers.
+
+Use lazy loading or efficient rendering so expanding and collapsing remains fast.
+
+==========================================================
+ACCOUNTING SAFETY
+==========================================================
+
+Do NOT allow deletion of
+
+System Groups
+
+System Sub Groups
+
+System Ledgers
+
+If a ledger already contains transactions,
+
+do not allow deletion.
+
+Allow only
+
+Deactivate
+
+Rename (where permitted)
+
+Merge (optional)
+
+==========================================================
+FINAL REQUIREMENT
+==========================================================
+
+The Chart of Accounts should resemble a modern enterprise ERP.
+
+It must be clean, hierarchical, easy to navigate, and capable of handling very large accounting structures.
+
+Existing accounting logic, balances, reports, Trial Balance, Profit & Loss, Balance Sheet, and General Ledger must continue to work without any changes.

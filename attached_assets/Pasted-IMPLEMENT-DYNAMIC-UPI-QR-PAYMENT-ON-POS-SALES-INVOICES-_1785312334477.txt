@@ -1,0 +1,874 @@
+IMPLEMENT DYNAMIC UPI QR PAYMENT ON POS / SALES INVOICES
+
+IMPORTANT:
+Do not redesign or replace the existing invoice system.
+
+Extend the existing POS/Sales invoice, payment, customer outstanding,
+PDF, WhatsApp sharing, accounting and reconciliation flows.
+
+The key business rule is:
+
+UPI QR AMOUNT = CURRENT OUTSTANDING AMOUNT
+
+NOT the original invoice amount.
+
+==========================================================
+1. CORE BUSINESS RULE
+==========================================================
+
+Every invoice must calculate:
+
+Invoice Total
+- Confirmed/Valid Payments Received
+- Valid Credit Adjustments
+= Current Outstanding Amount
+
+The UPI QR must always request ONLY the Current Outstanding Amount.
+
+Example:
+
+Invoice Total        ₹5,670
+Payment Received     ₹2,000
+Outstanding          ₹3,670
+
+The QR must request:
+
+₹3,670
+
+NOT ₹5,670.
+
+If another ₹1,000 is subsequently received:
+
+Invoice Total        ₹5,670
+Total Received       ₹3,000
+Outstanding          ₹2,670
+
+The next time the invoice is viewed, printed, downloaded or shared,
+the QR must automatically request:
+
+₹2,670
+
+No manual QR update should be required.
+
+==========================================================
+2. PAYMENT STATUS
+==========================================================
+
+Payment status must be derived from actual valid payment/accounting data.
+
+Do not rely only on the original payment mode stored on the sale.
+
+Statuses:
+
+UNPAID
+
+If:
+
+Outstanding Amount = Invoice Total
+
+
+PARTIALLY PAID
+
+If:
+
+Outstanding Amount > 0
+AND
+Outstanding Amount < Invoice Total
+
+
+PAID
+
+If:
+
+Outstanding Amount = 0
+
+
+CANCELLED
+
+If the invoice has been properly cancelled according to the existing
+sales cancellation workflow.
+
+Use the ERP's existing currency precision/rounding rules when comparing
+amounts.
+
+==========================================================
+3. CREDIT SALES
+==========================================================
+
+Credit is a payment arrangement, NOT a permanent payment status.
+
+Example:
+
+Invoice created:
+
+₹10,000
+Payment Mode: Credit
+
+Initially:
+
+Invoice Total        ₹10,000
+Received                  ₹0
+Outstanding          ₹10,000
+
+Status:
+
+UNPAID / CREDIT
+
+QR amount:
+
+₹10,000
+
+
+Later customer pays:
+
+₹4,000
+
+Invoice becomes:
+
+Invoice Total        ₹10,000
+Received              ₹4,000
+Outstanding           ₹6,000
+
+Status:
+
+PARTIALLY PAID
+
+QR amount:
+
+₹6,000
+
+
+Later customer pays remaining:
+
+₹6,000
+
+Invoice becomes:
+
+Invoice Total        ₹10,000
+Received             ₹10,000
+Outstanding               ₹0
+
+Status:
+
+PAID
+
+QR must disappear.
+
+==========================================================
+4. UNPAID INVOICE PAYMENT SECTION
+==========================================================
+
+For invoices with an outstanding balance, use the existing:
+
+PAYMENT DETAILS
+
+section.
+
+Display:
+
+PAYMENT DETAILS
+
+SCAN TO PAY (UPI)
+
+[ DYNAMIC QR CODE ]
+
+Invoice Total:       ₹5,670.00
+Amount Received:         ₹0.00
+Balance Due:         ₹5,670.00
+
+Payment Status: UNPAID
+
+Invoice No: TST/2025-26/0010
+
+The QR must request:
+
+₹5,670.00
+
+==========================================================
+5. PARTIALLY PAID INVOICE
+==========================================================
+
+For a partially paid invoice display:
+
+PAYMENT DETAILS
+
+SCAN BALANCE TO PAY
+
+[ DYNAMIC QR CODE ]
+
+Invoice Total:       ₹5,670.00
+Amount Received:     ₹2,000.00
+Balance Due:         ₹3,670.00
+
+Payment Status:
+
+PARTIALLY PAID
+
+The QR must request exactly:
+
+₹3,670.00
+
+==========================================================
+6. FULLY PAID INVOICE
+==========================================================
+
+If Outstanding Amount = ₹0:
+
+DO NOT SHOW THE UPI QR.
+
+This is critical.
+
+A paid invoice must never display a QR asking the customer to make
+another payment.
+
+Instead display:
+
+PAYMENT DETAILS
+
+✓ PAID
+
+Invoice Total:       ₹5,670.00
+Amount Received:     ₹5,670.00
+Balance Due:             ₹0.00
+
+Payment Status: PAID
+
+Also show available payment information such as:
+
+Payment Method
+Payment Date
+Reference Number
+
+If multiple payments were used, show an appropriate payment summary.
+
+==========================================================
+7. MULTIPLE/PARTIAL PAYMENTS
+==========================================================
+
+Support multiple collections against the same invoice.
+
+Example:
+
+Invoice:
+
+₹10,000
+
+Payment 1:
+Cash ₹2,000
+
+Payment 2:
+Bank ₹3,000
+
+Total Received:
+
+₹5,000
+
+Outstanding:
+
+₹5,000
+
+The QR must request:
+
+₹5,000
+
+Do not assume that one invoice has only one payment.
+
+==========================================================
+8. UPI QR GENERATION
+==========================================================
+
+Generate the QR dynamically using company payment settings.
+
+QR should contain:
+
+• Company UPI ID
+• Payee Name
+• Current Outstanding Amount
+• Invoice Number / Reference
+• Transaction Note
+
+Example concept:
+
+Payee:
+Marlin Test
+
+Amount:
+₹3,670
+
+Reference:
+TST/2025-26/0010
+
+Note:
+Payment for Invoice TST/2025-26/0010
+
+Do NOT hard-code UPI information.
+
+==========================================================
+9. COMPANY PAYMENT SETTINGS
+==========================================================
+
+Use Company Settings as the source for payment information.
+
+Support:
+
+• UPI Enabled
+• UPI ID
+• UPI Payee Name
+• Show UPI QR on Invoice
+• Show Bank Details on Invoice
+• Default Bank Account
+
+If UPI is disabled or UPI ID is missing:
+
+Do NOT generate an invalid QR.
+
+Show Bank Account Details only.
+
+==========================================================
+10. BANK ACCOUNT DETAILS
+==========================================================
+
+Continue showing the existing:
+
+BANK ACCOUNT DETAILS
+
+for invoices with an outstanding balance.
+
+Where configured display:
+
+• Account Holder Name
+• Bank Name
+• Account Number
+• IFSC
+• Branch
+
+This gives the customer two payment methods:
+
+1. Scan UPI QR
+2. Bank Transfer
+
+==========================================================
+11. PAYMENT COLLECTION
+==========================================================
+
+The QR itself must NOT mark an invoice as paid.
+
+Important:
+
+QR Generated
+≠
+Payment Received
+
+QR Scanned
+≠
+Payment Received
+
+Invoice Viewed
+≠
+Payment Received
+
+PDF Downloaded
+≠
+Payment Received
+
+WhatsApp Shared
+≠
+Payment Received
+
+The invoice balance should change only when a valid payment is recorded
+through the existing ERP payment/collection/reconciliation process.
+
+==========================================================
+12. PAYMENT RECEIVED
+==========================================================
+
+When a valid payment is recorded against the invoice:
+
+Immediately recalculate:
+
+Total Received
+
+and
+
+Outstanding Amount.
+
+Example:
+
+Before:
+
+Invoice Total        ₹5,670
+Received                  ₹0
+Outstanding          ₹5,670
+
+Customer pays:
+
+₹2,000
+
+After:
+
+Invoice Total        ₹5,670
+Received              ₹2,000
+Outstanding           ₹3,670
+
+The QR should automatically become:
+
+₹3,670
+
+without editing or recreating the invoice.
+
+==========================================================
+13. CUSTOMER OUTSTANDING
+==========================================================
+
+The invoice outstanding amount must reconcile with the existing customer
+receivable/outstanding system.
+
+Do NOT create a second independent outstanding calculation.
+
+Use one authoritative payment/outstanding calculation.
+
+The following should agree:
+
+Invoice Outstanding
+Customer Outstanding
+Customer Ledger
+Accounts Receivable
+Sales Outstanding Report
+
+==========================================================
+14. ACCOUNTING
+==========================================================
+
+Do not create additional accounting entries merely because a QR exists.
+
+QR generation is presentation/payment-request functionality only.
+
+Actual payment accounting must continue through the existing accounting
+engine.
+
+Example credit sale:
+
+At Sale:
+
+Debit
+Customer / Accounts Receivable
+
+Credit
+Sales
+
+Credit
+Output GST
+
+according to the existing accounting implementation.
+
+
+When ₹2,000 is actually received:
+
+Debit
+Cash / Bank ₹2,000
+
+Credit
+Customer / Accounts Receivable ₹2,000
+
+The remaining receivable stays outstanding.
+
+==========================================================
+15. BANK RECONCILIATION
+==========================================================
+
+If a bank/UPI payment requires reconciliation under the existing ERP
+workflow, continue using that workflow.
+
+Do not mark bank transactions reconciled merely because the invoice
+becomes paid unless the existing accounting rules explicitly support it.
+
+Keep separate concepts:
+
+Invoice Payment Status
+
+and
+
+Bank Reconciliation Status.
+
+Example:
+
+Invoice:
+PAID
+
+Bank Transaction:
+PENDING RECONCILIATION
+
+This must be allowed.
+
+==========================================================
+16. PDF MUST ALWAYS USE CURRENT DATA
+==========================================================
+
+When generating an invoice PDF, use the latest payment information.
+
+Do not permanently store an old QR amount inside the original invoice.
+
+Example:
+
+Invoice created:
+
+₹5,670 outstanding
+
+Original QR:
+₹5,670
+
+Later:
+
+₹2,000 received.
+
+If the user downloads the invoice again:
+
+The newly generated PDF must show:
+
+Received: ₹2,000
+Outstanding: ₹3,670
+QR: ₹3,670
+
+==========================================================
+17. WHATSAPP SHARING
+==========================================================
+
+Apply the same rule to WhatsApp invoice sharing.
+
+If Outstanding = ₹3,670:
+
+The shared invoice PDF must show the QR for:
+
+₹3,670
+
+The WhatsApp message may also show:
+
+Invoice Amount: ₹5,670
+Amount Received: ₹2,000
+Balance Due: ₹3,670
+
+If fully paid:
+
+Do not include payment-request wording.
+
+Instead show that the invoice has been paid.
+
+==========================================================
+18. SECURE INVOICE SHARE LINK
+==========================================================
+
+The previously implemented secure invoice share link must also generate
+the invoice using the CURRENT payment status.
+
+The secure link remains valid according to the existing 15-day expiry
+rule.
+
+However, the financial information shown through that link must be
+current.
+
+Example:
+
+Day 1:
+Outstanding ₹5,670
+
+Day 3:
+Customer pays ₹2,000
+
+Same active secure link opened on Day 4 should show:
+
+Received ₹2,000
+Outstanding ₹3,670
+QR ₹3,670
+
+Do not serve a stale PDF containing the original outstanding amount if
+the invoice has subsequently received payment.
+
+==========================================================
+19. OVERPAYMENT SAFETY
+==========================================================
+
+Prevent accidental overpayment where appropriate.
+
+Example:
+
+Outstanding:
+
+₹3,670
+
+The invoice QR must never request more than:
+
+₹3,670
+
+If a payment entry exceeds the outstanding amount, use the ERP's existing
+customer advance/overpayment rules.
+
+Do not silently create negative invoice outstanding.
+
+==========================================================
+20. CANCELLED INVOICE
+==========================================================
+
+Cancelled invoices must NEVER display an active payment QR.
+
+Display:
+
+CANCELLED
+
+Do not display:
+
+SCAN TO PAY
+
+The secure invoice share/PDF/print views must follow the same rule.
+
+==========================================================
+21. SALES RETURN / CREDIT NOTE
+==========================================================
+
+If a sales return or credit note reduces the amount due, the outstanding
+amount and QR must recalculate accordingly.
+
+Example:
+
+Invoice:
+
+₹10,000
+
+Payment received:
+
+₹4,000
+
+Return/Credit Note:
+
+₹2,000
+
+Adjusted amount due:
+
+₹8,000
+
+Received:
+
+₹4,000
+
+Outstanding:
+
+₹4,000
+
+QR:
+
+₹4,000
+
+Use the existing credit-note/sales-return accounting rules rather than
+creating duplicate logic.
+
+==========================================================
+22. UI CONSISTENCY
+==========================================================
+
+The following must all show the same payment position:
+
+• POS Invoice View
+• Sales Invoice View
+• PDF
+• Print
+• Download
+• WhatsApp PDF
+• Secure Invoice Share
+• Customer Outstanding
+• Customer Ledger
+
+There must not be situations where:
+
+ERP says ₹3,670 due
+
+but
+
+PDF QR requests ₹5,670.
+
+==========================================================
+23. AUDIT TRAIL
+==========================================================
+
+Continue recording payment events in the existing audit system.
+
+Where applicable record:
+
+• Invoice Number
+• Customer
+• Payment Amount
+• Previous Outstanding
+• New Outstanding
+• Payment Method
+• Reference
+• User
+• Date/Time
+
+QR regeneration itself does not need to create financial entries.
+
+==========================================================
+24. IMPORTANT — DO NOT BREAK EXISTING ERP
+==========================================================
+
+Do NOT change unrelated functionality.
+
+Do not break:
+
+• GST calculation
+• GST reports
+• Invoice numbering
+• Stock deduction
+• Stock ledger
+• Customer ledger
+• Customer outstanding
+• Sales reports
+• Cash balance
+• Bank balance
+• Chart of Accounts
+• Trial Balance
+• Profit & Loss
+• Balance Sheet
+• Reconciliation
+• Sales returns
+• Credit notes
+• Permissions
+• Location scoping
+
+This enhancement must use the existing accounting/payment sources rather
+than creating parallel financial data.
+
+==========================================================
+25. REGRESSION TEST
+==========================================================
+
+After implementation perform end-to-end tests.
+
+TEST 1 — UNPAID CREDIT SALE
+
+Invoice:
+₹5,670
+
+Expected:
+
+Received ₹0
+Outstanding ₹5,670
+QR ₹5,670
+Status UNPAID
+
+
+TEST 2 — PARTIAL PAYMENT
+
+Receive:
+
+₹2,000
+
+Expected:
+
+Invoice ₹5,670
+Received ₹2,000
+Outstanding ₹3,670
+QR ₹3,670
+Status PARTIALLY PAID
+
+
+TEST 3 — SECOND PARTIAL PAYMENT
+
+Receive:
+
+₹1,000
+
+Expected:
+
+Received ₹3,000
+Outstanding ₹2,670
+QR ₹2,670
+
+
+TEST 4 — FINAL PAYMENT
+
+Receive:
+
+₹2,670
+
+Expected:
+
+Received ₹5,670
+Outstanding ₹0
+Status PAID
+
+QR MUST DISAPPEAR.
+
+
+TEST 5 — PDF REGENERATION
+
+Download PDF after each payment.
+
+Verify QR always equals CURRENT OUTSTANDING.
+
+
+TEST 6 — WHATSAPP
+
+Share invoice after partial payment.
+
+Verify PDF and message show correct balance.
+
+
+TEST 7 — SECURE LINK
+
+Open existing secure invoice link after a partial payment.
+
+Verify it reflects current payment information.
+
+
+TEST 8 — CANCELLED INVOICE
+
+Verify no QR is displayed.
+
+
+TEST 9 — NO UPI CONFIGURATION
+
+Verify invoice still works and Bank Details are displayed without a
+broken QR.
+
+
+TEST 10 — ACCOUNTING
+
+Verify partial payments correctly reconcile across:
+
+Customer Ledger
+Accounts Receivable
+Cash/Bank
+Trial Balance
+Balance Sheet
+Outstanding Report
+
+==========================================================
+FINAL ACCEPTANCE RULE
+==========================================================
+
+There must be ONE authoritative Outstanding Amount.
+
+That amount must drive:
+
+1. Invoice Payment Status
+2. UPI QR Amount
+3. PDF Balance Due
+4. WhatsApp Balance Due
+5. Secure Share Invoice Balance
+6. Customer Outstanding
+
+The fundamental rule is:
+
+UPI QR AMOUNT = CURRENT OUTSTANDING AMOUNT
+
+NEVER:
+
+UPI QR AMOUNT = ORIGINAL INVOICE TOTAL
+
+unless the complete original invoice amount is still outstanding.
+
+Once Outstanding = ₹0:
+
+REMOVE THE QR AND DISPLAY PAID.
+
+After implementation, provide a validation report showing the results of
+all tests above and confirm that no duplicate accounting/payment logic
+was introduced.

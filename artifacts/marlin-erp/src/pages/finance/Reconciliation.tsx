@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
+import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -98,10 +99,12 @@ export default function Reconciliation() {
   // Sales happen at outlets *and* warehouses, so the filter is keyed by
   // "<type>:<id>" rather than by outlet id alone.
   const [locationFilter, setLocationFilter] = useState('all');
+  useClearOutletSelection(locationFilter.startsWith('outlet:'), () => setLocationFilter('all'));
   const [methodFilter, setMethodFilter] = useState('all');
   const [search, setSearch] = useState('');
 
   const { data: outlets = [] } = useListOutlets();
+  const { outletsEnabled } = useOutletsEnabled();
   const { data: warehouses = [] } = useListWarehouses();
   const [filterType, filterId] = locationFilter !== 'all' ? locationFilter.split(':') : [];
   const { data: pending = [], isLoading: pendingLoading } = useGetPendingPayments({
@@ -296,7 +299,7 @@ export default function Reconciliation() {
                       {warehouses.map((w: any) => <SelectItem key={`warehouse:${w.id}`} value={`warehouse:${w.id}`}>{w.name}</SelectItem>)}
                     </SelectGroup>
                   )}
-                  {outlets.length > 0 && (
+                  {outletsEnabled && outlets.length > 0 && (
                     <SelectGroup>
                       <SelectLabel>Outlets</SelectLabel>
                       {outlets.map((o: any) => <SelectItem key={`outlet:${o.id}`} value={`outlet:${o.id}`}>{o.name}</SelectItem>)}

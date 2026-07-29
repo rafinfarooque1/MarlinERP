@@ -1,0 +1,280 @@
+====================================================
+UPDATE – DYNAMIC DAILY ACCRUAL & RECALCULATION
+====================================================
+
+Update both the Rent Management and Payroll modules to support enterprise-grade dynamic daily accrual accounting.
+
+====================================================
+GENERAL PRINCIPLE
+====================================================
+
+The ERP must maintain accurate daily Profit & Loss by automatically accruing expenses every day.
+
+However, until the accounting period is Approved, the ERP must allow recalculation if the monthly amount changes.
+
+Approval locks the accounting period.
+
+====================================================
+RENT ACCRUAL
+====================================================
+
+Every active rent agreement must automatically generate daily accounting entries.
+
+Daily Entry
+
+Debit
+Rent Expense (Indirect Expense)
+
+Credit
+Rent Payable
+
+Daily Accrual Formula
+
+Monthly Rent
+÷
+Number of Days in Month
+
+Example
+
+Monthly Rent
+
+₹30,000
+
+July (31 Days)
+
+Daily Accrual
+
+₹967.74
+
+(or according to company rounding policy)
+
+====================================================
+RECALCULATION BEFORE APPROVAL
+====================================================
+
+If the monthly rent amount changes before the month is Approved,
+
+Example
+
+Original Rent
+
+₹30,000
+
+Changed on July 25
+
+₹60,000
+
+The ERP must automatically
+
+• Recalculate every daily accrual for July.
+• Reverse previously generated daily accrual entries.
+• Generate corrected daily accrual entries.
+• Update
+
+Profit & Loss
+
+Trial Balance
+
+Balance Sheet
+
+General Ledger
+
+Chart of Accounts
+
+Expense Reports
+
+Dashboard
+
+No manual journal entry should be required.
+
+====================================================
+AFTER APPROVAL
+====================================================
+
+When the month is Approved,
+
+The ERP must
+
+Lock all daily accrual entries.
+
+Prevent automatic recalculation.
+
+Mark the rent as ready for payment.
+
+Approval must NOT generate another Rent Expense or Rent Payable entry because those were already recognized daily.
+
+====================================================
+PAYMENT
+====================================================
+
+When rent is paid,
+
+Automatically create
+
+Debit
+
+Rent Payable
+
+Credit
+
+Selected Cash or Bank Account
+
+This clears the liability only.
+
+No additional expense should be recorded.
+
+====================================================
+PAYROLL
+====================================================
+
+Apply exactly the same accounting logic to Payroll.
+
+Every day
+
+Debit
+
+Salary Expense
+
+Credit
+
+Salary Payable
+
+Daily Salary Accrual
+
+Monthly Salary
+÷
+Number of Days in Payroll Month
+
+====================================================
+SALARY RECALCULATION
+====================================================
+
+If salary changes before Payroll Approval
+
+Example
+
+Salary
+
+₹30,000
+
+Changed to
+
+₹35,000
+
+before payroll approval.
+
+The ERP must automatically
+
+Reverse previous salary accrual entries.
+
+Generate corrected daily accruals.
+
+Update
+
+Profit & Loss
+
+Trial Balance
+
+Balance Sheet
+
+General Ledger
+
+Chart of Accounts
+
+Payroll Reports
+
+Dashboard
+
+No manual journal entry.
+
+====================================================
+PAYROLL APPROVAL
+====================================================
+
+Payroll Approval
+
+Locks the payroll period.
+
+Prevents further recalculation.
+
+Does NOT generate duplicate Salary Expense or Salary Payable entries.
+
+====================================================
+SALARY PAYMENT
+====================================================
+
+When salary is paid,
+
+Automatically create
+
+Debit
+
+Salary Payable
+
+Credit
+
+Cash or Bank
+
+No additional expense posting.
+
+====================================================
+ACCOUNTING PRINCIPLE
+====================================================
+
+At the close of every business day, the ERP must provide an accurate financial position.
+
+The following should already be reflected:
+
+• Sales
+• Purchases
+• Production Cost
+• Rent Expense
+• Salary Expense
+• Other Expenses
+• Cash
+• Bank
+• GST
+• Receivables
+• Payables
+
+Once all daily transactions are entered and bank reconciliation is completed, the ERP should automatically produce accurate:
+
+• Chart of Accounts
+• Trial Balance
+• Profit & Loss
+• Balance Sheet
+• Cash Flow
+• General Ledger
+
+without requiring any manual journal entries.
+
+====================================================
+AUDIT
+====================================================
+
+Whenever recalculation occurs,
+
+Record
+
+• Previous Amount
+• New Amount
+• Previous Daily Accrual
+• New Daily Accrual
+• User
+• Date
+• Time
+• Reason
+• Number of entries reversed
+• Number of entries regenerated
+
+Maintain a complete audit trail.
+
+====================================================
+FINAL REQUIREMENT
+====================================================
+
+The ERP must follow a true accrual accounting model.
+
+Daily expenses should always reflect the latest unapproved values.
+
+Once a period is Approved, it becomes financially locked. Any subsequent changes must follow the ERP's controlled adjustment or period reopening process with appropriate permissions and a full audit trail.

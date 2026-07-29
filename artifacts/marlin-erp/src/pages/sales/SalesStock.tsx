@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { useLocation } from 'wouter';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useLocationContext } from '@/lib/locationContext';
-import { useListStock, useListItems, useListOutlets, useListStockBatches, type StockBatch } from '@workspace/api-client-react';
+import { useListStock, useListItems, useListStockBatches, type StockBatch } from '@workspace/api-client-react';
+import { useAllOutlets, useIsLocationKindEnabled } from '@/lib/locationStructure';
 import { LocationFilter, parseLocationFilter } from '@/components/ui/LocationFilter';
 import { Package, AlertTriangle, Search, ShieldOff } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
@@ -33,8 +34,11 @@ export default function SalesStock() {
     if (!locationType) navigate('/sales');
   }, [locationType]);
 
-  // Child outlets for warehouse mode
-  const { data: outlets = [] } = useListOutlets();
+  // Child outlets for warehouse mode. Historical aggregation, not a selector:
+  // stock physically held by a child outlet stays part of the warehouse's total
+  // whether or not outlets are on show, otherwise the quantity simply vanishes.
+  const outletsVisible = useIsLocationKindEnabled('outlet');
+  const { data: outlets = [] } = useAllOutlets();
   const childOutletIds = isWarehouse
     ? new Set((outlets as any[]).filter(o => Number(o.warehouseId) === locationId).map(o => o.id))
     : new Set<number>();
@@ -79,9 +83,9 @@ export default function SalesStock() {
   const showLocationCol = isAll || isWarehouse;
   const title    = isAll ? 'Stock — All Locations' : `Stock — ${locationName}`;
   const subtitle = isAll
-    ? 'Current inventory across all warehouses and outlets'
+    ? `Current inventory across all warehouses${outletsVisible ? ' and outlets' : ''}`
     : isWarehouse
-    ? `Stock at ${locationName} and its outlets`
+    ? `Stock at ${locationName}${outletsVisible ? ' and its outlets' : ''}`
     : 'Current inventory at this location';
 
   if (!locationType) return null;

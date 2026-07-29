@@ -5,6 +5,7 @@ import {
   type PayComponent, type PayComponents,
 } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
+import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -49,6 +50,9 @@ const editSchema = z.object({
   branchId: z.coerce.number().min(0),
   salary: z.coerce.number().min(0),
   isProductionStaff: z.boolean().default(false),
+  // Why the salary changed. Salary accrues daily, so a revision rewrites every
+  // unapproved month at the new figure — the reason is kept with that audit entry.
+  revisionReason: z.string().optional(),
 });
 type EditFormValues = z.infer<typeof editSchema>;
 
@@ -208,10 +212,12 @@ export default function Employees() {
   const { data: hierarchies = [] } = useListHierarchies();
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
+  const { outletsEnabled } = useOutletsEnabled();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
   const [branchTypeFilter, setBranchTypeFilter] = useState<string>('all');
   const [branchLocId, setBranchLocId] = useState<string>('all');
+  useClearOutletSelection(branchTypeFilter === 'outlet', () => { setBranchTypeFilter('all'); setBranchLocId('all'); });
   const [isOpen, setIsOpen] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
   const [viewItem, setViewItem] = useState<any>(null);
@@ -244,11 +250,15 @@ export default function Employees() {
       branchType: emp.branchType === 'production' ? 'headoffice' : emp.branchType,
       branchId: emp.branchId, salary: Number(emp.salary),
       isProductionStaff: !!emp.isProductionStaff,
+      revisionReason: '',
     });
   };
 
   const onEditSubmit = (data: EditFormValues) => {
-    updateMutation.mutate({ id: editItem.id, data: { ...data, email: data.email || undefined, phone: data.phone || undefined } as any }, {
+    updateMutation.mutate({ id: editItem.id, data: {
+      ...data, email: data.email || undefined, phone: data.phone || undefined,
+      revisionReason: data.revisionReason?.trim() || undefined,
+    } as any }, {
       onSuccess: () => { toast.success(`${data.name} updated`); queryClient.invalidateQueries({ queryKey: getListEmployeesQueryKey() }); setEditItem(null); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
@@ -349,7 +359,7 @@ export default function Employees() {
               <SelectItem value="all">All Branches</SelectItem>
               <SelectItem value="headoffice">Head Office</SelectItem>
               <SelectItem value="warehouse">Warehouse</SelectItem>
-              <SelectItem value="outlet">Outlet</SelectItem>
+              {outletsEnabled && <SelectItem value="outlet">Outlet</SelectItem>}
             </SelectContent>
           </Select>
           {branchTypeFilter === 'warehouse' && (
@@ -504,6 +514,17 @@ export default function Employees() {
                   <FormItem><FormLabel>Monthly Basic Salary ₹</FormLabel><FormControl><Input type="number" min={0} {...field} /></FormControl></FormItem>
                 )} />
               </div>
+              <FormField control={editForm.control} name="revisionReason" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Reason for Salary Revision (optional)</FormLabel>
+                  <FormControl><Input placeholder="e.g. annual increment, promotion" {...field} /></FormControl>
+                  <p className="text-xs text-muted-foreground">
+                    Salary reaches the accounts a day at a time as it is earned. Changing it
+                    recalculates every month not yet approved at the new figure, and records who
+                    changed it, when, and why. Approved and paid months stay as they are.
+                  </p>
+                </FormItem>
+              )} />
               <div className="border-t border-border pt-4 grid grid-cols-2 gap-4">
                 <FormField control={editForm.control} name="hierarchyId" render={({ field }) => (
                   <FormItem><FormLabel>Role <span className="text-destructive">*</span></FormLabel>
@@ -519,7 +540,7 @@ export default function Employees() {
                       <SelectContent>
                         <SelectItem value="headoffice">Head Office</SelectItem>
                         <SelectItem value="warehouse">Warehouse</SelectItem>
-                        <SelectItem value="outlet">Retail Outlet</SelectItem>
+                        {outletsEnabled && <SelectItem value="outlet">Retail Outlet</SelectItem>}
                       </SelectContent>
                     </Select></FormItem>
                 )} />
@@ -628,7 +649,7 @@ export default function Employees() {
                       <SelectContent>
                         <SelectItem value="headoffice">Head Office</SelectItem>
                         <SelectItem value="warehouse">Warehouse</SelectItem>
-                        <SelectItem value="outlet">Retail Outlet</SelectItem>
+                        {outletsEnabled && <SelectItem value="outlet">Retail Outlet</SelectItem>}
                       </SelectContent>
                     </Select></FormItem>
                 )} />

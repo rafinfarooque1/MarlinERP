@@ -67,6 +67,10 @@ app.use("/api", (req, res, next) => {
   if (req.path === "/health" || req.path === "/healthz") { next(); return; }
   if (req.path === "/auth/login" && req.method === "POST") { next(); return; }
   if (req.method === "GET" && req.path.startsWith("/public/invoices/")) { next(); return; }
+  // Customer-facing invoice links. GET only, and every request is authorised
+  // against the invoice_share_links row named by its own opaque URL — see
+  // routes/invoiceShareLinks.ts.
+  if (req.method === "GET" && req.path.startsWith("/share/invoice/")) { next(); return; }
   requireAuth(req, res, next);
 });
 

@@ -1,0 +1,433 @@
+Implement a new enterprise module called "Backup & Restore" under the Company module.
+
+Purpose:
+
+Provide a complete disaster recovery solution.
+
+If the application is lost, deleted, corrupted or moved to a new server/Replit, the administrator should be able to restore the ERP using:
+
+1. Source Code (GitHub)
+2. Database Backup
+3. Company Files
+4. Settings
+
+The system should support one-click backup and one-click restore.
+
+==========================================
+MODULE LOCATION
+==========================================
+
+Company
+
+• Company Profile
+• Settings
+• Permissions
+• Audit Log
+• Login History
+• Backup & Restore (NEW)
+
+Permissions
+
+View
+
+Backup
+
+Restore
+
+Download
+
+Delete Backup
+
+Only Super Admin can Restore.
+
+==========================================
+BACKUP DASHBOARD
+==========================================
+
+Display
+
+Total Backups
+
+Latest Backup
+
+Backup Size
+
+Last Restore
+
+Automatic Backup Status
+
+Database Version
+
+ERP Version
+
+Git Commit ID (if available)
+
+==========================================
+DATABASE BACKUP
+==========================================
+
+Allow administrator to create backups manually.
+
+Button
+
+Create Backup
+
+System should export:
+
+Entire PostgreSQL database
+
+Including
+
+Tables
+
+Indexes
+
+Sequences
+
+Constraints
+
+Triggers
+
+Views
+
+Functions
+
+Stored Procedures (if any)
+
+Everything required for a full restore.
+
+Support:
+
+SQL
+
+Compressed SQL (.zip)
+
+==========================================
+FILE BACKUP
+==========================================
+
+Also backup:
+
+Uploaded PDFs
+
+Invoices
+
+Payslips
+
+Company Logo
+
+Product Images
+
+Attachments
+
+Export everything into one archive.
+
+==========================================
+SETTINGS BACKUP
+==========================================
+
+Backup
+
+Company Settings
+
+GST Settings
+
+Location Structure
+
+Permissions
+
+Roles
+
+Salary Settings
+
+PF
+
+ESI
+
+Number Series
+
+Dashboard Configuration
+
+==========================================
+BACKUP FORMAT
+==========================================
+
+Create one downloadable file.
+
+Example
+
+Marlin_Backup_2026_07_29_2300.zip
+
+Contents
+
+/database.sql
+
+/uploads/
+
+settings.json
+
+version.json
+
+manifest.json
+
+==========================================
+VERSION INFORMATION
+==========================================
+
+Store
+
+ERP Version
+
+Database Version
+
+Backup Date
+
+Created By
+
+Git Commit
+
+Schema Version
+
+==========================================
+AUTOMATIC BACKUP
+==========================================
+
+Support automatic backups.
+
+Options
+
+Daily
+
+Weekly
+
+Monthly
+
+Manual Only
+
+Keep
+
+Last 7
+
+Last 30
+
+Last 90
+
+Unlimited
+
+Automatically delete old backups based on retention policy.
+
+==========================================
+RESTORE
+==========================================
+
+Allow administrator to upload a backup ZIP.
+
+System should verify
+
+Version
+
+Schema
+
+Integrity
+
+Checksum
+
+If valid
+
+Restore
+
+Database
+
+Settings
+
+Files
+
+Images
+
+Documents
+
+Permissions
+
+Users
+
+Ledger
+
+Inventory
+
+Everything.
+
+==========================================
+RESTORE SAFETY
+==========================================
+
+Before restoring
+
+Automatically create a backup of the current database.
+
+Confirmation
+
+"This operation will replace the current ERP data."
+
+Require administrator password confirmation.
+
+==========================================
+VALIDATION
+==========================================
+
+Before restoring
+
+Verify
+
+Database Version
+
+Schema Version
+
+Missing Tables
+
+Corrupt Backup
+
+Incomplete Backup
+
+Show errors before restore.
+
+==========================================
+IMPORT
+==========================================
+
+Support
+
+Upload Backup ZIP
+
+Restore
+
+Show progress
+
+Verify completion
+
+==========================================
+EXPORT
+==========================================
+
+Support
+
+Download Backup
+
+Database Only
+
+Files Only
+
+Settings Only
+
+Complete Backup
+
+==========================================
+AUDIT LOG
+==========================================
+
+Log
+
+Backup Created
+
+Backup Downloaded
+
+Backup Deleted
+
+Restore Started
+
+Restore Completed
+
+Restore Failed
+
+Include
+
+User
+
+Time
+
+IP
+
+==========================================
+SECURITY
+==========================================
+
+Encrypt backup metadata.
+
+Only Super Admin can Restore.
+
+Require password confirmation before restore.
+
+Do not expose backup download URLs publicly.
+
+==========================================
+DISASTER RECOVERY
+==========================================
+
+Recovery procedure:
+
+1. Clone ERP source code from GitHub.
+
+2. Create a new PostgreSQL database.
+
+3. Configure environment variables.
+
+4. Open Backup & Restore.
+
+5. Upload the backup ZIP.
+
+6. Restore Database.
+
+7. Restore Files.
+
+8. Restore Settings.
+
+9. Restart the ERP.
+
+After restart, the ERP should be identical to the backup date.
+
+==========================================
+VALIDATION
+==========================================
+
+After every backup
+
+Verify
+
+Database Export
+
+Files Export
+
+Settings Export
+
+Checksum
+
+Backup Size
+
+Backup Integrity
+
+After every restore
+
+Verify
+
+Trial Balance
+
+Balance Sheet
+
+Inventory
+
+Ledger
+
+Dashboard
+
+Permissions
+
+Users
+
+Warehouse Data
+
+Payroll
+
+Reports
+
+Everything matches the backup.
+
+Do not mark this task complete until a backup is created, restored into a test environment, and verified successfully.

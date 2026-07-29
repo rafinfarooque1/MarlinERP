@@ -7,6 +7,7 @@ import {
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
+import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 import {
   Card, CardContent, CardHeader, CardTitle, CardDescription,
 } from '@/components/ui/card';
@@ -82,9 +83,11 @@ export default function Dashboard() {
   const dashPerm = usePermission('page:/');
   const range = useDateRange('month');
   const [loc, setLoc] = useState('all'); // 'all' | 'warehouse:<id>' | 'outlet:<id>'
+  useClearOutletSelection(loc.startsWith('outlet:'), () => setLoc('all'));
 
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
+  const { outletsEnabled } = useOutletsEnabled();
 
   const filters = useMemo<DashboardBiFilters>(() => {
     const f: DashboardBiFilters = {};
@@ -174,12 +177,12 @@ export default function Dashboard() {
               {(warehouses as any[]).map((w: any) => (
                 <SelectItem key={`w${w.id}`} value={`warehouse:${w.id}`}>{w.name}</SelectItem>
               ))}
-              {(outlets as any[]).length > 0 && (
+              {outletsEnabled && (outlets as any[]).length > 0 && (
                 <div className="px-2 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                   Outlets
                 </div>
               )}
-              {(outlets as any[]).map((o: any) => (
+              {outletsEnabled && (outlets as any[]).map((o: any) => (
                 <SelectItem key={`o${o.id}`} value={`outlet:${o.id}`}>{o.name}</SelectItem>
               ))}
             </SelectContent>

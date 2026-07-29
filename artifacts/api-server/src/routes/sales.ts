@@ -14,6 +14,10 @@ import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 import { blockedByInactiveProducts, INACTIVE_PRODUCT_CODE } from "../lib/productIdentity";
 import { SALE_PAYMENT_MODES, isSettledAtSale, clearsThroughBank } from "../lib/paymentModes";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
+import {
+  loadPaymentPosition, loadPaymentPositions, computePaymentPosition,
+  loadInvoicePaymentSettings, buildUpiRequest,
+} from "../lib/salePaymentPosition";
 
 const router = Router();
 
@@ -260,6 +264,12 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
   const oMap = new Map(outlets.map((o) => [o.id, { name: o.name, upiId: (o as any).upiId ?? "" }]));
   const wMap = new Map(warehouses.map((w) => [w.id, { name: w.name, upiId: w.upi_id ?? "" }]));
 
+  // One batched read of the shared payment position for every row on this page,
+  // plus the company's payment settings. The list, the invoice view and the QR
+  // it shows then all quote the same number.
+  const positions = await loadPaymentPositions(pgPool, rawRows.map((r: any) => Number(r.id)));
+  const paySettings = await loadInvoicePaymentSettings(pgPool);
+
   const mapped = rawRows.map((r: any) => {
     const locationType: string = r.location_type ?? 'outlet';
     const locationId: number = r.location_id ?? r.outlet_id;
@@ -269,6 +279,18 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
     const locationUpiId = warehouse?.upiId ?? outlet?.upiId ?? "";
     const totalAmount = Number(r.total_amount);
     const amountPaid  = Number(r.amount_paid ?? 0);
+    const position = positions.get(Number(r.id)) ?? computePaymentPosition({
+      totalAmount, amountReceived: amountPaid, cancelledAt: r.cancelled_at,
+    });
+    // The collect request is built server-side from the position, so the screen
+    // cannot ask for an amount the invoice does not owe.
+    const upiRequest = buildUpiRequest({
+      position,
+      upiId: locationUpiId || paySettings.upiId,
+      payeeName: paySettings.upiPayeeName || locationName,
+      reference: r.invoice_number ?? "",
+      enabled: paySettings.upiEnabled && paySettings.showUpiQrOnInvoice,
+    });
     return {
       id: r.id,
       invoiceNumber: r.invoice_number,
@@ -285,9 +307,16 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
       paymentMode: r.payment_mode,
       couponCode: r.coupon_code,
       createdAt: r.created_at,
-      paymentStatus: r.payment_status ?? "paid",
+      paymentStatus: position.status,
       amountPaid,
-      balanceDue: Math.max(0, totalAmount - amountPaid),
+      amountReceived: position.amountReceived,
+      creditAdjustments: position.creditAdjustments,
+      amountDue: position.amountDue,
+      balanceDue: position.outstanding,
+      cancelledAt: r.cancelled_at ?? null,
+      isCancelled: position.isCancelled,
+      upiQrUri: upiRequest?.uri ?? null,
+      upiQrAmount: upiRequest?.amount ?? 0,
       outletName: locationName,
       outletUpiId: locationUpiId,
       customerName: r._customer_name ?? null,
@@ -731,9 +760,23 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     paymentMode: row.payment_mode,
     couponCode: row.coupon_code,
     createdAt: row.created_at,
-    paymentStatus: row.payment_status ?? 'unpaid',
-    amountPaid: Number(row.amount_paid ?? 0),
-    balanceDue: Math.max(0, totalAmount - Number(row.amount_paid ?? 0)),
+    // A sale cannot have a credit note against it the moment it is created, so
+    // the position is computed rather than read back — same definition though,
+    // so the figure the POS shows matches the one the invoice will print.
+    ...(() => {
+      const position = computePaymentPosition({
+        totalAmount, amountReceived: row.amount_paid, cancelledAt: null,
+      });
+      return {
+        paymentStatus: position.status,
+        amountPaid: position.amountReceived,
+        amountReceived: position.amountReceived,
+        creditAdjustments: position.creditAdjustments,
+        amountDue: position.amountDue,
+        balanceDue: position.outstanding,
+        isCancelled: false,
+      };
+    })(),
   });
 });
 
@@ -1168,6 +1211,10 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     metadata: { before: { totalAmount: oldTotal }, after: { totalAmount } },
   }).catch(() => {});
 
+  // Re-read the shared position after the edit: the new total may have changed
+  // what is owed, and credit notes raised against this invoice still count.
+  const editedPosition = await loadPaymentPosition(pgPool, Number(updated.id));
+
   res.json({
     id: updated.id,
     invoiceNumber: updated.invoice_number,
@@ -1186,9 +1233,13 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     paymentMode: updated.payment_mode,
     couponCode: updated.coupon_code,
     createdAt: updated.created_at,
-    paymentStatus: updated.payment_status ?? 'paid',
+    paymentStatus: editedPosition?.status ?? updated.payment_status ?? 'paid',
     amountPaid: Number(updated.amount_paid ?? 0),
-    balanceDue: Math.max(0, totalAmount - Number(updated.amount_paid ?? 0)),
+    amountReceived: editedPosition?.amountReceived ?? Number(updated.amount_paid ?? 0),
+    creditAdjustments: editedPosition?.creditAdjustments ?? 0,
+    amountDue: editedPosition?.amountDue ?? totalAmount,
+    balanceDue: editedPosition?.outstanding ?? Math.max(0, totalAmount - Number(updated.amount_paid ?? 0)),
+    isCancelled: editedPosition?.isCancelled ?? false,
   });
 });
 
@@ -1405,25 +1456,37 @@ router.get("/sales/summary", requireModuleView(["page:/sales/pos", "page:/"]), a
   });
 });
 
-// Create a time-limited signed share token for the invoice PDF.
-// The backend verifies the sale exists (and thereby the customer linkage)
-// before issuing a token — the frontend never passes phone numbers or IDs
-// that could be tampered with into the PDF pipeline.
+// Create a short-lived signed token so THIS user's browser can fetch the invoice
+// PDF it is already looking at. It exists because `window.open` and a download
+// navigation cannot carry an Authorization header — not as a way to publish an
+// invoice. The backend verifies the sale exists (and thereby the customer
+// linkage) before issuing one, so the frontend never passes phone numbers or ids
+// into the PDF pipeline.
 //
-// This token IS the document: whoever holds it can fetch the invoice PDF for a
-// month without signing in. So the right to mint one is a document right, and
-// the caller says which one it is exercising. It used to require `add` on the
-// sales pages — recording a sale and releasing a copy of it are different
-// things, and the roles that print invoices are frequently not the ones that
-// write them.
+// The token IS the document: whoever holds it can fetch the PDF without signing
+// in. So the right to mint one is a document right, and the caller says which one
+// it is exercising. It used to require `add` on the sales pages — recording a sale
+// and releasing a copy of it are different things, and the roles that print
+// invoices are frequently not the ones that write them.
+//
+// Sending an invoice to a customer is NOT one of these intents. That goes through
+// the share-link flow, which needs the `share` right and produces a link the
+// office can revoke, replace and see the usage of.
 const SHARE_INTENT_ACTIONS: Record<string, ModuleAction[]> = {
   download: ["download"],
   print: ["print"],
-  // Reading it on screen, or sending the customer their copy, is satisfied by
-  // either right — both pages offer those buttons to both kinds of user.
+  // Reading it on screen is satisfied by either right — both pages offer those
+  // buttons to both kinds of user.
   preview: ["download", "print"],
-  share: ["download", "print"],
 };
+
+// Minutes, not days. A month-long token was in practice an unrevocable public
+// share link that anyone who could download an invoice could forward, which is
+// precisely the thing the revocable share-link flow exists to control. Long
+// enough here to survive a slow print dialog or a re-authenticating proxy.
+// Tokens already issued carry their own signed expiry, so links customers were
+// sent under the old scheme keep working until they lapse on their own.
+const IN_SESSION_TOKEN_TTL_DAYS = 30 / (24 * 60);
 const SHARE_PAGES = ["page:/sales/pos", "page:/outstanding"];
 
 router.post("/sales/:id/share-token", async (req, res): Promise<void> => {
@@ -1442,9 +1505,9 @@ router.post("/sales/:id/share-token", async (req, res): Promise<void> => {
     });
     return;
   }
-  // LBAC: a share link is a public, month-long window onto one invoice, so only
-  // someone who can see the sale may mint one. Scoped through the same rule the
-  // sales list uses, otherwise a branch user could publish any invoice by id.
+  // LBAC: the token opens one invoice without a session, so only someone who can
+  // see the sale may mint one. Scoped through the same rule the sales list uses,
+  // otherwise a branch user could read any invoice by id.
   const shareScope = await getUserDataScope((req as any).employee);
   const shareParams: unknown[] = [id];
   const { rows: [row] } = await pool.query(
@@ -1452,7 +1515,7 @@ router.post("/sales/:id/share-token", async (req, res): Promise<void> => {
     shareParams,
   );
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
-  const { token, expiresAt } = createInvoiceShareToken(id);
+  const { token, expiresAt } = createInvoiceShareToken(id, IN_SESSION_TOKEN_TTL_DAYS);
   res.json({ token, expiresAt });
 });
 
@@ -1482,6 +1545,19 @@ router.get("/sales/:id", requireModuleView("page:/sales/pos"), async (req, res):
     : null;
   const totalAmount = Number(row.total_amount);
   const amountPaid  = Number(row.amount_paid ?? 0);
+  // One shared position drives the status, what is still owed and the QR, and it
+  // is re-derived on every fetch — never read from a stored figure.
+  const position = (await loadPaymentPosition(pgPool, Number(row.id))) ?? computePaymentPosition({
+    totalAmount, amountReceived: amountPaid, cancelledAt: row.cancelled_at,
+  });
+  const paySettings = await loadInvoicePaymentSettings(pgPool);
+  const upiRequest = buildUpiRequest({
+    position,
+    upiId: locationUpiId || paySettings.upiId,
+    payeeName: paySettings.upiPayeeName || locationName,
+    reference: row.invoice_number ?? "",
+    enabled: paySettings.upiEnabled && paySettings.showUpiQrOnInvoice,
+  });
   res.json({
     id: row.id,
     invoiceNumber: row.invoice_number,
@@ -1498,9 +1574,16 @@ router.get("/sales/:id", requireModuleView("page:/sales/pos"), async (req, res):
     paymentMode: row.payment_mode,
     couponCode: row.coupon_code,
     createdAt: row.created_at,
-    paymentStatus: row.payment_status ?? "paid",
+    paymentStatus: position.status,
     amountPaid,
-    balanceDue: Math.max(0, totalAmount - amountPaid),
+    amountReceived: position.amountReceived,
+    creditAdjustments: position.creditAdjustments,
+    amountDue: position.amountDue,
+    balanceDue: position.outstanding,
+    cancelledAt: row.cancelled_at ?? null,
+    isCancelled: position.isCancelled,
+    upiQrUri: upiRequest?.uri ?? null,
+    upiQrAmount: upiRequest?.amount ?? 0,
     outletName: locationName,
     outletUpiId: locationUpiId,
     customerName,

@@ -130,6 +130,10 @@
           "href": "/hr/advances"
         },
         {
+          "name": "Rent Management",
+          "href": "/hr/rent"
+        },
+        {
           "name": "Hierarchy",
           "href": "/hr/hierarchy"
         }
@@ -214,6 +218,10 @@
         {
           "name": "Login History",
           "href": "/company/login-history"
+        },
+        {
+          "name": "Backup & Restore",
+          "href": "/company/backup"
         }
       ]
     }

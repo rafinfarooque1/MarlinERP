@@ -1,0 +1,1176 @@
+MARLIN FROZEN FRUITS ERP
+FINAL ERP CHANGE + BACKEND INTEGRATION + REGRESSION PROMPT
+
+Continue from the CURRENT ERP architecture and current database.
+
+IMPORTANT:
+Do NOT rebuild the ERP.
+Do NOT replace working modules.
+Do NOT reset or wipe the database.
+Do NOT destroy historical transactions.
+Do NOT create duplicate accounting entries.
+Do NOT create parallel accounting/stock/payment systems.
+
+Implement the following as extensions and corrections to the existing ERP.
+
+Before changing each feature, trace the complete flow:
+
+UI
+→ API
+→ server-side validation
+→ database/schema
+→ accounting posting
+→ stock/payment effects
+→ permissions
+→ reports
+→ PDFs/exports where applicable.
+
+A frontend change is NOT complete unless the corresponding backend behaviour is also correct.
+
+If a field is removed from the UI, verify whether:
+• API validation still requires it
+• database constraints require it
+• posting logic uses it
+• reports depend on it
+• old records depend on it
+
+Use safe migrations where required.
+
+Preserve historical data.
+
+After implementation, perform full end-to-end regression testing.
+
+========================================================
+1. SALES / POINT OF SALE PAYMENT METHODS
+========================================================
+
+In:
+
+Operations → Point of Sale → Record Sale
+
+The initial sale Payment Mode must contain ONLY:
+
+1. Cash
+2. Credit (Pay Later)
+
+REMOVE from initial sale creation:
+
+• Bank
+• UPI
+
+Do not merely hide Bank and UPI in the frontend.
+
+Inspect backend validation and posting logic so the API accepts only the valid initial payment modes.
+
+REASON:
+
+If the customer is not paying cash immediately, create the invoice as Credit.
+
+Payment can then be collected later through Customer / Invoice payment collection.
+
+Existing historical Bank/UPI sales must remain valid and readable.
+
+Do NOT modify historical payment records.
+
+========================================================
+2. CUSTOMER — COLLECT PAYMENT
+========================================================
+
+Add a clear:
+
+COLLECT PAYMENT
+
+action to the Customer module.
+
+Location:
+
+Operations → Customers
+
+The action should be available from the relevant customer row/details.
+
+When clicked, show:
+
+• Customer
+• Total Outstanding
+• Open invoices
+• Invoice number
+• Invoice date
+• Original invoice amount
+• Amount already received
+• Outstanding amount
+• Due date where applicable
+
+Allow collection against outstanding invoices.
+
+Support:
+
+• Full payment
+• Partial payment
+
+Payment methods for collection can include the payment methods supported by the ERP, including:
+
+• Cash
+• Bank
+• UPI
+
+For Cash:
+
+Credit Customer Receivable
+Debit the correct location Cash ledger.
+
+For Bank:
+
+Credit Customer Receivable
+Debit the selected Bank ledger / appropriate bank clearing flow according to the ERP's existing reconciliation architecture.
+
+For UPI:
+
+Use the existing UPI/bank/reconciliation architecture.
+
+Do NOT invent a second payment accounting system.
+
+Payment collection must update:
+
+• Customer outstanding
+• Invoice outstanding
+• Customer ledger
+• Cash/Bank/UPI accounting
+• Day Book
+• General Ledger
+• Trial Balance
+• Balance Sheet
+• Cash/Bank reports
+• reconciliation workflow where applicable
+
+Never duplicate receipts.
+
+Location ownership must be enforced server-side.
+
+========================================================
+3. INVOICE UPI QR — OUTSTANDING AMOUNT
+========================================================
+
+Update sales invoice PDF behaviour.
+
+The UPI QR must NOT blindly request the original invoice amount.
+
+QR AMOUNT = CURRENT OUTSTANDING AMOUNT.
+
+Example:
+
+Invoice total = ₹5,670
+Payment received = ₹2,000
+Outstanding = ₹3,670
+
+The regenerated/viewed invoice QR must request:
+
+₹3,670
+
+not ₹5,670.
+
+If outstanding = ₹0:
+
+Do NOT display a payment QR.
+
+Instead clearly show:
+
+PAID
+
+or equivalent payment status.
+
+For an unpaid/partially paid invoice, show useful payment information such as:
+
+Invoice Total
+Amount Received
+Outstanding Amount
+
+The QR must be generated from server-verified outstanding data, not a client-provided amount.
+
+Bank account details may remain on the invoice.
+
+Do not show a misleading payment QR on fully paid invoices.
+
+========================================================
+4. EXPENSE MODULE — SIMPLIFICATION
+========================================================
+
+Expenses belong under:
+
+Operations → Expenses
+
+REMOVE:
+
+Accounts → Expenses
+
+from the sidebar/navigation.
+
+This removes only the duplicate navigation/page exposure.
+
+It MUST NOT remove expense accounting.
+
+Expenses must continue feeding the accounting system.
+
+--------------------------------------------------------
+RECORD EXPENSE FORM
+--------------------------------------------------------
+
+Simplify Record Expense.
+
+Remove the visible:
+
+Category
+
+field.
+
+Do NOT require Category from the backend if it is no longer part of the business workflow.
+
+Clean up:
+
+• API DTO/schema
+• validation
+• form state
+• backend assumptions
+• obsolete required-field checks
+
+without destroying historical category data.
+
+--------------------------------------------------------
+EXPENSE ACCOUNT
+--------------------------------------------------------
+
+Keep:
+
+Expense Account
+
+but its dropdown should show ONLY valid posting ledgers underneath:
+
+Indirect Expense
+
+including valid descendant ledgers/subledgers.
+
+Do not show:
+
+• Assets
+• Liabilities
+• Income
+• Current Assets
+• Current Liabilities
+• system clearing accounts
+• payable accounts
+• non-posting groups
+• inappropriate system accounts
+
+The backend must validate that the selected account is a valid expense posting ledger.
+
+Do not rely only on frontend filtering.
+
+--------------------------------------------------------
+NO ATTACHMENTS
+--------------------------------------------------------
+
+REMOVE:
+
+Supporting Bill
+Attach bill or receipt
+file upload controls
+
+from Expenses.
+
+This ERP should not accept expense attachments.
+
+Also inspect the backend and remove/disable the corresponding expense attachment upload path if it exists and is no longer required.
+
+Do not leave an unused upload endpoint exposed.
+
+--------------------------------------------------------
+SCROLLING
+--------------------------------------------------------
+
+Fix Expense Account dropdown scrolling.
+
+If there are many ledgers, the dropdown must have:
+
+• sensible max height
+• vertical scrolling
+• search if supported by the current component
+
+The expense modal itself must also remain usable on smaller screens.
+
+========================================================
+5. OUTLET VISIBILITY — GLOBAL LOCATION SETTING
+========================================================
+
+Company Settings contains:
+
+Location Structure → Outlet Management
+
+When Outlet Management = OFF:
+
+Outlets are legacy/disabled operationally.
+
+They must disappear from ACTIVE operational UI, including:
+
+• Inventory navigation
+• Cash Balance filters/cards
+• location selectors
+• stock selectors
+• Point of Sale selling-location selectors
+• expense location selectors
+• operational reports/filters
+• warehouse/location dropdowns
+• other active operational screens
+
+Do NOT merely hide:
+
+Inventory → Outlets
+
+and leave outlets visible elsewhere.
+
+There must be ONE central source of truth for whether outlets are operationally enabled.
+
+All frontend location selectors should use it.
+
+Backend APIs must also respect the setting where operational selection is involved.
+
+--------------------------------------------------------
+HISTORICAL DATA
+--------------------------------------------------------
+
+VERY IMPORTANT:
+
+Turning Outlet Management OFF must NOT:
+
+• delete outlets
+• delete outlet transactions
+• delete outlet sales
+• delete outlet stock history
+• delete outlet cash history
+• delete accounting entries
+• change historical reports incorrectly
+
+Historical outlet transactions remain valid.
+
+The toggle controls future operational visibility/selection.
+
+If Outlet Management is turned ON again:
+
+Outlets should become operationally visible again.
+
+--------------------------------------------------------
+CASH BALANCE BUG
+--------------------------------------------------------
+
+Currently outlets may remain visible in Cash Balance even when Outlet Management is OFF.
+
+Fix this.
+
+Cash Balance must respect Location Structure.
+
+When OFF:
+
+active Cash Balance operational views should show active allowed locations only.
+
+However historical outlet cash ledgers must remain in accounting history.
+
+========================================================
+6. LOCATION-WISE STOCK
+========================================================
+
+Every stock-related operational screen must show stock belonging to the selected/current location only unless the user explicitly selects an authorized consolidated company view.
+
+Never expose another warehouse/location's available stock as sellable stock.
+
+For Point of Sale:
+
+After selecting Selling Location:
+
+show ONLY stock available at that location.
+
+For production/purchase/transfer flows:
+
+use the appropriate selected location.
+
+Backend stock validation must use the same location.
+
+Do not trust a quantity supplied by the frontend.
+
+Before completing a sale/transfer/consumption, verify server-side:
+
+location
+item
+batch
+available quantity
+reservation/in-transit status where applicable.
+
+========================================================
+7. ASSET / FIXED ASSET SUPPORT
+========================================================
+
+Add:
+
+Asset
+
+as an Item Type in Item Master.
+
+Existing types include things such as:
+
+• Packing Material
+• Raw Material
+• Item/SKU
+
+Add:
+
+• Asset
+
+Assets are NOT sale inventory.
+
+Therefore Asset item creation should NOT require:
+
+• MRP
+
+unless some separate future use requires it.
+
+Asset master should capture appropriate information such as:
+
+• Asset Name
+• Asset Code
+• Unit
+• Description
+• Status
+
+Do not force sales-specific fields onto assets.
+
+--------------------------------------------------------
+ASSET PURCHASE
+--------------------------------------------------------
+
+Assets must be purchasable for a specific location.
+
+Example:
+
+Purchase:
+Freezer
+Qty: 2
+Cost: ₹50,000 each
+Location: Karnataka Central Warehouse
+
+The ERP must know:
+
+Asset
+Quantity
+Acquisition Cost
+Location
+
+Asset purchases must NOT increase normal saleable inventory.
+
+Accounting should post to the appropriate Fixed Asset ledger instead of Purchase/Inventory expense treatment.
+
+Do not implement depreciation unless the current ERP already supports it or it is separately requested.
+
+--------------------------------------------------------
+FIXED ASSET ACCOUNTING VIEW
+--------------------------------------------------------
+
+In Chart of Accounts:
+
+Assets
+→ Fixed Asset
+
+allow the user to expand and see useful asset balances/details.
+
+Where practical show:
+
+• Asset/item
+• Location
+• Quantity
+• Acquisition value / accounting balance
+
+But maintain proper accounting architecture:
+
+Chart of Accounts balances must still come from ledger transactions.
+
+Do not calculate an accounting balance merely from UI asset quantities.
+
+========================================================
+8. CHART OF ACCOUNTS — TOP FILTERS
+========================================================
+
+The Chart of Accounts currently exposes too many detailed group filters.
+
+Simplify the TOP FILTERS to only:
+
+• All
+• Assets
+• Liabilities
+• Income
+• Expenses
+
+Do not expose detailed groups such as Current Assets, Current Liabilities, Direct Expense, Indirect Expense etc. as top-level filter buttons.
+
+Those belong inside the hierarchy.
+
+Filtering Expenses must include relevant Direct + Indirect expense hierarchy.
+
+Filtering Assets must include all asset descendants.
+
+Filtering Liabilities must include all liability descendants.
+
+========================================================
+9. CHART OF ACCOUNTS — MANUAL STRUCTURE MANAGEMENT
+========================================================
+
+The ERP already creates many accounting structures automatically.
+
+KEEP automatic creation.
+
+But also allow authorized administrators/accountants to manually create valid accounting structures.
+
+Support:
+
+• Group where permitted
+• Subgroup
+• Ledger
+• Sub-ledger
+
+Do not allow manual editing to break accounting integrity.
+
+System-controlled groups/ledgers must remain protected where appropriate.
+
+--------------------------------------------------------
+EDIT MODE
+--------------------------------------------------------
+
+Normal Chart of Accounts view should remain clean.
+
+Add/use a clear top-right action such as:
+
+Manage Accounts
+
+or
+
+Edit Structure
+
+Only after entering this mode should structural controls appear.
+
+Allow authorized users to:
+
+• Add subgroup
+• Add ledger
+• Add sub-ledger
+• edit permitted manually created structures
+• deactivate permitted structures
+
+Do not allow destructive deletion of accounts with transaction history.
+
+Use deactivate/archive where appropriate.
+
+Protect system-generated accounting roots.
+
+All changes require backend permission checks.
+
+========================================================
+10. CHART OF ACCOUNTS — COLLAPSIBLE HIERARCHY
+========================================================
+
+Make Chart of Accounts visually simple and understandable.
+
+Every expandable level should have a disclosure arrow where children exist.
+
+Example:
+
+Liabilities
+  >
+Current Liabilities
+  >
+Expense Payable
+  >
+Salary Payable
+  >
+Salary Payable - Employee A
+Salary Payable - Employee B
+
+and:
+
+Expense Payable
+  >
+Rent Payable
+  >
+Rent Payable - Head Office
+Rent Payable - Warehouse A
+
+Similarly:
+
+Expenses
+  >
+Indirect Expenses
+  >
+Salary Expense
+  >
+employee/location ledgers if the architecture uses them
+
+and:
+
+Rent Expense
+  >
+location rent ledgers
+
+Click arrow:
+
+Expand children.
+
+Click again:
+
+Collapse children.
+
+Provide:
+
+Expand All
+Collapse All
+
+where useful.
+
+--------------------------------------------------------
+BALANCES
+--------------------------------------------------------
+
+Show balance at EVERY meaningful hierarchy level:
+
+• Group
+• Subgroup
+• Ledger
+• Sub-ledger
+
+Parent balance must equal the correctly signed aggregate of its children according to accounting rules.
+
+Do NOT duplicate balances.
+
+Do NOT count a parent posting plus its children twice.
+
+========================================================
+11. SALARY PAYABLE / SALARY EXPENSE STRUCTURE
+========================================================
+
+Organize payroll accounts clearly.
+
+Under liabilities use a structure similar to:
+
+Liabilities
+→ Current Liabilities
+→ Expense Payable
+→ Salary Payable
+   → employee salary payable ledgers
+
+Example:
+
+Salary Payable
+  Salary Payable - Rafin
+  Salary Payable - Administrator
+
+Under expenses:
+
+Expenses
+→ Indirect Expenses
+→ Salary Expense
+   → relevant salary expense ledgers
+
+Do not blindly rename or move historical ledgers if that would break existing journal references.
+
+Perform a safe migration/re-parenting while preserving IDs and historical accounting where possible.
+
+========================================================
+12. RENT PAYABLE / RENT EXPENSE STRUCTURE
+========================================================
+
+Use:
+
+Liabilities
+→ Current Liabilities
+→ Expense Payable
+→ Rent Payable
+   → location rent payable ledgers
+
+Examples:
+
+Rent Payable - Head Office
+Rent Payable - Karnataka Central Warehouse
+Rent Payable - Tamil Nadu Warehouse
+
+Expenses:
+
+Expenses
+→ Indirect Expenses
+→ Rent Expense
+   → location rent expense ledgers where required by current architecture.
+
+Keep the existing Rent Management accounting rules.
+
+Do not create duplicate rent postings.
+
+========================================================
+13. BALANCE SHEET — COLLAPSIBLE
+========================================================
+
+Apply the same clean hierarchy to:
+
+Chart of Accounts → Balance Sheet
+
+Users should NOT be forced to see every ledger/subledger simultaneously.
+
+Provide expand/collapse arrows for groups that have children.
+
+Example:
+
+Assets >
+Liabilities >
+
+then nested groups.
+
+Every visible level must show its amount.
+
+Parent totals must reconcile exactly with children.
+
+The Balance Sheet must continue to satisfy:
+
+Total Assets = Total Liabilities + Equity
+
+according to the ERP's existing accounting model.
+
+No plug figures or balancing hacks.
+
+========================================================
+14. PROFIT & LOSS — COLLAPSIBLE
+========================================================
+
+Apply the same expand/collapse behaviour to:
+
+Chart of Accounts → Profit & Loss
+
+Example:
+
+Income >
+  Sales >
+     ledgers...
+
+Expenses >
+  Direct Expenses >
+  Indirect Expenses >
+      Salary Expense >
+      Rent Expense >
+      other expenses...
+
+Show totals at:
+
+• major section
+• group
+• subgroup
+• ledger/subledger where appropriate
+
+Net Profit must be calculated from actual accounting data.
+
+Do not hardcode dashboard totals.
+
+========================================================
+15. RENT + SALARY DAILY ACCRUAL — PRESERVE CURRENT RULES
+========================================================
+
+Do not break the approved daily accrual architecture.
+
+Rent and salary expenses should support accurate daily profitability according to the currently approved implementation.
+
+Daily accrual should affect the appropriate:
+
+Expense
+and
+Payable
+
+accounts.
+
+Approval should validate/lock the accrued amount and make it available for payment.
+
+Approval must NOT duplicate an expense already accrued.
+
+Payment should settle the payable:
+
+Debit Payable
+Credit Cash/Bank
+
+--------------------------------------------------------
+CURRENT-MONTH AMOUNT CHANGE
+--------------------------------------------------------
+
+Preserve/implement the approved recalculation behaviour:
+
+If a monthly amount changes BEFORE that month's accrual is approved/locked, recalculate the unapproved month using the revised monthly amount.
+
+Example:
+
+July Rent initially = ₹30,000.
+
+Later, before July is approved, authorized user changes July rent to:
+
+₹60,000.
+
+The unapproved July daily accrual basis should be recalculated using ₹60,000 for that month according to the ERP's approved daily allocation logic.
+
+Do NOT modify previously approved/locked periods.
+
+Do NOT duplicate journals.
+
+Apply the equivalent principle to Salary where the approved payroll architecture permits monthly salary revision before locking/approval.
+
+Maintain audit history of revisions.
+
+========================================================
+16. BACKUP & RESTORE — DO NOT BREAK
+========================================================
+
+Do not break the existing:
+
+Company → Backup & Restore
+
+module while implementing these schema changes.
+
+Any database migration introduced by this work must remain compatible with the ERP's backup/restore architecture.
+
+A backup created after these migrations must contain everything necessary to restore:
+
+• master data
+• transactions
+• accounting data
+• stock data
+• payroll/rent data
+• settings
+• permissions
+• location configuration
+• asset data added by this change
+
+Since the ERP is intended to avoid document uploads, do not introduce new attachment dependencies through these changes.
+
+========================================================
+17. BACKEND CLEANUP REQUIREMENT
+========================================================
+
+For EVERY change above, explicitly audit backend consequences.
+
+Look for:
+
+• obsolete request fields
+• obsolete validation schemas
+• hidden-but-still-required fields
+• stale database constraints
+• unused upload routes
+• duplicate posting functions
+• incorrect enum values
+• old location/outlet assumptions
+• incorrect permission mappings
+• report queries using old logic
+• PDF generators using old payment logic
+• exports using obsolete fields
+• scheduled jobs using obsolete fields
+• hardcoded account IDs/names
+• frontend/backend enum mismatches
+
+Do not leave compatibility bugs behind.
+
+Where historical records use old values, maintain read compatibility.
+
+========================================================
+18. ACCOUNTING SINGLE SOURCE OF TRUTH
+========================================================
+
+This is critical.
+
+The Chart of Accounts / General Ledger must remain the financial source of truth.
+
+Sales, purchases, expenses, payroll, rent, customer receipts, asset purchases and other financial transactions must generate correct accounting postings.
+
+By the end of each business day, after applicable reconciliation, the following should derive consistently from the books:
+
+• Trial Balance
+• Balance Sheet
+• Profit & Loss
+• General Ledger
+• Cash Book
+• Bank Book
+• Day Book
+• customer balances
+• supplier balances
+• payable balances
+
+Do not create separate dashboard calculations that contradict the accounting books.
+
+Internal stock transfers must not inflate customer sales revenue.
+
+========================================================
+19. PERMISSIONS
+========================================================
+
+All new actions must use the ERP's existing server-side permission architecture.
+
+Review permissions for:
+
+• Collect Customer Payment
+• Create Expense
+• Asset Master
+• Asset Purchase
+• View Assets
+• Manage Chart of Accounts
+• Add Group
+• Add Subgroup
+• Add Ledger
+• Add Sub-ledger
+• Edit permitted accounting structures
+
+Do not rely on hidden buttons for security.
+
+Unauthorized direct API requests must be rejected server-side.
+
+========================================================
+20. AUDIT LOG
+========================================================
+
+Record important actions in the existing Audit Log, including where applicable:
+
+• customer payment collected
+• expense created
+• accounting structure created/changed
+• asset created
+• asset purchased
+• location/outlet operational setting changed
+• rent/salary amount revision
+
+Record useful before/after values for financial configuration changes.
+
+========================================================
+21. DO NOT CREATE DUPLICATE ARCHITECTURE
+========================================================
+
+Before implementing anything, search the existing ERP for equivalent functionality.
+
+Reuse:
+
+• accounting posting engine
+• receipt/payment engine
+• stock service
+• location resolver
+• permissions
+• PDF generator
+• UPI configuration
+• reconciliation
+• audit service
+• report engine
+
+Do NOT create competing services when an existing service can be extended.
+
+========================================================
+22. FINAL END-TO-END REGRESSION AUDIT
+========================================================
+
+After implementation, do NOT stop after typecheck/build success.
+
+Run an end-to-end verification against the actual ERP.
+
+Test at minimum:
+
+A. POS
+• Cash sale
+• Credit sale
+• Bank/UPI absent from initial Record Sale
+• correct location stock
+• insufficient stock rejected server-side
+
+B. CUSTOMER PAYMENT
+• full payment
+• partial payment
+• cash collection
+• bank collection
+• UPI collection
+• customer outstanding updates
+• invoice outstanding updates
+• no duplicate receipt
+
+C. INVOICE PDF
+• unpaid QR = outstanding
+• partial-payment QR = remaining outstanding
+• paid invoice = no payment QR
+• bank details remain correct
+
+D. EXPENSE
+• no Category field
+• no attachment field
+• only valid Indirect Expense posting ledgers selectable
+• dropdown scroll works
+• invalid ledger rejected by API
+• accounting posting correct
+• Expenses removed from Accounts navigation
+
+E. OUTLET SETTING
+With Outlet Management OFF:
+• no active outlet inventory navigation
+• no outlets in operational Cash Balance
+• no outlets in POS location selector
+• no outlets in expense selector
+• no outlets in operational location selectors
+
+Then turn ON:
+• outlets return correctly
+
+Verify historical outlet records remain intact in both states.
+
+F. STOCK
+• each location shows only its stock
+• transfers reduce sender and increase receiver correctly
+• stock ledger agrees with stock
+• no cross-location sale
+
+G. ASSETS
+• Asset can be created
+• no MRP requirement
+• asset can be purchased for location
+• quantity/cost/location retained
+• Fixed Asset accounting correct
+• asset does not become saleable inventory
+
+H. CHART OF ACCOUNTS
+• top filters = All / Assets / Liabilities / Income / Expenses
+• groups collapse/expand
+• subgroups collapse/expand
+• balances visible at all levels
+• parent totals reconcile with children
+• manual subgroup creation works
+• manual ledger creation works
+• manual sub-ledger creation works
+• protected system accounts cannot be damaged
+
+I. BALANCE SHEET
+• hierarchy collapses/expands
+• amounts reconcile
+• Assets = Liabilities + Equity according to accounting model
+
+J. PROFIT & LOSS
+• hierarchy collapses/expands
+• salary visible correctly
+• rent visible correctly
+• other expenses visible
+• sales correct
+• net profit correct
+
+K. RENT/SALARY
+• daily accrual correct
+• payable correct
+• approval does not duplicate expense
+• payment clears payable
+• permitted unapproved monthly revision recalculates correctly
+• locked historical periods do not change
+
+L. SECURITY
+Attempt direct unauthorized API calls for newly introduced actions.
+They must return the appropriate authorization failure.
+
+M. DATABASE
+Check:
+• no orphan records
+• no duplicate journals
+• no unbalanced vouchers
+• no accidental historical deletion
+• no duplicate receipts
+• no duplicate accruals
+• no invalid account hierarchy
+• stock totals reconcile
+
+========================================================
+23. FINANCIAL RECONCILIATION BEFORE COMPLETION
+========================================================
+
+Before declaring this task complete, reconcile live totals.
+
+Confirm:
+
+Trial Balance:
+Total Debits = Total Credits
+
+Balance Sheet:
+balances exactly.
+
+P&L:
+Net Profit is derived correctly.
+
+Cash:
+Cash ledger balances agree with valid underlying cash movements.
+
+Bank:
+Bank balances agree with posted/reconciled movements according to existing architecture.
+
+Customer:
+Customer ledger outstanding = invoice/credit outstanding after valid allocations.
+
+Stock:
+location stock = valid stock movements/batches according to existing architecture.
+
+Fixed Assets:
+asset accounting balances reconcile with valid asset acquisition postings.
+
+Rent/Salary:
+expense + payable + payment lifecycle reconciles without duplication.
+
+If ANY reconciliation fails:
+
+DO NOT hide the difference.
+DO NOT insert balancing entries simply to force agreement.
+
+Trace the source transaction and report the defect.
+
+========================================================
+24. IMPLEMENTATION SAFETY
+========================================================
+
+Before modifying schema or financial posting logic:
+
+Create/check the current backup/checkpoint.
+
+Use migrations.
+
+Do not manually rewrite historical financial records unless absolutely necessary and explicitly justified.
+
+If historical correction is required:
+
+• document what is wrong
+• calculate affected records
+• preserve auditability
+• use a controlled migration
+• verify totals before and after
+
+========================================================
+25. COMPLETION REPORT
+========================================================
+
+When everything is finished, give me a concise implementation report containing:
+
+1. Changes completed
+2. Frontend files/modules changed
+3. Backend/API changes
+4. Database migrations
+5. Accounting changes
+6. Permission changes
+7. Outlet-setting changes
+8. Expense changes
+9. Customer-payment changes
+10. Invoice/QR changes
+11. Asset changes
+12. Chart of Accounts changes
+13. Balance Sheet/P&L changes
+14. Tests performed
+15. Financial reconciliation results
+16. Any remaining warnings
+
+Do NOT say "ERP is complete" merely because the pages render.
+
+Only mark this extension complete when:
+
+UI + API + database + accounting + stock + payments + permissions + reports
+
+all agree end-to-end.
+
+If you discover an architectural conflict that requires a business decision, STOP only that dependent part, explain the exact conflict and ask me the minimum necessary question. Continue implementing unrelated non-blocked work.
+
+START BY AUDITING THE EXISTING IMPLEMENTATION AGAINST THIS SPECIFICATION, THEN IMPLEMENT THE CHANGES SAFELY.

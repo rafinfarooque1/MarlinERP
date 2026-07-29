@@ -46,17 +46,21 @@ totals is wrong from the start.
 **How to apply:** reconcile batch vs stock totals before enforcing anything based on
 availability.
 
-## Financial statements ignore journal vouchers
+## Financial statements DO include journal vouchers — an earlier note here claimed otherwise
 
-The Trial Balance derives from the shared postings builder. The P&L and Balance Sheet read
-source tables directly and skip `journal_voucher_lines` entirely.
+Re-verified against live data: the shared postings builder has a journal-voucher section that
+ingests `journal_voucher_lines`, and the financial-statements endpoint builds both the P&L and
+the Balance Sheet from that same builder. A posting made as a journal voucher reaches the
+Trial Balance **and** the P&L / Balance Sheet. Proof: a rent payment voucher's ledgers appear
+in the financial-statements feed.
 
-**Why it matters:** payroll posts as a voucher, so it appears in the Trial Balance and not in
-the P&L. Any *new* posting added as a voucher is invisible to the P&L for the same reason.
+**Why it matters:** this file previously asserted the opposite. That is the more dangerous
+error of the two — believing the P&L cannot see vouchers leads to bolting on a second,
+parallel posting path "so the P&L picks it up", which double-counts.
 
-**How to apply:** never assume a new voucher shows up in the P&L. Route financial figures
-through the shared builder, and treat Day Book, GST returns and dashboard totals as separate
-re-implementations that also need unifying.
+**How to apply:** route new financial figures through the shared postings builder and then
+*verify* against the trial balance before adding any new path. Day Book, GST returns and
+dashboard totals are still separate re-implementations that need unifying.
 
 ## The Balance Sheet self-balances with a plug
 

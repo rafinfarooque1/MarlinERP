@@ -8,6 +8,8 @@ import {
 } from "@workspace/api-zod";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
+import { provisionRentLedgers, syncRentLedgerNames, rentLedgerIdsFor } from "../lib/rentLedgers";
+import { resolveChartParentId } from "../lib/chartGroups";
 
 const router = Router();
 
@@ -15,11 +17,16 @@ const router = Router();
 
 /** Ensure the three warehouse ledgers exist and are linked back to the row. */
 async function provisionWarehouseLedgers(warehouseId: number, warehouseName: string): Promise<void> {
-  const [{ rows: [cashParent] }, { rows: [salParent] }, { rows: [purParent] }] = await Promise.all([
-    pool.query<{ id: number }>(`SELECT id FROM account_ledgers WHERE code = 'STD-CASH' LIMIT 1`),
-    pool.query<{ id: number }>(`SELECT id FROM account_ledgers WHERE code = 'SYS-SAL' LIMIT 1`),
-    pool.query<{ id: number }>(`SELECT id FROM account_ledgers WHERE code = 'SYS-PUR' LIMIT 1`),
+  // Per-location sales and purchase ledgers file inside their own sub-groups so
+  // the Sales and Purchase groups stay readable as locations are added.
+  const [cashParentId, salParentId, purParentId] = await Promise.all([
+    resolveChartParentId(pool, 'STD-CASH'),
+    resolveChartParentId(pool, 'STD-GRP-LOC-SAL'),
+    resolveChartParentId(pool, 'STD-GRP-LOC-PUR'),
   ]);
+  const cashParent = cashParentId ? { id: cashParentId } : undefined;
+  const salParent  = salParentId  ? { id: salParentId }  : undefined;
+  const purParent  = purParentId  ? { id: purParentId }  : undefined;
 
   const specs = [
     { col: 'cash_ledger_id',     code: `WH-CASH-${warehouseId}`, name: `${warehouseName} Cash`,     type: 'asset',   section: 'balance_sheet', parent: cashParent, desc: `Cash held at ${warehouseName}` },
@@ -50,10 +57,12 @@ async function provisionWarehouseLedgers(warehouseId: number, warehouseName: str
 
 /** Ensure the two outlet ledgers exist and are linked back to the row. */
 async function provisionOutletLedgers(outletId: number, outletName: string): Promise<void> {
-  const [{ rows: [cashParent] }, { rows: [salParent] }] = await Promise.all([
-    pool.query<{ id: number }>(`SELECT id FROM account_ledgers WHERE code = 'STD-CASH' LIMIT 1`),
-    pool.query<{ id: number }>(`SELECT id FROM account_ledgers WHERE code = 'SYS-SAL' LIMIT 1`),
+  const [cashParentId, salParentId] = await Promise.all([
+    resolveChartParentId(pool, 'STD-CASH'),
+    resolveChartParentId(pool, 'STD-GRP-LOC-SAL'),
   ]);
+  const cashParent = cashParentId ? { id: cashParentId } : undefined;
+  const salParent  = salParentId  ? { id: salParentId }  : undefined;
 
   const specs = [
     { col: 'cash_ledger_id',  code: `OUTLET-CASH-${outletId}`, name: `${outletName} Cash`,  type: 'asset',  section: 'balance_sheet', parent: cashParent, desc: `Cash held at ${outletName}` },
@@ -162,6 +171,15 @@ router.post("/warehouses", requireModuleAction("page:/headoffice/warehouses", "a
   if (scNew !== null) await pool.query(`UPDATE warehouses SET state_code = $1 WHERE id = $2`, [scNew || null, row.id]);
   // Auto-provision ledgers (non-fatal if CoA groups not ready)
   try { await provisionWarehouseLedgers(row.id, row.name); } catch (e) { console.warn('[branches] warehouse ledger provision failed:', e); }
+  // Register the warehouse for rent straight away — inactive and at zero — so it
+  // shows up in Rent Management without anyone having to link it by hand.
+  try {
+    await pool.query(
+      `INSERT INTO warehouse_rent_agreements (warehouse_id) VALUES ($1) ON CONFLICT (warehouse_id) DO NOTHING`,
+      [row.id],
+    );
+    await provisionRentLedgers(pool, row.id, row.name);
+  } catch (e) { console.warn('[branches] rent registration failed:', e); }
   const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null; state_code: string | null }>(
     `SELECT cash_ledger_id, sales_ledger_id, purchase_ledger_id, COALESCE(state_code,'') AS state_code FROM warehouses WHERE id = $1`, [row.id]
   );
@@ -193,6 +211,9 @@ router.patch("/warehouses/:id", requireModuleAction("page:/headoffice/warehouses
   // Sync ledger display names if name changed
   if (before && parsed.data.name && parsed.data.name !== before.name) {
     try { await syncWarehouseLedgerNames(id, row.name); } catch (e) { console.warn('[branches] ledger name sync failed:', e); }
+    // Rent ledgers carry the warehouse name too, and are renamed with it rather
+    // than edited by hand.
+    try { await syncRentLedgerNames(pool, id, row.name); } catch (e) { console.warn('[branches] rent ledger name sync failed:', e); }
   }
   const [cnt] = await db.select({ cnt: count() }).from(outletsTable).where(eq(outletsTable.warehouseId, id));
   const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null; state_code: string | null }>(
@@ -207,11 +228,31 @@ router.delete("/warehouses/:id", requireModuleAction("page:/headoffice/warehouse
   const { rows: [wh] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null }>(
     `SELECT cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses WHERE id = $1`, [id]
   );
-  if (wh && await hasLedgerEntries([wh.cash_ledger_id, wh.sales_ledger_id, wh.purchase_ledger_id])) {
+  const rentLedgers = await rentLedgerIdsFor(pool, id);
+  if (wh && await hasLedgerEntries([wh.cash_ledger_id, wh.sales_ledger_id, wh.purchase_ledger_id, ...rentLedgers])) {
     res.status(400).json({ error: "This warehouse cannot be deleted because accounting entries already exist. Deleting it would affect financial history." });
     return;
   }
+  // Rent accruals are derived postings, not ledger rows, so they are invisible
+  // to the ledger check above — but deleting the warehouse would still orphan
+  // real rent history and silently drop it out of the P&L.
+  const { rows: [rentHistory] } = await pool.query<{ count: string }>(
+    `SELECT (SELECT COUNT(*) FROM rent_accruals WHERE warehouse_id = $1)
+          + (SELECT COUNT(*) FROM rent_payments WHERE warehouse_id = $1) AS count`, [id],
+  );
+  if (Number(rentHistory?.count ?? 0) > 0) {
+    res.status(400).json({ error: "This warehouse cannot be deleted because rent has already been accrued or paid against it. Deleting it would affect financial history." });
+    return;
+  }
   // Note: a sales-count check will be added here in Task #33 when location_type is added to sales.
+  await pool.query(`DELETE FROM warehouse_rent_agreements WHERE warehouse_id = $1`, [id]);
+  // Take the auto-provisioned rent ledgers with it. They are safe to drop here
+  // precisely because the check above already refused the delete if anything had
+  // ever posted to them — leaving them would strand "Rent Expense - <deleted
+  // warehouse>" in the Chart of Accounts forever, with no way to reach it.
+  if (rentLedgers.length > 0) {
+    await pool.query(`DELETE FROM account_ledgers WHERE id = ANY($1::int[])`, [rentLedgers]);
+  }
   await db.delete(warehousesTable).where(eq(warehousesTable.id, id));
   res.status(204).send();
 });

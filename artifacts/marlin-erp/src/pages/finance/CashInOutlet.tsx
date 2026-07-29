@@ -10,12 +10,14 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrig
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import {
-  useGetCashInOutlet, useGetCashDeposits, useCreateCashDeposit, useReconcileCashDeposit,
+  useGetCashDeposits, useCreateCashDeposit, useReconcileCashDeposit,
   useGetBankLedgers,
 } from '@workspace/api-client-react';
 import { toast } from 'sonner';
 import { Banknote, ArrowUpFromLine, CheckCircle2, Store, Warehouse, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { buildHierarchy } from '@/lib/locationHierarchy';
+import { useLocationCashBalances, useIsLocationKindEnabled } from '@/lib/locationStructure';
+import { useClearOutletSelection } from '@/lib/useFeatureFlags';
 
 function fmt(n: number) {
   return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -56,6 +58,8 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
 export default function CashBalance() {
   const perm = usePermission('page:/accounts/cash-in-outlet');
   const [tab, setTab] = useState<'balances' | 'deposits'>('balances');
+  // Which location types exist for this company — never assumed by this page.
+  const outletsVisible = useIsLocationKindEnabled('outlet');
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -76,14 +80,18 @@ export default function CashBalance() {
   const [sortDir,     setSortDir]         = useState<SortDir>('asc');
   const [depositFilter, setDepositFilter] = useState('all');
 
-  const { data: allBalances = [], isLoading: balancesLoading, refetch: refetchBalances } = useGetCashInOutlet();
+  // Outlet tills are withheld from this list while Outlet Management is off, so
+  // the cards, hierarchy, pickers and totals below all follow automatically.
+  const { data: allBalances, isLoading: balancesLoading, refetch: refetchBalances } = useLocationCashBalances();
   const { data: deposits = [], isLoading: depositsLoading } = useGetCashDeposits(
     depositFilter !== 'all' ? { status: depositFilter } : undefined
   );
   const { data: bankLedgers = [] } = useGetBankLedgers();
 
-  // Only outlets can have deposits recorded
-  const outletBalances = allBalances.filter(b => b.locationType === 'outlet');
+  // A filter still *holding* an outlet keeps scoping the page after the option
+  // to clear it disappears, so both selections are reset when outlets go away.
+  useClearOutletSelection(typeFilter === 'outlet', () => setTypeFilter('all'));
+  useClearOutletSelection(locationId.startsWith('outlet-'), () => setLocationId('all'));
 
   // ── derived: totals ───────────────────────────────────────────────────────
   const totalCash      = allBalances.reduce((s, b) => s + b.cashBalance,      0);
@@ -214,7 +222,7 @@ export default function CashBalance() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Cash Balance</h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Track physical cash at each outlet and warehouse, and record bank deposits
+              Track physical cash at each {outletsVisible ? 'outlet and warehouse' : 'warehouse'}, and record bank deposits
             </p>
           </div>
           {tab === 'balances' && (
@@ -264,12 +272,14 @@ export default function CashBalance() {
                   </div>
                   <div className="rounded-xl border border-border bg-card p-3 space-y-0.5">
                     <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">Breakdown</p>
+                    {outletsVisible && (
+                      <div className="flex items-center gap-1.5 pt-0.5">
+                        <Store className="w-3 h-3 text-emerald-500 shrink-0" />
+                        <span className="text-xs text-muted-foreground">Outlets</span>
+                        <span className="ml-auto text-xs font-mono font-semibold">{fmt(outletTotal)}</span>
+                      </div>
+                    )}
                     <div className="flex items-center gap-1.5 pt-0.5">
-                      <Store className="w-3 h-3 text-emerald-500 shrink-0" />
-                      <span className="text-xs text-muted-foreground">Outlets</span>
-                      <span className="ml-auto text-xs font-mono font-semibold">{fmt(outletTotal)}</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
                       <Warehouse className="w-3 h-3 text-blue-500 shrink-0" />
                       <span className="text-xs text-muted-foreground">Warehouses</span>
                       <span className="ml-auto text-xs font-mono font-semibold">{fmt(warehouseTotal)}</span>
@@ -282,7 +292,7 @@ export default function CashBalance() {
               <div className="flex flex-wrap items-center gap-2">
                 {/* Type filter */}
                 <div className="flex items-center gap-1 bg-muted/20 rounded-lg p-1">
-                  {(['all', 'outlet', 'warehouse'] as TypeFilter[]).map(t => (
+                  {(['all', ...(outletsVisible ? ['outlet' as const] : []), 'warehouse'] as TypeFilter[]).map(t => (
                     <button
                       key={t}
                       onClick={() => handleTypeChange(t)}

@@ -5,6 +5,7 @@ import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 import { stockValuation } from "../lib/valuation";
 import { requireModuleView } from "../middleware/permissions";
 import { buildDerivedPostings } from "./journal";
+import { outstandingExpr } from "../lib/salePaymentPosition";
 
 const router = Router();
 
@@ -500,7 +501,10 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     // receivables — outstanding on non-transfer, non-cancelled sales (all-time
     // exposure, not period-bound); overdue = outstanding on sales older than 30d.
     (() => {
-      const conds = ["s.branch_transfer_id IS NULL", "s.cancelled_at IS NULL", "s.payment_status <> 'paid'"];
+      // Filtered on the derived figure rather than the stored payment_status: a
+      // credit note can settle a bill without that column being rewritten, and
+      // a stale status would keep money in receivables that nobody owes.
+      const conds = ["s.branch_transfer_id IS NULL", "s.cancelled_at IS NULL", `${outstandingExpr("s")} > 0.009`];
       const params: unknown[] = [];
       if (effLocType && effLocId != null) {
         params.push(effLocType); conds.push(`COALESCE(s.location_type,'outlet') = $${params.length}`);
@@ -512,10 +516,10 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       params.push(refDate);
       const refIdx = params.length;
       return pool.query(
-        `SELECT COALESCE(SUM(s.total_amount::numeric - s.amount_paid::numeric),0)::float AS total,
+        `SELECT COALESCE(SUM(${outstandingExpr("s")}),0)::float AS total,
                 COUNT(*)::int AS count,
                 COALESCE(SUM(CASE WHEN s.sale_date < (COALESCE($${refIdx}::date, CURRENT_DATE) - INTERVAL '30 day')
-                     THEN s.total_amount::numeric - s.amount_paid::numeric ELSE 0 END),0)::float AS overdue
+                     THEN ${outstandingExpr("s")} ELSE 0 END),0)::float AS overdue
            FROM sales s WHERE ${conds.join(" AND ")}`, params); })(),
     // cash inflow — receipts
     (() => { const p = locConds("r", { dateCol: "receipt_date", dateCast: "::date" });

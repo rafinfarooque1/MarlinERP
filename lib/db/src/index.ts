@@ -24,6 +24,23 @@ export const db = drizzle(pool, { schema });
 
 // `pg` is a dependency of this package only, so consumers cannot import its
 // types directly under pnpm's strict resolution. Re-export the ones they need.
-export type { Pool as PgPool, PoolClient as PgPoolClient } from "pg";
+export type { Pool as PgPool, PoolClient as PgPoolClient, Client as PgClient } from "pg";
+
+/**
+ * Open a one-off connection to a database OTHER than the application's own.
+ *
+ * The only current caller is backup verification, which restores an archive into
+ * a throwaway database to prove it works. That needs a connection outside the
+ * pool above, and it has to come from here rather than from a `pg` import in the
+ * consuming package: the DATE type parser registered at the top of this file is
+ * global to this module instance, so a second copy of `pg` resolved elsewhere
+ * would silently return Date objects where the rest of the codebase expects
+ * 'YYYY-MM-DD' strings.
+ *
+ * Caller owns the connection and must call `end()`.
+ */
+export function createClient(connectionString: string): pg.Client {
+  return new pg.Client({ connectionString });
+}
 
 export * from "./schema";

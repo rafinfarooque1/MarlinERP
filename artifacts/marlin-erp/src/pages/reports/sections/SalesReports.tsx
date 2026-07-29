@@ -4,7 +4,7 @@
 import { useState } from 'react';
 import {
   useSalesRegister, useSalesByItem, useSalesByLocation, useSalesStockCombined,
-  useDiscountReport, useListOutlets, useListWarehouses,
+  useDiscountReport, useListWarehouses,
 } from '@workspace/api-client-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
@@ -12,6 +12,8 @@ import { Building2, Store } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
 import { downloadCSV } from '@/lib/download';
 import { paymentModeLabel } from '@/lib/paymentModes';
+import { useEnabledOutlets, useAllOutlets } from '@/lib/locationStructure';
+import { useClearOutletSelection } from '@/lib/useFeatureFlags';
 import {
   fmt, num, pdfMoney, fmtDate, titleCase, periodLabel,
   useDateRange, RangeBar, ReportPicker, SummaryCards, LocationBadge, RTable, ExportButtons, exportReportPdf,
@@ -249,7 +251,10 @@ function StatusBadge({ status }: { status: string }) {
 // ── Register ──────────────────────────────────────────────────────────────────
 function RegisterReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
   const [loc, setLoc] = useState('all');
-  const { data: outlets = [] } = useListOutlets();
+  // A selector, so it offers only location types that are switched on — and
+  // drops a selection left pointing at an outlet once they are switched off.
+  const { data: outlets } = useEnabledOutlets();
+  useClearOutletSelection(loc.startsWith('outlet:'), () => setLoc('all'));
   const { data: warehouses = [] } = useListWarehouses();
 
   const [locationType, locationIdStr] = loc === 'all' ? ['', ''] : loc.split(':');
@@ -341,7 +346,10 @@ function RegisterReport({ range, canDownload }: { range: RangeState; canDownload
 // ── Discounts ─────────────────────────────────────────────────────────────────
 function DiscountsReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
   const [loc, setLoc] = useState('all');
-  const { data: outlets = [] } = useListOutlets();
+  // A selector, so it offers only location types that are switched on — and
+  // drops a selection left pointing at an outlet once they are switched off.
+  const { data: outlets } = useEnabledOutlets();
+  useClearOutletSelection(loc.startsWith('outlet:'), () => setLoc('all'));
   const { data: warehouses = [] } = useListWarehouses();
 
   const [locationType, locationIdStr] = loc === 'all' ? ['', ''] : loc.split(':');
@@ -498,7 +506,9 @@ function ByItemReport({ range, canDownload }: { range: RangeState; canDownload: 
 function ByLocationReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
   const { data, isLoading } = useSalesByLocation({ from: range.from || undefined, to: range.to || undefined });
   const { data: warehouses = [] } = useListWarehouses();
-  const { data: outlets = [] } = useListOutlets();
+  // Labels historical rows, so it reads every outlet: a past sale must keep its
+  // location's name in the grouping and exports even while outlets are hidden.
+  const { data: outlets = [] } = useAllOutlets();
   const rows = data?.rows ?? [];
   const t = data?.totals;
 
@@ -598,7 +608,9 @@ function ByLocationReport({ range, canDownload }: { range: RangeState; canDownlo
 function CombinedReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
   const { data, isLoading } = useSalesStockCombined({ from: range.from || undefined, to: range.to || undefined });
   const { data: warehouses = [] } = useListWarehouses();
-  const { data: outlets = [] } = useListOutlets();
+  // Labels historical rows, so it reads every outlet: a past sale must keep its
+  // location's name in the grouping and exports even while outlets are hidden.
+  const { data: outlets = [] } = useAllOutlets();
   const s = data?.sales;
 
   const onPDF = () => exportReportPdf({

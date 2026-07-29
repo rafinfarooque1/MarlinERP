@@ -10,9 +10,12 @@
  * and only *write* operations are sealed off.
  *
  * OFF (the default, and the state of every new install):
- *   - no outlet may be created, edited, deleted or transferred to/from
+ *   - no outlet may be created, edited, deleted, transferred to/from, sold at,
+ *     priced, staffed, or newly assigned a customer, vendor or expense
  *   - existing outlets stay fully visible for reports, audits and old documents
- *   - the nav entry appears for Head Office administrators only, badged legacy
+ *   - the module disappears from the UI entirely — no nav entry for anyone, no
+ *     "legacy" badge, no outlet option in any location picker, and the page
+ *     itself answers direct URLs with an Access Disabled screen
  *
  * ON:
  *   - the module reactivates with no database change whatsoever; the parent

@@ -408,6 +408,11 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navEntries: [{ name: 'Payroll', href: '/hr/payroll' }, { name: 'Advances', href: '/hr/advances' }],
   },
   {
+    key: 'Rent Management', permGroup: 'HR',
+    navGroup: 'HR',
+    navEntries: [{ name: 'Rent Management', href: '/hr/rent' }],
+  },
+  {
     key: 'Hierarchy', permGroup: 'HR',
     navGroup: 'HR',
     navEntries: [{ name: 'Hierarchy', href: '/hr/hierarchy' }],
@@ -513,6 +518,11 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     key: 'Login History', permGroup: 'Company',
     navGroup: 'Company',
     navEntries: [{ name: 'Login History', href: '/company/login-history' }],
+  },
+  {
+    key: 'Backup & Restore', permGroup: 'Company',
+    navGroup: 'Company',
+    navEntries: [{ name: 'Backup & Restore', href: '/company/backup' }],
   },
 ];
 

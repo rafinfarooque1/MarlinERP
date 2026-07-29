@@ -5,6 +5,7 @@ import {
   getListCustomersQueryKey, useListCoupons,
   customFetch,
   useGetSalePayments, useCreateSalePayment, useUpdateSale,
+  ensureInvoiceShareLink, absoluteShareUrl,
 } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
 import { isActiveProduct } from '@/lib/productStatus';
@@ -39,13 +40,8 @@ import {
 } from 'lucide-react';
 
 // ── WhatsApp brand icon (inline SVG) ──────────────────────────────────────────
-function WhatsAppIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden>
-      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
-    </svg>
-  );
-}
+import { WhatsAppIcon } from '@/components/ui/WhatsAppIcon';
+import { InvoiceShareLinkPanel, NO_PHONE_MESSAGE } from '@/components/sales/InvoiceShareLinkPanel';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
@@ -218,22 +214,42 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const paymentMethod = upiRow ? 'upi' : (paymentRows[0]?.method ?? 'cash');
   const paymentAmount = upiRow?.amount ?? paymentRows[0]?.amount ?? '';
 
-  // Generate UPI QR data URL whenever the invoice view opens or a UPI row's amount changes.
+  // QR shown next to the collect-payment form, for a PART amount (below).
+  const [collectQrUrl, setCollectQrUrl] = useState<string | null>(null);
+
+  // The invoice QR renders the request the SERVER built: exactly what this sale
+  // still owes — and nothing at all once it is settled or cancelled, or when UPI
+  // is switched off in settings. The page does no payment arithmetic of its own,
+  // so the amount scanned here cannot drift from the amount the invoice prints.
   useEffect(() => {
-    if (!viewItem || !(viewItem as any).outletUpiId) { setViewQrUrl(null); return; }
-    const upiId  = (viewItem as any).outletUpiId as string;
-    const balanceDue = Number((viewItem as any).balanceDue ?? viewItem.totalAmount);
-    const collectionAmount = paymentAmount && Number(paymentAmount) > 0
-      ? Number(paymentAmount)
-      : balanceDue;
-    const amount = Math.max(0, collectionAmount).toFixed(2);
-    const upiUri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(viewItem.outletName || '')}&am=${amount}&cu=INR&tn=${encodeURIComponent(viewItem.invoiceNumber || '')}`;
+    const uri = (viewItem as any)?.upiQrUri as string | null | undefined;
+    if (!viewItem || !uri) { setViewQrUrl(null); return; }
     let cancelled = false;
     (import('qrcode') as Promise<any>).then(QR => {
-      QR.toDataURL(upiUri, { width: 200, margin: 2 }).then((url: string) => { if (!cancelled) setViewQrUrl(url); });
+      QR.toDataURL(uri, { width: 200, margin: 2 }).then((url: string) => { if (!cancelled) setViewQrUrl(url); });
     }).catch(() => { if (!cancelled) setViewQrUrl(null); });
     return () => { cancelled = true; };
-  }, [viewItem, paymentRows]);
+  }, [viewItem]);
+
+  // A SECOND, deliberately separate QR for the collect-payment form: this one
+  // carries the part amount the operator typed, capped at what is owed. Keeping
+  // it distinct from the invoice QR above means a part collection can never be
+  // mistaken for the bill's outstanding balance.
+  useEffect(() => {
+    const upiId = (viewItem as any)?.outletUpiId as string | undefined;
+    const typed = Number(paymentAmount);
+    const balanceDue = Number((viewItem as any)?.balanceDue ?? 0);
+    if (!viewItem || !upiId || !showPaymentForm || !(typed > 0) || !(balanceDue > 0)) {
+      setCollectQrUrl(null); return;
+    }
+    const amount = Math.min(typed, balanceDue).toFixed(2);
+    const uri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(viewItem.outletName || '')}&am=${amount}&cu=INR&tn=${encodeURIComponent(viewItem.invoiceNumber || '')}`;
+    let cancelled = false;
+    (import('qrcode') as Promise<any>).then(QR => {
+      QR.toDataURL(uri, { width: 160, margin: 2 }).then((url: string) => { if (!cancelled) setCollectQrUrl(url); });
+    }).catch(() => { if (!cancelled) setCollectQrUrl(null); });
+    return () => { cancelled = true; };
+  }, [viewItem, paymentRows, showPaymentForm, paymentAmount]);
   const queryClient = useQueryClient();
 
   // Refresh every sales-derived view after a write: sales lists (legacy +
@@ -298,7 +314,16 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         ? `${validRows.length} payments totalling ₹${totalPaying.toLocaleString('en-IN')}`
         : `₹${totalPaying.toLocaleString('en-IN')} via ${validRows[0].method}`;
       toast.success(`Payment collected — ${label}`);
-      setViewItem((prev: any) => prev ? { ...prev, paymentStatus: lastResult.newPaymentStatus, amountPaid: lastResult.newAmountPaid, balanceDue: Math.max(0, prev.totalAmount - lastResult.newAmountPaid) } : null);
+      // Re-read the sale rather than patching the panel by hand: the server owns
+      // the outstanding figure (credit notes included) and the QR built from it,
+      // and recomputing either here would be a second, drifting definition.
+      try {
+        const fresh = await customFetch(`/api/sales/${viewItem.id}`) as any;
+        setViewItem((prev: any) => (prev && fresh && prev.id === fresh.id ? { ...prev, ...fresh } : prev));
+      } catch {
+        // Refresh failed — fall back to closing the stale figures out of view.
+        setViewItem((prev: any) => prev ? { ...prev, paymentStatus: lastResult.newPaymentStatus, amountPaid: lastResult.newAmountPaid } : null);
+      }
       invalidateSalesData();
       setPaymentRows([{ id: Date.now(), method: 'cash', amount: '', ref: '' }]);
       setShowPaymentForm(false);
@@ -531,7 +556,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // for the wrong right, so each caller names what its button actually does.
   const requestInvoicePdfUrl = async (
     saleId: number,
-    intent: 'download' | 'print' | 'preview' | 'share',
+    intent: 'download' | 'print' | 'preview',
   ): Promise<string> => {
     const { token } = await customFetch<{ token: string; expiresAt: string }>(
       `/api/sales/${saleId}/share-token`,
@@ -594,20 +619,26 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const handleWhatsApp = async (sale: any) => {
     const phone = normaliseWhatsAppNumber(sale.customerPhone);
     if (!phone) {
-      toast.error('WhatsApp number is not available for this customer. Please update Customer Details.');
+      toast.error(NO_PHONE_MESSAGE);
       return;
     }
 
     const waTab = window.open('', '_blank'); // sync open — popup-blocker safe
 
     try {
-      const pdfUrl = await requestInvoicePdfUrl(sale.id, 'share');
+      // The customer gets a managed share link, not a signed one-off URL: it can be
+      // revoked later, and it reveals nothing about the sale. Reuses the invoice's
+      // active link so re-sending does not silently invalidate the first message.
+      const { link } = await ensureInvoiceShareLink(sale.id, 'whatsapp');
+      if (!link.path) throw new Error('share link is not active');
+      const pdfUrl = absoluteShareUrl(link.path);
       const cs = companySettings as any;
       const message = composeInvoiceMessage({
         sale,
         pdfUrl,
         companyName: cs?.companyName ?? cs?.name ?? 'Marlin Frozen Fruits',
         resolveItemName: id => itemsMap.get(id)?.name,
+        linkValidDays: link.validForDays,
       });
 
       const target = await activeInvoiceShareChannel().deliver({
@@ -738,6 +769,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   <TableCell>
                     {(() => {
                       const ps = (sale as any).paymentStatus ?? 'paid';
+                      if (ps === 'cancelled') return <Badge variant="outline" className="text-[10px] text-muted-foreground">Cancelled</Badge>;
                       if (ps === 'paid') return <Badge className="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Paid</Badge>;
                       if (ps === 'partially_paid') return <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">Partial</Badge>;
                       return <Badge className="text-[10px] bg-red-500/10 text-red-600 border-red-500/20">Unpaid</Badge>;
@@ -757,7 +789,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   </TableCell>
                   <TableCell className="text-right">
                     <p className="font-mono font-bold text-emerald-500">₹{Number(sale.totalAmount).toLocaleString('en-IN')}</p>
-                    {((sale as any).paymentStatus === 'partially_paid' || (sale as any).paymentStatus === 'unpaid') && (
+                    {Number((sale as any).balanceDue ?? 0) > 0.004 && (
                       <p className="text-[10px] text-red-500 font-mono">Due: ₹{Number((sale as any).balanceDue ?? 0).toLocaleString('en-IN')}</p>
                     )}
                   </TableCell>
@@ -766,8 +798,16 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(sale)} title="View"><Eye className="w-4 h-4" /></Button>
                       {perm.canEdit && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500" onClick={() => openEdit(sale)} title="Edit sale"><Pencil className="w-4 h-4" /></Button>}
                       {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => void handleDownloadPDF(sale)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>}
-                      {(perm.canDownload || perm.canPrint) && (sale as any).customerPhone && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-[#25D366] hover:text-[#128C7E] hover:bg-[#25D366]/10" onClick={() => void handleWhatsApp(sale)} title={`Send invoice to ${(sale as any).customerPhone} via WhatsApp`}>
+                      {perm.canShare && (
+                        <Button
+                          variant="ghost" size="icon"
+                          className="h-8 w-8 text-[#25D366] hover:text-[#128C7E] hover:bg-[#25D366]/10"
+                          disabled={!(sale as any).customerPhone}
+                          onClick={() => void handleWhatsApp(sale)}
+                          title={(sale as any).customerPhone
+                            ? `Send invoice to ${(sale as any).customerPhone} via WhatsApp`
+                            : NO_PHONE_MESSAGE}
+                        >
                           <WhatsAppIcon className="w-4 h-4" />
                         </Button>
                       )}
@@ -1275,12 +1315,15 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <Printer className="w-3.5 h-3.5" /> Print
                   </Button>
                 )}
-                {(perm.canDownload || perm.canPrint) && viewItem && (viewItem as any).customerPhone && (
+                {perm.canShare && viewItem && (
                   <Button
                     variant="outline" size="sm"
                     className="gap-1.5 border-[#25D366] text-[#25D366] hover:bg-[#25D366]/10 hover:text-[#128C7E]"
+                    disabled={!(viewItem as any).customerPhone}
                     onClick={() => void handleWhatsApp(viewItem)}
-                    title={`Send invoice to ${(viewItem as any).customerPhone} via WhatsApp`}
+                    title={(viewItem as any).customerPhone
+                      ? `Send invoice to ${(viewItem as any).customerPhone} via WhatsApp`
+                      : NO_PHONE_MESSAGE}
                   >
                     <WhatsAppIcon className="w-3.5 h-3.5" /> WhatsApp
                   </Button>
@@ -1380,9 +1423,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 </div>
               </div>
 
-              {/* ── Payment Status ─────────────────────────────────────────── */}
+              {/* ── Payment Status ───────────────────────────────────────────
+                  Every figure here is the server's derived position, not the
+                  stored payment mode: 'credit' is an arrangement, not a status. */}
               <div className={`p-3 rounded-lg border text-sm ${
-                ((viewItem as any).paymentStatus === 'paid')
+                ((viewItem as any).paymentStatus === 'cancelled')
+                  ? 'bg-muted border-border'
+                  : ((viewItem as any).paymentStatus === 'paid')
                   ? 'bg-emerald-500/5 border-emerald-500/20'
                   : ((viewItem as any).paymentStatus === 'partially_paid')
                   ? 'bg-amber-500/5 border-amber-500/20'
@@ -1394,6 +1441,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   </span>
                   {(() => {
                     const ps = (viewItem as any).paymentStatus ?? 'paid';
+                    if (ps === 'cancelled') return <Badge variant="outline" className="text-muted-foreground">Cancelled</Badge>;
                     if (ps === 'paid') return <Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Fully Paid</Badge>;
                     if (ps === 'partially_paid') return <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/20">Partially Paid</Badge>;
                     return <Badge className="bg-red-500/10 text-red-600 border-red-500/20">Unpaid</Badge>;
@@ -1401,17 +1449,33 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 </div>
                 <div className="space-y-1 text-xs text-muted-foreground">
                   <div className="flex justify-between">
-                    <span>Total</span>
+                    <span>Invoice Total</span>
                     <span className="font-mono font-semibold text-foreground">₹{Number(viewItem.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span>Paid</span>
-                    <span className="font-mono text-emerald-600">₹{Number((viewItem as any).amountPaid ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    <span>Amount Received</span>
+                    <span className="font-mono text-emerald-600">₹{Number((viewItem as any).amountReceived ?? (viewItem as any).amountPaid ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                   </div>
-                  {(Number((viewItem as any).balanceDue ?? 0) > 0) && (
+                  {(Number((viewItem as any).creditAdjustments ?? 0) > 0) && (
+                    <div className="flex justify-between text-sky-600">
+                      <span>Less Credit Notes</span>
+                      <span className="font-mono">−₹{Number((viewItem as any).creditAdjustments).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    </div>
+                  )}
+                  {(viewItem as any).paymentStatus === 'cancelled' ? (
+                    <div className="flex justify-between font-semibold text-muted-foreground">
+                      <span>Balance Due</span>
+                      <span className="font-mono">Nil — invoice cancelled</span>
+                    </div>
+                  ) : (Number((viewItem as any).balanceDue ?? 0) > 0) ? (
                     <div className="flex justify-between font-semibold text-red-600">
                       <span>Balance Due</span>
                       <span className="font-mono">₹{Number((viewItem as any).balanceDue ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    </div>
+                  ) : (
+                    <div className="flex justify-between font-semibold text-emerald-600">
+                      <span>Balance Due</span>
+                      <span className="font-mono">₹0.00 — settled in full</span>
                     </div>
                   )}
                 </div>
@@ -1434,7 +1498,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 )}
 
                 {/* Collect payment — supports split payments across multiple methods */}
-                {(viewItem as any).paymentStatus !== 'paid' && perm.canAdd && (
+                {/* Offered on what is actually owed — a bill settled by a credit
+                    note has nothing left to collect, whatever its stored mode. */}
+                {Number((viewItem as any).balanceDue ?? 0) > 0.004 && (viewItem as any).paymentStatus !== 'cancelled' && perm.canAdd && (
                   <div className="mt-3">
                     {!showPaymentForm ? (
                       <Button size="sm" className="w-full h-8" onClick={() => {
@@ -1560,8 +1626,37 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 )}
               </div>
 
-              {/* ── UPI QR Payment section ──────────────────────────────────── */}
-              {(viewItem as any).outletUpiId && paymentMethod === 'upi' && showPaymentForm ? (
+              {/* ── Payment request / receipt ─────────────────────────────────
+                  The QR is built by the SERVER, for exactly the amount still
+                  outstanding, and it is offered on the invoice itself — not only
+                  while a collection is being keyed in. Nothing outstanding means
+                  no QR at all: a settled or cancelled invoice shows what happened
+                  instead of asking to be paid again. */}
+              {(viewItem as any).paymentStatus === 'cancelled' ? (
+                <div className="rounded-lg border border-border bg-muted p-3 text-xs text-muted-foreground">
+                  <p className="font-semibold text-foreground">Invoice cancelled</p>
+                  <p className="mt-0.5">Nothing is due on a cancelled invoice, so no payment QR or bank detail is issued.</p>
+                </div>
+              ) : Number((viewItem as any).balanceDue ?? 0) <= 0.004 ? (
+                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
+                  <p className="text-xs font-bold text-emerald-600 uppercase tracking-widest mb-2">✓ Payment Received</p>
+                  <div className="flex justify-between text-sm font-semibold">
+                    <span>Paid in full</span>
+                    <span className="font-mono">₹{Number((viewItem as any).amountReceived ?? (viewItem as any).amountPaid ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                  {viewItemPayments.length > 0 ? (
+                    <p className="text-[11px] text-muted-foreground mt-1">
+                      Last receipt: {paymentModeLabel(viewItemPayments[viewItemPayments.length - 1].method)} on {viewItemPayments[viewItemPayments.length - 1].paymentDate}
+                      {viewItemPayments[viewItemPayments.length - 1].referenceNumber ? ` · #${viewItemPayments[viewItemPayments.length - 1].referenceNumber}` : ''}
+                    </p>
+                  ) : (
+                    <p className="text-[11px] text-muted-foreground mt-1">
+                      Settled at the counter by {paymentModeLabel(viewItem.paymentMode) || 'cash'} on {new Date(viewItem.saleDate).toLocaleDateString('en-IN')}.
+                    </p>
+                  )}
+                  <p className="text-[11px] text-muted-foreground mt-1">Nothing further is due, so no payment QR is shown.</p>
+                </div>
+              ) : (viewItem as any).upiQrUri ? (
                 <div className="border border-teal-500/30 rounded-xl bg-teal-500/5 p-4 text-center">
                   <p className="text-xs font-bold text-teal-600 uppercase tracking-widest mb-3">⊡ Scan to Pay (UPI)</p>
                   {viewQrUrl ? (
@@ -1572,30 +1667,43 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     </div>
                   )}
                   <p className="text-xs text-muted-foreground mt-2 font-mono">{(viewItem as any).outletUpiId}</p>
-                  <p className="text-base font-bold mt-0.5">₹{Number((viewItem as any).balanceDue ?? viewItem.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wide mt-1">Amount Due</p>
+                  <p className="text-base font-bold">₹{Number((viewItem as any).upiQrAmount ?? (viewItem as any).balanceDue ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
                   <p className="text-xs text-muted-foreground">{viewItem.invoiceNumber}</p>
+                  {/* A part collection being keyed in gets its own, smaller QR so
+                      it can never be mistaken for the invoice's balance. */}
+                  {showPaymentForm && paymentMethod === 'upi' && collectQrUrl && (
+                    <div className="mt-3 pt-3 border-t border-teal-500/20">
+                      <p className="text-[10px] font-semibold text-teal-700 dark:text-teal-400 uppercase tracking-wide">Or collect this part payment now</p>
+                      <img src={collectQrUrl} alt="UPI QR for part payment" className="w-32 h-32 mx-auto rounded-lg border border-border shadow-sm mt-2" />
+                      <p className="text-sm font-bold mt-1">₹{Math.min(Number(paymentAmount) || 0, Number((viewItem as any).balanceDue ?? 0)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                      <p className="text-[10px] text-muted-foreground">Asks for the amount entered above, not the full balance.</p>
+                    </div>
+                  )}
                 </div>
-              ) : !(viewItem as any).outletUpiId ? (
+              ) : (
                 <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-400">
                   <p className="font-semibold">UPI payment QR not available</p>
-                  <p className="mt-0.5 opacity-80">No UPI ID configured for <strong>{viewItem.outletName}</strong>. Update the outlet profile to enable QR payments on invoices.</p>
+                  <p className="mt-0.5 opacity-80">
+                    ₹{Number((viewItem as any).balanceDue ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })} is outstanding, but{' '}
+                    {(viewItem as any).outletUpiId
+                      ? <>the invoice QR is switched off in Company Settings → Invoice Payments.</>
+                      : <>no UPI ID is set for <strong>{viewItem.outletName}</strong> or in Company Settings → Invoice Payments.</>}
+                    {' '}The invoice still carries bank details for payment.
+                  </p>
                 </div>
-              ) : null}
+              )}
 
-              <div className="flex flex-col gap-2">
-                {/* WhatsApp — needs a phone number AND the right to release a
-                    copy of the invoice (Download or Print), because the share
-                    link is the invoice. */}
-                {(perm.canDownload || perm.canPrint) && (viewItem as any)?.customerPhone && (
-                  <Button
-                    className="w-full bg-[#25D366] hover:bg-[#128C7E] text-white border-0"
-                    onClick={() => void handleWhatsApp(viewItem)}
-                  >
-                    <WhatsAppIcon className="w-4 h-4 mr-2" />
-                    Share Invoice on WhatsApp
-                    <span className="ml-2 text-xs opacity-80 font-normal">{(viewItem as any).customerPhone}</span>
-                  </Button>
-                )}
+              <div className="flex flex-col gap-3">
+                {/* Sharing is link management, not a one-shot button: the same link
+                    can be copied, replaced or cut off long after it was sent, so the
+                    invoice shows the link's live state rather than just a Send. */}
+                <InvoiceShareLinkPanel
+                  saleId={viewItem.id}
+                  canShare={perm.canShare}
+                  customerPhone={(viewItem as any).customerPhone}
+                  onShareWhatsApp={() => handleWhatsApp(viewItem)}
+                />
                 {(perm.canDownload || perm.canPrint) && (
                   <div className="grid grid-cols-3 gap-2">
                     {perm.canDownload && (

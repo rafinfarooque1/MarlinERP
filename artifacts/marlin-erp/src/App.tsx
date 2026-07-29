@@ -17,6 +17,7 @@ import Transfers from './pages/Transfers';
 
 import Warehouses from './pages/headoffice/Warehouses';
 import Outlets from './pages/headoffice/Outlets';
+import { OutletsEnabledRoute } from './components/OutletsEnabledRoute';
 import Stock from './pages/headoffice/Stock';
 import InventoryReports from './pages/headoffice/InventoryReports';
 import StockVerification from './pages/headoffice/StockVerification';
@@ -30,6 +31,7 @@ import Payroll from './pages/hr/Payroll';
 import Attendance from './pages/hr/Attendance';
 import Leave from './pages/hr/Leave';
 import Advances from './pages/hr/Advances';
+import RentManagement from './pages/hr/RentManagement';
 
 import Customers from './pages/customers/Customers';
 import Vendors from './pages/customers/Vendors';
@@ -59,6 +61,7 @@ import Permissions from './pages/company/Permissions';
 import Profile from './pages/company/Profile';
 import AuditLog from './pages/company/AuditLog';
 import LoginHistory from './pages/company/LoginHistory';
+import BackupRestore from './pages/company/BackupRestore';
 import Reconciliation from './pages/finance/Reconciliation';
 import CashInOutlet from './pages/finance/CashInOutlet';
 import ReportsCenter from './pages/reports/ReportsCenter';
@@ -139,7 +142,7 @@ function Router() {
       <Route path="/sales/transfers"><AuthGuard><Transfers /></AuthGuard></Route>
 
       <Route path="/headoffice/warehouses"><AuthGuard><Warehouses /></AuthGuard></Route>
-      <Route path="/headoffice/outlets"><AuthGuard><Outlets /></AuthGuard></Route>
+      <Route path="/headoffice/outlets"><AuthGuard><OutletsEnabledRoute><Outlets /></OutletsEnabledRoute></AuthGuard></Route>
       <Route path="/headoffice/stock"><AuthGuard><Stock /></AuthGuard></Route>
       <Route path="/headoffice/inventory-reports"><AuthGuard><InventoryReports /></AuthGuard></Route>
       <Route path="/headoffice/stock-verification"><AuthGuard><StockVerification /></AuthGuard></Route>
@@ -153,6 +156,7 @@ function Router() {
       <Route path="/hr/attendance"><AuthGuard><Attendance /></AuthGuard></Route>
       <Route path="/hr/leave"><AuthGuard><Leave /></AuthGuard></Route>
       <Route path="/hr/advances"><AuthGuard><Advances /></AuthGuard></Route>
+      <Route path="/hr/rent"><AuthGuard><RentManagement /></AuthGuard></Route>
 
       <Route path="/customers"><AuthGuard><Customers /></AuthGuard></Route>
       <Route path="/vendors"><AuthGuard><Vendors /></AuthGuard></Route>
@@ -184,6 +188,7 @@ function Router() {
       <Route path="/company/profile"><AuthGuard><Profile /></AuthGuard></Route>
       <Route path="/company/audit"><AuthGuard><AuditLog /></AuthGuard></Route>
       <Route path="/company/login-history"><AuthGuard><LoginHistory /></AuthGuard></Route>
+      <Route path="/company/backup"><AuthGuard><BackupRestore /></AuthGuard></Route>
 
       <Route path="/accounts/reconciliation"><AuthGuard><Reconciliation /></AuthGuard></Route>
       <Route path="/accounts/cash-in-outlet"><AuthGuard><CashInOutlet /></AuthGuard></Route>

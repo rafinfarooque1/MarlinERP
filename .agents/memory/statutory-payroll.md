@@ -18,9 +18,14 @@ row's snapshot. Only generation reads the live settings. This is what makes
 
 ## Approved payroll is locked
 
-Approval posts the salary voucher. After that, amounts must not change — no
-extra-amount edits, no regeneration. Corrections go through a reversal, not an
-amendment.
+Approval locks the run. After that, amounts must not change — no extra-amount
+edits, no regeneration, and no recalculation of the month's daily accruals.
+Corrections go through a reversal, not an amendment.
+
+Approval is no longer the moment salary is recognised: it posts only the
+difference between the final figure and what daily accrual already charged. See
+daily-expense-accrual.md — the entry below is the shape of that *full* cost, and
+approval now posts it net of the accrued portion.
 
 **Why:** the voucher is already in the books for the old figure. Editing the row
 leaves the payslip saying one thing and the ledger another, with no document

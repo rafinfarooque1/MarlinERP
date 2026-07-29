@@ -3,11 +3,12 @@ import { useLocation } from 'wouter';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useLocationContext } from '@/lib/locationContext';
-import { customFetch, useListOutlets, useDeleteLocationExpense, useGetCashInOutlet, useExpenseCategories, attachmentViewUrl } from '@workspace/api-client-react';
+import { customFetch, useListOutlets, useListWarehouses, useDeleteLocationExpense, useGetCashInOutlet, useExpenseCategories, attachmentViewUrl } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
+import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 import { AttachmentField } from '@/components/AttachmentField';
 import { downloadPDFFromEndpoint } from '@/lib/download';
-import { Receipt, Plus, Calendar, Wallet, AlertCircle, Layers, Trash2, Loader2, ShieldOff, AlertTriangle, Printer, Paperclip } from 'lucide-react';
+import { Receipt, Plus, Calendar, Wallet, AlertCircle, Layers, Trash2, Loader2, ShieldOff, AlertTriangle, Printer, Paperclip, Landmark, Clock } from 'lucide-react';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -25,15 +26,49 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { toast } from 'sonner';
 
+/** Payment methods, in the order they appear in the form. */
+const PAYMENT_MODES = [
+  { value: 'cash',   label: 'Cash',   hint: "Paid from this location's till" },
+  { value: 'bank',   label: 'Bank',   hint: 'Paid from a company bank account' },
+  { value: 'credit', label: 'Credit', hint: 'Not paid yet — recorded as Expense Payable' },
+] as const;
+
 const schema = z.object({
-  expenseLedgerId: z.coerce.number().min(1, 'Select an expense account'),
-  description:     z.string().min(1, 'Description required'),
-  amount:          z.coerce.number().min(0.01, 'Amount must be > 0'),
-  expenseDate:     z.string().min(1, 'Date required'),
-  category:        z.string().min(1, 'Category required'),
-  reference:       z.string().optional(),
+  // Held as "warehouse:3" / "outlet:1" so one Select can span both kinds.
+  location:         z.string().min(1, 'Select a location'),
+  expenseLedgerId:  z.coerce.number().min(1, 'Select an expense account'),
+  description:      z.string().min(1, 'Description required'),
+  amount:           z.coerce.number().min(0.01, 'Amount must be > 0'),
+  expenseDate:      z.string().min(1, 'Date required'),
+  category:         z.string().min(1, 'Category required'),
+  reference:        z.string().optional(),
+  paymentMode:      z.enum(['cash', 'bank', 'credit']),
+  paymentAccountId: z.coerce.number().optional(),
+  notes:            z.string().optional(),
+}).refine(d => d.paymentMode !== 'bank' || Number(d.paymentAccountId ?? 0) > 0, {
+  message: 'Select the bank account it was paid from',
+  path: ['paymentAccountId'],
 });
 type FormValues = z.infer<typeof schema>;
+
+/**
+ * Flags the payment method in a list, but only when it is not Cash: cash is the
+ * norm here, so tagging every row would be noise. "Unpaid" rather than "Credit"
+ * because what matters at a glance is that money is still owed.
+ */
+function PaymentModeTag({ mode }: { mode?: string }) {
+  if (mode === 'bank') return (
+    <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-blue-500/10 text-blue-600">
+      Bank
+    </span>
+  );
+  if (mode === 'credit') return (
+    <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-amber-500/10 text-amber-600">
+      Unpaid
+    </span>
+  );
+  return null;
+}
 
 const TODAY = new Date().toISOString().split('T')[0];
 
@@ -66,6 +101,29 @@ export default function SalesExpenses() {
   const deleteMutation = useDeleteLocationExpense();
   const [attachmentUrl, setAttachmentUrl] = useState<string | null>(null);
   const { data: categories = [] } = useExpenseCategories();
+  const { outletsEnabled } = useOutletsEnabled();
+  const { data: warehouses = [] } = useListWarehouses();
+
+  // Bank accounts for the Bank payment method. The endpoint is LBAC-scoped: a
+  // branch sees only its own till and so gets an empty bank list, which is
+  // exactly when Bank must not be offered. The UI therefore reads the
+  // availability off the data instead of guessing at the user's branch.
+  const { data: cashBankLedgers = [] } = useQuery<any[]>({
+    queryKey: ['cash-bank-ledgers'],
+    queryFn: () => customFetch('/api/accounts/cash-bank-ledgers'),
+    retry: false,
+  });
+  const bankAccounts = (() => {
+    const list = cashBankLedgers as any[];
+    const root = list.find(l => l.code === 'STD-BANK');
+    if (!root) return [] as any[];
+    const ids = new Set<number>([root.id]);
+    for (let i = 0; i < 4; i++) {
+      for (const l of list) if (l.parentId && ids.has(l.parentId)) ids.add(l.id);
+    }
+    // The root itself is the group heading, never a payable account.
+    return list.filter(l => ids.has(l.id) && l.id !== root.id);
+  })();
 
   const { locationType, locationId, locationName } = locationState;
   const isAll       = locationType === 'all';
@@ -151,9 +209,24 @@ export default function SalesExpenses() {
 
   const cashLedgerName: string | null = isSpecific ? (expenseData?.cashLedgerName ?? null) : null;
 
-  const blankForm = {
+  // The form carries its own location, so an expense can be recorded from the
+  // All-locations view as well. Outlets appear only while Outlet Management is
+  // enabled; warehouses are always available.
+  const locationOptions = [
+    ...(warehouses as any[]).map(w => ({ key: `warehouse:${w.id}`, label: w.name, kind: 'Warehouse', cashLedgerId: w.cashLedgerId ?? null })),
+    ...(outletsEnabled
+      ? (outlets as any[]).map(o => ({ key: `outlet:${o.id}`, label: o.name, kind: 'Outlet', cashLedgerId: o.cashLedgerId ?? null }))
+      : []),
+  ];
+  const defaultLocationKey = isSpecific
+    ? `${locationType}:${locationId}`
+    : (locationOptions[0]?.key ?? '');
+
+  const blankForm: FormValues = {
+    location: defaultLocationKey,
     expenseLedgerId: 0, description: '', amount: 0, expenseDate: TODAY,
     category: 'Uncategorised', reference: '',
+    paymentMode: 'cash', paymentAccountId: 0, notes: '',
   };
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -161,24 +234,50 @@ export default function SalesExpenses() {
   });
 
   const watchAmount = form.watch('amount');
+  const watchMode   = form.watch('paymentMode');
+  const watchLoc    = form.watch('location');
   const amountNum   = Number(watchAmount) || 0;
-  const overBalance = isSpecific && !!locationCash && amountNum > availableCash + 0.001;
+
+  // Cash checks follow the location chosen *in the form*, not the page filter,
+  // so recording from the All-locations view still checks the right till.
+  const [formLocType, formLocIdRaw] = (watchLoc || '').split(':');
+  const formLocId = Number(formLocIdRaw);
+  const selectedOption = locationOptions.find(o => o.key === watchLoc);
+  // Matched by cash ledger first, and only by location second. An outlet that is
+  // mirrored as a warehouse row shares one till, and the balances endpoint
+  // reports that till under a single identity — matching on the pair alone would
+  // read ₹0 for the other identity and block a spend the location can afford.
+  const formCash = (() => {
+    const list = allCashBalances as any[];
+    if (selectedOption?.cashLedgerId) {
+      const byLedger = list.find(b => Number(b.cashLedgerId) === Number(selectedOption.cashLedgerId));
+      if (byLedger) return byLedger;
+    }
+    return list.find(b => b.locationType === formLocType && Number(b.locationId) === formLocId) ?? null;
+  })();
+  // Without a resolved ledger the balance is unknown, not zero — so say nothing
+  // and let the server decide rather than blocking a legitimate entry.
+  const hasKnownCash = !!formCash?.cashLedgerId;
+  const formAvailableCash: number = hasKnownCash ? Number(formCash.availableBalance ?? 0) : 0;
+  // Only Cash is capped: Bank draws on a company account and Credit moves nothing.
+  const overBalance = watchMode === 'cash' && hasKnownCash && amountNum > formAvailableCash + 0.001;
 
   const openAdd = () => {
-    form.reset(blankForm);
+    form.reset({ ...blankForm, location: defaultLocationKey });
     setAttachmentUrl(null);
     setIsOpen(true);
   };
 
   const onSubmit = async (data: FormValues) => {
+    const [locType, locIdRaw] = data.location.split(':');
     setSubmitting(true);
     try {
       await customFetch('/api/accounts/location-expenses', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          locationType,
-          locationId,
+          locationType: locType,
+          locationId: Number(locIdRaw),
           expenseLedgerId: data.expenseLedgerId,
           amount: data.amount,
           expenseDate: data.expenseDate,
@@ -186,6 +285,9 @@ export default function SalesExpenses() {
           category: data.category,
           attachmentUrl: attachmentUrl || undefined,
           reference: data.reference || undefined,
+          paymentMode: data.paymentMode,
+          paymentAccountId: data.paymentMode === 'bank' ? data.paymentAccountId : undefined,
+          notes: data.notes || undefined,
         }),
       });
       toast.success('Expense recorded');
@@ -267,9 +369,11 @@ export default function SalesExpenses() {
               </p>
             )}
           </div>
-          {/* Only allow adding expenses on a specific location */}
-          {isSpecific && perm.canAdd && (
-            <Button onClick={openAdd} disabled={!cashLedgerName}>
+          {/* Always offered: the form carries its own location, so this works
+              from the All-locations view too — and Bank/Credit expenses do not
+              need the location to have a till. */}
+          {perm.canAdd && locationOptions.length > 0 && (
+            <Button onClick={openAdd}>
               <Plus className="w-4 h-4 mr-2" /> Add Expense
             </Button>
           )}
@@ -362,6 +466,7 @@ export default function SalesExpenses() {
                         <TableCell className="text-sm font-medium max-w-xs truncate">
                           <div className="flex items-center gap-1.5">
                             <span className="truncate">{e.description}</span>
+                            <PaymentModeTag mode={e.paymentMode} />
                             {e.attachmentUrl && (
                               <a
                                 href={attachmentViewUrl(e.attachmentUrl)}
@@ -452,6 +557,7 @@ export default function SalesExpenses() {
                     <TableCell className="font-medium max-w-xs truncate">
                       <div className="flex items-center gap-1.5">
                         <span className="truncate">{e.description}</span>
+                        <PaymentModeTag mode={e.paymentMode} />
                         {e.attachmentUrl && (
                           <a
                             href={attachmentViewUrl(e.attachmentUrl)}
@@ -537,8 +643,8 @@ export default function SalesExpenses() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Add Expense Dialog — only for specific location */}
-      {isSpecific && (
+      {/* Add Expense — reachable from any view; the form picks the location. */}
+      {locationOptions.length > 0 && (
         <Dialog open={isOpen} onOpenChange={setIsOpen}>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
@@ -546,26 +652,110 @@ export default function SalesExpenses() {
                 <Receipt className="w-5 h-5 text-primary" /> Record Expense
               </DialogTitle>
               <DialogDescription>
-                Charge against <strong>{locationName}</strong> cash. Debit goes to the selected expense account.
+                Charged against the location you choose. The debit goes to the selected expense account.
               </DialogDescription>
             </DialogHeader>
 
             <Form {...form}>
               <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
 
-                {/* Cash source + available balance */}
-                <div className="space-y-1.5">
-                  <p className="text-sm font-medium">Paid From (Cash)</p>
-                  <div className="flex items-center gap-2 px-3 py-2 bg-muted/30 rounded-md border border-border text-sm">
-                    <Wallet className="w-3.5 h-3.5 text-muted-foreground" />
-                    <span className="text-muted-foreground">{cashLedgerName ?? 'Loading…'}</span>
-                    {locationCash && (
-                      <span className="ml-auto font-mono text-xs font-semibold text-emerald-600">
-                        {fmt(availableCash)} available
+                {/* Location — defaults to the page's location, but editable so
+                    the All-locations view can record an expense too. */}
+                <FormField control={form.control} name="location" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Location <span className="text-destructive">*</span></FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl><SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {locationOptions.map(o => (
+                          <SelectItem key={o.key} value={o.key}>
+                            {o.label} <span className="text-muted-foreground text-xs">· {o.kind}</span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                {/* Payment method decides what gets credited: the till, a bank
+                    account, or Expense Payable. */}
+                <FormField control={form.control} name="paymentMode" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Payment Method <span className="text-destructive">*</span></FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {PAYMENT_MODES.map(m => (
+                          <SelectItem
+                            key={m.value}
+                            value={m.value}
+                            disabled={m.value === 'bank' && bankAccounts.length === 0}
+                          >
+                            {m.label}
+                            <span className="text-muted-foreground text-xs">
+                              {' · '}
+                              {m.value === 'bank' && bankAccounts.length === 0 ? 'Head Office only' : m.hint}
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                {/* Funding source, per method */}
+                {watchMode === 'cash' && (
+                  <div className="space-y-1.5">
+                    <p className="text-sm font-medium">Paid From (Cash)</p>
+                    <div className="flex items-center gap-2 px-3 py-2 bg-muted/30 rounded-md border border-border text-sm">
+                      <Wallet className="w-3.5 h-3.5 text-muted-foreground" />
+                      <span className="text-muted-foreground">
+                        {formCash?.cashLedgerName ?? formCash?.locationName ?? "This location's cash"}
                       </span>
-                    )}
+                      {hasKnownCash && (
+                        <span className="ml-auto font-mono text-xs font-semibold text-emerald-600">
+                          {fmt(formAvailableCash)} available
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {watchMode === 'bank' && (
+                  <FormField control={form.control} name="paymentAccountId" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="flex items-center gap-1.5">
+                        <Landmark className="w-3.5 h-3.5" /> Bank Account <span className="text-destructive">*</span>
+                      </FormLabel>
+                      <Select
+                        onValueChange={v => field.onChange(Number(v))}
+                        value={field.value && Number(field.value) > 0 ? String(field.value) : ''}
+                      >
+                        <FormControl><SelectTrigger><SelectValue placeholder="Select bank account" /></SelectTrigger></FormControl>
+                        <SelectContent>
+                          {bankAccounts.length === 0 ? (
+                            <SelectItem value="0" disabled>No bank accounts available</SelectItem>
+                          ) : bankAccounts.map((b: any) => (
+                            <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                )}
+
+                {watchMode === 'credit' && (
+                  <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 p-3 text-sm">
+                    <Clock className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
+                    <span className="text-muted-foreground">
+                      Nothing is paid now — this posts to <strong className="text-foreground">Expense Payable</strong> and
+                      stays outstanding until it is settled.
+                    </span>
+                  </div>
+                )}
 
                 <FormField control={form.control} name="expenseLedgerId" render={({ field }) => (
                   <FormItem>
@@ -620,7 +810,7 @@ export default function SalesExpenses() {
                       <FormControl>
                         <Input
                           type="number" step="0.01" min={0.01}
-                          max={availableCash > 0 ? availableCash : undefined}
+                          max={watchMode === 'cash' && formAvailableCash > 0 ? formAvailableCash : undefined}
                           className={overBalance ? 'border-destructive focus-visible:ring-destructive' : ''}
                           {...field}
                         />
@@ -628,11 +818,11 @@ export default function SalesExpenses() {
                       {overBalance ? (
                         <p className="text-xs text-destructive flex items-center gap-1 mt-1">
                           <AlertTriangle className="w-3 h-3 shrink-0" />
-                          Exceeds available cash (₹{availableCash.toLocaleString('en-IN', { minimumFractionDigits: 2 })})
+                          Exceeds available cash (₹{formAvailableCash.toLocaleString('en-IN', { minimumFractionDigits: 2 })})
                         </p>
-                      ) : locationCash && amountNum > 0 ? (
+                      ) : watchMode === 'cash' && hasKnownCash && amountNum > 0 ? (
                         <p className="text-xs text-muted-foreground mt-1">
-                          Remaining: <span className="font-mono font-medium text-foreground">{fmt(availableCash - amountNum)}</span>
+                          Remaining: <span className="font-mono font-medium text-foreground">{fmt(formAvailableCash - amountNum)}</span>
                         </p>
                       ) : null}
                       <FormMessage />
@@ -647,11 +837,11 @@ export default function SalesExpenses() {
                   )} />
                 </div>
 
-                {/* Hard block if no cash available */}
-                {isSpecific && locationCash && availableCash <= 0 && (
+                {/* Hard block if no cash available — cash mode only. */}
+                {watchMode === 'cash' && hasKnownCash && formAvailableCash <= 0 && (
                   <div className="flex items-start gap-2 rounded-lg bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive">
                     <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                    <span>No cash available at this location. Collect cash or make a sale first.</span>
+                    <span>No cash available at this location. Collect cash, make a sale, or record this as Credit.</span>
                   </div>
                 )}
 
@@ -659,6 +849,17 @@ export default function SalesExpenses() {
                   <FormItem>
                     <FormLabel>Bill / Reference No. <span className="text-muted-foreground text-xs">(optional)</span></FormLabel>
                     <FormControl><Input placeholder="e.g. BILL-2024-001" {...field} /></FormControl>
+                  </FormItem>
+                )} />
+
+                {/* Kept out of the description because the description becomes
+                    the voucher narration shown in the day book and ledgers. */}
+                <FormField control={form.control} name="notes" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Notes <span className="text-muted-foreground text-xs">(optional)</span></FormLabel>
+                    <FormControl>
+                      <Textarea rows={2} placeholder="Anything worth recording for later — approvals, context, follow-ups" {...field} />
+                    </FormControl>
                   </FormItem>
                 )} />
 
@@ -672,7 +873,7 @@ export default function SalesExpenses() {
 
                 <DialogFooter>
                   <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
-                  <Button type="submit" disabled={submitting || overBalance || (isSpecific && !!locationCash && availableCash <= 0)}>
+                  <Button type="submit" disabled={submitting || overBalance || (watchMode === 'cash' && hasKnownCash && formAvailableCash <= 0)}>
                     {submitting ? 'Saving…' : 'Record Expense'}
                   </Button>
                 </DialogFooter>

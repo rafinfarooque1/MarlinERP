@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -30,10 +31,37 @@ const schema = z.object({
   bankName: z.string().optional(),
   bankAccount: z.string().optional(),
   ifscCode: z.string().optional(),
+  bankBranch: z.string().optional(),
+  accountType: z.string().optional(),
+  bankAccountHolder: z.string().optional(),
+  upiEnabled: z.boolean().optional(),
+  upiId: z.string().optional().refine(
+    v => !v || /^[a-zA-Z0-9.\-_]{2,64}@[a-zA-Z][a-zA-Z0-9.\-_]{1,64}$/.test(v.trim()),
+    'Enter a valid UPI ID, e.g. marlin@hdfcbank',
+  ),
+  upiPayeeName: z.string().optional(),
+  showUpiQrOnInvoice: z.boolean().optional(),
+  showBankDetailsOnInvoice: z.boolean().optional(),
   financialYear: z.string().optional(),
   invoicePrefix: z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
+
+/**
+ * The form is driven by `values`, which is only populated once the settings
+ * request resolves. Without a blank starting shape every input mounts
+ * uncontrolled and flips to controlled when the data lands, which React warns
+ * about. Starting blank keeps every field controlled for the whole lifetime.
+ */
+const BLANK: FormValues = {
+  name: '', gstNumber: '', pan: '', phone: '', email: '', website: '',
+  address: '', city: '', state: '', pincode: '',
+  bankName: '', bankAccount: '', ifscCode: '', bankBranch: '',
+  accountType: '', bankAccountHolder: '',
+  upiEnabled: true, upiId: '', upiPayeeName: '',
+  showUpiQrOnInvoice: true, showBankDetailsOnInvoice: true,
+  financialYear: '2025-26', invoicePrefix: 'INV',
+};
 
 export default function Profile() {
   const perm = usePermission('page:/company/profile');
@@ -61,9 +89,19 @@ export default function Profile() {
       bankName: p.bankName || '',
       bankAccount: p.bankAccount || '',
       ifscCode: p.ifscCode || '',
+      bankBranch: p.bankBranch || '',
+      accountType: p.accountType || '',
+      bankAccountHolder: p.bankAccountHolder || '',
+      // Default ON: these switches exist to turn a payment request OFF, so an
+      // existing invoice keeps printing exactly what it printed before.
+      upiEnabled: p.upiEnabled ?? true,
+      upiId: p.upiId || '',
+      upiPayeeName: p.upiPayeeName || '',
+      showUpiQrOnInvoice: p.showUpiQrOnInvoice ?? true,
+      showBankDetailsOnInvoice: p.showBankDetailsOnInvoice ?? true,
       financialYear: p.financialYear || '2025-26',
       invoicePrefix: p.invoicePrefix || 'INV',
-    } : undefined,
+    } : BLANK,
   });
 
   const onSubmit = (data: FormValues) => {
@@ -82,6 +120,14 @@ export default function Profile() {
       bankName: data.bankName,
       bankAccount: data.bankAccount,
       ifscCode: data.ifscCode,
+      bankBranch: data.bankBranch,
+      accountType: data.accountType,
+      bankAccountHolder: data.bankAccountHolder,
+      upiEnabled: data.upiEnabled,
+      upiId: (data.upiId || '').trim(),
+      upiPayeeName: data.upiPayeeName,
+      showUpiQrOnInvoice: data.showUpiQrOnInvoice,
+      showBankDetailsOnInvoice: data.showBankDetailsOnInvoice,
       financialYear: data.financialYear,
       invoicePrefix: data.invoicePrefix || 'INV',
     };
@@ -224,15 +270,91 @@ export default function Profile() {
               </Section>
 
               <Section title="Bank Details">
+                <p className="text-xs text-muted-foreground -mt-1 mb-3">
+                  Printed on invoices that still carry a balance, so a customer can pay by transfer.
+                </p>
                 <div className="grid grid-cols-2 gap-4">
+                  <FormField control={form.control} name="bankAccountHolder" render={({ field }) => (
+                    <FormItem><FormLabel>Account Holder</FormLabel><FormControl><Input placeholder="As per bank records" {...field} value={field.value ?? ''} /></FormControl></FormItem>
+                  )} />
                   <FormField control={form.control} name="bankName" render={({ field }) => (
                     <FormItem><FormLabel>Bank Name</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                  )} />
+                  <FormField control={form.control} name="bankBranch" render={({ field }) => (
+                    <FormItem><FormLabel>Branch</FormLabel><FormControl><Input {...field} value={field.value ?? ''} /></FormControl></FormItem>
                   )} />
                   <FormField control={form.control} name="ifscCode" render={({ field }) => (
                     <FormItem><FormLabel>IFSC Code</FormLabel><FormControl><Input className="font-mono" {...field} /></FormControl></FormItem>
                   )} />
                   <FormField control={form.control} name="bankAccount" render={({ field }) => (
-                    <FormItem className="col-span-2"><FormLabel>Account Number</FormLabel><FormControl><Input className="font-mono" {...field} /></FormControl></FormItem>
+                    <FormItem><FormLabel>Account Number</FormLabel><FormControl><Input className="font-mono" {...field} /></FormControl></FormItem>
+                  )} />
+                  <FormField control={form.control} name="accountType" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Account Type</FormLabel>
+                      <Select value={field.value || ''} onValueChange={field.onChange}>
+                        <FormControl><SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger></FormControl>
+                        <SelectContent>
+                          <SelectItem value="Current">Current</SelectItem>
+                          <SelectItem value="Savings">Savings</SelectItem>
+                          <SelectItem value="Cash Credit">Cash Credit</SelectItem>
+                          <SelectItem value="Overdraft">Overdraft</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </FormItem>
+                  )} />
+                </div>
+              </Section>
+
+              <Section title="Invoice Payments (UPI & QR)">
+                <p className="text-xs text-muted-foreground -mt-1 mb-3">
+                  An invoice QR always asks for that invoice's own outstanding balance, recalculated every
+                  time it is viewed, printed or shared. A fully paid or cancelled invoice never carries one.
+                </p>
+                <div className="space-y-4">
+                  <FormField control={form.control} name="upiId" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>UPI ID (VPA)</FormLabel>
+                      <FormControl><Input placeholder="marlin@hdfcbank" className="font-mono" {...field} value={field.value ?? ''} /></FormControl>
+                      <FormMessage />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Used when the outlet or warehouse that made the sale has no UPI ID of its own.
+                        Leave blank to print bank details only — a broken QR is never drawn.
+                      </p>
+                    </FormItem>
+                  )} />
+                  <FormField control={form.control} name="upiPayeeName" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Payee name shown in the payment app</FormLabel>
+                      <FormControl><Input placeholder="Defaults to the selling location's name" {...field} value={field.value ?? ''} /></FormControl>
+                    </FormItem>
+                  )} />
+                  <FormField control={form.control} name="upiEnabled" render={({ field }) => (
+                    <FormItem className="flex items-center justify-between rounded-lg border p-3">
+                      <div className="pr-4">
+                        <FormLabel className="text-sm">Accept UPI payments</FormLabel>
+                        <p className="text-xs text-muted-foreground mt-0.5">Off stops UPI being offered anywhere on invoices.</p>
+                      </div>
+                      <FormControl><Switch checked={!!field.value} onCheckedChange={field.onChange} /></FormControl>
+                    </FormItem>
+                  )} />
+                  <FormField control={form.control} name="showUpiQrOnInvoice" render={({ field }) => (
+                    <FormItem className="flex items-center justify-between rounded-lg border p-3">
+                      <div className="pr-4">
+                        <FormLabel className="text-sm">Print the UPI QR on invoices</FormLabel>
+                        <p className="text-xs text-muted-foreground mt-0.5">Off keeps UPI available but leaves the QR off the document.</p>
+                      </div>
+                      <FormControl><Switch checked={!!field.value} onCheckedChange={field.onChange} /></FormControl>
+                    </FormItem>
+                  )} />
+                  <FormField control={form.control} name="showBankDetailsOnInvoice" render={({ field }) => (
+                    <FormItem className="flex items-center justify-between rounded-lg border p-3">
+                      <div className="pr-4">
+                        <FormLabel className="text-sm">Print bank details on invoices</FormLabel>
+                        <p className="text-xs text-muted-foreground mt-0.5">Shown beside the QR while a balance is outstanding.</p>
+                      </div>
+                      <FormControl><Switch checked={!!field.value} onCheckedChange={field.onChange} /></FormControl>
+                    </FormItem>
                   )} />
                 </div>
               </Section>

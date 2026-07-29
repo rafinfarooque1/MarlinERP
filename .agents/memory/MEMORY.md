@@ -5,10 +5,10 @@
 - [Custom API client hooks](custom-hooks.md) — New hooks go in lib/api-client-react/src/<name>.ts + export from index.ts; must run `pnpm tsc` in lib/api-client-react after adding files to generate .d.ts types.
 - [Item prices date range](item-prices-dates.md) — valid_from/valid_to added as text columns via startup migration in api-server/src/index.ts; ItemPrice type from generated code lacks these fields, use (ip as any).validFrom casts.
 - [Raw-migration columns](raw-migration-columns.md) — startup-migration columns are invisible to drizzle: db.select() silently drops them (fields read as 0/undefined); read AND write them via raw SQL.
-- [Invoice PDFs & share links](invoice-pdf-links.md) — ONE server-side renderer + HMAC public links; open popups synchronously in the click gesture; blob-URL PDFs trigger AV false positives.
+- [Invoice PDFs & share links](invoice-pdf-links.md) — ONE renderer; 2 public paths (minutes-long in-session token vs revocable share link); never derive a link token from SESSION_SECRET; popups need the click gesture.
 - [Accounts derivation & numbering](accounts-derivation.md) — books derive from buildDerivedPostings(); sale-linked receipts stay excluded (double-count trap); ALL GST math via lineTaxHeads(); never COUNT(*)-number vouchers.
 - [ERP enterprise decisions](erp-enterprise-decisions.md) — settled: labour from payroll allocation (and the double-count trap it creates), two-step transfers always, opening balances intentionally zero, sidebar frozen
-- [ERP integration conflicts](erp-integration-conflicts.md) — modules disagree: 5 stock qty stores (item-table col is STALE), materials have no location, P&L skips journal vouchers, transfer JVs already post tax
+- [ERP integration conflicts](erp-integration-conflicts.md) — modules disagree: 5 stock qty stores (item-table col is STALE), materials have no location, P&L DOES see journal vouchers, transfer JVs already post tax
 - [Inventory batch layer](inventory-batches.md) — additive lot layer over stock_entries (qty truth); FEFO clamped consumption, shortfall = "Untracked"; zod strips unknown keys so optional passthrough fields read from raw body.
 - [pg query gotchas](pg-gotchas.md) — date columns return JS Date (never string-compare vs YYYY-MM-DD); creates return 201; check-then-insert guards need one txn + pg_advisory_xact_lock.
 - [Codegen staleness trap](codegen-staleness.md) — cuts BOTH ways: codegen can flip optional→required, AND generated types under-declare what routes really return (auditing UI reads against them yields mass false positives).
@@ -26,7 +26,8 @@
 - [Money voucher ownership](money-voucher-ownership.md) — stamp OR ledger-leg ownership; money uses own-location scope (NOT getUserDataScope); foreign ledgers = set difference on ids.
 - [Payment modes & invoice share](payment-modes-invoice-share.md) — modes are Cash/Bank/UPI/Credit with legacy card/bank_transfer read as Bank, never rewritten; share = composed message + channel seam.
 - [Polymorphic stock_entries](polymorphic-stock-entries.md) — items AND materials share the table with OVERLAPPING ids; every query must scope material_type; boot-time dedupe blocks destroy data when the key widens.
-- [Module retirement pattern](module-retirement-pattern.md) — backend 409s enforce, frontend only withdraws affordances; retire a nav entry by filtering href in the layout, never by editing the frozen registry.
+- [Module retirement pattern](module-retirement-pattern.md) — retirement is a TOTAL hide (no badge/placeholder, owner rejected the badged variant); GETs still return data or history loses its names; stale filter state understates totals.
+- [Guard the effective value](effective-value-guards.md) — body-only write guards are routinely bypassed: session stamping and partial PATCHes both route around them. Compute the resulting state, then guard that, then write.
 - [Product identity](product-identity.md) — code prefixes follow the DISPLAY label (materials="Raw Material"→RM); EAN-13 in the `2` in-store range; inactive blocks CREATE only; HO-only is a location rule.
 - [ERP write-path concurrency](erp-write-path-concurrency.md) — lock order = labour day+location, then item, then rows; reversals must read their lines from a row locked inside the txn.
 - [Verifying costing on live data](verifying-costing-on-live-data.md) — create+delete of a batch permanently lowers item avg cost; a balanced TB does NOT prove the test left no trace.
@@ -41,3 +42,11 @@
 - [Sale cancellation](sale-cancellation.md) — a terminal state obliges EVERY write path (payments, returns) to refuse it after the row lock; filtering it from reports is not enough.
 - [Opt-in list paging](list-paging.md) — never default-cap a list endpoint the UI reads wholesale; in-memory slicing after a full fetch is pure downside.
 - [Text→DATE conversion](date-column-conversion.md) — after converting, every `col <> ''` guard becomes a live 22007; `$1 = ''` param guards are fine. Read-only audits never see it.
+- [Warehouse rent accrual](warehouse-rent.md) — accruals DERIVED (payments are vouchers) and reach the books DAILY, not at approval; see daily-expense-accrual.md for what approval means now.
+- [pg_dump exclusions](pg-dump-exclusions.md) — --exclude-table still dumps owned sequences and breaks --clean; use --exclude-schema. Fingerprint and dump must cover the same objects. Sign, don't encrypt, manifests.
+- [Mirror locations](mirror-locations.md) — a place can exist as BOTH a warehouse and an outlet sharing one cash ledger, with no flag; dedupe sums, resolve reads across identities, resolve writes like reads.
+- [Location expense identity](location-expense-identity.md) — never infer a record's kind from the ledger that funded it; store the discriminator and the payment mode, then rekey every read.
+- [Chart of accounts presentation](chart-of-accounts.md) — statements are signed to each section's natural side (sign ≠ Dr/Cr); postable parents (Cash/Bank) ≠ sum of children; `code` must never be client-writable.
+- [Partial-apply failure contracts](partial-apply-contracts.md) — "nothing was changed" must be computed from what actually ran, never asserted in the catch; absent info means assume the worst; only fault injection tests it.
+- [Daily expense accrual](daily-expense-accrual.md) — rent+salary hit the P&L daily; approval is a delta true-up that can flip sides, locks the month; revision deletes+regenerates the whole unapproved month
+- [One outstanding figure](single-outstanding-figure.md) — the owning module must export BOTH the in-process calc and SQL builders; reports and UIs hand-roll `total−paid` and silently drop credit notes.

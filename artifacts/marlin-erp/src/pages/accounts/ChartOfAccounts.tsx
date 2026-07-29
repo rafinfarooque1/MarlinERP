@@ -10,47 +10,19 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, ChevronDown, ChevronRight, Package, Lock, Trash2, ScrollText, ArrowUpRight, ArrowDownLeft, Folder, ShieldOff, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePermission } from '@/lib/usePermission';
+import { useIsLocationKindEnabled } from '@/lib/locationStructure';
+import { useClearOutletSelection } from '@/lib/useFeatureFlags';
 
-/* ── types ──────────────────────────────────────────────────────────────────── */
-type ALType = 'asset' | 'liability' | 'income' | 'expense' | 'equity';
-
-// `id` is only unique within a product kind — a finished good and a raw material
-// can both be id 1 — so anything keying off a stock item must include the kind.
-interface StockItem { id: number; name: string; unit: string; stock: number; unitCost: number; total: number; materialType: string }
-interface LedgerNode { id: number; name: string; type: string; parentId: number | null; code: string | null; balance: number; isGroup?: boolean; children: LedgerNode[] }
-interface GroupSummary { id: number | null; name: string; code: string | null; type?: string; total: number; children: LedgerNode[]; dutyAndTax?: number }
-interface FinancialStatements {
-  filters: { warehouses: { id: number; name: string }[]; outlets: { id: number; name: string }[] };
-  profitAndLoss: {
-    expenses: { openingStock: number; openingStockItems: StockItem[]; purchases: number; directExpenses: GroupSummary; indirectExpenses: GroupSummary; total: number };
-    incomes: { sales: number; closingStock: number; closingStockItems: StockItem[]; directIncomes: GroupSummary; indirectIncomes: GroupSummary; total: number };
-    netProfit: number;
-  };
-  balanceSheet: {
-    liabilities: { capitalAccount: GroupSummary; loans: GroupSummary; currentLiabilities: GroupSummary; pandlCarryForward: number; difference: number; total: number };
-    assets: { fixedAssets: GroupSummary; currentAssets: GroupSummary; closingStock: number; total: number };
-  };
-  integrity?: { balanced: boolean; difference: number; issues: string[] };
-}
+/* ── shared types & helpers live in chartCommon so the hierarchy view and the
+ * statement views cannot drift apart on formatting or payload shape ────────── */
+import {
+  fmt, BalTag, naturalSide,
+  type ALType, type StockItem, type LedgerNode, type GroupSummary,
+  type FinancialStatements, type StatementTarget,
+} from './chartCommon';
+import { ChartHierarchy } from './ChartHierarchy';
 
 /* ── helpers ─────────────────────────────────────────────────────────────────── */
-const fmt = (n: number) =>
-  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(n);
-
-/** Inline balance tag — always renders, shows Dr/Cr suffix with colour. */
-function BalTag({ balance, size = 'sm' }: { balance: number; size?: 'sm' | 'xs' }) {
-  const fs  = size === 'sm' ? 'text-[12px]' : 'text-[11px]';
-  const tag = size === 'sm' ? 'text-[10px]' : 'text-[9px]';
-  if (balance === 0)
-    return <span className={`${fs} font-mono tabular-nums text-muted-foreground/35 shrink-0`}>—</span>;
-  const dr = balance > 0;
-  return (
-    <span className={`${fs} font-mono tabular-nums shrink-0 ${dr ? 'text-blue-500 dark:text-blue-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
-      {fmt(Math.abs(balance))}<span className={`${tag} ml-0.5 opacity-70`}>{dr ? 'Dr' : 'Cr'}</span>
-    </span>
-  );
-}
-
 function computeDateRange(period: string, from: string, to: string) {
   const today = new Date();
   const iso = (d: Date) => d.toISOString().split('T')[0];
@@ -78,7 +50,7 @@ function LedgerCreationRetiredNote({ depth = 1 }: { depth?: number }) {
 
 /* ── ledger statement sheet ──────────────────────────────────────────────────── */
 function LedgerStatementSheet({ ledgerNode, fromDate, toDate, onClose }: {
-  ledgerNode: LedgerNode; fromDate?: string; toDate?: string; onClose: () => void;
+  ledgerNode: StatementTarget; fromDate?: string; toDate?: string; onClose: () => void;
 }) {
   const qs = new URLSearchParams();
   if (fromDate) qs.set('fromDate', fromDate);
@@ -259,7 +231,7 @@ function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename, onV
             </span>
           )}
 
-          <BalTag balance={node.balance} />
+          <BalTag balance={node.balance} natural={naturalSide(node.type)} />
 
           {!isSystem && canDelete && (
             <button onClick={() => onDelete?.(node.id, node.name)}
@@ -315,7 +287,7 @@ function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename, onV
           </span>
         )}
 
-        <BalTag balance={node.balance} size="xs" />
+        <BalTag balance={node.balance} size="xs" natural={naturalSide(node.type)} />
 
         {node.children.length === 0 && (
           <button onClick={() => onViewStatement?.(node)}
@@ -487,10 +459,14 @@ export default function ChartOfAccounts() {
   const [customFrom, setFrom]     = useState('');
   const [customTo, setTo]         = useState('');
   const [outletId, setOutletId]   = useState('all');
-  const [selectedLedger, setSelectedLedger] = useState<LedgerNode | null>(null);
+  const [selectedLedger, setSelectedLedger] = useState<StatementTarget | null>(null);
   const queryClient               = useQueryClient();
+  const outletsVisible            = useIsLocationKindEnabled('outlet');
+  // A filter still holding an outlet would keep scoping the statements after the
+  // control to clear it disappears, quietly narrowing every figure on screen.
+  useClearOutletSelection(outletId !== 'all', () => setOutletId('all'));
 
-  const onViewStatement = (node: LedgerNode) => setSelectedLedger(node);
+  const onViewStatement = (node: StatementTarget) => setSelectedLedger(node);
 
   const onRename = async (id: number, newName: string) => {
     try {
@@ -552,7 +528,10 @@ export default function ChartOfAccounts() {
   const pl  = fs?.profitAndLoss;
   const exp = fs?.profitAndLoss?.expenses;
   const inc = fs?.profitAndLoss?.incomes;
-  const outlets = fs?.filters?.outlets ?? [];
+  // The statements payload always carries every outlet, for historical reports.
+  // This dropdown is a selector, so it offers them only while the module is on —
+  // and the whole control disappears when the list comes back empty.
+  const outlets = outletsVisible ? (fs?.filters?.outlets ?? []) : [];
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -583,7 +562,7 @@ export default function ChartOfAccounts() {
             <Landmark className="w-5 h-5 text-primary" /> Chart of Accounts
           </h1>
           <p className="text-muted-foreground mt-0.5 text-xs">
-            Balance Sheet &amp; Profit &amp; Loss · All figures computed live from transactions
+            Account hierarchy, Balance Sheet &amp; Profit &amp; Loss · All figures computed live from transactions
           </p>
         </div>
 
@@ -658,8 +637,11 @@ export default function ChartOfAccounts() {
             </div>
           )}
 
-          <Tabs defaultValue="balance_sheet">
-            <TabsList className="grid w-full max-w-xs grid-cols-2">
+          <Tabs defaultValue="accounts">
+            <TabsList className="grid w-full max-w-lg grid-cols-3">
+              <TabsTrigger value="accounts" className="gap-1.5 text-xs">
+                <Folder className="w-3.5 h-3.5" /> Accounts
+              </TabsTrigger>
               <TabsTrigger value="balance_sheet" className="gap-1.5 text-xs">
                 <Landmark className="w-3.5 h-3.5" /> Balance Sheet
               </TabsTrigger>
@@ -667,6 +649,17 @@ export default function ChartOfAccounts() {
                 <BarChart3 className="w-3.5 h-3.5" /> Profit &amp; Loss
               </TabsTrigger>
             </TabsList>
+
+            {/* ══════════════════ ACCOUNT HIERARCHY ══════════════════ */}
+            <TabsContent value="accounts" className="mt-4">
+              <ChartHierarchy
+                statements={fs}
+                statementsLoading={isLoading}
+                onViewStatement={onViewStatement}
+                onStructureChanged={onCreated}
+                perm={{ canAdd: perm.canAdd, canEdit: perm.canEdit, canDelete: perm.canDelete }}
+              />
+            </TabsContent>
 
             {/* ══════════════════ BALANCE SHEET ══════════════════ */}
             <TabsContent value="balance_sheet" className="mt-4">

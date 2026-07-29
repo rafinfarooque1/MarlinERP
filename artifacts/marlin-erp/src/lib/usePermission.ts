@@ -7,6 +7,10 @@ export interface PermissionSet {
   canDelete: boolean;
   canDownload: boolean;
   canPrint: boolean;
+  /** Sign-off authority — distinct from canEdit; see the DB column comment. */
+  canApprove: boolean;
+  /** Authority to publish a document outside the company (invoice share links). */
+  canShare: boolean;
   isLoading: boolean;
 }
 
@@ -20,6 +24,8 @@ export interface PermissionRow {
   canDelete?: boolean | null;
   canDownload?: boolean | null;
   canPrint?: boolean | null;
+  canApprove?: boolean | null;
+  canShare?: boolean | null;
 }
 
 const FULL_ACCESS: PermissionSet = {
@@ -29,6 +35,8 @@ const FULL_ACCESS: PermissionSet = {
   canDelete: true,
   canDownload: true,
   canPrint: true,
+  canApprove: true,
+  canShare: true,
   isLoading: false,
 };
 
@@ -40,6 +48,8 @@ const DEFAULT_DENY: PermissionSet = {
   canDelete: false,
   canDownload: false,
   canPrint: false,
+  canApprove: false,
+  canShare: false,
   isLoading: false,
 };
 
@@ -89,6 +99,8 @@ export function resolvePermissions(
     canDelete: any(r => r.canDelete),
     canDownload: any(r => r.canDownload),
     canPrint: any(r => r.canPrint),
+    canApprove: any(r => r.canApprove),
+    canShare: any(r => r.canShare),
     isLoading: false,
   };
 }

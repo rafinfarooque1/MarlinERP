@@ -1,13 +1,15 @@
 import { Router } from "express";
 import { db, customersTable, vendorsTable, couponsTable } from "@workspace/db";
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { pool } from "@workspace/db";
 import {
   CreateCouponBody, UpdateCouponBody, DeleteCouponParams,
 } from "@workspace/api-zod";
 import { nextVoucherNumber } from "../lib/voucherNumber";
+import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
+import { outstandingExpr } from "../lib/salePaymentPosition";
 
 const router = Router();
 
@@ -75,7 +77,19 @@ router.get("/customers", requireModuleView(["page:/sales/pos", "page:/accounts/v
     SELECT
       c.*,
       COALESCE(SUM(s.total_amount), 0)  AS "totalPurchases",
-      COALESCE(SUM(s.total_amount - s.amount_paid), 0) AS "outstandingBalance"
+      -- Outstanding on the same definition the invoice, its UPI QR and the
+      -- credit-limit check use: dues net of credit notes, cancelled bills
+      -- excluded. Credit notes raised WITHOUT a return (manual ones from
+      -- Accounts) cannot be attributed to an invoice, so they are netted here at
+      -- customer level instead — counted once, either way.
+      GREATEST(0, COALESCE(SUM(${outstandingExpr("s")}), 0) - COALESCE((
+        SELECT SUM(v.total_amount::numeric)
+          FROM journal_vouchers v
+          JOIN account_ledgers l ON l.id = v.party_ledger_id
+         WHERE v.voucher_type = 'credit_note'
+           AND l.code = 'CUST-' || c.id
+           AND NOT EXISTS (SELECT 1 FROM sales_returns sr WHERE sr.credit_note_id = v.id)
+      ), 0)) AS "outstandingBalance"
     FROM customers c
     LEFT JOIN sales s ON s.customer_id = c.id
     WHERE ${scopeCond}
@@ -101,9 +115,6 @@ router.post("/customers", requireModuleAction("page:/customers", "add"), async (
   }
   const creditErr = validateCreditFields(req.body);
   if (creditErr) { res.status(400).json({ error: creditErr }); return; }
-  // pickCustomer whitelists keys and the guard above ensures name is present
-  const [row] = await db.insert(customersTable).values(data as typeof customersTable.$inferInsert).returning();
-
   // LBAC: stamp location from the authenticated employee's session — never trust client
   const empLbac = (req as any).employee as { branchType: string; branchId: number } | undefined;
   let stampType = empLbac?.branchType ?? 'headoffice';
@@ -113,10 +124,29 @@ router.post("/customers", requireModuleAction("page:/customers", "add"), async (
     const { locationType: ct, locationId: ci } = req.body as { locationType?: string; locationId?: number };
     if (ct && ci) { stampType = ct; stampId = Number(ci); }
   }
-  await pool.query(
-    `UPDATE customers SET location_type = $1, location_id = $2 WHERE id = $3`,
-    [stampType, stampId, row.id],
-  );
+  // Assigning a new customer to a retired outlet is new outlet activity. Guard the
+  // EFFECTIVE stamp, not the request body — an outlet-stationed user lands on an
+  // outlet through their session without ever naming one. Checked before the
+  // insert so a refusal cannot strand a half-created customer.
+  if (stampType === 'outlet' && await outletWritesBlocked(pool)) {
+    res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+  }
+
+  // Insert and stamp are one transaction. The guard above authorised this row to
+  // exist *at this location*; a row that survives without its stamp is one whose
+  // access scoping silently falls back to something nobody approved, so a failed
+  // stamp must take the insert down with it rather than leave that behind.
+  const row = await db.transaction(async (tx) => {
+    // pickCustomer whitelists keys and the guard above ensures name is present
+    const [created] = await tx.insert(customersTable)
+      .values(data as typeof customersTable.$inferInsert).returning();
+    // location_type/location_id came from a startup migration, so drizzle cannot
+    // see them on the insert — they have to be written as raw SQL.
+    await tx.execute(
+      sql`UPDATE customers SET location_type = ${stampType}, location_id = ${stampId} WHERE id = ${created.id}`,
+    );
+    return created;
+  });
 
   // Auto-create a debtor ledger under Sundry Debtors
   try {
@@ -265,9 +295,6 @@ router.post("/vendors", requireModuleAction("page:/vendors", "add"), async (req,
     res.status(400).json({ error: "name is required" });
     return;
   }
-  // pickVendor whitelists keys and the guard above ensures name is present
-  const [row] = await db.insert(vendorsTable).values(data as typeof vendorsTable.$inferInsert).returning();
-
   // LBAC: stamp location from the authenticated employee's session
   const vendEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
   let vendStampType = vendEmp?.branchType ?? 'headoffice';
@@ -277,10 +304,23 @@ router.post("/vendors", requireModuleAction("page:/vendors", "add"), async (req,
     const { locationType: ct, locationId: ci } = req.body as { locationType?: string; locationId?: number };
     if (ct && ci) { vendStampType = ct; vendStampId = Number(ci); }
   }
-  await pool.query(
-    `UPDATE vendors SET location_type = $1, location_id = $2 WHERE id = $3`,
-    [vendStampType, vendStampId, row.id],
-  ).catch(() => {});
+  // Same rule as customers, and on the same effective-stamp basis.
+  if (vendStampType === 'outlet' && await outletWritesBlocked(pool)) {
+    res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+  }
+
+  // Atomic for the same reason as customers — and note the stamp failure here used
+  // to be swallowed outright, which quietly produced exactly the unscoped row the
+  // guard exists to prevent.
+  const row = await db.transaction(async (tx) => {
+    // pickVendor whitelists keys and the guard above ensures name is present
+    const [created] = await tx.insert(vendorsTable)
+      .values(data as typeof vendorsTable.$inferInsert).returning();
+    await tx.execute(
+      sql`UPDATE vendors SET location_type = ${vendStampType}, location_id = ${vendStampId} WHERE id = ${created.id}`,
+    );
+    return created;
+  });
 
   // Auto-create a creditor ledger under Sundry Creditors
   try {
@@ -371,6 +411,10 @@ router.get("/customers/:id/ledger", requireModuleView(["page:/customers", "page:
        s.total_amount,
        s.payment_status,
        s.amount_paid,
+       -- Deliberately GROSS of credit notes, unlike every other outstanding
+       -- figure. This is a statement: each credit note appears as its own credit
+       -- line below and the running balance nets it there. Subtracting it here
+       -- too would relieve the customer of the same money twice on one page.
        (s.total_amount - s.amount_paid) AS balance_due
      FROM sales s
      WHERE s.customer_id = $1

@@ -14,6 +14,7 @@ import { Router } from "express";
 import { pool } from "@workspace/db";
 import { requireModuleView } from "../middleware/permissions";
 import { lineTaxHeads } from "../lib/gst";
+import { creditAdjustmentsExpr, outstandingExpr, computePaymentPosition } from "../lib/salePaymentPosition";
 
 const router = Router();
 
@@ -92,8 +93,8 @@ router.get("/reports/sales-register", requireModuleView("page:/reports/sales"), 
             COALESCE(s.subtotal,0) AS subtotal, COALESCE(s.discount_total,0) AS discount_total,
             COALESCE(s.tax_total,0) AS tax_total, s.total_amount,
             COALESCE(s.amount_paid,0) AS amount_paid,
-            COALESCE(s.payment_mode,'cash') AS payment_mode,
-            COALESCE(s.payment_status,'pending') AS payment_status
+            ${creditAdjustmentsExpr("s")} AS credit_adjustments,
+            COALESCE(s.payment_mode,'cash') AS payment_mode
      FROM sales s
      LEFT JOIN customers c ON c.id = s.customer_id
      WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
@@ -107,23 +108,35 @@ router.get("/reports/sales-register", requireModuleView("page:/reports/sales"), 
   );
   const maps = await locationMaps();
 
-  const list = rows.map((r: any) => ({
-    id: Number(r.id),
-    invoiceNumber: r.invoice_number ?? `#${r.id}`,
-    date: r.sale_date,
-    locationType: r.location_type,
-    locationId: Number(r.location_id),
-    locationName: locName(maps, r.location_type, Number(r.location_id)),
-    customerName: r.customer_name ?? "Walk-in",
-    subtotal: r2(Number(r.subtotal)),
-    discount: r2(Number(r.discount_total)),
-    tax: r2(Number(r.tax_total)),
-    total: r2(Number(r.total_amount)),
-    paid: r2(Number(r.amount_paid)),
-    balance: r2(Number(r.total_amount) - Number(r.amount_paid)),
-    paymentMode: r.payment_mode,
-    paymentStatus: r.payment_status,
-  }));
+  const list = rows.map((r: any) => {
+    // Balance and status come from the shared derivation, so the register agrees
+    // with the invoice, its QR and receivables. Cancelled bills are already
+    // excluded by the WHERE clause above.
+    const position = computePaymentPosition({
+      totalAmount: r.total_amount,
+      amountReceived: r.amount_paid,
+      creditAdjustments: r.credit_adjustments,
+      cancelledAt: null,
+    });
+    return {
+      id: Number(r.id),
+      invoiceNumber: r.invoice_number ?? `#${r.id}`,
+      date: r.sale_date,
+      locationType: r.location_type,
+      locationId: Number(r.location_id),
+      locationName: locName(maps, r.location_type, Number(r.location_id)),
+      customerName: r.customer_name ?? "Walk-in",
+      subtotal: r2(Number(r.subtotal)),
+      discount: r2(Number(r.discount_total)),
+      tax: r2(Number(r.tax_total)),
+      total: r2(Number(r.total_amount)),
+      paid: position.amountReceived,
+      creditNotes: position.creditAdjustments,
+      balance: position.outstanding,
+      paymentMode: r.payment_mode,
+      paymentStatus: position.status,
+    };
+  });
 
   const totals = {
     invoices: list.length,
@@ -208,7 +221,11 @@ router.get("/reports/sales-by-location", requireModuleView("page:/reports/sales"
             SUM(COALESCE(s.subtotal,0)) AS taxable,
             SUM(COALESCE(s.tax_total,0)) AS tax,
             SUM(s.total_amount) AS total,
-            SUM(COALESCE(s.amount_paid,0)) AS paid
+            SUM(COALESCE(s.amount_paid,0)) AS paid,
+            -- Outstanding per invoice, then summed: the shared expression already
+            -- nets credit notes and clamps, so a report cannot drift from the
+            -- invoice, the QR or the customer's balance.
+            SUM(${outstandingExpr("s")}) AS outstanding
      FROM sales s
      WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
        AND ($1 = '' OR s.sale_date >= $1::date)
@@ -227,7 +244,7 @@ router.get("/reports/sales-by-location", requireModuleView("page:/reports/sales"
     tax: r2(Number(r.tax)),
     total: r2(Number(r.total)),
     paid: r2(Number(r.paid)),
-    outstanding: r2(Number(r.total) - Number(r.paid)),
+    outstanding: r2(Number(r.outstanding)),
   }));
   const totals = {
     invoices: list.reduce((s, r) => s + r.invoices, 0),
@@ -670,7 +687,11 @@ router.get("/reports/sales-stock-combined", requireModuleView("page:/reports/sal
     pool.query<any>(
       `SELECT COUNT(*) AS invoices, COALESCE(SUM(total_amount),0) AS revenue,
               COALESCE(SUM(COALESCE(tax_total,0)),0) AS tax,
-              COALESCE(SUM(COALESCE(amount_paid,0)),0) AS collected
+              COALESCE(SUM(COALESCE(amount_paid,0)),0) AS collected,
+              -- Not revenue − collected: that ignores credit notes. Sum the
+              -- shared per-invoice outstanding so this agrees with every other
+              -- surface.
+              COALESCE(SUM(${outstandingExpr("sales")}),0) AS outstanding
        FROM sales
        WHERE branch_transfer_id IS NULL AND cancelled_at IS NULL
          AND ($1 = '' OR sale_date >= $1::date) AND ($2 = '' OR sale_date <= $2::date)
@@ -719,6 +740,7 @@ router.get("/reports/sales-stock-combined", requireModuleView("page:/reports/sal
   const s0 = salesAgg.rows[0] ?? {};
   const revenue = Number(s0.revenue ?? 0);
   const collected = Number(s0.collected ?? 0);
+  const outstanding = Number(s0.outstanding ?? 0);
 
   res.json({
     period: { from: range.from || null, to: range.to || null },
@@ -727,7 +749,7 @@ router.get("/reports/sales-stock-combined", requireModuleView("page:/reports/sal
       revenue: r2(revenue),
       tax: r2(Number(s0.tax ?? 0)),
       collected: r2(collected),
-      outstanding: r2(revenue - collected),
+      outstanding: r2(outstanding),
     },
     salesByLocation: byLoc.rows.map((r: any) => ({
       locationType: r.location_type,

@@ -19,6 +19,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { ClipboardCheck, Info, ShieldOff, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePermission } from '@/lib/usePermission';
+import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 
 const fmtQty = (n: number | string) => Number(n || 0).toLocaleString('en-IN');
 const fmtDate = (d: string) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
@@ -57,6 +58,7 @@ function NewCountTab({ canAdd }: { canAdd: boolean }) {
   const today = new Date().toISOString().split('T')[0];
   const [branchType, setBranchType] = useState('');
   const [branchId, setBranchId] = useState('');
+  useClearOutletSelection(branchType === 'outlet', () => { setBranchType(''); setBranchId(''); });
   const [verifyDate, setVerifyDate] = useState(today);
   const [notes, setNotes] = useState('');
   const [rows, setRows] = useState<CountRow[]>([]);
@@ -64,6 +66,7 @@ function NewCountTab({ canAdd }: { canAdd: boolean }) {
 
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
+  const { outletsEnabled } = useOutletsEnabled();
 
   const branchOptions =
     branchType === 'headoffice'
@@ -149,7 +152,7 @@ function NewCountTab({ canAdd }: { canAdd: boolean }) {
             <SelectContent>
               <SelectItem value="headoffice">Head Office</SelectItem>
               <SelectItem value="warehouse">Warehouse</SelectItem>
-              <SelectItem value="outlet">Outlet</SelectItem>
+              {outletsEnabled && <SelectItem value="outlet">Outlet</SelectItem>}
             </SelectContent>
           </Select>
         </div>

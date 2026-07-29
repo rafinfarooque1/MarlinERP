@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Store, Trash2, TriangleAlert, CalendarRange, FileText, ShieldCheck, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
+import { useQueryClient } from '@tanstack/react-query';
 import { customFetch } from '@workspace/api-client-react';
 import { Textarea } from '@/components/ui/textarea';
 
@@ -723,6 +724,7 @@ function SecuritySection({ canEdit }: { canEdit: boolean }) {
 
 export default function Settings() {
   const perm = usePermission('page:/company/settings');
+  const queryClient = useQueryClient();
   const [values, setValues] = useState<Record<string, any>>(getDefaults);
   const [loadingGeneral, setLoadingGeneral] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -752,6 +754,10 @@ export default function Settings() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ generalSettings: values }),
       });
+      // Location Structure lives in this payload, so the sidebar, route guard
+      // and every location dropdown must re-read it now rather than up to a
+      // minute later when the flags query goes stale on its own.
+      await queryClient.invalidateQueries({ queryKey: ['company', 'feature-flags'] });
       toast.success('Settings saved');
     } catch (e: any) {
       toast.error(e?.data?.error || e.message || 'Failed to save settings');

@@ -1,10 +1,12 @@
 import { useLocationContext } from '@/lib/locationContext';
-import { useListOutlets } from '@workspace/api-client-react';
+import { useAllOutlets } from '@/lib/locationStructure';
 import Sales from '@/pages/headoffice/Sales';
 
 export default function SalesPOS() {
   const { locationState } = useLocationContext();
-  const { data: outlets = [] } = useListOutlets();
+  // Historical aggregation, not a selector: a warehouse's figures must keep
+  // including sales its child outlets made, whether or not outlets are on show.
+  const { data: outlets = [] } = useAllOutlets();
 
   const { locationType, locationId, locationName } = locationState;
   const isAll       = locationType === 'all';

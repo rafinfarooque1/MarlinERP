@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { customFetch } from '@workspace/api-client-react';
 
@@ -47,6 +48,33 @@ export function useFeatureFlags() {
 export function useOutletsEnabled(): { outletsEnabled: boolean; isLoading: boolean } {
   const { flags, isLoading } = useFeatureFlags();
   return { outletsEnabled: flags.outletsEnabled, isLoading };
+}
+
+/**
+ * Clears a location filter that is still pointing at an outlet once Outlet
+ * Management has been switched off.
+ *
+ * Hiding the option is not enough on its own. A filter still *holding* an outlet
+ * value keeps scoping the page to that outlet just as the control to clear it
+ * disappears — every total on screen would quietly understate, with nothing left
+ * in the UI to explain or undo it. Hiding must remove the affordance, never the
+ * data.
+ *
+ * The reset runs in an effect rather than during render, so it stays a state
+ * update instead of a side effect in the render path.
+ *
+ * @param isOutletSelected whether the current value refers to an outlet
+ * @param clear            resets the filter to its neutral, non-outlet value
+ */
+export function useClearOutletSelection(isOutletSelected: boolean, clear: () => void): void {
+  const { outletsEnabled } = useOutletsEnabled();
+  // Latest-callback ref: callers pass an inline arrow, so depending on `clear`
+  // directly would re-run the effect on every render.
+  const clearRef = useRef(clear);
+  clearRef.current = clear;
+  useEffect(() => {
+    if (!outletsEnabled && isOutletSelected) clearRef.current();
+  }, [outletsEnabled, isOutletSelected]);
 }
 
 export const OUTLETS_LEGACY_NOTE =

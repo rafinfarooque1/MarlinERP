@@ -7,6 +7,7 @@ export * from "./purchases";
 export * from "./production";
 export * from "./transfers";
 export * from "./sales";
+export * from "./invoiceShareLinks";
 export * from "./hr";
 export * from "./accounts";
 export * from "./coupons";
