@@ -40,3 +40,4 @@
 - [Invoice numbering vs sequence](invoice-numbering-sequence.md) — renumbering documents strands the allocator counter and bricks all new creates once a unique index exists; read-only audits can't see it.
 - [Sale cancellation](sale-cancellation.md) — a terminal state obliges EVERY write path (payments, returns) to refuse it after the row lock; filtering it from reports is not enough.
 - [Opt-in list paging](list-paging.md) — never default-cap a list endpoint the UI reads wholesale; in-memory slicing after a full fetch is pure downside.
+- [Text→DATE conversion](date-column-conversion.md) — after converting, every `col <> ''` guard becomes a live 22007; `$1 = ''` param guards are fine. Read-only audits never see it.
