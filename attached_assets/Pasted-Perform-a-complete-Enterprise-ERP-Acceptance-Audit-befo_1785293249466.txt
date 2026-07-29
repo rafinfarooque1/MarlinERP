@@ -1,0 +1,572 @@
+Perform a complete Enterprise ERP Acceptance Audit before marking the implementation as complete.
+
+Do NOT modify code yet.
+
+Your job is to verify the entire ERP end-to-end exactly like an ERP implementation consultant performing User Acceptance Testing (UAT).
+
+========================
+1. MASTER DATA
+========================
+
+Verify:
+
+• Company Settings
+• GST Settings
+• Warehouses
+• Head Office
+• Employees
+• Customers
+• Vendors
+• Units
+• Raw Materials
+• Packing Materials
+• SKU Items
+• Item Prices
+• Chart of Accounts
+• Ledger Creation
+
+Confirm every master is connected correctly.
+
+========================
+2. PURCHASE FLOW
+========================
+
+Test complete purchase flow.
+
+Purchase
+↓
+
+Stock Increase
+
+↓
+
+Batch Creation
+
+↓
+
+Inventory Valuation
+
+↓
+
+Accounting Entries
+
+↓
+
+Reports
+
+↓
+
+Dashboard
+
+Verify:
+
+• Purchase Invoice
+• GST
+• Batch
+• Manufacture Date
+• Expiry
+• FIFO
+• FEFO
+• Ledger Posting
+
+========================
+3. PRODUCTION FLOW
+========================
+
+Verify production end-to-end.
+
+Raw Material
+
++
+
+Packing Material
+
+↓
+
+Production Batch
+
+↓
+
+SKU
+
+↓
+
+Stock Increase
+
+↓
+
+Accounting
+
+↓
+
+Reports
+
+↓
+
+Dashboard
+
+Confirm:
+
+• Material Consumption
+
+• Packing Consumption
+
+• Labour Cost
+
+• Overhead
+
+• Cost Per Unit
+
+• Inventory Valuation
+
+========================
+4. SALES FLOW
+========================
+
+Verify:
+
+Quotation (if available)
+
+↓
+
+POS Sale
+
+↓
+
+Invoice
+
+↓
+
+Stock Reduction
+
+↓
+
+FIFO
+
+↓
+
+Ledger
+
+↓
+
+Profit
+
+↓
+
+Dashboard
+
+↓
+
+Reports
+
+Verify customer payment.
+
+Cash
+
+UPI
+
+Bank
+
+Credit
+
+Outstanding
+
+GST
+
+========================
+5. STOCK TRANSFER
+========================
+
+Verify every transfer case.
+
+Same GSTIN
+
+Different GSTIN Same State
+
+Different GSTIN Different State
+
+Confirm:
+
+Dispatch
+
+↓
+
+In Transit
+
+↓
+
+Receive
+
+↓
+
+Completed
+
+Verify:
+
+• Source stock decreases
+
+• Destination stock increases
+
+• In Transit stock
+
+• Inventory valuation
+
+• Stock Ledger
+
+• Reports
+
+• Dashboard
+
+Different GSTIN:
+
+Verify automatic
+
+Sales Invoice
+
+Purchase Invoice
+
+GST Posting
+
+Accounting
+
+Branch Transfer Ledger
+
+Do NOT count internal transfers as customer sales.
+
+========================
+6. STOCK
+========================
+
+Verify:
+
+Warehouse Stock
+
+Raw Materials
+
+Packing Materials
+
+SKU
+
+Reserved Qty
+
+Available Qty
+
+In Transit Qty
+
+Batch Qty
+
+Expiry
+
+Near Expiry
+
+Inventory Valuation
+
+========================
+7. PAYROLL
+========================
+
+Verify:
+
+Attendance
+
+↓
+
+Salary Generation
+
+↓
+
+Payroll
+
+↓
+
+Indirect Expense
+
+↓
+
+Accounting
+
+↓
+
+Profit & Loss
+
+↓
+
+Reports
+
+Verify:
+
+Advance Salary
+
+Leave
+
+PF
+
+ESI
+
+Salary Slip
+
+========================
+8. ACCOUNTS
+========================
+
+Verify:
+
+Chart of Accounts
+
+Ledger
+
+Payments
+
+Receipts
+
+Cash Book
+
+Bank Book
+
+Day Book
+
+Trial Balance
+
+Profit & Loss
+
+Balance Sheet
+
+GST Summary
+
+GST Returns
+
+Reconciliation
+
+Confirm every operational transaction automatically creates correct accounting entries.
+
+========================
+9. DASHBOARD
+========================
+
+Verify dashboard values are correct.
+
+Sales
+
+Purchases
+
+Production
+
+Inventory Value
+
+Cash
+
+Bank
+
+Expenses
+
+Warehouse Wise Sales
+
+Warehouse Wise Purchases
+
+Warehouse Wise Profit
+
+Top Selling
+
+Dead Stock
+
+Near Expiry
+
+Pending Payments
+
+Pending Receivables
+
+Pending Payables
+
+Recent Activities
+
+========================
+10. REPORTS
+========================
+
+Verify every report.
+
+Sales
+
+Purchase
+
+Production
+
+Inventory
+
+Stock
+
+Transfer
+
+GST
+
+Payroll
+
+Expenses
+
+Cash
+
+Bank
+
+Ledger
+
+Trial Balance
+
+Profit & Loss
+
+Balance Sheet
+
+Verify totals match source transactions exactly.
+
+========================
+11. PERMISSIONS
+========================
+
+Verify every permission.
+
+View
+
+Add
+
+Edit
+
+Delete
+
+Download
+
+Confirm hidden modules cannot be accessed through direct URLs or APIs.
+
+========================
+12. LOCATION SECURITY
+========================
+
+Verify location-based access.
+
+Head Office
+
+Warehouse
+
+Confirm:
+
+Warehouse users only see their assigned warehouse.
+
+Customers are warehouse-specific.
+
+Vendors are warehouse-specific.
+
+Cash Balance is warehouse-specific.
+
+Sales are warehouse-specific.
+
+Purchases are warehouse-specific.
+
+Reports are warehouse-specific.
+
+Head Office can view all warehouses.
+
+========================
+13. GST
+========================
+
+Verify:
+
+GSTR-1
+
+GSTR-3B
+
+Input GST
+
+Output GST
+
+Interstate
+
+Intrastate
+
+Transfer GST
+
+Purchase GST
+
+Sales GST
+
+========================
+14. ACCOUNTING VALIDATION
+========================
+
+Verify:
+
+Every transaction produces balanced double-entry accounting.
+
+Trial Balance always balances.
+
+Profit & Loss matches ledger.
+
+Balance Sheet balances.
+
+No duplicate postings.
+
+No missing postings.
+
+========================
+15. DATABASE
+========================
+
+Verify:
+
+No orphan records.
+
+No duplicate stock.
+
+No duplicate accounting.
+
+No broken foreign keys.
+
+No inconsistent quantities.
+
+========================
+16. PERFORMANCE
+========================
+
+Verify:
+
+Search
+
+Filters
+
+Pagination
+
+Exports
+
+PDF
+
+Printing
+
+========================
+17. FINAL REPORT
+========================
+
+Produce an audit report with:
+
+PASS
+
+WARNING
+
+FAIL
+
+for every module.
+
+List every bug found.
+
+List every inconsistency.
+
+List every missing feature.
+
+List every security issue.
+
+List every accounting issue.
+
+List every stock issue.
+
+Do not fix anything automatically.
+
+Only produce the audit report first.
+
+The ERP should only be marked complete if every module passes enterprise-level validation.
