@@ -6,7 +6,7 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   customFetch, useGetStockValuation, useGetExpiryReport, useGetReorderReport,
-  useGetMovementAnalysis, useListWarehouses, useListOutlets, useGstTransfersReport,
+  useGetMovementAnalysis, useListWarehouses, useGstTransfersReport,
   type StockProductKind,
 } from '@workspace/api-client-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -27,7 +27,6 @@ const today = () => new Date().toLocaleDateString('en-IN');
 // ── Stock valuation ───────────────────────────────────────────────────────────
 function ValuationReport({ canDownload }: { canDownload: boolean }) {
   const { data: warehouses = [] } = useListWarehouses();
-  const { data: outlets = [] } = useListOutlets();
   const [materialType, setMaterialType] = useState<string>('all');
   const [branchType, setBranchType] = useState<string>('all');
   const [branchId, setBranchId] = useState<string>('');
@@ -57,7 +56,7 @@ function ValuationReport({ canDownload }: { canDownload: boolean }) {
     return [...m.values()].sort((a, b) => b.value - a.value);
   }, [rows]);
 
-  const branchOptions = branchType === 'warehouse' ? warehouses : branchType === 'outlet' ? outlets : [];
+  const branchOptions = branchType === 'warehouse' ? warehouses : [];
 
   return (
     <div className="space-y-4">
@@ -78,7 +77,6 @@ function ValuationReport({ canDownload }: { canDownload: boolean }) {
             <SelectItem value="all">All Locations</SelectItem>
             <SelectItem value="headoffice">Head Office</SelectItem>
             <SelectItem value="warehouse">Warehouse</SelectItem>
-            <SelectItem value="outlet">Outlet</SelectItem>
           </SelectContent>
         </Select>
         {branchOptions.length > 0 && (
@@ -193,7 +191,6 @@ function ValuationReport({ canDownload }: { canDownload: boolean }) {
 // ── Near Expiry report ────────────────────────────────────────────────────────
 function NearExpiryReport({ canDownload }: { canDownload: boolean }) {
   const { data: warehouses = [] } = useListWarehouses();
-  const { data: outlets = [] } = useListOutlets();
   const [branchType, setBranchType] = useState<string>('');
   const [branchId, setBranchId] = useState<string>('');
   const [from, setFrom] = useState('');
@@ -211,7 +208,7 @@ function NearExpiryReport({ canDownload }: { canDownload: boolean }) {
   const summary = data?.summary;
   const valueAtRisk = summary?.nearExpiryValue ?? 0;
 
-  const branchOptions = branchType === 'warehouse' ? warehouses : branchType === 'outlet' ? outlets : [];
+  const branchOptions = branchType === 'warehouse' ? warehouses : [];
 
   return (
     <div className="space-y-4">
@@ -222,7 +219,6 @@ function NearExpiryReport({ canDownload }: { canDownload: boolean }) {
           <SelectContent>
             <SelectItem value="">All Locations</SelectItem>
             <SelectItem value="warehouse">Warehouse</SelectItem>
-            <SelectItem value="outlet">Outlet</SelectItem>
           </SelectContent>
         </Select>
         {branchOptions.length > 0 && (
@@ -318,7 +314,6 @@ function NearExpiryReport({ canDownload }: { canDownload: boolean }) {
 // ── Expired Stock report ──────────────────────────────────────────────────────
 function ExpiredReport({ canDownload }: { canDownload: boolean }) {
   const { data: warehouses = [] } = useListWarehouses();
-  const { data: outlets = [] } = useListOutlets();
   const [branchType, setBranchType] = useState<string>('');
   const [branchId, setBranchId] = useState<string>('');
   const [from, setFrom] = useState('');
@@ -335,7 +330,7 @@ function ExpiredReport({ canDownload }: { canDownload: boolean }) {
   const summary = data?.summary;
   const expiredValue = summary?.expiredValue ?? 0;
 
-  const branchOptions = branchType === 'warehouse' ? warehouses : branchType === 'outlet' ? outlets : [];
+  const branchOptions = branchType === 'warehouse' ? warehouses : [];
 
   return (
     <div className="space-y-4">
@@ -346,7 +341,6 @@ function ExpiredReport({ canDownload }: { canDownload: boolean }) {
           <SelectContent>
             <SelectItem value="">All Locations</SelectItem>
             <SelectItem value="warehouse">Warehouse</SelectItem>
-            <SelectItem value="outlet">Outlet</SelectItem>
           </SelectContent>
         </Select>
         {branchOptions.length > 0 && (
@@ -427,7 +421,6 @@ function ExpiredReport({ canDownload }: { canDownload: boolean }) {
 // ── Slow / Dead Stock ─────────────────────────────────────────────────────────
 function MovementReport({ canDownload }: { canDownload: boolean }) {
   const { data: warehouses = [] } = useListWarehouses();
-  const { data: outlets = [] } = useListOutlets();
   const [branchType, setBranchType] = useState<string>('');
   const [branchId, setBranchId] = useState<string>('');
   const [classFilter, setClassFilter] = useState<string>('all');
@@ -442,7 +435,7 @@ function MovementReport({ canDownload }: { canDownload: boolean }) {
   const summary = data?.summary ?? [];
   const ledgerStart = data?.ledgerStart;
 
-  const branchOptions = branchType === 'warehouse' ? warehouses : branchType === 'outlet' ? outlets : [];
+  const branchOptions = branchType === 'warehouse' ? warehouses : [];
 
   const classMap: Record<string, string> = {
     fast: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
@@ -460,7 +453,6 @@ function MovementReport({ canDownload }: { canDownload: boolean }) {
           <SelectContent>
             <SelectItem value="">All Locations</SelectItem>
             <SelectItem value="warehouse">Warehouse</SelectItem>
-            <SelectItem value="outlet">Outlet</SelectItem>
           </SelectContent>
         </Select>
         {branchOptions.length > 0 && (

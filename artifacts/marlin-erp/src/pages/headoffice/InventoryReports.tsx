@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   useGetStockValuation, useGetExpiryReport, useGetReorderReport, useGetMovementAnalysis,
-  useListWarehouses, useListOutlets,
+  useListWarehouses,
   type ValuationRow, type ExpiryReportRow, type ReorderRow, type StockProductKind,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -51,7 +51,6 @@ export default function InventoryReports() {
   const [movementClass, setMovementClass] = useState<string>('all');
 
   const { data: warehouses = [] } = useListWarehouses();
-  const { data: outlets = [] } = useListOutlets();
 
   const valuationParams: any = {};
   if (materialType !== 'all') valuationParams.materialType = materialType as StockProductKind;
@@ -81,9 +80,9 @@ export default function InventoryReports() {
   const movement = useGetMovementAnalysis(movementParams);
   const reorder = useGetReorderReport();
 
-  const valuationBranchOptions = branchType === 'warehouse' ? warehouses : branchType === 'outlet' ? outlets : [];
-  const expiryBranchOptions = expiryBranchType === 'warehouse' ? warehouses : expiryBranchType === 'outlet' ? outlets : [];
-  const movementBranchOptions = movementBranchType === 'warehouse' ? warehouses : movementBranchType === 'outlet' ? outlets : [];
+  const valuationBranchOptions = branchType === 'warehouse' ? warehouses : [];
+  const expiryBranchOptions = expiryBranchType === 'warehouse' ? warehouses : [];
+  const movementBranchOptions = movementBranchType === 'warehouse' ? warehouses : [];
 
   if (!perms.isLoading && !perms.canView) {
     return (
@@ -189,7 +188,6 @@ export default function InventoryReports() {
                   <SelectItem value="all">All Locations</SelectItem>
                   <SelectItem value="headoffice">Head Office</SelectItem>
                   <SelectItem value="warehouse">Warehouse</SelectItem>
-                  <SelectItem value="outlet">Outlet</SelectItem>
                 </SelectContent>
               </Select>
               {valuationBranchOptions.length > 0 && (
@@ -323,7 +321,6 @@ export default function InventoryReports() {
                 <SelectContent>
                   <SelectItem value="">All Locations</SelectItem>
                   <SelectItem value="warehouse">Warehouse</SelectItem>
-                  <SelectItem value="outlet">Outlet</SelectItem>
                 </SelectContent>
               </Select>
               {expiryBranchOptions.length > 0 && (
@@ -417,7 +414,6 @@ export default function InventoryReports() {
                 <SelectContent>
                   <SelectItem value="">All Locations</SelectItem>
                   <SelectItem value="warehouse">Warehouse</SelectItem>
-                  <SelectItem value="outlet">Outlet</SelectItem>
                 </SelectContent>
               </Select>
               {expiryBranchOptions.length > 0 && (
@@ -509,7 +505,6 @@ export default function InventoryReports() {
                 <SelectContent>
                   <SelectItem value="">All Locations</SelectItem>
                   <SelectItem value="warehouse">Warehouse</SelectItem>
-                  <SelectItem value="outlet">Outlet</SelectItem>
                 </SelectContent>
               </Select>
               {movementBranchOptions.length > 0 && (
