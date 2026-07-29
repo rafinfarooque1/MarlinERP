@@ -555,11 +555,13 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
           WHERE ${conds.join(" AND ")}`, params); })(),
     // expiring soon — batches expiring within 30 days that still hold stock
     (() => {
-      // expiry_date is a real DATE column (converted from text by
-      // text_date_columns_to_date_v1). Comparing it to '' would make Postgres
-      // cast '' to date and raise 22007, so NULL is the only "no expiry" test.
+      // Comparing expiry_date to '' would make Postgres cast '' to date and
+      // raise 22007, so NULL is the only "no expiry" test. The ::date casts are
+      // deliberate: they are a no-op while the column is a real DATE, and they
+      // keep the comparison legal if it is ever text again (a bare
+      // `text >= CURRENT_DATE` has no operator and 500s the whole dashboard).
       const conds = ["sb.quantity::numeric > 0", "sb.expiry_date IS NOT NULL",
-        "sb.expiry_date >= CURRENT_DATE", "sb.expiry_date <= CURRENT_DATE + INTERVAL '30 day'"];
+        "sb.expiry_date::date >= CURRENT_DATE", "sb.expiry_date::date <= CURRENT_DATE + INTERVAL '30 day'"];
       const params: unknown[] = [];
       if (effLocType && effLocId != null) {
         params.push(effLocType); conds.push(`sb.branch_type = $${params.length}`);

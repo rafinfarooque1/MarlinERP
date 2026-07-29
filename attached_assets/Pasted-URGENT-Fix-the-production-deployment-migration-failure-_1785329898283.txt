@@ -1,0 +1,106 @@
+URGENT: Fix the production deployment migration failure safely.
+
+DO NOT overwrite, replace, reset, truncate, recreate, or copy the development database over the production database.
+
+The Replit deployment is currently failing migration validation with:
+
+ALTER TABLE "stock_batches"
+ALTER COLUMN "mfg_date" SET DATA TYPE date;
+
+Error:
+column "mfg_date" cannot be cast automatically to type date
+
+Production data must be preserved completely.
+
+TASK:
+
+1. Inspect the DEVELOPMENT and PRODUCTION database schema for:
+   - stock_batches.mfg_date
+   - stock_batches.expiry_date
+   - any related manufacturing/expiry date columns.
+
+2. Inspect the actual existing values in production before changing anything.
+
+3. Determine why PostgreSQL cannot automatically cast mfg_date to DATE.
+
+4. Create a SAFE, IDEMPOTENT migration that converts existing valid values explicitly.
+
+If mfg_date currently contains valid date strings, use an explicit PostgreSQL USING conversion such as:
+
+ALTER TABLE stock_batches
+ALTER COLUMN mfg_date TYPE date
+USING NULLIF(TRIM(mfg_date::text), '')::date;
+
+But DO NOT blindly execute this example.
+
+First inspect the actual production values and choose the correct conversion for the formats that really exist.
+
+5. Detect invalid/non-date values BEFORE migration.
+
+Do not silently delete or corrupt an invalid value.
+
+If invalid values exist:
+- report them,
+- determine how they were created,
+- safely normalize them only where the intended date can be determined,
+- otherwise stop and ask me before modifying ambiguous production data.
+
+6. Check expiry_date for the same migration problem so deployment does not simply fail on the next column afterward.
+
+7. Search ALL pending/generated migrations for other unsafe datatype conversions that could fail against existing production data.
+
+8. Preserve:
+   - all sales
+   - purchases
+   - customers
+   - vendors
+   - stock
+   - batches
+   - production
+   - transfers
+   - payroll
+   - rent
+   - expenses
+   - vouchers
+   - Chart of Accounts
+   - GST data
+   - cash/bank balances
+   - all historical transactions
+
+9. DO NOT:
+   - copy development data into production
+   - reset production
+   - delete production rows
+   - recreate production tables
+   - drop tables/columns containing data
+   - modify financial figures just to make the migration pass
+
+10. Before changing production, take/verify a restorable database backup.
+
+11. After fixing the migration, run migration validation again.
+
+12. Then verify database integrity:
+   - row counts remain intact
+   - stock quantities remain intact
+   - batch quantities remain intact
+   - Trial Balance still balances
+   - Balance Sheet still balances
+   - sales/purchase totals are unchanged
+   - customer/vendor balances are unchanged
+   - cash/bank balances are unchanged
+
+13. Only after all checks pass, retry the deployment.
+
+IMPORTANT:
+This is a production-data-preservation task. Fix the migration, NOT the production data by replacing it with development data.
+
+At the end report:
+- exact root cause
+- problematic production values found
+- migration SQL used
+- before/after row counts
+- financial reconciliation results
+- whether production data changed
+- whether deployment succeeded
+
+Do not make unrelated ERP changes during this task.

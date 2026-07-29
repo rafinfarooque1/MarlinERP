@@ -49,4 +49,5 @@
 - [Chart of accounts presentation](chart-of-accounts.md) — statements are signed to each section's natural side (sign ≠ Dr/Cr); postable parents (Cash/Bank) ≠ sum of children; `code` must never be client-writable.
 - [Partial-apply failure contracts](partial-apply-contracts.md) — "nothing was changed" must be computed from what actually ran, never asserted in the catch; absent info means assume the worst; only fault injection tests it.
 - [Daily expense accrual](daily-expense-accrual.md) — rent+salary hit the P&L daily; approval is a delta true-up that can flip sides, locks the month; revision deletes+regenerates the whole unapproved month
+- [Publish schema diff](publish-schema-diff.md) — publish diffs the two live DBs (not schema.ts); bare text→date can NEVER apply, date→text applies silently; hold dev at prod's type, publish, then converge.
 - [One outstanding figure](single-outstanding-figure.md) — the owning module must export BOTH the in-process calc and SQL builders; reports and UIs hand-roll `total−paid` and silently drop credit notes.
