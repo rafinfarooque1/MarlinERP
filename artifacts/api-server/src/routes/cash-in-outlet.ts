@@ -3,6 +3,7 @@ import { requireModuleAction, requireModuleView } from "../middleware/permission
 import { pool } from "@workspace/db";
 import { logActivity } from "../lib/audit";
 import { nextVoucherNumber } from "../lib/voucherNumber";
+import { isIsoDate } from "../lib/dateInput";
 import { getUserDataScope } from "../lib/dataScope";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 
@@ -221,6 +222,7 @@ router.post("/cash-in-outlet/deposits", requireModuleAction("page:/accounts/cash
   const parsedAmount = Number(amount);
   if (!parsedAmount || parsedAmount <= 0) { res.status(400).json({ error: "amount must be positive" }); return; }
   if (!depositDate) { res.status(400).json({ error: "depositDate is required" }); return; }
+  if (!isIsoDate(depositDate)) { res.status(400).json({ error: "depositDate must be a real calendar date in YYYY-MM-DD form" }); return; }
 
   const isWarehouse = !!warehouseId;
   // Cash cannot be banked out of a retired outlet — its till is frozen along
@@ -351,6 +353,7 @@ router.post("/cash-in-outlet/deposits/:id/reconcile", requireModuleAction(["page
 
   if (!destinationBankLedgerId) { res.status(400).json({ error: "destinationBankLedgerId is required" }); return; }
   if (!settlementDate) { res.status(400).json({ error: "settlementDate is required" }); return; }
+  if (!isIsoDate(settlementDate)) { res.status(400).json({ error: "settlementDate must be a real calendar date in YYYY-MM-DD form" }); return; }
 
   const parsedCharges = Number(charges ?? 0);
   if (parsedCharges < 0) { res.status(400).json({ error: "charges cannot be negative" }); return; }

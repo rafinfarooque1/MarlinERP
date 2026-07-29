@@ -5,12 +5,15 @@ import { nextVoucherNumber, VOUCHER_TYPE_LABELS } from "../lib/voucherNumber";
 import { logActivity } from "../lib/audit";
 import { lineTaxHeads } from "../lib/gst";
 import { clearsThroughBank } from "../lib/paymentModes";
+import { isIsoDate } from "../lib/dateInput";
 
 const router = Router();
 
 const JV_TYPES = new Set(["journal", "contra", "credit_note", "debit_note"]);
 const round2 = (n: number) => Math.round(n * 100) / 100;
-const isDate = (s: unknown): s is string => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+// Shape AND calendar validity (rejects 2026-02-30) — these values reach real
+// DATE columns, where an impossible date raises 22007 instead of storing text.
+const isDate = (s: unknown): s is string => isIsoDate(s);
 /**
  * A pg `date` column parses to a Date at LOCAL midnight. `toISOString()` on that
  * would shift the day backwards in any timezone west of UTC, so read the local

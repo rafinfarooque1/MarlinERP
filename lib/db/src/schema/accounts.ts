@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, numeric, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, numeric, integer, date } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -26,7 +26,8 @@ export const expensesTable = pgTable("expenses", {
   ledgerAccountId: integer("ledger_account_id").notNull().references(() => accountLedgersTable.id),
   paymentAccountId: integer("payment_account_id").notNull().references(() => cashBankAccountsTable.id),
   amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
-  expenseDate: text("expense_date").notNull(),
+  // Real DATE column (mode 'string' keeps the 'YYYY-MM-DD' API contract).
+  expenseDate: date("expense_date", { mode: "string" }).notNull(),
   description: text("description"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

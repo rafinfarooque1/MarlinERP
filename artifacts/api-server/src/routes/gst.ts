@@ -3,12 +3,18 @@ import { pool } from "@workspace/db";
 import { buildDerivedPostings } from "./journal";
 import { lineTaxHeads } from "../lib/gst";
 import { requireModuleView } from "../middleware/permissions";
+import { isIsoDate } from "../lib/dateInput";
 
 const router: IRouter = Router();
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
-const isDate = (s: unknown): s is string => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
-const isMonth = (s: unknown): s is string => typeof s === "string" && /^\d{4}-\d{2}$/.test(s);
+// Shape AND calendar validity (rejects 2026-02-30) — these values reach real
+// DATE columns, where an impossible date raises 22007 instead of storing text.
+const isDate = (s: unknown): s is string => isIsoDate(s);
+// Month 13 has to fail here: the value is expanded into `${month}-01` and
+// compared against real DATE columns, which reject an impossible date.
+const isMonth = (s: unknown): s is string =>
+  typeof s === "string" && /^\d{4}-\d{2}$/.test(s) && isIsoDate(`${s}-01`);
 const iso = (d: unknown): string => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
 
 /** Append `AND col >= / <= $n` clauses for an optional date range. */

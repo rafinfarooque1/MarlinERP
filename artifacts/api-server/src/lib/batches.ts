@@ -14,6 +14,7 @@
 // callers can choose their atomicity.
 
 import { batchReservedSql, insufficientStockMessage } from "./reservations";
+import { dateOrNull } from "./dateInput";
 
 export type Queryable = { query: (text: string, params?: any[]) => Promise<{ rows: any[] }> };
 
@@ -56,7 +57,9 @@ export async function creditBatch(c: Queryable, args: {
        mrp         = COALESCE(EXCLUDED.mrp, stock_batches.mrp),
        updated_at  = now()`,
     [args.itemId, args.materialType ?? "item", args.branchType, args.branchId, args.batchNumber,
-     args.mfgDate ?? null, args.expiryDate ?? null, r3(args.quantity), r2(args.unitCost ?? 0),
+     // mfg_date / expiry_date are real DATE columns: a blank from a form field
+     // has to reach Postgres as NULL, not '' (which raises 22007).
+     dateOrNull(args.mfgDate), dateOrNull(args.expiryDate), r3(args.quantity), r2(args.unitCost ?? 0),
      args.source ?? null, args.sourceId ?? null,
      args.barcode ?? null, args.mrp != null && args.mrp > 0 ? r2(args.mrp) : null]
   );

@@ -15,17 +15,17 @@ import { pool } from "@workspace/db";
 import { requireModuleView } from "../middleware/permissions";
 import { lineTaxHeads } from "../lib/gst";
 import { creditAdjustmentsExpr, outstandingExpr, computePaymentPosition } from "../lib/salePaymentPosition";
+import { isIsoDate } from "../lib/dateInput";
 
 const router = Router();
 
-const dateRe = /^\d{4}-\d{2}-\d{2}$/;
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 
 function parseRange(req: { query: Record<string, unknown> }): { from: string; to: string } | null {
   const from = typeof req.query.from === "string" ? req.query.from : "";
   const to = typeof req.query.to === "string" ? req.query.to : "";
-  if ((from && !dateRe.test(from)) || (to && !dateRe.test(to))) return null;
+  if ((from && !isIsoDate(from)) || (to && !isIsoDate(to))) return null;
   return { from, to };
 }
 

@@ -3,6 +3,7 @@ import { requireModuleAction, requireModuleView } from "../middleware/permission
 import { pool } from "@workspace/db";
 import { logActivity } from "../lib/audit";
 import { nextVoucherNumber } from "../lib/voucherNumber";
+import { optionalIsoDate } from "../lib/dateInput";
 import { COLLECTION_METHODS, paymentModeLabel } from "../lib/paymentModes";
 import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 import { callerLocation } from "../lib/moneyScope";
@@ -95,7 +96,11 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
     // Allow electronic without reference — it's useful but not mandatory
   }
 
-  const pDate = paymentDate || new Date().toISOString().split("T")[0];
+  // payment_date is a real DATE column: blank falls back to today, malformed is
+  // a 400 rather than a 22007 from the driver mid-transaction.
+  const pDateInput = optionalIsoDate(paymentDate);
+  if (!pDateInput.ok) { res.status(400).json({ error: "paymentDate must be a real calendar date in YYYY-MM-DD form" }); return; }
+  const pDate = pDateInput.value ?? new Date().toISOString().split("T")[0];
   const createdBy = (req as any).user?.username ?? "system";
 
   const client = await pool.connect();

@@ -4,6 +4,7 @@ import { requireModuleView, requireModuleAction } from "../middleware/permission
 import { eq } from "drizzle-orm";
 import { CreateProductionBody } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
+import { isIsoDate, optionalIsoDate } from "../lib/dateInput";
 import { creditBatch, consumeBatches, debitBatchByNumber, restoreBatches, updateAvgCostOnInbound, inboundCostForItem, inboundCostForMaterial, type BatchBreakdownEntry } from "../lib/batches";
 import { writeStockLedger } from "../lib/stockLedger";
 import { deductMaterialAt, creditMaterialAt, isMaterialKind } from "../lib/materialStock";
@@ -184,8 +185,7 @@ router.get("/productions", requireModuleView("page:/production/production"), asy
 router.get("/productions/reports", requireModuleView("page:/production/reports"), async (req, res): Promise<void> => {
   const from = typeof req.query.from === "string" ? req.query.from : "";
   const to = typeof req.query.to === "string" ? req.query.to : "";
-  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
-  if ((from && !dateRe.test(from)) || (to && !dateRe.test(to))) {
+  if ((from && !isIsoDate(from)) || (to && !isIsoDate(to))) {
     res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" });
     return;
   }
@@ -481,6 +481,14 @@ router.post("/productions", requireModuleAction("page:/production/production", "
   //  mid-flow failure rolls back every stock/cost side effect together —
   //  including the labour allocation and the accounting posting, so the books
   //  can never disagree with the stock move)
+  // mfg_date / expiry_date are real DATE columns. Validate the raw body before
+  // the transaction opens so a malformed date is a 400 here, not a 22007 that
+  // rolls back a half-written production run.
+  const mfgInput = optionalIsoDate(rawBody.mfgDate);
+  const expiryInput = optionalIsoDate(rawBody.expiryDate);
+  if (!mfgInput.ok) { res.status(400).json({ error: "mfgDate must be a real calendar date in YYYY-MM-DD form" }); return; }
+  if (!expiryInput.ok) { res.status(400).json({ error: "expiryDate must be a real calendar date in YYYY-MM-DD form" }); return; }
+
   const client = await pool.connect();
   let rowId = 0;
   let createdAt: Date | null = null;
@@ -512,8 +520,8 @@ router.post("/productions", requireModuleAction("page:/production/production", "
 
     // Batch identity: user-provided or the existing display convention (B-0001)
     batchNumber = (rawBody.batchNumber ?? "").trim() || defaultBatchNumber(rowId);
-    mfgDate = rawBody.mfgDate || parsed.data.productionDate || null;
-    expiryDate = rawBody.expiryDate || null;
+    mfgDate = mfgInput.value ?? parsed.data.productionDate ?? null;
+    expiryDate = expiryInput.value;
     await client.query(
       `UPDATE productions SET batch_number = $1, mfg_date = $2, expiry_date = $3,
          material_cost = $4, rm_cost = $5, pm_cost = $6,

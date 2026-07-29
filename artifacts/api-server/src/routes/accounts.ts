@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db, pool, accountLedgersTable, cashBankAccountsTable, expensesTable, salesTable, purchasesTable, warehousesTable } from "@workspace/db";
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
+import { isIsoDate } from "../lib/dateInput";
 import { eq, and, sql, gte, lte } from "drizzle-orm";
 import {
   CreateAccountLedgerBody, UpdateAccountLedgerBody,
@@ -380,6 +381,9 @@ router.post("/accounts/payments", requireModuleAction("page:/accounts/vouchers",
   if (!paymentDate || !paidFromLedgerId || !paidToLedgerId || !amount) {
     res.status(400).json({ error: "paymentDate, paidFromLedgerId, paidToLedgerId and amount are required" }); return;
   }
+  if (!isIsoDate(paymentDate)) {
+    res.status(400).json({ error: "paymentDate must be a real calendar date in YYYY-MM-DD form" }); return;
+  }
   // A branch user may only pay out of its own cash box, and never into another
   // location's or Head Office's cash/bank accounts.
   const scope = ownLocationScope((req as any).employee);
@@ -461,6 +465,9 @@ router.post("/accounts/receipts", requireModuleAction("page:/accounts/vouchers",
   };
   if (!receiptDate || !receivedFromLedgerId || !receivedInLedgerId || !amount) {
     res.status(400).json({ error: "receiptDate, receivedFromLedgerId, receivedInLedgerId and amount are required" }); return;
+  }
+  if (!isIsoDate(receiptDate)) {
+    res.status(400).json({ error: "receiptDate must be a real calendar date in YYYY-MM-DD form" }); return;
   }
   // A branch user may only collect into its own cash box.
   const scope = ownLocationScope((req as any).employee);
@@ -854,6 +861,12 @@ function readExpenseExtras(body: any): { category: string; attachmentUrl: string
 router.post("/expenses", requireModuleAction("page:/accounts/expenses", "add"), async (req, res): Promise<void> => {
   const parsed = CreateExpenseBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  // expense_date is a NOT NULL DATE column and the zod schema only checks for a
+  // string, so a blank or impossible date would otherwise reach the driver.
+  if (!isIsoDate(parsed.data.expenseDate)) {
+    res.status(400).json({ error: "expenseDate must be a real calendar date in YYYY-MM-DD form" }); return;
+  }
 
   // Head Office only. This row is paid from a company cash/bank account, which
   // a branch does not operate — a branch records spending through
@@ -1263,6 +1276,9 @@ router.post("/accounts/location-expenses", requireModuleAction("page:/sales/expe
   };
   if (!locationType || !locationId || !expenseLedgerId || !amount || !expenseDate || !description) {
     res.status(400).json({ error: "locationType, locationId, expenseLedgerId, amount, expenseDate and description are required" }); return;
+  }
+  if (!isIsoDate(expenseDate)) {
+    res.status(400).json({ error: "expenseDate must be a real calendar date in YYYY-MM-DD form" }); return;
   }
   const parsedAmount = Number(amount);
   if (!parsedAmount || parsedAmount <= 0) {
@@ -1770,7 +1786,7 @@ router.post("/accounts/opening-balances", requireModuleAction("page:/accounts/ch
   if (!["debit", "credit"].includes(balanceType)) {
     res.status(400).json({ error: "balanceType must be 'debit' or 'credit'" }); return;
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) {
+  if (!isIsoDate(asOfDate)) {
     res.status(400).json({ error: "asOfDate (YYYY-MM-DD) is required" }); return;
   }
 

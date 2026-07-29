@@ -11,6 +11,7 @@ import { writeStockLedger } from "../lib/stockLedger";
 import { deductMaterialAt, creditMaterialAt, isMaterialKind } from "../lib/materialStock";
 import { resolveActingLocation, locationLabel, type ProdLocation } from "../lib/productionCosting";
 import { getUserDataScope, scopeLocationTypeWhere } from "../lib/dataScope";
+import { isIsoDate } from "../lib/dateInput";
 
 const router = Router();
 
@@ -41,7 +42,7 @@ const KIND_LABEL: Record<string, string> = {
  * line so it can be fixed without guessing.
  */
 function batchIdentityError(lines: any[], maps: NameMaps): string | null {
-  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+
   for (let i = 0; i < lines.length; i++) {
     const li = lines[i];
     const kind = String(li?.materialType ?? "material");
@@ -54,8 +55,9 @@ function batchIdentityError(lines: any[], maps: NameMaps): string | null {
     if (!batchNumber) return `${at}: batch number is required`;
     if (!mfgDate) return `${at}: manufacturing date is required`;
     if (!expiryDate) return `${at}: expiry date is required`;
-    if (!dateRe.test(mfgDate)) return `${at}: manufacturing date must be a date (YYYY-MM-DD)`;
-    if (!dateRe.test(expiryDate)) return `${at}: expiry date must be a date (YYYY-MM-DD)`;
+    // Calendar-checked: these land in stock_batches DATE columns.
+    if (!isIsoDate(mfgDate)) return `${at}: manufacturing date must be a real calendar date (YYYY-MM-DD)`;
+    if (!isIsoDate(expiryDate)) return `${at}: expiry date must be a real calendar date (YYYY-MM-DD)`;
     if (expiryDate < mfgDate) return `${at}: expiry date cannot be before the manufacturing date`;
   }
   return null;

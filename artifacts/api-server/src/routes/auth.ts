@@ -12,6 +12,7 @@
  *    redirect to the forced password-change flow.
  */
 import { Router } from 'express';
+import { optionalIsoDate } from '../lib/dateInput';
 import { pool, db, hierarchiesTable, warehousesTable, outletsTable } from '@workspace/db';
 import { eq } from 'drizzle-orm';
 import { LoginBody } from '@workspace/api-zod';
@@ -279,7 +280,13 @@ router.patch('/auth/profile', async (req, res): Promise<void> => {
   if (workExperience   !== undefined) add('work_experience', JSON.stringify(workExperience));
   if (emergencyContact !== undefined) add('emergency_contact', JSON.stringify(emergencyContact));
   if (personalAddress !== undefined) add('personal_address', personalAddress);
-  if (dateOfBirth    !== undefined) add('date_of_birth', dateOfBirth);
+  // date_of_birth is a real DATE column: an empty profile field must store NULL
+  // rather than '' (22007), and a malformed value is a 400, not a driver error.
+  if (dateOfBirth    !== undefined) {
+    const dob = optionalIsoDate(dateOfBirth);
+    if (!dob.ok) { res.status(400).json({ error: 'dateOfBirth must be a real calendar date in YYYY-MM-DD form' }); return; }
+    add('date_of_birth', dob.value);
+  }
   if (bio            !== undefined) add('bio', bio);
 
   if (sets.length === 0) { res.status(400).json({ error: 'No fields to update' }); return; }

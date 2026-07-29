@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, numeric, integer, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, numeric, integer, boolean, date } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -8,7 +8,7 @@ export const couponsTable = pgTable("coupons", {
   discountType: text("discount_type").notNull(), // percentage, fixed
   discountValue: numeric("discount_value", { precision: 10, scale: 2 }).notNull(),
   validDays: integer("valid_days").notNull(),
-  expiryDate: text("expiry_date"),
+  expiryDate: date("expiry_date", { mode: "string" }),
   isActive: boolean("is_active").notNull().default(true),
   usageCount: integer("usage_count").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

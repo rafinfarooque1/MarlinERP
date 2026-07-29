@@ -1,9 +1,10 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Response } from "express";
 import { pool } from "@workspace/db";
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 import { getUserDataScope, type DataScope } from "../lib/dataScope";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import { logActivity } from "../lib/audit";
+import { isIsoDate } from "../lib/dateInput";
 import {
   runRentAccrual, isPeriodAccrualComplete, rentMonthCoverage, recalcUnapprovedRentAccruals, dailyRentRate,
 } from "../lib/rentAccrual";
@@ -25,6 +26,15 @@ function ymd(v: unknown): string | null {
 }
 const today = () => ymd(new Date())!;
 const daysInMonth = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate();
+
+/** Rejects an impossible from/to before it reaches a DATE comparison (22007). */
+function badDateRange(q: Record<string, string | undefined>, res: Response): boolean {
+  if ((q.from && !isIsoDate(q.from)) || (q.to && !isIsoDate(q.to))) {
+    res.status(400).json({ error: "from/to must be real calendar dates in YYYY-MM-DD form" });
+    return true;
+  }
+  return false;
+}
 
 /**
  * Rent is a warehouse-level record, so scope reduces to the warehouse list.
@@ -297,6 +307,7 @@ router.get("/rent/accruals", requireModuleView(PERM), async (req, res): Promise<
   const conds = [scopeWhere(scope, params, "r.warehouse_id")];
 
   const q = req.query as Record<string, string | undefined>;
+  if (badDateRange(q, res)) return;
   if (q.warehouseId) { params.push(Number(q.warehouseId)); conds.push(`r.warehouse_id = $${params.length}`); }
   if (q.from)        { params.push(q.from);                conds.push(`r.accrual_date >= $${params.length}`); }
   if (q.to)          { params.push(q.to);                  conds.push(`r.accrual_date <= $${params.length}`); }
@@ -494,7 +505,12 @@ router.post("/rent/periods/:warehouseId/:year/:month/pay", requireModuleAction(P
 
   const b = (req.body ?? {}) as Record<string, any>;
   const paymentMode = String(b.paymentMode ?? "cash").toLowerCase();
+  // ymd() only reshapes the value — it does not check the calendar, and this
+  // date lands in payments.payment_date and journal_vouchers.voucher_date.
   const paymentDate = ymd(b.paymentDate) ?? today();
+  if (!isIsoDate(paymentDate)) {
+    res.status(400).json({ error: "paymentDate must be a real calendar date in YYYY-MM-DD form" }); return;
+  }
   const reference = String(b.referenceNumber ?? "");
   const remarks = String(b.remarks ?? "");
 
@@ -630,6 +646,7 @@ router.get("/rent/payments", requireModuleView(PERM), async (req, res): Promise<
   const conds = [scopeWhere(scope, params, "p.warehouse_id")];
 
   const q = req.query as Record<string, string | undefined>;
+  if (badDateRange(q, res)) return;
   if (q.warehouseId) { params.push(Number(q.warehouseId)); conds.push(`p.warehouse_id = $${params.length}`); }
   if (q.year)        { params.push(Number(q.year));        conds.push(`p.year = $${params.length}`); }
   if (q.month)       { params.push(Number(q.month));       conds.push(`p.month = $${params.length}`); }
@@ -748,6 +765,7 @@ router.get("/rent/dashboard", requireModuleView(PERM), async (req, res): Promise
 router.get("/rent/ledger-postings", requireModuleView(PERM), async (req, res): Promise<void> => {
   const scope = await getUserDataScope(req.employee!);
   const q = req.query as Record<string, string | undefined>;
+  if (badDateRange(q, res)) return;
 
   const pa: unknown[] = [];
   const condsA = [scopeWhere(scope, pa, "r.warehouse_id")];

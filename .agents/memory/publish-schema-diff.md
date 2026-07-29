@@ -37,17 +37,34 @@ on an empty table. PostgreSQL has no automatic text→date cast; only an explici
 1. Align the **development** column types back to what production has, with an
    explicit `USING col::text`, in one transaction, verifying values are
    byte-identical before/after (`md5(string_agg(col::text, ',' ORDER BY id))`).
-2. Leave the conversion's `migration_log` entry in place in development, so an
-   api-server restart does not immediately re-convert and re-break the diff.
+2. Hold development at the production type with a **development-only env var**
+   the boot migration checks, so a restart does not re-convert and re-break the
+   diff. It must be an env var, never a file or a code flag: a repo file would
+   be deployed to production too and hold *it* back as well.
 3. Publish. The diff now carries only additive/appliable DDL (new tables, new
    columns, widening casts such as integer→numeric, dropped NOT NULL).
-4. The newly deployed build boots, finds no `migration_log` entry in production,
-   and runs the *real* migration with `USING NULLIF(col,'')::date`.
-5. Immediately delete the development `migration_log` entry and restart, so
-   development converges to the same type. Both sides equal ⇒ later diffs clean.
+4. The newly deployed build boots and runs the *real* migration with
+   `USING NULLIF(col,'')::date`.
+5. Remove the development hold and restart, so development converges to the same
+   type. Both sides equal ⇒ later diffs clean.
+
+## Gate the migration on the live column type, never on a log row
+
+A `migration_log`-gated migration is **wrong for a type change**, and this was
+proven the hard way: the conversion ran and succeeded in production, then two
+later publishes each diffed development (`text`) against production (`date`) and
+silently applied `date → text`, undoing it. The log row survived, so every
+later boot skipped the migration — production was stuck as `text` with a row
+claiming it had been converted.
+
+**The rule:** a migration that changes a column *type* must inspect
+`information_schema.columns` on every boot and convert whatever is still the old
+type, ignoring any log row. Then an accidental reversal self-heals on the next
+boot instead of becoming permanent.
 
 **Do not publish twice inside step 3–5.** In that window production is `date`
-and development is `text`, and the reverse cast applies without complaint.
+and development is `text`, and the reverse cast applies without complaint. With
+a type-driven migration the damage is temporary; with a log-gated one it is not.
 
 ## Make queries type-agnostic
 

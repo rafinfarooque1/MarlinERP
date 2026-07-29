@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, numeric, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, numeric, integer, date } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -65,8 +65,8 @@ export const stockBatchesTable = pgTable("stock_batches", {
   branchType: text("branch_type").notNull(), // headoffice, warehouse, outlet
   branchId: integer("branch_id").notNull(),
   batchNumber: text("batch_number").notNull(),
-  mfgDate: text("mfg_date"),      // YYYY-MM-DD
-  expiryDate: text("expiry_date"), // YYYY-MM-DD
+  mfgDate: date("mfg_date", { mode: "string" }),      // YYYY-MM-DD
+  expiryDate: date("expiry_date", { mode: "string" }), // YYYY-MM-DD
   quantity: numeric("quantity", { precision: 12, scale: 3 }).notNull().default("0"),
   unitCost: numeric("unit_cost", { precision: 12, scale: 2 }).notNull().default("0"),
   source: text("source"),   // production | purchase | transfer | opening | adjustment
@@ -82,7 +82,7 @@ export const stockVerificationsTable = pgTable("stock_verifications", {
   id: serial("id").primaryKey(),
   branchType: text("branch_type").notNull(),
   branchId: integer("branch_id").notNull(),
-  verifyDate: text("verify_date").notNull(),
+  verifyDate: date("verify_date", { mode: "string" }).notNull(),
   notes: text("notes"),
   createdBy: text("created_by"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

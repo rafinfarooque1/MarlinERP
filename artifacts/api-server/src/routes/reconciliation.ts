@@ -3,6 +3,7 @@ import { requireModuleAction, requireModuleView } from "../middleware/permission
 import { pool } from "@workspace/db";
 import { logActivity } from "../lib/audit";
 import { nextVoucherNumber } from "../lib/voucherNumber";
+import { isIsoDate } from "../lib/dateInput";
 import { LEGACY_BANK_MODES } from "../lib/paymentModes";
 
 const router = Router();
@@ -341,6 +342,7 @@ router.post("/reconciliation/batches", requireModuleAction("page:/accounts/recon
     res.status(400).json({ error: "salePaymentIds must be a non-empty array" }); return;
   }
   if (!settlementDate) { res.status(400).json({ error: "settlementDate is required" }); return; }
+  if (!isIsoDate(settlementDate)) { res.status(400).json({ error: "settlementDate must be a real calendar date in YYYY-MM-DD form" }); return; }
   if (!destinationBankLedgerId) { res.status(400).json({ error: "destinationBankLedgerId is required" }); return; }
 
   const parsedCharges = Number(charges ?? 0);

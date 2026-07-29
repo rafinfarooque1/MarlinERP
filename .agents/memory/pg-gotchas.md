@@ -20,3 +20,15 @@ Pattern for check-then-insert guards (credit limit, and any future balance/quota
 3. Re-read balances INSIDE the txn, decide, then INSERT (and increment any sequence counters) on the same client; COMMIT.
 **Why:** The original credit check read aggregates on the pool, then inserted later — two concurrent requests both passed the limit (architect-flagged race). The advisory lock + single-txn version is verified by a concurrency test (two simultaneous sales → exactly one accepted).
 **How to apply:** See POST /sales in api-server routes/sales.ts. Also enforce any "manager override" flags server-side (hierarchy level 1 or module can_edit in `permissions`) — never trust client gating alone (403 `CREDIT_OVERRIDE_FORBIDDEN`).
+
+## A backtick inside a SQL template literal silently ends the string
+
+SQL written as a TS template literal must not contain a backtick — including
+inside a `--` comment. Quoting an identifier or a column name the way you would
+in prose (`` `like this` ``) closes the template literal, and the bundler then
+fails somewhere further down the file with a meaningless syntax error
+(`Expected ")"`) that points nowhere near the comment.
+
+**How to apply:** in comments inside these queries, use plain single quotes.
+When esbuild reports a syntax error in a route file full of SQL and the flagged
+line looks fine, search that file for a stray backtick before anything else.

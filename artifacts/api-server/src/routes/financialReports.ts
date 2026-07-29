@@ -17,12 +17,14 @@ import { pool } from "@workspace/db";
 import { requireModuleView } from "../middleware/permissions";
 import { buildDerivedPostings, type Posting } from "./journal";
 import { loadChart, previousDay } from "../lib/books";
+import { isIsoDate } from "../lib/dateInput";
 
 const router = Router();
 const REPORTS_KEY = "page:/reports/sales";
 
-const dateRe = /^\d{4}-\d{2}-\d{2}$/;
-const isDate = (v: unknown): v is string => typeof v === "string" && dateRe.test(v);
+// Shape AND calendar validity (rejects 2026-02-30) — these values reach real
+// DATE columns, where an impossible date raises 22007 instead of storing text.
+const isDate = (v: unknown): v is string => isIsoDate(v);
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 
@@ -378,8 +380,12 @@ router.get("/reports/fin/expenses", requireModuleView(REPORTS_KEY), async (req, 
        LEFT JOIN account_ledgers l  ON l.id  = e.ledger_account_id
        LEFT JOIN account_ledgers pa ON pa.id = e.payment_account_id
        LEFT JOIN employees emp      ON emp.id = e.created_by
-      WHERE ($1::text IS NULL OR e.expense_date >= $1)
-        AND ($2::text IS NULL OR e.expense_date <= $2)
+      -- Both sides are cast explicitly so this works whether expense_date is
+      -- still text or already a real DATE. Pinning the parameters to ::text (as
+      -- this once did) leaves "date >= text", for which no operator exists;
+      -- pinning them to ::date alone breaks while the column is still text.
+      WHERE ($1::date IS NULL OR e.expense_date::date >= $1::date)
+        AND ($2::date IS NULL OR e.expense_date::date <= $2::date)
         AND ($3::text = ''   OR e.location_type = $3)
         AND ($4::int  = 0    OR e.location_id   = $4)
       ORDER BY e.expense_date DESC, e.id DESC`,

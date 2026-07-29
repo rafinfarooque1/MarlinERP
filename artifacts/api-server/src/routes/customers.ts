@@ -3,6 +3,7 @@ import { db, customersTable, vendorsTable, couponsTable } from "@workspace/db";
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 import { eq, sql } from "drizzle-orm";
 import { pool } from "@workspace/db";
+import { isIsoDate } from "../lib/dateInput";
 import {
   CreateCouponBody, UpdateCouponBody, DeleteCouponParams,
 } from "@workspace/api-zod";
@@ -545,6 +546,10 @@ router.post("/vendors/:id/payment", requireModuleAction(["page:/vendors", "page:
   };
   if (!date || !amount || !cashBankLedgerId) {
     res.status(400).json({ error: "date, amount and cashBankLedgerId are required" }); return;
+  }
+  // payments.payment_date is a real DATE column.
+  if (!isIsoDate(date)) {
+    res.status(400).json({ error: "date must be a real calendar date in YYYY-MM-DD form" }); return;
   }
 
   // Find the VEND-{id} ledger account

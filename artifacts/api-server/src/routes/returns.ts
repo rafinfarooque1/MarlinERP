@@ -19,12 +19,15 @@ import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
 import { outstandingExpr, creditAdjustmentsExpr, computePaymentPosition } from "../lib/salePaymentPosition";
 import { deductMaterialAt, isMaterialKind } from "../lib/materialStock";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
+import { isIsoDate } from "../lib/dateInput";
 
 const router: IRouter = Router();
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
-const isDateStr = (s: unknown): s is string => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+// Shape AND calendar validity (rejects 2026-02-30) — these values reach real
+// DATE columns, where an impossible date raises 22007 instead of storing text.
+const isDateStr = (s: unknown): s is string => isIsoDate(s);
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type Q = { query: (text: string, params?: any[]) => Promise<{ rows: any[] }> };

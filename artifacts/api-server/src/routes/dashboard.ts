@@ -6,6 +6,7 @@ import { stockValuation } from "../lib/valuation";
 import { requireModuleView } from "../middleware/permissions";
 import { buildDerivedPostings } from "./journal";
 import { outstandingExpr } from "../lib/salePaymentPosition";
+import { isIsoDate } from "../lib/dateInput";
 
 const router = Router();
 
@@ -174,7 +175,6 @@ router.get("/dashboard/recent-activity", requireModuleView("page:/"), async (req
 // warehouseScope=<warehouseId> (warehouse + its child outlets). All conditions
 // use COALESCE because location_type/location_id are raw-migration columns
 // that are null on legacy rows (outlet sales).
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 function salesWhere(query: Record<string, unknown>): { conds: string[]; params: unknown[]; error?: string } {
   // Branch-transfer invoices live in `sales` so GST returns can see them, but
   // they are statutory documents for moving own stock — not business revenue.
@@ -187,7 +187,7 @@ function salesWhere(query: Record<string, unknown>): { conds: string[]; params: 
   const params: unknown[] = [];
   const from = typeof query.from === 'string' ? query.from : '';
   const to = typeof query.to === 'string' ? query.to : '';
-  if ((from && !DATE_RE.test(from)) || (to && !DATE_RE.test(to))) {
+  if ((from && !isIsoDate(from)) || (to && !isIsoDate(to))) {
     return { conds, params, error: 'from/to must be YYYY-MM-DD' };
   }
   if (from) { params.push(from); conds.push(`s.sale_date >= $${params.length}::date`); }
@@ -297,7 +297,6 @@ router.get("/dashboard/sales-by-location", requireModuleView("page:/"), async (r
 // revenue figure excludes branch-transfer invoices (statutory own-stock moves,
 // not turnover). sales.location_type / location_id are startup-migration columns
 // invisible to drizzle, so all sales/purchase/production reads go through `pool`.
-const BI_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const money = (n: unknown) => Math.round(Number(n ?? 0) * 100) / 100;
 const qty = (n: unknown) => Math.round(Number(n ?? 0) * 1000) / 1000;
 const asISODate = (d: unknown): string => {
@@ -314,7 +313,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   const q = req.query as Record<string, unknown>;
   const fromDate = typeof q.fromDate === "string" ? q.fromDate : "";
   const toDate = typeof q.toDate === "string" ? q.toDate : "";
-  if ((fromDate && !BI_DATE_RE.test(fromDate)) || (toDate && !BI_DATE_RE.test(toDate))) {
+  if ((fromDate && !isIsoDate(fromDate)) || (toDate && !isIsoDate(toDate))) {
     res.status(400).json({ error: "fromDate/toDate must be YYYY-MM-DD" });
     return;
   }

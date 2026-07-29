@@ -14,6 +14,7 @@ import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 import { blockedByInactiveProducts, INACTIVE_PRODUCT_CODE } from "../lib/productIdentity";
 import { SALE_PAYMENT_MODES, isSettledAtSale, clearsThroughBank } from "../lib/paymentModes";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
+import { isIsoDate } from "../lib/dateInput";
 import {
   loadPaymentPosition, loadPaymentPositions, computePaymentPosition,
   loadInvoicePaymentSettings, buildUpiRequest,
@@ -198,8 +199,7 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
   const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
   const from = typeof req.query.from === 'string' ? req.query.from : '';
   const to = typeof req.query.to === 'string' ? req.query.to : '';
-  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
-  if ((from && !dateRe.test(from)) || (to && !dateRe.test(to))) {
+  if ((from && !isIsoDate(from)) || (to && !isIsoDate(to))) {
     res.status(400).json({ error: "from/to must be YYYY-MM-DD" }); return;
   }
 
@@ -334,6 +334,12 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
 router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req, res): Promise<void> => {
   const parsed = CreateSaleBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  // saleDate is copied into sale_date and into receipts.receipt_date, both real
+  // DATE columns, and zod only checks that it is a string.
+  if (!isIsoDate(parsed.data.saleDate)) {
+    res.status(400).json({ error: "saleDate must be a real calendar date in YYYY-MM-DD form" }); return;
+  }
 
   const { pool: pgPool } = await import("@workspace/db");
 
@@ -791,6 +797,10 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
 
   const parsed = CreateSaleBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  if (!isIsoDate(parsed.data.saleDate)) {
+    res.status(400).json({ error: "saleDate must be a real calendar date in YYYY-MM-DD form" }); return;
+  }
 
   // Credit (pay later) sales must have a customer — same server-side rule as
   // creation, enforced before any stock reversal side effects run.

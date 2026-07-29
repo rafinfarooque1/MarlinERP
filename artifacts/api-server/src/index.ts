@@ -1438,73 +1438,110 @@ async function runMigrations() {
   // ── (3) Convert text date columns to real DATE columns ─────────────────────
   // The global pg type parser for OID 1082 (DATE) is registered in lib/db where
   // the pool is created, so DATE reads back as a plain 'YYYY-MM-DD' string and
-  // the API contract is preserved. Each column is converted independently and
-  // guarded: if the table/column is missing, or any value is not castable, that
-  // single column is skipped (left as text) rather than aborting the batch —
-  // a working system beats a pure one.
+  // the API contract is preserved.
+  //
+  // This migration is TYPE-DRIVEN, not log-gated, and that is deliberate. The
+  // earlier log-gated version converted production once and wrote its log row;
+  // a later deployment then diffed development (still text) against production
+  // (now date) and silently applied date->text, undoing it — and because the
+  // log row already existed, no subsequent boot could heal it. Every boot now
+  // inspects the LIVE column type and converts whatever is still text, so a
+  // reversal from any source repairs itself on the next restart. The log row is
+  // only a record that a full pass succeeded.
+  //
+  // Each column is converted independently: a missing column, an unexpected
+  // type, or a value that cannot be cast skips that one column rather than
+  // aborting the batch or the boot.
+  //
+  // HOLD_DATE_COLUMN_CONVERSION is a development-only escape hatch. A publish
+  // diffs the two live databases, and PostgreSQL cannot auto-cast text->date,
+  // so a deployment fails if development converts before production does.
+  // Setting it holds development on text for exactly one publish; it is removed
+  // once production has converted.
   {
-    const { rows: [dateCastDone] } = await pool.query(
-      `SELECT 1 FROM migration_log WHERE name = 'text_date_columns_to_date_v1'`
-    );
-    if (!dateCastDone) {
-      const dateCols: [string, string][] = [
-        ['cash_deposits', 'deposit_date'],
-        ['coupons', 'expiry_date'],
-        ['employees', 'date_of_birth'],
-        ['expenses', 'expense_date'],
-        ['journal_vouchers', 'voucher_date'],
-        ['payments', 'payment_date'],
-        ['productions', 'expiry_date'],
-        ['productions', 'mfg_date'],
-        ['purchase_returns', 'return_date'],
-        ['receipts', 'receipt_date'],
-        ['reconciliation_batches', 'settlement_date'],
-        ['sale_payments', 'payment_date'],
-        ['sales_returns', 'return_date'],
-        ['stock_batches', 'expiry_date'],
-        ['stock_batches', 'mfg_date'],
-        ['stock_verifications', 'verify_date'],
-      ];
-      let converted = 0;
+    const dateCols: [string, string][] = [
+      ['cash_deposits', 'deposit_date'],
+      ['coupons', 'expiry_date'],
+      ['employees', 'date_of_birth'],
+      ['expenses', 'expense_date'],
+      ['journal_vouchers', 'voucher_date'],
+      ['payments', 'payment_date'],
+      ['productions', 'expiry_date'],
+      ['productions', 'mfg_date'],
+      ['purchase_returns', 'return_date'],
+      ['receipts', 'receipt_date'],
+      ['reconciliation_batches', 'settlement_date'],
+      ['sale_payments', 'payment_date'],
+      ['sales_returns', 'return_date'],
+      ['stock_batches', 'expiry_date'],
+      ['stock_batches', 'mfg_date'],
+      ['stock_verifications', 'verify_date'],
+    ];
+    const held = process.env.HOLD_DATE_COLUMN_CONVERSION === '1';
+    if (held) {
+      console.warn('[migration] text_date_columns_to_date_v2: HELD by HOLD_DATE_COLUMN_CONVERSION=1 — columns left as text');
+    } else {
+      let already = 0;
+      const converted: string[] = [];
       const skipped: string[] = [];
       for (const [table, col] of dateCols) {
         try {
           const { rows: [meta] } = await pool.query(
-            `SELECT data_type FROM information_schema.columns
+            `SELECT data_type, is_nullable FROM information_schema.columns
               WHERE table_name = $1 AND column_name = $2`,
             [table, col],
           );
           if (!meta) { skipped.push(`${table}.${col} (column missing)`); continue; }
-          if (meta.data_type === 'date') { converted++; continue; } // already done
+          if (meta.data_type === 'date') { already++; continue; }
           if (meta.data_type !== 'text' && meta.data_type !== 'character varying') {
             skipped.push(`${table}.${col} (unexpected type ${meta.data_type})`);
             continue;
           }
-          // Any non-empty value that is not YYYY-MM-DD would break the cast.
-          const { rows: [bad] } = await pool.query(
-            `SELECT count(*)::int AS c FROM ${table}
-              WHERE ${col} IS NOT NULL AND ${col} <> '' AND ${col} !~ '^\\d{4}-\\d{2}-\\d{2}$'`
+          // Validate every stored value BEFORE altering the column:
+          //  - bad_shape: not YYYY-MM-DD at all, so the cast would fail
+          //  - bad_value: right shape but not a real date (e.g. 2026-02-30).
+          //    to_date is lenient and would silently shift it to 2026-03-02, so
+          //    compare the round-trip instead of trusting the regex alone.
+          //  - blanks: '' becomes NULL, which a NOT NULL column would reject
+          const { rows: [audit] } = await pool.query(
+            `SELECT
+               count(*) FILTER (WHERE ${col} IS NOT NULL AND ${col} <> '' AND ${col} !~ '^\\d{4}-\\d{2}-\\d{2}$')::int AS bad_shape,
+               count(*) FILTER (WHERE ${col} IS NOT NULL AND ${col} <> '' AND ${col} ~ '^\\d{4}-\\d{2}-\\d{2}$'
+                                      AND to_date(${col}, 'YYYY-MM-DD')::text <> ${col})::int AS bad_value,
+               count(*) FILTER (WHERE ${col} = '')::int AS blanks
+             FROM ${table}`
           );
-          if (bad.c > 0) {
-            skipped.push(`${table}.${col} (${bad.c} un-castable value(s))`);
+          if (audit.bad_shape > 0 || audit.bad_value > 0) {
+            skipped.push(`${table}.${col} (${audit.bad_shape} malformed + ${audit.bad_value} impossible value(s))`);
             continue;
           }
-          // Empty strings become NULL, then cast text -> date.
+          if (audit.blanks > 0 && meta.is_nullable === 'NO') {
+            skipped.push(`${table}.${col} (${audit.blanks} blank(s) in a NOT NULL column)`);
+            continue;
+          }
           await pool.query(
             `ALTER TABLE ${table} ALTER COLUMN ${col} TYPE date USING NULLIF(${col}, '')::date`
           );
-          converted++;
+          converted.push(`${table}.${col}`);
         } catch (e) {
           skipped.push(`${table}.${col} (error: ${(e as Error).message})`);
         }
       }
-      // Only log the migration as done when nothing was skipped; otherwise leave
-      // it un-logged so a later boot retries the skipped columns after a fix.
+      if (converted.length > 0) {
+        console.log(`[migration] text_date_columns_to_date_v2: converted ${converted.length} column(s) text->date: ${converted.join(', ')}`);
+      }
       if (skipped.length === 0) {
-        await pool.query(`INSERT INTO migration_log (name) VALUES ('text_date_columns_to_date_v1')`);
-        console.log(`[migration] text_date_columns_to_date_v1: converted ${converted} column(s) text->date`);
+        // Record the successful full pass once. The row is informational only —
+        // the loop above never consults it, so a later reversal still heals.
+        await pool.query(
+          `INSERT INTO migration_log (name) SELECT 'text_date_columns_to_date_v2'
+            WHERE NOT EXISTS (SELECT 1 FROM migration_log WHERE name = 'text_date_columns_to_date_v2')`
+        );
+        if (converted.length === 0) {
+          console.log(`[migration] text_date_columns_to_date_v2: all ${already} date column(s) already correct`);
+        }
       } else {
-        console.warn(`[migration] text_date_columns_to_date_v1: converted ${converted}, SKIPPED: ${skipped.join('; ')} — will retry next boot`);
+        console.warn(`[migration] text_date_columns_to_date_v2: ${converted.length} converted, ${already} already date, SKIPPED: ${skipped.join('; ')} — will retry next boot`);
       }
     }
   }

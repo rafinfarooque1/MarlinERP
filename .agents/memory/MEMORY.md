@@ -10,7 +10,7 @@
 - [ERP enterprise decisions](erp-enterprise-decisions.md) — settled: labour from payroll allocation (and the double-count trap it creates), two-step transfers always, opening balances intentionally zero, sidebar frozen
 - [ERP integration conflicts](erp-integration-conflicts.md) — modules disagree: 5 stock qty stores (item-table col is STALE), materials have no location, P&L DOES see journal vouchers, transfer JVs already post tax
 - [Inventory batch layer](inventory-batches.md) — additive lot layer over stock_entries (qty truth); FEFO clamped consumption, shortfall = "Untracked"; zod strips unknown keys so optional passthrough fields read from raw body.
-- [pg query gotchas](pg-gotchas.md) — date columns return JS Date (never string-compare vs YYYY-MM-DD); creates return 201; check-then-insert guards need one txn + pg_advisory_xact_lock.
+- [pg query gotchas](pg-gotchas.md) — date columns return JS Date; creates return 201; check-then-insert needs one txn + advisory lock; a backtick in a SQL template comment breaks the build.
 - [Codegen staleness trap](codegen-staleness.md) — cuts BOTH ways: codegen can flip optional→required, AND generated types under-declare what routes really return (auditing UI reads against them yields mass false positives).
 - [CREATE TABLE IF NOT EXISTS drift](migration-ddl-drift.md) — constraints added to an existing CREATE TABLE IF NOT EXISTS never apply to live DBs; a 42P10 is almost always this. Dedupe before adding a unique index.
 - [Sales settlement & discounts](sales-settlement.md) — cash/upi/card settle at creation; only 'credit' is credit-controlled; dues = total−paid; line discounts net into GST pre-tax, discount_total = bill-level coupon ONLY (post-tax).
@@ -41,7 +41,7 @@
 - [Invoice numbering vs sequence](invoice-numbering-sequence.md) — renumbering documents strands the allocator counter and bricks all new creates once a unique index exists; read-only audits can't see it.
 - [Sale cancellation](sale-cancellation.md) — a terminal state obliges EVERY write path (payments, returns) to refuse it after the row lock; filtering it from reports is not enough.
 - [Opt-in list paging](list-paging.md) — never default-cap a list endpoint the UI reads wholesale; in-memory slicing after a full fetch is pure downside.
-- [Text→DATE conversion](date-column-conversion.md) — after converting, every `col <> ''` guard becomes a live 22007; `$1 = ''` param guards are fine. Read-only audits never see it.
+- [Text→DATE conversion](date-column-conversion.md) — after converting, `col <> ''` guards AND every shape-only date regex become live 22007s — read filters most of all; audits never see it.
 - [Warehouse rent accrual](warehouse-rent.md) — accruals DERIVED (payments are vouchers) and reach the books DAILY, not at approval; see daily-expense-accrual.md for what approval means now.
 - [pg_dump exclusions](pg-dump-exclusions.md) — --exclude-table still dumps owned sequences and breaks --clean; use --exclude-schema. Fingerprint and dump must cover the same objects. Sign, don't encrypt, manifests.
 - [Mirror locations](mirror-locations.md) — a place can exist as BOTH a warehouse and an outlet sharing one cash ledger, with no flag; dedupe sums, resolve reads across identities, resolve writes like reads.

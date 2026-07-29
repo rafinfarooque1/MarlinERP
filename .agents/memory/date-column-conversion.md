@@ -38,3 +38,34 @@ This is nastier than it sounds for three reasons:
   casts can stay; only the string comparisons are fatal.
 - Verify by actually calling each affected endpoint. Type-checking cannot see
   inside a SQL string.
+
+# Shape-valid is not calendar-valid: the second wave of 22007s
+
+Blank strings are only half the problem. The other half is `'2026-02-30'` —
+thirty days in February, or `'2026-13-01'`. A text column stored those happily;
+a real `date` column rejects them with the same `22007`.
+
+**The rule:** every date that reaches a `date` column or is compared against one
+must be validated against the **calendar**, not just the `^\d{4}-\d{2}-\d{2}$`
+shape. Do it once in a shared helper (build the date and read the fields back
+out) and route every check through it.
+
+**Why:** a codebase that grew up on text columns is full of hand-rolled
+`const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s)` helpers — one per route
+file, all subtly the same. While the columns were text they were adequate: the
+value was only ever string-compared. The moment the column becomes `date`, every
+one of them is a 500 waiting for a fat-fingered filter.
+
+**How to apply:**
+- Grep for `\d{4}-\d{2}-\d{2}` across the server, not just for write paths.
+  Expect to find it in a `const dateRe`/`DATE_RE`/`isDateStr`/`isMonth` per file.
+- **Read filters matter as much as writes.** `?from=2026-02-30` on a list or
+  report endpoint is a 500 once the parameter is inferred as a date. This is the
+  larger surface by far — one weak helper guards a dozen report routes.
+- A month parameter (`YYYY-MM`) needs the same treatment; validate it by
+  expanding to `${month}-01` and calendar-checking that.
+- Normalisers are not validators. A `ymd()` helper that reshapes a `Date` into
+  `YYYY-MM-DD` and otherwise does `String(v).slice(0, 10)` passes an impossible
+  date straight through. Validate *after* normalising.
+- Verify by replaying every date-carrying URL with an impossible date and
+  asserting no 5xx. Type-checking cannot see any of this.

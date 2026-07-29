@@ -3,6 +3,7 @@ import { pool } from "@workspace/db";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 import { logActivity } from "../lib/audit";
+import { isIsoDate } from "../lib/dateInput";
 import { buildBranchMaps } from "./stock";
 import { consumeBatches, creditBatch, planFEFO, inboundCostForItem } from "../lib/batches";
 import { productBatchIdentity } from "../lib/productIdentity";
@@ -512,6 +513,7 @@ router.post("/stock/verifications", requireModuleAction("page:/headoffice/stock-
     res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
   }
   if (!verifyDate) { res.status(400).json({ error: "verifyDate is required" }); return; }
+  if (!isIsoDate(verifyDate)) { res.status(400).json({ error: "verifyDate must be a real calendar date in YYYY-MM-DD form" }); return; }
   if (!Array.isArray(lines) || lines.length === 0) {
     res.status(400).json({ error: "At least one counted line is required" }); return;
   }

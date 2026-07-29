@@ -28,9 +28,12 @@
 
 import { pool } from "@workspace/db";
 import { closingStockValuation, stockValuation, resolveProductNames, type ValuedItem } from "./valuation";
+import { isIsoDate } from "./dateInput";
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
-const isDate = (s: unknown): s is string => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+// Shape AND calendar validity (rejects 2026-02-30) — these values reach real
+// DATE columns, where an impossible date raises 22007 instead of storing text.
+const isDate = (s: unknown): s is string => isIsoDate(s);
 
 /** Day before an ISO date, for "as at the start of the period" reads. */
 export function previousDay(date: string): string {

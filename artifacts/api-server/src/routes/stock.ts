@@ -7,6 +7,7 @@ import { logActivity } from "../lib/audit";
 import { pool } from "@workspace/db";
 import { consumeBatches, restoreBatches, creditBatch, updateAvgCostOnInbound, validateBatchOverride, type BatchBreakdownEntry } from "../lib/batches";
 import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
+import { isIsoDate } from "../lib/dateInput";
 import {
   resolveLocationGst, classifyTransfer, computeTransferGst, createDispatchVoucher, createReceiveVoucher,
   buildTransferInvoiceLines, totalsFromLines, isTransferInvoicingEnabled, nextTransferInvoiceNumber,
@@ -232,15 +233,24 @@ router.get("/stock/ledger", requireModuleView(["page:/headoffice/stock-ledger", 
   const materialType = typeof req.query.materialType === 'string' ? req.query.materialType : '';
   const txnType      = typeof req.query.txnType      === 'string' ? req.query.txnType      : '';
 
+  // from/to are compared against a date below, so an impossible date has to be
+  // rejected here instead of raising 22007 inside the driver.
+  if ((from && !isIsoDate(from)) || (to && !isIsoDate(to))) {
+    res.status(400).json({ error: "from/to must be real calendar dates in YYYY-MM-DD form" }); return;
+  }
+
   const conds: string[] = [];
   const params: unknown[] = [];
   const p = () => `$${params.length}`;
 
-  if (q)            { params.push(`%${q}%`);    conds.push(`sl.item_name ILIKE ${p()}`); }
-  if (from)         { params.push(from);          conds.push(`sl.created_at::date >= ${p()}::date`); }
-  if (to)           { params.push(to);            conds.push(`sl.created_at::date <= ${p()}::date`); }
-  if (materialType) { params.push(materialType);  conds.push(`sl.material_type = ${p()}`); }
-  if (txnType)      { params.push(txnType);       conds.push(`sl.txn_type = ${p()}`); }
+  // These conditions are applied to the `ranked` CTE below, not to the base
+  // table, so they must be qualified with `ranked` — `sl` only exists inside
+  // the CTE and any `sl.`-qualified filter here fails with 42P01.
+  if (q)            { params.push(`%${q}%`);    conds.push(`ranked.item_name ILIKE ${p()}`); }
+  if (from)         { params.push(from);          conds.push(`ranked.created_at::date >= ${p()}::date`); }
+  if (to)           { params.push(to);            conds.push(`ranked.created_at::date <= ${p()}::date`); }
+  if (materialType) { params.push(materialType);  conds.push(`ranked.material_type = ${p()}`); }
+  if (txnType)      { params.push(txnType);       conds.push(`ranked.txn_type = ${p()}`); }
 
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 
@@ -298,8 +308,7 @@ router.get("/stock/transfers", requireModuleView("page:/transfers"), async (req,
   const status = typeof req.query.status === "string" ? req.query.status : "";
   const limitRaw = Number(req.query.limit);
   const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 5000) : 0;
-  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
-  if ((from && !dateRe.test(from)) || (to && !dateRe.test(to))) {
+  if ((from && !isIsoDate(from)) || (to && !isIsoDate(to))) {
     res.status(400).json({ error: "from/to must be YYYY-MM-DD" });
     return;
   }
