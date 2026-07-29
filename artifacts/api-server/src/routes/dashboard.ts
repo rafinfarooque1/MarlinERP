@@ -4,6 +4,7 @@ import { count, sum, eq, and, sql, inArray } from "drizzle-orm";
 import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 import { stockValuation } from "../lib/valuation";
 import { requireModuleView } from "../middleware/permissions";
+import { buildDerivedPostings } from "./journal";
 
 const router = Router();
 
@@ -42,22 +43,21 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
     return ids;
   };
 
-  // Net balance for a set of ledger IDs: sum all payment/receipt movements
-  const { rows: txnRows } = await pool.query(`
-    SELECT ledger_id, COALESCE(SUM(net), 0)::float AS balance
-    FROM (
-      SELECT paid_to_ledger_id      AS ledger_id,  amount::numeric AS net FROM payments
-      UNION ALL
-      SELECT paid_from_ledger_id    AS ledger_id, -amount::numeric AS net FROM payments
-      UNION ALL
-      SELECT received_in_ledger_id  AS ledger_id,  amount::numeric AS net FROM receipts
-      UNION ALL
-      SELECT received_from_ledger_id AS ledger_id, -amount::numeric AS net FROM receipts
-    ) t
-    GROUP BY ledger_id
-  `);
+  // Cash and bank are read from the same derived posting stream that produces
+  // the Trial Balance, the Cash Book and the Balance Sheet.
+  //
+  // These two tiles used to add up the `payments` and `receipts` tables on
+  // their own. That is not what a cash balance is. It missed every sale
+  // settled at the till — the books derive those from the sale row itself, not
+  // from a receipt — and it counted the few sale receipts that do exist, which
+  // the books deliberately exclude to avoid double-counting. The dashboard
+  // showed cash of -125.01 on a day the Cash Book and the Balance Sheet both
+  // said 29,609.90. One source now feeds all of them.
+  const postings = await buildDerivedPostings({});
   const txnBalMap = new Map<number, number>();
-  for (const r of txnRows) txnBalMap.set(Number(r.ledger_id), Number(r.balance));
+  for (const p of postings) {
+    txnBalMap.set(p.ledgerId, (txnBalMap.get(p.ledgerId) ?? 0) + (Number(p.debit) - Number(p.credit)));
+  }
 
   const sumSubtree = (ids: number[]) =>
     Math.round(ids.reduce((s, id) => s + (txnBalMap.get(id) ?? 0), 0) * 100) / 100;
@@ -79,7 +79,13 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
     batchRows,
   ] = await Promise.all([
     db.select({ count: count() }).from(itemsTable),
-    db.select({ total: sum(salesTable.totalAmount) }).from(salesTable),
+    // Turnover means money customers owe us. Branch-transfer invoices are
+    // statutory paperwork for moving our own stock between our own locations,
+    // and cancelled bills never happened; counting either one reported revenue
+    // the company never earned, and made this tile disagree with the Sales
+    // Register and the GST return for the same period.
+    db.select({ total: sum(salesTable.totalAmount) }).from(salesTable)
+      .where(sql`branch_transfer_id IS NULL AND cancelled_at IS NULL`),
     // Stock value comes from the one shared valuation function, so the tile, the
     // Stock Valuation report and the P&L closing stock cannot disagree. It used
     // to multiply quantity by `stock_entries.cost_price` — a cost frozen at the
@@ -173,7 +179,10 @@ function salesWhere(query: Record<string, unknown>): { conds: string[]; params: 
   // they are statutory documents for moving own stock — not business revenue.
   // Every sales analytic excludes them or the dashboard reports turnover the
   // company never earned.
-  const conds: string[] = ['s.branch_transfer_id IS NULL'];
+  // A cancelled invoice is not turnover either — it was dropped from the GST
+  // and sales reports but left in the dashboard analytics, so the two told
+  // different stories about the same day.
+  const conds: string[] = ['s.branch_transfer_id IS NULL', 's.cancelled_at IS NULL'];
   const params: unknown[] = [];
   const from = typeof query.from === 'string' ? query.from : '';
   const to = typeof query.to === 'string' ? query.to : '';

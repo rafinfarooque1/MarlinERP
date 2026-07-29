@@ -110,13 +110,22 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
 
     // 1. Lock and fetch sale (include location columns added by Task #33)
     const { rows: [sale] } = await client.query(
-      `SELECT id, outlet_id, location_type, location_id,
+      `SELECT id, outlet_id, location_type, location_id, cancelled_at,
               total_amount::numeric AS total_amount,
               amount_paid::numeric AS amount_paid, payment_status
        FROM sales WHERE id = $1 FOR UPDATE`,
       [saleId]
     );
     if (!sale) { await client.query("ROLLBACK"); res.status(404).json({ error: "Sale not found" }); return; }
+
+    // Cancellation already restored the stock, reversed the customer balance and
+    // removed the receipt. Collecting against it afterwards would put the cash
+    // and the receivable back on a bill that no longer exists.
+    if (sale.cancelled_at) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: "This invoice has been cancelled — no further payment can be recorded against it.", code: "SALE_CANCELLED" });
+      return;
+    }
 
     const totalAmount = Number(sale.total_amount);
     const currentPaid = Number(sale.amount_paid);

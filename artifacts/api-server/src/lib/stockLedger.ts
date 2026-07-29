@@ -4,7 +4,7 @@
  */
 
 export interface LedgerEntry {
-  txnType: string;       // purchase | purchase_reversal | production_consumption | production_output | transfer_out | transfer_in | sales_return | purchase_return
+  txnType: string;       // sale | sale_reversal | sale_cancellation | purchase | purchase_reversal | production_consumption | production_output | transfer_out | transfer_in | sales_return | purchase_return
   materialType: string;  // item | material | raw_material
   refId: number;         // item_id / material_id / raw_material_id
   itemName: string;

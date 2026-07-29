@@ -134,6 +134,14 @@ router.post("/sales-returns", requireModuleAction(["page:/returns", "page:/sales
 
     const { rows: [sale] } = await client.query(`SELECT * FROM sales WHERE id = $1 FOR UPDATE`, [saleId]);
     if (!sale) { await client.query("ROLLBACK"); res.status(404).json({ error: "Sale not found" }); return; }
+    // Cancelling already put the whole quantity back. Returning against a
+    // cancelled bill would restore the same stock twice and raise a credit note
+    // for revenue that has already been reversed.
+    if (sale.cancelled_at) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: "This invoice has been cancelled — its stock was already restored, so it cannot be returned against.", code: "SALE_CANCELLED" });
+      return;
+    }
     if (returnDate < dateOnly(sale.sale_date)) {
       await client.query("ROLLBACK");
       res.status(400).json({ error: `Return date cannot be before the sale date (${dateOnly(sale.sale_date)})` });

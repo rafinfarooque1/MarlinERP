@@ -7,6 +7,7 @@ import {
   CreateOutletBody, UpdateOutletBody,
 } from "@workspace/api-zod";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
+import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 
 const router = Router();
 
@@ -147,7 +148,9 @@ router.get("/warehouses", requireModuleView(["page:/", "page:/production/item-ma
     `SELECT id, cash_ledger_id, sales_ledger_id, purchase_ledger_id, COALESCE(state_code,'') AS state_code FROM warehouses ORDER BY id`
   );
   const ledgerMap = new Map(raw.map(r => [r.id, { cashLedgerId: r.cash_ledger_id, salesLedgerId: r.sales_ledger_id, purchaseLedgerId: r.purchase_ledger_id, stateCode: r.state_code ?? '' }]));
-  res.json(rows.map((r) => ({ ...r, outletCount: countMap.get(r.id) ?? 0, ...ledgerMap.get(r.id) })));
+  const paging = parsePaging(_req.query as Record<string, unknown>);
+  setPagingHeaders(res, rows.length, paging);
+  res.json(applyPaging(rows, paging).map((r) => ({ ...r, outletCount: countMap.get(r.id) ?? 0, ...ledgerMap.get(r.id) })));
 });
 
 router.post("/warehouses", requireModuleAction("page:/headoffice/warehouses", "add"), async (req, res): Promise<void> => {
@@ -224,7 +227,9 @@ router.get("/outlets", requireModuleView(["page:/", "page:/production/item-maste
     `SELECT id, cash_ledger_id, sales_ledger_id, COALESCE(gstin,'') AS gstin, COALESCE(state,'') AS state, COALESCE(state_code,'') AS state_code FROM outlets ORDER BY id`
   );
   const ledgerMap = new Map(raw.map(r => [r.id, { cashLedgerId: r.cash_ledger_id, salesLedgerId: r.sales_ledger_id, gstin: r.gstin ?? '', state: r.state ?? '', stateCode: r.state_code ?? '' }]));
-  res.json(rows.map((r) => ({ ...r, warehouseName: wMap.get(r.warehouseId) ?? "", ...ledgerMap.get(r.id) })));
+  const paging = parsePaging(_req.query as Record<string, unknown>);
+  setPagingHeaders(res, rows.length, paging);
+  res.json(applyPaging(rows, paging).map((r) => ({ ...r, warehouseName: wMap.get(r.warehouseId) ?? "", ...ledgerMap.get(r.id) })));
 });
 
 router.post("/outlets", requireModuleAction("page:/headoffice/outlets", "add"), async (req, res): Promise<void> => {

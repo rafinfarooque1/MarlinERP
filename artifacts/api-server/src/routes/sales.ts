@@ -482,6 +482,30 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     overrideAllowed = await hasModuleAction(req.employee?.hierarchyId, CREDIT_OVERRIDE_PAGES, "edit");
   }
 
+  // ── Everything the sale transaction will need, resolved before it opens ───
+  // The movement trail, the customer total and the accounting receipt all have
+  // to commit WITH the sale (see below). These lookups are read-only, so they
+  // run first rather than holding row locks open while they wait on the
+  // database.
+  const [ledgerMeta, branchNameOf] = await Promise.all([
+    batchResolveMeta(pool, lineItems.map(li => ({ materialType: 'item' as const, refId: li.itemId }))),
+    buildBranchMaps(),
+  ]);
+  let elecClrLedgerId: number | null = null;
+  if (clearsThroughBank(paymentModeIn)) {
+    const { rows: [clr] } = await pgPool.query<{ id: number }>(
+      `SELECT id FROM account_ledgers WHERE code = 'STD-ELEC-CLR'`
+    );
+    elecClrLedgerId = clr?.id ?? null;
+  }
+  let custLedgerId: number | null = null;
+  if (paymentModeIn === 'credit' && parsed.data.customerId) {
+    const { rows: [cl] } = await pgPool.query<{ id: number }>(
+      `SELECT id FROM account_ledgers WHERE code = $1`, [`CUST-${parsed.data.customerId}`]
+    );
+    custLedgerId = cl?.id ?? null;
+  }
+
   const txClient = await pgPool.connect();
   let row: any;
   let invoiceNumber = '';
@@ -624,30 +648,19 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
        settledAtSale ? totalAmount : 0, settledAtSale ? 'paid' : 'unpaid']
     ));
 
-    await txClient.query('COMMIT');
-  } catch (txErr) {
-    try { await txClient.query('ROLLBACK'); } catch { /* already rolled back */ }
-    throw txErr;
-  } finally {
-    txClient.release();
-  }
-
-  // ── Stock ledger: sales are the largest source of stock movement, so they
-  // have to appear in the audit trail alongside purchases, transfers and
-  // production. Fire-and-forget: the ledger is a record of what happened, and
-  // a logging failure must never void a completed sale.
-  void (async () => {
-    const [meta, branchFn] = await Promise.all([
-      batchResolveMeta(pool, lineItems.map(li => ({ materialType: 'item' as const, refId: li.itemId }))),
-      buildBranchMaps(),
-    ]);
-    await writeStockLedger(pool, lineItems.map(li => {
-      const m = meta.get(`item:${li.itemId}`);
+    // ── The rest of what a sale means, in the SAME transaction ──────────────
+    // The movement trail, the customer's running total and the accounting
+    // receipt used to run AFTER the commit — the ledger write fire-and-forget
+    // with its errors swallowed by an empty catch. That is why the database
+    // held 52 sales and not one sale movement row: every failure was discarded
+    // in silence. All of it now commits with the sale or none of it does.
+    await writeStockLedger(txClient, lineItems.map(li => {
+      const m = ledgerMeta.get(`item:${li.itemId}`);
       return {
         txnType: 'sale', materialType: 'item' as const, refId: li.itemId,
         itemName: m?.name ?? '', unit: m?.unit ?? '',
         branchType: locationType, branchId: locationId,
-        branchName: branchFn(locationType, locationId),
+        branchName: branchNameOf(locationType, locationId),
         qtyChange: -Number(li.quantity),
         unitCost: Number(li.unitPrice ?? 0),
         docType: 'sale', docId: row.id,
@@ -656,41 +669,38 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
         notes: invoiceNumber,
       };
     }));
-  })().catch(() => {});
 
-  // ── Update customer total purchases ───────────────────────────────────────
-  if (parsed.data.customerId) {
-    await db.update(customersTable)
-      .set({ totalPurchases: sql`${customersTable.totalPurchases}::numeric + ${totalAmount}` })
-      .where(eq(customersTable.id, parsed.data.customerId));
-  }
+    if (parsed.data.customerId) {
+      await txClient.query(
+        `UPDATE customers SET total_purchases = COALESCE(total_purchases, 0)::numeric + $1 WHERE id = $2`,
+        [totalAmount, parsed.data.customerId]
+      );
+    }
 
-  // ── Post accounting entry ─────────────────────────────────────────────────
-  if (salesLedgerId) {
     // Debit routing follows settlement semantics: cash → location cash ledger,
     // upi/card (settled, awaiting bank) → Electronic Payment Clearing, and only
     // true credit sales → the customer debtor ledger.
-    let debitLedgerId = cashLedgerId;
-    if (clearsThroughBank(paymentModeIn)) {
-      const { rows: [clr] } = await pgPool.query<{ id: number }>(
-        `SELECT id FROM account_ledgers WHERE code = 'STD-ELEC-CLR'`
-      );
-      if (clr) debitLedgerId = clr.id;
-    } else if (paymentModeIn === 'credit' && parsed.data.customerId) {
-      const { rows: [custLedger] } = await pgPool.query<{ id: number }>(
-        `SELECT id FROM account_ledgers WHERE code = $1`, [`CUST-${parsed.data.customerId}`]
-      );
-      if (custLedger) debitLedgerId = custLedger.id;
+    if (salesLedgerId) {
+      let debitLedgerId = cashLedgerId;
+      if (clearsThroughBank(paymentModeIn) && elecClrLedgerId) debitLedgerId = elecClrLedgerId;
+      else if (paymentModeIn === 'credit' && custLedgerId) debitLedgerId = custLedgerId;
+      if (debitLedgerId) {
+        await txClient.query(
+          `INSERT INTO receipts (receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, voucher_number, location_type, location_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [parsed.data.saleDate, salesLedgerId, debitLedgerId, totalAmount,
+           `Sale: ${invoiceNumber}${locationName ? ` at ${locationName}` : ''}`, invoiceNumber,
+           locationType, locationId]
+        );
+      }
     }
-    if (debitLedgerId) {
-      await pgPool.query(
-        `INSERT INTO receipts (receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, voucher_number, location_type, location_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [parsed.data.saleDate, salesLedgerId, debitLedgerId, totalAmount,
-         `Sale: ${invoiceNumber}${locationName ? ` at ${locationName}` : ''}`, invoiceNumber,
-         locationType, locationId]
-      );
-    }
+
+    await txClient.query('COMMIT');
+  } catch (txErr) {
+    try { await txClient.query('ROLLBACK'); } catch { /* already rolled back */ }
+    throw txErr;
+  } finally {
+    txClient.release();
   }
 
   const customerName = parsed.data.customerId
@@ -902,6 +912,8 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
   // order, so a concurrent bill for the same item waits rather than reading a
   // quantity that is about to change.
   const oldLineItems = (existingRaw.line_items ?? []) as Array<{ itemId: number; quantity: number; batchBreakdown?: any[] }>;
+  const oldTotal = Number(existingRaw.total_amount);
+  const oldCustomerId = existingRaw.customer_id as number | null;
   const newPaymentMode = parsed.data.paymentMode ?? 'cash';
   let newAmountPaid = totalAmount;
   let newPaymentStatus = 'paid';
@@ -916,11 +928,75 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
   }
   const newOutletId = newLocationType === 'outlet' ? newLocationId : null;
 
+  // ── Everything the edit transaction will need, resolved before it opens ───
+  // An edit has to restate the accounting receipt as well as the stock, so the
+  // ledgers for the (possibly new) location are looked up here rather than
+  // inside the transaction.
+  const { rows: [editLoc] } = await pgPool.query<{
+    name: string; upi_id: string | null; cash_ledger_id: number | null; sales_ledger_id: number | null;
+  }>(
+    newLocationType === 'warehouse'
+      ? `SELECT name, upi_id, cash_ledger_id, sales_ledger_id FROM warehouses WHERE id = $1`
+      : `SELECT name, upi_id, cash_ledger_id, sales_ledger_id FROM outlets WHERE id = $1`,
+    [newLocationId]
+  );
+  const locationName = editLoc?.name ?? '';
+  const locationUpiId = editLoc?.upi_id ?? '';
+  const editSalesLedgerId = editLoc?.sales_ledger_id ?? null;
+  const editCashLedgerId = editLoc?.cash_ledger_id ?? null;
+
+  let editElecClrId: number | null = null;
+  if (clearsThroughBank(newPaymentMode)) {
+    const { rows: [clr] } = await pgPool.query<{ id: number }>(
+      `SELECT id FROM account_ledgers WHERE code = 'STD-ELEC-CLR'`
+    );
+    editElecClrId = clr?.id ?? null;
+  }
+  let editCustLedgerId: number | null = null;
+  if (newPaymentMode === 'credit' && parsed.data.customerId) {
+    const { rows: [cl] } = await pgPool.query<{ id: number }>(
+      `SELECT id FROM account_ledgers WHERE code = $1`, [`CUST-${parsed.data.customerId}`]
+    );
+    editCustLedgerId = cl?.id ?? null;
+  }
+  const [editMeta, editBranchNameOf] = await Promise.all([
+    batchResolveMeta(pool, [...oldLineItems, ...lineItems].map(li => ({ materialType: 'item' as const, refId: li.itemId }))),
+    buildBranchMaps(),
+  ]);
+
   const editTx = await pgPool.connect();
   let updated: any;
   const newLineItemsWithBatches: any[] = [];
   try {
     await editTx.query('BEGIN');
+
+    // 0. Take every stock lock this edit will need, up front, in one globally
+    //    deterministic order.
+    //
+    //    Reversing the old lines and applying the new ones are two separate
+    //    passes, each sorted only within itself. That is not enough: an edit
+    //    moving item 1 -> item 2 locks 1 then 2, while a concurrent edit moving
+    //    2 -> 1 locks 2 then 1, and the two deadlock. Ordering the union of both
+    //    passes by (item, location) gives every concurrent edit the same
+    //    acquisition order, so they queue instead of deadlocking.
+    //
+    //    Rows that do not exist yet cannot be locked here; the reversal pass
+    //    inserts them, which is safe because a row nobody has can't be
+    //    contended for its quantity.
+    const lockKeys = Array.from(new Set([
+      ...oldLineItems.map(li => `${Number(li.itemId)}|${oldLocationType}|${Number(oldLocationId)}`),
+      ...lineItems.map(li => `${Number(li.itemId)}|${newLocationType}|${Number(newLocationId)}`),
+    ]));
+    if (lockKeys.length > 0) {
+      await editTx.query(
+        `SELECT id FROM stock_entries
+          WHERE material_type = 'item'
+            AND (item_id::text || '|' || branch_type || '|' || branch_id::text) = ANY($1::text[])
+          ORDER BY item_id, branch_type, branch_id
+          FOR UPDATE`,
+        [lockKeys]
+      );
+    }
 
     // 1. Reverse the old lines: credit the quantity back and restore the exact
     //    lots the bill consumed. Legacy lines without a stored breakdown leave
@@ -1006,82 +1082,80 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
        newPaymentMode, parsed.data.couponCode ?? null, newAmountPaid, newPaymentStatus, id]
     ));
 
-    await editTx.query('COMMIT');
-  } catch (txErr) {
-    try { await editTx.query('ROLLBACK'); } catch { /* already rolled back */ }
-    throw txErr;
-  } finally {
-    editTx.release();
-  }
-
-  // Ledger the reversal before the re-apply so the trail reads
-  // out → back-in → out again, and the running balance stays truthful.
-  // Awaited (not fire-and-forget) so the two writes cannot interleave and land
-  // out of order. A ledger failure is logged rather than thrown: the ledger is
-  // an append-only audit trail, so losing an entry must not fail a sale the
-  // stock tables have already accepted — but it must never fail *silently*.
-  try {
-    const [meta, branchFn] = await Promise.all([
-      batchResolveMeta(pool, [...oldLineItems, ...lineItems].map(li => ({ materialType: 'item' as const, refId: li.itemId }))),
-      buildBranchMaps(),
-    ]);
-    await writeStockLedger(pool, oldLineItems.map(li => {
-      const m = meta.get(`item:${li.itemId}`);
+    // 4. Ledger the reversal before the re-apply so the trail reads
+    //    out → back-in → out again, and the running balance stays truthful.
+    //    Inside the transaction: an edit that moved stock but lost its movement
+    //    rows leaves a ledger that can never be reconciled to the quantity.
+    await writeStockLedger(editTx, oldLineItems.map(li => {
+      const m = editMeta.get(`item:${li.itemId}`);
       return {
         txnType: 'sale_reversal', materialType: 'item' as const, refId: li.itemId,
         itemName: m?.name ?? '', unit: m?.unit ?? '',
         branchType: oldLocationType, branchId: oldLocationId,
-        branchName: branchFn(oldLocationType, oldLocationId),
+        branchName: editBranchNameOf(oldLocationType, oldLocationId),
         qtyChange: Number(li.quantity),
         unitCost: Number((li as any).unitPrice ?? 0),
         docType: 'sale', docId: id,
         notes: `${existingRaw.invoice_number} — reversed for edit`,
       };
     }));
-    await writeStockLedger(pool, lineItems.map(li => {
-      const m = meta.get(`item:${li.itemId}`);
+    await writeStockLedger(editTx, lineItems.map(li => {
+      const m = editMeta.get(`item:${li.itemId}`);
       return {
         txnType: 'sale', materialType: 'item' as const, refId: li.itemId,
         itemName: m?.name ?? '', unit: m?.unit ?? '',
         branchType: newLocationType, branchId: newLocationId,
-        branchName: branchFn(newLocationType, newLocationId),
+        branchName: editBranchNameOf(newLocationType, newLocationId),
         qtyChange: -Number(li.quantity),
         unitCost: Number(li.unitPrice ?? 0),
         docType: 'sale', docId: id,
         notes: `${existingRaw.invoice_number} — re-applied after edit`,
       };
     }));
-  } catch (err) {
-    console.error(`[stock-ledger] sale ${id} edit entries failed to write:`, err);
-  }
 
-  // Adjust customer total purchases
-  const oldTotal = Number(existingRaw.total_amount);
-  const oldCustomerId = existingRaw.customer_id;
-  if (oldCustomerId) {
-    await db.update(customersTable)
-      .set({ totalPurchases: sql`${customersTable.totalPurchases}::numeric - ${oldTotal}` })
-      .where(eq(customersTable.id, oldCustomerId));
-  }
-  if (parsed.data.customerId) {
-    await db.update(customersTable)
-      .set({ totalPurchases: sql`${customersTable.totalPurchases}::numeric + ${totalAmount}` })
-      .where(eq(customersTable.id, parsed.data.customerId));
-  }
+    // 5. Customer running totals: take the old bill off, put the new one on.
+    if (oldCustomerId) {
+      await editTx.query(
+        `UPDATE customers SET total_purchases = COALESCE(total_purchases, 0)::numeric - $1 WHERE id = $2`,
+        [oldTotal, oldCustomerId]
+      );
+    }
+    if (parsed.data.customerId) {
+      await editTx.query(
+        `UPDATE customers SET total_purchases = COALESCE(total_purchases, 0)::numeric + $1 WHERE id = $2`,
+        [totalAmount, parsed.data.customerId]
+      );
+    }
 
-  // Get location name for response
-  let locationName = '';
-  let locationUpiId = '';
-  if (newLocationType === 'warehouse') {
-    const { rows: [wh] } = await pgPool.query<{ name: string; upi_id: string | null }>(
-      `SELECT name, upi_id FROM warehouses WHERE id = $1`, [newLocationId]
+    // 6. Restate the accounting receipt. An edit used to change the amount, the
+    //    payment mode or the location and leave the original receipt standing,
+    //    so the cash and bank books drifted away from the sales register with
+    //    nothing to show why. The old receipt for this invoice is withdrawn and
+    //    the current one written in its place, in the same transaction.
+    await editTx.query(
+      `DELETE FROM receipts WHERE voucher_number = $1`, [existingRaw.invoice_number]
     );
-    locationName = wh?.name ?? '';
-    locationUpiId = wh?.upi_id ?? '';
-  } else {
-    const [outlet] = await db.select().from(outletsTable).where(eq(outletsTable.id, newLocationId)).limit(1);
-    locationName = outlet?.name ?? '';
-    locationUpiId = (outlet as any)?.upiId ?? '';
+    if (editSalesLedgerId) {
+      let debitLedgerId = editCashLedgerId;
+      if (clearsThroughBank(newPaymentMode) && editElecClrId) debitLedgerId = editElecClrId;
+      else if (newPaymentMode === 'credit' && editCustLedgerId) debitLedgerId = editCustLedgerId;
+      if (debitLedgerId) {
+        await editTx.query(
+          `INSERT INTO receipts (receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, voucher_number, location_type, location_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [parsed.data.saleDate, editSalesLedgerId, debitLedgerId, totalAmount,
+           `Sale: ${existingRaw.invoice_number}${locationName ? ` at ${locationName}` : ''}`,
+           existingRaw.invoice_number, newLocationType, newLocationId]
+        );
+      }
+    }
+
+    await editTx.query('COMMIT');
+  } catch (txErr) {
+    try { await editTx.query('ROLLBACK'); } catch { /* already rolled back */ }
+    throw txErr;
+  } finally {
+    editTx.release();
   }
 
   const customerName = parsed.data.customerId
@@ -1118,6 +1192,157 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
   });
 });
 
+// ── Cancel Sale ───────────────────────────────────────────────────────────────
+//
+// Cancelling used to be something only the branch-transfer code could do, by
+// stamping `cancelled_at` and nothing else: stock stayed sold, the receipt
+// stayed in the cash book, the customer stayed charged and the movement trail
+// showed goods leaving that were still on the shelf. The GST and sales reports
+// dropped the bill while the books kept it, so the two never agreed again.
+//
+// A cancellation now reverses every consequence of the sale in one transaction,
+// and `buildDerivedPostings` skips cancelled customer invoices, so revenue,
+// output GST and the debtor balance all fall away with it.
+router.post("/sales/:id/cancel", requireModuleAction("page:/sales/pos", "delete"), async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid sale id" }); return; }
+  const reason = typeof (req.body as any)?.reason === 'string' ? String((req.body as any).reason).trim() : '';
+
+  const { pool: pgPool } = await import("@workspace/db");
+  const branchNameOf = await buildBranchMaps();
+
+  const tx = await pgPool.connect();
+  try {
+    await tx.query('BEGIN');
+
+    const { rows: [sale] } = await tx.query<any>(
+      `SELECT * FROM sales WHERE id = $1 FOR UPDATE`, [id]
+    );
+    if (!sale) {
+      await tx.query('ROLLBACK');
+      res.status(404).json({ error: "Sale not found" }); return;
+    }
+    if (sale.cancelled_at) {
+      await tx.query('ROLLBACK');
+      res.status(409).json({ error: `Invoice ${sale.invoice_number} is already cancelled.`, code: 'ALREADY_CANCELLED' }); return;
+    }
+    // A branch-transfer invoice is owned by the transfer that raised it. Reject
+    // the transfer instead — that path raises the credit note which reverses
+    // both legs and the tax with them.
+    if (sale.branch_transfer_id != null) {
+      await tx.query('ROLLBACK');
+      res.status(409).json({
+        error: 'This invoice belongs to a branch transfer. Reject the transfer to reverse it.',
+        code: 'BRANCH_TRANSFER_INVOICE',
+      }); return;
+    }
+    // Money already banked, or goods already taken back, mean the bill has a
+    // life of its own. Reversing it silently would strand those records.
+    const { rows: [pay] } = await tx.query<{ n: string; amt: string }>(
+      `SELECT COUNT(*)::text AS n, COALESCE(SUM(amount::numeric), 0)::text AS amt FROM sale_payments WHERE sale_id = $1`, [id]
+    );
+    if (Number(pay?.n ?? 0) > 0) {
+      await tx.query('ROLLBACK');
+      res.status(409).json({
+        error: `₹${Number(pay.amt).toFixed(2)} has already been collected against ${sale.invoice_number}. Refund or raise a credit note instead of cancelling.`,
+        code: 'PAYMENTS_RECORDED',
+      }); return;
+    }
+    const { rows: [ret] } = await tx.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n FROM sales_returns WHERE sale_id = $1`, [id]
+    );
+    if (Number(ret?.n ?? 0) > 0) {
+      await tx.query('ROLLBACK');
+      res.status(409).json({
+        error: `${sale.invoice_number} already has a sales return against it. Cancel the return first.`,
+        code: 'RETURN_EXISTS',
+      }); return;
+    }
+
+    const locType: string = sale.location_type ?? 'outlet';
+    const locId: number = sale.location_id ?? sale.outlet_id;
+    if (locType === 'outlet' && await outletWritesBlocked(pgPool)) {
+      await tx.query('ROLLBACK');
+      res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+    }
+
+    const lines = (sale.line_items ?? []) as Array<{ itemId: number; quantity: number; unitPrice?: number; batchBreakdown?: any[] }>;
+
+    // Put the goods back, in ascending item order so a concurrent bill for the
+    // same item queues behind this instead of deadlocking against it.
+    for (const li of [...lines].sort((a, b) => Number(a.itemId) - Number(b.itemId))) {
+      const { rows: [se] } = await tx.query<{ id: number }>(
+        `SELECT id FROM stock_entries
+          WHERE item_id = $1 AND material_type = 'item' AND branch_type = $2 AND branch_id = $3
+          LIMIT 1 FOR UPDATE`,
+        [li.itemId, locType, locId]
+      );
+      if (se) {
+        await tx.query(
+          `UPDATE stock_entries SET quantity = quantity::numeric + $1, updated_at = now() WHERE id = $2`,
+          [li.quantity, se.id]
+        );
+      } else {
+        await tx.query(
+          `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price)
+           VALUES ($1, 'item', $2, $3, $4, '0')`,
+          [li.itemId, locType, locId, li.quantity]
+        );
+      }
+      await restoreBatches(tx, li.itemId, locType, locId, li.batchBreakdown, "sale", id);
+    }
+
+    const meta = await batchResolveMeta(tx, lines.map(li => ({ materialType: 'item' as const, refId: li.itemId })));
+    await writeStockLedger(tx, lines.map(li => {
+      const m = meta.get(`item:${li.itemId}`);
+      return {
+        txnType: 'sale_cancellation', materialType: 'item' as const, refId: li.itemId,
+        itemName: m?.name ?? '', unit: m?.unit ?? '',
+        branchType: locType, branchId: locId,
+        branchName: branchNameOf(locType, locId),
+        qtyChange: Number(li.quantity),
+        unitCost: Number(li.unitPrice ?? 0),
+        docType: 'sale', docId: id,
+        notes: `${sale.invoice_number} — cancelled${reason ? `: ${reason}` : ''}`,
+      };
+    }));
+
+    if (sale.customer_id) {
+      await tx.query(
+        `UPDATE customers SET total_purchases = COALESCE(total_purchases, 0)::numeric - $1 WHERE id = $2`,
+        [Number(sale.total_amount), sale.customer_id]
+      );
+    }
+
+    // Withdraw the cash-book side. The derived postings drop the revenue, the
+    // output GST and the debtor leg on their own once `cancelled_at` is set.
+    await tx.query(`DELETE FROM receipts WHERE voucher_number = $1`, [sale.invoice_number]);
+
+    await tx.query(`UPDATE sales SET cancelled_at = now() WHERE id = $1`, [id]);
+
+    await tx.query('COMMIT');
+
+    logActivity({
+      action: "DELETE", module: "sales", entityType: "sale", entityId: id,
+      description: `Sale ${sale.invoice_number} cancelled — ₹${Number(sale.total_amount).toFixed(2)}${reason ? ` (${reason})` : ''}`,
+      metadata: { before: { totalAmount: Number(sale.total_amount), lineCount: lines.length }, reason },
+    }).catch(() => {});
+
+    res.json({
+      id,
+      invoiceNumber: sale.invoice_number,
+      cancelled: true,
+      reversedLines: lines.length,
+      totalAmount: Number(sale.total_amount),
+    });
+  } catch (txErr) {
+    try { await tx.query('ROLLBACK'); } catch { /* already rolled back */ }
+    throw txErr;
+  } finally {
+    tx.release();
+  }
+});
+
 // Summary totals + per-location breakdown. Raw SQL because location_type /
 // location_id are startup-migration columns invisible to drizzle — the old
 // drizzle version grouped warehouse sales under their fallback outlet_id,
@@ -1139,7 +1364,9 @@ router.get("/sales/summary", requireModuleView(["page:/sales/pos", "page:/"]), a
            COALESCE(SUM(s.total_amount::numeric), 0)::float AS sales_amount,
            COALESCE(SUM(s.tax_total::numeric), 0)::float    AS tax_amount
     FROM sales s
-    WHERE ${summScopeCond}
+    WHERE s.branch_transfer_id IS NULL
+      AND s.cancelled_at IS NULL
+      AND ${summScopeCond}
     GROUP BY 1, 2
   `, summParams);
   const outlets = await db.select().from(outletsTable);

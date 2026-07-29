@@ -7,6 +7,7 @@ import {
   CreateCouponBody, UpdateCouponBody, DeleteCouponParams,
 } from "@workspace/api-zod";
 import { nextVoucherNumber } from "../lib/voucherNumber";
+import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 
 const router = Router();
 
@@ -81,7 +82,9 @@ router.get("/customers", requireModuleView(["page:/sales/pos", "page:/accounts/v
     GROUP BY c.id
     ORDER BY c.id
   `, params);
-  res.json(rows.map((r: any) => ({
+  const paging = parsePaging(req.query as Record<string, unknown>);
+  setPagingHeaders(res, rows.length, paging);
+  res.json(applyPaging(rows as any[], paging).map((r: any) => ({
     ...r,
     totalPurchases:      Number(r.totalPurchases),
     outstandingBalance:  Number(r.outstandingBalance),
@@ -243,7 +246,9 @@ router.get("/vendors", requireModuleView(["page:/production/purchase", "page:/ac
     GROUP BY v.id
     ORDER BY v.id
   `, params);
-  res.json(rows.map((r: any) => ({
+  const paging = parsePaging(req.query as Record<string, unknown>);
+  setPagingHeaders(res, rows.length, paging);
+  res.json(applyPaging(rows as any[], paging).map((r: any) => ({
     ...r,
     gstNumber:          r.gst_number ?? null,
     bankName:           r.bank_name ?? null,
@@ -369,6 +374,8 @@ router.get("/customers/:id/ledger", requireModuleView(["page:/customers", "page:
        (s.total_amount - s.amount_paid) AS balance_due
      FROM sales s
      WHERE s.customer_id = $1
+       AND s.branch_transfer_id IS NULL
+       AND s.cancelled_at IS NULL
      ORDER BY s.sale_date ASC, s.id ASC`,
     [id],
   );
@@ -522,7 +529,9 @@ router.post("/vendors/:id/payment", requireModuleAction(["page:/vendors", "page:
 // ── Coupons ────────────────────────────────────────────────────────────────
 router.get("/coupons", requireModuleView("page:/coupons"), async (_req, res): Promise<void> => {
   const rows = await db.select().from(couponsTable).orderBy(couponsTable.id);
-  res.json(rows.map((r) => ({ ...r, discountValue: Number(r.discountValue) })));
+  const paging = parsePaging(_req.query as Record<string, unknown>);
+  setPagingHeaders(res, rows.length, paging);
+  res.json(applyPaging(rows, paging).map((r) => ({ ...r, discountValue: Number(r.discountValue) })));
 });
 
 router.post("/coupons", requireModuleAction("page:/coupons", "add"), async (req, res): Promise<void> => {

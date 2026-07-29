@@ -1,0 +1,165 @@
+Proceed with the final Enterprise ERP Stabilization Phase.
+
+Fix ONLY the issues identified in the Acceptance Audit.
+
+Priority order:
+
+========================
+PRIORITY 1 (Mandatory)
+========================
+
+1. Sales must always create Stock Ledger entries.
+
+Every Sale
+
+↓
+
+Stock Reduction
+
+↓
+
+FIFO/FEFO
+
+↓
+
+Stock Ledger
+
+↓
+
+Inventory Valuation
+
+↓
+
+Reports
+
+↓
+
+Dashboard
+
+↓
+
+Accounting
+
+must occur in one transaction.
+
+No fire-and-forget operations.
+
+No silent failures.
+
+------------------------------------------------
+
+2. Editing and Cancelling Sales
+
+Editing must correctly update:
+
+• Stock
+
+• Stock Ledger
+
+• Customer Balance
+
+• Receipt
+
+• Accounting
+
+• GST
+
+• Reports
+
+Cancelling must reverse every posting automatically.
+
+------------------------------------------------
+
+3. Internal GST Transfers
+
+Different GSTIN transfers:
+
+• Create GST Sale Invoice
+
+• Create GST Purchase Invoice
+
+• Update GST Returns
+
+• Update Accounting
+
+• Update Branch Transfer Ledger
+
+BUT
+
+Never count as Customer Sales.
+
+Dashboard Revenue
+
+Sales Register
+
+Top Customers
+
+Profit Reports
+
+must only use customer invoices.
+
+========================
+PRIORITY 2
+========================
+
+Fix:
+
+• Purchase Register vs P&L mismatch
+
+• Dashboard Cash mismatch
+
+• Dashboard Bank mismatch
+
+• Profit calculation consistency
+
+• Batch manufacture/expiry fields
+
+• Convert TEXT dates to DATE
+
+• Warehouse assignment for legacy customers
+
+• Remove all test/demo data
+
+• Add missing HSN codes
+
+• Improve report consistency
+
+========================
+PRIORITY 3
+========================
+
+Performance
+
+Pagination
+
+Indexes
+
+Report optimisation
+
+Database constraints
+
+========================
+
+After fixing everything,
+
+perform the complete Enterprise Acceptance Audit again.
+
+The ERP should not be marked complete until:
+
+✓ All critical failures are resolved
+
+✓ Trial Balance matches
+
+✓ Balance Sheet matches
+
+✓ Dashboard matches Accounting
+
+✓ Reports match source transactions
+
+✓ Inventory matches Stock Ledger
+
+✓ GST matches reports
+
+✓ No accounting inconsistencies remain
+
+✓ Final verdict = READY FOR PRODUCTION.

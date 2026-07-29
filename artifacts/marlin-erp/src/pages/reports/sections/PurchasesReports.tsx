@@ -26,8 +26,22 @@ function RegisterReport({ range, canDownload }: { range: RangeState; canDownload
     to: range.to || undefined,
     vendorId: vendor === 'all' ? undefined : Number(vendor),
   });
-  const rows = data?.rows ?? [];
-  const t = data?.totals;
+  // Backend adds gross / inputGst / net (recoverable input GST split out, so
+  // net purchases ties to the P&L). Access them loosely — the shared client
+  // type still lists only the legacy tax/total fields.
+  const rows = (data?.rows ?? []) as Array<{
+    id: number; billNumber: string; date: string; vendorName: string;
+    subtotal: number; discount: number; tax: number; total: number;
+    gross?: number; inputGst?: number; net?: number;
+  }>;
+  const t = data?.totals as (undefined | {
+    bills: number; subtotal: number; discount: number; tax: number; total: number;
+    gross?: number; inputGst?: number; net?: number;
+  });
+  const reconciliation = (data as any)?.reconciliation as string | undefined;
+  const g = (r: { gross?: number; total: number }) => r.gross ?? r.total;
+  const ig = (r: { inputGst?: number; tax: number }) => r.inputGst ?? r.tax;
+  const nt = (r: { net?: number; total: number; tax: number }) => r.net ?? (r.total - r.tax);
   const vendorLabel = vendor === 'all' ? 'All vendors' : (vendors as any[]).find((v) => String(v.id) === vendor)?.name ?? vendor;
 
   return (
@@ -46,7 +60,7 @@ function RegisterReport({ range, canDownload }: { range: RangeState; canDownload
           onCSV={() => downloadCSV('purchase-register.csv', rows.map((r) => ({
             'Bill No': r.billNumber, Date: r.date, Vendor: r.vendorName,
             'Taxable (₹)': r.subtotal.toFixed(2), 'Discount (₹)': r.discount.toFixed(2),
-            'Tax (₹)': r.tax.toFixed(2), 'Total (₹)': r.total.toFixed(2),
+            'Gross (₹)': g(r).toFixed(2), 'Input GST (₹)': ig(r).toFixed(2), 'Net (₹)': nt(r).toFixed(2),
           })))}
           onPDF={() => exportReportPdf({
             title: 'Purchase Register',
@@ -55,12 +69,12 @@ function RegisterReport({ range, canDownload }: { range: RangeState; canDownload
             sections: [{
               columns: [
                 { label: 'Bill No', width: 1.4 }, { label: 'Date' }, { label: 'Vendor', width: 2 },
-                { label: 'Taxable', align: 'right', width: 1.3 }, { label: 'Discount', align: 'right' },
-                { label: 'Tax', align: 'right', width: 1.1 }, { label: 'Total', align: 'right', width: 1.3 },
+                { label: 'Gross', align: 'right', width: 1.3 }, { label: 'Input GST', align: 'right', width: 1.1 },
+                { label: 'Net', align: 'right', width: 1.3 },
               ],
-              rows: rows.map((r) => [r.billNumber, fmtDate(r.date), r.vendorName, pdfMoney(r.subtotal),
-                pdfMoney(r.discount), pdfMoney(r.tax), pdfMoney(r.total)]),
-              totalsRow: ['TOTAL', '', '', pdfMoney(t?.subtotal), pdfMoney(t?.discount), pdfMoney(t?.tax), pdfMoney(t?.total)],
+              rows: rows.map((r) => [r.billNumber, fmtDate(r.date), r.vendorName,
+                pdfMoney(g(r)), pdfMoney(ig(r)), pdfMoney(nt(r))]),
+              totalsRow: ['TOTAL', '', '', pdfMoney(t?.gross ?? t?.total), pdfMoney(t?.inputGst ?? t?.tax), pdfMoney(t?.net ?? ((t?.total ?? 0) - (t?.tax ?? 0)))],
             }],
           })}
         />
@@ -68,9 +82,9 @@ function RegisterReport({ range, canDownload }: { range: RangeState; canDownload
 
       <SummaryCards cards={[
         { label: 'Bills', value: t?.bills ?? 0 },
-        { label: 'Taxable Value', value: fmt(t?.subtotal) },
-        { label: 'Tax (ITC)', value: fmt(t?.tax), tone: 'accent' },
-        { label: 'Total Purchases', value: fmt(t?.total), tone: 'warn' },
+        { label: 'Gross Invoice', value: fmt(t?.gross ?? t?.total), tone: 'warn' },
+        { label: 'Input GST (ITC)', value: fmt(t?.inputGst ?? t?.tax), tone: 'accent' },
+        { label: 'Net Purchases', value: fmt(t?.net ?? ((t?.total ?? 0) - (t?.tax ?? 0))) },
       ]} />
 
       <RTable
@@ -78,14 +92,17 @@ function RegisterReport({ range, canDownload }: { range: RangeState; canDownload
           { key: 'billNumber', label: 'Bill No', render: (r) => <span className="font-mono text-xs text-primary font-bold">{r.billNumber}</span> },
           { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
           { key: 'vendorName', label: 'Vendor', render: (r) => <span className="font-medium">{r.vendorName}</span> },
-          { key: 'subtotal', label: 'Taxable', align: 'right', render: (r) => fmt(r.subtotal) },
-          { key: 'discount', label: 'Discount', align: 'right', render: (r) => fmt(r.discount) },
-          { key: 'tax', label: 'Tax', align: 'right', render: (r) => fmt(r.tax) },
-          { key: 'total', label: 'Total', align: 'right', render: (r) => <b>{fmt(r.total)}</b> },
-        ] satisfies Col<(typeof rows)[number]>[]}
+          { key: 'gross', label: 'Gross', align: 'right', render: (r) => fmt(g(r)) },
+          { key: 'inputGst', label: 'Input GST', align: 'right', render: (r) => fmt(ig(r)) },
+          { key: 'net', label: 'Net', align: 'right', render: (r) => <b>{fmt(nt(r))}</b> },
+        ] as Col<(typeof rows)[number]>[]}
         rows={rows} loading={isLoading} rowKey={(r) => r.id}
-        footer={['TOTAL', '', '', fmt(t?.subtotal), fmt(t?.discount), fmt(t?.tax), fmt(t?.total)]}
+        footer={['TOTAL', '', '', fmt(t?.gross ?? t?.total), fmt(t?.inputGst ?? t?.tax), fmt(t?.net ?? ((t?.total ?? 0) - (t?.tax ?? 0)))]}
       />
+
+      <p className="text-xs text-muted-foreground">
+        {reconciliation ?? 'Gross − Input GST = Net purchases (agrees with the P&L Purchases line, before any journal-voucher adjustments).'}
+      </p>
     </div>
   );
 }

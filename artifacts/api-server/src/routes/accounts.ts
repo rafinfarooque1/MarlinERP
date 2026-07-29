@@ -15,6 +15,7 @@ import { buildBooks } from "../lib/books";
 import { buildDerivedPostings } from "./journal";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { getUserDataScope, scopeSalesWhere, scopeBranchWhere } from "../lib/dataScope";
+import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 import {
   callerLocation, ownLocationScope, scopeLedgerIds, scopeCashLedgerIds, scopeMoneyWhere,
   checkVoucherLegs, foreignLocationLedgerIds,
@@ -451,7 +452,7 @@ router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledge
     const salesWhere = scopeSalesWhere(scope, salesParams);
     const { rows } = await pool.query(
       `SELECT s.id, s.sale_date, s.invoice_number, s.total_amount, s.tax_total
-       FROM sales s WHERE s.branch_transfer_id IS NULL AND ${salesWhere}`, salesParams,
+       FROM sales s WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL AND ${salesWhere}`, salesParams,
     );
     scopedSales = rows as typeof scopedSales;
   }
@@ -679,7 +680,9 @@ router.get("/expenses", requireModuleView(["page:/accounts/expenses", "page:/sal
   const all = [...directExpenses, ...locationExpenses].sort(
     (a, b) => String(b.expenseDate).localeCompare(String(a.expenseDate))
   );
-  res.json(all);
+  const paging = parsePaging(req.query as Record<string, unknown>);
+  setPagingHeaders(res, all.length, paging);
+  res.json(applyPaging(all, paging));
 });
 
 /** Expense categories. Free text would fragment the audit trail across
@@ -1333,11 +1336,22 @@ router.get("/gst/summary", requireModuleView(["page:/accounts/gst", "page:/accou
   }
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
 
-  let allSales = await db.select().from(salesTable).orderBy(salesTable.saleDate);
+  // Cancelled documents are not tax documents. The dedicated GSTR-1 / GSTR-3B
+  // endpoints have always excluded them; this summary did not, so the two
+  // disagreed about the same period's liability.
+  //
+  // Branch-transfer invoices deliberately STAY: a cross-GSTIN stock transfer
+  // carries real output GST that has to be paid, so excluding it here would
+  // understate the liability. It is outward supply, not customer revenue —
+  // which is why the revenue tiles and the sales reports filter it out and
+  // this one does not.
+  let allSales = await db.select().from(salesTable)
+    .where(sql`cancelled_at IS NULL`).orderBy(salesTable.saleDate);
   if (fromDate) allSales = allSales.filter(s => s.saleDate >= fromDate);
   if (toDate) allSales = allSales.filter(s => s.saleDate <= toDate);
 
-  let allPurchases = await db.select().from(purchasesTable).orderBy(purchasesTable.purchaseDate);
+  let allPurchases = await db.select().from(purchasesTable)
+    .where(sql`cancelled_at IS NULL`).orderBy(purchasesTable.purchaseDate);
   if (fromDate) allPurchases = allPurchases.filter(p => p.purchaseDate >= fromDate);
   if (toDate) allPurchases = allPurchases.filter(p => p.purchaseDate <= toDate);
 

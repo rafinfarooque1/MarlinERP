@@ -10,6 +10,7 @@ import { DEFAULT_INITIAL_PASSWORD } from '../lib/passwordPolicy';
 import { eq, and, gte, lte, sql } from "drizzle-orm";
 import { logActivity } from "../lib/audit";
 import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
+import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 import {
   CreateHierarchyBody, UpdateHierarchyBody, DeleteHierarchyParams,
   CreateEmployeeBody, UpdateEmployeeBody, GetEmployeeParams, DeleteEmployeeParams,
@@ -18,6 +19,7 @@ import {
 } from "@workspace/api-zod";
 
 const router = Router();
+
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -422,9 +424,11 @@ async function postSalaryApproval(opts: {
 // app shell read the hierarchy list on every page to work out what the signed-in
 // user is allowed to see — guarding it makes permission resolution itself require
 // a permission, and every page 403s for everyone below top level.
-router.get("/hr/hierarchies", async (_req, res): Promise<void> => {
-  const rows = await db.select().from(hierarchiesTable).orderBy(hierarchiesTable.level);
-  res.json(rows);
+router.get("/hr/hierarchies", async (req, res): Promise<void> => {
+  const paging = parsePaging(req.query as Record<string, unknown>);
+  const all = await db.select().from(hierarchiesTable).orderBy(hierarchiesTable.level);
+  setPagingHeaders(res, all.length, paging);
+  res.json(applyPaging(all, paging));
 });
 
 router.post("/hr/hierarchies", requireModuleAction("page:/hr/hierarchy", "add"), async (req, res): Promise<void> => {
@@ -460,6 +464,7 @@ router.get("/hr/employees", requireModuleView("page:/hr/employees"), async (req,
     scopeCond = scopeBranchWhere(scope, scopeParams, 'e');
   }
 
+  const paging = parsePaging(req.query as Record<string, unknown>);
   const [{ rows }, hierarchies] = await Promise.all([
     pool.query(
       `SELECT e.id, e.name, e.username, e.email, e.phone,
@@ -473,8 +478,11 @@ router.get("/hr/employees", requireModuleView("page:/hr/employees"), async (req,
     db.select().from(hierarchiesTable),
   ]);
 
+  const total = (rows as any[]).length;
+  const page = applyPaging(rows as any[], paging);
+  setPagingHeaders(res, total, paging);
   const hMap = new Map(hierarchies.map((h) => [h.id, h.name]));
-  const enriched = await Promise.all((rows as any[]).map(async (e) => ({
+  const enriched = await Promise.all(page.map(async (e) => ({
     id: e.id, name: e.name, username: e.username, email: e.email ?? null, phone: e.phone ?? null,
     hierarchyId: e.hierarchyId, hierarchyName: hMap.get(e.hierarchyId) ?? "",
     branchType: e.branchType, branchId: e.branchId,
@@ -693,6 +701,7 @@ router.get("/hr/payroll", requireModuleView("page:/hr/payroll"), async (req, res
   if (qp.success && qp.data.month) whereParts.push(`pr.month = ${p(Number(qp.data.month))}`);
   if (empIdFilter !== null) whereParts.push(`pr.employee_id = ${p(empIdFilter)}`);
 
+  const paging = parsePaging(req.query as Record<string, unknown>);
   const { rows } = await pool.query(
     `SELECT pr.*, e.name AS employee_name, e.branch_type, e.branch_id
      FROM payroll pr
@@ -702,7 +711,10 @@ router.get("/hr/payroll", requireModuleView("page:/hr/payroll"), async (req, res
     params,
   );
 
-  const enriched = await Promise.all(rows.map(async (r: any) => ({
+  const total = rows.length;
+  const page = applyPaging(rows, paging);
+  setPagingHeaders(res, total, paging);
+  const enriched = await Promise.all(page.map(async (r: any) => ({
     ...enrichPayroll(r),
     employeeName: r.employee_name ?? "",
     branchName: await getBranchName(r.branch_type, r.branch_id),
@@ -1108,13 +1120,15 @@ router.get("/hr/advances", requireModuleView("page:/hr/advances"), async (req, r
     empFilter = `WHERE ea.employee_id = $1`;
     params.push(scopeEmp.id);
   }
+  const paging = parsePaging(req.query as Record<string, unknown>);
   const { rows } = await pool.query(
     `SELECT ea.*, e.name AS employee_name
      FROM employee_advances ea JOIN employees e ON e.id = ea.employee_id
      ${empFilter} ORDER BY ea.created_at DESC`,
     params,
   );
-  res.json(rows.map((r: any) => ({
+  setPagingHeaders(res, rows.length, paging);
+  res.json(applyPaging(rows, paging).map((r: any) => ({
     id: r.id, employeeId: r.employee_id, employeeName: r.employee_name,
     amount: Number(r.amount), date: r.date, note: r.note,
     isDeducted: r.is_deducted, deductedPayrollId: r.deducted_payroll_id,
@@ -1210,7 +1224,9 @@ router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (re
         : null,
     }));
 
-    res.json(result);
+    const paging = parsePaging(req.query as Record<string, unknown>);
+    setPagingHeaders(res, result.length, paging);
+    res.json(applyPaging(result, paging));
     return;
   }
 
@@ -1277,7 +1293,9 @@ router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (re
     return a.employeeName.localeCompare(b.employeeName);
   });
 
-  res.json(result);
+  const paging = parsePaging(req.query as Record<string, unknown>);
+  setPagingHeaders(res, result.length, paging);
+  res.json(applyPaging(result, paging));
 });
 
 router.post("/hr/attendance/check-in", requireModuleAction("page:/hr/attendance", "add"), async (req, res): Promise<void> => {
@@ -1358,7 +1376,9 @@ router.get("/hr/leaves", requireModuleView("page:/hr/attendance"), async (req, r
   }
   const employees = await db.select().from(employeesTable);
   const eMap = new Map(employees.map((e) => [e.id, e.name]));
-  res.json(rows.map((r) => ({ ...r, employeeName: eMap.get(r.employeeId) ?? "", approverName: null })));
+  const paging = parsePaging(req.query as Record<string, unknown>);
+  setPagingHeaders(res, rows.length, paging);
+  res.json(applyPaging(rows, paging).map((r) => ({ ...r, employeeName: eMap.get(r.employeeId) ?? "", approverName: null })));
 });
 
 router.post("/hr/leaves", requireModuleAction("page:/hr/attendance", "add"), async (req, res): Promise<void> => {

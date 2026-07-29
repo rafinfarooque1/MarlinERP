@@ -13,6 +13,7 @@ import {
   resolveActingLocation, locationLabel, type ProdLocation,
 } from "../lib/productionCosting";
 import { getUserDataScope, scopeLocationTypeWhere } from "../lib/dataScope";
+import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 
 // ── Batch costing & wastage ──────────────────────────────────────────────────
@@ -113,6 +114,7 @@ const EXTRA_COLS = `id, batch_number, mfg_date, expiry_date, material_cost, rm_c
 
 const router = Router();
 
+
 /** Names for every location that can manufacture, for list/report labels. */
 async function locationNameMap(): Promise<Map<string, string>> {
   const [whs, outs] = await Promise.all([
@@ -156,7 +158,7 @@ router.get("/productions", requireModuleView("page:/production/production"), asy
   const locNames = await locationNameMap();
   const eMap = new Map(extra.rows.map((e: any) => [e.id, e]));
   const idSet = new Set(ids);
-  res.json(rows.filter((r) => idSet.has(r.id)).map((r) => {
+  const list = rows.filter((r) => idSet.has(r.id)).map((r) => {
     const ex = eMap.get(r.id);
     return {
       ...r,
@@ -171,7 +173,10 @@ router.get("/productions", requireModuleView("page:/production/production"), asy
       locationName: locNames.get(locKey(ex)) ?? "Head Office",
       ...costFields(ex),
     };
-  }));
+  });
+  const paging = parsePaging(req.query as Record<string, unknown>);
+  setPagingHeaders(res, list.length, paging);
+  res.json(applyPaging(list, paging));
 });
 
 // ── Production reports (must be registered before /productions/:id) ──────────

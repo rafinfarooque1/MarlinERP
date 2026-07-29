@@ -1346,6 +1346,329 @@ async function runMigrations() {
       client.release();
     }
   }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ERP stabilization: hygiene, date-column typing, indexes, invoice numbering
+  // All blocks below are guarded, idempotent and re-runnable on a LIVE database.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // ── (1) Remove test/demo data — GUARDED, delete ONLY unreferenced rows ─────
+  // Confirmed test rows: customers 5..19 and their CUST-{id} ledgers, plus item
+  // 12 ('TST-P5 Pack 63178'). We delete a row ONLY when it has zero references
+  // anywhere it could be pointed at. Anything referenced is deliberately left in
+  // place — deleting it would orphan real business documents. This block reports
+  // what it removed and what it kept so the state is auditable on every boot.
+  {
+    const custIds = Array.from({ length: 15 }, (_, i) => i + 5); // 5..19
+    // A customer is safe to remove only if NOTHING points at it.
+    const { rows: safeCusts } = await pool.query(
+      `SELECT c.id FROM customers c
+        WHERE c.id = ANY($1)
+          AND c.name ~ '^(Credit Test|ZZ )'
+          AND NOT EXISTS (SELECT 1 FROM sales s WHERE s.customer_id = c.id)
+          AND NOT EXISTS (SELECT 1 FROM sales_returns sr WHERE sr.customer_id = c.id)
+          -- its CUST-{id} ledger must also be unreferenced
+          AND NOT EXISTS (
+            SELECT 1 FROM account_ledgers al
+             WHERE al.code = 'CUST-' || c.id::text
+               AND (
+                 EXISTS (SELECT 1 FROM journal_voucher_lines jvl WHERE jvl.ledger_id = al.id)
+                 OR EXISTS (SELECT 1 FROM receipts r WHERE r.received_from_ledger_id = al.id OR r.received_in_ledger_id = al.id)
+                 OR EXISTS (SELECT 1 FROM payments p WHERE p.paid_from_ledger_id = al.id OR p.paid_to_ledger_id = al.id)
+               )
+          )`,
+      [custIds],
+    );
+    const safeCustIds = safeCusts.map((r) => r.id);
+    if (safeCustIds.length > 0) {
+      await pool.query(
+        `DELETE FROM account_ledgers WHERE code = ANY($1)`,
+        [safeCustIds.map((id: number) => `CUST-${id}`)],
+      );
+      await pool.query(`DELETE FROM customers WHERE id = ANY($1)`, [safeCustIds]);
+      console.log(`[migration] test_data_cleanup: removed ${safeCustIds.length} unreferenced test customer(s): ${safeCustIds.join(', ')}`);
+    } else {
+      console.log('[migration] test_data_cleanup: 0 test customers removable — all customers 5..19 are referenced by sales/receipts; kept in place');
+    }
+
+    // Item 12: delete only if it has NO stock/ledger/price/BOM/production refs.
+    const { rows: [item12Safe] } = await pool.query(
+      `SELECT 1 WHERE
+         NOT EXISTS (SELECT 1 FROM stock_entries WHERE item_id = 12 AND material_type = 'item')
+         AND NOT EXISTS (SELECT 1 FROM stock_batches WHERE item_id = 12 AND material_type = 'item')
+         AND NOT EXISTS (SELECT 1 FROM stock_ledger WHERE ref_id = 12 AND material_type = 'item')
+         AND NOT EXISTS (SELECT 1 FROM item_prices WHERE item_id = 12)
+         AND NOT EXISTS (SELECT 1 FROM bom_templates WHERE item_id = 12)
+         AND NOT EXISTS (SELECT 1 FROM productions WHERE item_id = 12)`
+    );
+    if (item12Safe) {
+      await pool.query(`DELETE FROM items WHERE id = 12 AND name = 'TST-P5 Pack 63178'`);
+      console.log('[migration] test_data_cleanup: removed unreferenced test item 12');
+    } else {
+      console.log('[migration] test_data_cleanup: item 12 kept — referenced by stock_entries/stock_batches (zero-qty scaffolding rows)');
+    }
+  }
+
+  // ── (2) Fill missing HSN codes for frozen-fruit items ──────────────────────
+  // 0810 10 00 is frozen strawberries. Item 1 ('Strawberry') gets it. Item 12,
+  // if it survived (1) above, gets a generic frozen-fruit HSN. Idempotent: only
+  // touches rows whose hsn_code is still blank.
+  await pool.query(
+    `UPDATE items SET hsn_code = '08101000'
+      WHERE id = 1 AND (hsn_code IS NULL OR hsn_code = '')`
+  );
+  await pool.query(
+    `UPDATE items SET hsn_code = '08101000'
+      WHERE id = 12 AND name = 'TST-P5 Pack 63178' AND (hsn_code IS NULL OR hsn_code = '')`
+  );
+  // NOTE: a DB-level CHECK (hsn_code <> '') is deliberately NOT added here. The
+  // item create/update path (routes/inventory.ts) is owned elsewhere and inserts
+  // hsn_code verbatim, so a hard CHECK could reject a legitimate future insert
+  // that relies on a blank default. Recommendation reported to the main agent.
+
+  // ── (3) Convert text date columns to real DATE columns ─────────────────────
+  // The global pg type parser for OID 1082 (DATE) is registered in lib/db where
+  // the pool is created, so DATE reads back as a plain 'YYYY-MM-DD' string and
+  // the API contract is preserved. Each column is converted independently and
+  // guarded: if the table/column is missing, or any value is not castable, that
+  // single column is skipped (left as text) rather than aborting the batch —
+  // a working system beats a pure one.
+  {
+    const { rows: [dateCastDone] } = await pool.query(
+      `SELECT 1 FROM migration_log WHERE name = 'text_date_columns_to_date_v1'`
+    );
+    if (!dateCastDone) {
+      const dateCols: [string, string][] = [
+        ['cash_deposits', 'deposit_date'],
+        ['coupons', 'expiry_date'],
+        ['employees', 'date_of_birth'],
+        ['expenses', 'expense_date'],
+        ['journal_vouchers', 'voucher_date'],
+        ['payments', 'payment_date'],
+        ['productions', 'expiry_date'],
+        ['productions', 'mfg_date'],
+        ['purchase_returns', 'return_date'],
+        ['receipts', 'receipt_date'],
+        ['reconciliation_batches', 'settlement_date'],
+        ['sale_payments', 'payment_date'],
+        ['sales_returns', 'return_date'],
+        ['stock_batches', 'expiry_date'],
+        ['stock_batches', 'mfg_date'],
+        ['stock_verifications', 'verify_date'],
+      ];
+      let converted = 0;
+      const skipped: string[] = [];
+      for (const [table, col] of dateCols) {
+        try {
+          const { rows: [meta] } = await pool.query(
+            `SELECT data_type FROM information_schema.columns
+              WHERE table_name = $1 AND column_name = $2`,
+            [table, col],
+          );
+          if (!meta) { skipped.push(`${table}.${col} (column missing)`); continue; }
+          if (meta.data_type === 'date') { converted++; continue; } // already done
+          if (meta.data_type !== 'text' && meta.data_type !== 'character varying') {
+            skipped.push(`${table}.${col} (unexpected type ${meta.data_type})`);
+            continue;
+          }
+          // Any non-empty value that is not YYYY-MM-DD would break the cast.
+          const { rows: [bad] } = await pool.query(
+            `SELECT count(*)::int AS c FROM ${table}
+              WHERE ${col} IS NOT NULL AND ${col} <> '' AND ${col} !~ '^\\d{4}-\\d{2}-\\d{2}$'`
+          );
+          if (bad.c > 0) {
+            skipped.push(`${table}.${col} (${bad.c} un-castable value(s))`);
+            continue;
+          }
+          // Empty strings become NULL, then cast text -> date.
+          await pool.query(
+            `ALTER TABLE ${table} ALTER COLUMN ${col} TYPE date USING NULLIF(${col}, '')::date`
+          );
+          converted++;
+        } catch (e) {
+          skipped.push(`${table}.${col} (error: ${(e as Error).message})`);
+        }
+      }
+      // Only log the migration as done when nothing was skipped; otherwise leave
+      // it un-logged so a later boot retries the skipped columns after a fix.
+      if (skipped.length === 0) {
+        await pool.query(`INSERT INTO migration_log (name) VALUES ('text_date_columns_to_date_v1')`);
+        console.log(`[migration] text_date_columns_to_date_v1: converted ${converted} column(s) text->date`);
+      } else {
+        console.warn(`[migration] text_date_columns_to_date_v1: converted ${converted}, SKIPPED: ${skipped.join('; ')} — will retry next boot`);
+      }
+    }
+  }
+
+  // ── (5) Priority-3 performance indexes for hot query paths ─────────────────
+  // Each index is created only if the table and every column it needs exist.
+  {
+    const idxSpecs: [string, string, string[]][] = [
+      ['idx_sales_sale_date',          'sales',                 ['sale_date']],
+      ['idx_sales_customer_id',        'sales',                 ['customer_id']],
+      ['idx_sales_branch_transfer_id', 'sales',                 ['branch_transfer_id']],
+      ['idx_sales_cancelled_at',       'sales',                 ['cancelled_at']],
+      ['idx_sales_loc',                'sales',                 ['location_type', 'location_id']],
+      ['idx_purchases_purchase_date',  'purchases',             ['purchase_date']],
+      ['idx_purchases_vendor_id',      'purchases',             ['vendor_id']],
+      ['idx_stock_entries_item_mt_br', 'stock_entries',         ['item_id', 'material_type', 'branch_type', 'branch_id']],
+      ['idx_stock_batches_item_mt_br', 'stock_batches',         ['item_id', 'material_type', 'branch_type', 'branch_id']],
+      ['idx_stock_ledger_ref_mt_br',   'stock_ledger',          ['ref_id', 'material_type', 'branch_type', 'branch_id']],
+      ['idx_stock_ledger_doc',         'stock_ledger',          ['doc_type', 'doc_id']],
+      ['idx_jvl_ledger_id',            'journal_voucher_lines', ['ledger_id']],
+      ['idx_jv_voucher_date',          'journal_vouchers',      ['voucher_date']],
+      ['idx_receipts_voucher_number',  'receipts',              ['voucher_number']],
+      ['idx_sale_payments_sale_id2',   'sale_payments',         ['sale_id']],
+      ['idx_attendance_date',          'attendance',            ['date']],
+      ['idx_sales_returns_sale_id',    'sales_returns',         ['sale_id']],
+    ];
+    for (const [idxName, table, cols] of idxSpecs) {
+      try {
+        const { rows: present } = await pool.query(
+          `SELECT column_name FROM information_schema.columns WHERE table_name = $1`,
+          [table],
+        );
+        if (present.length === 0) { console.warn(`[migration] index ${idxName}: table ${table} missing — skipped`); continue; }
+        const have = new Set(present.map((r) => r.column_name));
+        const missing = cols.filter((c) => !have.has(c));
+        if (missing.length > 0) { console.warn(`[migration] index ${idxName}: ${table} missing column(s) ${missing.join(', ')} — skipped`); continue; }
+        await pool.query(`CREATE INDEX IF NOT EXISTS ${idxName} ON ${table} (${cols.join(', ')})`);
+      } catch (e) {
+        console.error(`[migration] index ${idxName} FAILED:`, (e as Error).message);
+      }
+    }
+  }
+
+  // ── (6) Fix duplicate sales invoice numbers, then enforce uniqueness ───────
+  // ids 1..13 collide with 15..27 on 'TST/2025-26/0001'..'0013'. They are real,
+  // distinct sales, so nothing is deleted — the LATER (higher-id) row of each
+  // pair is renumbered onto a fresh number in the SAME format. Any receipt whose
+  // voucher_number pointed at the renumbered invoice is updated in the same
+  // transaction, because the general ledger links receipts to sales purely by
+  // voucher_number = invoice_number (and excludes such receipts to avoid
+  // double-counting revenue). Renumbering without fixing the receipt would
+  // silently double-count that sale in the Trial Balance.
+  {
+    const { rows: [dupFixDone] } = await pool.query(
+      `SELECT 1 FROM migration_log WHERE name = 'sales_invoice_dedupe_v1'`
+    );
+    // Only act if duplicates actually remain (also makes a re-run a no-op).
+    const { rows: [dupCount] } = await pool.query(
+      `SELECT count(*)::int AS c FROM (
+         SELECT invoice_number FROM sales
+         GROUP BY invoice_number HAVING count(*) > 1
+       ) d`
+    );
+    if (!dupFixDone && dupCount.c > 0) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        // Group prefixes seen so we can find the next free running number per
+        // prefix/FY (e.g. 'TST/2025-26/'). Renumber every non-lowest id in each
+        // colliding group.
+        const { rows: dupes } = await client.query(
+          `SELECT invoice_number, array_agg(id ORDER BY id) AS ids
+             FROM sales GROUP BY invoice_number HAVING count(*) > 1`
+        );
+        let renamed = 0, receiptsFixed = 0;
+        for (const d of dupes) {
+          // Split 'TST/2025-26/0001' -> prefix 'TST/2025-26/', width 4.
+          const m = String(d.invoice_number).match(/^(.*?)(\d+)$/);
+          const prefix = m ? m[1] : `${d.invoice_number}-`;
+          const width = m ? m[2].length : 4;
+          const ids: number[] = d.ids;
+          // Keep the lowest id on the original number; renumber the rest.
+          for (let i = 1; i < ids.length; i++) {
+            const oldNum = d.invoice_number;
+            // Next free number for this prefix. CRITICAL: it must not collide
+            // with an existing SALE invoice_number NOR an existing RECEIPT
+            // voucher_number. The general ledger excludes any receipt whose
+            // voucher_number equals a sale invoice_number (to avoid double-
+            // counting revenue), so reusing a receipt's number would silently
+            // knock that receipt out of the Trial Balance. Take the max numeric
+            // suffix across BOTH tables and add one.
+            const escPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const { rows: [nextRow] } = await client.query(
+              `SELECT GREATEST(
+                 COALESCE((SELECT MAX((regexp_replace(invoice_number, '^' || $1, ''))::int)
+                             FROM sales
+                            WHERE invoice_number LIKE $2
+                              AND regexp_replace(invoice_number, '^' || $1, '') ~ '^\\d+$'), 0),
+                 COALESCE((SELECT MAX((regexp_replace(voucher_number, '^' || $1, ''))::int)
+                             FROM receipts
+                            WHERE voucher_number LIKE $2
+                              AND regexp_replace(voucher_number, '^' || $1, '') ~ '^\\d+$'), 0)
+               ) + 1 AS n`,
+              [escPrefix, prefix + '%'],
+            );
+            const newNum = `${prefix}${String(nextRow.n).padStart(width, '0')}`;
+            await client.query(`UPDATE sales SET invoice_number = $1 WHERE id = $2`, [newNum, ids[i]]);
+            const { rowCount: rc } = await client.query(
+              `UPDATE receipts SET voucher_number = $1 WHERE voucher_number = $2`,
+              [newNum, oldNum],
+            );
+            receiptsFixed += rc ?? 0;
+            renamed++;
+          }
+        }
+        // Prove uniqueness before enforcing it.
+        const { rows: [stillDup] } = await client.query(
+          `SELECT count(*)::int AS c FROM (
+             SELECT invoice_number FROM sales GROUP BY invoice_number HAVING count(*) > 1
+           ) d`
+        );
+        if (stillDup.c > 0) throw new Error(`invoice de-dupe left ${stillDup.c} duplicate group(s)`);
+        await client.query(
+          `CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_invoice_number ON sales (invoice_number)`
+        );
+        await client.query(`INSERT INTO migration_log (name) VALUES ('sales_invoice_dedupe_v1')`);
+        await client.query('COMMIT');
+        console.log(`[migration] sales_invoice_dedupe_v1: renumbered ${renamed} sale(s), updated ${receiptsFixed} linked receipt(s), unique index added`);
+      } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        console.error('[migration] sales_invoice_dedupe_v1 FAILED (rolled back):', (e as Error).message);
+      } finally {
+        client.release();
+      }
+    } else if (!dupFixDone) {
+      // No duplicates: still enforce uniqueness and record the migration.
+      try {
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_invoice_number ON sales (invoice_number)`);
+        await pool.query(`INSERT INTO migration_log (name) VALUES ('sales_invoice_dedupe_v1')`);
+        console.log('[migration] sales_invoice_dedupe_v1: no duplicates found, unique index ensured');
+      } catch (e) {
+        console.error('[migration] sales_invoice_dedupe_v1 unique index FAILED:', (e as Error).message);
+      }
+    }
+  }
+
+  // ── Invoice sequence reconcile (every boot, idempotent) ────────────────────
+  // The next invoice number comes from company_settings.invoice_sequence, but
+  // the number actually stored on a sale is what makes it unique. Renumbering
+  // duplicates moves sales ONTO higher numbers without advancing the counter,
+  // so the counter points at numbers that are already taken and every new sale
+  // dies on uq_sales_invoice_number. Anything that rewrites invoice numbers can
+  // strand the counter the same way, so this is not gated behind a migration
+  // log entry — it re-checks on every start and only ever moves the counter
+  // forward, never backward over numbers already issued.
+  try {
+    const { rows } = await pool.query<{ id: number; invoice_sequence: number }>(
+      `UPDATE company_settings cs
+          SET invoice_sequence = GREATEST(cs.invoice_sequence, COALESCE((
+                SELECT MAX((regexp_replace(s.invoice_number, '^.*/', ''))::int)
+                  FROM sales s
+                 WHERE s.invoice_number LIKE cs.invoice_prefix || '/' || cs.financial_year || '/%'
+                   AND regexp_replace(s.invoice_number, '^.*/', '') ~ '^[0-9]+$'
+              ), 0))
+        WHERE cs.invoice_prefix IS NOT NULL AND cs.financial_year IS NOT NULL
+        RETURNING cs.id, cs.invoice_sequence`
+    );
+    for (const r of rows) {
+      console.log(`[migration] invoice_sequence_reconcile: company ${r.id} next invoice sequence is ${r.invoice_sequence}`);
+    }
+  } catch (e) {
+    console.error('[migration] invoice_sequence_reconcile FAILED:', (e as Error).message);
+  }
 }
 
 // ── Run core migrations first so all tables exist before the top-level awaits ──

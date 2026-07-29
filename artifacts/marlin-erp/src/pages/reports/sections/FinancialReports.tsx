@@ -282,9 +282,11 @@ function PnlReport({ range, canDownload, canPrint }: { range: RangeState; canDow
         <NoteLine>{pl.incomes.closingStockNote}</NoteLine>
       )}
       <NoteLine>
-        Inventory is accounted periodically — purchases are expensed and stock enters through opening
-        and closing stock at weighted-average cost. Cost of goods sold is therefore
-        opening stock + purchases − closing stock.
+        Basis: <b>Periodic</b>. Inventory is accounted periodically — purchases are expensed and stock
+        enters through opening and closing stock at weighted-average cost. Cost of goods sold is therefore
+        opening stock + purchases − closing stock. This differs from the Sales → Profitability report,
+        which computes gross profit per item from actual batch cost (perpetual method); the two
+        gross-profit figures are legitimately different and will not tie out.
       </NoteLine>
 
       <div className="grid lg:grid-cols-2 gap-4">

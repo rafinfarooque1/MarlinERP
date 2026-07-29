@@ -435,10 +435,19 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   const inpCgst = byCode.get("STD-INP-CGST")?.id, inpSgst = byCode.get("STD-INP-SGST")?.id, inpIgst = byCode.get("STD-INP-IGST")?.id;
   const sp: any[] = [];
   const { rows: sales } = await pool.query(
+    // A cancelled customer invoice carries no revenue, no tax and no debt, so
+    // it must not post at all — leaving it in was what let a cancelled bill go
+    // on inflating turnover and output GST after the fact.
+    //
+    // Cancelled BRANCH-TRANSFER invoices are the deliberate exception and stay
+    // in: rejection raises a credit note that reverses them, so dropping the
+    // invoice as well would subtract the same amount twice.
     `SELECT id, invoice_number, sale_date, total_amount, tax_total, amount_paid,
             payment_mode, customer_id, location_type, location_id, line_items,
             branch_transfer_id
-     FROM sales WHERE 1=1${upTo("sale_date", sp)}`, sp
+     FROM sales
+     WHERE (cancelled_at IS NULL OR branch_transfer_id IS NOT NULL)
+       ${upTo("sale_date", sp)}`, sp
   );
   const spp: any[] = [];
   const { rows: salePays } = await pool.query(

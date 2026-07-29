@@ -21,6 +21,8 @@ export default function ProfitabilitySection() {
   const t = data?.totals;
   const hasEstimates = rows.some((r) => r.estimatedCostQty > 0);
   const entity = groupBy === 'item' ? 'Item' : 'Location';
+  const basisLabel = (data as any)?.basisLabel as string | undefined;
+  const reconciliationNote = (data as any)?.reconciliationNote as string | undefined;
 
   const marginCls = (m: number) => (m >= 25 ? 'text-emerald-600' : m >= 10 ? 'text-amber-600' : 'text-red-500');
 
@@ -73,6 +75,10 @@ export default function ProfitabilitySection() {
         />
       </RangeBar>
 
+      <p className="text-xs text-muted-foreground">
+        Basis: <b>{basisLabel ?? 'Perpetual (per-item batch COGS)'}</b>
+      </p>
+
       <SummaryCards cards={[
         { label: 'Revenue (ex-tax)', value: fmt(t?.revenue), tone: 'accent' },
         { label: 'COGS', value: fmt(t?.cogs), tone: 'warn' },
@@ -105,6 +111,11 @@ export default function ProfitabilitySection() {
           * Some sold quantities had no batch cost data — those were costed at the item's average cost (estimate).
         </p>
       )}
+
+      <p className="text-xs text-muted-foreground border-t pt-2">
+        {reconciliationNote
+          ?? "Gross profit here is computed per item from the actual batch cost of goods sold (perpetual method). The Profit & Loss statement instead derives gross profit from opening stock + purchases − closing stock (periodic method), so the two gross-profit figures are legitimately different and will not tie out."}
+      </p>
     </div>
   );
 }
