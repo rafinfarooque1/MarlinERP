@@ -1703,8 +1703,36 @@ components:
           type: number
         unitCost:
           type: number
+          description: >-
+            Rate as keyed in. Whether it includes GST is decided by the bill's
+            priceMode, never inferred from the amount.
+        hsnCode:
+          type: string
+          description: >-
+            Snapshot of the product's HSN at the time of the bill. Defaults from
+            the Item Master when omitted. A string, so leading zeros survive.
+        discount:
+          type: number
+          description: Line discount as a percentage of qty x rate.
+        gstRate:
+          type: number
+          description: >-
+            GST slab for this line (0/5/12/18/28). Defaults from the Item Master
+            when omitted; snapshotted onto the bill, never written back.
+        taxType:
+          type: string
+          enum: [intra, inter]
+          description: >-
+            Supply type. The server derives this from the vendor and receiving
+            location states and its value wins unless taxTypeOverride is set.
+        taxTypeOverride:
+          type: boolean
+          description: Keep the supplied taxType even when the server derives a different one.
         batchNumber:
           type: string
+          description: >-
+            Leave blank to have a unique PUR-YYYYMMDD-NNNNN number issued by the
+            server. A supplied number is checked for collisions.
         mfgDate:
           type: string
         expiryDate:
@@ -1730,6 +1758,25 @@ components:
             $ref: "#/components/schemas/PurchaseLineItem"
         totalAmount:
           type: number
+        taxTotal:
+          type: number
+        discountTotal:
+          type: number
+        roundOff:
+          type: number
+        priceMode:
+          type: string
+          enum: [exclusive, inclusive]
+        locationType:
+          type: string
+        locationId:
+          type: integer
+        locationName:
+          type: string
+        warnings:
+          type: array
+          items:
+            type: string
         notes:
           type: ["string", "null"]
         createdAt:
@@ -1745,6 +1792,20 @@ components:
           type: string
         invoiceNumber:
           type: string
+        priceMode:
+          type: string
+          enum: [exclusive, inclusive]
+          description: >-
+            Whether the line rates were keyed inclusive or exclusive of GST.
+            Stored with the bill; defaults to exclusive.
+        locationType:
+          type: string
+          enum: [headoffice, warehouse, outlet]
+          description: >-
+            Requested receiving location. Only honoured if the caller's own
+            location scope allows it; otherwise the session's location is used.
+        locationId:
+          type: integer
         lineItems:
           type: array
           items:

@@ -13,6 +13,7 @@ import { startSalaryAccrualScheduler } from "./lib/salaryAccrual";
 import { addBackupRestore } from "./migrations/backupRestore";
 import { addExpensePaymentModes } from "./migrations/expensePaymentModes";
 import { addFixedAssets } from "./migrations/fixedAssets";
+import { addPurchaseBillFields } from "./migrations/purchaseBills";
 import { startBackupScheduler } from "./lib/backup/scheduler";
 import { PasswordService } from "./lib/password";
 import { PRODUCT_KINDS, PRODUCT_TABLE, nextProductIdentity } from "./lib/productIdentity";
@@ -2516,6 +2517,10 @@ await addExpensePaymentModes(pool);
 // above so the postable Fixed Asset ledger (STD-FIXED-ASSET) can be provisioned
 // under the SYS-FIXD group. Assets get their OWN tables and never touch stock.
 await addFixedAssets(pool);
+
+// Manual Purchase Bill: stored rate mode, the batch-number allocator and the
+// duplicate-invoice guard. Independent of the ledger seeding above.
+await addPurchaseBillFields(pool);
 
 // Automatic backups and retention. Starts after the migrations above so a
 // scheduled backup can never capture a half-upgraded schema.

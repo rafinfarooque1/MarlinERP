@@ -6,12 +6,25 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { PurchaseLineItemMaterialType } from './purchaseLineItemMaterialType';
+import type { PurchaseLineItemTaxType } from './purchaseLineItemTaxType';
 
 export interface PurchaseLineItem {
   materialType: PurchaseLineItemMaterialType;
   materialId: number;
   quantity: number;
+  /** Rate as keyed in. Whether it includes GST is decided by the bill's priceMode, never inferred from the amount. */
   unitCost: number;
+  /** Snapshot of the product's HSN at the time of the bill. Defaults from the Item Master when omitted. A string, so leading zeros survive. */
+  hsnCode?: string;
+  /** Line discount as a percentage of qty x rate. */
+  discount?: number;
+  /** GST slab for this line (0/5/12/18/28). Defaults from the Item Master when omitted; snapshotted onto the bill, never written back. */
+  gstRate?: number;
+  /** Supply type. The server derives this from the vendor and receiving location states and its value wins unless taxTypeOverride is set. */
+  taxType?: PurchaseLineItemTaxType;
+  /** Keep the supplied taxType even when the server derives a different one. */
+  taxTypeOverride?: boolean;
+  /** Leave blank to have a unique PUR-YYYYMMDD-NNNNN number issued by the server. A supplied number is checked for collisions. */
   batchNumber?: string;
   mfgDate?: string;
   expiryDate?: string;

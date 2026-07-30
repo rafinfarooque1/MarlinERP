@@ -55,4 +55,5 @@
 - [Orphaned ledger postings](orphaned-ledger-postings.md) — a balanced trial balance proves nothing: deleted ledgers leave postings that classify into neither statement, and the BS gap equals their net exactly.
 - [Dashboard KPI sources](dashboard-kpi-sources.md) — never re-sum expense subtrees for a tile (the capitalisation overlay makes it disagree with the P&L); postings carry no location, so those tiles are company-level only.
 - [Audit stamp fallbacks](audit-stamp-fallbacks.md) — `?? "system"` over a never-assigned request property records every row as system-generated and never fails; grep the middleware before writing created_by.
+- [Purchase bill costing](purchase-bill-costing.md) — stock is valued at the TAXABLE value (net of GST+discount); floor-at-zero reversals invent stock, so refuse an edit once the goods moved; unwind avg cost with the qty.
 - [Hiding a money figure](hiding-a-money-figure.md) — the figure always has siblings behind weaker guards; omit (never zero) the key; stripping a GET a client echoes back on approve zeroes cost.

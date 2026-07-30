@@ -232,6 +232,38 @@ export async function debitBatchByNumber(c: Queryable, args: {
 }
 
 /**
+ * Undo one inbound's contribution to the weighted average. Call BEFORE the
+ * quantity is taken back out of stock_entries, so the current total still
+ * includes it — the mirror of updateAvgCostOnInbound, which is called after.
+ *
+ * Reversing matters because the average is a running figure: an edit that
+ * subtracts the quantity but leaves the average alone makes the post-purchase
+ * average the baseline for the replacement line, and every re-save drifts the
+ * valuation further. Exact when this inbound is still the latest one; when
+ * later purchases have already rolled in, it is the closest recovery available
+ * without replaying every movement.
+ */
+export async function updateAvgCostOnReversal(c: Queryable, itemId: number, outQty: number, outCost: number): Promise<void> {
+  if (!(outQty > 0) || !(outCost > 0)) return;
+  const { rows: [tot] } = await c.query(
+    `SELECT COALESCE(SUM(quantity::numeric), 0) AS q FROM stock_entries
+      WHERE item_id = $1 AND material_type = 'item'`, [itemId]
+  );
+  const { rows: [it] } = await c.query(
+    `SELECT COALESCE(avg_cost, 0) AS avg_cost FROM items WHERE id = $1`, [itemId]
+  );
+  if (!it) return;
+  const totalNow = Number(tot?.q ?? 0);
+  const remaining = r3(totalNow - outQty);
+  // Nothing left to carry an average: leave the last known figure standing
+  // rather than zeroing the master, which would value the next issue at nil.
+  if (remaining <= 0) return;
+  const prevAvg = (totalNow * Number(it.avg_cost) - outQty * outCost) / remaining;
+  await c.query(`UPDATE items SET avg_cost = $1, updated_at = now() WHERE id = $2`,
+    [r2(Math.max(0, prevAvg)), itemId]);
+}
+
+/**
  * Weighted-average cost update. Call AFTER the inbound quantity has been
  * applied to stock_entries: prevQty is derived as (current total − inQty).
  * Zero-cost inbounds are ignored so they never drag the average to 0.

@@ -166,15 +166,46 @@ export const PurchaseLineItemMaterialType = {
   item: 'item',
 } as const;
 
+/**
+ * Supply type. The server derives this from the vendor and receiving location states and its value wins unless taxTypeOverride is set.
+ */
+export type PurchaseLineItemTaxType = typeof PurchaseLineItemTaxType[keyof typeof PurchaseLineItemTaxType];
+
+
+export const PurchaseLineItemTaxType = {
+  intra: 'intra',
+  inter: 'inter',
+} as const;
+
 export interface PurchaseLineItem {
   materialType: PurchaseLineItemMaterialType;
   materialId: number;
   quantity: number;
+  /** Rate as keyed in. Whether it includes GST is decided by the bill's priceMode, never inferred from the amount. */
   unitCost: number;
+  /** Snapshot of the product's HSN at the time of the bill. Defaults from the Item Master when omitted. A string, so leading zeros survive. */
+  hsnCode?: string;
+  /** Line discount as a percentage of qty x rate. */
+  discount?: number;
+  /** GST slab for this line (0/5/12/18/28). Defaults from the Item Master when omitted; snapshotted onto the bill, never written back. */
+  gstRate?: number;
+  /** Supply type. The server derives this from the vendor and receiving location states and its value wins unless taxTypeOverride is set. */
+  taxType?: PurchaseLineItemTaxType;
+  /** Keep the supplied taxType even when the server derives a different one. */
+  taxTypeOverride?: boolean;
+  /** Leave blank to have a unique PUR-YYYYMMDD-NNNNN number issued by the server. A supplied number is checked for collisions. */
   batchNumber?: string;
   mfgDate?: string;
   expiryDate?: string;
 }
+
+export type PurchasePriceMode = typeof PurchasePriceMode[keyof typeof PurchasePriceMode];
+
+
+export const PurchasePriceMode = {
+  exclusive: 'exclusive',
+  inclusive: 'inclusive',
+} as const;
 
 export interface Purchase {
   id: number;
@@ -185,15 +216,51 @@ export interface Purchase {
   invoiceNumber?: string | null;
   lineItems: PurchaseLineItem[];
   totalAmount: number;
+  taxTotal?: number;
+  discountTotal?: number;
+  roundOff?: number;
+  priceMode?: PurchasePriceMode;
+  locationType?: string;
+  locationId?: number;
+  locationName?: string;
+  warnings?: string[];
   /** @nullable */
   notes?: string | null;
   createdAt: string;
 }
 
+/**
+ * Whether the line rates were keyed inclusive or exclusive of GST. Stored with the bill; defaults to exclusive.
+ */
+export type PurchaseInputPriceMode = typeof PurchaseInputPriceMode[keyof typeof PurchaseInputPriceMode];
+
+
+export const PurchaseInputPriceMode = {
+  exclusive: 'exclusive',
+  inclusive: 'inclusive',
+} as const;
+
+/**
+ * Requested receiving location. Only honoured if the caller's own location scope allows it; otherwise the session's location is used.
+ */
+export type PurchaseInputLocationType = typeof PurchaseInputLocationType[keyof typeof PurchaseInputLocationType];
+
+
+export const PurchaseInputLocationType = {
+  headoffice: 'headoffice',
+  warehouse: 'warehouse',
+  outlet: 'outlet',
+} as const;
+
 export interface PurchaseInput {
   vendorId: number;
   purchaseDate: string;
   invoiceNumber?: string;
+  /** Whether the line rates were keyed inclusive or exclusive of GST. Stored with the bill; defaults to exclusive. */
+  priceMode?: PurchaseInputPriceMode;
+  /** Requested receiving location. Only honoured if the caller's own location scope allows it; otherwise the session's location is used. */
+  locationType?: PurchaseInputLocationType;
+  locationId?: number;
   lineItems: PurchaseLineItem[];
   notes?: string;
 }

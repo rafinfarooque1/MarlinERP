@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { PurchaseLineItem } from './purchaseLineItem';
+import type { PurchasePriceMode } from './purchasePriceMode';
 
 export interface Purchase {
   id: number;
@@ -16,6 +17,14 @@ export interface Purchase {
   invoiceNumber?: string | null;
   lineItems: PurchaseLineItem[];
   totalAmount: number;
+  taxTotal?: number;
+  discountTotal?: number;
+  roundOff?: number;
+  priceMode?: PurchasePriceMode;
+  locationType?: string;
+  locationId?: number;
+  locationName?: string;
+  warnings?: string[];
   /** @nullable */
   notes?: string | null;
   createdAt: string;

@@ -204,6 +204,9 @@ if (!vendor?.id) {
     vendorId:       vendor.id,
     purchaseDate:   new Date().toISOString().slice(0, 10),
     invoiceNumber:  `ACCTEST-${Date.now()}`,
+    // Batch dates are required on every purchase line: frozen stock cannot be
+    // expiry-checked without them. The batch number itself is left blank so the
+    // server issues one.
     lineItems: [{
       materialType: 'material',
       materialId:   1,
@@ -213,6 +216,8 @@ if (!vendor?.id) {
       discount:     0,
       gstRate:      12,
       taxType:      'intra',
+      mfgDate:      '2026-01-01',
+      expiryDate:   '2027-01-01',
     }],
   });
 

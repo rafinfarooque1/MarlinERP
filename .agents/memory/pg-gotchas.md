@@ -21,6 +21,15 @@ Pattern for check-then-insert guards (credit limit, and any future balance/quota
 **Why:** The original credit check read aggregates on the pool, then inserted later — two concurrent requests both passed the limit (architect-flagged race). The advisory lock + single-txn version is verified by a concurrency test (two simultaneous sales → exactly one accepted).
 **How to apply:** See POST /sales in api-server routes/sales.ts. Also enforce any "manager override" flags server-side (hierarchy level 1 or module can_edit in `permissions`) — never trust client gating alone (403 `CREDIT_OVERRIDE_FORBIDDEN`).
 
+## FOR UPDATE is rejected on an aggregate query
+
+`SELECT COALESCE(SUM(qty),0) … FOR UPDATE` fails at runtime with
+`FOR UPDATE is not allowed with aggregate functions` (SQLSTATE 0A000) — it
+typechecks and builds fine, so it only shows up as a 500 under test.
+
+**How to apply:** when you need both the total and the lock, select the
+individual rows `FOR UPDATE` and sum them in JS.
+
 ## A backtick inside a SQL template literal silently ends the string
 
 SQL written as a TS template literal must not contain a backtick — including

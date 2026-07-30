@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import {
   usePaginatedPurchases, useCreatePurchase, useListVendors, useListMaterials, useListRawMaterials, useListItems,
   getListPurchasesQueryKey, useUpdatePurchase, useDeletePurchase, useGetCompanySettings,
+  useListWarehouses, useListOutlets,
 } from '@workspace/api-client-react';
 import { downloadPurchaseOrderPDF } from '@/lib/pdfUtils';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -26,21 +27,30 @@ import { usePermission } from '@/lib/usePermission';
 import { activeProductsWithSelection } from '@/lib/productStatus';
 import { useActingLocations, decodeLocation, encodeLocation } from '@/lib/useActingLocation';
 import { Separator } from '@/components/ui/separator';
+// The same arithmetic the server posts with. Imported rather than re-typed so
+// the preview in this form and the figures written to the books cannot drift.
+import { calcPurchaseBill, calcPurchaseLine, type PriceMode } from '@workspace/purchase-pricing';
 
 const GST_RATES = [0, 5, 12, 18, 28] as const;
 
 const lineSchema = z.object({
   materialType: z.enum(['material', 'raw_material', 'item']),
   materialId: z.coerce.number().min(1, 'Select item'),
-  hsnCode: z.string().optional(),
+  // HSN is TEXT, never a number: 08045020 must not become 8045020.
+  hsnCode: z.string().trim().regex(/^(\d{4,8})?$/, 'HSN must be 4-8 digits').optional(),
   quantity: z.coerce.number().min(0.001, 'Qty > 0'),
   unitCost: z.coerce.number().min(0, 'Rate ≥ 0'),
   discount: z.coerce.number().min(0).max(100).default(0),
   gstRate: z.coerce.number().default(0),
   taxType: z.enum(['intra', 'inter']).default('intra'),
+  /** Set only when the user changes the GST type away from the derived one. */
+  taxTypeOverride: z.boolean().default(false),
+  // Blank means "issue one on save" — the server allocates PUR-YYYYMMDD-NNNNN.
   batchNumber: z.string().optional(),
-  mfgDate: z.string().optional(),
-  expiryDate: z.string().optional(),
+  mfgDate: z.string().min(1, 'Mfg date required'),
+  expiryDate: z.string().min(1, 'Expiry date required'),
+}).refine(l => !l.expiryDate || !l.mfgDate || l.expiryDate >= l.mfgDate, {
+  message: 'Expiry cannot be before manufacture', path: ['expiryDate'],
 });
 
 const schema = z.object({
@@ -48,26 +58,25 @@ const schema = z.object({
   purchaseDate: z.string().min(1, 'Date required'),
   invoiceNumber: z.string().optional(),
   location: z.string().min(1, 'Location required'),
+  // Whether the rates below include GST. Recorded with the bill, never guessed
+  // from the amounts: at 5%, a rate of 105 is a valid inclusive line and an
+  // equally valid exclusive one.
+  priceMode: z.enum(['exclusive', 'inclusive']).default('exclusive'),
   lineItems: z.array(lineSchema).min(1, 'Add at least one item'),
   notes: z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
 
-const defaultLine = { materialType: 'raw_material' as const, materialId: 0, hsnCode: '', quantity: 1, unitCost: 0, discount: 0, gstRate: 5, taxType: 'intra' as const, batchNumber: '', mfgDate: '', expiryDate: '' };
-
-function calcLine(q: number, rate: number, disc: number, gst: number, taxType: string) {
-  const lineSubtotal = q * rate;
-  const discountAmt = lineSubtotal * disc / 100;
-  const taxableValue = lineSubtotal - discountAmt;
-  const taxAmount = Math.round(taxableValue * gst / 100 * 100) / 100;
-  const intra = taxType === 'intra';
-  const cgst = intra ? Math.round(taxAmount / 2 * 100) / 100 : 0;
-  const sgst = intra ? Math.round(taxAmount / 2 * 100) / 100 : 0;
-  const igst = !intra ? taxAmount : 0;
-  return { lineSubtotal, discountAmt, taxableValue, taxAmount, cgst, sgst, igst, lineTotal: taxableValue + taxAmount };
-}
+const defaultLine = { materialType: 'raw_material' as const, materialId: 0, hsnCode: '', quantity: 1, unitCost: 0, discount: 0, gstRate: 5, taxType: 'intra' as const, taxTypeOverride: false, batchNumber: '', mfgDate: '', expiryDate: '' };
 
 function fmt(n: number) { return n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+
+/** Two-letter state code out of a GSTIN, for the intra/inter hint. */
+const gstinState = (g: unknown) => {
+  const s = String(g ?? '').trim();
+  return /^\d{2}[A-Za-z0-9]{13}$/.test(s) ? s.slice(0, 2) : null;
+};
+const plainState = (s: unknown) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 
 // ── Asset purchases (fixed-asset acquisition, spec §7) ──────────────────────
 // Assets are capital items, NOT sale inventory: they live in their own tables
@@ -351,6 +360,9 @@ export default function Purchases() {
   const deleteMutation = useDeletePurchase();
 
   const { data: companySettings } = useGetCompanySettings();
+  // Branch registrations, for the intra/inter hint on the entry form.
+  const { data: warehouses = [] } = useListWarehouses();
+  const { data: outlets = [] } = useListOutlets();
 
   const getMaterialName = (li: any) => {
     if (li.materialName) return li.materialName; // server-enriched
@@ -370,38 +382,100 @@ export default function Purchases() {
     }
   };
 
-  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', location: 'headoffice:1', lineItems: [defaultLine], notes: '' } });
+  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', location: 'headoffice:1', priceMode: 'exclusive', lineItems: [defaultLine], notes: '' } });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
   const watchLines = form.watch('lineItems');
+  const priceMode = (form.watch('priceMode') ?? 'exclusive') as PriceMode;
 
-  // Bill summary
-  const billSummary = watchLines.reduce((acc, li) => {
-    const calc = calcLine(Number(li.quantity) || 0, Number(li.unitCost) || 0, Number(li.discount) || 0, Number(li.gstRate) || 0, li.taxType);
-    acc.subtotal += calc.lineSubtotal;
-    acc.discountTotal += calc.discountAmt;
-    acc.taxableTotal += calc.taxableValue;
-    acc.cgstTotal += calc.cgst;
-    acc.sgstTotal += calc.sgst;
-    acc.igstTotal += calc.igst;
-    acc.taxTotal += calc.taxAmount;
-    return acc;
-  }, { subtotal: 0, discountTotal: 0, taxableTotal: 0, cgstTotal: 0, sgstTotal: 0, igstTotal: 0, taxTotal: 0 });
+  // Bill summary — one shared calculation, so the footer is exactly what the
+  // server will store: per-line rounding to paise, then whole-rupee round-off.
+  const bill = calcPurchaseBill(
+    (watchLines ?? []).map(li => ({
+      quantity: li?.quantity, unitCost: li?.unitCost, discount: li?.discount,
+      gstRate: li?.gstRate, taxType: li?.taxType,
+    })),
+    priceMode,
+  );
 
-  const rawTotal = billSummary.taxableTotal + billSummary.taxTotal;
-  const roundOff = Math.round(rawTotal) - rawTotal;
-  const grandTotal = Math.round(rawTotal);
+  // ── Item Master defaults ───────────────────────────────────────────────────
+  const masterFor = (kind: string, id: number): any => {
+    const list = kind === 'raw_material' ? rawMaterials : kind === 'item' ? finishedItems : materials;
+    return (list as any[]).find((m: any) => Number(m.id) === Number(id));
+  };
 
-  const resetForm = () => form.reset({ vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', location: locations.defaultValue, lineItems: [defaultLine], notes: '' });
+  /** Choosing a product pulls its HSN and GST rate off the Item Master. Both
+   *  stay editable: the master is only a default, and the bill keeps whatever
+   *  was actually charged rather than following later master changes. */
+  const applyMasterDefaults = (index: number, kind: string, id: number) => {
+    const m = masterFor(kind, id);
+    if (!m) return;
+    const hsn = String(m.hsnCode ?? '').trim();
+    if (hsn) form.setValue(`lineItems.${index}.hsnCode`, hsn, { shouldDirty: true });
+    const rate = Number(m.taxRate);
+    if (Number.isFinite(rate)) form.setValue(`lineItems.${index}.gstRate`, rate, { shouldDirty: true });
+  };
+
+  // ── Intra/inter hint ───────────────────────────────────────────────────────
+  // A hint only. The server re-derives this from the vendor's and the receiving
+  // location's registrations and its answer wins, so a stale value here cannot
+  // decide which GST heads the input credit lands in.
+  const selectedVendor = (vendors as any[]).find((v: any) => Number(v.id) === Number(form.watch('vendorId')));
+  // Compared against the RECEIVING location's own registration, the way the
+  // server does it — a branch in another state has its own GSTIN, and hinting
+  // off the company's would show CGST+SGST on a bill the server posts as IGST.
+  const watchedLocation = form.watch('location');
+  const buyerRegistration = (() => {
+    const picked = decodeLocation(locations.canChoose ? watchedLocation : locations.defaultValue);
+    if (picked.locationType === 'warehouse') {
+      const w = (warehouses as any[]).find((x: any) => Number(x.id) === Number(picked.locationId));
+      if (w?.gstin || w?.gstNumber || w?.state) return { gstNumber: w.gstin ?? w.gstNumber, state: w.state };
+    }
+    if (picked.locationType === 'outlet') {
+      const o = (outlets as any[]).find((x: any) => Number(x.id) === Number(picked.locationId));
+      if (o?.gstin || o?.gstNumber || o?.state) return { gstNumber: o.gstin ?? o.gstNumber, state: o.state };
+    }
+    // Head Office, or a location with no registration of its own.
+    return { gstNumber: (companySettings as any)?.gstNumber, state: (companySettings as any)?.state };
+  })();
+  const hintTaxType: 'intra' | 'inter' | null = (() => {
+    if (!selectedVendor) return null;
+    const vc = gstinState(selectedVendor.gstNumber), cc = gstinState(buyerRegistration.gstNumber);
+    if (vc && cc) return vc === cc ? 'intra' : 'inter';
+    const vs = plainState(selectedVendor.state), cs = plainState(buyerRegistration.state);
+    if (vs && cs) return vs === cs ? 'intra' : 'inter';
+    return null;
+  })();
+
+  useEffect(() => {
+    if (!hintTaxType) return;
+    (form.getValues('lineItems') ?? []).forEach((l: any, i: number) => {
+      if (!l?.taxTypeOverride && l?.taxType !== hintTaxType) {
+        form.setValue(`lineItems.${i}.taxType`, hintTaxType);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hintTaxType, fields.length]);
+
+  const resetForm = () => form.reset({ vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', location: locations.defaultValue, priceMode: 'exclusive', lineItems: [defaultLine], notes: '' });
+
+  /** The server may correct the GST type or report anything else it changed —
+   *  surfaced rather than swallowed, so a corrected bill is never a surprise. */
+  const showWarnings = (resp: any) => {
+    for (const w of (resp?.warnings ?? []) as string[]) toast.warning(w);
+  };
 
   const onSubmit = (form0: FormValues) => {
+    // Double-submit guard for the Enter key, which bypasses the disabled button.
+    if (createMutation.isPending || updateMutation.isPending) return;
     const { location, ...rest } = form0;
     // A user who cannot choose is always pinned to their own location, even if
     // the picker had not resolved `me` yet when the dialog opened.
     const data = { ...rest, ...decodeLocation(locations.canChoose ? location : locations.defaultValue) };
     if (editingId !== null) {
       updateMutation.mutate({ id: editingId, data: data as any }, {
-        onSuccess: () => {
+        onSuccess: (resp: any) => {
           toast.success('Purchase bill updated');
+          showWarnings(resp);
           queryClient.invalidateQueries({ queryKey: getListPurchasesQueryKey() });
           invalidateStockDashboards();
           setIsOpen(false);
@@ -412,8 +486,10 @@ export default function Purchases() {
       });
     } else {
       createMutation.mutate({ data: data as any }, {
-        onSuccess: () => {
-          toast.success('Purchase bill created');
+        onSuccess: (resp: any) => {
+          const lots = ((resp?.lineItems ?? []) as any[]).map(l => l?.batchNumber).filter(Boolean);
+          toast.success(lots.length ? `Purchase bill created · batch ${lots.join(', ')}` : 'Purchase bill created');
+          showWarnings(resp);
           queryClient.invalidateQueries({ queryKey: getListPurchasesQueryKey() });
           invalidateStockDashboards();
           setIsOpen(false);
@@ -469,7 +545,7 @@ export default function Purchases() {
               </Button>
             )}
             {perm.canAdd && (
-              <Button onClick={() => { form.reset({ vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', lineItems: [defaultLine], notes: '' }); setIsOpen(true); }}>
+              <Button onClick={() => { setEditingId(null); resetForm(); setIsOpen(true); }}>
                 <Plus className="w-4 h-4 mr-2" /> New Purchase Bill
               </Button>
             )}
@@ -529,6 +605,10 @@ export default function Purchases() {
                             purchaseDate: (p.purchaseDate ?? '').substring(0, 10) || new Date().toISOString().split('T')[0],
                             invoiceNumber: p.invoiceNumber || '',
                             location: encodeLocation((p as any).locationType ?? 'headoffice', Number((p as any).locationId ?? 1)),
+                            // The bill's own rate mode, not a fresh default:
+                            // re-opening an inclusive bill as exclusive would
+                            // restate every figure on it.
+                            priceMode: ((p as any).priceMode === 'inclusive' ? 'inclusive' : 'exclusive'),
                             notes: (p as any).notes || '',
                             lineItems: ((p.lineItems as any[]) || []).map((li: any) => ({
                               materialType: li.materialType || 'raw_material',
@@ -539,9 +619,12 @@ export default function Purchases() {
                               discount: Number(li.discount || 0),
                               gstRate: Number(li.gstRate || 0),
                               taxType: li.taxType || 'intra',
+                              // An existing line keeps the GST type it was saved
+                              // with unless the user changes it again.
+                              taxTypeOverride: li.taxTypeSource === 'override',
                               batchNumber: li.batchNumber || '',
-                              mfgDate: li.mfgDate || '',
-                              expiryDate: li.expiryDate || '',
+                              mfgDate: (li.mfgDate ?? '').substring(0, 10),
+                              expiryDate: (li.expiryDate ?? '').substring(0, 10),
                             })),
                           });
                           setIsOpen(true);
@@ -633,11 +716,29 @@ export default function Purchases() {
 
               {/* Line Items */}
               <div>
-                <div className="flex flex-wrap items-baseline justify-between gap-2 mb-2">
-                  <div className="text-sm font-medium">Line Items</div>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                  <div className="flex items-center gap-3">
+                    <div className="text-sm font-medium">Line Items</div>
+                    {/* Bill-level rate mode. Stored with the bill and never
+                        guessed from the amounts. */}
+                    <FormField control={form.control} name="priceMode" render={({ field }) => (
+                      <FormItem className="flex items-center gap-2 space-y-0">
+                        <FormLabel className="text-[11px] uppercase tracking-wide text-muted-foreground">Rates are</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value || 'exclusive'}>
+                          <FormControl><SelectTrigger className="h-7 text-xs w-[150px]"><SelectValue /></SelectTrigger></FormControl>
+                          <SelectContent>
+                            <SelectItem value="exclusive">GST exclusive</SelectItem>
+                            <SelectItem value="inclusive">GST inclusive</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </FormItem>
+                    )} />
+                  </div>
                   <p className="text-[11px] text-muted-foreground">
-                    Batch number, mfg date and expiry date are required on every line.
-                    {editingId !== null && ' Older bills may have been saved without them — fill them in to save.'}
+                    {priceMode === 'inclusive'
+                      ? 'Rates include GST — tax is worked back out of the rate.'
+                      : 'GST is added on top of the rate.'}
+                    {' '}Mfg and expiry dates are required; leave batch blank to have one issued.
                   </p>
                 </div>
                 <div className="border border-border rounded-lg overflow-hidden">
@@ -645,8 +746,11 @@ export default function Purchases() {
                     <span>Item</span><span>HSN</span><span>Qty</span><span>Rate ₹</span><span>Disc %</span><span>GST %</span><span className="text-right">Total ₹</span><span />
                   </div>
                   {fields.map((field, index) => {
-                    const li = watchLines[index] || {};
-                    const calc = calcLine(Number(li.quantity) || 0, Number(li.unitCost) || 0, Number(li.discount) || 0, Number(li.gstRate) || 0, li.taxType || 'intra');
+                    const li: any = watchLines[index] || {};
+                    const calc = calcPurchaseLine(
+                      { quantity: li.quantity, unitCost: li.unitCost, discount: li.discount, gstRate: li.gstRate, taxType: li.taxType },
+                      priceMode,
+                    );
                     return (
                       <Fragment key={field.id}>
                       <div className="grid items-center gap-2 px-3 py-2 border-t border-border" style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr 1fr auto' }}>
@@ -660,7 +764,14 @@ export default function Purchases() {
                               <SelectItem value="item">Item Name (SKU)</SelectItem>
                             </SelectContent>
                           </Select>
-                          <Select onValueChange={v => form.setValue(`lineItems.${index}.materialId`, Number(v))} value={form.watch(`lineItems.${index}.materialId`) ? String(form.watch(`lineItems.${index}.materialId`)) : ''}>
+                          <Select
+                            onValueChange={v => {
+                              form.setValue(`lineItems.${index}.materialId`, Number(v));
+                              // HSN and GST% follow the product out of the Item Master.
+                              applyMasterDefaults(index, form.getValues(`lineItems.${index}.materialType`), Number(v));
+                            }}
+                            value={form.watch(`lineItems.${index}.materialId`) ? String(form.watch(`lineItems.${index}.materialId`)) : ''}
+                          >
                             <SelectTrigger className="h-8 text-xs flex-1 min-w-0"><SelectValue placeholder="Select" /></SelectTrigger>
                             <SelectContent>
                               {/* Active only for new picks; an already-chosen product stays
@@ -683,8 +794,17 @@ export default function Purchases() {
                             <SelectTrigger className="h-8 text-xs w-[56px]"><SelectValue /></SelectTrigger>
                             <SelectContent>{GST_RATES.map(r => <SelectItem key={r} value={String(r)}>{r}%</SelectItem>)}</SelectContent>
                           </Select>
-                          <Select onValueChange={v => form.setValue(`lineItems.${index}.taxType`, v as any)} value={form.watch(`lineItems.${index}.taxType`) || 'intra'}>
-                            <SelectTrigger className="h-8 text-xs w-[52px]"><SelectValue /></SelectTrigger>
+                          {/* Changing this by hand marks the line as an explicit
+                              override, so the server keeps it instead of
+                              replacing it with the state-derived value. */}
+                          <Select
+                            onValueChange={v => {
+                              form.setValue(`lineItems.${index}.taxType`, v as any);
+                              form.setValue(`lineItems.${index}.taxTypeOverride`, hintTaxType !== null && v !== hintTaxType);
+                            }}
+                            value={form.watch(`lineItems.${index}.taxType`) || 'intra'}
+                          >
+                            <SelectTrigger className={`h-8 text-xs w-[52px] ${li.taxTypeOverride ? 'border-amber-500' : ''}`}><SelectValue /></SelectTrigger>
                             <SelectContent>
                               <SelectItem value="intra">Intra</SelectItem>
                               <SelectItem value="inter">Inter</SelectItem>
@@ -696,13 +816,12 @@ export default function Purchases() {
                           <X className="w-3.5 h-3.5" />
                         </Button>
                       </div>
-                      {/* Batch identity — required on every line, whatever the kind.
-                          Frozen food cannot be traced or expiry-checked without it. */}
+                      {/* Batch identity. Frozen food cannot be traced or
+                          expiry-checked without dates, so those stay required;
+                          the number is issued by the server when left blank. */}
                       <div className="flex flex-wrap items-center gap-2 px-3 pb-2 bg-emerald-500/[0.03]">
-                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                          Batch <span className="text-destructive">*</span>
-                        </span>
-                        <Input className="h-7 text-xs font-mono w-40" placeholder="Vendor lot / batch no." {...form.register(`lineItems.${index}.batchNumber`)} />
+                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Batch</span>
+                        <Input className="h-7 text-xs font-mono w-52" placeholder="Auto on save (or vendor lot no.)" {...form.register(`lineItems.${index}.batchNumber`)} />
                         <span className="text-[10px] uppercase tracking-wide text-muted-foreground ml-2">
                           Mfg <span className="text-destructive">*</span>
                         </span>
@@ -711,6 +830,13 @@ export default function Purchases() {
                           Expiry <span className="text-destructive">*</span>
                         </span>
                         <Input className="h-7 text-xs w-36" type="date" {...form.register(`lineItems.${index}.expiryDate`)} />
+                        {(form.formState.errors.lineItems?.[index] as any) && (
+                          <span className="text-[10px] text-destructive">
+                            {(form.formState.errors.lineItems?.[index] as any)?.mfgDate?.message
+                              ?? (form.formState.errors.lineItems?.[index] as any)?.expiryDate?.message
+                              ?? (form.formState.errors.lineItems?.[index] as any)?.hsnCode?.message}
+                          </span>
+                        )}
                       </div>
                       </Fragment>
                     );
@@ -727,18 +853,26 @@ export default function Purchases() {
                   <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea rows={3} placeholder="Optional notes" {...field} /></FormControl></FormItem>
                 )} />
                 <div className="bg-muted/20 rounded-lg p-4 space-y-2 text-sm">
-                  <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="font-mono">₹{fmt(billSummary.subtotal)}</span></div>
-                  {billSummary.discountTotal > 0 && (
-                    <div className="flex justify-between"><span className="text-muted-foreground">(-) Discount</span><span className="font-mono text-red-500">-₹{fmt(billSummary.discountTotal)}</span></div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Subtotal {priceMode === 'inclusive' ? '(GST incl.)' : ''}</span>
+                    <span className="font-mono">₹{fmt(bill.subtotal)}</span>
+                  </div>
+                  {bill.discountTotal > 0 && (
+                    <div className="flex justify-between"><span className="text-muted-foreground">(-) Discount</span><span className="font-mono text-red-500">-₹{fmt(bill.discountTotal)}</span></div>
                   )}
-                  <div className="flex justify-between"><span className="text-muted-foreground">Taxable Amount</span><span className="font-mono">₹{fmt(billSummary.taxableTotal)}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Taxable Amount</span><span className="font-mono">₹{fmt(bill.taxableTotal)}</span></div>
                   <Separator />
-                  {billSummary.cgstTotal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">CGST</span><span className="font-mono">₹{fmt(billSummary.cgstTotal)}</span></div>}
-                  {billSummary.sgstTotal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">SGST</span><span className="font-mono">₹{fmt(billSummary.sgstTotal)}</span></div>}
-                  {billSummary.igstTotal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">IGST</span><span className="font-mono">₹{fmt(billSummary.igstTotal)}</span></div>}
-                  {Math.abs(roundOff) > 0.001 && <div className="flex justify-between"><span className="text-muted-foreground">Round Off</span><span className="font-mono">{roundOff > 0 ? '+' : ''}₹{fmt(Math.abs(roundOff))}</span></div>}
+                  {bill.cgstTotal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">CGST</span><span className="font-mono">₹{fmt(bill.cgstTotal)}</span></div>}
+                  {bill.sgstTotal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">SGST</span><span className="font-mono">₹{fmt(bill.sgstTotal)}</span></div>}
+                  {bill.igstTotal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">IGST</span><span className="font-mono">₹{fmt(bill.igstTotal)}</span></div>}
+                  {Math.abs(bill.roundOff) > 0.001 && <div className="flex justify-between"><span className="text-muted-foreground">Round Off</span><span className="font-mono">{bill.roundOff > 0 ? '+' : ''}₹{fmt(Math.abs(bill.roundOff))}</span></div>}
                   <Separator />
-                  <div className="flex justify-between font-bold text-base pt-1"><span>Grand Total</span><span className="font-mono text-primary">₹{grandTotal.toLocaleString('en-IN')}</span></div>
+                  <div className="flex justify-between font-bold text-base pt-1"><span>Grand Total</span><span className="font-mono text-primary">₹{bill.totalAmount.toLocaleString('en-IN')}</span></div>
+                  {priceMode === 'inclusive' && (
+                    <p className="text-[10px] text-muted-foreground pt-1">
+                      GST is worked back out of the rates, so the total equals the rates you keyed in (plus round-off).
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -814,11 +948,19 @@ export default function Purchases() {
                 </table>
               </div>
 
-              {/* Summary */}
+              {/* Summary — server figures, shown as stored. */}
               <div className="bg-muted/20 rounded-lg p-4 space-y-2 text-sm mb-4">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Rates entered</span>
+                  <span className="font-medium">{(viewItem as any).priceMode === 'inclusive' ? 'GST inclusive' : 'GST exclusive'}</span>
+                </div>
                 {Number(viewItem.discountTotal || 0) > 0 && (
                   <div className="flex justify-between"><span className="text-muted-foreground">(-) Discount</span><span className="font-mono text-red-500">-₹{fmt(Number(viewItem.discountTotal))}</span></div>
                 )}
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Taxable Amount</span>
+                  <span className="font-mono">₹{fmt(((viewItem.lineItems as any[]) ?? []).reduce((s, l) => s + Number(l.taxableValue || 0), 0))}</span>
+                </div>
                 {Number(viewItem.taxTotal || 0) > 0 && (
                   <div className="flex justify-between"><span className="text-muted-foreground">Tax</span><span className="font-mono">₹{fmt(Number(viewItem.taxTotal))}</span></div>
                 )}

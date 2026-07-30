@@ -5,12 +5,19 @@
  * Marlin Frozen Fruits ERP API
  * OpenAPI spec version: 0.1.0
  */
+import type { PurchaseInputLocationType } from './purchaseInputLocationType';
+import type { PurchaseInputPriceMode } from './purchaseInputPriceMode';
 import type { PurchaseLineItem } from './purchaseLineItem';
 
 export interface PurchaseInput {
   vendorId: number;
   purchaseDate: string;
   invoiceNumber?: string;
+  /** Whether the line rates were keyed inclusive or exclusive of GST. Stored with the bill; defaults to exclusive. */
+  priceMode?: PurchaseInputPriceMode;
+  /** Requested receiving location. Only honoured if the caller's own location scope allows it; otherwise the session's location is used. */
+  locationType?: PurchaseInputLocationType;
+  locationId?: number;
   lineItems: PurchaseLineItem[];
   notes?: string;
 }
