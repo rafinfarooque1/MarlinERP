@@ -12,7 +12,7 @@ import { buildBranchMaps } from "./stock";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 import { blockedByInactiveProducts, INACTIVE_PRODUCT_CODE } from "../lib/productIdentity";
-import { SALE_PAYMENT_MODES, isSettledAtSale, clearsThroughBank } from "../lib/paymentModes";
+import { CREATE_SALE_PAYMENT_MODES, isAllowedNewSaleMode, isSettledAtSale, clearsThroughBank, resolveEditedSaleMode } from "../lib/paymentModes";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 import { isIsoDate } from "../lib/dateInput";
 import {
@@ -484,11 +484,15 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   // sale never burns an invoice number.
   const paymentModeIn = parsed.data.paymentMode ?? 'cash';
   // The generated zod schema types paymentMode as a plain string, so the mode
-  // list is enforced here. Legacy 'card' / 'bank_transfer' rows are still
-  // accepted so an old invoice can be edited without rewriting its mode.
-  if (!isSettledAtSale(paymentModeIn) && paymentModeIn !== 'credit') {
+  // list is enforced here. A NEW sale may only be cash or credit: if the
+  // customer isn't paying cash now the invoice is raised on Credit and the
+  // money is collected later through payment collection (which still takes
+  // bank/upi). Bank/UPI/card/bank_transfer are rejected on creation — they stay
+  // valid only for reading/editing existing historical sales and for
+  // collections.
+  if (!isAllowedNewSaleMode(paymentModeIn)) {
     res.status(400).json({
-      error: `paymentMode must be one of: ${SALE_PAYMENT_MODES.join(', ')}`,
+      error: `paymentMode must be one of: ${CREATE_SALE_PAYMENT_MODES.join(', ')}. For a non-cash sale, record it as credit and collect payment later.`,
     });
     return;
   }
@@ -802,6 +806,24 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     res.status(400).json({ error: "saleDate must be a real calendar date in YYYY-MM-DD form" }); return;
   }
 
+  // Editing must not be a loophole for setting bank/upi on a sale. A new sale
+  // may only be cash or credit; an edit may only leave the mode among the
+  // create-time modes OR keep the historical mode (bank/upi/card/bank_transfer)
+  // it already carried. Any attempt to CHANGE a sale into a non-create mode is
+  // rejected — those are collected later, never set at sale time.
+  const editModeIn = parsed.data.paymentMode ?? 'cash';
+  const existingMode = (existingRaw.payment_mode ?? 'cash') as string;
+  const resolvedMode = resolveEditedSaleMode(editModeIn, existingMode);
+  if (!resolvedMode.ok) {
+    res.status(400).json({
+      error: `paymentMode must be one of: ${CREATE_SALE_PAYMENT_MODES.join(', ')}. A non-cash payment on this invoice is recorded through payment collection, not by changing the sale's mode.`,
+    });
+    return;
+  }
+  // Guard the value that will actually be written, not the one that was sent:
+  // a 'bank' submission against a stored 'card' sale keeps 'card'.
+  const effectivePaymentMode = resolvedMode.mode;
+
   // Credit (pay later) sales must have a customer — same server-side rule as
   // creation, enforced before any stock reversal side effects run.
   if ((parsed.data.paymentMode ?? 'cash') === 'credit' && !parsed.data.customerId) {
@@ -903,7 +925,7 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
 
   // ── Credit limit check on edit ────────────────────────────────────────────
   // Mirror of the POST credit-limit guard so edits can't silently bypass it.
-  const newPaymentModeForCredit = parsed.data.paymentMode ?? 'cash';
+  const newPaymentModeForCredit = effectivePaymentMode;
   const isEditCreditControlled = !!parsed.data.customerId && newPaymentModeForCredit === 'credit';
 
   if (isEditCreditControlled) {
@@ -967,7 +989,7 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
   const oldLineItems = (existingRaw.line_items ?? []) as Array<{ itemId: number; quantity: number; batchBreakdown?: any[] }>;
   const oldTotal = Number(existingRaw.total_amount);
   const oldCustomerId = existingRaw.customer_id as number | null;
-  const newPaymentMode = parsed.data.paymentMode ?? 'cash';
+  const newPaymentMode = effectivePaymentMode;
   let newAmountPaid = totalAmount;
   let newPaymentStatus = 'paid';
   if (!isSettledAtSale(newPaymentMode)) {

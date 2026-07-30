@@ -32,8 +32,17 @@ export const RESTORABLE_SETTINGS_TABLES = [
   "voucher_sequences",
 ] as const;
 
-/** Exported for inspection ONLY — see the note above. */
-export const REFERENCE_ONLY_TABLES = ["warehouses", "outlets", "pay_components"] as const;
+/**
+ * Exported for inspection ONLY — see the note above.
+ *
+ * `assets` (fixed-asset master) and `asset_purchases` (acquisitions that carry
+ * capitalised value and a linked journal voucher) are reference-only for the
+ * same reason `warehouses`/`outlets` are: they are referenced by real financial
+ * rows (the Fixed Asset ledger postings), so a settings-only restore must not
+ * rewrite them against a live ledger. They travel with the full-database dump,
+ * which restores them consistently alongside the postings that reference them.
+ */
+export const REFERENCE_ONLY_TABLES = ["warehouses", "outlets", "pay_components", "assets", "asset_purchases"] as const;
 
 export interface SettingsExport {
   exportedAt: string;

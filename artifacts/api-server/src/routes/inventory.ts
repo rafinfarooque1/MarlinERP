@@ -5,6 +5,7 @@ import { eq, sql } from "drizzle-orm";
 import { GetItemParams, DeleteItemParams } from "@workspace/api-zod";
 import { pool } from "@workspace/db";
 import { isValidGstSlab, gstSlabErrorMessage } from "../lib/gst";
+import { logActivity } from "../lib/audit";
 import {
   nextProductIdentity, isProductStatus, PRODUCT_STATUSES,
   type ProductKind,
@@ -364,6 +365,113 @@ router.patch("/items/:id", hoOnly, requireModuleAction("page:/production/item-ma
 router.delete("/items/:id", hoOnly, requireModuleAction("page:/production/item-master", "delete"), async (req, res): Promise<void> => {
   const { id } = DeleteItemParams.parse(req.params);
   await db.delete(itemsTable).where(eq(itemsTable.id, id));
+  res.status(204).send();
+});
+
+// ── Assets (Fixed-asset master) ────────────────────────────────────────────
+// Assets are NOT sale inventory: they live in their OWN `assets` table and are
+// never pushed through stock_entries/stock_batches, so no stock/POS/production/
+// transfer query can ever pick one up (those all scope by material_type on the
+// polymorphic stock tables, which assets never write to). Surfaced in Item
+// Master as another type; company-wide master, so Head-Office-only to write.
+const fmtAsset = (r: any) => ({
+  id: r.id,
+  name: r.name,
+  unit: r.unit,
+  description: r.description ?? "",
+  itemCode: r.item_code || "",
+  status: r.status || "active",
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
+
+router.get("/assets", requireModuleView(["page:/production/item-master", "page:/production/purchase"]), async (req, res): Promise<void> => {
+  const filter = statusFilter(req, res);
+  if (!filter) return;
+  const result = await pool.query(
+    `SELECT id, name, unit, description, item_code, status, created_at, updated_at
+       FROM assets${filter.sql} ORDER BY id`, filter.params,
+  );
+  res.json(result.rows.map(fmtAsset));
+});
+
+router.post("/assets", hoOnly, requireModuleAction("page:/production/item-master", "add"), async (req, res): Promise<void> => {
+  // No MRP/GST/HSN/selling price — assets are capital items, not sale inventory.
+  const { name, unit, description } = req.body;
+  if (!name || !unit) { res.status(400).json({ error: "name and unit are required" }); return; }
+  const itemCode = trimOrNull(req.body.itemCode);
+  const codeErr = identifierError(itemCode, "Asset code", 32);
+  if (codeErr) { res.status(400).json({ error: codeErr }); return; }
+  if (req.body.status != null && req.body.status !== "" && !isProductStatus(req.body.status)) {
+    res.status(400).json({ error: `Status must be one of: ${PRODUCT_STATUSES.join(", ")}` }); return;
+  }
+  const status = isProductStatus(req.body.status) ? req.body.status : "active";
+  await handleWrite(res, async () => {
+    const result = await pool.query(
+      `INSERT INTO assets (name, unit, description, item_code, status)
+       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [name, unit, description || null, itemCode, status],
+    );
+    logActivity({
+      action: "CREATE", module: "inventory", entityType: "asset", entityId: result.rows[0].id,
+      description: `New asset "${name}" created`,
+      metadata: { after: { name, unit, itemCode, status } },
+    }).catch(() => {});
+    res.status(201).json(fmtAsset(result.rows[0]));
+  });
+});
+
+router.get("/assets/:id", requireModuleView(["page:/production/item-master", "page:/production/purchase"]), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const result = await pool.query(`SELECT * FROM assets WHERE id = $1 LIMIT 1`, [id]);
+  if (!result.rows[0]) { res.status(404).json({ error: "Not found" }); return; }
+  res.json(fmtAsset(result.rows[0]));
+});
+
+router.patch("/assets/:id", hoOnly, requireModuleAction("page:/production/item-master", "edit"), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  const { name, unit, description } = req.body;
+  const itemCode = trimOrNull(req.body.itemCode);
+  const codeErr = identifierError(itemCode, "Asset code", 32);
+  if (codeErr) { res.status(400).json({ error: codeErr }); return; }
+  if (req.body.status != null && req.body.status !== "" && !isProductStatus(req.body.status)) {
+    res.status(400).json({ error: `Status must be one of: ${PRODUCT_STATUSES.join(", ")}` }); return;
+  }
+  await handleWrite(res, async () => {
+    const result = await pool.query(
+      `UPDATE assets SET
+         name = COALESCE($1, name),
+         unit = COALESCE($2, unit),
+         description = COALESCE($3, description),
+         item_code = COALESCE($5, item_code),
+         status = COALESCE($6, status),
+         updated_at = now()
+       WHERE id = $4 RETURNING *`,
+      [name ?? null, unit ?? null, description ?? null, id, itemCode,
+       isProductStatus(req.body.status) ? req.body.status : null],
+    );
+    if (!result.rows[0]) { res.status(404).json({ error: "Not found" }); return; }
+    res.json(fmtAsset(result.rows[0]));
+  });
+});
+
+router.delete("/assets/:id", hoOnly, requireModuleAction("page:/production/item-master", "delete"), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  // An asset that has been purchased carries capitalised value on the books;
+  // the FK is ON DELETE RESTRICT, so refuse rather than orphan the acquisition.
+  try {
+    await pool.query(`DELETE FROM assets WHERE id = $1`, [id]);
+  } catch (e: any) {
+    if (e?.code === "23503") {
+      res.status(409).json({ error: "This asset has purchase records and cannot be deleted. Mark it inactive instead." });
+      return;
+    }
+    throw e;
+  }
+  logActivity({
+    action: "DELETE", module: "inventory", entityType: "asset", entityId: id,
+    description: `Asset #${id} deleted`,
+  }).catch(() => {});
   res.status(204).send();
 });
 

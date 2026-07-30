@@ -60,6 +60,18 @@ const LOGO_KEY = 'marlin_company_logo';
  *  moduleRegistry's navEntries stay untouched. */
 const OUTLETS_HREF = '/headoffice/outlets';
 
+/**
+ * Duplicate sidebar links to hide, matched by href so moduleRegistry's
+ * navEntries stay untouched (same total-hide pattern as OUTLETS_HREF).
+ *
+ * "Accounts › Expenses" (/accounts/expenses) is a second door onto the same
+ * expenses — Expenses belongs under Operations (/sales/expenses). Only the
+ * navigation exposure is removed: the /accounts/expenses page route, its
+ * permission row and every expense read/accounting API stay in place, so
+ * expense accounting keeps working exactly as before.
+ */
+const RETIRED_NAV_HREFS = new Set<string>(['/accounts/expenses']);
+
 // ─── Navigation — derived from module registry ────────────────────────────────
 // To add, rename, or reorder modules edit src/lib/moduleRegistry.ts only.
 // AppLayout and the Permissions page update automatically from that file.
@@ -288,7 +300,16 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         ),
       };
     })
-    .filter(item => !item.children || item.children.length > 0);
+    .filter(item => !item.children || item.children.length > 0)
+    // Drop retired/duplicate nav links (total hide, no placeholder). Pure
+    // filter — the page routes and permission rows are left intact.
+    .filter((item: any) => !item.href || !RETIRED_NAV_HREFS.has(item.href))
+    .map((item: any) =>
+      item.children
+        ? { ...item, children: item.children.filter((c: any) => !RETIRED_NAV_HREFS.has(c.href)) }
+        : item,
+    )
+    .filter((item: any) => !item.children || item.children.length > 0);
 
   // ── Outlet module visibility ───────────────────────────────────────────────
   // Outlet Management off ⇒ the link disappears for everyone, with no badge and

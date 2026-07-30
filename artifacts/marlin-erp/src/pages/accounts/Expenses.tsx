@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { useListExpenses, useCreateExpense, getListExpensesQueryKey, useListChartOfAccounts, useListCashBankAccounts, useLocationExpensesSummary, useLocationExpenses, LocationExpenseSummary, useExpenseCategories, useListWarehouses, useListOutlets, attachmentViewUrl } from '@workspace/api-client-react';
+import { useQuery } from '@tanstack/react-query';
+import { useListExpenses, useCreateExpense, getListExpensesQueryKey, useListCashBankAccounts, useLocationExpensesSummary, useLocationExpenses, LocationExpenseSummary, useListWarehouses, useListOutlets, attachmentViewUrl, customFetch } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { AttachmentField } from '@/components/AttachmentField';
+import { AccountCombobox } from '@/components/ui/account-combobox';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -14,7 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Receipt, Download, Eye, Calendar, MapPin, Building2, ChevronRight, ArrowLeft, LayoutList, ShieldOff, Printer, Paperclip, Tag } from 'lucide-react';
+import { Plus, Search, Receipt, Download, Eye, Calendar, MapPin, Building2, ChevronRight, ArrowLeft, LayoutList, ShieldOff, Printer, Paperclip } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 import { toast } from 'sonner';
@@ -28,7 +29,6 @@ const schema = z.object({
   expenseDate: z.string().min(1, 'Date required'),
   ledgerAccountId: z.coerce.number().min(1, 'Ledger account required'),
   paymentAccountId: z.coerce.number().min(1, 'Payment account required'),
-  category: z.string().min(1, 'Category required'),
   attributeTo: z.string().min(1),
   notes: z.string().optional(),
 });
@@ -339,23 +339,25 @@ function ByLocationTab({ canPrint }: { canPrint: boolean }) {
 export default function Expenses() {
   const perm = usePermission('page:/accounts/expenses');
   const { data: expenses = [], isLoading } = useListExpenses();
-  const { data: accounts = [] } = useListChartOfAccounts();
   const { data: cashBanks = [] } = useListCashBankAccounts();
-  const { data: categories = [] } = useExpenseCategories();
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
   const { outletsEnabled } = useOutletsEnabled();
-  const expenseAccounts = accounts.filter(a => a.type === 'expense');
+  // Postable Indirect Expense ledgers only. The server restricts this endpoint
+  // to the Indirect Expense subtree and rejects anything else on write.
+  const { data: expenseAccounts = [] } = useQuery<any[]>({
+    queryKey: ['expense-ledgers'],
+    queryFn: () => customFetch('/api/accounts/expense-ledgers'),
+  });
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
-  const [attachmentUrl, setAttachmentUrl] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const createMutation = useCreateExpense();
 
   const blankForm = {
     description: '', amount: 0, expenseDate: new Date().toISOString().split('T')[0],
-    ledgerAccountId: 0, paymentAccountId: 0, category: 'Uncategorised', attributeTo: 'headoffice',
+    ledgerAccountId: 0, paymentAccountId: 0, attributeTo: 'headoffice',
   };
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -371,7 +373,6 @@ export default function Expenses() {
       data: {
         ...rest,
         amount: Number(data.amount),
-        attachmentUrl: attachmentUrl ?? undefined,
         locationType,
         ...(locationType === 'headoffice' ? {} : { locationId: Number(rawId) }),
       } as any,
@@ -380,7 +381,6 @@ export default function Expenses() {
         toast.success('Expense recorded');
         queryClient.invalidateQueries({ queryKey: getListExpensesQueryKey() });
         setIsOpen(false);
-        setAttachmentUrl(null);
         form.reset(blankForm);
       },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
@@ -445,7 +445,6 @@ export default function Expenses() {
             {perm.canAdd && (
             <Button onClick={() => {
               form.reset(blankForm);
-              setAttachmentUrl(null);
               setIsOpen(true);
             }}>
               <Plus className="w-4 h-4 mr-2" /> Add Expense
@@ -585,7 +584,7 @@ export default function Expenses() {
 
       {/* Add Expense Dialog */}
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Record Expense</DialogTitle></DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
@@ -611,15 +610,20 @@ export default function Expenses() {
                   </FormItem>
                 )} />
               </div>
+              {/* Searchable + scrollable; only postable Indirect Expense ledgers
+                  are offered, and the server rejects anything else. */}
               <FormField control={form.control} name="ledgerAccountId" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Expense Account <span className="text-destructive">*</span></FormLabel>
-                  <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
-                    <FormControl><SelectTrigger><SelectValue placeholder="Select account" /></SelectTrigger></FormControl>
-                    <SelectContent>
-                      {expenseAccounts.map(a => <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  <FormControl>
+                    <AccountCombobox
+                      options={(expenseAccounts as any[]).map(a => ({ id: a.id, name: a.name, code: a.code, parentId: a.parentId }))}
+                      value={Number(field.value) || 0}
+                      onChange={id => field.onChange(id)}
+                      placeholder={(expenseAccounts as any[]).length === 0 ? 'No expense ledgers found' : 'Select account'}
+                      disabled={(expenseAccounts as any[]).length === 0}
+                    />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )} />
@@ -630,20 +634,6 @@ export default function Expenses() {
                     <FormControl><SelectTrigger><SelectValue placeholder="Select cash/bank account" /></SelectTrigger></FormControl>
                     <SelectContent>
                       {(cashBanks as any[]).map((cb: any) => <SelectItem key={cb.id} value={String(cb.id)}>{cb.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )} />
-              {/* Category drives expense reporting, so it is a fixed list rather
-                  than free text — "Fuel" and "fuel" would otherwise split. */}
-              <FormField control={form.control} name="category" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Category <span className="text-destructive">*</span></FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <FormControl><SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger></FormControl>
-                    <SelectContent>
-                      {categories.map(c => <SelectItem key={c.name} value={c.name}>{c.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
                   <FormMessage />
@@ -671,13 +661,6 @@ export default function Expenses() {
                   </p>
                 </FormItem>
               )} />
-              {/* Plain markup, not FormItem/FormLabel: the attachment is held in
-                  its own state rather than in the react-hook-form field tree, and
-                  FormLabel throws outside a FormField context. */}
-              <div className="space-y-2">
-                <label className="text-sm font-medium leading-none">Supporting Bill</label>
-                <AttachmentField value={attachmentUrl} onChange={setAttachmentUrl} />
-              </div>
               <FormField control={form.control} name="notes" render={({ field }) => (
                 <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
               )} />

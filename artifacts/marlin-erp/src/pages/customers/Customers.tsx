@@ -13,13 +13,14 @@ import { Separator } from '@/components/ui/separator';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, UserCheck, Download, Eye, BookOpen, Pencil, ShieldOff } from 'lucide-react';
+import { Plus, Search, UserCheck, Download, Eye, BookOpen, Pencil, ShieldOff, HandCoins } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { INDIAN_STATES } from '@/lib/indianStates';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { usePermission } from '@/lib/usePermission';
+import { CollectPaymentDialog } from './CollectPaymentDialog';
 
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
@@ -124,6 +125,7 @@ export default function Customers() {
   const [editItem, setEditItem] = useState<any>(null);
   const [viewItem, setViewItem] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'details' | 'ledger'>('details');
+  const [collectFor, setCollectFor] = useState<{ id: number; name: string } | null>(null);
   const queryClient = useQueryClient();
   const createMutation = useCreateCustomer();
   const updateMutation = useUpdateCustomer();
@@ -230,6 +232,9 @@ export default function Customers() {
                     ₹{Number((c as any).outstandingBalance ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </TableCell>
                   <TableCell className="text-right flex items-center justify-end gap-1">
+                    {perm.canAdd && Number((c as any).outstandingBalance ?? 0) > 0.009 && (
+                    <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="Collect payment" onClick={() => setCollectFor({ id: c.id, name: c.name })}><HandCoins className="w-4 h-4" /></Button>
+                    )}
                     {perm.canEdit && (
                     <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(c)}><Pencil className="w-4 h-4" /></Button>
                     )}
@@ -335,7 +340,14 @@ export default function Customers() {
                     ₹{Number((viewItem as any).outstandingBalance ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </p>
                 </div>
-                <button onClick={() => setActiveTab('ledger')} className="text-xs text-primary underline">View ledger →</button>
+                <div className="flex flex-col items-end gap-2">
+                  {perm.canAdd && Number((viewItem as any).outstandingBalance ?? 0) > 0.009 && (
+                    <Button size="sm" variant="outline" className="h-8" onClick={() => setCollectFor({ id: viewItem.id, name: viewItem.name })}>
+                      <HandCoins className="w-3.5 h-3.5 mr-1.5" /> Collect Payment
+                    </Button>
+                  )}
+                  <button onClick={() => setActiveTab('ledger')} className="text-xs text-primary underline">View ledger →</button>
+                </div>
               </div>
               <Separator />
               {[['Phone', viewItem.phone || '—'], ['Email', viewItem.email || '—'], ['State', (viewItem as any).state || '—'], ['GSTIN', viewItem.gstNumber || '—'], ['Credit Limit', Number((viewItem as any).creditLimit ?? 0) > 0 ? `₹${Number((viewItem as any).creditLimit).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : 'No limit'], ['Credit Days', String(Number((viewItem as any).creditDays ?? 0) || '—')], ['Address', viewItem.address || '—'], ['Notes', viewItem.notes || '—']].map(([k, v]) => (
@@ -355,6 +367,12 @@ export default function Customers() {
           )}
         </SheetContent>
       </Sheet>
+
+      <CollectPaymentDialog
+        customerId={collectFor?.id ?? null}
+        customerName={collectFor?.name}
+        onOpenChange={v => { if (!v) setCollectFor(null); }}
+      />
     </AppLayout>
   );
 }

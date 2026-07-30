@@ -17,7 +17,6 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
 
 import { ObjectNotFoundError, ObjectStorageService } from "../lib/objectStorage";
-import { requireModuleAction } from "../middleware/permissions";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
@@ -29,42 +28,14 @@ const ALLOWED_CONTENT_TYPES = new Set([
   "image/jpeg", "image/png", "image/webp", "image/heic", "image/heif",
   "application/pdf",
 ]);
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
 
-// Only the bill/receipt attachment picker on the Expenses pages uses this.
-router.post("/storage/uploads/request-url", requireModuleAction(["page:/accounts/expenses", "page:/sales/expenses"], "add"), async (req: Request, res: Response) => {
-  const employee = (req as any).employee;
-  if (!employee) { res.status(401).json({ error: "Unauthorized" }); return; }
-
-  const name = String((req.body as any)?.name ?? "").trim();
-  const size = Number((req.body as any)?.size);
-  const contentType = String((req.body as any)?.contentType ?? "").trim().toLowerCase();
-
-  if (!name || name.length > 255) {
-    res.status(400).json({ error: "A file name is required." }); return;
-  }
-  if (!Number.isFinite(size) || size <= 0) {
-    res.status(400).json({ error: "The file appears to be empty." }); return;
-  }
-  if (size > MAX_UPLOAD_BYTES) {
-    res.status(400).json({
-      error: `That file is too large. Attachments must be under ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB.`,
-    });
-    return;
-  }
-  if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
-    res.status(400).json({ error: "Only images (JPG, PNG, WEBP, HEIC) and PDF files can be attached." });
-    return;
-  }
-
-  try {
-    const uploadURL = await objectStorageService.getObjectEntityUploadURL(Number(employee.id));
-    const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
-    res.json({ uploadURL, objectPath, metadata: { name, size, contentType } });
-  } catch (error) {
-    req.log?.error({ err: error }, "Error generating upload URL");
-    res.status(500).json({ error: "Failed to generate upload URL" });
-  }
+// The expense forms were the only consumer of the upload flow, and expense
+// attachments have been retired. The presigned-upload endpoint is therefore
+// disabled so no unused upload path stays exposed. The object-serving route
+// below is intentionally kept: historical expense/payment rows still carry
+// attachment paths and must remain viewable.
+router.post("/storage/uploads/request-url", (_req: Request, res: Response) => {
+  res.status(410).json({ error: "Attachment uploads are no longer available." });
 });
 
 /**

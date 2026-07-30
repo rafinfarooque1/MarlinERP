@@ -42,20 +42,25 @@ export interface ChartNode {
 
 /* ── section filters ────────────────────────────────────────────────────────── */
 /**
- * Each chip selects whole group heads. "Purchase" files under Direct Expenses:
- * trade purchases are a direct cost of sales, and it keeps the group reachable
- * from a chip rather than only from "All".
+ * Exactly five top-level filters, one per Balance-Sheet / P&L section. Each chip
+ * selects whole group heads and the tree renders their entire subtree, so
+ * filtering is descendant-inclusive: "Expenses" shows the complete Direct +
+ * Indirect (and Purchases) expense hierarchy, "Assets" every asset descendant,
+ * and so on. Detailed groups — Current Assets, Current Liabilities, Direct /
+ * Indirect Expense — are NOT chips; they live inside the hierarchy where they
+ * belong.
+ *
+ * Capital / Equity (SYS-CAP) is a balance-sheet section reported on the
+ * liabilities side of the Balance Sheet (owner's funds are a claim on the
+ * business), so it sits under "Liabilities" here rather than being dropped or
+ * mis-filed under Income/Expenses.
  */
 const SECTION_FILTERS: { key: string; label: string; codes?: string[] }[] = [
   { key: 'all',    label: 'All' },
-  { key: 'assets', label: 'Assets',              codes: ['SYS-FIXD', 'SYS-CURA'] },
-  { key: 'cura',   label: 'Current Assets',      codes: ['SYS-CURA'] },
-  { key: 'liab',   label: 'Liabilities',         codes: ['SYS-CAP', 'SYS-LOAN', 'SYS-CURL'] },
-  { key: 'curl',   label: 'Current Liabilities', codes: ['SYS-CURL'] },
-  { key: 'cap',    label: 'Capital',             codes: ['SYS-CAP'] },
-  { key: 'inc',    label: 'Income',              codes: ['SYS-SAL', 'SYS-DIRINC', 'SYS-INDINC'] },
-  { key: 'dexp',   label: 'Direct Expenses',     codes: ['SYS-PUR', 'SYS-DIREXP'] },
-  { key: 'iexp',   label: 'Indirect Expenses',   codes: ['SYS-INDEXP'] },
+  { key: 'assets', label: 'Assets',      codes: ['SYS-FIXD', 'SYS-CURA', 'SYS-OPSTOCK', 'SYS-CLSTOCK'] },
+  { key: 'liab',   label: 'Liabilities', codes: ['SYS-CAP', 'SYS-LOAN', 'SYS-CURL'] },
+  { key: 'inc',    label: 'Income',      codes: ['SYS-SAL', 'SYS-DIRINC', 'SYS-INDINC'] },
+  { key: 'exp',    label: 'Expenses',    codes: ['SYS-PUR', 'SYS-DIREXP', 'SYS-INDEXP'] },
 ];
 
 /** Statement order, so the hierarchy reads like the books rather than A–Z. */
@@ -207,7 +212,7 @@ const collectIds = (nodes: ChartNode[], acc: Set<number> = new Set()) => {
 interface RowActions {
   onToggle: (id: number) => void;
   onViewStatement: (t: StatementTarget) => void;
-  onAddGroup: (parent: ChartNode) => void;
+  onAddChild: (parent: ChartNode) => void;
   onRename: (node: ChartNode) => void;
   onToggleActive: (node: ChartNode) => void;
   onDelete: (node: ChartNode) => void;
@@ -381,11 +386,13 @@ const ChartRow = memo(function ChartRow({
 
         {manage && (
           <>
-            {isGroupish && canAdd && (
+            {canAdd && (
               <button
-                onClick={() => actions.onAddGroup(node)}
+                onClick={() => actions.onAddChild(node)}
                 className="p-1 rounded hover:bg-muted/60 text-muted-foreground hover:text-primary"
-                title="Add a sub-group inside this group"
+                title={isGroupish
+                  ? 'Add a sub-group or ledger inside this group'
+                  : 'Add a sub-ledger under this ledger'}
                 data-testid={`chart-add-${node.id}`}
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -452,6 +459,11 @@ export function ChartHierarchy({
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [addUnder, setAddUnder] = useState<ChartNode | null>(null);
   const [newName, setNewName] = useState('');
+  // What kind of account the add dialog will create. When the parent is a group
+  // the user picks group-vs-ledger; under a leaf ledger only a sub-ledger is
+  // valid, so the choice is forced. The server re-validates the parent either
+  // way — this is UX, not enforcement.
+  const [newKind, setNewKind] = useState<'group' | 'ledger'>('group');
 
   const canManage = perm.canAdd || perm.canEdit || perm.canDelete;
 
@@ -552,14 +564,16 @@ export function ChartHierarchy({
     }
   };
 
-  const createGroup = async () => {
+  const createAccount = async () => {
     const name = newName.trim();
     if (!addUnder) return;
-    if (name.length < 2) { toast.error('Give the group a name of at least 2 characters'); return; }
+    const isGroup = newKind === 'group';
+    const noun = isGroup ? 'group' : addUnder.isGroup || addUnder.isSystemGroup ? 'ledger' : 'sub-ledger';
+    if (name.length < 2) { toast.error(`Give the ${noun} a name of at least 2 characters`); return; }
     try {
       await customFetch('/api/accounts/chart', {
         method: 'POST',
-        body: JSON.stringify({ isGroup: true, name, parentId: addUnder.id }),
+        body: JSON.stringify({ isGroup, name, parentId: addUnder.id }),
       });
       toast.success(`"${name}" added`);
       setExpanded((prev) => new Set(prev).add(addUnder.id));
@@ -567,14 +581,19 @@ export function ChartHierarchy({
       setNewName('');
       refresh();
     } catch (e: any) {
-      toast.error(e?.data?.error || e?.message || 'Could not add the group');
+      toast.error(e?.data?.error || e?.message || `Could not add the ${noun}`);
     }
   };
 
   const actions: RowActions = useMemo(() => ({
     onToggle,
     onViewStatement,
-    onAddGroup: (parent) => { setAddUnder(parent); setNewName(''); },
+    onAddChild: (parent) => {
+      setAddUnder(parent);
+      setNewName('');
+      // A leaf ledger can only take a sub-ledger; a group defaults to sub-group.
+      setNewKind(parent.isGroup || parent.isSystemGroup ? 'group' : 'ledger');
+    },
     onRename: (node) => setRenamingId(node.id),
     onToggleActive: toggleActive,
     onDelete: remove,
@@ -660,9 +679,10 @@ export function ChartHierarchy({
           <Info className="w-3.5 h-3.5 text-primary mt-0.5 shrink-0" />
           <p className="text-[11px] text-muted-foreground leading-relaxed">
             <span className="text-foreground font-medium">Structure mode.</span>{' '}
-            Add sub-groups, rename your own groups, drag an account into another group, or deactivate one you no longer use.
-            System groups and ledgers that carry entries are protected — hover a disabled action to see why.
-            Ledgers themselves are still created automatically with their master record (customer, vendor, employee, location).
+            Use <span className="text-foreground font-medium">+</span> to add a sub-group or ledger inside a group, or a sub-ledger under a ledger.
+            You can also rename your own accounts, drag one into another group, or deactivate one you no longer use.
+            System groups and ledgers, and any account that carries entries, are protected — hover a disabled action to see why.
+            Ledgers for customers, vendors, employees and locations are still created automatically with their master record.
           </p>
         </div>
       )}
@@ -714,32 +734,76 @@ export function ChartHierarchy({
         group equals the sum of the accounts inside it.
       </p>
 
-      {/* ── add sub-group ── */}
+      {/* ── add sub-group / ledger / sub-ledger ── */}
       <Dialog open={!!addUnder} onOpenChange={(v) => { if (!v) { setAddUnder(null); setNewName(''); } }}>
         <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="text-base">Add a sub-group</DialogTitle>
-            <DialogDescription className="text-xs">
-              Inside <span className="text-foreground font-medium">{addUnder?.name}</span>. A group holds other accounts
-              and carries no entries of its own — its balance is always the total of what is inside it.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Group name</label>
-            <Input
-              autoFocus value={newName} onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') createGroup(); }}
-              placeholder="e.g. Utilities"
-              className="h-9 text-sm"
-              data-testid="chart-new-group-name"
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" size="sm" onClick={() => { setAddUnder(null); setNewName(''); }}>Cancel</Button>
-            <Button size="sm" onClick={createGroup} data-testid="chart-new-group-save">
-              <Plus className="w-3.5 h-3.5 mr-1" /> Add group
-            </Button>
-          </DialogFooter>
+          {(() => {
+            const parentIsGroup = !!addUnder && (addUnder.isGroup || addUnder.isSystemGroup);
+            const isGroup = newKind === 'group';
+            const title = !parentIsGroup
+              ? 'Add a sub-ledger'
+              : isGroup ? 'Add a sub-group' : 'Add a ledger';
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="text-base">{title}</DialogTitle>
+                  <DialogDescription className="text-xs">
+                    Inside <span className="text-foreground font-medium">{addUnder?.name}</span>.{' '}
+                    {isGroup
+                      ? 'A group holds other accounts and carries no entries of its own — its balance is always the total of what is inside it.'
+                      : parentIsGroup
+                        ? 'A ledger is a posting account: entries land on it directly and roll up into this group.'
+                        : 'A sub-ledger is a posting account filed under this ledger — the same shape as a per-bank or per-till account.'}
+                  </DialogDescription>
+                </DialogHeader>
+
+                {/* Only a group parent offers the group-vs-ledger choice; under a
+                    ledger the only valid child is a sub-ledger. */}
+                {parentIsGroup && (
+                  <div className="flex items-center gap-1.5 rounded-md bg-muted/25 p-1">
+                    <button
+                      type="button"
+                      onClick={() => setNewKind('group')}
+                      className={`flex-1 px-2.5 py-1.5 rounded text-xs font-medium transition-colors
+                        ${isGroup ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                      data-testid="chart-new-kind-group"
+                    >
+                      Sub-group
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewKind('ledger')}
+                      className={`flex-1 px-2.5 py-1.5 rounded text-xs font-medium transition-colors
+                        ${!isGroup ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                      data-testid="chart-new-kind-ledger"
+                    >
+                      Ledger
+                    </button>
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-muted-foreground">
+                    {isGroup ? 'Group name' : parentIsGroup ? 'Ledger name' : 'Sub-ledger name'}
+                  </label>
+                  <Input
+                    autoFocus value={newName} onChange={(e) => setNewName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') createAccount(); }}
+                    placeholder={isGroup ? 'e.g. Utilities' : 'e.g. Electricity Charges'}
+                    className="h-9 text-sm"
+                    data-testid="chart-new-account-name"
+                  />
+                </div>
+
+                <DialogFooter>
+                  <Button variant="ghost" size="sm" onClick={() => { setAddUnder(null); setNewName(''); }}>Cancel</Button>
+                  <Button size="sm" onClick={createAccount} data-testid="chart-new-account-save">
+                    <Plus className="w-3.5 h-3.5 mr-1" /> {title.replace('Add a ', 'Add ').replace('Add an ', 'Add ')}
+                  </Button>
+                </DialogFooter>
+              </>
+            );
+          })()}
         </DialogContent>
       </Dialog>
     </div>

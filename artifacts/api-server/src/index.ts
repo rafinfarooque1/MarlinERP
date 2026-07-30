@@ -12,6 +12,7 @@ import { addSalaryAccrual } from "./migrations/salaryAccrual";
 import { startSalaryAccrualScheduler } from "./lib/salaryAccrual";
 import { addBackupRestore } from "./migrations/backupRestore";
 import { addExpensePaymentModes } from "./migrations/expensePaymentModes";
+import { addFixedAssets } from "./migrations/fixedAssets";
 import { startBackupScheduler } from "./lib/backup/scheduler";
 import { PasswordService } from "./lib/password";
 import { PRODUCT_KINDS, PRODUCT_TABLE, nextProductIdentity } from "./lib/productIdentity";
@@ -2496,6 +2497,11 @@ await addInvoiceShareLinks(pool);
 // so they must exist independently of whatever a restored archive happens to hold.
 await addBackupRestore(pool);
 await addExpensePaymentModes(pool);
+
+// Fixed-asset support (spec §7). Runs after the chart of accounts is seeded
+// above so the postable Fixed Asset ledger (STD-FIXED-ASSET) can be provisioned
+// under the SYS-FIXD group. Assets get their OWN tables and never touch stock.
+await addFixedAssets(pool);
 
 // Automatic backups and retention. Starts after the migrations above so a
 // scheduled backup can never capture a half-upgraded schema.

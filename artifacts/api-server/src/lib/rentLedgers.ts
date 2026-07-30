@@ -9,8 +9,8 @@ type Pool = typeof _pool;
  *
  * Every warehouse gets exactly two, both system-generated and never hand-made:
  *
- *   Current Liabilities → Rent Payable → <Warehouse>    (SYS-CURL)
- *   Indirect Expense    → Rent Expense → <Warehouse>    (SYS-INDEXP)
+ *   Current Liabilities → Rent Payable → <Warehouse>    (STD-GRP-RENT-PAY)
+ *   Indirect Expense    → Rent Expense → <Warehouse>    (STD-GRP-RENT-EXP)
  *
  * They sit under the same two group roots payroll uses for salary payable and
  * salary expense, which is what carries rent into the balance sheet and the P&L
@@ -69,12 +69,19 @@ export async function provisionRentLedgers(
   warehouseId: number,
   warehouseName: string,
 ): Promise<RentLedgerIds> {
+  // Target the container codes, not the group heads (SYS-INDEXP / SYS-CURL):
+  // passing a group head files the ledger as a loose sibling of every other
+  // indirect expense / current liability, and it only reaches its "Rent Expense"
+  // / "Rent Payable" container on the next boot when ensureChartStructure
+  // relocates it. Naming the container puts it there on first provision.
+  // If the container isn't seeded yet, provisionOne returns null (no ledger,
+  // no duplicate container) and the caller retries on the next boot.
   const expenseLedgerId = await provisionOne(
     pool,
     RENT_EXPENSE_CODE(warehouseId),
     `Rent Expense - ${warehouseName}`,
     "expense",
-    "SYS-INDEXP",
+    "STD-GRP-RENT-EXP",
     `Rent expense for ${warehouseName}`,
   );
   const payableLedgerId = await provisionOne(
@@ -82,7 +89,7 @@ export async function provisionRentLedgers(
     RENT_PAYABLE_CODE(warehouseId),
     `Rent Payable - ${warehouseName}`,
     "liability",
-    "SYS-CURL",
+    "STD-GRP-RENT-PAY",
     `Rent payable for ${warehouseName}`,
   );
 

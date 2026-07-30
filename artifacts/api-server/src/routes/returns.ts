@@ -102,7 +102,7 @@ async function insertVoucher(c: Q, args: {
 }
 
 const userOf = (req: Request): string | null =>
-  (req as any).user?.username ?? (req as any).user?.name ?? null;
+  (req as any).employee?.username ?? null;
 
 // ═════════════════════════════════════════════════════════════════════════════
 // Sales returns
@@ -944,11 +944,37 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
       return;
     }
     const asOf = todayISO();
+    // An asset bought on credit credits the vendor's payable ledger exactly as a
+    // stock purchase does, but it lives in asset_purchases, not purchases. Left
+    // out, this report would understate what is owed and disagree with the
+    // vendor's ledger balance in the books. Acquisitions with no vendor are
+    // funded from Cash and never create a payable, so they stay out.
+    // to_regclass guards the case where the fixed-assets migration has not run.
+    const { rows: [assetTbl] } = await pool.query<{ ok: boolean }>(
+      `SELECT to_regclass('public.asset_purchases') IS NOT NULL AS ok`
+    );
+    const assetBillsSql = assetTbl?.ok
+      ? `UNION ALL
+         SELECT 'asset_purchase'::text AS source, ap.id,
+                COALESCE(jv.voucher_number, 'Asset — ' || a.name) AS invoice_number,
+                ap.purchase_date, ap.vendor_id,
+                (ap.quantity * ap.acquisition_cost)::numeric AS total, v.name, v.phone
+           FROM asset_purchases ap
+           JOIN vendors v ON v.id = ap.vendor_id
+           JOIN assets a ON a.id = ap.asset_id
+           LEFT JOIN journal_vouchers jv ON jv.id = ap.journal_voucher_id
+          WHERE ap.vendor_id IS NOT NULL
+            AND (ap.quantity * ap.acquisition_cost) > 0.004`
+      : "";
     const { rows: bills } = await pool.query(
-      `SELECT p.id, p.invoice_number, p.purchase_date, p.vendor_id, p.total_amount::numeric AS total, v.name, v.phone
-       FROM purchases p
-       JOIN vendors v ON v.id = p.vendor_id
-       ORDER BY p.purchase_date ASC, p.id ASC`
+      `SELECT * FROM (
+         SELECT 'purchase'::text AS source, p.id, p.invoice_number, p.purchase_date, p.vendor_id,
+                p.total_amount::numeric AS total, v.name, v.phone
+           FROM purchases p
+           JOIN vendors v ON v.id = p.vendor_id
+         ${assetBillsSql}
+       ) bills
+       ORDER BY purchase_date ASC, source ASC, id ASC`
     );
     const { rows: payRows } = await pool.query(
       `SELECT l.code, COALESCE(SUM(p.amount::numeric), 0) AS amt
@@ -993,8 +1019,13 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
         byVendor.set(b.vendor_id, v);
       }
       v.totalBilled = r2(v.totalBilled + Number(b.total));
+      const isAsset = b.source === "asset_purchase";
       v.bills.push({
-        purchaseId: b.id,
+        // Ids are only unique within their own table, so callers key off billKey.
+        billKey: `${isAsset ? "A" : "P"}-${b.id}`,
+        source: b.source,
+        purchaseId: isAsset ? null : b.id,
+        assetPurchaseId: isAsset ? b.id : null,
         invoiceNumber: b.invoice_number ?? null,
         purchaseDate: b.purchase_date,
         total: r2(Number(b.total)),

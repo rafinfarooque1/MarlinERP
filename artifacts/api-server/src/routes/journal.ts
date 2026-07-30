@@ -139,7 +139,7 @@ router.post("/accounts/journal-vouchers", requireModuleAction("page:/accounts/vo
   if (!isDate(voucherDate)) { res.status(400).json({ error: "voucherDate (YYYY-MM-DD) is required" }); return; }
   const narration = body.narration ? String(body.narration).trim() || null : null;
   const reason = body.reason ? String(body.reason).trim() || null : null;
-  const createdBy = (req as any).user?.username ?? "system";
+  const createdBy = (req as any).employee?.username ?? "system";
 
   let lines: { ledgerId: number; debit: number; credit: number }[] = [];
   let partyLedgerId: number | null = null;

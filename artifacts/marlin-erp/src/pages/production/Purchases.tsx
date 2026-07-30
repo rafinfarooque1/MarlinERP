@@ -18,7 +18,8 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Plus, Search, Trash2, ShoppingCart, Download, Eye, Calendar, FileDown, Edit2, AlertTriangle, X } from 'lucide-react';
 import { toast } from 'sonner';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery, useMutation } from '@tanstack/react-query';
+import { customFetch } from '@workspace/api-client-react';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
@@ -67,6 +68,239 @@ function calcLine(q: number, rate: number, disc: number, gst: number, taxType: s
 }
 
 function fmt(n: number) { return n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+
+// ── Asset purchases (fixed-asset acquisition, spec §7) ──────────────────────
+// Assets are capital items, NOT sale inventory: they live in their own tables
+// and post to the Fixed Asset ledger, never to Purchases/inventory/stock. This
+// self-contained section talks to the new /asset-purchases endpoints (kept out
+// of the generated api-client). It reuses the Purchases page permission.
+interface AssetMasterRow { id: number; name: string; unit: string; status: string; }
+interface AssetPurchaseRow {
+  id: number; assetId: number; assetName: string; assetUnit: string;
+  quantity: number; acquisitionCost: number; totalCost: number;
+  vendorId: number | null; vendorName: string; purchaseDate: string; notes: string | null;
+  locationType: string; locationId: number; locationName: string;
+}
+
+const assetPurchaseSchema = z.object({
+  assetId: z.coerce.number().min(1, 'Select an asset'),
+  quantity: z.coerce.number().min(0.001, 'Qty > 0'),
+  acquisitionCost: z.coerce.number().min(0, 'Cost ≥ 0'),
+  vendorId: z.coerce.number().optional(),
+  location: z.string().min(1, 'Location required'),
+  purchaseDate: z.string().min(1, 'Date required'),
+  notes: z.string().optional(),
+});
+type AssetPurchaseFormValues = z.infer<typeof assetPurchaseSchema>;
+
+function AssetPurchasesSection({ vendors, canAdd, canDownload }: { vendors: any[]; canAdd: boolean; canDownload: boolean }) {
+  const queryClient = useQueryClient();
+  const locations = useActingLocations();
+  const [isOpen, setIsOpen] = useState(false);
+
+  const assetsQuery = useQuery<AssetMasterRow[]>({
+    queryKey: ['assets-master', 'active'],
+    queryFn: () => customFetch<AssetMasterRow[]>('/api/inventory/assets?status=active'),
+  });
+  const activeAssets = assetsQuery.data ?? [];
+
+  const purchasesQuery = useQuery<AssetPurchaseRow[]>({
+    queryKey: ['asset-purchases'],
+    queryFn: () => customFetch<AssetPurchaseRow[]>('/api/asset-purchases'),
+  });
+  const assetPurchases = purchasesQuery.data ?? [];
+
+  const createMutation = useMutation({
+    mutationFn: (data: any) => customFetch('/api/asset-purchases', { method: 'POST', body: JSON.stringify(data) }),
+  });
+
+  const form = useForm<AssetPurchaseFormValues>({
+    resolver: zodResolver(assetPurchaseSchema),
+    defaultValues: { assetId: 0, quantity: 1, acquisitionCost: 0, vendorId: 0, location: locations.defaultValue, purchaseDate: new Date().toISOString().split('T')[0], notes: '' },
+  });
+  const watchQty = Number(form.watch('quantity')) || 0;
+  const watchCost = Number(form.watch('acquisitionCost')) || 0;
+  const previewTotal = Math.round(watchQty * watchCost * 100) / 100;
+
+  const openDialog = () => {
+    form.reset({ assetId: 0, quantity: 1, acquisitionCost: 0, vendorId: 0, location: locations.defaultValue, purchaseDate: new Date().toISOString().split('T')[0], notes: '' });
+    setIsOpen(true);
+  };
+
+  const onSubmit = (values: AssetPurchaseFormValues) => {
+    const loc = decodeLocation(locations.canChoose ? values.location : locations.defaultValue);
+    const payload = {
+      assetId: values.assetId,
+      quantity: values.quantity,
+      acquisitionCost: values.acquisitionCost,
+      vendorId: values.vendorId ? values.vendorId : null,
+      purchaseDate: values.purchaseDate,
+      notes: values.notes || undefined,
+      locationType: (loc as any).locationType,
+      locationId: (loc as any).locationId,
+    };
+    createMutation.mutate(payload, {
+      onSuccess: () => {
+        toast.success('Asset purchase recorded');
+        queryClient.invalidateQueries({ queryKey: ['asset-purchases'] });
+        setIsOpen(false);
+      },
+      onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed to record asset purchase'),
+    });
+  };
+
+  return (
+    <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-border">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight flex items-center gap-2"><ShoppingCart className="w-5 h-5 text-purple-500" /> Asset Purchases</h2>
+          <p className="text-muted-foreground text-sm mt-0.5">Acquire fixed assets (e.g. freezers) per location — booked to the Fixed Asset ledger, not inventory</p>
+        </div>
+        <div className="flex gap-2">
+          {canDownload && assetPurchases.length > 0 && (
+            <Button variant="outline" size="sm" onClick={() => downloadCSV('asset-purchases.csv', assetPurchases.map(a => ({
+              'Ref #': a.id, Date: a.purchaseDate, Asset: a.assetName, Location: a.locationName,
+              Quantity: a.quantity, 'Cost/Unit': a.acquisitionCost, 'Total': a.totalCost, Vendor: a.vendorName || '',
+            })))}>
+              <Download className="w-4 h-4 mr-2" /> Export
+            </Button>
+          )}
+          {canAdd && (
+            <Button size="sm" onClick={openDialog}><Plus className="w-4 h-4 mr-2" /> Buy Asset</Button>
+          )}
+        </div>
+      </div>
+
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Ref #</TableHead>
+            <TableHead>Date</TableHead>
+            <TableHead>Asset</TableHead>
+            <TableHead>Location</TableHead>
+            <TableHead className="text-right">Qty</TableHead>
+            <TableHead className="text-right">Cost/Unit</TableHead>
+            <TableHead className="text-right">Total</TableHead>
+            <TableHead>Vendor</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {purchasesQuery.isLoading ? (
+            <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-8">Loading…</TableCell></TableRow>
+          ) : assetPurchases.length === 0 ? (
+            <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-8">No asset purchases yet.</TableCell></TableRow>
+          ) : assetPurchases.map(a => (
+            <TableRow key={a.id}>
+              <TableCell className="font-mono text-xs">#{String(a.id).padStart(4, '0')}</TableCell>
+              <TableCell className="text-sm"><div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(a.purchaseDate).toLocaleDateString('en-IN')}</div></TableCell>
+              <TableCell className="font-medium">{a.assetName} <span className="text-xs text-muted-foreground">({a.assetUnit})</span></TableCell>
+              <TableCell><Badge variant="outline" className="text-xs">{a.locationName}</Badge></TableCell>
+              <TableCell className="text-right font-mono">{a.quantity}</TableCell>
+              <TableCell className="text-right font-mono">₹{fmt(a.acquisitionCost)}</TableCell>
+              <TableCell className="text-right font-mono font-semibold">₹{fmt(a.totalCost)}</TableCell>
+              <TableCell className="text-sm text-muted-foreground">{a.vendorName || '—'}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+
+      <Dialog open={isOpen} onOpenChange={setIsOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Buy Asset</DialogTitle>
+            <DialogDescription>Records a fixed-asset acquisition. Booked to the Fixed Asset ledger — no depreciation, no stock impact.</DialogDescription>
+          </DialogHeader>
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+              <FormField control={form.control} name="assetId" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Asset</FormLabel>
+                  <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Select an asset" /></SelectTrigger></FormControl>
+                    <SelectContent>
+                      {activeAssets.length === 0
+                        ? <SelectItem value="0" disabled>No active assets — create one in Item Master</SelectItem>
+                        : activeAssets.map(a => <SelectItem key={a.id} value={String(a.id)}>{a.name} ({a.unit})</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )} />
+              <div className="grid grid-cols-2 gap-3">
+                <FormField control={form.control} name="quantity" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Quantity</FormLabel>
+                    <FormControl><Input type="number" min={0} step="0.001" className="font-mono" {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                <FormField control={form.control} name="acquisitionCost" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Acquisition Cost / Unit (₹)</FormLabel>
+                    <FormControl><Input type="number" min={0} step="0.01" className="font-mono" {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+              </div>
+              {locations.canChoose && (
+                <FormField control={form.control} name="location" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Location</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {locations.options.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                <FormField control={form.control} name="vendorId" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Vendor (optional)</FormLabel>
+                    <Select onValueChange={v => field.onChange(v === 'none' ? 0 : Number(v))} value={field.value ? String(field.value) : 'none'}>
+                      <FormControl><SelectTrigger><SelectValue placeholder="No vendor" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        <SelectItem value="none">No vendor</SelectItem>
+                        {(vendors as any[]).map(v => <SelectItem key={v.id} value={String(v.id)}>{v.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                <FormField control={form.control} name="purchaseDate" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Purchase Date</FormLabel>
+                    <FormControl><Input type="date" {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+              </div>
+              <FormField control={form.control} name="notes" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Notes</FormLabel>
+                  <FormControl><Textarea rows={2} placeholder="Optional" {...field} /></FormControl>
+                </FormItem>
+              )} />
+              <div className="flex justify-between items-center rounded-lg bg-muted/40 px-3 py-2">
+                <span className="text-sm text-muted-foreground">Total acquisition value</span>
+                <span className="font-mono font-bold text-primary">₹{fmt(previewTotal)}</span>
+              </div>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setIsOpen(false)}>Cancel</Button>
+                <Button type="submit" disabled={createMutation.isPending || activeAssets.length === 0}>
+                  {createMutation.isPending ? 'Saving…' : 'Record Asset Purchase'}
+                </Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
 
 export default function Purchases() {
   const perm = usePermission('page:/production/purchase');
@@ -340,6 +574,9 @@ export default function Purchases() {
             </div>
           )}
         </div>
+
+        {/* ── Asset purchases (fixed assets, separate ledger, no stock) ── */}
+        <AssetPurchasesSection vendors={vendors as any[]} canAdd={perm.canAdd} canDownload={perm.canDownload} />
       </div>
 
       {/* ── New / Edit Purchase Bill Dialog ── */}

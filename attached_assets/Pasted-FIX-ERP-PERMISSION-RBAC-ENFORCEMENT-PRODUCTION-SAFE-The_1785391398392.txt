@@ -1,0 +1,574 @@
+FIX ERP PERMISSION / RBAC ENFORCEMENT — PRODUCTION-SAFE
+
+There is a serious permission issue in the ERP.
+
+CURRENT PROBLEM
+
+I created a hierarchy/role and assigned an employee to that hierarchy.
+
+Example:
+Hierarchy/Role: Warehouse Manager L3
+
+In Company → Permissions, I configured restricted permissions for Warehouse Manager.
+
+The Permission screen currently shows:
+
+“Warehouse Manager can open 13 of 47 pages”
+
+The permissions were saved successfully.
+
+The employee is also assigned to a specific warehouse/location.
+
+However, when I log in using that employee ID, the employee can still see and access almost everything in the ERP.
+
+This means the permission configuration is either not being resolved correctly or is not being enforced correctly.
+
+This must be fixed properly in BOTH frontend and backend.
+
+Do NOT solve this only by hiding sidebar menu items.
+
+==================================================
+1. DIAGNOSE THE ROOT CAUSE FIRST
+==================================================
+
+Before changing production data, trace the complete permission flow:
+
+Employee Login
+→ Employee Record
+→ Assigned Hierarchy/Role
+→ Hierarchy Permission Configuration
+→ Authenticated Session/JWT
+→ Effective Permissions
+→ Frontend Navigation
+→ Frontend Route Guards
+→ Backend API Authorization
+→ Location/Warehouse Authorization
+
+Determine exactly why an employee assigned to Warehouse Manager can see modules that are disabled for Warehouse Manager.
+
+Check specifically for:
+
+• Employee hierarchy not being loaded after login
+• Wrong hierarchy ID being resolved
+• Employee role and hierarchy conflicting
+• Administrator permissions accidentally inherited
+• Missing permission records being treated as ALLOW
+• Default allow behaviour
+• Permission configuration saved but not read during authentication
+• Old/stale permissions stored in session/JWT
+• Frontend hard-coded permissions
+• Frontend checking employee type instead of hierarchy permissions
+• Backend checking authentication but not authorization
+• API endpoints missing permission middleware
+• Location assignment bypassing hierarchy permissions
+• Permission cache not refreshing after Save
+• Mobile navigation using different permission logic
+• Direct URLs bypassing sidebar permission checks
+
+Report the actual root cause.
+
+Do not guess.
+
+==================================================
+2. DENY BY DEFAULT
+==================================================
+
+For normal/non-admin employees, permissions must follow:
+
+NO EXPLICIT PERMISSION = DENY
+
+Do not automatically grant access just because the employee is authenticated.
+
+Administrator/Super Admin can retain full access according to the existing ERP architecture.
+
+But Warehouse Manager and other employee hierarchies must receive only their explicitly granted permissions.
+
+==================================================
+3. VIEW PERMISSION
+==================================================
+
+The View permission determines whether the employee can access the page/module.
+
+If:
+
+View = OFF
+
+Then the employee must NOT be able to:
+
+• See the module in the sidebar
+• See it in the mobile menu
+• Find it through global search
+• Open it through dashboard shortcuts
+• Open it through quick links
+• Open the URL manually
+• Fetch the module's protected business data through the API
+
+If:
+
+View = ON
+
+Then the page can be displayed, subject to the employee's location/data scope.
+
+==================================================
+4. SIDEBAR AND NAVIGATION
+==================================================
+
+Generate navigation using the logged-in employee's EFFECTIVE hierarchy permissions.
+
+Example:
+
+If Warehouse Manager can open only 13 of 47 pages, the employee should only see those permitted pages/modules.
+
+Do not show the remaining restricted pages.
+
+This must apply to:
+
+• Desktop sidebar
+• Mobile menu
+• Dashboard shortcuts
+• Search/navigation results
+• Quick links
+• Other navigation surfaces
+
+Parent menu groups should only appear when at least one child page is permitted.
+
+Example:
+
+If Accounts contains 10 pages but the employee has permission for none of them, do not show Accounts.
+
+If the employee has permission for only one Accounts page, show Accounts with only that permitted child page.
+
+==================================================
+5. DIRECT URL SECURITY
+==================================================
+
+Hiding menu items is NOT security.
+
+Protect every restricted frontend route.
+
+Example:
+
+If Warehouse Manager has no View permission for:
+
+Chart of Accounts
+
+and manually enters:
+
+/accounts/chart
+
+the ERP must NOT display Chart of Accounts.
+
+Show an Access Denied page or return/handle HTTP 403 appropriately.
+
+Do the same for every protected ERP page.
+
+==================================================
+6. BACKEND API AUTHORIZATION — CRITICAL
+==================================================
+
+Backend permission enforcement is mandatory.
+
+Every protected API operation must validate:
+
+1. Logged-in employee
+2. Employee hierarchy
+3. Effective permission
+4. Required action
+5. Employee location/warehouse scope where applicable
+
+Do not trust frontend permission checks.
+
+Use the permission types already available in the Permission screen:
+
+VIEW
+CREATE / ADD
+EDIT
+DELETE
+EXPORT / DOWNLOAD
+PRINT
+
+Behaviour:
+
+VIEW OFF
+→ Protected list/detail APIs must reject unauthorized access.
+
+VIEW ON + ADD OFF
+→ Employee can view but cannot create.
+
+EDIT OFF
+→ Update APIs must return 403.
+
+DELETE OFF
+→ Delete APIs must return 403.
+
+EXPORT OFF
+→ Export/download APIs must return 403.
+
+PRINT OFF
+→ Protected print/PDF operations must be denied.
+
+Frontend buttons should also be hidden/disabled appropriately, but backend enforcement is mandatory.
+
+==================================================
+7. WAREHOUSE / LOCATION DATA ISOLATION
+==================================================
+
+The employee is assigned to a specific warehouse/location.
+
+Hierarchy permission and location permission must work TOGETHER.
+
+Having permission to Stock, Sales, Production, Expenses, etc. does NOT automatically mean the employee can see every company's location.
+
+Example:
+
+Employee:
+Hierarchy = Warehouse Manager
+Assigned Location = Warehouse A
+
+If Stock View permission is ON:
+
+The employee should see stock belonging to Warehouse A only unless the hierarchy explicitly has company-wide location access.
+
+The employee must NOT automatically see:
+
+Warehouse B
+Warehouse C
+Head Office
+Other Outlets
+Other Locations
+
+Apply location scope where applicable to:
+
+• Stock
+• Stock Ledger
+• Inventory
+• Production
+• Sales
+• Expenses
+• Cash Balance
+• Stock Transfers
+• Warehouse operations
+• Reports
+• Inventory quantities
+• Location-sensitive transactions
+• Other location-specific ERP data
+
+IMPORTANT:
+
+Never trust a location ID supplied by the frontend.
+
+Example:
+
+If Warehouse Manager is assigned Warehouse A but manually changes an API request from:
+
+location=A
+
+to:
+
+location=B
+
+the backend must reject or safely scope the request.
+
+The employee must not obtain Warehouse B data.
+
+==================================================
+8. PERMISSION SAVE / REFRESH
+==================================================
+
+When an administrator changes hierarchy permissions and clicks Save, ensure those changes actually affect employees assigned to that hierarchy.
+
+Investigate whether current permissions are:
+
+• stored in JWT
+• stored in session
+• cached in frontend
+• cached in backend
+• loaded dynamically from database
+
+Implement safe permission refresh according to the current architecture.
+
+Prefer immediate permission refresh if practical.
+
+At minimum:
+
+After logout and login, the employee MUST receive the latest permissions.
+
+Old permissions must not continue indefinitely because of stale session/JWT/cache data.
+
+==================================================
+9. EMPLOYEE HIERARCHY RESOLUTION
+==================================================
+
+Verify the employee actually resolves to:
+
+Warehouse Manager L3
+
+during authentication and every authorization check.
+
+Do not merely trust a role string supplied by the frontend.
+
+The backend must determine the employee and hierarchy from the authenticated identity.
+
+Check whether the employee has multiple role/hierarchy fields.
+
+If multiple systems currently exist, establish one authoritative effective-permission resolution path without breaking existing employees.
+
+==================================================
+10. PERMISSION MATRIX MUST BE AUTHORITATIVE
+==================================================
+
+Company → Permissions must be the authoritative configuration for hierarchy permissions.
+
+If the Permission screen says:
+
+Warehouse Manager can open 13 of 47 pages
+
+the actual effective permission system must match that configuration.
+
+Do not maintain separate hidden hard-coded permission lists that contradict the Permission screen.
+
+==================================================
+11. ADMINISTRATOR REGRESSION PROTECTION
+==================================================
+
+Do not accidentally restrict Administrator/Super Admin.
+
+Test:
+
+Administrator:
+→ full intended ERP access
+
+Warehouse Manager:
+→ only configured permissions
+
+Other hierarchy:
+→ its own configured permissions
+
+Permissions from one hierarchy must not leak into another.
+
+==================================================
+12. PRODUCTION DATA SAFETY
+==================================================
+
+This is primarily an authorization/security fix.
+
+Do NOT:
+
+• Delete employees
+• Recreate employees unnecessarily
+• Delete hierarchy records
+• Reset hierarchy configuration
+• Reset existing permissions
+• Reset production database
+• Delete accounting transactions
+• Change ledger balances
+• Change stock
+• Change sales
+• Change purchases
+• Change production transactions
+• Change customer balances
+• Change cash/bank balances
+
+Preserve existing production business data.
+
+If a database/schema migration is genuinely necessary, explain exactly why before applying it.
+
+Make any required migration production-safe and backward-compatible.
+
+==================================================
+13. BACKEND AUDIT
+==================================================
+
+While fixing this, audit the backend routes for protected ERP modules.
+
+Identify routes that currently check only:
+
+“Is user logged in?”
+
+but do NOT check:
+
+“Does this employee have permission for this operation?”
+
+Add centralized authorization middleware/helper where appropriate instead of scattering inconsistent permission logic throughout the codebase.
+
+The authorization architecture should preferably resolve:
+
+authenticated employee
+→ hierarchy
+→ effective page/module permission
+→ requested action
+→ permitted locations
+→ allow/deny
+
+Avoid duplicating permission logic across dozens of routes if a centralized implementation is possible.
+
+==================================================
+14. TEST THE ACTUAL WAREHOUSE MANAGER CASE
+==================================================
+
+Use the actual Warehouse Manager permission configuration for testing.
+
+Current Permission screen reports:
+
+13 of 47 pages permitted.
+
+Test with an employee assigned to:
+
+Warehouse Manager L3
++
+one specific warehouse/location.
+
+Verify:
+
+1. Login succeeds.
+
+2. Only permitted modules/pages appear.
+
+3. Restricted modules disappear.
+
+4. Direct URLs to restricted pages are denied.
+
+5. Restricted API requests return 403.
+
+6. Permitted pages work normally.
+
+7. CREATE follows its checkbox.
+
+8. EDIT follows its checkbox.
+
+9. DELETE follows its checkbox.
+
+10. EXPORT follows its checkbox.
+
+11. PRINT follows its checkbox.
+
+12. Employee only sees data belonging to the assigned warehouse/location where location restrictions apply.
+
+13. Changing location IDs manually cannot expose another location's data.
+
+14. Administrator still has full intended access.
+
+==================================================
+15. TEST PERMISSION CHANGES
+==================================================
+
+Perform a controlled permission-change test.
+
+Take one currently permitted test page.
+
+Disable View.
+
+Save permissions.
+
+Refresh/re-login as required.
+
+Verify:
+
+• Page disappears
+• Direct URL is denied
+• API access is denied
+
+Then enable View again.
+
+Verify:
+
+• Page returns
+• Direct route works
+• API works
+
+Restore the intended final Warehouse Manager permissions after testing.
+
+Do not leave temporary test permissions behind.
+
+==================================================
+16. SECURITY BYPASS TESTS
+==================================================
+
+Explicitly test attempts to bypass permissions through:
+
+• Manually entering URLs
+• Direct API requests
+• Changing location IDs
+• Changing warehouse IDs
+• Hidden frontend routes
+• Export endpoints
+• Download endpoints
+• Print/PDF endpoints
+• Browser refresh on restricted route
+• Mobile navigation
+• Global search
+• Dashboard shortcuts
+
+Unauthorized access must fail server-side.
+
+==================================================
+17. DO NOT PUBLISH AUTOMATICALLY
+==================================================
+
+First fix and test this safely in development.
+
+Do NOT automatically publish to production.
+
+When development testing is complete, STOP and give me a report.
+
+I will approve the production publish separately.
+
+==================================================
+FINAL REPORT REQUIRED
+==================================================
+
+Before asking me to publish, report:
+
+1. Exact root cause
+
+2. Why Warehouse Manager was seeing all modules
+
+3. Employee hierarchy resolved during login
+
+4. Effective hierarchy permissions loaded
+
+5. Number of pages permitted
+
+6. Number of pages denied
+
+7. Frontend files/components changed
+
+8. Backend files/routes/middleware changed
+
+9. Whether database/schema changes were required
+
+10. Direct URL authorization test results
+
+11. Backend API authorization test results
+
+12. CREATE/EDIT/DELETE permission test results
+
+13. EXPORT/PRINT permission test results
+
+14. Warehouse/location isolation test results
+
+15. Attempted location-ID bypass test results
+
+16. Administrator regression test results
+
+17. Permission save/refresh test results
+
+18. Confirmation that no production business data was modified
+
+IMPORTANT FINAL REQUIREMENT:
+
+Do not consider this fixed merely because unauthorized sidebar items are hidden.
+
+The fix is complete only when:
+
+FRONTEND VISIBILITY
++
+FRONTEND ROUTE PROTECTION
++
+BACKEND API AUTHORIZATION
++
+ACTION-LEVEL PERMISSIONS
++
+WAREHOUSE/LOCATION DATA ISOLATION
+
+are all working together correctly.

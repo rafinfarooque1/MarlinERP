@@ -15,14 +15,15 @@
  *    The warehouse control is rendered disabled with that reason rather than
  *    hidden, so it reads as a rule instead of an oversight.
  */
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { customFetch } from '@workspace/api-client-react';
 import { Link } from 'wouter';
 import {
   BookOpen, Scale, FileSpreadsheet, Landmark, Wallet, Percent, ArrowRight, Clock,
-  AlertTriangle, Info,
+  AlertTriangle, Info, ChevronDown, ChevronRight, FoldVertical, UnfoldVertical,
 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { usePermission } from '@/lib/usePermission';
 import { useEnabledOutlets } from '@/lib/locationStructure';
 import { downloadCSV } from '@/lib/download';
@@ -73,7 +74,15 @@ interface FinancialStatements {
   integrity: { balanced: boolean; difference: number; issues: string[] };
 }
 
-interface Line { name: string; amount: number; depth: number; bold?: boolean }
+/**
+ * A statement line.
+ *
+ * `key`/`parentKey`/`hasChildren` drive the on-screen collapsible tree only.
+ * They are presentation metadata — the amount, depth, sign and aggregation are
+ * exactly what they always were, so PDF/CSV exports (which read the full,
+ * unfiltered list) are untouched by collapsing.
+ */
+interface Line { name: string; amount: number; depth: number; bold?: boolean; key: string; parentKey: string | null; hasChildren?: boolean }
 
 /**
  * Flatten a group into indented lines.
@@ -83,32 +92,42 @@ interface Line { name: string; amount: number; depth: number; bold?: boolean }
  * Sales"…), and a single level of children would print the sub-group's rolled-up
  * total with the accounts inside it invisible. Zero-balance branches are pruned
  * whole — a sub-group is only listed when something under it moved.
+ *
+ * Each emitted line carries a stable `key` (its parent path + group root) and a
+ * `parentKey`, so the on-screen table can hide a branch by knowing which lines
+ * descend from a collapsed one. `hasChildren` marks the lines that get a
+ * disclosure arrow.
  */
 function groupLines(gs: GroupSummary | undefined): Line[] {
   if (!gs) return [];
   const printed = (nodes: LedgerNode[] | undefined) =>
     (nodes ?? []).filter((c) => Math.abs(c.balance) > 0.005);
 
-  const walk = (nodes: LedgerNode[] | undefined, depth: number): Line[] =>
+  // Root key is scoped to this group summary so keys never collide across the
+  // several groups stacked in one column (e.g. Direct + Indirect expenses).
+  const rootKey = `g:${gs.id ?? gs.code ?? gs.name}`;
+
+  const walk = (nodes: LedgerNode[] | undefined, depth: number, parentKey: string): Line[] =>
     printed(nodes).flatMap((c) => {
-      const kids = walk(c.children, depth + 1);
-      const lines: Line[] = [{ name: c.name, amount: c.balance, depth, bold: kids.length > 0 }, ...kids];
+      const key = `${parentKey}/${c.id}`;
+      const kids = walk(c.children, depth + 1, key);
+      const lines: Line[] = [{ name: c.name, amount: c.balance, depth, bold: kids.length > 0, key, parentKey, hasChildren: kids.length > 0 }, ...kids];
       // Accounts like "Cash" carry entries of their own as well as children, so
       // the listed accounts need not add up to the parent. Print the remainder
       // rather than leaving an unexplained gap in the statement.
       if (kids.length > 0) {
         const own = c.balance - printed(c.children).reduce((s, x) => s + x.balance, 0);
-        if (Math.abs(own) > 0.005) lines.push({ name: 'Direct entries', amount: own, depth: depth + 1 });
+        if (Math.abs(own) > 0.005) lines.push({ name: 'Direct entries', amount: own, depth: depth + 1, key: `${key}/direct`, parentKey: key });
       }
       return lines;
     });
 
-  const kids = walk(gs.children, 1);
+  const kids = walk(gs.children, 1, rootKey);
   const ownAtRoot = gs.total - printed(gs.children).reduce((s, x) => s + x.balance, 0);
   return [
-    { name: gs.name, amount: gs.total, depth: 0, bold: true },
+    { name: gs.name, amount: gs.total, depth: 0, bold: true, key: rootKey, parentKey: null, hasChildren: kids.length > 0 },
     ...kids,
-    ...(Math.abs(ownAtRoot) > 0.005 ? [{ name: 'Direct entries', amount: ownAtRoot, depth: 1 }] : []),
+    ...(Math.abs(ownAtRoot) > 0.005 ? [{ name: 'Direct entries', amount: ownAtRoot, depth: 1, key: `${rootKey}/direct`, parentKey: rootKey }] : []),
   ];
 }
 
@@ -190,21 +209,132 @@ function NoteLine({ children }: { children: React.ReactNode }) {
   );
 }
 
-function LineTable({ lines, total, totalLabel, loading }: { lines: Line[]; total: number; totalLabel: string; loading?: boolean }) {
+/**
+ * Every line whose `key` is used as some other line's `parentKey` — i.e. the
+ * lines that own a disclosure arrow.
+ */
+function parentKeys(lines: Line[]): Set<string> {
+  const s = new Set<string>();
+  for (const l of lines) if (l.parentKey) s.add(l.parentKey);
+  return s;
+}
+
+/**
+ * A line is visible only if every ancestor between it and the root is expanded.
+ * Walking parentKey up to the root keeps this honest no matter how deep the
+ * chart of accounts nests.
+ */
+function visibleLines(lines: Line[], expanded: Set<string>): Line[] {
+  const byKey = new Map(lines.map((l) => [l.key, l]));
+  const isVisible = (l: Line): boolean => {
+    let p = l.parentKey;
+    while (p) {
+      if (!expanded.has(p)) return false;
+      p = byKey.get(p)?.parentKey ?? null;
+    }
+    return true;
+  };
+  return lines.filter(isVisible);
+}
+
+/**
+ * Collapsible statement table.
+ *
+ * A presentation layer over the flat `lines`: collapsing only hides rows, it
+ * never changes an amount or a total. Parent totals still equal the sum of
+ * their children because those numbers come straight from the posting stream —
+ * the arrow just decides whether the children are on screen. The footer total
+ * is always the true total regardless of what is expanded.
+ *
+ * Default disclosure state is decided by the caller (top-level sections open,
+ * deeper sub-ledgers closed).
+ */
+function LineTable({
+  lines, total, totalLabel, loading, expanded, onToggle,
+}: {
+  lines: Line[]; total: number; totalLabel: string; loading?: boolean;
+  expanded: Set<string>; onToggle: (key: string) => void;
+}) {
+  const rows = useMemo(() => visibleLines(lines, expanded), [lines, expanded]);
   return (
     <RTable
       cols={[
         { key: 'name', label: 'Particulars', render: (l) => (
-          <span className={l.bold ? 'font-semibold' : ''} style={{ paddingLeft: l.depth * 16 }}>{l.name}</span>
+          <span className="flex items-center gap-1" style={{ paddingLeft: l.depth * 16 }}>
+            {l.hasChildren ? (
+              <button
+                type="button"
+                onClick={() => onToggle(l.key)}
+                className="p-0.5 -ml-1 rounded hover:bg-muted/60 text-muted-foreground shrink-0"
+                aria-label={expanded.has(l.key) ? 'Collapse' : 'Expand'}
+                aria-expanded={expanded.has(l.key)}
+                data-testid={`fin-toggle-${l.key}`}
+              >
+                {expanded.has(l.key) ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+              </button>
+            ) : (
+              <span className="w-[18px] shrink-0" />
+            )}
+            <span className={l.bold ? 'font-semibold' : ''}>{l.name}</span>
+          </span>
         ) },
         { key: 'amount', label: 'Amount', align: 'right', render: (l) => (
           <span className={l.bold ? 'font-bold' : ''}>{fmt(l.amount)}</span>
         ) },
       ] satisfies Col<Line>[]}
-      rows={lines} loading={loading} rowKey={(_, i) => i}
+      rows={rows} loading={loading} rowKey={(l) => l.key}
       empty="No entries"
       footer={[totalLabel, fmt(total)]}
     />
+  );
+}
+
+/**
+ * Shared collapse state for one statement column.
+ *
+ * `defaultOpen` seeds the sensible default (top-level sections expanded, deep
+ * sub-ledgers collapsed). Expand All / Collapse All operate over exactly the
+ * lines that carry a disclosure arrow, so nothing dangles half-open.
+ */
+function useCollapse(lines: Line[], defaultOpen: (l: Line) => boolean) {
+  // A stable signature of the tree's shape: the arrays are rebuilt on every
+  // render, so keying anything off array identity would loop. The signature
+  // only changes when the actual set of lines changes (period/date change).
+  const sig = lines.map((l) => l.key).join('|');
+  const allParents = useMemo(() => parentKeys(lines), [sig]); // eslint-disable-line react-hooks/exhaustive-deps
+  const defaults = useMemo(() => {
+    const s = new Set<string>();
+    for (const l of lines) if (l.hasChildren && defaultOpen(l)) s.add(l.key);
+    return s;
+    // defaultOpen is a stable predicate; re-seed only when the shape changes.
+  }, [sig]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [expanded, setExpanded] = useState<Set<string>>(defaults);
+  // Re-seed when a new payload changes the set of lines (period/date change).
+  const [seededFor, setSeededFor] = useState(sig);
+  if (seededFor !== sig) { setSeededFor(sig); setExpanded(defaults); }
+
+  const toggle = (key: string) => setExpanded((prev) => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+  const expandAll = () => setExpanded(new Set(allParents));
+  const collapseAll = () => setExpanded(new Set());
+  const hasCollapsible = allParents.size > 0;
+  return { expanded, toggle, expandAll, collapseAll, hasCollapsible };
+}
+
+/** Expand All / Collapse All control pair, matching the Chart of Accounts UX. */
+function DisclosureControls({ expandAll, collapseAll, disabled }: { expandAll: () => void; collapseAll: () => void; disabled?: boolean }) {
+  return (
+    <div className="flex items-center gap-1">
+      <Button variant="ghost" size="sm" onClick={expandAll} disabled={disabled} className="h-7 px-2 text-xs gap-1" data-testid="fin-expand-all">
+        <UnfoldVertical className="w-3.5 h-3.5" /> Expand
+      </Button>
+      <Button variant="ghost" size="sm" onClick={collapseAll} disabled={disabled} className="h-7 px-2 text-xs gap-1" data-testid="fin-collapse-all">
+        <FoldVertical className="w-3.5 h-3.5" /> Collapse
+      </Button>
+    </div>
   );
 }
 
@@ -217,19 +347,27 @@ function PnlReport({ range, canDownload, canPrint }: { range: RangeState; canDow
   const s = pl?.summary;
 
   const expenseLines: Line[] = pl ? [
-    { name: 'Opening Stock', amount: pl.expenses.openingStock, depth: 0 },
-    { name: 'Purchases', amount: pl.expenses.purchases, depth: 0 },
+    { name: 'Opening Stock', amount: pl.expenses.openingStock, depth: 0, key: 'pl:openingStock', parentKey: null },
+    { name: 'Purchases', amount: pl.expenses.purchases, depth: 0, key: 'pl:purchases', parentKey: null },
     ...groupLines(pl.expenses.directExpenses),
     ...groupLines(pl.expenses.indirectExpenses),
   ] : [];
   const incomeLines: Line[] = pl ? [
-    { name: 'Sales (net of GST)', amount: pl.incomes.sales, depth: 0 },
-    { name: 'Closing Stock', amount: pl.incomes.closingStock, depth: 0 },
+    { name: 'Sales (net of GST)', amount: pl.incomes.sales, depth: 0, key: 'pl:sales', parentKey: null },
+    {
+      name: 'Closing Stock', amount: pl.incomes.closingStock, depth: 0,
+      key: 'pl:closingStock', parentKey: null,
+      hasChildren: pl.incomes.closingStockInTransit > 0.005,
+    },
     ...(pl.incomes.closingStockInTransit > 0.005
-      ? [{ name: 'of which in transit', amount: pl.incomes.closingStockInTransit, depth: 1 }] : []),
+      ? [{ name: 'of which in transit', amount: pl.incomes.closingStockInTransit, depth: 1, key: 'pl:closingStock/transit', parentKey: 'pl:closingStock' }] : []),
     ...groupLines(pl.incomes.directIncomes),
     ...groupLines(pl.incomes.indirectIncomes),
   ] : [];
+
+  // Default open: top-level sections (depth 0). Deep sub-ledgers stay collapsed.
+  const expCol = useCollapse(expenseLines, (l) => l.depth === 0);
+  const incCol = useCollapse(incomeLines, (l) => l.depth === 0);
 
   const toRows = (lines: Line[]) => lines.map((l) => [`${'   '.repeat(l.depth)}${l.name}`, pdfMoney(l.amount)] as (string | number)[]);
 
@@ -322,12 +460,18 @@ function PnlReport({ range, canDownload, canPrint }: { range: RangeState; canDow
 
       <div className="grid lg:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <h3 className="text-sm font-semibold text-muted-foreground">Expenses</h3>
-          <LineTable lines={expenseLines} total={pl?.expenses.total ?? 0} totalLabel="Total Expenses" loading={isLoading} />
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-muted-foreground">Expenses</h3>
+            <DisclosureControls expandAll={expCol.expandAll} collapseAll={expCol.collapseAll} disabled={isLoading || !expCol.hasCollapsible} />
+          </div>
+          <LineTable lines={expenseLines} total={pl?.expenses.total ?? 0} totalLabel="Total Expenses" loading={isLoading} expanded={expCol.expanded} onToggle={expCol.toggle} />
         </div>
         <div className="space-y-2">
-          <h3 className="text-sm font-semibold text-muted-foreground">Incomes</h3>
-          <LineTable lines={incomeLines} total={pl?.incomes.total ?? 0} totalLabel="Total Incomes" loading={isLoading} />
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-muted-foreground">Incomes</h3>
+            <DisclosureControls expandAll={incCol.expandAll} collapseAll={incCol.collapseAll} disabled={isLoading || !incCol.hasCollapsible} />
+          </div>
+          <LineTable lines={incomeLines} total={pl?.incomes.total ?? 0} totalLabel="Total Incomes" loading={isLoading} expanded={incCol.expanded} onToggle={incCol.toggle} />
         </div>
       </div>
     </div>
@@ -341,15 +485,19 @@ function BalanceSheetReport({ range, canDownload, canPrint }: { range: RangeStat
 
   const liabilityLines: Line[] = bs ? [
     ...groupLines(bs.liabilities.capitalAccount),
-    { name: 'Reserves & Surplus (P&L)', amount: bs.liabilities.pandlCarryForward, depth: 0 },
+    { name: 'Reserves & Surplus (P&L)', amount: bs.liabilities.pandlCarryForward, depth: 0, key: 'bs:pandlCarryForward', parentKey: null },
     ...groupLines(bs.liabilities.loans),
     ...groupLines(bs.liabilities.currentLiabilities),
   ] : [];
   const assetLines: Line[] = bs ? [
     ...groupLines(bs.assets.fixedAssets),
-    { name: 'Closing Stock', amount: bs.assets.closingStock, depth: 0 },
+    { name: 'Closing Stock', amount: bs.assets.closingStock, depth: 0, key: 'bs:closingStock', parentKey: null },
     ...groupLines(bs.assets.currentAssets),
   ] : [];
+
+  // Default open: top-level sections (depth 0). Deep sub-ledgers stay collapsed.
+  const liaCol = useCollapse(liabilityLines, (l) => l.depth === 0);
+  const astCol = useCollapse(assetLines, (l) => l.depth === 0);
 
   const toRows = (lines: Line[]) => lines.map((l) => [`${'   '.repeat(l.depth)}${l.name}`, pdfMoney(l.amount)] as (string | number)[]);
   const asAt = range.to || 'today';
@@ -414,12 +562,18 @@ function BalanceSheetReport({ range, canDownload, canPrint }: { range: RangeStat
 
       <div className="grid lg:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <h3 className="text-sm font-semibold text-muted-foreground">Liabilities</h3>
-          <LineTable lines={liabilityLines} total={bs?.liabilities.total ?? 0} totalLabel="Total Liabilities" loading={isLoading} />
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-muted-foreground">Liabilities</h3>
+            <DisclosureControls expandAll={liaCol.expandAll} collapseAll={liaCol.collapseAll} disabled={isLoading || !liaCol.hasCollapsible} />
+          </div>
+          <LineTable lines={liabilityLines} total={bs?.liabilities.total ?? 0} totalLabel="Total Liabilities" loading={isLoading} expanded={liaCol.expanded} onToggle={liaCol.toggle} />
         </div>
         <div className="space-y-2">
-          <h3 className="text-sm font-semibold text-muted-foreground">Assets</h3>
-          <LineTable lines={assetLines} total={bs?.assets.total ?? 0} totalLabel="Total Assets" loading={isLoading} />
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-muted-foreground">Assets</h3>
+            <DisclosureControls expandAll={astCol.expandAll} collapseAll={astCol.collapseAll} disabled={isLoading || !astCol.hasCollapsible} />
+          </div>
+          <LineTable lines={assetLines} total={bs?.assets.total ?? 0} totalLabel="Total Assets" loading={isLoading} expanded={astCol.expanded} onToggle={astCol.toggle} />
         </div>
       </div>
     </div>

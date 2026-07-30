@@ -129,63 +129,102 @@ router.get("/accounts/cash-bank-ledgers", requireModuleView(["page:/accounts/cas
   })));
 });
 
-// Manual creation splits in two.
+// Manual structure creation. AUTOMATIC provisioning (a ledger per customer,
+// vendor, employee, location and standard chart account) is unchanged and still
+// the primary path — this only lets an authorised administrator/accountant hand-
+// build valid structure alongside it.
 //
-// GROUPS and SUB-GROUPS are structure: they hold no postings, so making one is
-// safe and reversible, and organising the chart is exactly what the management
-// mode is for.
+// Four shapes are accepted, all keyed off `isGroup` plus the parent's own shape:
 //
-// LEDGERS remain retired. Every postable ledger mirrors a master record
-// (customer, vendor, employee, location, standard chart account) and is
-// provisioned alongside it; a hand-made ledger is an orphan that no module will
-// ever post to. The 409 explains that instead of silently creating one.
+//   · GROUP / SUB-GROUP  (isGroup === true)  — a container, holds no postings.
+//     Parent must be another group (system head or user sub-group).
+//
+//   · LEDGER             (isGroup !== true)  — a postable leaf under a GROUP.
+//     Parent must be a group; you cannot file a ledger directly under another
+//     postable ledger's group head unless that head is a group (all SYS/STD
+//     heads are). This is what makes it a valid posting ledger under a valid
+//     parent.
+//
+//   · SUB-LEDGER         (isGroup !== true)  — a postable leaf under a LEDGER,
+//     mirroring how Cash / Bank carry a sub-ledger per till or bank account.
+//     Parent is a leaf ledger (is_group = false) that is NOT system-owned via a
+//     code check below is relaxed: sub-ledgers under STD-CASH / STD-BANK are a
+//     first-class, supported shape, so any non-system-*group* leaf is allowed.
+//
+// The `code` is NEVER read from the body. A code is the sole marker that makes a
+// ledger system-owned (it drives the rename block, the delete/deactivate block
+// and every provisioning lookup in lib/chartGroups.ts). Hand-made accounts are
+// therefore codeless, exactly like hand-made groups: that is what keeps them
+// renamable, movable, deactivatable and — while empty — deletable, and it keeps
+// the existing delete guard (loadLedgerUsage → deleteBlockReason) fully in force
+// for them, so one with transaction history can never be destroyed.
 router.post("/accounts/chart", requireModuleAction("page:/accounts/chart", "add"), async (req, res): Promise<void> => {
   const body = (req.body ?? {}) as Record<string, unknown>;
-
-  if (body.isGroup !== true) {
-    res.status(409).json({
-      error: "Ledgers are no longer created by hand — they are provisioned automatically. " +
-        "Create the master record instead and its ledger is created with it " +
-        "(e.g. create the customer and its ledger is created with it; the same applies to vendors, employees, locations and standard chart accounts). " +
-        "You can still add groups and sub-groups here to organise the chart.",
-    });
-    return;
-  }
+  const wantGroup = body.isGroup === true;
+  const kindWord = wantGroup ? "group" : "ledger";
 
   const name = typeof body.name === "string" ? body.name.trim() : "";
-  if (name.length < 2) { res.status(400).json({ error: "Give the group a name of at least 2 characters." }); return; }
-  if (name.length > 120) { res.status(400).json({ error: "Group names are limited to 120 characters." }); return; }
+  if (name.length < 2)  { res.status(400).json({ error: `Give the ${kindWord} a name of at least 2 characters.` }); return; }
+  if (name.length > 120) { res.status(400).json({ error: `${wantGroup ? "Group" : "Ledger"} names are limited to 120 characters.` }); return; }
 
   const parentId = Number(body.parentId);
-  if (!Number.isFinite(parentId)) { res.status(400).json({ error: "Choose the group this sits inside." }); return; }
+  if (!Number.isFinite(parentId)) { res.status(400).json({ error: "Choose the account this sits inside." }); return; }
 
   const { rows: [parent] } = await pool.query(
-    `SELECT id, type, section, is_group, is_system_group FROM account_ledgers WHERE id = $1`, [parentId],
+    `SELECT id, type, section, is_group, is_system_group, is_active FROM account_ledgers WHERE id = $1`, [parentId],
   );
-  if (!parent) { res.status(404).json({ error: "That parent group no longer exists — reload the page." }); return; }
-  if (!parent.is_group && !parent.is_system_group) {
-    res.status(400).json({ error: "A sub-group can only be added inside a group, not under a ledger." });
+  if (!parent) { res.status(404).json({ error: "That parent no longer exists — reload the page." }); return; }
+
+  const parentIsGroup = parent.is_group || parent.is_system_group;
+
+  // Parent validity — the backend decides this, never the client.
+  if (wantGroup) {
+    // A sub-group belongs inside a group only.
+    if (!parentIsGroup) {
+      res.status(400).json({ error: "A sub-group can only be added inside a group, not under a ledger." });
+      return;
+    }
+  } else {
+    // A ledger belongs under a group (→ posting ledger) OR under a postable
+    // leaf ledger (→ sub-ledger). Both are valid; nothing else is.
+    if (parent.is_system_group === false && parent.is_group === false) {
+      // parent is a leaf ledger → sub-ledger. Allowed.
+    } else if (parentIsGroup) {
+      // parent is a group → posting ledger. Allowed.
+    } else {
+      res.status(400).json({ error: "A ledger must sit inside a group, or under another ledger as a sub-ledger." });
+      return;
+    }
+  }
+
+  // Do not hang new structure off a deactivated parent — it would be born
+  // unreachable for new entries.
+  if (parent.is_active === false) {
+    res.status(400).json({ error: "That parent is deactivated. Reactivate it first, or pick another parent." });
     return;
   }
 
   const { rows: [dupe] } = await pool.query(
     `SELECT id FROM account_ledgers WHERE parent_id = $1 AND lower(name) = lower($2) LIMIT 1`, [parentId, name],
   );
-  if (dupe) { res.status(409).json({ error: `"${name}" already exists in this group.` }); return; }
+  if (dupe) { res.status(409).json({ error: `"${name}" already exists here.` }); return; }
 
-  // A user-made group carries no code, which is what keeps it renamable and
-  // deletable — the same rule that protects the system groups.
+  // A user-made account carries no code, which is what keeps it renamable and
+  // deletable — the same rule that protects the system groups/ledgers.
+  const description = typeof body.description === "string" && body.description.trim() ? body.description.trim() : null;
   const { rows: [created] } = await pool.query(
     `INSERT INTO account_ledgers (name, type, parent_id, section, description, is_group, is_system_group, is_active)
-     VALUES ($1, $2, $3, $4, $5, true, false, true)
-     RETURNING id, name, type, parent_id, section, description`,
-    [name, parent.type, parentId, parent.section ?? null,
-     typeof body.description === "string" && body.description.trim() ? body.description.trim() : null],
+     VALUES ($1, $2, $3, $4, $5, $6, false, true)
+     RETURNING id, name, type, parent_id, section, description, is_group`,
+    [name, parent.type, parentId, parent.section ?? null, description, wantGroup],
   );
 
   await logActivity({
-    action: "CREATE", module: "accounts", entityType: "account_group", entityId: created.id,
-    description: `Added chart group "${name}"`,
+    action: "CREATE", module: "accounts",
+    entityType: wantGroup ? "account_group" : "account_ledger", entityId: created.id,
+    description:
+      `Added chart ${wantGroup ? "group" : "ledger"} "${name}" ` +
+      `[before: none · after: name="${name}", type=${created.type}, parentId=${parentId}, isGroup=${wantGroup}]`,
     user: (req as any).employee?.username ?? "system",
   });
 
@@ -193,7 +232,8 @@ router.post("/accounts/chart", requireModuleAction("page:/accounts/chart", "add"
     id: created.id, name: created.name, type: created.type,
     parentId: created.parent_id ?? null, section: created.section ?? null,
     description: created.description ?? null,
-    code: null, isGroup: true, isSystemGroup: false, isActive: true,
+    code: null, isGroup: created.is_group ?? wantGroup, isSystemGroup: false, isActive: true,
+    canRename: true, deleteBlockedReason: null, transactionCount: 0, childCount: 0,
     children: [], balance: 0,
   });
 });
@@ -286,10 +326,15 @@ router.patch("/accounts/chart/:id/move", requireModuleAction("page:/accounts/cha
 
   // Target parent must exist and must be a group (container)
   const { rows: [parent] } = await pool.query(
-    `SELECT id, is_group FROM account_ledgers WHERE id = $1`, [parentId]
+    `SELECT id, is_group, is_active FROM account_ledgers WHERE id = $1`, [parentId]
   );
   if (!parent) { res.status(404).json({ error: "Target parent not found" }); return; }
   if (!parent.is_group) { res.status(400).json({ error: "Target must be a group or sub-group, not a leaf ledger" }); return; }
+  // Same lifecycle rule as creating under a parent: a deactivated group is not
+  // a valid home, or a move would quietly park live accounts under a dead head.
+  if (parent.is_active === false) {
+    res.status(400).json({ error: "That group is deactivated. Reactivate it first, or pick another group." }); return;
+  }
 
   // Prevent circular reference: target must not be a descendant of the node being moved
   const { rows: circular } = await pool.query(`
@@ -835,7 +880,18 @@ export const EXPENSE_CATEGORIES = [
   'Cold Storage', 'Travel', 'Other',
 ] as const;
 
-/** Read category + attachment from the RAW body — zod strips unknown keys. */
+/**
+ * Read the expense extras from the RAW body — zod strips unknown keys.
+ *
+ * Category is optional: an absent or blank value defaults to 'Uncategorised'.
+ * A supplied value must still match the fixed list so historical reporting
+ * stays consistent, but the form no longer collects it.
+ *
+ * Attachments have been retired from the expense forms, so `attachmentUrl` is
+ * no longer accepted from the client — new rows are always written with a null
+ * attachment. Historical rows keep whatever path they already hold and still
+ * render everywhere they are shown.
+ */
 function readExpenseExtras(body: any): { category: string; attachmentUrl: string | null } | { error: string } {
   const rawCat = body?.category;
   let category = 'Uncategorised';
@@ -844,18 +900,7 @@ function readExpenseExtras(body: any): { category: string; attachmentUrl: string
     if (!match) return { error: `category must be one of: ${EXPENSE_CATEGORIES.join(', ')}` };
     category = match;
   }
-  const rawAtt = body?.attachmentUrl;
-  let attachmentUrl: string | null = null;
-  if (rawAtt !== undefined && rawAtt !== null && String(rawAtt).trim() !== '') {
-    const v = String(rawAtt).trim();
-    // Only our own object-storage paths — an arbitrary URL here would let a
-    // voucher point anywhere, and the PDF/link would leave the app.
-    if (!/^\/objects\/[A-Za-z0-9._\-/]+$/.test(v)) {
-      return { error: 'attachmentUrl must be an uploaded file path' };
-    }
-    attachmentUrl = v;
-  }
-  return { category, attachmentUrl };
+  return { category, attachmentUrl: null };
 }
 
 router.post("/expenses", requireModuleAction("page:/accounts/expenses", "add"), async (req, res): Promise<void> => {
@@ -881,6 +926,14 @@ router.post("/expenses", requireModuleAction("page:/accounts/expenses", "add"), 
 
   const extras = readExpenseExtras(req.body);
   if ('error' in extras) { res.status(400).json({ error: extras.error }); return; }
+
+  // The expense account must be a postable Indirect Expense ledger. Enforced
+  // server-side so hiding non-expense accounts in the UI is never the only
+  // guard. Historical rows posted to Direct Expense read fine — only new
+  // writes are constrained.
+  if (!(await isPostableIndirectExpenseLedger(Number(parsed.data.ledgerAccountId)))) {
+    res.status(400).json({ error: "ledgerAccountId must be an active Indirect Expense ledger account." }); return;
+  }
 
   // Attribution: which location the spend belongs to. Defaults to Head Office.
   let locationType = 'headoffice';
@@ -952,6 +1005,25 @@ async function getDescendantLedgerIds(rootCodes: string[]): Promise<number[]> {
     .map((r: any) => r.id);
 }
 
+/**
+ * True only when `id` is an active, postable (non-group) ledger under the
+ * Indirect Expense subtree. This is the single source of truth for validating
+ * the Expense Account chosen on either expense form — a group heading, an
+ * inactive ledger, or anything outside Indirect Expense (Direct Expense,
+ * Assets, Liabilities, Income, Clearing, Payables) is rejected.
+ */
+async function isPostableIndirectExpenseLedger(id: number): Promise<boolean> {
+  if (!Number.isInteger(id) || id <= 0) return false;
+  const allowed = await getDescendantLedgerIds(['SYS-INDEXP']);
+  if (!allowed.includes(id)) return false;
+  const { rows } = await pool.query(
+    `SELECT 1 FROM account_ledgers
+      WHERE id = $1 AND COALESCE(is_active, true) AND NOT COALESCE(is_group, false)`,
+    [id],
+  );
+  return rows.length > 0;
+}
+
 /** Resolve the cash_ledger_id for a given warehouse or outlet. */
 async function resolveLocationCashLedger(locationType: string, locationId: number): Promise<number | null> {
   if (locationType === 'warehouse') {
@@ -964,10 +1036,23 @@ async function resolveLocationCashLedger(locationType: string, locationId: numbe
   return null;
 }
 
-// Returns only Direct Expense + Indirect Expense leaf ledgers for the dropdown
-// No mapped consumer; serves the Expenses page.
-router.get("/accounts/expense-ledgers", requireModuleView(["page:/accounts/expenses", "page:/sales/expenses"]), async (_req, res): Promise<void> => {
-  const ids = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
+// Postable expense ledgers for the "Expense Account" dropdown.
+//
+// Defaults to Indirect Expense only — day-to-day expenses (rent, utilities,
+// freight, admin, etc.) belong under Indirect Expense, never Direct Expense,
+// Assets, Liabilities, Income, Clearing or Payables. Groups and inactive
+// ledgers are never postable, so they are excluded too.
+//
+// A caller that legitimately needs Direct Expense as well (there is none today,
+// but historical entries exist) can pass ?include=all to widen the set; the
+// read/report endpoints below always keep both subtrees so posted history is
+// never hidden.
+router.get("/accounts/expense-ledgers", requireModuleView(["page:/accounts/expenses", "page:/sales/expenses"]), async (req, res): Promise<void> => {
+  const include = String((req.query as any)?.include ?? '').trim().toLowerCase();
+  const rootCodes = include === 'all' || include === 'direct'
+    ? ['SYS-DIREXP', 'SYS-INDEXP']
+    : ['SYS-INDEXP'];
+  const ids = await getDescendantLedgerIds(rootCodes);
   if (ids.length === 0) { res.json([]); return; }
   // Groups and deactivated ledgers are not postable, so they are not offered.
   const { rows } = await pool.query(
@@ -1317,10 +1402,13 @@ router.post("/accounts/location-expenses", requireModuleAction("page:/sales/expe
   if (!locRow) {
     res.status(400).json({ error: `No such ${locationType}: ${locationId}` }); return;
   }
-  // Server-side validation: expenseLedgerId must be within Direct/Indirect Expense subtree
-  const allowedExpenseIds = await getDescendantLedgerIds(['SYS-DIREXP', 'SYS-INDEXP']);
-  if (!allowedExpenseIds.includes(Number(expenseLedgerId))) {
-    res.status(400).json({ error: "expenseLedgerId must be a Direct or Indirect Expense ledger account." }); return;
+  // Server-side validation: the expense account must be a postable Indirect
+  // Expense ledger. Direct Expense, Assets, Liabilities, Income, Clearing and
+  // Payable accounts are rejected — frontend filtering alone is not trusted.
+  // (Historical vouchers already posted to Direct Expense are untouched: the
+  // read/report endpoints still resolve both subtrees.)
+  if (!(await isPostableIndirectExpenseLedger(Number(expenseLedgerId)))) {
+    res.status(400).json({ error: "expenseLedgerId must be an active Indirect Expense ledger account." }); return;
   }
   // LBAC: a branch user may only spend its own location's cash.
   const expEmployee = (req as any).employee as { branchType: string; branchId: number } | undefined;

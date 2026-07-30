@@ -234,7 +234,7 @@ router.post("/cash-in-outlet/deposits", requireModuleAction("page:/accounts/cash
   const cashCode    = isWarehouse ? `WH-CASH-${locationId}` : `OUTLET-CASH-${locationId}`;
   const locLabel    = isWarehouse ? `warehouse ${locationId}` : `outlet ${locationId}`;
 
-  const createdBy = (req as any).user?.username ?? "system";
+  const createdBy = (req as any).employee?.username ?? "system";
 
   const client = await pool.connect();
   try {
@@ -358,7 +358,7 @@ router.post("/cash-in-outlet/deposits/:id/reconcile", requireModuleAction(["page
   const parsedCharges = Number(charges ?? 0);
   if (parsedCharges < 0) { res.status(400).json({ error: "charges cannot be negative" }); return; }
 
-  const createdBy = (req as any).user?.username ?? "system";
+  const createdBy = (req as any).employee?.username ?? "system";
 
   const client = await pool.connect();
   try {

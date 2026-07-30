@@ -22,28 +22,63 @@ import * as z from 'zod';
 import { Plus, Search, Edit2, Trash2, Layers, Download, Eye, ClipboardList, ShieldOff } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
 import { toast } from 'sonner';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery, useMutation } from '@tanstack/react-query';
+import { customFetch } from '@workspace/api-client-react';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { useUnits } from '@/lib/useUnits';
 import { useIsHeadOffice, HEAD_OFFICE_ONLY_HINT, isActiveProduct } from '@/lib/productStatus';
 
-type ItemType = 'raw_material' | 'material' | 'item';
+type ItemType = 'raw_material' | 'material' | 'item' | 'asset';
 
 const TYPE_LABELS: Record<ItemType, string> = {
   raw_material: 'Packing Material',
   material: 'Raw Material',
   item: 'Item Name (SKU)',
+  asset: 'Asset',
 };
 
 const TYPE_COLORS: Record<ItemType, string> = {
   raw_material: 'bg-orange-500/10 text-orange-500 border-orange-500/20',
   material: 'bg-blue-500/10 text-blue-500 border-blue-500/20',
   item: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20',
+  asset: 'bg-purple-500/10 text-purple-500 border-purple-500/20',
 };
 
+// ── Asset master hooks (assets have their own table; not sale inventory) ──────
+// Kept inline (not in the generated api-client) so this page can talk to the
+// new /assets endpoints without regenerating the client. Assets carry no MRP,
+// GST/HSN or selling price.
+interface AssetRow { id: number; name: string; unit: string; description: string; itemCode: string; status: string; }
+const ASSETS_KEY = ['assets-master'] as const;
+function useListAssets() {
+  return useQuery<AssetRow[]>({
+    queryKey: ASSETS_KEY,
+    queryFn: () => customFetch<AssetRow[]>('/api/inventory/assets'),
+  });
+}
+type AssetPayload = { name: string; unit: string; description?: string; itemCode?: string; status: string };
+function useCreateAsset() {
+  return useMutation({
+    mutationFn: (data: AssetPayload) =>
+      customFetch('/api/inventory/assets', { method: 'POST', body: JSON.stringify(data) }),
+  });
+}
+function useUpdateAsset() {
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Partial<AssetPayload> }) =>
+      customFetch(`/api/inventory/assets/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  });
+}
+function useDeleteAsset() {
+  return useMutation({
+    mutationFn: (id: number) =>
+      customFetch(`/api/inventory/assets/${id}`, { method: 'DELETE', responseType: 'text' }),
+  });
+}
+
 const schema = z.object({
-  itemType:    z.enum(['raw_material', 'material', 'item']),
+  itemType:    z.enum(['raw_material', 'material', 'item', 'asset']),
   name:        z.string().min(1, 'Name required'),
   unit:        z.string().min(1, 'Unit required'),
   hsnCode:     z.string().optional(),
@@ -80,6 +115,7 @@ export default function ItemMaster() {
   const { data: rawMaterials = [], isLoading: rmLoading } = useListRawMaterials();
   const { data: materials = [], isLoading: mLoading } = useListMaterials();
   const { data: items = [], isLoading: iLoading } = useListItems();
+  const { data: assets = [], isLoading: aLoading } = useListAssets();
   const { data: bomTemplates = [] } = useListBomTemplates();
   const { units } = useUnits();
   const queryClient = useQueryClient();
@@ -121,6 +157,7 @@ export default function ItemMaster() {
   const createRM = useCreateRawMaterial(); const updateRM = useUpdateRawMaterial(); const deleteRM = useDeleteRawMaterial();
   const createM = useCreateMaterial(); const updateM = useUpdateMaterial(); const deleteM = useDeleteMaterial();
   const createI = useCreateItem(); const updateI = useUpdateItem(); const deleteI = useDeleteItem();
+  const createA = useCreateAsset(); const updateA = useUpdateAsset(); const deleteA = useDeleteAsset();
   const createBom = useCreateBomTemplate(); const updateBom = useUpdateBomTemplate(); const deleteBom = useDeleteBomTemplate();
 
   const form = useForm<FormValues>({
@@ -143,6 +180,8 @@ export default function ItemMaster() {
     ...(rawMaterials as any[]).map(r => ({ ...r, _type: 'raw_material' as ItemType, stock: Number(r.currentStock || 0) })),
     ...(materials as any[]).map(m => ({ ...m, _type: 'material' as ItemType, stock: Number(m.currentStock || 0) })),
     ...(items as any[]).map(i => ({ ...i, _type: 'item' as ItemType, stock: Number(i.productionStock || 0) })),
+    // Assets are NOT sale inventory and carry no stock counter — shown at 0.
+    ...(assets as any[]).map(a => ({ ...a, _type: 'asset' as ItemType, stock: 0 })),
   ];
 
   const q = search.trim().toLowerCase();
@@ -158,7 +197,7 @@ export default function ItemMaster() {
       (i.barcode || '').toLowerCase().includes(q))
   );
 
-  const isLoading = rmLoading || mLoading || iLoading;
+  const isLoading = rmLoading || mLoading || iLoading || aLoading;
 
   const openAdd = (type?: ItemType) => {
     setEditTarget(null);
@@ -222,15 +261,28 @@ export default function ItemMaster() {
 
   const onSubmit = (data: FormValues) => {
     const type = data.itemType;
-    const key = type === 'raw_material' ? getListRawMaterialsQueryKey() : type === 'material' ? getListMaterialsQueryKey() : getListItemsQueryKey();
+    const key = type === 'raw_material' ? getListRawMaterialsQueryKey() : type === 'material' ? getListMaterialsQueryKey() : type === 'item' ? getListItemsQueryKey() : ASSETS_KEY;
     const opts = {
       onSuccess: () => {
         toast.success(editTarget ? 'Item updated' : 'Item created');
-        queryClient.invalidateQueries({ queryKey: key });
+        queryClient.invalidateQueries({ queryKey: key as any });
         setIsOpen(false);
       },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     };
+
+    // Assets are capital items: only name/unit/description/code/status apply.
+    if (type === 'asset') {
+      const assetData: AssetPayload = {
+        name: data.name, unit: data.unit,
+        description: data.description,
+        ...(data.itemCode?.trim() ? { itemCode: data.itemCode.trim() } : {}),
+        status: data.status,
+      };
+      if (editTarget) updateA.mutate({ id: editTarget.id, data: assetData }, opts);
+      else createA.mutate(assetData, opts);
+      return;
+    }
     // raw_material / material: production cost auto-derives from purchases; mrp is manually set
     // Blank code/barcode are omitted, not sent as '' — on create that asks the
     // server to issue them, and on edit it leaves the existing values alone.
@@ -256,17 +308,18 @@ export default function ItemMaster() {
   const handleDelete = () => {
     if (!deleteTarget) return;
     const { id, type } = deleteTarget;
-    const key = type === 'raw_material' ? getListRawMaterialsQueryKey() : type === 'material' ? getListMaterialsQueryKey() : getListItemsQueryKey();
+    const key = type === 'raw_material' ? getListRawMaterialsQueryKey() : type === 'material' ? getListMaterialsQueryKey() : type === 'item' ? getListItemsQueryKey() : ASSETS_KEY;
     const opts = {
-      onSuccess: () => { toast.success('Deleted'); queryClient.invalidateQueries({ queryKey: key }); setDeleteTarget(null); },
+      onSuccess: () => { toast.success('Deleted'); queryClient.invalidateQueries({ queryKey: key as any }); setDeleteTarget(null); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Delete failed'),
     };
     if (type === 'raw_material') deleteRM.mutate({ id } as any, opts);
     else if (type === 'material') deleteM.mutate({ id } as any, opts);
-    else deleteI.mutate({ id } as any, opts);
+    else if (type === 'item') deleteI.mutate({ id } as any, opts);
+    else deleteA.mutate(id, opts);
   };
 
-  const isPending = createRM.isPending || updateRM.isPending || createM.isPending || updateM.isPending || createI.isPending || updateI.isPending;
+  const isPending = createRM.isPending || updateRM.isPending || createM.isPending || updateM.isPending || createI.isPending || updateI.isPending || createA.isPending || updateA.isPending;
   const bomExisting = bomTarget ? bomByItem.get(bomTarget.id) : null;
 
   if (!perm.isLoading && !perm.canView) {
@@ -313,8 +366,8 @@ export default function ItemMaster() {
         </div>
 
         {/* Summary badges */}
-        <div className="grid grid-cols-3 gap-4">
-          {(['raw_material', 'material', 'item'] as ItemType[]).map(t => {
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          {(['raw_material', 'material', 'item', 'asset'] as ItemType[]).map(t => {
             const count = allItems.filter(i => i._type === t).length;
             return (
               <button key={t} onClick={() => setTypeFilter(typeFilter === t ? 'all' : t)}
@@ -394,6 +447,7 @@ export default function ItemMaster() {
                 <SelectItem value="raw_material">Packing Material</SelectItem>
                 <SelectItem value="material">Raw Material</SelectItem>
                 <SelectItem value="item">Item Name (SKU)</SelectItem>
+                <SelectItem value="asset">Asset</SelectItem>
               </SelectContent>
             </Select>
 
@@ -445,7 +499,7 @@ export default function ItemMaster() {
                 <TableRow key={`${item._type}-${item.id}`} className={`hover:bg-muted/10 ${active ? '' : 'opacity-60'}`}>
                   <TableCell>
                     <Badge variant="outline" className={`text-xs ${(TYPE_COLORS as any)[item._type] ?? ''}`}>
-                      {item._type === 'raw_material' ? 'Packing Material' : item._type === 'material' ? 'Raw Material' : 'Item Name (SKU)'}
+                      {TYPE_LABELS[item._type as ItemType] ?? item._type}
                     </Badge>
                   </TableCell>
                   <TableCell className="whitespace-nowrap">
@@ -524,8 +578,14 @@ export default function ItemMaster() {
                       <SelectItem value="raw_material">Packing Material</SelectItem>
                       <SelectItem value="material">Raw Material</SelectItem>
                       <SelectItem value="item">Item Name (SKU)</SelectItem>
+                      <SelectItem value="asset">Asset</SelectItem>
                     </SelectContent>
                   </Select>
+                  {watchType === 'asset' && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Assets are capital items (e.g. freezers), not sale inventory — no MRP, GST/HSN or selling price. Purchase them on the Purchases page.
+                    </p>
+                  )}
                   <FormMessage />
                 </FormItem>
               )} />
@@ -548,12 +608,15 @@ export default function ItemMaster() {
                     <FormMessage />
                   </FormItem>
                 )} />
+                {watchType !== 'asset' && (
                 <FormField control={form.control} name="hsnCode" render={({ field }) => (
                   <FormItem>
                     <FormLabel>HSN Code</FormLabel>
                     <FormControl><Input className="font-mono" placeholder="e.g. 09011111" {...field} /></FormControl>
                   </FormItem>
                 )} />
+                )}
+                {watchType !== 'asset' && (
                 <FormField control={form.control} name="taxRate" render={({ field }) => (
                   <FormItem>
                     <FormLabel>GST Rate %</FormLabel>
@@ -565,6 +628,7 @@ export default function ItemMaster() {
                     </Select>
                   </FormItem>
                 )} />
+                )}
                 {/* Cost / Rate — SKUs only (production cost, auto-derived for materials) */}
                 {watchType === 'item' && (
                   <FormField control={form.control} name="cost" render={({ field }) => (
@@ -576,7 +640,8 @@ export default function ItemMaster() {
                   )} />
                 )}
 
-                {/* MRP — all types */}
+                {/* MRP — sale-inventory types only (assets carry no selling price) */}
+                {watchType !== 'asset' && (
                 <FormField control={form.control} name="mrp" render={({ field }) => (
                   <FormItem>
                     <FormLabel>MRP (₹)</FormLabel>
@@ -584,6 +649,7 @@ export default function ItemMaster() {
                     <FormMessage />
                   </FormItem>
                 )} />
+                )}
 
                 {/* Reorder level — finished items only */}
                 {watchType === 'item' && (

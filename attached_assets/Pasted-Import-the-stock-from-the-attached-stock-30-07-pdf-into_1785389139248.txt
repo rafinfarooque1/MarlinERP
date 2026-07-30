@@ -1,0 +1,140 @@
+Import the stock from the attached stock 30-07.pdf into the PRODUCTION database as OPENING STOCK.
+
+This is production financial/inventory data. Do not guess, silently correct, merge, delete, overwrite, or duplicate existing records.
+
+1. Read and validate the source
+
+Extract every stock line from the attached PDF and validate the extracted totals against the document before making any database write.
+
+Expected document totals:
+
+Total quantity: 2,874
+Total stock value: ₹633,192.21
+
+Each source line contains Item Name, HSN Code, Qty, Unit where provided, Cost, Total Value, MRP and MFG Date.
+
+Produce a dry-run report first showing every extracted row and flag any missing/ambiguous field.
+
+2. Location
+
+Ask me to select/confirm the exact warehouse/location that owns this opening stock BEFORE writing anything.
+
+All imported quantities and batches must belong only to that selected location. Do not put the stock into company-wide/general stock or another warehouse.
+
+3. Item Master
+
+For each source item, search Item Master using normalized item name and other identifiers.
+
+If the item already exists, use the existing item — do not create a duplicate.
+
+If it does not exist, create a new Item Name/SKU record using the source:
+
+Item Name
+HSN Code
+Unit
+GST configuration only if it can be derived safely from existing ERP rules; otherwise flag it for confirmation rather than guessing.
+MRP from the source where applicable
+
+Preserve the source item names. Do not automatically rename spelling such as PLUP/PULP or other apparent typos unless I explicitly approve it.
+
+4. Opening-stock batches
+
+Create this stock through the ERP's normal Opening Stock / Stock Batch / Stock Ledger architecture. Do NOT directly modify aggregate stock quantity fields if the ERP normally derives stock from ledger/batch transactions.
+
+For every row create the appropriate opening-stock batch with:
+
+Item
+Location
+Opening quantity
+Unit
+Unit cost
+Opening stock value
+MRP
+HSN
+MFG date from the PDF
+Expiry date
+
+Expiry Date must be:
+
+MFG Date + exactly 18 calendar months
+
+Examples:
+
+MFG 14-Jul-2026 → Expiry 14-Jan-2028
+MFG 31-Jan-2026 → use correct calendar-month handling for the resulting date.
+
+Store MFG and expiry using the ERP's real DATE columns.
+
+5. Accounting
+
+Treat this strictly as OPENING STOCK.
+
+Do not create a supplier purchase, purchase invoice, supplier payable, cash payment, bank payment, GST input transaction, or purchase expense.
+
+Use the ERP's existing opening-stock accounting mechanism. Do not invent a new accounting path.
+
+The stock valuation imported from the document must reconcile to ₹633,192.21.
+
+6. Duplicate protection
+
+This import must be idempotent.
+
+Before inserting, determine whether this exact opening-stock import has already been applied.
+
+Running this operation twice must NOT double the stock.
+
+Do not delete or replace existing production inventory merely because an item also appears in this PDF. If there is already stock for an item/location, report the conflict before importing.
+
+7. Production safety
+
+Before writing:
+
+Take/confirm a production database backup.
+Record current item count.
+Record current batch count.
+Record current stock-ledger count.
+Record current location stock valuation.
+
+Do not alter database schemas or run unrelated migrations for this import.
+
+8. Dry run first
+
+DO NOT write to production immediately.
+
+First show me:
+
+number of PDF rows extracted
+new items to create
+existing items matched
+ambiguous/duplicate matches
+total quantity
+total value
+selected location
+number of batches to create
+calculated MFG/expiry dates
+expected accounting effect
+
+The dry-run quantity and value MUST reconcile with the PDF totals before continuing.
+
+Stop and ask for my approval.
+
+9. After I approve
+
+Perform the import as one controlled transaction where practical.
+
+If any critical row fails, roll back rather than leaving a partially imported opening stock.
+
+Then verify:
+
+all intended Item Master records exist
+all opening batches exist
+MFG dates match the source
+expiry dates equal MFG + 18 months
+stock is visible ONLY at the selected location
+stock ledger identifies these entries as Opening Stock
+total imported quantity = 2,874
+total imported stock value = ₹633,192.21
+no purchase/payable/payment transaction was created
+no duplicate opening-stock entries exist
+
+Finally give me a reconciliation report showing Source PDF vs Database for quantity and value and list every item imported.

@@ -46,3 +46,21 @@ Beware the mirror case of over-netting: per-document figures net only credits al
 to that document, while per-customer figures additionally net unallocated credits. A
 statement that lists the invoice and the credit note as separate lines must stay
 **gross**, or the credit is subtracted twice.
+
+## A second table that bills the same party
+
+Payables/receivables reports are usually built from *one* document table. The
+moment a second table can create an obligation to the same party — a capital
+purchase, a service bill, anything credited to the party's ledger — that report
+silently understates and stops matching the party's ledger balance.
+
+**Why:** the ledger is credited by whichever module posts the entry, but the
+aging report enumerates bills from its own table only. Nothing errors; the two
+figures just drift apart, and the ledger is the one that's right.
+
+**How to apply:** when a new module credits a party's payable/receivable ledger,
+union its documents into that party's aging report in the same change, and prove
+it by comparing the report's net due against the party's ledger balance. Ids are
+only unique within their own table, so the merged rows need an explicit
+source-qualified key, and documents funded another way (e.g. paid from cash, no
+party) must stay out or the report will over-state.

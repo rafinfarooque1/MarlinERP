@@ -3,10 +3,10 @@ import { useLocation } from 'wouter';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useLocationContext } from '@/lib/locationContext';
-import { customFetch, useListOutlets, useListWarehouses, useDeleteLocationExpense, useGetCashInOutlet, useExpenseCategories, attachmentViewUrl } from '@workspace/api-client-react';
+import { customFetch, useListOutlets, useListWarehouses, useDeleteLocationExpense, useGetCashInOutlet, attachmentViewUrl } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
-import { AttachmentField } from '@/components/AttachmentField';
+import { AccountCombobox } from '@/components/ui/account-combobox';
 import { downloadPDFFromEndpoint } from '@/lib/download';
 import { Receipt, Plus, Calendar, Wallet, AlertCircle, Layers, Trash2, Loader2, ShieldOff, AlertTriangle, Printer, Paperclip, Landmark, Clock } from 'lucide-react';
 import {
@@ -40,7 +40,6 @@ const schema = z.object({
   description:      z.string().min(1, 'Description required'),
   amount:           z.coerce.number().min(0.01, 'Amount must be > 0'),
   expenseDate:      z.string().min(1, 'Date required'),
-  category:         z.string().min(1, 'Category required'),
   reference:        z.string().optional(),
   paymentMode:      z.enum(['cash', 'bank', 'credit']),
   paymentAccountId: z.coerce.number().optional(),
@@ -99,8 +98,6 @@ export default function SalesExpenses() {
   const perm = usePermission('page:/sales/expenses');
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
   const deleteMutation = useDeleteLocationExpense();
-  const [attachmentUrl, setAttachmentUrl] = useState<string | null>(null);
-  const { data: categories = [] } = useExpenseCategories();
   const { outletsEnabled } = useOutletsEnabled();
   const { data: warehouses = [] } = useListWarehouses();
 
@@ -225,7 +222,7 @@ export default function SalesExpenses() {
   const blankForm: FormValues = {
     location: defaultLocationKey,
     expenseLedgerId: 0, description: '', amount: 0, expenseDate: TODAY,
-    category: 'Uncategorised', reference: '',
+    reference: '',
     paymentMode: 'cash', paymentAccountId: 0, notes: '',
   };
   const form = useForm<FormValues>({
@@ -264,7 +261,6 @@ export default function SalesExpenses() {
 
   const openAdd = () => {
     form.reset({ ...blankForm, location: defaultLocationKey });
-    setAttachmentUrl(null);
     setIsOpen(true);
   };
 
@@ -282,8 +278,6 @@ export default function SalesExpenses() {
           amount: data.amount,
           expenseDate: data.expenseDate,
           description: data.description,
-          category: data.category,
-          attachmentUrl: attachmentUrl || undefined,
           reference: data.reference || undefined,
           paymentMode: data.paymentMode,
           paymentAccountId: data.paymentMode === 'bank' ? data.paymentAccountId : undefined,
@@ -294,7 +288,6 @@ export default function SalesExpenses() {
       queryClient.invalidateQueries({ queryKey: expensesQueryKey });
       queryClient.invalidateQueries({ queryKey: ['location-expenses-all'] });
       setIsOpen(false);
-      setAttachmentUrl(null);
     } catch (err: any) {
       toast.error(err?.message ?? 'Failed to record expense');
     } finally {
@@ -646,7 +639,7 @@ export default function SalesExpenses() {
       {/* Add Expense — reachable from any view; the form picks the location. */}
       {locationOptions.length > 0 && (
         <Dialog open={isOpen} onOpenChange={setIsOpen}>
-          <DialogContent className="sm:max-w-md">
+          <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <Receipt className="w-5 h-5 text-primary" /> Record Expense
@@ -757,38 +750,21 @@ export default function SalesExpenses() {
                   </div>
                 )}
 
+                {/* Searchable + scrollable so a long Indirect Expense tree stays
+                    usable on small screens. Only postable Indirect Expense
+                    ledgers are offered; the server rejects anything else. */}
                 <FormField control={form.control} name="expenseLedgerId" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Expense Account <span className="text-destructive">*</span></FormLabel>
-                    <Select
-                      onValueChange={v => field.onChange(Number(v))}
-                      value={field.value && field.value > 0 ? String(field.value) : ''}
-                    >
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select expense account" /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        {(expenseLedgers as any[]).length === 0 ? (
-                          <SelectItem value="0" disabled>No expense ledgers found</SelectItem>
-                        ) : (expenseLedgers as any[]).map((l: any) => (
-                          <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-
-                {/* Separate from the ledger above: the ledger is where it posts,
-                    the category is how it is reported. Fixed list, so spelling
-                    cannot fragment the audit trail. */}
-                <FormField control={form.control} name="category" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Category <span className="text-destructive">*</span></FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        {categories.map(c => <SelectItem key={c.name} value={c.name}>{c.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+                    <FormControl>
+                      <AccountCombobox
+                        options={(expenseLedgers as any[]).map(l => ({ id: l.id, name: l.name, code: l.code, parentId: l.parentId }))}
+                        value={Number(field.value) || 0}
+                        onChange={id => field.onChange(id)}
+                        placeholder={(expenseLedgers as any[]).length === 0 ? 'No expense ledgers found' : 'Select expense account'}
+                        disabled={(expenseLedgers as any[]).length === 0}
+                      />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )} />
@@ -862,14 +838,6 @@ export default function SalesExpenses() {
                     </FormControl>
                   </FormItem>
                 )} />
-
-                {/* Plain markup, not FormItem/FormLabel: the attachment is held
-                    in its own state rather than in the react-hook-form field
-                    tree, and FormLabel throws outside a FormField context. */}
-                <div className="space-y-2">
-                  <label className="text-sm font-medium leading-none">Supporting Bill</label>
-                  <AttachmentField value={attachmentUrl} onChange={setAttachmentUrl} />
-                </div>
 
                 <DialogFooter>
                   <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>

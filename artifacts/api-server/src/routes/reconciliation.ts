@@ -348,7 +348,7 @@ router.post("/reconciliation/batches", requireModuleAction("page:/accounts/recon
   const parsedCharges = Number(charges ?? 0);
   if (parsedCharges < 0) { res.status(400).json({ error: "charges cannot be negative" }); return; }
 
-  const createdBy = (req as any).user?.username ?? "system";
+  const createdBy = (req as any).employee?.username ?? "system";
 
   const client = await pool.connect();
   try {
@@ -587,7 +587,7 @@ router.post("/reconciliation/:id/match", requireModuleAction("page:/accounts/rec
     return;
   }
 
-  const matchedBy = (req as any).user?.username ?? "system";
+  const matchedBy = (req as any).employee?.username ?? "system";
 
   const client = await pool.connect();
   try {

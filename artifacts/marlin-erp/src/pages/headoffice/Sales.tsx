@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import {
-  usePaginatedSales, useCreateSale, useListOutlets, useListCustomers, useCreateCustomer,
+  usePaginatedSales, useCreateSale, useListCustomers, useCreateCustomer,
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
   getListCustomersQueryKey, useListCoupons,
   customFetch,
@@ -10,6 +10,7 @@ import {
 import { usePermission } from '@/lib/usePermission';
 import { isActiveProduct } from '@/lib/productStatus';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
+import { useEnabledOutlets } from '@/lib/locationStructure';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -27,8 +28,8 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { INDIAN_STATES } from '@/lib/indianStates';
 import {
-  SALE_PAYMENT_MODES, PAYMENT_MODE_OPTIONS, COLLECTION_METHODS,
-  paymentModeLabel, editableSaleMode,
+  STORED_SALE_MODES, PAYMENT_MODE_OPTIONS, CREATE_PAYMENT_MODE_OPTIONS, COLLECTION_METHODS,
+  paymentModeLabel, storedSaleMode,
 } from '@/lib/paymentModes';
 import {
   normaliseWhatsAppNumber, composeInvoiceMessage, activeInvoiceShareChannel,
@@ -100,7 +101,7 @@ const schema = z.object({
   locationId: z.coerce.number().min(1, 'Location required'),
   customerId: z.coerce.number().optional(),
   saleDate: z.string().min(1, 'Date required'),
-  paymentMode: z.enum(SALE_PAYMENT_MODES).default('cash'),
+  paymentMode: z.enum(STORED_SALE_MODES).default('cash'),
   couponCode: z.string().optional(),
   lineItems: z.array(saleLineSchema).min(1, 'Add at least one item'),
 });
@@ -144,7 +145,9 @@ interface SalesProps {
 
 export default function Sales({ forceLocationType, forceLocationId, forceLocationName, permissionModule }: SalesProps = {}) {
   const perm = usePermission(permissionModule ?? 'page:/sales/pos');
-  const { data: outlets = [] } = useListOutlets();
+  // Outlet enablement is a Company Settings toggle; go through the shared helper
+  // so this page honours it too — an empty list while Outlet Management is off.
+  const { data: outlets = [] } = useEnabledOutlets();
   const { outletsEnabled } = useOutletsEnabled();
   // 'all' | 'warehouse:<id>' | 'outlet:<id>'
   const [locationFilter, setLocationFilter] = useState<string>('all');
@@ -276,9 +279,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       locationId: sale.locationId ?? sale.outletId ?? 0,
       customerId: sale.customerId ?? undefined,
       saleDate: sale.saleDate,
-      // Legacy 'card' / 'bank_transfer' invoices collapse onto Bank so an edit
-      // keeps their meaning instead of silently becoming a cash sale.
-      paymentMode: editableSaleMode(sale.paymentMode) as FormValues['paymentMode'],
+      // Carry the stored mode through untouched — legacy 'card'/'bank_transfer'
+      // included. They are shown as "Bank", but submitting 'bank' in their place
+      // would rewrite a value reconciliation points at, and the API would read
+      // it as changing the sale's mode and refuse the edit.
+      paymentMode: storedSaleMode(sale.paymentMode) as FormValues['paymentMode'],
       couponCode: sale.couponCode ?? '',
       lineItems: (sale.lineItems ?? []).map((li: any) => ({
         itemId: li.itemId,
@@ -361,6 +366,25 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const watchLocationType = form.watch('locationType');
   const watchLocationId = form.watch('locationId');
   const watchCustomerId = form.watch('customerId');
+  const watchPaymentMode = form.watch('paymentMode');
+
+  // A new sale may only be Cash or Credit — Bank/UPI are collected later, never
+  // set at sale time (the API rejects them on create). Editing an existing
+  // bank/upi sale must not blank its mode, so that stored value stays selectable
+  // (but the API refuses to CHANGE any sale into bank/upi). Mirrors the
+  // "keep the current pick valid" rule used by lineItemOptions above.
+  const paymentModeOptions = useMemo(() => {
+    const current = watchPaymentMode;
+    if (current && !CREATE_PAYMENT_MODE_OPTIONS.some(o => o.value === current)) {
+      const known = PAYMENT_MODE_OPTIONS.find(o => o.value === current);
+      // A stored legacy spelling ('card'/'bank_transfer') has no option of its
+      // own; give it one under the Bank label so the select can hold the exact
+      // stored value instead of silently swapping it for 'bank'.
+      const option = known ?? { value: current, label: `🏦 ${paymentModeLabel(current)}` };
+      return [...CREATE_PAYMENT_MODE_OPTIONS, option];
+    }
+    return CREATE_PAYMENT_MODE_OPTIONS;
+  }, [watchPaymentMode]);
 
   const { data: outletPrices = [] } = useListItemPrices(
     { outletId: watchLocationId },
@@ -940,7 +964,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <Select onValueChange={field.onChange} value={field.value}>
                       <FormControl><SelectTrigger><SelectValue placeholder="Select mode" /></SelectTrigger></FormControl>
                       <SelectContent>
-                        {PAYMENT_MODE_OPTIONS.map(m => (
+                        {paymentModeOptions.map(m => (
                           <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
                         ))}
                       </SelectContent>

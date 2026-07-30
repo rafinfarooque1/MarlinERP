@@ -12,7 +12,7 @@ import { useState, useMemo } from 'react';
 import {
   useListStockTransfers, useCreateStockTransfer,
   useListItems, useListRawMaterials, useListMaterials,
-  useListWarehouses, useListOutlets, useListStock,
+  useListWarehouses, useListStock,
   getListStockTransfersQueryKey, useGetCompanySettings,
   useSuggestBatches, useListStockBatches,
   useGetMe,
@@ -29,7 +29,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useOutletsEnabled } from '@/lib/useFeatureFlags';
+import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
+import { useEnabledOutlets } from '@/lib/locationStructure';
 import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -377,7 +378,11 @@ export default function Transfers() {
   const { data: rawMaterials = [] } = useListRawMaterials();
   const { data: materials = [] }    = useListMaterials();
   const { data: warehouses = [] }   = useListWarehouses();
-  const { data: outlets = [] }      = useListOutlets();
+  // Selection-only: withheld while Outlet Management is off so retired outlets
+  // cannot appear as a source or destination for new stock movement. The list
+  // view labels each row from the transfer's own `fromName`/`toName`, so past
+  // transfers to/from an outlet keep displaying that outlet even when disabled.
+  const { data: outlets = [] }      = useEnabledOutlets();
   const { data: companySettings }   = useGetCompanySettings();
   const queryClient = useQueryClient();
   const createMutation = useCreateStockTransfer();
@@ -447,6 +452,19 @@ export default function Transfers() {
   const watchFromId   = form.watch('fromId');
   const watchToType   = form.watch('toType');
   const isFromHO      = watchFromType === 'headoffice';
+
+  // Clear a stale outlet source/destination once Outlet Management is switched
+  // off, so the form never posts against an outlet that is no longer offered.
+  // Admins reset to the Head Office default; employees keep their locked branch.
+  useClearOutletSelection(watchFromType === 'outlet', () => {
+    if (isEmployee) return;
+    form.setValue('fromType', 'headoffice');
+    form.setValue('fromId', 1);
+  });
+  useClearOutletSelection(watchToType === 'outlet', () => {
+    form.setValue('toType', 'warehouse');
+    form.setValue('toId', 0);
+  });
 
   // From location options (admin only — employees have it locked).
   // Retired outlets take no part in new stock movement, in either direction, so

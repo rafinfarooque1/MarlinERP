@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import {
-  useListEmployees, useCreateEmployee, useUpdateEmployee, useDeleteEmployee, useListHierarchies, useListWarehouses, useListOutlets,
+  useListEmployees, useCreateEmployee, useUpdateEmployee, useDeleteEmployee, useListHierarchies, useListWarehouses,
   getListEmployeesQueryKey, useGetPayComponents, useSetPayComponents, getPayComponentsQueryKey,
   type PayComponent, type PayComponents,
 } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
+import { useEnabledOutlets } from '@/lib/locationStructure';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -211,7 +212,11 @@ export default function Employees() {
   const { data: employees = [], isLoading } = useListEmployees();
   const { data: hierarchies = [] } = useListHierarchies();
   const { data: warehouses = [] } = useListWarehouses();
-  const { data: outlets = [] } = useListOutlets();
+  // Selection-only: withheld while Outlet Management is off. Historical outlet
+  // names still render from each employee's own `branchName` field, so disabling
+  // the module never blanks out a past assignment — it only removes outlets from
+  // the pickers/filters below.
+  const { data: outlets = [] } = useEnabledOutlets();
   const { outletsEnabled } = useOutletsEnabled();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');

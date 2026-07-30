@@ -52,3 +52,5 @@
 - [Daily expense accrual](daily-expense-accrual.md) — rent+salary hit the P&L daily; approval is a delta true-up that can flip sides, locks the month; revision deletes+regenerates the whole unapproved month
 - [Publish schema diff](publish-schema-diff.md) — publish diffs the two live DBs (not schema.ts); bare text→date can NEVER apply, date→text applies silently; hold dev at prod's type, publish, then converge.
 - [One outstanding figure](single-outstanding-figure.md) — the owning module must export BOTH the in-process calc and SQL builders; reports and UIs hand-roll `total−paid` and silently drop credit notes.
+- [Orphaned ledger postings](orphaned-ledger-postings.md) — a balanced trial balance proves nothing: deleted ledgers leave postings that classify into neither statement, and the BS gap equals their net exactly.
+- [Audit stamp fallbacks](audit-stamp-fallbacks.md) — `?? "system"` over a never-assigned request property records every row as system-generated and never fails; grep the middleware before writing created_by.

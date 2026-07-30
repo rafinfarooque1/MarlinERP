@@ -367,8 +367,8 @@ export default function Outstanding() {
                               </thead>
                               <tbody>
                                 {(v.bills ?? []).map((b: any) => (
-                                  <tr key={b.purchaseId} className="border-t border-border/50">
-                                    <td className="py-1.5 font-mono">{b.invoiceNumber || `PB #${String(b.purchaseId).padStart(4, '0')}`}</td>
+                                  <tr key={b.billKey ?? b.purchaseId} className="border-t border-border/50">
+                                    <td className="py-1.5 font-mono">{b.invoiceNumber || `PB #${String(b.purchaseId ?? b.assetPurchaseId).padStart(4, '0')}`}</td>
                                     <td className="py-1.5">{dfmt(b.purchaseDate)}</td>
                                     <td className="py-1.5 text-right">
                                       <Badge variant="outline" className={`font-mono text-[10px] ${bucketBadge(b.bucket)}`}>{b.daysOld} d</Badge>

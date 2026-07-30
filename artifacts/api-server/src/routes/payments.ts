@@ -69,7 +69,7 @@ router.get("/sales/:id/payments", requireModuleView("page:/sales/pos"), async (r
 });
 
 // ── POST /sales/:id/payments ───────────────────────────────────────────────────
-router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page:/outstanding"], "add"), async (req, res): Promise<void> => {
+router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page:/outstanding", "page:/customers"], "add"), async (req, res): Promise<void> => {
   const saleId = parseInt(req.params.id, 10);
   if (!Number.isFinite(saleId)) { res.status(400).json({ error: "Invalid sale id" }); return; }
 
@@ -101,7 +101,7 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
   const pDateInput = optionalIsoDate(paymentDate);
   if (!pDateInput.ok) { res.status(400).json({ error: "paymentDate must be a real calendar date in YYYY-MM-DD form" }); return; }
   const pDate = pDateInput.value ?? new Date().toISOString().split("T")[0];
-  const createdBy = (req as any).user?.username ?? "system";
+  const createdBy = (req as any).employee?.username ?? "system";
 
   const client = await pool.connect();
   try {
