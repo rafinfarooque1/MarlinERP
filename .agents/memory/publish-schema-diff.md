@@ -66,6 +66,23 @@ boot instead of becoming permanent.
 and development is `text`, and the reverse cast applies without complaint. With
 a type-driven migration the damage is temporary; with a log-gated one it is not.
 
+**Confirmed in practice, and worth knowing what the evidence looks like:** during
+this window a routine publish did silently apply `date → text` again, and the
+type-driven pass converted all 16 columns back before the port opened, so no
+request ever saw the wrong type. The tell was in the boot-status rows — two
+consecutive production boots each reported "converted 16", where the second
+should have reported "already correct". Two conversions with only one
+`migration_log` row is the signature of a reversal that self-healed.
+
+Convergence is the actual fix; the self-heal is only the safety net. Once both
+sides hold the same type the diff is empty and the reversal stops occurring.
+
+**Verifying convergence:** run the identical statement against both databases and
+compare one hash, rather than eyeballing column lists —
+`SELECT count(DISTINCT table_name), count(*), md5(string_agg(table_name||'.'||column_name||':'||data_type||':'||is_nullable, '|' ORDER BY table_name, column_name)) FROM information_schema.columns WHERE table_schema='public'`.
+Equal fingerprints prove there is nothing left for a publish to cast. Expect the
+counts to differ from any earlier baseline by exactly the tables you added.
+
 ## Make queries type-agnostic
 
 Any query comparing such a column to a date expression must cast the column
