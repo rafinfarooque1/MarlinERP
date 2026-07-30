@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { SearchableItemSelect } from '@/components/ui/searchable-item-select';
 import {
   useListProductions, useCreateProduction, useListItems, useListRawMaterials,
   useListMaterials, getListProductionsQueryKey,
@@ -412,11 +413,14 @@ export default function ProductionList() {
                 <FormField control={form.control} name="itemId" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Item Name (SKU) <span className="text-destructive">*</span></FormLabel>
-                    <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select item" /></SelectTrigger></FormControl>
-                      {/* Active only: a discontinued SKU can't be produced again */}
-                      <SelectContent>{activeProducts(items).map(i => <SelectItem key={i.id} value={String(i.id)}>{i.name}</SelectItem>)}</SelectContent>
-                    </Select><FormMessage />
+                    {/* Active only: a discontinued SKU can't be produced again */}
+                    <FormControl><SearchableItemSelect
+                      items={activeProducts(items).map((i: any) => ({
+                        id: i.id, name: i.name, code: i.itemCode || null, uom: i.unit || null,
+                      }))}
+                      value={field.value}
+                      onChange={id => field.onChange(id)}
+                    /></FormControl><FormMessage />
                   </FormItem>
                 )} />
                 <FormField control={form.control} name="producedQuantity" render={({ field }) => (
@@ -480,10 +484,15 @@ export default function ProductionList() {
                           <div className="col-span-5">
                             <FormField control={form.control} name={`materialUsed.${i}.materialId`} render={({ field: f }) => (
                               <FormItem><FormLabel className="text-xs">Raw Material</FormLabel>
-                                <Select onValueChange={v => f.onChange(Number(v))} value={f.value ? String(f.value) : ''}>
-                                  <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger></FormControl>
-                                  <SelectContent>{activeProducts(materials as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}</SelectContent>
-                                </Select><FormMessage /></FormItem>
+                                <FormControl><SearchableItemSelect
+                                  className="h-8 text-xs"
+                                  placeholder="Select"
+                                  items={activeProducts(materials as any[]).map((o: any) => ({
+                                    id: o.id, name: o.name, code: o.itemCode || null, uom: o.unit || null,
+                                  }))}
+                                  value={f.value}
+                                  onChange={id => f.onChange(id)}
+                                /></FormControl><FormMessage /></FormItem>
                             )} />
                           </div>
                           <div className="col-span-2">
@@ -517,10 +526,15 @@ export default function ProductionList() {
                           <div className="col-span-5">
                             <FormField control={form.control} name={`materialUsed.${i}.materialId`} render={({ field: f }) => (
                               <FormItem><FormLabel className="text-xs">Packing Material</FormLabel>
-                                <Select onValueChange={v => f.onChange(Number(v))} value={f.value ? String(f.value) : ''}>
-                                  <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger></FormControl>
-                                  <SelectContent>{activeProducts(rawMaterials as any[]).map(o => <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>)}</SelectContent>
-                                </Select><FormMessage /></FormItem>
+                                <FormControl><SearchableItemSelect
+                                  className="h-8 text-xs"
+                                  placeholder="Select"
+                                  items={activeProducts(rawMaterials as any[]).map((o: any) => ({
+                                    id: o.id, name: o.name, code: o.itemCode || null, uom: o.unit || null,
+                                  }))}
+                                  value={f.value}
+                                  onChange={id => f.onChange(id)}
+                                /></FormControl><FormMessage /></FormItem>
                             )} />
                           </div>
                           <div className="col-span-2">

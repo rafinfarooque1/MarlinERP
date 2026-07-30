@@ -212,8 +212,10 @@ function PayablesReport({ canDownload }: { canDownload: boolean }) {
   const { data, isLoading } = usePayablesAging();
   const rows = data?.vendors ?? [];
   const t = data?.totals;
-  // Payables totals don't include netDue — derive it from the vendor rows.
-  const netPayable = rows.reduce((s, r) => s + r.netDue, 0);
+  // The control figure from the payables report: the sum of the vendor ledger
+  // balances, which is Sundry Creditors on the Balance Sheet. Falls back to
+  // summing the rows, which comes to the same thing by construction.
+  const netPayable = t?.netDue ?? rows.reduce((s, r) => s + r.netDue, 0);
 
   return (
     <div className="space-y-4">

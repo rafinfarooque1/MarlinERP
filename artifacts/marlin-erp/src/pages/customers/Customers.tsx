@@ -20,6 +20,7 @@ import { downloadCSV } from '@/lib/download';
 import { INDIAN_STATES } from '@/lib/indianStates';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { usePermission } from '@/lib/usePermission';
+import { PartyBalance } from '@/lib/partyBalance';
 import { CollectPaymentDialog } from './CollectPaymentDialog';
 
 const schema = z.object({
@@ -228,8 +229,8 @@ export default function Customers() {
                   <TableCell className="text-sm text-muted-foreground">{c.phone || '—'}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{(c as any).state || '—'}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{c.gstNumber || '—'}</TableCell>
-                  <TableCell className="text-right font-mono text-sm font-semibold text-primary">
-                    ₹{Number((c as any).outstandingBalance ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  <TableCell className="text-right">
+                    <PartyBalance kind="customer" balance={(c as any).outstandingBalance} className="text-sm" />
                   </TableCell>
                   <TableCell className="text-right flex items-center justify-end gap-1">
                     {perm.canAdd && Number((c as any).outstandingBalance ?? 0) > 0.009 && (
@@ -336,9 +337,7 @@ export default function Customers() {
               <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 flex items-center justify-between">
                 <div>
                   <p className="text-xs text-muted-foreground uppercase tracking-wider">Outstanding Balance</p>
-                  <p className="text-2xl font-bold font-mono text-primary mt-0.5">
-                    ₹{Number((viewItem as any).outstandingBalance ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                  </p>
+                  <PartyBalance kind="customer" balance={(viewItem as any).outstandingBalance} className="text-2xl mt-0.5 block" />
                 </div>
                 <div className="flex flex-col items-end gap-2">
                   {perm.canAdd && Number((viewItem as any).outstandingBalance ?? 0) > 0.009 && (

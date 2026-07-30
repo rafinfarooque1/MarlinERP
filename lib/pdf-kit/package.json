@@ -1,0 +1,12 @@
+{
+  "name": "@workspace/pdf-kit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "jspdf": "^4.2.1"
+  }
+}

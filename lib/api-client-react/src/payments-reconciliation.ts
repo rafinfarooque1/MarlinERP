@@ -1,5 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "./custom-fetch";
+import { getListVendorsQueryKey } from "./generated/api";
+import { getPayablesAgingQueryKey } from "./returns";
 
 // ── Customer / Vendor Ledger ───────────────────────────────────────────────────
 export interface LedgerEntry {
@@ -56,8 +58,16 @@ export function useRecordVendorPayment() {
     mutationFn: ({ vendorId, data }: { vendorId: number; data: { date: string; amount: number; cashBankLedgerId: number; narration?: string } }) =>
       customFetch<any>(`/api/vendors/${vendorId}/payment`, { method: 'POST', body: JSON.stringify(data) }),
     onSuccess: (_: any, vars) => {
+      // Paying a vendor moves the vendor ledger, the payables control and the
+      // cash/bank ledger it was paid from, so every surface that reports one of
+      // those has to be refetched. The list key must be the generated one:
+      // a hand-written ['vendors'] matches no query, which left the vendor list
+      // showing the pre-payment balance until a full page reload.
       qc.invalidateQueries({ queryKey: ['vendor-ledger', vars.vendorId] });
-      qc.invalidateQueries({ queryKey: ['vendors'] });
+      qc.invalidateQueries({ queryKey: getListVendorsQueryKey() });
+      qc.invalidateQueries({ queryKey: getPayablesAgingQueryKey() });
+      qc.invalidateQueries({ queryKey: ['/api/dashboard/bi'] });
+      qc.invalidateQueries({ queryKey: ['/api/cash-in-outlet'] });
     },
   });
 }

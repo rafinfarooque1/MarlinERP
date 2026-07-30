@@ -43,9 +43,41 @@ export interface DashboardBi {
   purchases: { total: number; count: number; byDay: BiPurchaseDay[] };
   production: { batches: number; outputQty: number; wastageQty: number; wastagePct: number; byDay: BiProductionDay[] };
   inventory: { valuation?: number; itemCount: number; lowStockCount: number; expiringSoonCount: number };
-  receivables: { total: number; overdue: number; count: number };
-  payables: { total: number; count: number };
-  cash: { inflow: number; outflow: number; net: number };
+  /**
+   * `total` is Sundry Debtors from the accounting postings — the Balance Sheet
+   * figure, so a receipt, a journal or a credit note all move it. It is `null`
+   * for a location-scoped caller, because a posting carries no location.
+   * `invoiceExposure` is the document-level figure for the selected period and
+   * location, and `overdue` can only come from invoice dates.
+   */
+  receivables: {
+    total: number | null;
+    basis: 'ledger' | null;
+    companyWide: boolean;
+    invoiceExposure: number;
+    overdue: number;
+    count: number;
+  };
+  /** Sundry Creditors, same construction and same caveats as receivables. */
+  payables: {
+    total: number | null;
+    basis: 'ledger' | null;
+    companyWide: boolean;
+    purchaseExposure: number;
+    count: number;
+  };
+  /**
+   * `inflow`/`outflow`/`net` are period voucher FLOWS. `balance` is the cash
+   * position from the postings — the Cash Book figure — and is `null` for a
+   * location-scoped caller.
+   */
+  cash: {
+    inflow: number;
+    outflow: number;
+    net: number;
+    balance: number | null;
+    companyWide: boolean;
+  };
   /**
    * Direct + indirect expenses for the period, from the accounting postings.
    * `null` when the caller is scoped to a single location — derived postings

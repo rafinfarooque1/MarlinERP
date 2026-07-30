@@ -150,9 +150,24 @@ export default function Dashboard() {
     // Hidden entirely for employees without the inventory-valuation right —
     // the server omits the figure, so there is nothing honest to show.
     ...(bi?.canViewValuation ? [{ label: 'Inventory Value', value: fmt(bi.inventory.valuation ?? 0) }] : []),
-    { label: 'Receivables', value: fmt(bi?.receivables.total ?? 0), tone: (bi?.receivables.overdue ?? 0) > 0 ? 'warn' : 'default' },
-    { label: 'Payables', value: fmt(bi?.payables.total ?? 0), tone: 'neg' },
-    { label: 'Net Cash', value: fmt(bi?.cash.net ?? 0), tone: (bi?.cash.net ?? 0) >= 0 ? 'pos' : 'neg' },
+    // Receivables, Payables and Cash Balance are Balance Sheet positions taken
+    // from the accounting ledgers, so they carry no location and read '—' for a
+    // single-location login, exactly like Expenses and Bank Balance above.
+    {
+      label: 'Receivables',
+      value: bi?.receivables?.total == null ? '—' : fmt(bi.receivables.total),
+      tone: (bi?.receivables?.overdue ?? 0) > 0 ? 'warn' : 'default',
+    },
+    {
+      label: 'Payables',
+      value: bi?.payables?.total == null ? '—' : fmt(bi.payables.total),
+      tone: bi?.payables?.total == null ? 'default' : 'neg',
+    },
+    {
+      label: 'Cash Balance',
+      value: bi?.cash?.balance == null ? '—' : fmt(bi.cash.balance),
+      tone: bi?.cash?.balance == null ? 'default' : bi.cash.balance >= 0 ? 'pos' : 'neg',
+    },
   ];
 
   return (

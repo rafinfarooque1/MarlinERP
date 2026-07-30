@@ -1,10 +1,11 @@
 import { Fragment, useEffect, useState } from 'react';
+import { SearchableItemSelect } from '@/components/ui/searchable-item-select';
 import {
   usePaginatedPurchases, useCreatePurchase, useListVendors, useListMaterials, useListRawMaterials, useListItems,
   getListPurchasesQueryKey, useUpdatePurchase, useDeletePurchase, useGetCompanySettings,
   useListWarehouses, useListOutlets,
 } from '@workspace/api-client-react';
-import { downloadPurchaseOrderPDF } from '@/lib/pdfUtils';
+import { downloadPurchaseInvoicePDF } from '@/lib/purchasePdf';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -371,14 +372,18 @@ export default function Purchases() {
     return materials.find((m: any) => m.id === li.materialId)?.name || `Item #${li.materialId}`;
   };
 
-  const handleDownloadPO = (p: any) => {
+  const handleDownloadPO = async (p: any) => {
     try {
-      const matMap = new Map<number, string>((materials as any[]).map((m: any) => [m.id, m.name]));
-      const rawMap = new Map<number, string>((rawMaterials as any[]).map((m: any) => [m.id, m.name]));
-      const vendorGstin = (vendors as any[]).find((v: any) => v.id === p.vendorId)?.gstNumber;
-      downloadPurchaseOrderPDF({ ...p, vendorGstin }, companySettings ?? {}, matMap, rawMap);
+      // The stored line already carries its name and unit; the client maps are
+      // only a fallback for a bill saved before that enrichment existed.
+      const lineItems = (p.lineItems ?? []).map((li: any) => ({
+        ...li,
+        materialName: li.materialName || getMaterialName(li),
+      }));
+      const vendor = (vendors as any[]).find((v: any) => v.id === p.vendorId);
+      await downloadPurchaseInvoicePDF({ ...p, lineItems }, companySettings ?? {}, vendor);
     } catch {
-      toast.error('Could not generate the PO PDF');
+      toast.error('Could not generate the purchase invoice PDF');
     }
   };
 
@@ -764,26 +769,31 @@ export default function Purchases() {
                               <SelectItem value="item">Item Name (SKU)</SelectItem>
                             </SelectContent>
                           </Select>
-                          <Select
-                            onValueChange={v => {
-                              form.setValue(`lineItems.${index}.materialId`, Number(v));
+                          {/* Purchasing cares about the tax identity of the product, not
+                              about MRP or what is currently in stock, so this picker shows
+                              HSN and GST only. Active only for new picks; an already-chosen
+                              product stays listed so editing an old bill can't blank the line. */}
+                          <SearchableItemSelect
+                            className="h-8 text-xs flex-1 min-w-0"
+                            placeholder="Select"
+                            columns={['hsn', 'gst']}
+                            items={activeProductsWithSelection(
+                              (form.watch(`lineItems.${index}.materialType`) === 'raw_material' ? rawMaterials : form.watch(`lineItems.${index}.materialType`) === 'item' ? finishedItems : materials) as any[],
+                              Number(form.watch(`lineItems.${index}.materialId`)),
+                            ).map((m: any) => ({
+                              id: m.id,
+                              name: m.name,
+                              code: m.itemCode || null,
+                              hsn: m.hsnCode || null,
+                              gstRate: m.taxRate == null ? null : Number(m.taxRate),
+                            }))}
+                            value={form.watch(`lineItems.${index}.materialId`)}
+                            onChange={id => {
+                              form.setValue(`lineItems.${index}.materialId`, id);
                               // HSN and GST% follow the product out of the Item Master.
-                              applyMasterDefaults(index, form.getValues(`lineItems.${index}.materialType`), Number(v));
+                              applyMasterDefaults(index, form.getValues(`lineItems.${index}.materialType`), id);
                             }}
-                            value={form.watch(`lineItems.${index}.materialId`) ? String(form.watch(`lineItems.${index}.materialId`)) : ''}
-                          >
-                            <SelectTrigger className="h-8 text-xs flex-1 min-w-0"><SelectValue placeholder="Select" /></SelectTrigger>
-                            <SelectContent>
-                              {/* Active only for new picks; an already-chosen product stays
-                                  listed so editing an old bill can't blank the line. */}
-                              {activeProductsWithSelection(
-                                (form.watch(`lineItems.${index}.materialType`) === 'raw_material' ? rawMaterials : form.watch(`lineItems.${index}.materialType`) === 'item' ? finishedItems : materials) as any[],
-                                Number(form.watch(`lineItems.${index}.materialId`)),
-                              ).map((m: any) => (
-                                <SelectItem key={m.id} value={String(m.id)}>{m.name}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          />
                         </div>
                         <Input className="h-8 text-xs font-mono" placeholder="HSN" {...form.register(`lineItems.${index}.hsnCode`)} />
                         <Input className="h-8 text-xs text-right" type="number" min={0} step="0.001" {...form.register(`lineItems.${index}.quantity`)} />
@@ -904,7 +914,7 @@ export default function Purchases() {
               {perm.canDownload && (
                 <div className="flex justify-end mb-4">
                   <Button variant="outline" size="sm" onClick={() => handleDownloadPO(viewItem)}>
-                    <FileDown className="w-4 h-4 mr-2" /> Download PO PDF
+                    <FileDown className="w-4 h-4 mr-2" /> Download Invoice PDF
                   </Button>
                 </div>
               )}

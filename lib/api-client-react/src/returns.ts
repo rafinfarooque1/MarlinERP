@@ -114,15 +114,25 @@ export interface ReceivableCustomer extends AgingBuckets {
   phone: string | null;
   creditLimit: number;
   creditDays: number;
+  /** Aged invoice balances only — what the buckets add up to. */
   totalDue: number;
   creditNotes: number;
+  /** The customer's account balance. Absent when the report is invoice-based. */
+  ledgerBalance?: number;
+  /** Ledger balance with no invoice behind it. */
+  uninvoicedBalance?: number;
+  /** Invoiced more than the ledger says is owed — an unallocated credit. */
+  unallocatedCredit?: number;
+  /** The control figure: the ledger balance when head office, else totalDue−creditNotes. */
   netDue: number;
   invoices: ReceivableInvoice[];
 }
 
 export interface ReceivablesAging {
   asOf: string;
-  totals: AgingBuckets & { totalDue: number; creditNotes: number; netDue: number };
+  /** "ledger" when netDue is anchored to Sundry Debtors, "invoices" when location-scoped. */
+  basis?: 'ledger' | 'invoices';
+  totals: AgingBuckets & { totalDue: number; creditNotes: number; uninvoiced?: number; netDue: number };
   customers: ReceivableCustomer[];
 }
 
@@ -144,14 +154,20 @@ export interface PayableVendor extends AgingBuckets {
   totalBilled: number;
   totalPaid: number;
   debitNotes: number;
-  netDue: number;
+  /** The vendor's account balance — negative when we are in advance. */
+  ledgerBalance?: number;
+  /** Ledger balance with no bill behind it. */
+  unbilledBalance?: number;
+  /** Billed more than the ledger says is owed — an unallocated credit. */
   unallocatedCredit: number;
+  /** The control figure: the vendor's ledger balance. */
+  netDue: number;
   bills: PayableBill[];
 }
 
 export interface PayablesAging {
   asOf: string;
-  totals: AgingBuckets & { totalDue: number };
+  totals: AgingBuckets & { totalDue: number; debitNotes?: number; unbilled?: number; netDue: number };
   vendors: PayableVendor[];
 }
 

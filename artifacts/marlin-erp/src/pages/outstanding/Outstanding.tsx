@@ -203,7 +203,7 @@ export default function Outstanding() {
         {tab !== 'collections' && (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <div className="bg-card border border-border rounded-xl p-3">
-              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Total Due</p>
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Aged Bills</p>
               <p className="text-lg font-bold font-mono mt-1">₹{fmt0(totals?.totalDue)}</p>
             </div>
             {BUCKETS.map(b => (
@@ -212,10 +212,29 @@ export default function Outstanding() {
                 <p className={`text-lg font-bold font-mono mt-1 ${b.cls}`}>₹{fmt0(totals?.[b.key])}</p>
               </div>
             ))}
+            {/* The control figure. It comes from the party ledgers, so it equals
+                Sundry Debtors / Sundry Creditors on the Balance Sheet. The
+                buckets to the left show only the part that maps to dated bills. */}
             <div className="bg-card border border-border rounded-xl p-3">
-              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{tab === 'receivables' ? 'Net (less CNs)' : 'Net (less DNs)'}</p>
-              <p className="text-lg font-bold font-mono mt-1 text-primary">₹{fmt0(tab === 'receivables' ? totals?.netDue : totals?.totalDue)}</p>
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Balance (ledger)</p>
+              <p className="text-lg font-bold font-mono mt-1 text-primary">₹{fmt0(totals?.netDue)}</p>
             </div>
+          </div>
+        )}
+
+        {/* Anything the ledger says is owed that no dated document explains —
+            an opening balance, or a journal raising the liability directly.
+            Surfaced rather than dropped so the buckets and the control figure
+            can be reconciled by eye. */}
+        {tab !== 'collections' && Number((totals as any)?.[tab === 'receivables' ? 'uninvoiced' : 'unbilled']) > 0.004 && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm">
+            <span className="font-medium text-amber-600">
+              ₹{fmt((totals as any)[tab === 'receivables' ? 'uninvoiced' : 'unbilled'])}
+            </span>{' '}
+            <span className="text-muted-foreground">
+              of the ledger balance has no dated {tab === 'receivables' ? 'invoice' : 'bill'} behind it
+              (opening balance or journal entry), so it cannot be aged into the buckets above.
+            </span>
           </div>
         )}
 

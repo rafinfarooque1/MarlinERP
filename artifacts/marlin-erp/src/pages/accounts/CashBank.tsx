@@ -50,7 +50,14 @@ export default function CashBank() {
   };
 
   const filtered = accounts.filter(a => a.name?.toLowerCase().includes(search.toLowerCase()) || a.bankName?.toLowerCase().includes(search.toLowerCase()));
-  const totalBalance = filtered.reduce((s, a) => s + Number((a as any).currentBalance || 0), 0);
+  // These legacy payment accounts predate the chart of accounts and are not
+  // linked to any ledger, so the API returns currentBalance: null. Summing the
+  // stored column instead would put lakhs of unreconciled rupees on screen under
+  // the heading "Total Balance"; the reconciled cash and bank positions are on
+  // the Cash & Bank Book and the Trial Balance.
+  const linked = filtered.filter(a => (a as any).currentBalance != null);
+  const totalBalance = linked.reduce((s, a) => s + Number((a as any).currentBalance || 0), 0);
+  const anyUnlinked = filtered.some(a => (a as any).currentBalance == null);
 
   const typeColor = (t: string) => t === 'cash' ? 'bg-emerald-500/10 text-emerald-500' : t === 'bank' ? 'bg-primary/10 text-primary' : t === 'upi' ? 'bg-purple-500/10 text-purple-500' : 'bg-muted';
 
@@ -95,12 +102,27 @@ export default function CashBank() {
         <div className="bg-card border border-border rounded-xl p-5 flex justify-between items-center">
           <div>
             <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Balance</p>
-            <p className="text-3xl font-bold font-mono text-primary mt-1">₹{totalBalance.toLocaleString('en-IN')}</p>
+            <p className="text-3xl font-bold font-mono text-primary mt-1">
+              {linked.length === 0 ? '—' : `₹${totalBalance.toLocaleString('en-IN')}`}
+            </p>
           </div>
           <div className="text-right">
             <p className="text-xs text-muted-foreground">{filtered.length} accounts</p>
           </div>
         </div>
+
+        {anyUnlinked && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm">
+            <p className="font-medium text-amber-600">Not linked to the chart of accounts</p>
+            <p className="text-muted-foreground mt-1">
+              These payment accounts pre-date the ledgers and carry a stored figure that no
+              accounting entry maintains, so no current balance can be shown for them. For
+              reconciled cash and bank positions use{' '}
+              <a href="/accounts/cash-bank-book" className="underline">Cash &amp; Bank Book</a>,{' '}
+              <a href="/accounts/trial-balance" className="underline">Trial Balance</a> or the Balance Sheet.
+            </p>
+          </div>
+        )}
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
@@ -130,7 +152,13 @@ export default function CashBank() {
                   <TableCell><Badge variant="outline" className={`capitalize ${typeColor(a.accountType)}`}>{a.accountType}</Badge></TableCell>
                   <TableCell className="text-sm text-muted-foreground">{a.bankName || '—'}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{a.accountNumber || '—'}</TableCell>
-                  <TableCell className="text-right font-mono font-bold text-primary text-lg">₹{Number((a as any).currentBalance || 0).toLocaleString('en-IN')}</TableCell>
+                  <TableCell className="text-right font-mono">
+                    {(a as any).currentBalance == null ? (
+                      <span className="text-muted-foreground" title="No ledger backs this account, so it has no reconciled balance">—</span>
+                    ) : (
+                      <span className="font-bold text-primary text-lg">₹{Number((a as any).currentBalance).toLocaleString('en-IN')}</span>
+                    )}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

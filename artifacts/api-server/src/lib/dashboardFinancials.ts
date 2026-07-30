@@ -32,6 +32,9 @@ export interface CompanyFinancials {
   /** Cumulative to `toDate` — a balance is a position, not a period flow. */
   bankBalance: number;
   cashBalance: number;
+  /** Control-account totals, signed to their natural side. */
+  accountsReceivable: number;
+  accountsPayable: number;
 }
 
 type Posting = { date: string; ledgerId: number; debit: number; credit: number };
@@ -75,29 +78,47 @@ export async function ledgerSubtreeLookup(): Promise<(code: string) => number[]>
   };
 }
 
-/** Cash and bank positions from an already-fetched posting stream. */
-async function balancesFrom(postings: Posting[]): Promise<{ bankBalance: number; cashBalance: number }> {
-  const subtree = await ledgerSubtreeLookup();
-  const bankIds = new Set(subtree("STD-BANK"));
-  const cashIds = new Set(subtree("STD-CASH"));
-  let bank = 0;
-  let cash = 0;
-  for (const p of postings) {
-    const id = Number(p.ledgerId);
-    const net = Number(p.debit) - Number(p.credit);
-    if (bankIds.has(id)) bank += net;
-    if (cashIds.has(id)) cash += net;
-  }
-  return { bankBalance: r2(bank), cashBalance: r2(cash) };
+export interface ControlBalances {
+  bankBalance: number;
+  cashBalance: number;
+  accountsReceivable: number;
+  accountsPayable: number;
 }
 
-/** Bank and cash only — for callers that do not need the expense figure. */
+/**
+ * Balance-sheet control positions from an already-fetched posting stream.
+ *
+ * Delegated to the shared balance index rather than summing the subtrees here.
+ * The inline version this replaces walked the postings only, so it silently
+ * ignored `opening_balances` — which live outside the posting stream and are
+ * folded in by `buildBooks`. That made the dashboard's cash and bank tiles read
+ * lower than the Balance Sheet's by exactly the opening balances, on a screen
+ * whose whole purpose is to agree with it.
+ */
+async function balancesFrom(
+  postings: Posting[],
+  opts: { toDate?: string | null } = {},
+): Promise<ControlBalances> {
+  const { buildLedgerBalanceIndex } = await import("./ledgerBalances");
+  const idx = await buildLedgerBalanceIndex(
+    (async () => postings) as unknown as PostingsFn,
+    { toDate: opts.toDate ?? null, postings },
+  );
+  return {
+    bankBalance: idx.bankBalance(),
+    cashBalance: idx.cashBalance(),
+    accountsReceivable: idx.controlTotal("customer"),
+    accountsPayable: idx.controlTotal("vendor"),
+  };
+}
+
+/** Control balances only — for callers that do not need the expense figure. */
 export async function companyBalances(
   buildDerivedPostings: PostingsFn,
   opts: { toDate?: string | null } = {},
-): Promise<{ bankBalance: number; cashBalance: number }> {
+): Promise<ControlBalances> {
   const toDate = opts.toDate || null;
-  return balancesFrom(await buildDerivedPostings(toDate ? { toDate } : {}));
+  return balancesFrom(await buildDerivedPostings(toDate ? { toDate } : {}), { toDate });
 }
 
 /**
@@ -120,8 +141,8 @@ export async function companyFinancials(
   // only argument buildBooks would have passed.
   const postings = await buildDerivedPostings(toDate ? { toDate } : {});
 
-  const [{ bankBalance, cashBalance }, books] = await Promise.all([
-    balancesFrom(postings),
+  const [controls, books] = await Promise.all([
+    balancesFrom(postings, { toDate }),
     buildBooks(async () => postings, {
       ...(fromDate ? { fromDate } : {}),
       ...(toDate ? { toDate } : {}),
@@ -133,7 +154,6 @@ export async function companyFinancials(
 
   return {
     expenses: { direct: r2(direct), indirect: r2(indirect), total: r2(direct + indirect) },
-    bankBalance,
-    cashBalance,
+    ...controls,
   };
 }

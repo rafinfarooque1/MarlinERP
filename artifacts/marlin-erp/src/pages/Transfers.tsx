@@ -9,6 +9,7 @@
  *   their branch; "From" is locked to their location in the create form.
  */
 import { useState, useMemo } from 'react';
+import { SearchableItemSelect } from '@/components/ui/searchable-item-select';
 import {
   useListStockTransfers, useCreateStockTransfer,
   useListItems, useListRawMaterials, useListMaterials,
@@ -1095,19 +1096,25 @@ export default function Transfers() {
                                 <FormField control={form.control} name={`lineItems.${i}.itemId`} render={({ field: f }) => (
                                   <FormItem>
                                     <FormLabel className="text-xs">Item</FormLabel>
-                                    <Select value={f.value ? String(f.value) : ''} onValueChange={v => {
-                                      f.onChange(Number(v));
-                                      setOverrides(prev => ({ ...prev, [i]: undefined }));
-                                    }}>
-                                      <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select" /></SelectTrigger></FormControl>
-                                      <SelectContent>
-                                        {typeFiltered.map(it => (
-                                          <SelectItem key={it.id} value={String(it.id)}>
-                                            {it.name} — {it.availQty} {it.unit} avail
-                                          </SelectItem>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
+                                    {/* `typeFiltered` is already narrowed to stock held at the
+                                        SOURCE location, so only what can actually be sent is
+                                        listed. The server re-checks it on dispatch regardless. */}
+                                    <FormControl><SearchableItemSelect
+                                      className="h-8 text-xs"
+                                      placeholder="Select"
+                                      columns={['available']}
+                                      items={typeFiltered.map(it => ({
+                                        id: it.id,
+                                        name: it.name,
+                                        uom: it.unit ?? null,
+                                        available: Number(it.availQty ?? 0),
+                                      }))}
+                                      value={f.value}
+                                      onChange={id => {
+                                        f.onChange(id);
+                                        setOverrides(prev => ({ ...prev, [i]: undefined }));
+                                      }}
+                                    /></FormControl>
                                   </FormItem>
                                 )} />
                               </div>

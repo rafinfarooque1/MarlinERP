@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { SearchableItemSelect, type ItemOption } from '@/components/ui/searchable-item-select';
 import {
   usePaginatedSales, useCreateSale, useListCustomers, useCreateCustomer,
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
@@ -395,19 +396,43 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     { query: { enabled: !!watchLocationId && watchLocationId > 0 } as any }
   );
 
-  const stockMap = new Map<number, number>(locationStock.map(s => [s.itemId!, Number(s.quantity ?? 0)]));
+  const stockMap = useMemo(
+    () => new Map<number, number>(locationStock.map(s => [s.itemId!, Number(s.quantity ?? 0)])),
+    [locationStock],
+  );
   // Discontinued items can't be billed — the server rejects them on create, so
   // they never reach the picker here either.
-  const availableItems = items.filter(it => isActiveProduct(it) && (stockMap.get(it.id) ?? 0) > 0);
+  const availableItems = useMemo(
+    () => items.filter(it => isActiveProduct(it) && (stockMap.get(it.id) ?? 0) > 0),
+    [items, stockMap],
+  );
+
+  // Item Master row → picker row. `available` is this LOCATION's sellable stock
+  // (the same figure the qty validator uses), never a company-wide total.
+  // Nothing cost-bearing is mapped: no cost, avg cost, valuation or margin.
+  const toItemOption = (it: any): ItemOption => ({
+    id: it.id,
+    name: it.name,
+    code: it.itemCode || null,
+    hsn: it.hsnCode || null,
+    uom: it.unit || null,
+    available: stockMap.get(it.id) ?? 0,
+    mrp: Number(it.mrp ?? 0),
+    gstRate: Number(it.taxRate ?? 0),
+  });
+  const availableOptions = useMemo(
+    () => availableItems.map(toItemOption),
+    [availableItems, stockMap],
+  );
 
   // Editing an old bill must never blank a line: whatever that line already
   // points at stays selectable even if the item has since gone inactive or run
   // out of stock. New picks are still limited to availableItems.
-  const lineItemOptions = (selectedId: number) => {
+  const lineItemOptions = (selectedId: number): ItemOption[] => {
     const id = Number(selectedId);
-    if (!id || availableItems.some(it => it.id === id)) return availableItems;
+    if (!id || availableItems.some(it => it.id === id)) return availableOptions;
     const selected = items.find(it => it.id === id);
-    return selected ? [...availableItems, selected] : availableItems;
+    return selected ? [...availableOptions, toItemOption(selected)] : availableOptions;
   };
 
   // Price comes from item MRP (set in Item Master) — not outlet-specific
@@ -1052,31 +1077,17 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                             <FormField control={form.control} name={`lineItems.${index}.itemId`} render={({ field: f }) => (
                               <FormItem>
                                 <FormLabel className="text-xs">Item</FormLabel>
-                                <Select
-                                  onValueChange={v => {
-                                    const id = Number(v);
+                                <FormControl><SearchableItemSelect
+                                  className="h-8 text-xs"
+                                  columns={['available', 'mrp', 'gst']}
+                                  items={lineItemOptions(Number(f.value))}
+                                  value={f.value}
+                                  onChange={id => {
                                     f.onChange(id);
                                     // Auto-fill from Item Master MRP — read-only in sale
                                     form.setValue(`lineItems.${index}.unitPrice`, getPrice(id));
                                   }}
-                                  value={f.value ? String(f.value) : ''}
-                                >
-                                  <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select item" /></SelectTrigger></FormControl>
-                                  <SelectContent>
-                                    {lineItemOptions(Number(f.value)).map(it => {
-                                      const avail = stockMap.get(it.id) ?? 0;
-                                      const mrp   = getPrice(it.id);
-                                      const r     = Number((it as any).taxRate ?? 0);
-                                      return (
-                                        <SelectItem key={it.id} value={String(it.id)}>
-                                          {it.name} — {avail} avail
-                                          {mrp > 0 ? ` · MRP ₹${mrp}` : ' · MRP not set'}
-                                          {r > 0 ? ` · ${r}% GST` : ''}
-                                        </SelectItem>
-                                      );
-                                    })}
-                                  </SelectContent>
-                                </Select>
+                                /></FormControl>
                               </FormItem>
                             )} />
 

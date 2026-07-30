@@ -1,11 +1,31 @@
 /**
- * Payslip PDF generator — jsPDF, A4 portrait.
+ * Payslip PDF generator — A4 portrait, one page for a normal salary run.
  *
  * The route assembles this input from the stored payroll row, so the slip always
  * reflects the figures the run was approved on — never a recomputation against
- * today's statutory rates.
+ * today's statutory rates. Nothing in this file does arithmetic on the payroll
+ * beyond adding up the rows it prints.
+ *
+ * Layout notes, because the previous version got these wrong:
+ *   • Earnings and deductions sit side by side in two balanced columns rather
+ *     than in one long stack, which is what a salary slip is expected to look
+ *     like and what keeps it on a single page.
+ *   • The signature area follows the summary immediately. It used to be pinned
+ *     to a fixed offset from the bottom of the page, which left a large empty
+ *     band in the middle of every slip.
+ *   • Money is printed with the real rupee sign, which needs the embedded
+ *     Unicode face from the shared kit.
+ *
+ * The two columns reconcile: (Gross Earnings) - (Total Deductions) = Net Pay,
+ * because gross_pay is stored net of LOP and net_pay is stored net of both the
+ * configured deductions and any advance recovery.
  */
 import { jsPDF } from "jspdf";
+import {
+  registerFonts, Painter, stampFooters, amountInWords, inr, dateIN,
+  NAVY, TEAL, WHITE, LGRAY, MGRAY, BORDER, GREEN, RED, AMBER,
+  PW, PH, M, CW,
+} from "@workspace/pdf-kit";
 
 export interface PayslipBreakdownItem { name: string; amount: number }
 
@@ -14,6 +34,8 @@ export interface PayslipPdfInput {
     companyName?: string;
     address?: string; city?: string; state?: string; pincode?: string;
     gstNumber?: string; phone?: string; email?: string;
+    /** Only rendered when it is an inline data URL; see the route. */
+    logoDataUrl?: string;
   };
   employeeName: string;
   branchName: string;
@@ -43,213 +65,267 @@ export interface PayslipPdfInput {
   paidAmount?: number;
 }
 
-/** Amount in words — cheques and audit trails expect it on a salary slip. */
-function amountInWords(value: number): string {
-  const n = Math.floor(Math.abs(value));
-  if (n === 0) return "Zero Rupees Only";
-  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
-    "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
-    "Seventeen", "Eighteen", "Nineteen"];
-  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
-  const two = (x: number): string =>
-    x < 20 ? ones[x] : `${tens[Math.floor(x / 10)]}${x % 10 ? " " + ones[x % 10] : ""}`;
-  const three = (x: number): string =>
-    x >= 100 ? `${ones[Math.floor(x / 100)]} Hundred${x % 100 ? " " + two(x % 100) : ""}` : two(x);
+const DASH = "-";
+const has = (n: unknown) => Math.abs(Number(n) || 0) > 0.004;
+const val = (v: unknown) => {
+  const s = v == null ? "" : String(v).trim();
+  return s === "" ? DASH : s;
+};
 
-  // Indian grouping: crore, lakh, thousand, hundred
-  const parts: string[] = [];
-  const crore = Math.floor(n / 10000000);
-  const lakh = Math.floor((n % 10000000) / 100000);
-  const thousand = Math.floor((n % 100000) / 1000);
-  const rest = n % 1000;
-  if (crore) parts.push(`${three(crore)} Crore`);
-  if (lakh) parts.push(`${three(lakh)} Lakh`);
-  if (thousand) parts.push(`${three(thousand)} Thousand`);
-  if (rest) parts.push(three(rest));
-
-  const paise = Math.round((Math.abs(value) - n) * 100);
-  const rupees = `${parts.join(" ")} Rupees`;
-  return paise > 0 ? `${rupees} and ${two(paise)} Paise Only` : `${rupees} Only`;
-}
-
-type RGB = [number, number, number];
-
-export function generatePayslipPdf(data: PayslipPdfInput): Buffer {
+export async function generatePayslipPdf(data: PayslipPdfInput): Promise<Buffer> {
   const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
+  await registerFonts(doc);
+  const p = new Painter(doc);
 
-  const M  = 15;
-  const PW = 210;
-  const PH = 297;
-  const CW = PW - M*2;
-
-  // ── Helpers ──────────────────────────────────────────────────────────────
-  const txt = (s: string, x: number, y: number, opts?: {
-    size?: number; bold?: boolean; align?: "left"|"center"|"right"; color?: RGB;
-  }) => {
-    doc.setFont("helvetica", opts?.bold ? "bold" : "normal");
-    doc.setFontSize(opts?.size ?? 8);
-    const c = opts?.color ?? [0, 0, 0];
-    doc.setTextColor(c[0], c[1], c[2]);
-    doc.text(s, x, y, { align: opts?.align ?? "left" });
-  };
-  const fillRect = (x: number, y: number, w: number, h: number, rgb: RGB) => {
-    doc.setFillColor(rgb[0], rgb[1], rgb[2]); doc.rect(x, y, w, h, "F");
-  };
-  const outlineRect = (x: number, y: number, w: number, h: number, lw = 0.3) => {
-    doc.setDrawColor(0); doc.setLineWidth(lw); doc.rect(x, y, w, h);
-  };
-  const hline = (x1: number, y: number, x2: number, lw = 0.2) => {
-    doc.setDrawColor(200); doc.setLineWidth(lw); doc.line(x1, y, x2, y);
-  };
-  const vline = (x: number, y1: number, y2: number) => {
-    doc.setDrawColor(200); doc.setLineWidth(0.2); doc.line(x, y1, x, y2);
-  };
-
-  const money = (n: number) => `Rs. ${Math.abs(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const cName = data.cs?.companyName || "Company";
+  const isPaid = !!data.isPaid;
+  const extraAmt = Number(data.extraAmount ?? 0);
+  const advance = Number(data.advanceDeduction ?? 0);
+  const grossEarnings = Number(data.grossPay ?? 0) + extraAmt;
+  const totalDeductions = Number(data.deductions ?? 0) + advance;
+  const netTotal = Number(data.netPay ?? 0);
 
   let y = M;
-  const cName = data.cs?.companyName || "Company";
 
-  // ── Header band ──────────────────────────────────────────────────────────
-  fillRect(M, y, CW, 14, [25, 72, 140]);
-  txt(cName, PW/2, y+8, { size: 13, bold: true, align: "center", color: [255,255,255] });
-  txt("PAYSLIP", PW/2, y+12.5, { size: 7.5, align: "center", color: [180,215,255] });
-  y += 16;
+  // ── Header band ───────────────────────────────────────────────────────────
+  const bandH = 20;
+  p.fill(M, y, CW, bandH, NAVY);
 
-  // ── Pay period + status ───────────────────────────────────────────────────
-  outlineRect(M, y, CW, 11);
-  txt("Pay Period", M+2, y+4.5, { size: 6.5, color: [100,100,100] });
-  txt(data.monthLabel || "—", M+2, y+9, { size: 10, bold: true });
-
-  const isPaid = !!data.isPaid;
-  const paidBg: RGB = isPaid ? [220,252,231] : [254,243,199];
-  const paidFg: RGB = isPaid ? [22,163,74] : [180,100,0];
-  fillRect(M+CW-36, y+1.5, 34, 8, paidBg);
-  outlineRect(M+CW-36, y+1.5, 34, 8, 0.2);
-  txt(isPaid ? "PAID" : "PENDING", M+CW-19, y+7.5, { size: 9, bold: true, align: "center", color: paidFg });
-  y += 13;
-
-  // ── Employee details ──────────────────────────────────────────────────────
-  outlineRect(M, y, CW, 20);
-  vline(M+CW/2, y, y+20);
-  txt("Employee", M+3, y+5, { size: 6.5, color: [100,100,100] });
-  txt(data.employeeName || "—", M+3, y+11, { size: 9.5, bold: true });
-  const idBits = [
-    data.employeeCode ? `ID: ${data.employeeCode}` : "",
-    `Branch: ${data.branchName || "—"}`,
-  ].filter(Boolean).join("   ");
-  txt(idBits, M+3, y+17, { size: 7.5, color: [80,80,80] });
-
-  txt("Attendance", M+CW/2+3, y+5, { size: 6.5, color: [100,100,100] });
-  txt(`${data.workingDays ?? "—"} working days / ${data.presentDays ?? "—"} present`, M+CW/2+3, y+11, { size: 8, bold: true });
-  if ((data.lopDays || 0) > 0) {
-    txt(`LOP: ${data.lopDays} days  (Deduction: ${money(data.lopDeduction)})`, M+CW/2+3, y+17, { size: 7.5, color: [200,50,50] });
-  }
-  y += 22;
-
-  // ── Section helper ────────────────────────────────────────────────────────
-  const sectionHeader = (label: string, fg: RGB) => {
-    fillRect(M, y, CW, 7, [240,244,255]);
-    outlineRect(M, y, CW, 7, 0.2);
-    txt(label, M+3, y+5, { size: 7.5, bold: true, color: fg });
-    y += 7;
-  };
-
-  const tableRow = (label: string, amount: number, idx: number, amtColor?: RGB) => {
-    if (idx % 2 === 1) fillRect(M, y, CW, 7.5, [248,250,254]);
-    doc.setDrawColor(220); doc.setLineWidth(0.2); doc.rect(M, y, CW, 7.5);
-    txt(label, M+3, y+5.5, { size: 7.5 });
-    txt(money(amount), M+CW-3, y+5.5, { size: 7.5, bold: true, align: "right", color: amtColor ?? [0,0,0] });
-    y += 7.5;
-  };
-
-  const totalRow = (label: string, amount: number, bg: RGB, fg: RGB) => {
-    fillRect(M, y, CW, 9, bg);
-    outlineRect(M, y, CW, 9, 0.4);
-    txt(label, M+3, y+6, { size: 8.5, bold: true });
-    txt(money(amount), M+CW-3, y+6, { size: 8.5, bold: true, align: "right", color: fg });
-    y += 11;
-  };
-
-  // ── Earnings ──────────────────────────────────────────────────────────────
-  sectionHeader("EARNINGS", [30, 80, 160]);
-  const extraAmt = Number(data.extraAmount ?? 0);
-  const earningRows: Array<[string, number, RGB]> = [
-    ["Basic Salary", data.baseSalary, [0,0,0]],
-    ...((data.lopDays || 0) > 0 ? [["Less: LOP Deduction", data.lopDeduction, [200,50,50]] as [string, number, RGB]] : []),
-    ...(data.allowancesBreakdown || []).map((a: PayslipBreakdownItem) => [a.name, a.amount, [0,0,0]] as [string, number, RGB]),
-  ];
-  earningRows.forEach(([label, amt, fg], i) => tableRow(label, amt, i, fg));
-  totalRow("Gross Pay", data.grossPay, [220,245,235], [22,163,74]);
-
-  if (extraAmt > 0.004) {
-    tableRow(data.extraNote?.trim() ? `Additional: ${data.extraNote.trim()}` : "Additional Payment", extraAmt, 0);
-  }
-
-  // ── Deductions ────────────────────────────────────────────────────────────
-  // The stored breakdown already carries the employee's PF and ESI share
-  // alongside any configured deductions. Advance recovery is listed separately
-  // because it repays money already received, not a fresh withholding.
-  sectionHeader("DEDUCTIONS", [170, 30, 30]);
-  const advance = Number(data.advanceDeduction ?? 0);
-  const dedRows: PayslipBreakdownItem[] = [
-    ...(data.deductionsBreakdown || []),
-    ...(advance > 0.004 ? [{ name: "Advance Recovered", amount: advance }] : []),
-  ];
-  if (dedRows.length === 0) {
-    fillRect(M, y, CW, 7.5, [250,250,250]);
-    outlineRect(M, y, CW, 7.5, 0.2);
-    txt("No deductions", M+3, y+5.5, { size: 7.5, color: [140,140,140] });
-    y += 9;
-  } else {
-    dedRows.forEach((d: PayslipBreakdownItem, i: number) => tableRow(d.name, d.amount, i, [200,50,50]));
-  }
-  totalRow("Total Deductions", Number(data.deductions ?? 0) + advance, [255,238,238], [200,50,50]);
-
-  // ── Net Pay ───────────────────────────────────────────────────────────────
-  const netTotal = Number(data.netPay ?? 0);
-  fillRect(M, y, CW, 16, [25, 72, 140]);
-  outlineRect(M, y, CW, 16, 0.5);
-  txt("NET PAY", M+4, y+10, { size: 13, bold: true, color: [255,255,255] });
-  txt(money(netTotal), M+CW-4, y+10, { size: 14, bold: true, align: "right", color: [160,230,160] });
-  y += 18;
-
-  txt(`Amount in words: ${amountInWords(netTotal)}`, M, y, { size: 7, bold: true, color: [60,60,60] });
-  y += 7;
-
-  // ── Employer contributions ────────────────────────────────────────────────
-  // Not deducted from the employee — shown so the slip discloses the full cost
-  // of employment, which is what the P&L carries.
-  const pfEmpr  = Number(data.pfEmployer ?? 0);
-  const esiEmpr = Number(data.esiEmployer ?? 0);
-  if (pfEmpr > 0.004 || esiEmpr > 0.004) {
-    sectionHeader("EMPLOYER CONTRIBUTIONS (not deducted from salary)", [90, 90, 110]);
-    let i = 0;
-    if (pfEmpr  > 0.004) tableRow("Employer Provident Fund", pfEmpr, i++);
-    if (esiEmpr > 0.004) tableRow("Employer ESI", esiEmpr, i++);
-    totalRow("Total Cost to Company", Number(data.grossPay ?? 0) + extraAmt + pfEmpr + esiEmpr, [240,240,248], [40,40,80]);
-  }
-
-  const paidAmt = Number(data.paidAmount ?? 0);
-  if (isPaid && data.paidDate) {
+  let tx = M + 4;
+  const logo = data.cs?.logoDataUrl;
+  if (logo && logo.startsWith("data:image/")) {
     try {
-      const d = new Date(data.paidDate);
-      txt(`Paid on: ${d.toLocaleDateString("en-IN")}`, M, y, { size: 7, color: [80,80,80] });
-    } catch { /* ignore */ }
-    y += 6;
-  } else if (paidAmt > 0.004) {
-    txt(`Part payment received: ${money(paidAmt)}   Balance: ${money(netTotal - paidAmt)}`, M, y, { size: 7, color: [180,100,0] });
-    y += 6;
+      const fmt = logo.startsWith("data:image/png") ? "PNG"
+        : logo.startsWith("data:image/webp") ? "WEBP" : "JPEG";
+      doc.setFillColor(255, 255, 255);
+      doc.roundedRect(M + 3, y + 3, 15, 14, 1.2, 1.2, "F");
+      doc.addImage(logo, fmt, M + 4.5, y + 4.2, 12, 11.6, undefined, "FAST");
+      tx = M + 21;
+    } catch { /* fall through to the wordmark alone */ }
   }
 
-  // ── Signature footer ──────────────────────────────────────────────────────
-  const footY = PH - 36;
-  hline(M, footY, M+CW, 0.5);
-  outlineRect(M, footY, CW/2, 22);
-  outlineRect(M+CW/2, footY, CW/2, 22);
-  txt("Employee's Signature", M+3, footY+5, { size: 6, color: [100,100,100] });
-  txt(cName, M+CW-3, footY+5, { size: 7.5, bold: true, align: "right" });
-  txt("Authorised Signatory", M+CW-3, footY+19, { size: 6, align: "right", color: [100,100,100] });
+  p.txt(cName, tx, y + 8.5, { size: 12.5, bold: true, color: WHITE });
+  const addr = [data.cs?.address, [data.cs?.city, data.cs?.state, data.cs?.pincode]
+    .filter(Boolean).join(", ")].filter(Boolean).join(" \u2022 ");
+  if (addr) {
+    p.txt(p.wrap(addr, CW / 2, 6.2)[0] ?? "", tx, y + 13.5, { size: 6.2, color: [180, 200, 225] });
+  }
+
+  p.txt("PAYSLIP", PW - M - 4, y + 8, { size: 13, bold: true, color: WHITE, align: "right" });
+  p.txt(val(data.monthLabel), PW - M - 4, y + 13.5,
+    { size: 7.6, color: [180, 200, 225], align: "right" });
+  y += bandH;
+
+  // Status strip, under the band so the band itself stays clean.
+  const statusH = 7;
+  p.fill(M, y, CW, statusH, isPaid ? [232, 248, 238] : [255, 247, 227]);
+  p.box(M, y, CW, statusH, BORDER, 0.2);
+  p.txt(isPaid ? "STATUS: PAID" : "STATUS: PENDING", M + 3, y + 4.9,
+    { size: 7, bold: true, color: isPaid ? GREEN : AMBER });
+  if (isPaid && data.paidDate) {
+    p.txt(`Paid on ${dateIN(data.paidDate)}`, PW - M - 3, y + 4.9,
+      { size: 6.8, color: [70, 80, 95], align: "right" });
+  } else if (has(data.paidAmount)) {
+    p.txt(
+      `Part payment ${inr(Number(data.paidAmount))} \u2022 Balance ${inr(netTotal - Number(data.paidAmount))}`,
+      PW - M - 3, y + 4.9, { size: 6.8, color: AMBER, align: "right" },
+    );
+  }
+  y += statusH + 3.5;
+
+  // ── Employee details, two columns ─────────────────────────────────────────
+  const empH = 21;
+  const halfW = CW / 2;
+  p.box(M, y, CW, empH, BORDER, 0.25);
+  p.line(M + halfW, y + 1.5, M + halfW, y + empH - 1.5, BORDER, 0.2);
+
+  const pair = (x: number, rows: Array<[string, string]>) => {
+    let ly = y + 5;
+    for (const [label, value] of rows) {
+      p.txt(label, x, ly, { size: 6, color: MGRAY });
+      p.txt(value, x + 26, ly, { size: 7.6, bold: true });
+      ly += 5.2;
+    }
+  };
+  pair(M + 3, [
+    ["EMPLOYEE", val(data.employeeName)],
+    ["EMPLOYEE ID", val(data.employeeCode)],
+    ["DESIGNATION", val(data.designation)],
+  ]);
+  pair(M + halfW + 3, [
+    ["LOCATION", val(data.branchName)],
+    ["DATE OF JOINING", dateIN(data.joinDate)],
+    ["PAY PERIOD", val(data.monthLabel)],
+  ]);
+  y += empH + 3.5;
+
+  // ── Attendance ────────────────────────────────────────────────────────────
+  // Paid days is working days less loss-of-pay days, which is the definition
+  // the payroll run itself uses when it prices a day of LOP.
+  const lopDays = Number(data.lopDays ?? 0);
+  const workingDays = Number(data.workingDays ?? 0);
+  const attH = 13;
+  p.fill(M, y, CW, 5.2, TEAL);
+  p.txt("ATTENDANCE SUMMARY", M + 3, y + 3.7, { size: 6, bold: true, color: WHITE });
+  p.box(M, y, CW, attH, BORDER, 0.25);
+  const att: Array<[string, string]> = [
+    ["Working Days", String(workingDays)],
+    ["Present Days", String(Number(data.presentDays ?? 0))],
+    ["Absent / LOP Days", String(lopDays)],
+    ["Paid Days", String(Math.max(0, Math.round((workingDays - lopDays) * 100) / 100))],
+  ];
+  const attW = CW / att.length;
+  att.forEach(([label, value], i) => {
+    const cx = M + attW * i;
+    if (i > 0) p.line(cx, y + 5.2, cx, y + attH, BORDER, 0.2);
+    p.txt(label, cx + attW / 2, y + 9, { size: 5.8, color: MGRAY, align: "center" });
+    p.txt(value, cx + attW / 2, y + 12.2, { size: 8.2, bold: true, align: "center" });
+  });
+  y += attH + 3.5;
+
+  // ── Earnings / Deductions, side by side and balanced ──────────────────────
+  const colW = (CW - 3) / 2;
+  const rightX = M + colW + 3;
+  const rowH = 6.2;
+  const headH = 6;
+
+  const earnRows: Array<[string, number, boolean]> = [
+    ["Basic Salary", Number(data.baseSalary ?? 0), false],
+  ];
+  if (lopDays > 0) {
+    earnRows.push([`Less: Loss of Pay (${lopDays} d)`, -Number(data.lopDeduction ?? 0), true]);
+  }
+  for (const a of data.allowancesBreakdown ?? []) {
+    earnRows.push([a.name, Number(a.amount ?? 0), false]);
+  }
+  if (has(extraAmt)) {
+    earnRows.push([data.extraNote?.trim() ? `Additional: ${data.extraNote.trim()}` : "Additional Payment", extraAmt, false]);
+  }
+
+  const dedRows: Array<[string, number, boolean]> = [
+    ...(data.deductionsBreakdown ?? []).map(
+      (d): [string, number, boolean] => [d.name, Number(d.amount ?? 0), true],
+    ),
+    ...(has(advance) ? [["Advance Recovered", advance, true] as [string, number, boolean]] : []),
+  ];
+
+  // ── Fit the two columns into what is actually left of the sheet ───────────
+  // A payslip is a single page by contract, but the number of pay components is
+  // whatever the employee's structure holds. Measure the fixed tail first, then
+  // tighten the row pitch, and only if that is still not enough fold the surplus
+  // into one summarised line so the column totals stay honest.
+  const SAFE_BOTTOM = PH - 15;
+  const wordLines = p.wrap(amountInWords(netTotal), CW - 32, 7);
+  const wordsH = 4 + wordLines.length * 3.6;
+  const pfEmpr = Number(data.pfEmployer ?? 0);
+  const esiEmpr = Number(data.esiEmployer ?? 0);
+  const hasCtc = has(pfEmpr) || has(esiEmpr);
+  const sigH = 17;
+  const tailH = 4 + 12.5 + wordsH + 3.5 + (hasCtc ? 11 + 3.5 : 0) + sigH;
+  const capacity = SAFE_BOTTOM - y - tailH - headH - 8.5;
+
+  let pitch = rowH;
+  let bodyRows = Math.max(earnRows.length, dedRows.length, 3);
+  if (bodyRows * pitch > capacity) pitch = Math.max(4.2, capacity / bodyRows);
+  if (bodyRows * pitch > capacity) {
+    const maxRows = Math.max(3, Math.floor(capacity / pitch));
+    const fold = (rows: Array<[string, number, boolean]>, negative: boolean) => {
+      if (rows.length <= maxRows) return;
+      const kept = rows.slice(0, maxRows - 1);
+      const rest = rows.slice(maxRows - 1);
+      const total = rest.reduce((a, r) => a + r[1], 0);
+      kept.push([`Other components (${rest.length})`, total, negative]);
+      rows.length = 0;
+      rows.push(...kept);
+    };
+    fold(earnRows, false);
+    fold(dedRows, true);
+    bodyRows = Math.max(earnRows.length, dedRows.length, 3);
+  }
+  const bodyH = bodyRows * pitch;
+  // Type has to follow the pitch. At the tightest spacing a 7pt baseline sitting
+  // 4.3 mm down overshoots its own row and prints over the totals band.
+  const rowFs = pitch >= 5.4 ? 7 : 6.2;
+  const baseline = Math.min(4.3, pitch - 0.8);
+
+  const column = (
+    x: number, title: string, rows: Array<[string, number, boolean]>,
+    totalLabel: string, totalValue: number, totalFg: [number, number, number],
+  ) => {
+    p.fill(x, y, colW, headH, NAVY);
+    p.txt(title, x + 3, y + 4.2, { size: 6.6, bold: true, color: WHITE });
+    p.box(x, y, colW, headH + bodyH + 8.5, BORDER, 0.25);
+
+    let ry = y + headH;
+    if (rows.length === 0) {
+      p.txt("None", x + 3, ry + 4.2, { size: 7, color: MGRAY });
+    }
+    rows.forEach(([label, amount, negative], i) => {
+      if (i % 2 === 1) p.fill(x + 0.3, ry + 0.3, colW - 0.6, pitch, LGRAY);
+      // Shrink-then-ellipsize rather than taking the first wrapped line: a long
+      // component name is then visibly cut instead of silently losing its tail.
+      const l = p.fit(label, colW - 32, rowFs);
+      p.txt(l.text, x + 3, ry + baseline, { size: l.size });
+      p.txt(
+        `${amount < 0 ? "- " : ""}${inr(Math.abs(amount))}`,
+        x + colW - 3, ry + baseline,
+        { size: rowFs, align: "right", color: negative ? RED : [20, 20, 20] },
+      );
+      ry += pitch;
+    });
+
+    const ty = y + headH + bodyH;
+    p.fill(x + 0.3, ty, colW - 0.6, 8.2, [237, 241, 247]);
+    p.line(x, ty, x + colW, ty, BORDER, 0.3);
+    p.txt(totalLabel, x + 3, ty + 5.6, { size: 7.4, bold: true });
+    p.txt(inr(totalValue), x + colW - 3, ty + 5.6,
+      { size: 8, bold: true, align: "right", color: totalFg });
+  };
+
+  column(M, "EARNINGS", earnRows, "Gross Earnings", grossEarnings, GREEN);
+  column(rightX, "DEDUCTIONS", dedRows, "Total Deductions", totalDeductions, RED);
+  y += headH + bodyH + 8.5 + 4;
+
+  // ── Net pay + amount in words ─────────────────────────────────────────────
+  p.fill(M, y, CW, 12.5, NAVY);
+  p.txt("NET PAY", M + 4, y + 8.2, { size: 10.5, bold: true, color: WHITE });
+  p.txt(inr(netTotal), PW - M - 4, y + 8.4,
+    { size: 13, bold: true, color: [168, 232, 190], align: "right" });
+  y += 12.5;
+
+  p.fill(M, y, CW, wordsH, [244, 247, 251]);
+  p.box(M, y, CW, wordsH, BORDER, 0.2);
+  p.txt("In words:", M + 4, y + 4.4, { size: 6.4, color: MGRAY });
+  wordLines.forEach((l, i) => {
+    p.txt(l, M + 22, y + 4.4 + i * 3.6, { size: 7, bold: true, color: [45, 55, 72] });
+  });
+  y += wordsH + 3.5;
+
+  // ── Employer contributions, disclosure only ───────────────────────────────
+  if (hasCtc) {
+    const ctcH = 11;
+    p.box(M, y, CW, ctcH, BORDER, 0.25);
+    p.txt("EMPLOYER CONTRIBUTIONS (not deducted from salary)", M + 3, y + 4,
+      { size: 5.8, color: MGRAY });
+    const bits = [
+      has(pfEmpr) ? `Provident Fund ${inr(pfEmpr)}` : "",
+      has(esiEmpr) ? `ESI ${inr(esiEmpr)}` : "",
+    ].filter(Boolean).join("     ");
+    p.txt(bits, M + 3, y + 8.6, { size: 7.2 });
+    p.txt(`Cost to Company: ${inr(grossEarnings + pfEmpr + esiEmpr)}`, PW - M - 3, y + 8.6,
+      { size: 7.2, bold: true, align: "right" });
+    y += ctcH + 3.5;
+  }
+
+  // ── Signatures, immediately after the summary ─────────────────────────────
+  p.box(M, y, colW, sigH, BORDER, 0.25);
+  p.box(rightX, y, colW, sigH, BORDER, 0.25);
+  p.txt("Employee's Signature", M + 3, y + sigH - 2.5, { size: 6, color: MGRAY });
+  p.txt(`For ${cName}`, rightX + 3, y + 4.5, { size: 7, bold: true });
+  p.txt("Authorised Signatory", rightX + colW - 3, y + sigH - 2.5,
+    { size: 6, color: MGRAY, align: "right" });
+
+  stampFooters(doc, `Computer-generated payslip \u2022 ${cName} \u2022 ${val(data.monthLabel)}`);
 
   return Buffer.from(doc.output("arraybuffer"));
 }

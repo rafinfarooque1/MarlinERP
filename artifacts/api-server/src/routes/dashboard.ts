@@ -609,20 +609,42 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       expiringSoonCount: Number(expiringRow.rows[0]?.count ?? 0),
     },
     receivables: {
-      total: money(receivablesRows.rows[0]?.total),
+      // Sundry Debtors from the posting stream — the same figure the Balance
+      // Sheet shows, so a receipt voucher or a journal against a customer moves
+      // it. Summing invoice dues could not see either.
+      total: accounting ? accounting.accountsReceivable : null,
+      basis: accounting ? "ledger" : null,
+      companyWide: true,
+      // Invoice-level exposure for the selected period and location. Ageing needs
+      // invoice dates, so `overdue` can only ever come from the documents.
+      invoiceExposure: money(receivablesRows.rows[0]?.total),
       overdue: money(receivablesRows.rows[0]?.overdue),
       count: Number(receivablesRows.rows[0]?.count ?? 0),
     },
     payables: {
-      // Purchases carry no payment tracking, so the full non-transfer purchase
-      // value in the period is the payables exposure.
-      total: money(purchaseTotals.rows[0]?.total),
+      // Sundry Creditors from the posting stream — the same figure the Balance
+      // Sheet shows. The old tile was a raw sum of purchase invoices with no
+      // payment subtraction at all, so paying a vendor in full left the payables
+      // card completely unchanged.
+      total: accounting ? accounting.accountsPayable : null,
+      basis: accounting ? "ledger" : null,
+      companyWide: true,
+      // Source-document exposure for the selected period and location. Kept
+      // because it is location-answerable and the control total is not, but
+      // named so it can never be mistaken for the payables balance.
+      purchaseExposure: money(purchaseTotals.rows[0]?.total),
       count: Number(purchaseTotals.rows[0]?.count ?? 0),
     },
     cash: {
+      // Voucher flows for the period — receipts and payments only. These are
+      // movements, not a position; the balance below is the position.
       inflow: money(cashInRows.rows[0]?.total),
       outflow: money(cashOutRows.rows[0]?.total),
       net: money(Number(cashInRows.rows[0]?.total ?? 0) - Number(cashOutRows.rows[0]?.total ?? 0)),
+      // Cash in hand from the posting stream, so a contra, a journal or a till
+      // sale moves it. Mirrors the bank tile below.
+      balance: accounting ? accounting.cashBalance : null,
+      companyWide: true,
     },
     // Direct + indirect expenses for the period, from the same derived
     // postings as the P&L. Purchases are excluded because the Purchases tile

@@ -1,0 +1,319 @@
+Improve the PDF/print formats for BOTH:
+
+1. Purchase Order / Purchase Invoice
+2. Employee Payslip
+
+This is a DOCUMENT LAYOUT / PRINT DESIGN improvement only.
+
+Do not change accounting logic, purchase calculations, GST calculations,
+inventory posting, payroll calculations, attendance calculations, LOP calculations,
+permissions, database records, or existing business workflows unless a small backend
+change is strictly required to expose already-existing data to the PDF.
+
+FIRST:
+Inspect the existing frontend/backend PDF generation implementation and determine
+where each document is generated. Reuse the existing ERP branding and existing data.
+Do not create duplicate PDF systems if a shared print/PDF utility already exists.
+
+==================================================
+A. PURCHASE ORDER / PURCHASE INVOICE PDF
+==================================================
+
+The current purchase PDF becomes too compressed when there are many line items.
+The current example has 51 items and is being squeezed into essentially one page.
+
+Redesign it as a proper professional multi-page A4 business document.
+
+HEADER
+
+Use a clean company header containing:
+
+- Marlin / company logo
+- Company legal name
+- Full company address
+- GSTIN
+- Phone/contact details
+
+On the right clearly show the document title:
+
+PURCHASE ORDER
+or
+PURCHASE INVOICE
+
+Use the correct title according to the actual document being printed.
+Do not label a Purchase Bill incorrectly.
+
+DOCUMENT INFORMATION
+
+Create a clean information block containing:
+
+- PO / Purchase number
+- Purchase date
+- Vendor invoice/reference number
+- Vendor name
+- Vendor GSTIN
+- Receiving warehouse/location
+- Purchase status, if available
+
+Vendor information and company information must be visually separated.
+
+LINE ITEM TABLE
+
+Make the table readable and suitable for large purchases.
+
+Columns should use the data actually available in the purchase record, including:
+
+#
+Item / Material
+HSN
+Batch
+MFG Date
+Expiry Date
+Qty
+UOM
+Rate
+GST %
+Taxable Amount
+GST Amount
+Line Total
+
+If a field genuinely does not exist for an older purchase, display "-" rather than
+inventing data.
+
+Do not allow long item names to overlap other columns.
+
+Use proper Indian currency formatting:
+₹6,33,194.00
+
+Do not output broken rupee characters such as "¹".
+
+MULTI-PAGE BEHAVIOUR
+
+This is important.
+
+Never shrink 40–50+ items until they become unreadable.
+
+Allow the table to flow naturally onto page 2, page 3, etc.
+
+Repeat the table header on every page.
+
+Prevent rows from being cut in half where reasonably possible.
+
+Keep sensible A4 margins.
+
+Add page numbering:
+Page 1 of 3
+Page 2 of 3
+etc.
+
+Repeat a compact company/document header on continuation pages if appropriate.
+
+TOTALS
+
+At the end of the final page show a clean totals box:
+
+Subtotal
+Taxable Amount
+CGST
+SGST
+IGST
+Round Off (only if actually applicable)
+Grand Total
+
+Only show taxes that actually apply.
+
+Do not recalculate historical purchases differently from the stored purchase values.
+
+Show:
+Amount in Words
+
+FOOTER / SIGNATURE
+
+Add:
+
+Prepared By
+Checked / Authorised By
+Vendor Acknowledgement (where applicable)
+
+and:
+
+"This is a computer-generated document."
+
+Do not create huge blank areas simply to force signatures to the physical bottom of
+the page.
+
+==================================================
+B. PAYSLIP PDF
+==================================================
+
+Redesign the payslip into a compact, professional A4 payroll document.
+
+The current payslip has too much unused blank space between Net Pay and the signature
+area. Remove that problem.
+
+HEADER
+
+Show:
+
+- Company logo
+- Company name
+- PAYSLIP
+- Pay period/month
+- Payroll status such as PENDING / PAID
+
+EMPLOYEE DETAILS
+
+Use a clean two-column employee-information block.
+
+Include available fields such as:
+
+Employee Name
+Employee ID
+Designation
+Department
+Branch / Warehouse
+Pay Period
+
+Do not invent missing employee information.
+
+ATTENDANCE SUMMARY
+
+Show clearly:
+
+Working Days
+Present Days
+Absent Days / LOP Days
+Paid Days
+
+Use the application's actual payroll/attendance definitions.
+
+Do not change how attendance or LOP is calculated.
+
+EARNINGS AND DEDUCTIONS
+
+Create a professional two-column or balanced table:
+
+EARNINGS                     DEDUCTIONS
+
+Basic Salary                 LOP Deduction
+Allowances                   PF
+Overtime                     ESI
+Other Earnings               Advance / Other Deduction
+etc.
+
+Only show components that actually exist in the payroll data.
+
+Then clearly show:
+
+Gross Earnings
+Total Deductions
+
+NET PAY
+
+Make Net Pay visually prominent without using an oversized block.
+
+Example:
+
+NET PAY                         ₹769.23
+
+Immediately below:
+
+Amount in Words:
+Seven Hundred Sixty Nine Rupees and Twenty Three Paise Only
+
+SIGNATURE AREA
+
+Place a compact signature section shortly after the payroll summary:
+
+Employee Signature                 Authorised Signatory
+
+Do NOT leave most of an A4 page blank just to put the signatures at the bottom.
+
+FOOTER
+
+Add a subtle footer such as:
+
+"This is a computer-generated payslip."
+
+and page number if necessary.
+
+==================================================
+C. DESIGN REQUIREMENTS
+==================================================
+
+Both documents should use the same Marlin ERP visual identity:
+
+- professional typography
+- restrained company brand colours
+- consistent spacing
+- clean borders
+- readable font sizes
+- proper alignment
+- Indian ₹ currency formatting
+- suitable for A4 printing
+- suitable for PDF download
+- readable in both colour and black-and-white printing
+
+Do not over-design them. These are accounting/business documents, not marketing
+brochures.
+
+==================================================
+D. DATA AND SECURITY
+==================================================
+
+Use the existing purchase and payroll data sources.
+
+Do not add hardcoded sample values.
+
+Do not expose fields the logged-in employee is not permitted to access.
+
+Existing Download/Print permissions must continue to be enforced.
+
+Do not weaken RBAC.
+
+Do not alter production data.
+
+Do not publish automatically.
+
+==================================================
+E. VERIFICATION
+==================================================
+
+After implementation, generate development previews for:
+
+1. A purchase containing 1–3 line items.
+2. A purchase containing approximately 50+ line items.
+3. A normal payslip.
+4. A payslip containing LOP/deductions.
+
+Specifically verify:
+
+- no text overlaps
+- no table columns are clipped
+- ₹ symbol renders correctly
+- Indian number formatting is correct
+- purchase table continues across pages correctly
+- table headers repeat on continuation pages
+- totals appear once on the final page
+- amount in words agrees with Net/Grand Total
+- dates are formatted consistently
+- long item names wrap correctly
+- signatures do not create excessive blank space
+- existing calculations remain unchanged
+- Print and Download permissions still work
+- frontend and backend typechecks pass
+
+Compare totals in the generated documents against the underlying API/database values.
+The PDF redesign must not change any financial amount.
+
+Do not publish.
+
+At completion report:
+- files/modules changed
+- whether backend changes were required
+- screenshots/previews or description of both new formats
+- multi-page purchase test result
+- payslip test result
+- financial-value comparison
+- typecheck/build results
+- any remaining limitations

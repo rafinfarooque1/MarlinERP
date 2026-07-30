@@ -1,0 +1,545 @@
+Improve the Item Selection UX across the ERP, especially the Point of Sale item selector.
+
+IMPORTANT:
+- Development only.
+- Do NOT publish automatically.
+- Do NOT modify existing production/live data.
+- Do NOT create sales, purchases, transfers, stock entries, journal entries, or other business transactions for testing.
+- Do NOT change existing accounting, stock valuation, GST calculation, MRP, batch, FEFO, RBAC, warehouse/outlet scope, or business logic unless required to correct an existing defect directly related to this selector.
+- This task is primarily a frontend UX improvement, with backend verification for security and location scope.
+
+==================================================
+CURRENT PROBLEM
+==================================================
+
+Item Master now contains many items.
+
+Item-selection dropdowns are becoming difficult to use in:
+
+1. Point of Sale / Sales
+2. Purchase Bill
+3. Stock Transfer
+4. Any other ERP screen that uses the same Item Master item-selection pattern
+
+The Point of Sale dropdown is especially difficult to read.
+
+Currently rows look approximately like:
+
+Marlin Tender 1.5 kg — 17 avail · MRP ₹380 · 5% GST
+
+When many items are listed, Item Name, Available Stock, MRP and GST are concatenated into one long line.
+
+This is visually messy and difficult to scan quickly during billing.
+
+Replace this with a structured searchable, scrollable table-style item picker.
+
+==================================================
+1. CREATE/REUSE ONE SEARCHABLE ITEM SELECTOR
+==================================================
+
+Create or refactor a reusable component such as:
+
+SearchableItemSelect
+
+or use the project's existing combobox/searchable-select implementation if appropriate.
+
+Do NOT create three unrelated implementations if the same component can safely serve Sales, Purchase and Stock Transfer.
+
+The component should support configuration for:
+
+- Item name
+- SKU/item code
+- HSN
+- available quantity
+- UOM
+- MRP
+- GST %
+- location
+- selected item
+- disabled state
+- search
+- permission-sensitive fields
+- context-specific columns
+
+Different screens may show different columns.
+
+==================================================
+2. SEARCH FIELD
+==================================================
+
+Every long Item Master selector must have a search field at the top.
+
+Placeholder:
+
+Search item...
+
+Search immediately while typing.
+
+Do not require Enter.
+
+Search should be case-insensitive and support partial matches.
+
+Where the data exists, search by:
+
+- Item Name
+- SKU / Item Code
+- HSN
+
+Example:
+
+Typing:
+
+tender
+
+should return:
+
+Marlin Tender
+Marlin Tender 1.5 kg
+Marlin Tender 500 gm
+
+Typing:
+
+straw
+
+should return:
+
+Strawberry
+Strawberry IMO FRT
+
+Provide a clear:
+
+No items found
+
+state when nothing matches.
+
+==================================================
+3. SCROLLABLE RESULTS
+==================================================
+
+Do NOT allow the item dropdown to grow vertically with the complete Item Master.
+
+Give the results panel a sensible maximum height.
+
+For example, enough for approximately 6–10 item rows depending on screen size.
+
+When additional items exist:
+
+- keep the dropdown height fixed/max-height
+- show an internal vertical scrollbar
+- keep the search field easily accessible
+- do not make the entire page scroll because the dropdown is open
+
+The component must also work correctly on smaller laptop screens and mobile/tablet layouts.
+
+==================================================
+4. POS / SALES — TABLE-STYLE ITEM PICKER
+==================================================
+
+This is particularly important.
+
+The current POS selector concatenates:
+
+Item Name
+Available Qty
+MRP
+GST
+
+into a single long text line.
+
+REMOVE that presentation.
+
+Make the POS dropdown look like a compact mini table.
+
+Desktop example:
+
+| Item | Available | MRP | GST |
+|------|-----------|-----|-----|
+| Marlin Tender | 59 kg | ₹395 | 5% |
+| Marlin Tender 1.5 kg | 17 kg | ₹380 | 5% |
+| Marlin Tender 500 gm | 66 kg | ₹125 | 5% |
+| Strawberry | 8 kg | ₹200 | 5% |
+
+Use proper aligned columns.
+
+Suggested structure:
+
+ITEM                         AVAILABLE     MRP       GST
+Marlin Tender                59 kg         ₹395      5%
+Marlin Tender 1.5 kg         17 kg         ₹380      5%
+Marlin Tender 500 gm         66 kg         ₹125      5%
+
+The exact widths can adapt responsively, but the information must remain visually separated.
+
+Do NOT produce:
+
+Marlin Tender 1.5 kg — 17 avail · MRP ₹380 · 5% GST
+
+as one dense line.
+
+==================================================
+5. POS TABLE HEADER
+==================================================
+
+When the dropdown opens, show a small header row:
+
+Item | Available | MRP | GST
+
+The header should align with the item rows.
+
+If practical, keep the header visible/sticky while scrolling through the results.
+
+The search field should appear above the header.
+
+Desired structure:
+
+[ Search item...                         ]
+
+ITEM                  AVAILABLE     MRP       GST
+-------------------------------------------------
+Marlin Tender          59 kg         ₹395      5%
+Marlin Tender 1.5 kg   17 kg         ₹380      5%
+Marlin Tender 500 gm   66 kg         ₹125      5%
+Strawberry              8 kg         ₹200      5%
+...
+
+Internal scrollbar →
+
+==================================================
+6. POS ROW DESIGN
+==================================================
+
+Each item must occupy its own clean row.
+
+Requirements:
+
+- Item Name gets the largest column.
+- Available quantity is aligned consistently.
+- Always show UOM with availability where available.
+- MRP should be formatted as Indian currency.
+- GST should be displayed clearly as a percentage.
+- Use consistent spacing.
+- Avoid wrapping ordinary item names unnecessarily.
+- Long item names may truncate with ellipsis if required.
+- If practical, show the full item name via tooltip/title on hover.
+- Selected/hovered row should be visually obvious.
+- Do not use excessive colors.
+
+Example selected row:
+
+✓ Marlin Tender 1.5 kg     17 kg     ₹380     5%
+
+The existing application's visual theme should be preserved.
+
+==================================================
+7. RESPONSIVE POS BEHAVIOUR
+==================================================
+
+On desktop/tablet, use the table layout.
+
+On very narrow/mobile screens, if four full columns cannot fit cleanly, use a structured two-line row rather than returning to one messy concatenated sentence.
+
+Example mobile presentation:
+
+Marlin Tender 1.5 kg
+Available: 17 kg   |   MRP: ₹380   |   GST: 5%
+
+The information must remain clearly separated.
+
+==================================================
+8. POS STOCK AVAILABILITY
+==================================================
+
+The Available column must represent the actual sellable stock for the currently selected/authorized location.
+
+Do not accidentally display company-wide stock when POS is operating against a warehouse/outlet.
+
+Preserve existing:
+
+- warehouse/outlet scope
+- reserved quantity handling
+- available quantity logic
+- batch logic
+- FEFO behaviour
+- negative/insufficient-stock prevention
+
+Backend stock validation remains authoritative.
+
+Do not trust the displayed number alone when saving a sale.
+
+==================================================
+9. POS COST/VALUE SECURITY
+==================================================
+
+The POS selector may display:
+
+- Item Name
+- Available Qty
+- MRP
+- GST
+
+It must NOT expose:
+
+- purchase rate
+- cost price
+- stock valuation
+- margin
+- profit
+
+unless the employee already has explicit authorization for such information.
+
+Do not weaken the existing stock-value/cost visibility restrictions.
+
+==================================================
+10. PURCHASE BILL ITEM SELECTOR
+==================================================
+
+Apply the reusable searchable + scrollable selector to Purchase Bill.
+
+The Purchase selector should primarily make Item Name easy to find.
+
+Useful columns may include:
+
+Item | HSN | GST
+
+Do NOT unnecessarily show MRP or stock availability if it is not relevant to purchasing.
+
+When an item is selected:
+
+- HSN must continue to auto-fill from Item Master
+- GST must continue to auto-fill from Item Master
+- existing editable behaviour must remain as currently designed
+
+Preserve:
+
+- GST Inclusive / GST Exclusive mode
+- automatic batch generation
+- MFG date
+- expiry date
+- quantity
+- rate
+- discount
+- GST calculations
+- purchase accounting
+- vendor payable logic
+- manual payment workflow
+
+Do not change those features as part of this UI task.
+
+==================================================
+11. STOCK TRANSFER ITEM SELECTOR
+==================================================
+
+Apply the searchable + scrollable selector to Stock Transfer.
+
+Suggested table:
+
+| Item | Available |
+|------|-----------|
+| Strawberry | 8 kg |
+| Tender Coconut Pulp | 260 kg |
+
+Only stock actually available at the selected SOURCE location may appear.
+
+The user must not be able to search for and expose inventory belonging to an unauthorized warehouse/outlet.
+
+Backend scope remains authoritative.
+
+When quantity is entered, existing server-side available-stock validation must remain intact.
+
+==================================================
+12. CHECK OTHER ITEM SELECTORS
+==================================================
+
+Search the frontend codebase for other Item Master/product/SKU selectors.
+
+Where the same long-list problem exists, migrate them to the reusable component where safe.
+
+Examples may include:
+
+- sales
+- purchase
+- stock transfer
+- stock adjustments
+- production consumption
+- production output
+- returns
+- other inventory forms
+
+Only change genuine Item Master selectors.
+
+Do NOT blindly replace unrelated dropdowns such as:
+
+- customer
+- vendor
+- ledger
+- warehouse
+- outlet
+- employee
+- hierarchy
+
+Those can be handled separately if needed.
+
+==================================================
+13. KEYBOARD USABILITY
+==================================================
+
+Where supported by the existing UI framework:
+
+- typing should search
+- Arrow Up / Arrow Down should move through results
+- Enter should select
+- Escape should close
+- selected item should be visible
+- keyboard focus should not get trapped incorrectly
+
+This is especially useful for fast POS billing.
+
+==================================================
+14. PERFORMANCE
+==================================================
+
+The selector must remain usable when Item Master grows to hundreds or thousands of items.
+
+Do not render an uncontrolled full-page list.
+
+If the existing backend/API supports item search, pagination or query filtering, use it where appropriate.
+
+If Item Master is currently small enough and items are already legitimately loaded client-side, client-side filtering is acceptable.
+
+Do NOT introduce unnecessary database/schema changes simply for the dropdown.
+
+==================================================
+15. BACKEND AND SECURITY REVIEW
+==================================================
+
+Although this is primarily frontend work, inspect the APIs supplying these selectors.
+
+Confirm that:
+
+POS:
+- stock availability is location-correct
+- employee location scope is enforced server-side
+- unauthorized stock/cost information is not exposed
+
+Stock Transfer:
+- source inventory is server-scoped
+- foreign-location inventory cannot be obtained by changing request parameters
+
+Purchase:
+- existing RBAC is maintained
+
+Do not weaken Task #161 RBAC/location protections.
+
+Frontend filtering is NOT a security boundary.
+
+==================================================
+16. DO NOT CHANGE BUSINESS LOGIC
+==================================================
+
+This task must NOT change:
+
+- stock quantities
+- stock valuation
+- purchase accounting
+- sales accounting
+- vendor payable calculations
+- customer receivables
+- cash/bank balances
+- journal postings
+- payment logic
+- GST posting
+- batch costing
+- FEFO
+- MRP calculations
+- existing item master records
+
+The purpose is to improve item finding and readability.
+
+==================================================
+17. TESTING
+==================================================
+
+Test at minimum:
+
+A. POS
+
+Open the item selector and confirm:
+
+- search field appears
+- table header appears
+- Item / Available / MRP / GST are separate aligned columns
+- results scroll internally
+- partial search works
+- item selection works
+- selected item populates correctly
+- available stock is correct for the selected location
+- MRP remains correct
+- GST remains correct
+- sale calculation is unchanged
+
+B. Purchase
+
+Confirm:
+
+- search works
+- dropdown scrolls internally
+- item can be selected
+- HSN populates correctly
+- GST populates correctly
+- GST Inclusive/Exclusive behaviour is unchanged
+
+C. Stock Transfer
+
+Confirm:
+
+- search works
+- internal scrolling works
+- only source-location stock appears
+- available quantity/UOM are correct
+- unauthorized location inventory is not exposed
+
+D. Responsive
+
+Check at least:
+
+- normal desktop
+- smaller laptop viewport
+- narrow/mobile viewport
+
+The dropdown must not overflow the screen.
+
+==================================================
+18. TYPECHECK / REGRESSION
+==================================================
+
+Run:
+
+- frontend typecheck
+- relevant backend typecheck
+- production frontend build if safely available
+
+Check browser console for errors.
+
+Do not create real production transactions for testing.
+
+==================================================
+FINAL REPORT
+==================================================
+
+When complete, report:
+
+1. Reusable component created/reused
+2. Files changed
+3. Every screen migrated
+4. POS table columns implemented
+5. Search behaviour
+6. Scroll/max-height behaviour
+7. Responsive/mobile behaviour
+8. Purchase HSN/GST behaviour verified
+9. Stock Transfer source-location filtering verified
+10. RBAC/location-scope verification
+11. Backend/API changes, if any
+12. Typecheck/build results
+13. Any remaining Item Master selectors still using the old dropdown and why
+
+Do NOT publish automatically.

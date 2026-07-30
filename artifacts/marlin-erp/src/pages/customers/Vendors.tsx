@@ -23,6 +23,7 @@ import { downloadCSV } from '@/lib/download';
 import { INDIAN_STATES } from '@/lib/indianStates';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { usePermission } from '@/lib/usePermission';
+import { PartyBalance } from '@/lib/partyBalance';
 
 // ── Schemas ───────────────────────────────────────────────────────────────────
 const vendorSchema = z.object({
@@ -159,9 +160,11 @@ function VendorSheet({ vendor, onClose, onPay, canPay }: { vendor: any; onClose:
             <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4 flex items-center justify-between">
               <div>
                 <p className="text-xs text-muted-foreground uppercase tracking-wider">Outstanding Balance</p>
-                <p className="text-2xl font-bold font-mono text-amber-600 mt-0.5">
-                  ₹{Number(ledger?.balance ?? vendor.outstandingBalance ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                </p>
+                <PartyBalance
+                  kind="vendor"
+                  balance={ledger?.balance ?? vendor.outstandingBalance}
+                  className="text-2xl mt-0.5 block"
+                />
               </div>
               <div className="flex flex-col items-end gap-2">
                 <button onClick={() => setActiveTab('ledger')} className="text-xs text-primary underline">View ledger →</button>
@@ -230,7 +233,7 @@ function PaymentDialog({ vendor, onClose }: { vendor: any; onClose: () => void }
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-1">
             <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
-              Outstanding balance: <span className="font-bold font-mono">₹{Number(vendor.outstandingBalance ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+              Outstanding balance: <PartyBalance kind="vendor" balance={vendor.outstandingBalance} className="font-bold" />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -407,9 +410,7 @@ export default function Vendors() {
                   <TableCell className="text-sm text-muted-foreground">{(v as any).state || '—'}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{v.gstNumber || '—'}</TableCell>
                   <TableCell className="text-right">
-                    <span className={`font-mono text-sm font-semibold ${(v as any).outstandingBalance > 0 ? 'text-amber-600' : 'text-muted-foreground'}`}>
-                      ₹{Number((v as any).outstandingBalance ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </span>
+                    <PartyBalance kind="vendor" balance={(v as any).outstandingBalance} className="text-sm" />
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-1">

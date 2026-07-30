@@ -338,20 +338,24 @@ router.post("/pdf/payslip", requireModuleAction("page:/hr/payroll", "download"),
     }
 
     const { rows: [cs] } = await pool.query<any>(
-      `SELECT company_name, address, city, state, pincode, gst_number, phone, email
+      `SELECT company_name, address, city, state, pincode, gst_number, phone, email, logo_url
          FROM company_settings ORDER BY id LIMIT 1`,
     ).catch(() => ({ rows: [undefined as any] }));
 
     const monthLabel = pr.pay_period_label
       || `${MONTH_LABELS[Number(pr.month) - 1] ?? pr.month} ${pr.year}`;
 
-    const buffer = generatePayslipPdf({
+    const buffer = await generatePayslipPdf({
       cs: cs ? {
         companyName: cs.company_name ?? undefined,
         address: cs.address ?? undefined, city: cs.city ?? undefined,
         state: cs.state ?? undefined, pincode: cs.pincode ?? undefined,
         gstNumber: cs.gst_number ?? undefined,
         phone: cs.phone ?? undefined, email: cs.email ?? undefined,
+        // Only an inline image can be drawn straight into the PDF. A stored
+        // URL would need fetching, which this renderer deliberately does not do.
+        logoDataUrl: typeof cs.logo_url === "string" && cs.logo_url.startsWith("data:image/")
+          ? cs.logo_url : undefined,
       } : undefined,
       employeeName: pr.employee_name ?? `Employee #${pr.employee_id}`,
       employeeCode: pr.username ?? String(pr.employee_id),

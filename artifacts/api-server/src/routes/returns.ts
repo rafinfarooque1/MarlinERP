@@ -868,6 +868,19 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
       if (Number.isFinite(id)) cnByCustomer.set(id, r2(Number(r.amt)));
     }
 
+    // The authoritative receivable per customer, from the party ledgers — the
+    // same number Sundry Debtors shows on the Balance Sheet, so a receipt, a
+    // journal, a contra or a credit note all move it.
+    //
+    // Ledger postings carry no location, so there is no honest way to scope this
+    // to a branch. A location-scoped caller therefore keeps the document view
+    // and is told so via `basis`, rather than being shown a company-wide figure
+    // under a branch heading.
+    const rcvLedgerAnchored = rcvScope.isHeadOffice;
+    const ledgerByCustomer = rcvLedgerAnchored
+      ? (await (await import("../lib/ledgerBalances")).currentBalanceIndex()).partyBalances("customer")
+      : new Map<number, { balance: number }>();
+
     const byCustomer = new Map<number, any>();
     const totals: Record<BucketKey, number> = { b0_30: 0, b31_60: 0, b61_90: 0, b90p: 0 };
     let totalDueAll = 0;
@@ -891,6 +904,9 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
           creditDays,
           totalDue: 0,
           creditNotes: cnByCustomer.get(inv.customer_id) ?? 0,
+          ledgerBalance: ledgerByCustomer.get(inv.customer_id)?.balance ?? 0,
+          uninvoicedBalance: 0,
+          unallocatedCredit: 0,
           netDue: 0,
           b0_30: 0, b31_60: 0, b61_90: 0, b90p: 0,
           invoices: [],
@@ -915,15 +931,79 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
       totalDueAll = r2(totalDueAll + balance);
     }
 
-    const customers = [...byCustomer.values()].map(c => ({
-      ...c,
-      netDue: r2(Math.max(0, c.totalDue - c.creditNotes)),
-    })).sort((a, b) => b.totalDue - a.totalDue);
+    // A customer can carry a ledger balance with no open invoice behind it — an
+    // opening balance, or a journal raising the debt directly. Seeding from the
+    // ledger too is what stops them being invisible on a report that claims to
+    // show everything owed.
+    if (rcvLedgerAnchored) {
+      // One query for all of them, not one per customer: this list is unbounded
+      // in principle, and a per-row lookup makes the report's cost scale with it.
+      const seedIds = [...ledgerByCustomer]
+        .filter(([id, bal]) => !byCustomer.has(id) && Math.abs(bal.balance) >= 0.005)
+        .map(([id]) => id);
+      if (seedIds.length) {
+        const { rows: seedRows } = await pool.query<any>(
+          `SELECT id, name, phone, COALESCE(credit_limit, 0)::numeric AS credit_limit,
+                  COALESCE(credit_days, 0) AS credit_days
+             FROM customers WHERE id = ANY($1::int[])`, [seedIds],
+        );
+        for (const cr of seedRows) {
+          const customerId = Number(cr.id);
+          byCustomer.set(customerId, {
+            customerId, name: cr.name, phone: cr.phone ?? null,
+            creditLimit: Number(cr.credit_limit), creditDays: Number(cr.credit_days),
+            totalDue: 0, creditNotes: cnByCustomer.get(customerId) ?? 0,
+            ledgerBalance: r2(ledgerByCustomer.get(customerId)!.balance),
+            uninvoicedBalance: 0, unallocatedCredit: 0, netDue: 0,
+            b0_30: 0, b31_60: 0, b61_90: 0, b90p: 0, invoices: [],
+          });
+        }
+      }
+    }
+
+    let totalUninvoiced = 0;
+    const customers = [...byCustomer.values()].map(c => {
+      if (!rcvLedgerAnchored) {
+        // Document view: no ledger to anchor to, so the old net-of-credit-notes
+        // figure stands and is labelled as an invoice-basis number.
+        return { ...c, netDue: r2(Math.max(0, c.totalDue - c.creditNotes)) };
+      }
+      // Sales carry a real per-invoice allocation (`amount_paid` plus credit
+      // notes raised against that invoice), so unlike payables the buckets keep
+      // showing genuine settlement history rather than a synthesised FIFO.
+      // What changes is the control figure: netDue is the ledger balance, and
+      // the gap between it and the aged bills is reported explicitly instead of
+      // being absorbed silently.
+      //   uninvoicedBalance — owed per the ledger, no dated invoice behind it.
+      //   unallocatedCredit — money received or credited but not applied to any
+      //                       specific invoice (also covers a net advance).
+      const gap = r2(c.ledgerBalance - c.totalDue);
+      const row = {
+        ...c,
+        netDue: r2(c.ledgerBalance),
+        uninvoicedBalance: gap > 0 ? gap : 0,
+        unallocatedCredit: gap < 0 ? r2(-gap) : 0,
+      };
+      totalUninvoiced = r2(totalUninvoiced + row.uninvoicedBalance);
+      return row;
+    }).filter(c => Math.abs(c.netDue) > 0.004 || c.totalDue > 0.004 || c.unallocatedCredit > 0.004)
+      .sort((a, b) => b.netDue - a.netDue);
 
     const totalCreditNotes = r2(customers.reduce((s, c) => s + c.creditNotes, 0));
     res.json({
       asOf,
-      totals: { ...totals, totalDue: totalDueAll, creditNotes: totalCreditNotes, netDue: r2(Math.max(0, totalDueAll - totalCreditNotes)) },
+      basis: rcvLedgerAnchored ? "ledger" : "invoices",
+      totals: {
+        ...totals,
+        // Aged invoice balances only — this is what the buckets add up to.
+        totalDue: totalDueAll,
+        creditNotes: totalCreditNotes,
+        uninvoiced: totalUninvoiced,
+        // The control figure: agrees with Sundry Debtors on the Balance Sheet.
+        netDue: rcvLedgerAnchored
+          ? r2(customers.reduce((s, c) => s + c.netDue, 0))
+          : r2(Math.max(0, totalDueAll - totalCreditNotes)),
+      },
       customers,
     });
   } catch (err) {
@@ -976,6 +1056,11 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
        ) bills
        ORDER BY purchase_date ASC, source ASC, id ASC`
     );
+    // Payments and debit notes, kept for display only. They are NOT what the
+    // ageing settles bills with any more: that pool is derived from the vendor's
+    // ledger below, because these two queries between them cannot see a plain
+    // journal voucher against a vendor — the exact gap that let a payable
+    // settled by journal keep ageing here at its full original value.
     const { rows: payRows } = await pool.query(
       `SELECT l.code, COALESCE(SUM(p.amount::numeric), 0) AS amt
        FROM payments p
@@ -1001,21 +1086,31 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
       if (Number.isFinite(id)) dnByVendor.set(id, r2((dnByVendor.get(id) ?? 0) + Number(r.amt)));
     }
 
+    // The authoritative payable per vendor.
+    const { currentBalanceIndex } = await import("../lib/ledgerBalances");
+    const balIdx = await currentBalanceIndex();
+    const ledgerByVendor = balIdx.partyBalances("vendor");
+
+    const newVendorRow = (vendorId: number, name: string, phone: string | null) => ({
+      vendorId,
+      name,
+      phone: phone ?? null,
+      totalBilled: 0,
+      totalPaid: paidByVendor.get(vendorId) ?? 0,
+      debitNotes: dnByVendor.get(vendorId) ?? 0,
+      ledgerBalance: ledgerByVendor.get(vendorId)?.balance ?? 0,
+      netDue: 0,
+      unallocatedCredit: 0,
+      unbilledBalance: 0,
+      b0_30: 0, b31_60: 0, b61_90: 0, b90p: 0,
+      bills: [] as any[],
+    });
+
     const byVendor = new Map<number, any>();
     for (const b of bills) {
       let v = byVendor.get(b.vendor_id);
       if (!v) {
-        v = {
-          vendorId: b.vendor_id,
-          name: b.name,
-          phone: b.phone ?? null,
-          totalBilled: 0,
-          totalPaid: paidByVendor.get(b.vendor_id) ?? 0,
-          debitNotes: dnByVendor.get(b.vendor_id) ?? 0,
-          netDue: 0,
-          b0_30: 0, b31_60: 0, b61_90: 0, b90p: 0,
-          bills: [],
-        };
+        v = newVendorRow(b.vendor_id, b.name, b.phone ?? null);
         byVendor.set(b.vendor_id, v);
       }
       v.totalBilled = r2(v.totalBilled + Number(b.total));
@@ -1036,11 +1131,45 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
       });
     }
 
+    // A vendor can carry a ledger balance with no open bill behind it — an
+    // opening balance, or a journal that raised a liability directly. Seeding
+    // from the ledger as well as from the bills is what stops those vendors
+    // from being invisible on a report that claims to show everything owed.
+    // One query for all of them, not one per vendor — see the receivables report.
+    {
+      const seedIds = [...ledgerByVendor]
+        .filter(([id, bal]) => !byVendor.has(id) && Math.abs(bal.balance) >= 0.005)
+        .map(([id]) => id);
+      if (seedIds.length) {
+        const { rows: seedRows } = await pool.query<any>(
+          `SELECT id, name, phone FROM vendors WHERE id = ANY($1::int[])`, [seedIds],
+        );
+        for (const vr of seedRows) {
+          byVendor.set(Number(vr.id), newVendorRow(Number(vr.id), vr.name, vr.phone ?? null));
+        }
+      }
+    }
+
     const totals: Record<BucketKey, number> = { b0_30: 0, b31_60: 0, b61_90: 0, b90p: 0 };
     let totalDueAll = 0;
+    let totalUnbilled = 0;
 
     const vendors = [...byVendor.values()].map(v => {
-      let credit = r2(v.totalPaid + v.debitNotes); // FIFO pool
+      // The FIFO pool is everything the vendor's LEDGER says has relieved these
+      // bills — payments, debit notes, journals, contras, the lot — not just the
+      // two document types this report happens to query. Deriving it as
+      // "billed minus what is still owed" means the residual bill balances add
+      // up to the ledger balance by construction, so this report can never
+      // disagree with the vendor's account or with the Balance Sheet.
+      let credit = r2(v.totalBilled - v.ledgerBalance);
+      // A ledger balance larger than the bills on file is a real payable with no
+      // document behind it. It cannot be aged (there is no invoice date), so it
+      // is reported on its own line rather than quietly dropped or back-dated.
+      if (credit < 0) {
+        v.unbilledBalance = r2(-credit);
+        totalUnbilled = r2(totalUnbilled + v.unbilledBalance);
+        credit = 0;
+      }
       for (const bill of v.bills) {
         const alloc = r2(Math.min(credit, bill.total));
         bill.allocated = alloc;
@@ -1054,13 +1183,28 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
           totalDueAll = r2(totalDueAll + bill.balance);
         }
       }
-      v.netDue = r2(v.bills.reduce((s: number, b: any) => s + b.balance, 0));
-      v.unallocatedCredit = credit; // advance payments / excess DNs
+      // netDue is the vendor's ledger balance, full stop. The buckets above show
+      // how much of it can be attributed to dated bills; unbilledBalance carries
+      // the rest, and unallocatedCredit is a net advance (an abnormal debit
+      // balance), which is shown rather than clamped away.
+      v.netDue = v.ledgerBalance;
+      v.unallocatedCredit = credit;
       return v;
-    }).filter(v => v.netDue > 0.004 || v.unallocatedCredit > 0.004)
+    }).filter(v => Math.abs(v.netDue) > 0.004 || v.unallocatedCredit > 0.004)
       .sort((a, b) => b.netDue - a.netDue);
 
-    res.json({ asOf, totals: { ...totals, totalDue: totalDueAll }, vendors });
+    res.json({
+      asOf,
+      totals: {
+        ...totals,
+        // Aged bill balances only — this is what the buckets add up to.
+        totalDue: totalDueAll,
+        unbilled: totalUnbilled,
+        // The control figure: agrees with Sundry Creditors on the Balance Sheet.
+        netDue: r2(vendors.reduce((s, v) => s + v.netDue, 0)),
+      },
+      vendors,
+    });
   } catch (err) {
     console.error("GET /outstanding/payables failed:", err);
     res.status(500).json({ error: "Failed to compute payables aging" });

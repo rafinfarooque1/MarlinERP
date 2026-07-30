@@ -14,6 +14,53 @@ import { outstandingExpr } from "../lib/salePaymentPosition";
 
 const router = Router();
 
+/**
+ * Attach the party's ACCOUNTING balance to each master row.
+ *
+ * `outstandingBalance` keeps its name because every screen already reads it, but
+ * its meaning is now precise: the party's ledger balance signed to its natural
+ * side — payable for a vendor, receivable for a customer. It is deliberately
+ * **not** clamped at zero. A negative figure is a real position (an advance paid
+ * to a vendor, or an advance received from a customer) and is surfaced separately
+ * as `advanceBalance` so the UI can label it rather than swallow it.
+ *
+ * `hasLedger: false` means the party was never provisioned an account ledger, so
+ * nothing can be attributed to it. That is reported rather than shown as a
+ * confident zero.
+ */
+function attachPartyBalance(
+  rows: any[],
+  idx: { partyBalance(kind: "vendor" | "customer", id: number): { balance: number; net: number; ledgerId: number } | null },
+  kind: "vendor" | "customer",
+): void {
+  for (const row of rows) {
+    const b = idx.partyBalance(kind, Number(row.id));
+    if (b == null) {
+      // No ledger was ever provisioned for this party, so nothing can be
+      // attributed to it. That is NOT a balance of zero — a confident ₹0.00 here
+      // is indistinguishable from "settled in full". Send null and let the UI
+      // say so.
+      row.outstandingBalance = null;
+      row.ledgerBalance = null;
+      row.advanceBalance = 0;
+      row.balanceSide = null;
+      row.ledgerId = null;
+      row.hasLedger = false;
+      continue;
+    }
+    const balance = b.balance;
+    row.outstandingBalance = balance;
+    row.ledgerBalance = balance;
+    row.advanceBalance = balance < -0.004 ? Math.round(-balance * 100) / 100 : 0;
+    // Dr/Cr comes from the account's nature and the sign of the raw net, never
+    // from the sign of the presented balance — a payable of 100 is Cr, and the
+    // same account at −100 is Dr.
+    row.balanceSide = Math.abs(balance) < 0.005 ? null : (kind === "vendor" ? (balance > 0 ? "Cr" : "Dr") : (balance > 0 ? "Dr" : "Cr"));
+    row.ledgerId = b.ledgerId;
+    row.hasLedger = true;
+  }
+}
+
 // ── Field allowlists (bypass restrictive auto-generated schemas) ───────────
 // These include `state` and all fields present in the DB schema.
 
@@ -78,31 +125,35 @@ router.get("/customers", requireModuleView(["page:/sales/pos", "page:/accounts/v
     SELECT
       c.*,
       COALESCE(SUM(s.total_amount), 0)  AS "totalPurchases",
-      -- Outstanding on the same definition the invoice, its UPI QR and the
-      -- credit-limit check use: dues net of credit notes, cancelled bills
-      -- excluded. Credit notes raised WITHOUT a return (manual ones from
-      -- Accounts) cannot be attributed to an invoice, so they are netted here at
-      -- customer level instead — counted once, either way.
-      GREATEST(0, COALESCE(SUM(${outstandingExpr("s")}), 0) - COALESCE((
-        SELECT SUM(v.total_amount::numeric)
-          FROM journal_vouchers v
-          JOIN account_ledgers l ON l.id = v.party_ledger_id
-         WHERE v.voucher_type = 'credit_note'
-           AND l.code = 'CUST-' || c.id
-           AND NOT EXISTS (SELECT 1 FROM sales_returns sr WHERE sr.credit_note_id = v.id)
-      ), 0)) AS "outstandingBalance"
+      -- Invoice-level exposure, kept as a source-document figure only. It is NOT
+      -- the customer's current balance: see the ledger balance attached below.
+      GREATEST(0, COALESCE(SUM(${outstandingExpr("s")}), 0)) AS "invoiceOutstanding"
     FROM customers c
     LEFT JOIN sales s ON s.customer_id = c.id
     WHERE ${scopeCond}
     GROUP BY c.id
     ORDER BY c.id
   `, params);
+
+  // The current balance is the customer's ACCOUNTING ledger balance, so a
+  // journal, a receipt voucher or a manual credit note settles the customer
+  // here exactly as it does on the Balance Sheet. Summing invoices minus
+  // receipts cannot see any of those, which is how this list used to contradict
+  // the customer's own ledger.
+  const { currentBalanceIndex } = await import("../lib/ledgerBalances");
+  const balIdx = await currentBalanceIndex();
+  attachPartyBalance(rows, balIdx, "customer");
   const paging = parsePaging(req.query as Record<string, unknown>);
   setPagingHeaders(res, rows.length, paging);
   res.json(applyPaging(rows as any[], paging).map((r: any) => ({
     ...r,
     totalPurchases:      Number(r.totalPurchases),
-    outstandingBalance:  Number(r.outstandingBalance),
+    invoiceOutstanding:  Number(r.invoiceOutstanding),
+    // Kept nullable on purpose: Number(null) is 0, which would turn "this party
+    // has no ledger" back into a confident zero balance.
+    outstandingBalance:  r.outstandingBalance == null ? null : Number(r.outstandingBalance),
+    ledgerBalance:       r.ledgerBalance == null ? null : Number(r.ledgerBalance),
+    advanceBalance:      Number(r.advanceBalance),
     creditLimit:         Number(r.credit_limit ?? 0),
     creditDays:          Number(r.credit_days ?? 0),
   })));
@@ -255,28 +306,32 @@ router.get("/vendors", requireModuleView(["page:/production/purchase", "page:/ac
   const { rows } = await pool.query<any>(`
     SELECT
       v.*,
-      COALESCE(SUM(p.total_amount), 0) AS "totalPurchased",
+      -- Source-document totals, informational only. Branch-transfer purchases are
+      -- excluded because they are owed to the sending branch's clearing ledger,
+      -- not to this vendor — counting them here is what made "billed" disagree
+      -- with the vendor's own account.
+      COALESCE(SUM(p.total_amount) FILTER (WHERE p.branch_transfer_id IS NULL), 0) AS "totalPurchased",
       COALESCE((
         SELECT SUM(pay.amount)
         FROM payments pay
         JOIN account_ledgers al ON al.id = pay.paid_to_ledger_id
         WHERE al.code = 'VEND-' || v.id::text
-      ), 0) AS "totalPaid",
-      GREATEST(0,
-        COALESCE(SUM(p.total_amount), 0) -
-        COALESCE((
-          SELECT SUM(pay.amount)
-          FROM payments pay
-          JOIN account_ledgers al ON al.id = pay.paid_to_ledger_id
-          WHERE al.code = 'VEND-' || v.id::text
-        ), 0)
-      ) AS "outstandingBalance"
+      ), 0) AS "totalPaid"
     FROM vendors v
     LEFT JOIN purchases p ON p.vendor_id = v.id
     WHERE ${scopeCond}
     GROUP BY v.id
     ORDER BY v.id
   `, params);
+
+  // Current payable comes from the vendor's ACCOUNTING ledger, not from
+  // purchases minus payments. That old formula could not see a journal voucher,
+  // so a payable settled by journal stayed on this list at its full original
+  // value while the vendor's own ledger correctly showed zero.
+  const { currentBalanceIndex } = await import("../lib/ledgerBalances");
+  const balIdx = await currentBalanceIndex();
+  attachPartyBalance(rows, balIdx, "vendor");
+
   const paging = parsePaging(req.query as Record<string, unknown>);
   setPagingHeaders(res, rows.length, paging);
   res.json(applyPaging(rows as any[], paging).map((r: any) => ({
@@ -286,7 +341,10 @@ router.get("/vendors", requireModuleView(["page:/production/purchase", "page:/ac
     accountNumber:      r.account_number ?? null,
     totalPurchased:     Number(r.totalPurchased),
     totalPaid:          Number(r.totalPaid),
-    outstandingBalance: Number(r.outstandingBalance),
+    // Nullable on purpose — see the customers list above.
+    outstandingBalance: r.outstandingBalance == null ? null : Number(r.outstandingBalance),
+    ledgerBalance:      r.ledgerBalance == null ? null : Number(r.ledgerBalance),
+    advanceBalance:     Number(r.advanceBalance),
   })));
 });
 
@@ -401,141 +459,83 @@ router.delete("/vendors/:id", requireModuleAction("page:/vendors", "delete"), as
   res.status(204).send();
 });
 
-// ── Customer ledger (sales history as Dr/Cr statement) ────────────────────
+/**
+ * Document-side totals for a party, shown alongside the ledger statement.
+ *
+ * These are source-document figures, NOT a balance. They are what was invoiced
+ * and what was recorded as settled against those invoices, which is useful
+ * context but must never be subtracted into a "current balance" — that is the
+ * ledger's job, and doing it here is what produced two different answers for the
+ * same party.
+ */
+async function partyDocumentTotals(kind: "vendor" | "customer", id: number) {
+  if (kind === "customer") {
+    const { rows } = await pool.query<any>(
+      `SELECT COALESCE(SUM(total_amount), 0) AS billed, COALESCE(SUM(amount_paid), 0) AS paid
+         FROM sales
+        WHERE customer_id = $1 AND branch_transfer_id IS NULL AND cancelled_at IS NULL`,
+      [id],
+    );
+    return { totalBilled: Number(rows[0]?.billed ?? 0), totalPaid: Number(rows[0]?.paid ?? 0) };
+  }
+  const [{ rows: pr }, { rows: payr }] = await Promise.all([
+    pool.query<any>(
+      `SELECT COALESCE(SUM(total_amount), 0) AS billed FROM purchases
+        WHERE vendor_id = $1 AND branch_transfer_id IS NULL`,
+      [id],
+    ),
+    pool.query<any>(
+      `SELECT COALESCE(SUM(pay.amount), 0) AS paid FROM payments pay
+         JOIN account_ledgers al ON al.id = pay.paid_to_ledger_id
+        WHERE al.code = $1`,
+      [`VEND-${id}`],
+    ),
+  ]);
+  return { totalPurchased: Number(pr[0]?.billed ?? 0), totalPaid: Number(payr[0]?.paid ?? 0) };
+}
+
+// ── Customer ledger (the customer's account, from the posting stream) ─────
 router.get("/customers/:id/ledger", requireModuleView(["page:/customers", "page:/outstanding"]), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
-  const { rows } = await pool.query<any>(
-    `SELECT
-       s.id,
-       s.invoice_number,
-       s.sale_date,
-       s.total_amount,
-       s.payment_status,
-       s.amount_paid,
-       -- Deliberately GROSS of credit notes, unlike every other outstanding
-       -- figure. This is a statement: each credit note appears as its own credit
-       -- line below and the running balance nets it there. Subtracting it here
-       -- too would relieve the customer of the same money twice on one page.
-       (s.total_amount - s.amount_paid) AS balance_due
-     FROM sales s
-     WHERE s.customer_id = $1
-       AND s.branch_transfer_id IS NULL
-       AND s.cancelled_at IS NULL
-     ORDER BY s.sale_date ASC, s.id ASC`,
-    [id],
-  );
-
-  // Credit notes / journal lines touching this customer's ledger
-  const jvRes = await pool.query<any>(
-    `SELECT l.id, v.voucher_date AS date, v.voucher_number, v.voucher_type, v.narration,
-            l.debit, l.credit
-     FROM journal_voucher_lines l
-     JOIN journal_vouchers v ON v.id = l.voucher_id
-     JOIN account_ledgers al ON al.id = l.ledger_id
-     WHERE al.code = $1
-     ORDER BY v.voucher_date, l.id`,
-    [`CUST-${id}`],
-  ).catch(() => ({ rows: [] as any[] }));
-  const jvRows = jvRes.rows;
-
-  const combined = [
-    ...rows.map((r: any) => ({
-      sortKey: `${r.sale_date}-S${String(r.id).padStart(8, '0')}`,
-      date: r.sale_date,
-      description: r.invoice_number ?? `Sale #${r.id}`,
-      entryType: 'sale' as string,
-      debit: Number(r.total_amount),
-      credit: 0,
-      paymentStatus: r.payment_status,
-    })),
-    ...jvRows.map((r: any) => ({
-      sortKey: `${r.date}-J${String(r.id).padStart(8, '0')}`,
-      date: r.date,
-      description: r.narration || `${r.voucher_type === 'credit_note' ? 'Credit Note' : r.voucher_type === 'debit_note' ? 'Debit Note' : 'Journal'} ${r.voucher_number}`,
-      entryType: r.voucher_type as string,
-      debit: Number(r.debit),
-      credit: Number(r.credit),
-      paymentStatus: undefined,
-    })),
-  ].sort((a, b) => a.sortKey.localeCompare(b.sortKey));
-
-  let running = 0;
-  const entries = combined.map(({ sortKey: _sk, ...e }) => {
-    running += e.debit - e.credit;
-    return { ...e, balance: running };
+  const { currentPartyStatement } = await import("../lib/ledgerBalances");
+  const [statement, docs] = await Promise.all([
+    currentPartyStatement("customer", id),
+    partyDocumentTotals("customer", id),
+  ]);
+  res.json({
+    // Authoritative: the customer's ledger balance, receivable-positive.
+    balance: statement.closing,
+    opening: statement.opening,
+    totalDebit: statement.totalDebit,
+    totalCredit: statement.totalCredit,
+    hasLedger: statement.hasLedger,
+    // Source-document context, not a balance.
+    totalBilled: docs.totalBilled,
+    totalPaid: docs.totalPaid,
+    entries: statement.entries,
   });
-
-  const totalBilled = rows.reduce((s: number, r: any) => s + Number(r.total_amount), 0);
-  const totalPaid   = rows.reduce((s: number, r: any) => s + Number(r.amount_paid), 0);
-  const jvNet = jvRows.reduce((s: number, r: any) => s + Number(r.debit) - Number(r.credit), 0);
-
-  res.json({ balance: totalBilled - totalPaid + jvNet, totalBilled, totalPaid, entries });
 });
 
-// ── Vendor ledger (purchases + payments as Dr/Cr statement) ───────────────
+// ── Vendor ledger (the vendor's account, from the posting stream) ─────────
 router.get("/vendors/:id/ledger", requireModuleView(["page:/vendors", "page:/outstanding"]), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
-
-  const { rows: purchaseRows } = await pool.query<any>(
-    `SELECT p.id, p.invoice_number, p.purchase_date AS date, p.total_amount AS amount
-     FROM purchases p WHERE p.vendor_id = $1`,
-    [id],
-  );
-  const { rows: paymentRows } = await pool.query<any>(
-    `SELECT pay.id, pay.voucher_number, pay.payment_date AS date, pay.amount,
-            fl.name AS paid_from_name
-     FROM payments pay
-     JOIN account_ledgers al ON al.id = pay.paid_to_ledger_id
-     JOIN account_ledgers fl ON fl.id = pay.paid_from_ledger_id
-     WHERE al.code = $1`,
-    [`VEND-${id}`],
-  );
-
-  // Debit notes / journal lines touching this vendor's ledger
-  const jvRes = await pool.query<any>(
-    `SELECT l.id, v.voucher_date AS date, v.voucher_number, v.voucher_type, v.narration,
-            l.debit, l.credit
-     FROM journal_voucher_lines l
-     JOIN journal_vouchers v ON v.id = l.voucher_id
-     JOIN account_ledgers al ON al.id = l.ledger_id
-     WHERE al.code = $1
-     ORDER BY v.voucher_date, l.id`,
-    [`VEND-${id}`],
-  ).catch(() => ({ rows: [] as any[] }));
-  const jvRows = jvRes.rows;
-
-  // Merge and sort by date
-  const combined = [
-    ...purchaseRows.map((r: any) => ({
-      date: r.date, sortKey: r.date + '-P' + r.id,
-      entryType: 'purchase' as string,
-      description: r.invoice_number ? `Purchase — Ref: ${r.invoice_number}` : `Purchase #${r.id}`,
-      debit: 0, credit: Number(r.amount),
-    })),
-    ...paymentRows.map((r: any) => ({
-      date: r.date, sortKey: r.date + '-V' + r.id,
-      entryType: 'payment' as string,
-      description: `Payment via ${r.paid_from_name} (${r.voucher_number})`,
-      debit: Number(r.amount), credit: 0,
-    })),
-    ...jvRows.map((r: any) => ({
-      date: r.date, sortKey: r.date + '-J' + r.id,
-      entryType: r.voucher_type as string,
-      description: r.narration || `${r.voucher_type === 'debit_note' ? 'Debit Note' : r.voucher_type === 'credit_note' ? 'Credit Note' : 'Journal'} ${r.voucher_number}`,
-      debit: Number(r.debit), credit: Number(r.credit),
-    })),
-  ].sort((a, b) => a.sortKey.localeCompare(b.sortKey));
-
-  let running = 0;
-  const entries = combined.map(e => {
-    running += e.credit - e.debit;
-    return { ...e, balance: running };
+  const { currentPartyStatement } = await import("../lib/ledgerBalances");
+  const [statement, docs] = await Promise.all([
+    currentPartyStatement("vendor", id),
+    partyDocumentTotals("vendor", id),
+  ]);
+  res.json({
+    // Authoritative: the vendor's ledger balance, payable-positive.
+    balance: statement.closing,
+    opening: statement.opening,
+    totalDebit: statement.totalDebit,
+    totalCredit: statement.totalCredit,
+    hasLedger: statement.hasLedger,
+    // Source-document context, not a balance.
+    totalPurchased: docs.totalPurchased,
+    totalPaid: docs.totalPaid,
+    entries: statement.entries,
   });
-
-  const totalPurchased = purchaseRows.reduce((s: number, r: any) => s + Number(r.amount), 0);
-  const totalPaid      = paymentRows.reduce((s: number, r: any) => s + Number(r.amount), 0);
-  const jvNet = jvRows.reduce((s: number, r: any) => s + Number(r.credit) - Number(r.debit), 0);
-  res.json({ balance: Math.max(0, totalPurchased - totalPaid + jvNet), totalPurchased, totalPaid, entries });
 });
 
 // ── Record vendor payment ─────────────────────────────────────────────────

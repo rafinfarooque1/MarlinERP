@@ -1,0 +1,550 @@
+Fix the ERP balance/outstanding architecture so Vendor Payables, Customer Receivables,
+Cash, Bank and dashboard balances always reconcile with the accounting ledgers.
+
+THIS IS AN ACCOUNTING CONSISTENCY FIX.
+
+Do not simply patch the Frozen Hub vendor shown in the current data.
+Fix the underlying calculation for ALL vendors, customers, cash accounts and bank
+accounts.
+
+CURRENT CONFIRMED PROBLEM
+
+Example currently visible in production:
+
+Vendor: Frozen Hub
+
+Purchase:
+₹6,33,194.00
+
+Vendor ledger shows:
+
+Purchase:
+Credit ₹6,33,194.00
+
+Journal entry:
+Debit ₹6,33,194.00
+
+Final ledger balance:
+₹0.00
+
+Therefore Frozen Hub has no accounting payable remaining.
+
+However:
+
+- Vendor list still displays Balance ₹6,33,194.00
+- Vendor ledger/detail shows ₹0.00
+- Payables/dashboard can still show the purchase amount
+
+This means different screens are using different sources for the same financial
+balance.
+
+That is incorrect.
+
+==================================================
+1. ACCOUNTING SOURCE OF TRUTH
+==================================================
+
+First audit the current implementation before changing it.
+
+Identify exactly how each of these currently calculates its balance:
+
+- Vendor list balance
+- Vendor detail outstanding
+- Vendor ledger
+- Vendor payable report / ageing
+- Dashboard Accounts Payable
+- Customer list balance
+- Customer outstanding
+- Receivables report / ageing
+- Dashboard Accounts Receivable
+- Cash Balance
+- Cash Book
+- Bank Balance
+- Bank Book
+- Dashboard cash/bank aggregates
+- Trial Balance
+
+Determine whether any of them calculate balances from source/business tables such as:
+
+purchases - vendor_payments
+
+or:
+
+sales - sale_payments
+
+instead of the posted accounting ledger.
+
+Report the current inconsistency/root cause.
+
+Then establish ONE authoritative accounting rule:
+
+For posted financial transactions, the accounting ledger/journal balance is the
+authoritative current financial balance.
+
+Business tables such as purchases, sales, payments and receipts remain source
+documents, but must not independently create a contradictory "current balance".
+
+==================================================
+2. VENDOR PAYABLES
+==================================================
+
+Vendor payable must be based on the vendor's accounting ledger balance.
+
+Example:
+
+Purchase from Frozen Hub:
+
+Dr Purchase / Inventory     ₹6,33,194
+Cr Frozen Hub               ₹6,33,194
+
+Vendor payable = ₹6,33,194.
+
+If subsequently a valid JOURNAL posts:
+
+Dr Frozen Hub               ₹6,33,194
+Cr Frozen Hub Investment    ₹6,33,194
+
+then:
+
+Frozen Hub ledger = ₹0
+Vendor payable = ₹0
+Vendor list Balance = ₹0
+Vendor detail Outstanding = ₹0
+Payables report = ₹0
+Dashboard Accounts Payable contribution = ₹0
+
+The ERP must NOT continue showing ₹6,33,194 merely because no record exists in a
+vendor_payments table.
+
+The same must work when the vendor ledger is affected by:
+
+- Purchase
+- Payment voucher
+- Journal voucher
+- Contra, if the accounting rules legitimately allow that ledger
+- Debit note / purchase return
+- Opening balance
+- Other valid posted accounting transactions
+
+Do NOT automatically create a fake vendor-payment record merely to make the report
+agree.
+
+The accounting balance should naturally reconcile from the posted ledger entries.
+
+==================================================
+3. CUSTOMER RECEIVABLES
+==================================================
+
+Apply the same principle to customers.
+
+Example:
+
+Sale:
+
+Dr Customer       ₹10,000
+Cr Sales          ₹10,000
+
+Receivable = ₹10,000.
+
+If Receipt:
+
+Dr Bank/Cash      ₹10,000
+Cr Customer       ₹10,000
+
+Customer ledger = ₹0
+Receivable = ₹0.
+
+But ALSO if an authorized Journal legitimately posts:
+
+Dr Adjustment/Other Ledger
+Cr Customer       ₹10,000
+
+and the customer ledger becomes zero, then the customer current receivable must also
+be zero.
+
+Customer list, Customer detail, Outstanding, Receivables report and Dashboard must
+agree with the ledger.
+
+Do not make sale_payments the only mechanism capable of reducing current
+receivables.
+
+==================================================
+4. CASH BALANCE
+==================================================
+
+Cash balance must also be ledger-driven.
+
+Every valid posting affecting a Cash ledger must immediately affect:
+
+- Cash & Bank screen
+- Cash Book
+- Dashboard Cash Balance
+- relevant financial reports
+- Trial Balance
+
+This includes:
+
+Payment:
+Cr Cash
+
+Receipt:
+Dr Cash
+
+Contra:
+Dr/Cr Cash as appropriate
+
+Journal:
+Dr/Cr Cash if the voucher rules permit the posting
+
+Expense:
+Cr Cash where applicable
+
+Sale/Purchase:
+according to their actual accounting posting.
+
+Do not maintain a separate cash total that ignores Journal or Contra entries.
+
+==================================================
+5. BANK BALANCE
+==================================================
+
+Apply exactly the same rule to bank ledgers.
+
+A valid posted transaction affecting a bank ledger must update:
+
+- Bank balance
+- Cash & Bank screen
+- Bank Book
+- Dashboard Bank Balance
+- financial reports
+- Trial Balance
+
+Payment, Receipt, Contra and Journal postings must all be reflected according to
+their actual debit/credit entries.
+
+Example Contra:
+
+Dr Bank ₹50,000
+Cr Cash ₹50,000
+
+After posting:
+
+Bank increases ₹50,000
+Cash decreases ₹50,000
+
+Dashboard, Cash Book, Bank Book and ledger balances must immediately agree.
+
+The contra transaction must NOT change income, expense, payable or receivable unless
+one of those ledgers is actually part of the transaction.
+
+==================================================
+6. DO NOT CONFUSE CURRENT BALANCE WITH SETTLEMENT HISTORY
+==================================================
+
+This distinction is important.
+
+Current outstanding balance and invoice settlement/allocation are NOT necessarily
+the same thing.
+
+The ERP may retain:
+
+- individual invoice amount
+- payment allocation
+- invoice settlement status
+- ageing information
+- payment history
+
+But the overall party CURRENT BALANCE must reconcile to the accounting ledger.
+
+Do not silently mark a specific invoice as "paid by payment" if a journal merely
+adjusted the vendor/customer control account and there is no explicit invoice
+allocation.
+
+If invoice-level allocation is needed, show it separately.
+
+For example:
+
+Vendor total ledger balance: ₹0
+Specific purchase allocation: Unallocated adjustment / settled through journal
+
+Do not fabricate payment allocations.
+
+For ageing reports, determine and document how unallocated journal credits/debits
+should reduce the party's total outstanding while preserving invoice-level history.
+
+==================================================
+7. DASHBOARD
+==================================================
+
+Audit all dashboard financial cards.
+
+At minimum verify:
+
+Accounts Payable
+Accounts Receivable
+Cash Balance
+Bank Balance
+Expenses
+Sales
+Purchases
+
+Balance-sheet-type figures such as:
+
+Payables
+Receivables
+Cash
+Bank
+
+must come from the same accounting source used by the ledger/trial balance.
+
+Do not derive Dashboard Payables simply as:
+
+SUM(purchases) - SUM(vendor_payments)
+
+if that ignores journal/contra/adjustment postings.
+
+Do not derive Dashboard Receivables simply as:
+
+SUM(sales) - SUM(sale_payments)
+
+if that ignores legitimate ledger postings.
+
+==================================================
+8. SINGLE SHARED BALANCE SERVICE
+==================================================
+
+Avoid fixing each screen with another independent query.
+
+If practical in the current architecture, create/reuse a centralized backend
+accounting balance service/helper.
+
+Examples conceptually:
+
+getLedgerBalance(ledgerId)
+getVendorBalance(vendorId)
+getCustomerBalance(customerId)
+getCashBalance(...)
+getBankBalance(...)
+
+All relevant APIs should use the same accounting sign conventions and posting
+source.
+
+Do NOT duplicate slightly different debit-credit formulas across multiple routes.
+
+==================================================
+9. DEBIT/CREDIT SIGN RULES
+==================================================
+
+Be extremely careful with account nature.
+
+Do not simply calculate every account as Debit - Credit and display it blindly.
+
+Respect the accounting nature of:
+
+Assets
+Liabilities
+Income
+Expenses
+Capital
+
+For example:
+
+Vendor/Sundry Creditor:
+net credit normally represents payable.
+
+Customer/Sundry Debtor:
+net debit normally represents receivable.
+
+Cash/Bank:
+net debit normally represents positive asset balance.
+
+The UI should display balances consistently and correctly label Dr/Cr where
+appropriate.
+
+Do not hide abnormal balances.
+
+Example:
+a vendor with a net debit should not silently display ₹0 if that debit represents an
+advance to the vendor.
+
+Represent the actual accounting balance appropriately.
+
+==================================================
+10. RBAC / LOCATION SCOPE
+==================================================
+
+Do not weaken the recently implemented RBAC/location controls.
+
+Company-wide management/accounting reports may remain company-wide where that is the
+existing policy.
+
+Warehouse employees must not gain access to financial balances they are not
+authorized to see.
+
+Do not expose stock value/cost as part of this change.
+
+==================================================
+11. HISTORICAL DATA
+==================================================
+
+Do NOT rewrite existing production journals merely to make the screens agree.
+
+Do NOT delete purchases, sales, payments, receipts or journals.
+
+Do NOT create artificial balancing entries.
+
+The first goal is to make reporting correctly interpret the accounting postings
+already present.
+
+If an actual historical accounting inconsistency is discovered, REPORT IT before
+modifying financial data.
+
+==================================================
+12. REQUIRED RECONCILIATION TESTS
+==================================================
+
+Use development/test transactions only unless explicitly authorized otherwise.
+
+Test at least these cases:
+
+A. Vendor purchase only
+Vendor ledger payable = Vendor list = Payables report = Dashboard AP.
+
+B. Vendor purchase + Payment
+All four reduce correctly.
+
+C. Vendor purchase + Journal adjustment
+If vendor ledger reaches zero:
+Vendor list = ₹0
+Vendor detail = ₹0
+Payables total contribution = ₹0
+Dashboard AP contribution = ₹0.
+
+D. Customer sale only
+Customer ledger = Receivable = Dashboard AR.
+
+E. Customer sale + Receipt
+All reduce correctly.
+
+F. Customer sale + Journal adjustment
+If customer ledger reaches zero, overall receivable reaches zero.
+
+G. Cash Receipt
+Cash ledger, Cash Book and Dashboard Cash increase identically.
+
+H. Cash Payment
+All decrease identically.
+
+I. Bank Receipt/Payment
+Bank ledger, Bank Book and Dashboard Bank agree.
+
+J. Contra Cash → Bank
+Cash decreases and Bank increases by exactly the same amount.
+No income/expense created.
+
+K. Journal affecting Cash/Bank
+If permitted by existing voucher rules, all balance displays update from the journal
+posting.
+
+==================================================
+13. FROZEN HUB REGRESSION CASE
+==================================================
+
+Specifically verify the current Frozen Hub scenario WITHOUT changing its existing
+production entries.
+
+The screenshots show:
+
+Purchase credit: ₹6,33,194.00
+Journal debit: ₹6,33,194.00
+Ledger balance: ₹0.00
+
+After the reporting fix, every CURRENT BALANCE representation of Frozen Hub should
+agree with the ledger.
+
+Do not create another payment.
+Do not create another journal.
+Do not delete the existing journal.
+
+Determine why the vendor list currently shows ₹6,33,194 while its ledger shows ₹0
+and fix the underlying calculation.
+
+==================================================
+14. FINAL RECONCILIATION
+==================================================
+
+After implementation verify:
+
+Sum of vendor control-ledger balances
+↔ Accounts Payable
+
+Sum of customer control-ledger balances
+↔ Accounts Receivable
+
+Cash ledger balances
+↔ Cash Balance / Cash Book
+
+Bank ledger balances
+↔ Bank Balance / Bank Book
+
+Dashboard
+↔ corresponding accounting balances
+
+Trial Balance
+↔ underlying journal entries
+
+Balance Sheet
+↔ same ledger balances
+
+There must not be multiple contradictory versions of the same current financial
+balance.
+
+==================================================
+15. SAFETY
+==================================================
+
+Development first.
+
+Do not publish automatically.
+
+Do not modify production financial data.
+
+Do not create balancing entries.
+
+Do not reset/reseed accounting data.
+
+Do not alter stock quantities.
+
+Do not alter the 16 DATE-column migration.
+
+Do not change payment workflow unnecessarily.
+
+Do not change accounting entries merely because a report is wrong.
+
+Fix the reporting/balance source first.
+
+==================================================
+16. COMPLETION REPORT
+==================================================
+
+Before asking me to publish, report:
+
+1. Root cause
+2. Which screens/APIs were using source-document balances instead of ledger balances
+3. Backend files changed
+4. Frontend files changed
+5. Whether any schema change was required
+6. Vendor reconciliation results
+7. Customer reconciliation results
+8. Cash reconciliation results
+9. Bank reconciliation results
+10. Contra test result
+11. Journal-adjustment test result
+12. Dashboard reconciliation
+13. Trial Balance result
+14. Balance Sheet result
+15. Frozen Hub regression result
+16. Typecheck/build/test results
+17. Confirmation that no production financial records were changed
+
+Do not publish until I separately approve it.

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { SearchableItemSelect } from '@/components/ui/searchable-item-select';
 import { useListItemPrices, useSetItemPrice, useListItems, useListOutlets, useListWarehouses } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -166,13 +167,17 @@ export default function ItemPrices() {
               <Search className="w-4 h-4 text-muted-foreground" />
               <Input placeholder="Search item or location…" value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0" />
             </div>
-            <Select value={itemFilter} onValueChange={setItemFilter}>
-              <SelectTrigger className="w-44"><SelectValue placeholder="All Items" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Items</SelectItem>
-                {items.map((i: any) => <SelectItem key={i.id} value={String(i.id)}>{i.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            {/* Every item, including discontinued ones, so historic prices stay
+                reviewable. Id 0 is the "All Items" sentinel — real ids are positive. */}
+            <SearchableItemSelect
+              className="w-44"
+              placeholder="All Items"
+              items={[{ id: 0, name: 'All Items' }, ...items.map((i: any) => ({
+                id: i.id, name: i.name, code: i.itemCode || null,
+              }))]}
+              value={itemFilter === 'all' ? 0 : Number(itemFilter)}
+              onChange={id => setItemFilter(id === 0 ? 'all' : String(id))}
+            />
           </div>
 
           <Table>
@@ -255,15 +260,20 @@ export default function ItemPrices() {
               <FormField control={form.control} name="itemId" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Item <span className="text-destructive">*</span></FormLabel>
-                  <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
-                    <FormControl><SelectTrigger><SelectValue placeholder="Select item" /></SelectTrigger></FormControl>
-                    <SelectContent>
-                      {/* Active only for new prices; an item already on the row
-                          being edited stays listed. The filter dropdown above
-                          still shows every item so old prices stay reviewable. */}
-                      {activeProductsWithSelection(items as any[], Number(field.value)).map((i: any) => <SelectItem key={i.id} value={String(i.id)}>{i.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  {/* Active only for new prices; an item already on the row
+                      being edited stays listed. The filter dropdown above
+                      still shows every item so old prices stay reviewable. */}
+                  <FormControl><SearchableItemSelect
+                    columns={['mrp']}
+                    items={activeProductsWithSelection(items as any[], Number(field.value)).map((i: any) => ({
+                      id: i.id,
+                      name: i.name,
+                      code: i.itemCode || null,
+                      mrp: Number(i.mrp ?? 0),
+                    }))}
+                    value={field.value}
+                    onChange={id => field.onChange(id)}
+                  /></FormControl>
                   <FormMessage />
                 </FormItem>
               )} />

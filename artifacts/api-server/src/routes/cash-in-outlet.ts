@@ -10,20 +10,23 @@ import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } 
 const router = Router();
 
 // ── Helper: compute running balance for a ledger from receipts/payments ───────
-async function getLedgerBalance(client: any, ledgerId: number): Promise<number> {
-  const { rows: recRows } = await client.query(
-    `SELECT COALESCE(SUM(CASE WHEN received_in_ledger_id = $1 THEN amount::numeric ELSE 0 END), 0)
-          - COALESCE(SUM(CASE WHEN received_from_ledger_id = $1 THEN amount::numeric ELSE 0 END), 0) AS balance
-     FROM receipts WHERE received_in_ledger_id = $1 OR received_from_ledger_id = $1`,
-    [ledgerId]
-  );
-  const { rows: payRows } = await client.query(
-    `SELECT COALESCE(SUM(CASE WHEN paid_to_ledger_id = $1 THEN amount::numeric ELSE 0 END), 0)
-          - COALESCE(SUM(CASE WHEN paid_from_ledger_id = $1 THEN amount::numeric ELSE 0 END), 0) AS balance
-     FROM payments WHERE paid_to_ledger_id = $1 OR paid_from_ledger_id = $1`,
-    [ledgerId]
-  );
-  return Number(recRows[0]?.balance ?? 0) + Number(payRows[0]?.balance ?? 0);
+/**
+ * A till's balance, from the accounting postings.
+ *
+ * This used to add up `receipts` and `payments` for the ledger and call the
+ * result a cash balance. Those two tables hold voucher-entered money only, so
+ * the figure missed every sale settled at the till (the books derive those from
+ * the sale row), every contra moving cash to the bank, and every journal — while
+ * the Cash Book, the Trial Balance and the Balance Sheet all saw them. Same
+ * till, two answers.
+ *
+ * Callers that need more than one till must build the index once and read
+ * `idx.net(ledgerId)` per till; deriving the stream inside a loop is what makes
+ * a list endpoint quadratic.
+ */
+async function getLedgerBalance(_client: unknown, ledgerId: number): Promise<number> {
+  const { currentBalanceIndex } = await import("../lib/ledgerBalances");
+  return (await currentBalanceIndex()).net(ledgerId);
 }
 
 /**
@@ -61,6 +64,12 @@ router.get("/cash-in-outlet", requireModuleView(["page:/accounts/cash-in-outlet"
   }
   const result: any[] = [];
 
+  // Derived ONCE for the whole page. Every till reads its balance out of this
+  // index; deriving the posting stream per location would re-read the entire
+  // ledger history for each outlet and warehouse on the list.
+  const { currentBalanceIndex } = await import("../lib/ledgerBalances");
+  const balIdx = await currentBalanceIndex();
+
   // ── Outlets ────────────────────────────────────────────────────────────────
   const { rows: outlets } = await pool.query(
     `SELECT id, name, warehouse_id, cash_ledger_id FROM outlets ORDER BY name`
@@ -77,7 +86,7 @@ router.get("/cash-in-outlet", requireModuleView(["page:/accounts/cash-in-outlet"
       result.push({ locationType: 'outlet', locationId: outlet.id, locationName: outlet.name, outletId: outlet.id, outletName: outlet.name, parentWarehouseId: outlet.warehouse_id ?? null, cashLedgerId: null, cashBalance: 0, pendingDeposits: 0, availableBalance: 0 });
       continue;
     }
-    const balance = await getLedgerBalance(pool, ledger.id);
+    const balance = balIdx.net(ledger.id);
     const { rows: [pendingRow] } = await pool.query(
       `SELECT COALESCE(SUM(amount::numeric), 0) AS total FROM cash_deposits WHERE outlet_id = $1 AND status = 'pending_reconciliation'`,
       [outlet.id]
@@ -109,7 +118,7 @@ router.get("/cash-in-outlet", requireModuleView(["page:/accounts/cash-in-outlet"
       result.push({ locationType: 'warehouse', locationId: wh.id, locationName: wh.name, outletId: null, outletName: null, cashLedgerId: null, cashBalance: 0, pendingDeposits: 0, availableBalance: 0 });
       continue;
     }
-    const balance = await getLedgerBalance(pool, ledger.id);
+    const balance = balIdx.net(ledger.id);
     const { rows: [whPendingRow] } = await pool.query(
       `SELECT COALESCE(SUM(amount::numeric), 0) AS total FROM cash_deposits WHERE warehouse_id = $1 AND status = 'pending_reconciliation'`,
       [wh.id]

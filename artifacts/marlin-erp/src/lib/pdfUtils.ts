@@ -1,8 +1,14 @@
 /**
- * Client-side PDF generation using jsPDF.
- * Two document types: Payslip, Purchase Order.
- * (Sales invoices are rendered server-side by the canonical renderer in
- *  api-server/src/services/invoicePdf.ts and served over HTTP.)
+ * Client-side PDF generation using jsPDF — payment vouchers and salary
+ * advances.
+ *
+ * (Sales invoices and payslips are rendered server-side; the purchase invoice
+ *  lives in ./purchasePdf.ts and is built on the shared @workspace/pdf-kit.)
+ *
+ * These two documents still draw with jsPDF's built-in Helvetica, which is a
+ * WinAnsi face with no rupee glyph, so money is printed as "Rs." here. Writing
+ * a literal \u20B9 with this font emits a broken substitute character.
+ *
  * Logo is read from localStorage (key: 'marlin_company_logo').
  */
 import jsPDF from 'jspdf';
@@ -27,7 +33,7 @@ const GREEN: RGB  = [22, 163, 74];
 function esc(s: unknown): string { return String(s ?? ''); }
 
 function fmt(n: unknown): string {
-  return '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+  return 'Rs. ' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
 }
 
 function setColor(doc: jsPDF, rgb: RGB) { doc.setTextColor(rgb[0], rgb[1], rgb[2]); }
@@ -418,129 +424,4 @@ export function downloadAdvancePDF(advance: {
   drawFooter(doc, 'This is a computer-generated advance voucher.');
   const safeName = esc(advance.employeeName).replace(/[^a-zA-Z0-9-]/g, '_');
   doc.save(`Advance-${safeName}-${advance.date}.pdf`);
-}
-
-// ── Purchase Order ────────────────────────────────────────────────────────────
-
-export function downloadPurchaseOrderPDF(
-  po: any,
-  companySettings: any,
-  materialsMap: Map<number, string>,
-  rawMaterialsMap: Map<number, string>,
-) {
-  const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
-  const cs = companySettings as any;
-  let y = drawHeader(doc, cs, 'PURCHASE ORDER');
-
-  const poNumber = `PO-${String(po.id).padStart(4, '0')}`;
-
-  // PO + Vendor info box
-  const infoH = 22;
-  setFill(doc, LIGHT);
-  setDraw(doc, [200, 200, 200]);
-  doc.setLineWidth(0.2);
-  doc.rect(MARGIN, y, CONTENT_W, infoH, 'FD');
-
-  const colW = CONTENT_W / 2;
-  const infoLeft: [string, string][] = [
-    ['PO Number', poNumber],
-    ['Date',      new Date(po.purchaseDate).toLocaleDateString('en-IN')],
-    ['Ref Invoice', esc(po.invoiceNumber || '—')],
-  ];
-  const infoRight: [string, string][] = [
-    ['Vendor',        esc(po.vendorName || '—')],
-    ['Vendor GSTIN',  esc(po.vendorGstin || '—')],
-    ['Total Amount',  fmt(po.totalAmount)],
-  ];
-
-  doc.setFontSize(8);
-  for (let i = 0; i < infoLeft.length; i++) {
-    const iy = y + 5.5 + i * 5.5;
-    doc.setFont('helvetica', 'normal'); setColor(doc, MUTED);
-    doc.text(infoLeft[i][0] + ':', MARGIN + 3, iy);
-    doc.setFont('helvetica', 'bold'); setColor(doc, DARK);
-    doc.text(infoLeft[i][1], MARGIN + 30, iy);
-  }
-  for (let i = 0; i < infoRight.length; i++) {
-    const iy = y + 5.5 + i * 5.5;
-    doc.setFont('helvetica', 'normal'); setColor(doc, MUTED);
-    doc.text(infoRight[i][0] + ':', MARGIN + colW + 3, iy);
-    doc.setFont('helvetica', 'bold'); setColor(doc, DARK);
-    doc.text(infoRight[i][1], MARGIN + colW + 30, iy);
-  }
-  y += infoH + 5;
-
-  // Line items table
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  setColor(doc, TEAL);
-  doc.text('LINE ITEMS', MARGIN, y);
-  y += 4;
-
-  const poCols: TableCol[] = [
-    { header: '#',         width: 8,  align: 'center' },
-    { header: 'Type',      width: 22, align: 'center' },
-    { header: 'Material',  width: 78 },
-    { header: 'Qty',       width: 20, align: 'right' },
-    { header: 'Unit Cost', width: 26, align: 'right' },
-    { header: 'Amount',    width: 26, align: 'right' },
-  ];
-
-  const poRows = (po.lineItems || []).map((li: any, i: number) => {
-    // Prefer the server-enriched materialName; fall back to client-side maps.
-    const fallback = li.materialType === 'raw_material'
-      ? (rawMaterialsMap.get(Number(li.materialId)) || `Packing Mat. #${li.materialId}`)
-      : li.materialType === 'item'
-        ? `Item #${li.materialId}`
-        : (materialsMap.get(Number(li.materialId)) || `Material #${li.materialId}`);
-    const name = li.materialName || fallback;
-    const typeLabel = li.materialType === 'raw_material' ? 'Packing Material' : li.materialType === 'item' ? 'Item Name (SKU)' : 'Raw Material';
-    const amount = Number(li.quantity) * Number(li.unitCost);
-    return [i + 1, typeLabel, esc(name), Number(li.quantity), fmt(li.unitCost), fmt(amount)];
-  });
-
-  y = drawTable(doc, y, poCols, poRows);
-  y += 5;
-
-  // Total box
-  const totBoxW = 80;
-  const totBoxX = PAGE_W - MARGIN - totBoxW;
-  setFill(doc, TEAL);
-  doc.roundedRect(totBoxX, y, totBoxW, 10, 2, 2, 'F');
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  setColor(doc, WHITE);
-  doc.text('Total:', totBoxX + 4, y + 7);
-  doc.text(fmt(po.totalAmount), totBoxX + totBoxW - 3, y + 7, { align: 'right' });
-  y += 16;
-
-  // Notes
-  if (po.notes) {
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8);
-    setColor(doc, MUTED);
-    doc.text('NOTES', MARGIN, y);
-    y += 4;
-    doc.setFont('helvetica', 'normal');
-    setColor(doc, DARK);
-    const lines = doc.splitTextToSize(esc(po.notes), CONTENT_W);
-    doc.text(lines, MARGIN, y);
-    y += lines.length * 4.5 + 4;
-  }
-
-  // Signature lines
-  const sigY = Math.max(y + 8, PAGE_H - 42);
-  setDraw(doc, [150, 150, 150]);
-  doc.setLineWidth(0.3);
-  doc.line(MARGIN, sigY, MARGIN + 60, sigY);
-  doc.line(PAGE_W - MARGIN - 60, sigY, PAGE_W - MARGIN, sigY);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  setColor(doc, MUTED);
-  doc.text('Authorised by', MARGIN, sigY + 4);
-  doc.text('Vendor Acknowledgement', PAGE_W - MARGIN, sigY + 4, { align: 'right' });
-
-  drawFooter(doc, 'This is a computer-generated purchase order.');
-  const safeName = esc(po.vendorName || 'Vendor').replace(/[^a-zA-Z0-9-]/g, '_');
-  doc.save(`PO-${String(po.id).padStart(4, '0')}-${safeName}.pdf`);
 }

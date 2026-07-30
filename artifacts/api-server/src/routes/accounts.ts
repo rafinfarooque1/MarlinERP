@@ -722,10 +722,35 @@ router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledge
   });
 });
 
-// ── Cash & Bank (kept for backward compat) ────────────────────────────────
+/**
+ * ── Cash & Bank (legacy) ──────────────────────────────────────────────────
+ *
+ * `cash_bank_accounts` predates the chart of accounts and has no link to it —
+ * no ledger id, and no naming convention that resolves to one. Its `balance`
+ * column is a stored running total that no accounting entry maintains (one
+ * ad-hoc decrement on expense creation aside), so it is not a balance in the
+ * accounting sense and nothing in the books agrees with it.
+ *
+ * It is therefore reported as `storedBalance` and never as the account's
+ * current balance. `currentBalance` stays null while a row has no ledger behind
+ * it, because the honest answer here is "this figure is not backed by the
+ * books", and a null renders as an explicit gap instead of a confident number.
+ * The real cash and bank positions live on the Cash & Bank Book, the Trial
+ * Balance and the Balance Sheet, which all read the posting stream.
+ *
+ * The rows themselves are left untouched: `expenses.payment_account_id` still
+ * points at them.
+ */
 router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"), async (_req, res): Promise<void> => {
   const rows = await db.select().from(cashBankAccountsTable).orderBy(cashBankAccountsTable.id);
-  res.json(rows.map(r => ({ ...r, balance: Number(r.balance) })));
+  res.json(rows.map(r => ({
+    ...r,
+    balance: Number(r.balance),
+    storedBalance: Number(r.balance),
+    currentBalance: null,
+    balanceSource: "unlinked" as const,
+    ledgerId: null,
+  })));
 });
 
 router.post("/accounts/cash-bank", requireModuleAction("page:/accounts/cash-bank", "add"), async (req, res): Promise<void> => {
@@ -1289,21 +1314,19 @@ router.get("/accounts/location-expenses", requireModuleView(["page:/accounts/exp
   });
 });
 
-// ── Helper: compute running cash balance for a ledger ────────────────────────
+/**
+ * A location's cash-in-hand, from the accounting postings.
+ *
+ * This gates the "a till can only spend what it holds" check on cash expenses,
+ * so it has to be the same number the Cash Book shows. The previous version
+ * added up `receipts` and `payments` only — a second, narrower definition of
+ * cash that could not see a till sale, a contra or a journal. It was also a
+ * verbatim copy of the helper in the cash-in-outlet route, so the two could
+ * drift apart independently. Both now go through the shared balance service.
+ */
 async function getLocationCashBalance(ledgerId: number): Promise<number> {
-  const { rows: recRows } = await pool.query(
-    `SELECT COALESCE(SUM(CASE WHEN received_in_ledger_id = $1 THEN amount::numeric ELSE 0 END), 0)
-          - COALESCE(SUM(CASE WHEN received_from_ledger_id = $1 THEN amount::numeric ELSE 0 END), 0) AS balance
-     FROM receipts WHERE received_in_ledger_id = $1 OR received_from_ledger_id = $1`,
-    [ledgerId]
-  );
-  const { rows: payRows } = await pool.query(
-    `SELECT COALESCE(SUM(CASE WHEN paid_to_ledger_id = $1 THEN amount::numeric ELSE 0 END), 0)
-          - COALESCE(SUM(CASE WHEN paid_from_ledger_id = $1 THEN amount::numeric ELSE 0 END), 0) AS balance
-     FROM payments WHERE paid_to_ledger_id = $1 OR paid_from_ledger_id = $1`,
-    [ledgerId]
-  );
-  return Number(recRows[0]?.balance ?? 0) + Number(payRows[0]?.balance ?? 0);
+  const { currentBalanceIndex } = await import("../lib/ledgerBalances");
+  return (await currentBalanceIndex()).net(ledgerId);
 }
 
 /**
