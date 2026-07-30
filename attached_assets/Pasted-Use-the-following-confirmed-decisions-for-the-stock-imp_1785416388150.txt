@@ -1,0 +1,149 @@
+Use the following confirmed decisions for the stock import.
+
+1. LIVE ERP
+The final result must exist in the LIVE production ERP:
+- create/update the required Item Master records;
+- create the stock/batches;
+- stock must appear in the live Ragiguda warehouse;
+- do not directly modify production while developing or testing.
+Build and verify the process in development first, then stop and ask me before the final production execution/publish if required.
+
+2. LOCATION
+All stock in the uploaded stock file belongs to:
+
+Ragiguda — Warehouse 1
+
+Do not split this stock between warehouses or outlets.
+
+3. ITEM TYPE
+Treat all imported items as FINISHED GOODS.
+
+Create missing Item Master records as finished goods / sellable products.
+
+Do not create duplicate items if an equivalent Item Master record already exists. Show the item mapping before the live import.
+
+4. UNIT
+For the two rows where UOM is missing:
+
+CALSSIC JAGGERY BOBA — KG
+MILK SHAKE THICKENER — KG
+
+Use the existing UOM master where possible. Do not create duplicate KG units.
+
+5. GST
+Use GST rate = 5% for these imported/new finished-goods items.
+
+Preserve the HSN codes supplied in the stock file.
+
+6. THIS IS A VENDOR PURCHASE, NOT A SIMPLE OPENING-STOCK JOURNAL
+
+The stock originates from:
+
+Vendor: Frozen Hub
+
+Treat the inventory as a purchase from Frozen Hub so the ERP creates the correct purchase, stock/batch and accounting records through the normal business logic.
+
+Do NOT independently insert quantities into stock tables if the existing purchase/stock service can create them correctly.
+
+The resulting stock must be located at Ragiguda warehouse.
+
+7. INVESTMENT / PAYMENT TREATMENT
+
+The source of funds is:
+
+Frozen Hub Investment
+
+Use the existing Frozen Hub Investment ledger/account.
+
+The intended economic result is:
+
+- inventory/finished goods increase;
+- the Frozen Hub vendor purchase is recorded;
+- the Frozen Hub vendor payable is settled using Frozen Hub Investment;
+- there must be no artificial Cash or Bank movement.
+
+Use the ERP's proper purchase/payment/journal workflow to achieve this. Do not create a fake cash payment.
+
+Before posting anything, show me the exact proposed accounting entries, including ledger names, debit amounts and credit amounts.
+
+The final entries must balance exactly.
+
+8. VALUE
+
+The uploaded stock file total is expected to be ₹6,33,192.21.
+
+Before live execution, independently recalculate:
+
+SUM(quantity × applicable unit cost)
+
+and reconcile it against ₹6,33,192.21.
+
+If there is ANY difference, STOP and report the difference. Do not force a balancing amount.
+
+9. MFG AND EXPIRY
+
+Import the MFG dates from the supplied stock data.
+
+Expiry date must be exactly 18 months after the applicable MFG date.
+
+Use calendar-correct date handling.
+
+Show MFG and calculated expiry in the preview before importing.
+
+10. PRODUCTION SAFETY
+
+This import must be idempotent.
+
+Running or retrying it must NOT duplicate:
+- Item Master records
+- purchase records
+- purchase lines
+- stock batches
+- stock ledger movements
+- vendor payable
+- investment/payment accounting entries
+
+Use a unique import reference/batch ID and detect an already-completed import.
+
+Do not delete, reset, truncate or overwrite existing production business data.
+
+Do not modify unrelated production records.
+
+11. PRE-LIVE PREVIEW REQUIRED
+
+Before any production write, give me a complete preview showing:
+
+- source row count
+- each source item
+- existing item vs new item
+- UOM
+- HSN
+- GST %
+- quantity
+- unit cost
+- total value
+- MFG date
+- calculated expiry date
+- Ragiguda warehouse
+- Frozen Hub vendor mapping
+- total inventory value
+- proposed purchase transaction
+- proposed vendor settlement
+- exact debit/credit accounting entries
+- duplicate/conflict checks
+
+Also confirm that the resulting stock quantities will appear correctly in:
+Item Master / Stock,
+Ragiguda warehouse stock,
+Stock Ledger,
+batch/lot records,
+inventory reports,
+purchase records,
+vendor ledger,
+Trial Balance,
+Balance Sheet,
+and relevant inventory valuation reports.
+
+STOP after producing and validating this preview.
+
+Do not execute the production import until I explicitly approve the preview.

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { pool } from "@workspace/db";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
-import { requireModuleView, requireModuleAction } from "../middleware/permissions";
+import { requireModuleView, requireModuleAction, canViewStockValuation } from "../middleware/permissions";
 import { logActivity } from "../lib/audit";
 import { isIsoDate } from "../lib/dateInput";
 import { buildBranchMaps } from "./stock";
@@ -73,6 +73,10 @@ router.get("/stock/batches", requireModuleView(["page:/headoffice/stock", "page:
     conds.push(scopeBranchWhere(scope, params, 'sb'));
   }
 
+  // Same rule as the stock rows these lots hang off: without the valuation
+  // right the lot keeps its identity, dates and quantities and loses its money.
+  const showValuation = await canViewStockValuation((req as any).employee?.hierarchyId);
+
   const [result, branchName] = await Promise.all([
     pool.query(
       `SELECT sb.id, sb.item_id, sb.material_type, sb.branch_type, sb.branch_id, sb.batch_number,
@@ -98,7 +102,7 @@ router.get("/stock/batches", requireModuleView(["page:/headoffice/stock", "page:
     const reserved = r3(Number(b.reserved ?? 0));
     const unitCost = Number(b.unit_cost);
     const bucket = expiryBucket(days);
-    return {
+    const lot: Record<string, unknown> = {
       id: b.id,
       itemId: b.item_id,
       materialType: b.material_type ?? "item",
@@ -113,8 +117,6 @@ router.get("/stock/batches", requireModuleView(["page:/headoffice/stock", "page:
       quantity,
       reserved,
       available: r3(Math.max(0, quantity - reserved)),
-      unitCost,
-      value: Math.round(quantity * unitCost * 100) / 100,
       source: b.source,
       itemCode: b.item_code ?? "",
       barcode: b.barcode ?? "",
@@ -127,6 +129,11 @@ router.get("/stock/batches", requireModuleView(["page:/headoffice/stock", "page:
       bucketLabel: EXPIRY_BUCKET_LABELS[bucket],
       tone: EXPIRY_BUCKET_TONE[bucket],
     };
+    if (showValuation) {
+      lot.unitCost = unitCost;
+      lot.value = Math.round(quantity * unitCost * 100) / 100;
+    }
+    return lot;
   }));
 });
 
@@ -159,7 +166,7 @@ router.get("/stock/batches/suggest", requireModuleView("page:/transfers"), async
 //   near_expiry → dated ahead of today, inside the window
 //   expired     → already past, regardless of how long ago
 //   all         → both (default)
-router.get("/stock/expiry-report", requireModuleView(["page:/headoffice/inventory-reports", "page:/headoffice/stock"]), async (req, res): Promise<void> => {
+router.get("/stock/expiry-report", requireModuleView("page:/headoffice/inventory-reports"), async (req, res): Promise<void> => {
   const widest = EXPIRY_TIER_DAYS[EXPIRY_TIER_DAYS.length - 1];
   const days = Math.max(1, Number(req.query.days ?? widest) || widest);
   const status = String(req.query.status ?? "all");
@@ -281,7 +288,7 @@ router.get("/stock/expiry-report", requireModuleView(["page:/headoffice/inventor
 // finished goods only; raw and packing materials are stock the business owns and
 // are now included, as is stock dispatched but not yet received (valued as the
 // sender's until it lands, because it belongs to nobody else).
-router.get("/stock/valuation", requireModuleView(["page:/headoffice/inventory-reports", "page:/headoffice/stock"]), async (req, res): Promise<void> => {
+router.get("/stock/valuation", requireModuleView("page:/headoffice/inventory-reports"), async (req, res): Promise<void> => {
   const { branchType, branchId, materialType } = req.query as Record<string, string | undefined>;
   if (materialType && !BATCH_KINDS.includes(materialType as any)) {
     res.status(400).json({ error: `materialType must be one of: ${BATCH_KINDS.join(", ")}` }); return;
@@ -348,7 +355,7 @@ router.get("/stock/valuation", requireModuleView(["page:/headoffice/inventory-re
 // Classified on days since the last OUTBOUND movement, because that is what
 // "moving" means for stock: receiving more of something that never leaves does
 // not make it alive. Both dates are returned so the UI can show either.
-router.get("/stock/movement-analysis", requireModuleView(["page:/headoffice/inventory-reports", "page:/headoffice/stock"]), async (req, res): Promise<void> => {
+router.get("/stock/movement-analysis", requireModuleView("page:/headoffice/inventory-reports"), async (req, res): Promise<void> => {
   const { branchType, branchId, materialType, itemId } = req.query as Record<string, string | undefined>;
   const cls = String(req.query.class ?? "all");
   if (materialType && !BATCH_KINDS.includes(materialType as any)) {
@@ -466,7 +473,7 @@ router.get("/stock/movement-analysis", requireModuleView(["page:/headoffice/inve
 });
 
 // ── Reorder report (per-item reorder levels) ─────────────────────────────────
-router.get("/stock/reorder-report", requireModuleView(["page:/headoffice/inventory-reports", "page:/headoffice/stock"]), async (_req, res): Promise<void> => {
+router.get("/stock/reorder-report", requireModuleView("page:/headoffice/inventory-reports"), async (_req, res): Promise<void> => {
   const [result, branchName] = await Promise.all([
     pool.query(
       `SELECT se.branch_type, se.branch_id, se.item_id, se.quantity::numeric AS qty,

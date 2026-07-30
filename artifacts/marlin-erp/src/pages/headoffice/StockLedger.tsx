@@ -76,6 +76,10 @@ export default function StockLedger() {
   });
 
   const rows: StockLedgerRow[] = data?.rows ?? [];
+  // The server decides whether this employee may see cost; default to hidden
+  // so a slow or failed response never flashes a rate at someone.
+  const canSeeValue = data?.canViewValuation === true;
+  const COLS = canSeeValue ? 9 : 8;
   const totalRows  = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
 
@@ -120,7 +124,7 @@ export default function StockLedger() {
             'Qty Change': r.qtyChange,
             Unit: r.unit,
             'Running Balance': r.runningBalance,
-            'Unit Cost': r.unitCost,
+            ...(canSeeValue ? { 'Unit Cost': r.unitCost } : {}),
             'Doc Type': r.docType,
             'Doc ID': r.docId ?? '',
             Notes: r.notes ?? '',
@@ -187,7 +191,7 @@ export default function StockLedger() {
                 <TableHead>Location</TableHead>
                 <TableHead className="text-right">Qty Change</TableHead>
                 <TableHead className="text-right">Running Balance</TableHead>
-                <TableHead className="text-right">Unit Cost</TableHead>
+                {canSeeValue && <TableHead className="text-right">Unit Cost</TableHead>}
                 <TableHead>Source Doc</TableHead>
               </TableRow>
             </TableHeader>
@@ -195,12 +199,12 @@ export default function StockLedger() {
               {isLoading ? (
                 [...Array(6)].map((_, i) => (
                   <TableRow key={i}>
-                    <TableCell colSpan={9}><div className="h-7 bg-muted/30 rounded animate-pulse" /></TableCell>
+                    <TableCell colSpan={COLS}><div className="h-7 bg-muted/30 rounded animate-pulse" /></TableCell>
                   </TableRow>
                 ))
               ) : rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
+                  <TableCell colSpan={COLS} className="text-center py-16 text-muted-foreground">
                     <BookOpen className="w-10 h-10 mx-auto mb-3 opacity-20" />
                     <p>No ledger entries found</p>
                     <p className="text-xs mt-1 opacity-60">Entries appear automatically when purchases, production, transfers, or returns are recorded.</p>
@@ -230,9 +234,11 @@ export default function StockLedger() {
                       {Number(r.runningBalance).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 3 })}
                       {r.unit ? <span className="text-[10px] ml-0.5">{r.unit}</span> : null}
                     </TableCell>
-                    <TableCell className="text-right font-mono text-sm text-muted-foreground">
-                      {r.unitCost > 0 ? money(r.unitCost) : '—'}
-                    </TableCell>
+                    {canSeeValue && (
+                      <TableCell className="text-right font-mono text-sm text-muted-foreground">
+                        {(r.unitCost ?? 0) > 0 ? money(r.unitCost!) : '—'}
+                      </TableCell>
+                    )}
                     <TableCell className="text-xs text-muted-foreground">
                       {r.docType && r.docId ? (
                         <span className="capitalize">{r.docType.replace(/_/g, ' ')} #{r.docId}</span>

@@ -612,6 +612,10 @@ function CombinedReport({ range, canDownload }: { range: RangeState; canDownload
   // location's name in the grouping and exports even while outlets are hidden.
   const { data: outlets = [] } = useAllOutlets();
   const s = data?.sales;
+  // The stock half of this handout is a valuation. The server withholds those
+  // fields from roles without the valuation right, so the columns come out too —
+  // the sales half, SKU counts and quantities are unaffected.
+  const canSeeValue = data?.canViewValuation === true;
 
   const onPDF = () => exportReportPdf({
     title: 'Sales & Stock Summary',
@@ -620,7 +624,7 @@ function CombinedReport({ range, canDownload }: { range: RangeState; canDownload
       ['Period', periodLabel(range.from, range.to)],
       ['Revenue', pdfMoney(s?.revenue)],
       ['Collected', pdfMoney(s?.collected)],
-      ['Stock Value', pdfMoney(data?.stockValueTotal)],
+      ...(canSeeValue ? [['Stock Value', pdfMoney(data?.stockValueTotal)] as [string, string]] : []),
     ],
     sections: [
       {
@@ -644,10 +648,16 @@ function CombinedReport({ range, canDownload }: { range: RangeState; canDownload
         heading: 'Current Stock by Location',
         columns: [
           { label: 'Location', width: 2.4 }, { label: 'Type' }, { label: 'SKUs', align: 'center' },
-          { label: 'Total Qty', align: 'right' }, { label: 'Stock Value', align: 'right', width: 1.6 },
+          { label: 'Total Qty', align: 'right' as const },
+          ...(canSeeValue ? [{ label: 'Stock Value', align: 'right' as const, width: 1.6 }] : []),
         ],
-        rows: (data?.stockByLocation ?? []).map((r) => [r.locationName, titleCase(r.locationType), r.skus, num(r.totalQty), pdfMoney(r.stockValue)]),
-        totalsRow: ['TOTAL', '', '', '', pdfMoney(data?.stockValueTotal)],
+        rows: (data?.stockByLocation ?? []).map((r) => [
+          r.locationName, titleCase(r.locationType), r.skus, num(r.totalQty),
+          ...(canSeeValue ? [pdfMoney(r.stockValue)] : []),
+        ]),
+        totalsRow: canSeeValue
+          ? ['TOTAL', '', '', '', pdfMoney(data?.stockValueTotal)]
+          : ['TOTAL', '', '', ''],
       },
     ],
     footerNote: 'Stock positions are as of report generation time; sales figures cover the selected period.',
@@ -698,11 +708,13 @@ function CombinedReport({ range, canDownload }: { range: RangeState; canDownload
             { key: 'locationName', label: 'Location', render: (r: any) => <span className="font-medium">{r.locationName}</span> },
             { key: 'locationType', label: 'Type', render: (r: any) => <LocationBadge type={r.locationType} /> },
             { key: 'skus', label: 'SKUs', align: 'center' },
-            { key: 'totalQty', label: 'Total Qty', align: 'right', render: (r: any) => num(r.totalQty) },
-            { key: 'stockValue', label: 'Stock Value', align: 'right', render: (r: any) => <b>{fmt(r.stockValue)}</b> },
+            { key: 'totalQty', label: 'Total Qty', align: 'right' as const, render: (r: any) => num(r.totalQty) },
+            ...(canSeeValue
+              ? [{ key: 'stockValue', label: 'Stock Value', align: 'right' as const, render: (r: any) => <b>{fmt(r.stockValue)}</b> }]
+              : []),
           ]}
           rows={data?.stockByLocation ?? []} loading={isLoading} rowKey={(_, i) => i}
-          footer={['TOTAL', '', '', '', fmt(data?.stockValueTotal)]}
+          footer={canSeeValue ? ['TOTAL', '', '', '', fmt(data?.stockValueTotal)] : ['TOTAL', '', '', '']}
         />
       </div>
     </div>

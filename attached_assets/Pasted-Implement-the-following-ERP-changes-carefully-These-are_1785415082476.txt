@@ -1,0 +1,477 @@
+Implement the following ERP changes carefully. These are NOT frontend-only requirements.
+
+IMPORTANT IMPLEMENTATION RULES
+
+Before changing anything:
+1. Inspect the existing frontend, backend/API, database schema, accounting logic, RBAC/permissions, warehouse/location scoping, reports, and migrations related to each requirement.
+2. Reuse existing architecture and source-of-truth tables wherever possible.
+3. If a frontend change requires backend/API/database changes to work correctly and securely, implement those changes too.
+4. Do not create duplicate accounting records, duplicate stock movements, duplicate ledgers, or parallel sources of truth.
+5. Do not delete/reset/reseed existing production business data.
+6. Do not weaken the RBAC and warehouse-scope security work already implemented.
+7. Do not publish automatically. Complete and test everything in development first.
+8. Avoid unnecessary schema migrations. If a schema migration is genuinely required, make it idempotent and production-safe and explain why it is required.
+9. Existing DATE-column conversion/self-healing logic and /api/healthz/schema must remain intact.
+10. Before completion, test frontend + API + database behavior together, not merely that pages render.
+
+==================================================
+1. DASHBOARD KPI CHANGES
+==================================================
+
+On the Dashboard, remove/replace these two KPI cards:
+
+- Invoices
+- Avg Ticket
+
+Add:
+
+- Expenses
+- Bank Balance
+
+EXPENSES:
+Show the actual expense amount for the dashboard's applicable reporting period using the ERP's authoritative accounting/expense transactions.
+
+Do not calculate it from a frontend-only list if the accounting source of truth is elsewhere.
+
+BANK BALANCE:
+Show the actual aggregate bank balance from the accounting/cash-bank ledgers.
+
+Do not include physical cash unless the ERP's existing definition of Bank Balance explicitly includes it.
+
+If multiple bank accounts exist, the KPI should represent the correct combined bank balance according to the existing accounting ledger balances.
+
+Check whether the dashboard API needs modification. If it does, update it rather than calculating financial values independently in the frontend.
+
+Dashboard values must respect any applicable RBAC/location scope.
+
+==================================================
+2. CHART OF ACCOUNTS – SIMPLIFY THE UI
+==================================================
+
+The current Chart of Accounts area is unnecessarily complicated because Accounts, Balance Sheet and Profit & Loss expose overlapping hierarchy information.
+
+Remove the separate "Accounts" presentation/tab if it is redundant after the changes below.
+
+The primary financial views should be:
+
+- Balance Sheet
+- Profit & Loss
+
+Do NOT delete underlying accounts, account groups, ledgers or accounting records merely because the Accounts UI is removed.
+
+This is a presentation/navigation simplification, not deletion of the accounting structure.
+
+==================================================
+3. COLLAPSIBLE ACCOUNTING HIERARCHY
+==================================================
+
+Improve BOTH:
+
+- Balance Sheet
+- Profit & Loss
+
+Every hierarchy node that contains children should have a chevron/arrow.
+
+This applies as appropriate to:
+
+Group
+  → Subgroup
+      → Ledger
+          → Sub-ledger
+
+Users must not be forced to see every ledger/sub-ledger at once.
+
+Clicking the arrow should expand/collapse only that node's children.
+
+Parent totals must remain visible when collapsed.
+
+Amounts must not change when sections are collapsed.
+
+Support sensible:
+- Expand All
+- Collapse All
+
+Do not fake hierarchy levels in the frontend. Use the actual Chart of Accounts parent/child relationships.
+
+Verify that totals at every parent level equal the appropriate children and that collapsing has no effect on calculations.
+
+==================================================
+4. MANAGE CHART OF ACCOUNTS
+==================================================
+
+Add a working:
+
+"Manage Chart of Accounts"
+
+button to BOTH:
+
+- Balance Sheet
+- Profit & Loss
+
+It should use the existing Chart of Accounts management functionality rather than creating a second independent account-management system.
+
+Users with sufficient permission should be able to perform the already-supported operations, including as applicable:
+
+- Create group
+- Create subgroup
+- Create ledger
+- Create sub-ledger
+- Move permitted manual accounts
+- Activate/deactivate permitted manual accounts
+- Delete only when existing backend safety rules allow deletion
+
+System/protected accounts must remain protected.
+
+All existing backend parent validation, usage checks and system-account protection must continue to apply.
+
+Do not make these controls frontend-only.
+
+Unauthorized users must not be able to bypass the UI and perform account-management actions by calling the API directly.
+
+==================================================
+5. REPORTS CENTER – BRANCH / STOCK TRANSFER REPORT
+==================================================
+
+Add a new Reports Center section/tab:
+
+"Branch Transfer"
+or
+"Stock Transfer"
+
+Use the existing internal stock-transfer records and stock movements as the source of truth.
+
+DO NOT generate fake sales invoices or fake purchase invoices.
+
+For location-level reporting, present a completed internal transfer as:
+
+Sending location:
+Transfer Out / Sales-equivalent operational view
+
+Receiving location:
+Transfer In / Purchase-equivalent operational view
+
+This terminology is for branch performance/stock reporting only.
+
+DO NOT treat an internal transfer as external company revenue or purchasing.
+
+The report should include at minimum:
+
+- Transfer number/reference
+- Transfer date
+- Source warehouse/location
+- Destination warehouse/location
+- Item
+- Batch where applicable
+- Quantity
+- UOM
+- Unit cost
+- Total cost/value
+- Transfer status
+- Dispatch date
+- Received date
+- Created/handled by, where available
+
+Provide filters for:
+
+- Date/date range
+- Source location
+- Destination location
+- Item
+- Status
+
+Provide summary values including:
+
+- Transfer Out quantity/value
+- Transfer In quantity/value
+- In-transit quantity/value where applicable
+
+Completed/received transfers should count in final Transfer Out/Transfer In totals.
+
+Pending/in-transit transfers must be separately identifiable and must not be represented as completed receipts.
+
+Provide CSV/PDF export consistent with the existing Reports Center.
+
+CRITICAL ACCOUNTING RULE:
+
+Internal branch/warehouse transfers must NOT inflate:
+
+- Company sales/revenue
+- Purchases
+- GST/output tax/input tax
+- COGS
+- Debtors
+- Creditors/vendor payables
+
+Do not double-count inventory.
+
+The report is an internal stock-movement report.
+
+==================================================
+6. BRANCH TRANSFER RBAC + LOCATION SECURITY
+==================================================
+
+The new report must respect the current RBAC and warehouse/outlet scoping.
+
+Do not merely hide records in the browser.
+
+Backend/API queries must enforce the authenticated employee's allowed scope.
+
+A warehouse/location-restricted employee must not be able to alter a request parameter or call the API manually to retrieve unrelated locations.
+
+For an internal transfer, determine the correct visibility rules from the existing authorization model.
+
+Normally a location user should be able to see transfers where their permitted location participates as source and/or destination, subject to their page permissions.
+
+Management/admin access should continue according to the existing hierarchy/RBAC rules.
+
+Test forged foreign-location requests.
+
+==================================================
+7. PERMISSIONS – PAGE-WISE SELECT ALL
+==================================================
+
+In:
+
+Company → Permissions
+
+add a row/page-level bulk permission control.
+
+Each page currently has action permissions such as:
+
+View
+Add
+Edit
+Delete
+Download
+Print
+Approve
+Share
+
+Add a Select All / Clear All control for EACH PAGE ROW.
+
+Example:
+
+Stock Transfer | [Select All] | View | Add | Edit | Delete | Download | Print | Approve | Share
+
+When Select All is clicked:
+- enable every applicable action for THAT PAGE only.
+
+When Clear All is clicked:
+- disable every applicable action for THAT PAGE only.
+
+Do not change permissions for other pages.
+
+Keep all individual permission checkboxes so the administrator can select all and then customize individual actions.
+
+Keep the existing hierarchy-level:
+- Enable All
+- Disable All
+
+The new function is specifically row/page-wise.
+
+If some actions are genuinely not applicable to a particular page, do not manufacture meaningless permissions just so Select All can check them.
+
+==================================================
+8. PAGE-WISE SELECT ALL MUST PERSIST
+==================================================
+
+This must NOT be a visual-only checkbox feature.
+
+Inspect the current permission save API and database model.
+
+The row-level Select All/Clear All operation should modify the same permission state that individual checkboxes use.
+
+When Save is pressed:
+
+Frontend state
+→ permission API
+→ authoritative permission storage
+
+must remain consistent.
+
+After:
+1. Save
+2. Logout
+3. Login again
+
+the permissions must remain exactly as saved.
+
+Do not introduce a second "select all" permission flag in the database unless absolutely necessary. Prefer using the existing individual action permissions.
+
+==================================================
+9. PERMISSION ENFORCEMENT
+==================================================
+
+The permission matrix must remain the authoritative source for non-admin employees.
+
+Changing permissions must affect:
+
+- Sidebar/navigation visibility
+- Direct route access
+- Backend API access
+- View
+- Add
+- Edit
+- Delete
+- Download
+- Print
+- Approve
+- Share
+
+as applicable.
+
+Do not rely on frontend hiding.
+
+If View is disabled, the employee must not be able to type the page URL and open it.
+
+If Add/Edit/Delete/Approve/etc. is disabled, manually calling the corresponding API must also be denied.
+
+Preserve the intended Level-1/top-management administrator behavior already established by the authorization system.
+
+Do not reintroduce the old legacy behavior that grants all permissions to existing roles.
+
+==================================================
+10. BACKEND REVIEW FOR ALL OF THESE CHANGES
+==================================================
+
+For EACH requirement above, explicitly inspect whether backend changes are required.
+
+Check:
+
+- API endpoints
+- Authentication
+- RBAC middleware
+- Warehouse/location-scope middleware
+- SQL/database queries
+- Accounting journal logic
+- Stock ledger
+- Batch stock
+- Transfer state transitions
+- Financial report calculations
+- CSV/PDF exports
+- Dashboard aggregation
+- Chart hierarchy APIs
+- Permission persistence
+- Audit logging
+
+If the existing backend already correctly supports a requirement, reuse it.
+
+If it does not, fix the backend.
+
+Do not duplicate business logic in React merely to make the screen appear correct.
+
+==================================================
+11. REGRESSION / DATA SAFETY
+==================================================
+
+Do not alter existing production data while developing/testing this.
+
+Use disposable DEVELOPMENT fixtures where data is required.
+
+Do not:
+
+- reset databases
+- truncate tables
+- delete production records
+- reseed production permissions
+- rewrite historical transactions
+- create balancing journal entries to hide discrepancies
+- duplicate stock
+- duplicate opening stock
+- convert branch transfers into real sales/purchases
+
+Preserve the existing accounting source of truth.
+
+==================================================
+12. REQUIRED VERIFICATION
+==================================================
+
+Before reporting completion, test at minimum:
+
+A. Dashboard
+- Expense KPI agrees with accounting/expense source.
+- Bank Balance agrees with bank ledger balances.
+
+B. Balance Sheet
+- Group/subgroup/ledger/sub-ledger expand/collapse works.
+- Parent totals remain correct.
+- Manage Chart of Accounts works only for authorized users.
+
+C. Profit & Loss
+- Same hierarchy behavior.
+- Totals remain correct.
+- Manage Chart of Accounts follows the same backend protections.
+
+D. Branch Transfer report
+Test:
+Warehouse A → Warehouse B.
+
+Verify:
+- A shows Transfer Out.
+- B shows Transfer In after receipt.
+- quantities match the actual stock movement.
+- valuation matches the authoritative transfer/stock cost.
+- company sales did NOT increase.
+- company purchases did NOT increase.
+- GST did NOT increase.
+- debtors/creditors did NOT change.
+- inventory was not double-counted.
+
+E. RBAC
+Using a restricted Warehouse Manager:
+- permitted report/page works.
+- non-permitted page is absent from navigation.
+- direct URL is denied.
+- direct API request is denied.
+- foreign warehouse/location request is denied.
+
+F. Page-wise permission Select All
+For one test page:
+- Clear All.
+- Save.
+- logout/login.
+- verify all actions denied.
+- Select All.
+- Save.
+- logout/login.
+- verify applicable actions restored.
+- remove one individual action.
+- Save/re-login.
+- verify only that action remains denied.
+
+G. Exports
+Verify CSV/PDF obey both:
+- Download/Print permission
+- warehouse/location data scope.
+
+H. Accounting
+After testing, verify:
+- Trial Balance remains balanced.
+- Balance Sheet remains internally consistent.
+- P&L values have not been distorted by branch transfers.
+- stock quantities reconcile to transfer movements.
+
+==================================================
+13. FINAL REPORT
+==================================================
+
+Do not simply say "done".
+
+At completion report:
+
+1. Frontend files changed
+2. Backend/API files changed
+3. Database/schema changes, or explicitly "none"
+4. Permission/RBAC changes
+5. Location-scope changes
+6. Dashboard calculation sources
+7. Branch Transfer report source tables/logic
+8. Accounting impact
+9. Tests performed and results
+10. Any failed/inconclusive tests
+11. Existing issues discovered but not changed
+12. Whether a production publish/migration is required
+
+Do NOT publish automatically.
+
+Stop after development verification and wait for my approval before production deployment.

@@ -39,6 +39,18 @@ The build check proves a guard name *exists*; it cannot prove it is the *right* 
 - Migrating destroys the old rows, so **a role's pre-migration permissions cannot be recovered** — there is no audit table for permission changes.
 - **Backfill seeding must be one-time (migration-log guarded), never per-boot.** A boot-time "give every role a row for every page" pass treats *no row* as *needs an all-true row*, so a role configured with three pages comes back from the next restart holding all of them. Under default-deny, a missing row is the answer, not a gap to fill.
 
+## A data reset must not clear the migration log
+
+One-time all-true permission seeds are guarded by rows in `migration_log`. If a "reset company data" path truncates that table, the seeds re-run on the next boot and silently re-widen every non-level-1 role to full access — the role you just restricted comes back unrestricted after a restart, with no user action in between.
+
+**How to apply:** keep `migration_log` out of any reset/truncate list, and treat "which one-time migrations have run" as configuration, not data.
+
+## Bootstrap endpoints should return the caller's own rows, not everyone's
+
+`GET /company/permissions` must stay reachable by every authenticated user (the shell resolves rights from it), but "reachable" does not mean it should hand back the whole matrix. Returning every hierarchy's rows to any logged-in user leaks the entire authorization model to an API caller even though the Permissions *page* is guarded.
+
+**How to apply:** return only the caller's own hierarchy rows; widen to all hierarchies only for level 1. Derive level from the hierarchies table — the session/token does not carry it.
+
 ## Uniqueness is an authorization requirement
 
 `permissions (hierarchy_id, module)` carries a unique index. Guards fold rows with `json_object_agg(module, ...)`, so a duplicate row makes effective rights depend on which row the planner emits last — authorization stops being deterministic. All seeding and the save endpoint use `ON CONFLICT`, not check-then-insert, because two instances booting at once both pass a `WHERE NOT EXISTS` check.

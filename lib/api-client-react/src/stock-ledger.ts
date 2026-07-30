@@ -14,12 +14,19 @@ export interface StockLedgerRow {
   branchName: string;
   qtyChange: number;
   runningBalance: number;
-  unitCost: number;
+  /**
+   * ABSENT — not zero — for callers without the inventory-valuation right.
+   * Check `canViewValuation` on the envelope before rendering it.
+   */
+  unitCost?: number;
   docType: string;
   docId: number | null;
   notes: string | null;
   createdAt: string;
 }
+
+/** Envelope carries the server's verdict on whether this caller may see cost. */
+export type PaginatedStockLedger = Paginated<StockLedgerRow> & { canViewValuation: boolean };
 
 export interface StockLedgerParams {
   page?: number;
@@ -46,7 +53,7 @@ export function usePaginatedStockLedger(params?: StockLedgerParams) {
   return useQuery({
     queryKey: ['/api/stock/ledger', 'paginated', key] as const,
     queryFn: ({ signal }) =>
-      customFetch<Paginated<StockLedgerRow>>(`/api/stock/ledger?${key}`, { signal }),
+      customFetch<PaginatedStockLedger>(`/api/stock/ledger?${key}`, { signal }),
     placeholderData: (prev) => prev,
   });
 }

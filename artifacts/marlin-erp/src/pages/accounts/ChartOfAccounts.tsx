@@ -4,10 +4,12 @@ import { customFetch } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, ChevronDown, ChevronRight, Package, Lock, Trash2, ScrollText, ArrowUpRight, ArrowDownLeft, Folder, ShieldOff, AlertTriangle } from 'lucide-react';
+import { CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, ChevronDown, ChevronRight, Package, Lock, Trash2, ScrollText, ArrowUpRight, ArrowDownLeft, ShieldOff, AlertTriangle, Settings2, FoldVertical, UnfoldVertical, Folder } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePermission } from '@/lib/usePermission';
 import { useIsLocationKindEnabled } from '@/lib/locationStructure';
@@ -16,9 +18,9 @@ import { useClearOutletSelection } from '@/lib/useFeatureFlags';
 /* ── shared types & helpers live in chartCommon so the hierarchy view and the
  * statement views cannot drift apart on formatting or payload shape ────────── */
 import {
-  fmt, BalTag, naturalSide,
+  fmt, BalTag, naturalSide, useStatementExpansion, collectExpandableIds,
   type ALType, type StockItem, type LedgerNode, type GroupSummary,
-  type FinancialStatements, type StatementTarget,
+  type FinancialStatements, type StatementTarget, type StatementExpansion,
 } from './chartCommon';
 import { ChartHierarchy } from './ChartHierarchy';
 
@@ -166,6 +168,8 @@ function LedgerStatementSheet({ ledgerNode, fromDate, toDate, onClose }: {
 /* ── ledger line (handles both leaf ledgers and user sub-groups) ─────────────── */
 type LedgerLineProps = {
   node: LedgerNode; depth: number; onCreated: () => void;
+  /** Shared open/closed state for this statement — see useStatementExpansion(). */
+  expansion: StatementExpansion;
   onBankAdd?: (parentId: number, parentType: ALType) => void;
   onDelete?: (id: number, name: string) => void;
   onRename?: (id: number, newName: string) => void;
@@ -173,7 +177,7 @@ type LedgerLineProps = {
   onMove?: (nodeId: number, newParentId: number) => void;
   canAdd?: boolean; canEdit?: boolean; canDelete?: boolean;
 };
-function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename, onViewStatement, onMove, canAdd, canEdit, canDelete }: LedgerLineProps) {
+function LedgerLine({ node, depth, onCreated, expansion, onBankAdd, onDelete, onRename, onViewStatement, onMove, canAdd, canEdit, canDelete }: LedgerLineProps) {
   const pl = `${8 + depth * 16}px`;
   const balance = Math.abs(node.balance);
   const isSystem = node.code != null;
@@ -182,12 +186,16 @@ function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename, onV
   const [renaming, setRenaming] = useState(false);
   const [renameVal, setRenameVal] = useState('');
   const [dropOver, setDropOver] = useState(false);
-  const [subOpen, setSubOpen] = useState(true);
+
+  // Only a node that really has accounts inside it is expandable — a chevron on
+  // a leaf would be an affordance that does nothing.
+  const hasChildren = node.children.length > 0;
+  const subOpen = hasChildren && expansion.isOpen(node.id);
 
   const startRename = () => { if (isSystem || !canEdit) return; setRenameVal(node.name); setRenaming(true); };
   const submitRename = () => { const t = renameVal.trim(); setRenaming(false); if (!t || t === node.name) return; onRename?.(node.id, t); };
 
-  const sharedProps: Omit<LedgerLineProps, 'node' | 'depth'> = { onCreated, onBankAdd, onDelete, onRename, onViewStatement, onMove, canAdd, canEdit, canDelete };
+  const sharedProps: Omit<LedgerLineProps, 'node' | 'depth'> = { onCreated, expansion, onBankAdd, onDelete, onRename, onViewStatement, onMove, canAdd, canEdit, canDelete };
 
   // Drag-to-move is an edit; disable dragging entirely without edit rights.
   const allowDrag = canDrag && !!canEdit;
@@ -209,9 +217,19 @@ function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename, onV
           onDragLeave={canEdit ? (e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropOver(false); } : undefined}
           onDrop={canEdit ? (e) => { e.preventDefault(); e.stopPropagation(); setDropOver(false); const id = Number(e.dataTransfer.getData('text/plain')); if (id && id !== node.id) onMove?.(id, node.id); } : undefined}
         >
-          <button onClick={() => setSubOpen(o => !o)} className="shrink-0 text-muted-foreground/50 hover:text-muted-foreground">
-            {subOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-          </button>
+          {hasChildren ? (
+            <button
+              onClick={() => expansion.toggle(node.id)}
+              className="shrink-0 text-muted-foreground/50 hover:text-muted-foreground"
+              aria-label={subOpen ? 'Collapse' : 'Expand'}
+              aria-expanded={subOpen}
+              data-testid={`stmt-toggle-${node.id}`}
+            >
+              {subOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            </button>
+          ) : (
+            <span className="w-3 shrink-0" />
+          )}
           <Folder className="w-3.5 h-3.5 text-violet-400/80 shrink-0" />
 
           {renaming ? (
@@ -262,7 +280,20 @@ function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename, onV
     >
       {/* Row */}
       <div className="flex items-center gap-1.5 py-1.5 pr-2 group" style={{ paddingLeft: pl }}>
-        <span className="w-1 h-1 rounded-full bg-muted-foreground/25 shrink-0" />
+        {/* A ledger can parent sub-ledgers; only then does it get a toggle. */}
+        {hasChildren ? (
+          <button
+            onClick={() => expansion.toggle(node.id)}
+            className="shrink-0 text-muted-foreground/50 hover:text-muted-foreground"
+            aria-label={subOpen ? 'Collapse' : 'Expand'}
+            aria-expanded={subOpen}
+            data-testid={`stmt-toggle-${node.id}`}
+          >
+            {subOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+          </button>
+        ) : (
+          <span className="w-1 h-1 rounded-full bg-muted-foreground/25 shrink-0" />
+        )}
 
         {renaming ? (
           <input autoFocus value={renameVal}
@@ -306,8 +337,9 @@ function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename, onV
         )}
       </div>
 
-      {/* Sub-ledgers (existing recursive pattern) */}
-      {node.children.map(c => (
+      {/* Sub-ledgers (existing recursive pattern) — hidden while collapsed.
+          The parent row and its balance above stay on screen either way. */}
+      {subOpen && node.children.map(c => (
         <LedgerLine key={c.id} node={c} depth={depth + 1} {...sharedProps} />
       ))}
     </div>
@@ -315,9 +347,10 @@ function LedgerLine({ node, depth, onCreated, onBankAdd, onDelete, onRename, onV
 }
 
 /* ── group block ────────────────────────────────────────────────────────────── */
-function GroupBlock({ group, onCreated, onBankAdd, onDelete, onRename, onViewStatement, onMove, canAdd, canEdit, canDelete }: {
+function GroupBlock({ group, onCreated, expansion, onBankAdd, onDelete, onRename, onViewStatement, onMove, canAdd, canEdit, canDelete }: {
   group: GroupSummary;
   onCreated: () => void;
+  expansion: StatementExpansion;
   onBankAdd?: (parentId: number, parentType: ALType) => void;
   onDelete?: (id: number, name: string) => void;
   onRename?: (id: number, newName: string) => void;
@@ -325,20 +358,37 @@ function GroupBlock({ group, onCreated, onBankAdd, onDelete, onRename, onViewSta
   onMove?: (nodeId: number, newParentId: number) => void;
   canAdd?: boolean; canEdit?: boolean; canDelete?: boolean;
 }) {
-  if (!group.id) return null;
-  const hasChildren = group.children.length > 0;
   const [dropOver, setDropOver] = useState(false);
+  const groupId = group.id;
+  const hasChildren = group.children.length > 0;
+  // Group heads are top level, so they stay on screen by default; what is inside
+  // them starts closed. The head keeps showing group.total either way.
+  const open = hasChildren && groupId != null && expansion.isOpen(groupId);
+  if (!groupId) return null;
 
   return (
     <div className="mb-3">
-      {/* Group label row — drop target for drag-and-drop */}
+      {/* Group label row — toggle + drop target for drag-and-drop */}
       <div
         className={`flex items-center gap-2 py-2 px-3 rounded-md mx-2 transition-colors select-none
           ${dropOver ? 'bg-blue-500/15 ring-1 ring-blue-500/30' : 'bg-muted/10'}`}
         onDragOver={canEdit ? (e) => { e.preventDefault(); setDropOver(true); } : undefined}
         onDragLeave={canEdit ? (e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropOver(false); } : undefined}
-        onDrop={canEdit ? (e) => { e.preventDefault(); setDropOver(false); const id = Number(e.dataTransfer.getData('text/plain')); if (id && group.id) onMove?.(id, group.id); } : undefined}
+        onDrop={canEdit ? (e) => { e.preventDefault(); setDropOver(false); const id = Number(e.dataTransfer.getData('text/plain')); if (id && groupId) onMove?.(id, groupId); } : undefined}
       >
+        {hasChildren ? (
+          <button
+            onClick={() => expansion.toggle(groupId)}
+            className="shrink-0 text-muted-foreground/60 hover:text-foreground"
+            aria-label={open ? 'Collapse' : 'Expand'}
+            aria-expanded={open}
+            data-testid={`stmt-toggle-${groupId}`}
+          >
+            {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </button>
+        ) : (
+          <span className="w-3.5 shrink-0" />
+        )}
         <span className="flex-1 text-xs font-bold text-foreground/70 uppercase tracking-wide">{group.name}</span>
         {dropOver
           ? <span className="text-[10px] text-blue-400 font-medium">Drop here</span>
@@ -349,8 +399,9 @@ function GroupBlock({ group, onCreated, onBankAdd, onDelete, onRename, onViewSta
       </div>
 
       {/* Ledgers and sub-groups under this group */}
-      {group.children.map(node => (
+      {open && group.children.map(node => (
         <LedgerLine key={node.id} node={node} depth={1} onCreated={onCreated}
+          expansion={expansion}
           onDelete={onDelete} onRename={onRename}
           onViewStatement={onViewStatement} onMove={onMove}
           canAdd={canAdd} canEdit={canEdit} canDelete={canDelete} />
@@ -360,7 +411,7 @@ function GroupBlock({ group, onCreated, onBankAdd, onDelete, onRename, onViewSta
         <p className="pl-6 py-1 text-[11px] text-muted-foreground/40 italic">No ledgers yet</p>
       )}
 
-      <LedgerCreationRetiredNote depth={1} />
+      {open && <LedgerCreationRetiredNote depth={1} />}
 
       <div className="border-b border-border/20 mx-2 mt-1" />
     </div>
@@ -443,6 +494,48 @@ function Panel({ title, icon: Icon, total, hdrClass, borderClass, children }: {
   );
 }
 
+/* ── statement toolbar ───────────────────────────────────────────────────────
+ * Expand/Collapse act on the whole statement, and "Manage Chart of Accounts"
+ * opens the one hierarchy editor rather than a second one — see ManageChartDialog.
+ */
+function StatementToolbar({ expansion, expandableIds, onManage, statement }: {
+  expansion: StatementExpansion;
+  expandableIds: number[];
+  /** Omitted when the user lacks edit rights on page:/accounts/chart. */
+  onManage?: () => void;
+  statement: string;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1 mb-3">
+      <Button
+        variant="ghost" size="sm" className="h-8 px-2 text-xs gap-1"
+        onClick={() => expansion.expandAll(expandableIds)}
+        disabled={expandableIds.length === 0}
+        data-testid={`${statement}-expand-all`}
+      >
+        <UnfoldVertical className="w-3.5 h-3.5" /> Expand All
+      </Button>
+      <Button
+        variant="ghost" size="sm" className="h-8 px-2 text-xs gap-1"
+        onClick={expansion.collapseAll}
+        data-testid={`${statement}-collapse-all`}
+      >
+        <FoldVertical className="w-3.5 h-3.5" /> Collapse All
+      </Button>
+
+      {onManage && (
+        <Button
+          variant="outline" size="sm" className="h-8 px-2.5 text-xs gap-1.5 ml-auto"
+          onClick={onManage}
+          data-testid={`${statement}-manage-chart`}
+        >
+          <Settings2 className="w-3.5 h-3.5" /> Manage Chart of Accounts
+        </Button>
+      )}
+    </div>
+  );
+}
+
 /* ── period filter ───────────────────────────────────────────────────────────── */
 const PERIODS = [
   { value: 'all', label: 'All' },
@@ -460,6 +553,10 @@ export default function ChartOfAccounts() {
   const [customTo, setTo]         = useState('');
   const [outletId, setOutletId]   = useState('all');
   const [selectedLedger, setSelectedLedger] = useState<StatementTarget | null>(null);
+  const [manageOpen, setManageOpen] = useState(false);
+  // Same ids appear on both statements, so each keeps its own namespaced state.
+  const bsExpansion               = useStatementExpansion('balance_sheet');
+  const plExpansion               = useStatementExpansion('profit_loss');
   const queryClient               = useQueryClient();
   const outletsVisible            = useIsLocationKindEnabled('outlet');
   // A filter still holding an outlet would keep scoping the statements after the
@@ -532,6 +629,21 @@ export default function ChartOfAccounts() {
   // This dropdown is a selector, so it offers them only while the module is on —
   // and the whole control disappears when the list comes back empty.
   const outlets = outletsVisible ? (fs?.filters?.outlets ?? []) : [];
+
+  // "Expand All" needs the nodes that genuinely have children, taken from the
+  // real children arrays of the groups each statement renders.
+  const bsExpandable = useMemo(() => collectExpandableIds([
+    bs?.liabilities.capitalAccount, bs?.liabilities.loans, bs?.liabilities.currentLiabilities,
+    bs?.assets.fixedAssets, bs?.assets.currentAssets,
+  ]), [bs]);
+  const plExpandable = useMemo(() => collectExpandableIds([
+    exp?.directExpenses, exp?.indirectExpenses,
+    inc?.directIncomes, inc?.indirectIncomes,
+  ]), [exp, inc]);
+
+  // Managing the chart mutates it, so it follows the same 'edit' gate other
+  // pages use. The backend guards stay authoritative regardless.
+  const canManageChart = perm.canEdit;
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -637,11 +749,11 @@ export default function ChartOfAccounts() {
             </div>
           )}
 
-          <Tabs defaultValue="accounts">
-            <TabsList className="grid w-full max-w-lg grid-cols-3">
-              <TabsTrigger value="accounts" className="gap-1.5 text-xs">
-                <Folder className="w-3.5 h-3.5" /> Accounts
-              </TabsTrigger>
+          {/* The account hierarchy is no longer a tab — the two statements are the
+              primary views, and the same ChartHierarchy editor opens over either
+              of them via "Manage Chart of Accounts". */}
+          <Tabs defaultValue="balance_sheet">
+            <TabsList className="grid w-full max-w-md grid-cols-2">
               <TabsTrigger value="balance_sheet" className="gap-1.5 text-xs">
                 <Landmark className="w-3.5 h-3.5" /> Balance Sheet
               </TabsTrigger>
@@ -650,19 +762,15 @@ export default function ChartOfAccounts() {
               </TabsTrigger>
             </TabsList>
 
-            {/* ══════════════════ ACCOUNT HIERARCHY ══════════════════ */}
-            <TabsContent value="accounts" className="mt-4">
-              <ChartHierarchy
-                statements={fs}
-                statementsLoading={isLoading}
-                onViewStatement={onViewStatement}
-                onStructureChanged={onCreated}
-                perm={{ canAdd: perm.canAdd, canEdit: perm.canEdit, canDelete: perm.canDelete }}
-              />
-            </TabsContent>
-
             {/* ══════════════════ BALANCE SHEET ══════════════════ */}
             <TabsContent value="balance_sheet" className="mt-4">
+              <StatementToolbar
+                statement="balance-sheet"
+                expansion={bsExpansion}
+                expandableIds={bsExpandable}
+                onManage={canManageChart ? () => setManageOpen(true) : undefined}
+              />
+
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
                 {/* ── Liabilities ── */}
@@ -675,13 +783,13 @@ export default function ChartOfAccounts() {
                   {bs && (
                     <>
                       {/* Capital Account */}
-                      <GroupBlock group={bs.liabilities.capitalAccount} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <GroupBlock group={bs.liabilities.capitalAccount} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
 
                       {/* Loans */}
-                      <GroupBlock group={bs.liabilities.loans} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <GroupBlock group={bs.liabilities.loans} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
 
                       {/* Current Liabilities — STD-DTX (Duty & Tax) is already a child ledger with correct balance */}
-                      <GroupBlock group={bs.liabilities.currentLiabilities} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <GroupBlock group={bs.liabilities.currentLiabilities} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
 
                       <Divider />
 
@@ -711,7 +819,7 @@ export default function ChartOfAccounts() {
                 >
                   {bs && (
                     <>
-                      <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <GroupBlock group={bs.assets.fixedAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
 
                       {/* Closing Stock — a real asset line. Before this change closing
                           stock never appeared on the balance sheet, which is why a
@@ -723,7 +831,7 @@ export default function ChartOfAccounts() {
                         </span>
                       </div>
 
-                      <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <GroupBlock group={bs.assets.currentAssets} onCreated={onCreated} expansion={bsExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
                     </>
                   )}
                 </Panel>
@@ -732,6 +840,12 @@ export default function ChartOfAccounts() {
 
             {/* ══════════════════ PROFIT & LOSS ══════════════════ */}
             <TabsContent value="profit_loss" className="mt-4">
+              <StatementToolbar
+                statement="profit-loss"
+                expansion={plExpansion}
+                expandableIds={plExpandable}
+                onManage={canManageChart ? () => setManageOpen(true) : undefined}
+              />
 
               {/* Net P&L banner */}
               {pl && (
@@ -769,10 +883,10 @@ export default function ChartOfAccounts() {
                       <Divider />
 
                       {/* Direct Expenses */}
-                      <GroupBlock group={exp.directExpenses} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <GroupBlock group={exp.directExpenses} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
 
                       {/* Indirect Expenses */}
-                      <GroupBlock group={exp.indirectExpenses} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <GroupBlock group={exp.indirectExpenses} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
                     </>
                   )}
                 </Panel>
@@ -792,7 +906,7 @@ export default function ChartOfAccounts() {
                       <Divider />
 
                       {/* Direct Incomes */}
-                      <GroupBlock group={inc.directIncomes} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <GroupBlock group={inc.directIncomes} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
 
                       {/* Closing Stock */}
                       <StockBlock
@@ -804,7 +918,7 @@ export default function ChartOfAccounts() {
                       <Divider />
 
                       {/* Indirect Incomes */}
-                      <GroupBlock group={inc.indirectIncomes} onCreated={onCreated} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      <GroupBlock group={inc.indirectIncomes} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
                     </>
                   )}
                 </Panel>
@@ -814,6 +928,35 @@ export default function ChartOfAccounts() {
           </>
         )}
       </div>
+
+      {/* ── Manage Chart of Accounts ──
+          The very same ChartHierarchy the Accounts tab used, moved into a large
+          scrollable dialog. Every create / rename / activate / move / delete
+          action, and the protections around them, still live inside it — nothing
+          is reimplemented here. */}
+      {canManageChart && (
+        <Dialog open={manageOpen} onOpenChange={setManageOpen}>
+          <DialogContent className="max-w-[95vw] xl:max-w-6xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="text-base flex items-center gap-2">
+                <Folder className="w-4 h-4 text-primary" /> Manage Chart of Accounts
+              </DialogTitle>
+              <DialogDescription className="text-xs">
+                Add, rename, move, deactivate or delete accounts. Balances shown here are the
+                same live figures as the statements behind this dialog.
+              </DialogDescription>
+            </DialogHeader>
+
+            <ChartHierarchy
+              statements={fs}
+              statementsLoading={isLoading}
+              onViewStatement={(t) => { setManageOpen(false); onViewStatement(t); }}
+              onStructureChanged={onCreated}
+              perm={{ canAdd: perm.canAdd, canEdit: perm.canEdit, canDelete: perm.canDelete }}
+            />
+          </DialogContent>
+        </Dialog>
+      )}
 
       {selectedLedger && (
         <LedgerStatementSheet

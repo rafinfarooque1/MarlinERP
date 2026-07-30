@@ -132,10 +132,24 @@ export default function Dashboard() {
 
   const summaryCards: { label: string; value: React.ReactNode; tone?: CardTone }[] = [
     { label: 'Sales', value: fmt(s?.total ?? 0), tone: 'accent' },
-    { label: 'Invoices', value: num(s?.count ?? 0) },
-    { label: 'Avg Ticket', value: fmt(s?.avgTicket ?? 0) },
+    // Expenses and Bank Balance come from the accounting postings, which carry
+    // no location. The API returns null for a single-location login rather
+    // than passing off a company-wide number as that branch's — render the
+    // gap instead of a misleading zero.
+    {
+      label: 'Expenses',
+      value: bi?.expenses?.total == null ? '—' : fmt(bi.expenses.total),
+      tone: (bi?.expenses?.total ?? 0) > 0 ? 'neg' : 'default',
+    },
+    {
+      label: 'Bank Balance',
+      value: bi?.bank?.balance == null ? '—' : fmt(bi.bank.balance),
+      tone: bi?.bank?.balance == null ? 'default' : bi.bank.balance >= 0 ? 'pos' : 'neg',
+    },
     { label: 'Purchases', value: fmt(bi?.purchases.total ?? 0) },
-    { label: 'Inventory Value', value: fmt(bi?.inventory.valuation ?? 0) },
+    // Hidden entirely for employees without the inventory-valuation right —
+    // the server omits the figure, so there is nothing honest to show.
+    ...(bi?.canViewValuation ? [{ label: 'Inventory Value', value: fmt(bi.inventory.valuation ?? 0) }] : []),
     { label: 'Receivables', value: fmt(bi?.receivables.total ?? 0), tone: (bi?.receivables.overdue ?? 0) > 0 ? 'warn' : 'default' },
     { label: 'Payables', value: fmt(bi?.payables.total ?? 0), tone: 'neg' },
     { label: 'Net Cash', value: fmt(bi?.cash.net ?? 0), tone: (bi?.cash.net ?? 0) >= 0 ? 'pos' : 'neg' },
@@ -204,7 +218,15 @@ export default function Dashboard() {
             {[...Array(8)].map((_, i) => <Skeleton key={i} className="h-[68px] rounded-lg" />)}
           </div>
         ) : (
-          <SummaryCards cards={summaryCards} />
+          <>
+            <SummaryCards cards={summaryCards} />
+            {bi && bi.expenses?.total == null && (
+              <p className="text-xs text-muted-foreground">
+                Expenses and Bank Balance are company-level accounting figures and are not
+                broken down by location, so they are not shown for a single-location view.
+              </p>
+            )}
+          </>
         )}
 
         {/* ── Sales trend + payment mix ──────────────────────────────────── */}
@@ -372,7 +394,9 @@ export default function Dashboard() {
               <Empty message="No inventory data" />
             ) : (
               <div className="space-y-2.5">
-                <StatRow icon={<Landmark className="w-4 h-4 text-primary" />} label="Valuation" value={fmt(bi.inventory.valuation)} />
+                {bi.canViewValuation && (
+                  <StatRow icon={<Landmark className="w-4 h-4 text-primary" />} label="Valuation" value={fmt(bi.inventory.valuation ?? 0)} />
+                )}
                 <StatRow icon={<Boxes className="w-4 h-4 text-muted-foreground" />} label="Products in stock" value={num(bi.inventory.itemCount)} />
                 <StatRow
                   icon={<AlertTriangle className="w-4 h-4 text-destructive" />}

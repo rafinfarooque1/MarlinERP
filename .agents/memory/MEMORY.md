@@ -15,7 +15,7 @@
 - [Migration DDL drift / 42P10](migration-ddl-drift.md) — two causes: constraints inside CREATE TABLE IF NOT EXISTS never reach live DBs, and widening a natural key strands every older ON CONFLICT target.
 - [Boot migration observability](boot-migration-observability.md) — prod discards stdout until the port opens, so a swallowed mid-migration throw silently skips everything after it; one-time conversions need their own top-level step + boot_status row.
 - [Sales settlement & discounts](sales-settlement.md) — cash/upi/card settle at creation; only 'credit' is credit-controlled; dues = total−paid; line discounts net into GST pre-tax, discount_total = bill-level coupon ONLY (post-tax).
-- [RBAC & branch scoping](rbac-branch-scoping.md) — branch_type 'headoffice' is a string, not null; permissions are default-DENY (a missing row denies); branch scoping is still client-side.
+- [RBAC & branch scoping](rbac-branch-scoping.md) — two gates: page right (403) runs BEFORE location scope (404); body location is a request not authority; scope SQL needs the caller's table alias.
 - [Sales location gate](location-context-gate.md) — /sales/* pages render blank (null) in fresh sessions until a location is picked at /sales; not a crash — navigate via the picker in tests.
 - [Stock Ledger](stock-ledger.md) — append-only audit table; write strategy varies by route (fire-and-forget vs inside txn); running balance via window function at query time.
 - [GST transfer classification](gst-transfer-classification.md) — auto-detects internal/intrastate/interstate from GSTIN; JVs created inside transactions at dispatch+approve; STD-BRANCH-DEBTOR/CREDITOR auto-provisioned.
@@ -53,4 +53,6 @@
 - [Publish schema diff](publish-schema-diff.md) — publish diffs the two live DBs (not schema.ts); bare text→date can NEVER apply, date→text applies silently; hold dev at prod's type, publish, then converge.
 - [One outstanding figure](single-outstanding-figure.md) — the owning module must export BOTH the in-process calc and SQL builders; reports and UIs hand-roll `total−paid` and silently drop credit notes.
 - [Orphaned ledger postings](orphaned-ledger-postings.md) — a balanced trial balance proves nothing: deleted ledgers leave postings that classify into neither statement, and the BS gap equals their net exactly.
+- [Dashboard KPI sources](dashboard-kpi-sources.md) — never re-sum expense subtrees for a tile (the capitalisation overlay makes it disagree with the P&L); postings carry no location, so those tiles are company-level only.
 - [Audit stamp fallbacks](audit-stamp-fallbacks.md) — `?? "system"` over a never-assigned request property records every row as system-generated and never fails; grep the middleware before writing created_by.
+- [Hiding a money figure](hiding-a-money-figure.md) — the figure always has siblings behind weaker guards; omit (never zero) the key; stripping a GET a client echoes back on approve zeroes cost.

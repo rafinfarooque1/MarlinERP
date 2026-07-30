@@ -10,22 +10,25 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
 import {
   FileBarChart2, ShoppingCart, Receipt, Boxes, Factory, Users, Landmark, TrendingUp, Lock,
+  ArrowLeftRight,
 } from 'lucide-react';
 
 import SalesSection from './sections/SalesReports';
 import PurchasesSection from './sections/PurchasesReports';
 import InventorySection from './sections/InventoryReports';
+import TransfersSection from './sections/TransfersReports';
 import ProductionSection from './sections/ProductionReports';
 import PartiesSection from './sections/PartiesReports';
 import FinancialSection from './sections/FinancialReports';
 import ProfitabilitySection from './sections/ProfitabilityReports';
 
-type Category = 'sales' | 'purchases' | 'inventory' | 'production' | 'parties' | 'financial' | 'profitability';
+type Category = 'sales' | 'purchases' | 'inventory' | 'transfers' | 'production' | 'parties' | 'financial' | 'profitability';
 
 const CATEGORIES: { value: Category; label: string; icon: typeof ShoppingCart }[] = [
   { value: 'sales', label: 'Sales', icon: ShoppingCart },
   { value: 'purchases', label: 'Purchases', icon: Receipt },
   { value: 'inventory', label: 'Inventory', icon: Boxes },
+  { value: 'transfers', label: 'Branch Transfers', icon: ArrowLeftRight },
   { value: 'production', label: 'Production', icon: Factory },
   { value: 'parties', label: 'Parties', icon: Users },
   { value: 'financial', label: 'Financial', icon: Landmark },
@@ -47,6 +50,7 @@ export default function ReportsCenter() {
     sales: perm.canView,
     purchases: perm.canView,
     inventory: perm.canView,
+    transfers: perm.canView,
     production: perm.canView,
     parties: perm.canView,
     financial: perm.canView,
@@ -68,7 +72,7 @@ export default function ReportsCenter() {
           </div>
           <div>
             <h1 className="text-xl font-bold text-foreground">Reports Center</h1>
-            <p className="text-sm text-muted-foreground">Sales, purchases, inventory, production, parties, financial &amp; profitability — with CSV and PDF export</p>
+            <p className="text-sm text-muted-foreground">Sales, purchases, inventory, branch transfers, production, parties, financial &amp; profitability — with CSV and PDF export</p>
           </div>
         </div>
 
@@ -103,6 +107,7 @@ export default function ReportsCenter() {
             {active === 'sales' && <SalesSection />}
             {active === 'purchases' && <PurchasesSection />}
             {active === 'inventory' && <InventorySection />}
+            {active === 'transfers' && <TransfersSection />}
             {active === 'production' && <ProductionSection />}
             {active === 'parties' && (
               <PartiesSection canCustomers={perm.canView} canVendors={perm.canView} />

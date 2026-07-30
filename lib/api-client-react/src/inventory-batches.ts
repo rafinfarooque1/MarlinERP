@@ -34,8 +34,13 @@ export interface StockBatch {
   reserved: number;
   /** quantity − reserved, floored at zero. */
   available: number;
-  unitCost: number;
-  value: number;
+  /**
+   * Cost-derived fields are ABSENT — not zero — for callers without the
+   * inventory-valuation right. Gate any render on the stock envelope's
+   * `canViewValuation` rather than on the field being truthy.
+   */
+  unitCost?: number;
+  value?: number;
   source: string;
   daysToExpiry: number | null;
   status: BatchExpiryStatus;

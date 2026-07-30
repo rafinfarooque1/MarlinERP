@@ -19,6 +19,7 @@ export * from "./inventory-batches";
 export * from "./returns";
 export * from "./reports";
 export * from "./gst-transfers";
+export * from "./branch-transfers-report";
 export * from "./quick-search";
 export * from "./stock-ledger";
 export * from "./login-history";

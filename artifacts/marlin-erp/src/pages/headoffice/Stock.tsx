@@ -71,6 +71,14 @@ export default function Stock() {
     ...params, page, limit: PAGE_SIZE, q: debouncedSearch || undefined,
   });
   const stock = stockPage?.rows ?? [];
+  // Whether this role may see what the stock is WORTH is the server's call, not
+  // the browser's. It strips avgCost/stockValue/costPrice from the payload for
+  // roles without the inventory-valuation right and reports the same answer
+  // here so the table can drop the columns instead of rendering a row of
+  // dashes. Absent means hidden: if the answer has not arrived yet, showing
+  // nothing is the safe direction.
+  const canSeeValue = (stockPage as any)?.canViewValuation === true;
+  const COLS = canSeeValue ? 9 : 8;
   const totalRows  = stockPage?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
 
@@ -153,8 +161,9 @@ export default function Stock() {
             Available: s.available,
             Unit: s.unit,
             'Reorder Level': s.reorderLevel,
-            'Avg Cost': s.avgCost,
-            Value: s.stockValue,
+            // The export follows the screen. A role that cannot see the money
+            // on screen must not be able to download it either.
+            ...(canSeeValue ? { 'Avg Cost': s.avgCost, Value: s.stockValue } : {}),
           })))}>
             <Download className="w-4 h-4 mr-2" /> Export
           </Button>
@@ -219,7 +228,7 @@ export default function Stock() {
                 <TableHead className="text-right">Quantity</TableHead>
                 <TableHead className="text-right">Reserved</TableHead>
                 <TableHead className="text-right">Available</TableHead>
-                <TableHead className="text-right">Value</TableHead>
+                {canSeeValue && <TableHead className="text-right">Value</TableHead>}
                 <TableHead className="text-right">Status</TableHead>
               </TableRow>
             </TableHeader>
@@ -227,14 +236,14 @@ export default function Stock() {
               {isLoading ? (
                 [...Array(5)].map((_, i) => (
                   <TableRow key={i}>
-                    <TableCell colSpan={9}>
+                    <TableCell colSpan={COLS}>
                       <div className="h-8 bg-muted/30 rounded animate-pulse" />
                     </TableCell>
                   </TableRow>
                 ))
               ) : filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
+                  <TableCell colSpan={COLS} className="text-center py-16 text-muted-foreground">
                     <BarChart3 className="w-10 h-10 mx-auto mb-3 opacity-20" />
                     <p>No stock data found</p>
                   </TableCell>
@@ -284,9 +293,11 @@ export default function Stock() {
                         {Number(s.available).toLocaleString('en-IN')}{' '}
                         <span className="text-xs font-normal text-muted-foreground">{s.unit}</span>
                       </TableCell>
-                      <TableCell className="text-right font-mono text-sm">
-                        {Number(s.stockValue) > 0 ? money(s.stockValue) : '—'}
-                      </TableCell>
+                      {canSeeValue && (
+                        <TableCell className="text-right font-mono text-sm">
+                          {Number(s.stockValue) > 0 ? money(s.stockValue) : '—'}
+                        </TableCell>
+                      )}
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1 flex-wrap">
                           {worst === 'expired'    && <Badge variant="destructive" className="text-[10px]">Expired batch</Badge>}
@@ -304,7 +315,7 @@ export default function Stock() {
                     {isOpen && hasLots && (
                       <TableRow className="bg-muted/5 hover:bg-muted/5">
                         <TableCell />
-                        <TableCell colSpan={8} className="py-3">
+                        <TableCell colSpan={COLS - 1} className="py-3">
                           {rowBatches.length === 0 && untracked <= 0 ? (
                             <p className="text-xs text-muted-foreground flex items-center gap-2">
                               <Layers className="w-3.5 h-3.5" /> No batch records for this stock
@@ -323,8 +334,8 @@ export default function Stock() {
                                     <th className="text-right px-3 py-1.5 font-medium">Rsvd</th>
                                     <th className="text-right px-3 py-1.5 font-medium">Avail</th>
                                     <th className="text-right px-3 py-1.5 font-medium">MRP</th>
-                                    <th className="text-right px-3 py-1.5 font-medium">Unit Cost</th>
-                                    <th className="text-right px-3 py-1.5 font-medium">Value</th>
+                                    {canSeeValue && <th className="text-right px-3 py-1.5 font-medium">Unit Cost</th>}
+                                    {canSeeValue && <th className="text-right px-3 py-1.5 font-medium">Value</th>}
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -356,8 +367,8 @@ export default function Stock() {
                                         </td>
                                         <td className="px-3 py-1.5 text-right font-mono font-semibold">{Number(b.available).toLocaleString('en-IN')}</td>
                                         <td className="px-3 py-1.5 text-right font-mono">{b.mrp != null ? money(b.mrp) : '—'}</td>
-                                        <td className="px-3 py-1.5 text-right font-mono">{Number(b.unitCost) > 0 ? money(b.unitCost) : '—'}</td>
-                                        <td className="px-3 py-1.5 text-right font-mono">{money(b.value)}</td>
+                                        {canSeeValue && <td className="px-3 py-1.5 text-right font-mono">{Number(b.unitCost ?? 0) > 0 ? money(Number(b.unitCost)) : '—'}</td>}
+                                        {canSeeValue && <td className="px-3 py-1.5 text-right font-mono">{money(Number(b.value ?? 0))}</td>}
                                       </tr>
                                     );
                                   })}
@@ -365,7 +376,7 @@ export default function Stock() {
                                     <tr className="border-t border-border/60 text-muted-foreground">
                                       <td className="px-3 py-1.5 italic" colSpan={5}>Untracked (no batch record)</td>
                                       <td className="px-3 py-1.5 text-right font-mono">{untracked.toLocaleString('en-IN')}</td>
-                                      <td colSpan={5} />
+                                      <td colSpan={canSeeValue ? 5 : 3} />
                                     </tr>
                                   )}
                                 </tbody>
@@ -388,7 +399,9 @@ export default function Stock() {
                 {isFetching ? ' · refreshing…' : ''}
               </span>
               <div className="flex items-center gap-3">
-                <span className="font-semibold text-foreground">Page stock value: {money(totalValue)}</span>
+                {canSeeValue && (
+                  <span className="font-semibold text-foreground">Page stock value: {money(totalValue)}</span>
+                )}
                 <div className="flex items-center gap-1">
                   <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Prev</Button>
                   <span className="px-1">Page {page}/{totalPages}</span>

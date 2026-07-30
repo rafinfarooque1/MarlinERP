@@ -861,30 +861,44 @@ function GstTransfersReport({ canDownload }: { canDownload: boolean }) {
 }
 
 // ── Section root ──────────────────────────────────────────────────────────────
+/** The reports whose numbers are cost — offered only with the valuation right. */
+const COST_REPORTS: { value: InvReport; label: string }[] = [
+  { value: 'valuation', label: 'Stock Valuation' },
+  { value: 'near_expiry', label: 'Near Expiry' },
+  { value: 'expired', label: 'Expired Stock' },
+  { value: 'movement', label: 'Slow / Dead Stock' },
+  { value: 'reorder', label: 'Reorder Alerts' },
+];
+
 export default function InventorySection() {
   const { canDownload } = usePermission('page:/reports/sales');
-  const [report, setReport] = useState<InvReport>('valuation');
+  // These five reports are built on cost. Their endpoints refuse anyone without
+  // the Inventory Valuation right, so offering them here would only render a
+  // table of ₹0.00 — a figure that reads as "stock is worthless" rather than
+  // "you may not see this". Hide them instead; the transfer registers stay.
+  const canSeeValuation = usePermission('page:/headoffice/inventory-reports').canView;
+  const [report, setReport] = useState<InvReport>(canSeeValuation ? 'valuation' : 'transfers');
+  const options: { value: InvReport; label: string }[] = [
+    ...(canSeeValuation ? COST_REPORTS : []),
+    { value: 'transfers', label: 'Transfer Register' },
+    { value: 'gst_transfers', label: 'GST Transfers' },
+  ];
+  // Permissions arrive after the first render, so a revoked user can briefly
+  // hold a cost report in state — never render one we are not allowed to show.
+  const active: InvReport = !canSeeValuation && report !== 'gst_transfers' ? 'transfers' : report;
   return (
     <div className="space-y-4">
       <ReportPicker
-        options={[
-          { value: 'valuation', label: 'Stock Valuation' },
-          { value: 'near_expiry', label: 'Near Expiry' },
-          { value: 'expired', label: 'Expired Stock' },
-          { value: 'movement', label: 'Slow / Dead Stock' },
-          { value: 'reorder', label: 'Reorder Alerts' },
-          { value: 'transfers', label: 'Transfer Register' },
-          { value: 'gst_transfers', label: 'GST Transfers' },
-        ]}
-        value={report} onChange={setReport}
+        options={options}
+        value={active} onChange={setReport}
       />
-      {report === 'valuation' && <ValuationReport canDownload={canDownload} />}
-      {report === 'near_expiry' && <NearExpiryReport canDownload={canDownload} />}
-      {report === 'expired' && <ExpiredReport canDownload={canDownload} />}
-      {report === 'movement' && <MovementReport canDownload={canDownload} />}
-      {report === 'reorder' && <ReorderReport canDownload={canDownload} />}
-      {report === 'transfers' && <TransfersReport canDownload={canDownload} />}
-      {report === 'gst_transfers' && <GstTransfersReport canDownload={canDownload} />}
+      {active === 'valuation' && <ValuationReport canDownload={canDownload} />}
+      {active === 'near_expiry' && <NearExpiryReport canDownload={canDownload} />}
+      {active === 'expired' && <ExpiredReport canDownload={canDownload} />}
+      {active === 'movement' && <MovementReport canDownload={canDownload} />}
+      {active === 'reorder' && <ReorderReport canDownload={canDownload} />}
+      {active === 'transfers' && <TransfersReport canDownload={canDownload} />}
+      {active === 'gst_transfers' && <GstTransfersReport canDownload={canDownload} />}
     </div>
   );
 }

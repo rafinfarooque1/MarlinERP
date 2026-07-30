@@ -61,11 +61,16 @@ export interface PaginatedStockRow {
   branchId: number;
   branchName: string;
   quantity: number;
-  costPrice: number;
   unit: string;
   reorderLevel: number;
-  avgCost: number;
-  stockValue: number;
+  /**
+   * Cost-derived fields are ABSENT — not zero — for callers without the
+   * inventory-valuation right, so they are optional by design. Never render
+   * one without checking `canViewValuation` on the envelope first.
+   */
+  costPrice?: number;
+  avgCost?: number;
+  stockValue?: number;
   /** Committed elsewhere (transfer in flight, unfulfilled order) — not sellable. */
   reserved: number;
   /** quantity − reserved: what can actually be promised to someone. */
@@ -73,6 +78,12 @@ export interface PaginatedStockRow {
   /** Judged on `available`, not `quantity`. */
   lowStock: boolean;
 }
+
+/**
+ * The stock envelope carries the server's verdict on whether this caller may
+ * see valuation, so the UI never has to guess from missing fields.
+ */
+export type PaginatedStock = Paginated<PaginatedStockRow> & { canViewValuation: boolean };
 
 export interface PaginatedListParams {
   page?: number;
@@ -139,7 +150,7 @@ export function usePaginatedStock(params?: PaginatedStockParams) {
   return useQuery({
     queryKey: ['/api/stock', 'paginated', key] as const,
     queryFn: ({ signal }) =>
-      customFetch<Paginated<PaginatedStockRow>>(`/api/stock?${key}`, { signal }),
+      customFetch<PaginatedStock>(`/api/stock?${key}`, { signal }),
     placeholderData: (prev) => prev,
   });
 }

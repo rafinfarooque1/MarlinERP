@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, stockEntriesTable, itemsTable, warehousesTable, outletsTable } from "@workspace/db";
-import { requireModuleView, requireModuleAction } from "../middleware/permissions";
+import { requireModuleView, requireModuleAction, canViewStockValuation } from "../middleware/permissions";
 import { eq, and, sql } from "drizzle-orm";
 import { CreateStockTransferBody, ListStockQueryParams } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
@@ -186,6 +186,12 @@ router.get("/stock", requireModuleView(["page:/", "page:/production/item-master"
     buildBranchMaps(),
   ]);
 
+  // Quantities are operational, valuation is commercial. A role without the
+  // inventory-valuation right gets the same rows with the money fields absent
+  // from the payload — not zeroed, not blanked client-side. Nothing about how
+  // the numbers are stored or costed changes; they are simply not serialised.
+  const showValuation = await canViewStockValuation((req as any).employee?.hierarchyId);
+
   const enriched = result.rows.map((r: any) => {
     const qty      = Number(r.quantity);
     const avgCost  = Number(r.avg_cost ?? 0) > 0 ? Number(r.avg_cost) : Number(r.cost ?? 0);
@@ -195,7 +201,7 @@ router.get("/stock", requireModuleView(["page:/", "page:/production/item-master"
     // available, not on-hand — stock that is spoken for cannot cover an order.
     const reserved = r3(Number(r.reserved ?? 0));
     const available = r3(Math.max(0, qty - reserved));
-    return {
+    const row: Record<string, unknown> = {
       id:           r.entry_id,
       itemId:       r.ref_id,
       materialType: r.material_type,
@@ -207,17 +213,23 @@ router.get("/stock", requireModuleView(["page:/", "page:/production/item-master"
       quantity:     qty,
       reserved,
       available,
-      costPrice:    Number(r.cost_price),
       unit:         r.unit ?? "",
       reorderLevel,
-      avgCost,
-      stockValue:   Math.round(qty * avgCost * 100) / 100,
       lowStock:     r.material_type === 'item' && available < reorderLevel,
     };
+    if (showValuation) {
+      row.costPrice  = Number(r.cost_price);
+      row.avgCost    = avgCost;
+      row.stockValue = Math.round(qty * avgCost * 100) / 100;
+    }
+    return row;
   });
 
   if (paginated) {
-    res.json({ total, page, limit, rows: enriched });
+    // The flag travels with the page so the table can drop its money columns
+    // and its footer total. It is a rendering hint, not the control — the
+    // fields are already gone from `rows` when it is false.
+    res.json({ total, page, limit, rows: enriched, canViewValuation: showValuation });
   } else {
     res.json(enriched);
   }
@@ -277,27 +289,61 @@ router.get("/stock/ledger", requireModuleView(["page:/headoffice/stock-ledger", 
   ]);
 
   const total = parseInt(countRes.rows[0]?.total ?? '0', 10);
-  const rows = rowsRes.rows.map((r: any) => ({
-    id:             Number(r.id),
-    txnType:        r.txn_type,
-    materialType:   r.material_type,
-    refId:          Number(r.ref_id),
-    itemName:       r.item_name,
-    unit:           r.unit,
-    branchType:     r.branch_type,
-    branchId:       Number(r.branch_id),
-    branchName:     r.branch_name,
-    qtyChange:      Number(r.qty_change),
-    runningBalance: Number(r.running_balance),
-    unitCost:       Number(r.unit_cost),
-    docType:        r.doc_type,
-    docId:          r.doc_id ? Number(r.doc_id) : null,
-    notes:          r.notes ?? null,
-    createdAt:      r.created_at,
-  }));
+  // The ledger is a movement history first and a cost record second. A role
+  // without the valuation right keeps every movement, quantity and running
+  // balance and loses only the rate each movement went in at.
+  const showValuation = await canViewStockValuation((req as any).employee?.hierarchyId);
+  const rows = rowsRes.rows.map((r: any) => {
+    const row: Record<string, unknown> = {
+      id:             Number(r.id),
+      txnType:        r.txn_type,
+      materialType:   r.material_type,
+      refId:          Number(r.ref_id),
+      itemName:       r.item_name,
+      unit:           r.unit,
+      branchType:     r.branch_type,
+      branchId:       Number(r.branch_id),
+      branchName:     r.branch_name,
+      qtyChange:      Number(r.qty_change),
+      runningBalance: Number(r.running_balance),
+      docType:        r.doc_type,
+      docId:          r.doc_id ? Number(r.doc_id) : null,
+      notes:          r.notes ?? null,
+      createdAt:      r.created_at,
+    };
+    if (showValuation) row.unitCost = Number(r.unit_cost);
+    return row;
+  });
 
-  res.json({ total, page, limit, rows });
+  res.json({ total, page, limit, rows, canViewValuation: showValuation });
 });
+
+/**
+ * Transfer lines carry the cost each unit moved at — the same figure the Stock
+ * page withholds — so it comes out of the payload for roles without the
+ * valuation right. Quantities, batches and every other line field stay.
+ *
+ * Safe because receipt does NOT trust the client: the approve handler rebuilds
+ * each credited line's cost from the stored transfer row, so a client that
+ * echoes the (now absent) field back as 0 cannot change what the destination is
+ * credited at. Never remove that server-side sourcing.
+ */
+const stripLineCost = (lines: unknown): unknown[] =>
+  (Array.isArray(lines) ? lines : []).map((li: any) => {
+    if (!li || typeof li !== "object") return li;
+    const { costPrice, unitCost, lineValue, value, batchBreakdown, ...rest } = li;
+    // The per-lot breakdown repeats the same cost one level down, so removing
+    // it from the line alone leaves it in plain sight. Lot number, dates and
+    // quantity stay — those are traceability, not money.
+    if (Array.isArray(batchBreakdown)) {
+      rest.batchBreakdown = batchBreakdown.map((b: any) => {
+        if (!b || typeof b !== "object") return b;
+        const { unitCost: _u, costPrice: _c, value: _v, ...bRest } = b;
+        return bRest;
+      });
+    }
+    return rest;
+  });
 
 router.get("/stock/transfers", requireModuleView("page:/transfers"), async (req, res): Promise<void> => {
   // Optional ?from&to (YYYY-MM-DD, inclusive), ?status and ?limit filters so
@@ -321,8 +367,12 @@ router.get("/stock/transfers", requireModuleView("page:/transfers"), async (req,
   // Non-HO employees only see transfers involving their warehouse OR one of
   // that warehouse's mapped outlets. The old branchId equality leaked none of
   // the child-outlet work to a warehouse manager and encouraged client filters.
+  // The alias must name what this query actually selects FROM: the list query
+  // uses the bare table, while the detail query aliases it `t`. A mismatch here
+  // is invisible to head-office users (their fragment is a constant TRUE) and
+  // only 500s for the branch users the scope exists to restrict.
   const emp = (req as any).employee as { branchType: string; branchId: number } | undefined;
-  if (emp) conds.push(scopeTransferWhere(await getUserDataScope(emp), params));
+  if (emp) conds.push(scopeTransferWhere(await getUserDataScope(emp), params, "stock_transfers"));
 
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   const [result, branchName] = await Promise.all([
@@ -336,6 +386,8 @@ router.get("/stock/transfers", requireModuleView("page:/transfers"), async (req,
     `, params),
     buildBranchMaps(),
   ]);
+  const showValuation = await canViewStockValuation((req as any).employee?.hierarchyId);
+
   const enriched = result.rows.map((r: any) => ({
     id: r.id,
     challanNumber: r.challan_number,
@@ -344,14 +396,14 @@ router.get("/stock/transfers", requireModuleView("page:/transfers"), async (req,
     toType: r.to_type,
     toId: r.to_id,
     transferDate: r.transfer_date,
-    lineItems: r.line_items ?? [],
+    lineItems: showValuation ? (r.line_items ?? []) : stripLineCost(r.line_items),
     isInterstate: r.is_interstate,
     status: r.status,
     notes: r.notes,
     createdAt: r.created_at,
     approvedBy: r.approved_by,
     approvedAt: r.approved_at,
-    receivedLineItems: r.received_line_items ?? [],
+    receivedLineItems: showValuation ? (r.received_line_items ?? []) : stripLineCost(r.received_line_items),
     rejectionReason: r.rejection_reason,
     transferType: r.transfer_type ?? 'internal',
     fromGstin: r.from_gstin ?? null,
@@ -1275,6 +1327,7 @@ router.get("/stock/transfers/:id", requireModuleView("page:/transfers"), async (
   const r = result.rows[0];
   if (!r) { res.status(404).json({ error: "Not found" }); return; }
   const branchName = await buildBranchMaps();
+  const showValuation = await canViewStockValuation((req as any).employee?.hierarchyId);
   res.json({
     id: r.id,
     challanNumber: r.challan_number,
@@ -1283,14 +1336,14 @@ router.get("/stock/transfers/:id", requireModuleView("page:/transfers"), async (
     toType: r.to_type,
     toId: r.to_id,
     transferDate: r.transfer_date,
-    lineItems: r.line_items ?? [],
+    lineItems: showValuation ? (r.line_items ?? []) : stripLineCost(r.line_items),
     isInterstate: r.is_interstate,
     status: r.status,
     notes: r.notes,
     createdAt: r.created_at,
     approvedBy: r.approved_by,
     approvedAt: r.approved_at,
-    receivedLineItems: r.received_line_items ?? [],
+    receivedLineItems: showValuation ? (r.received_line_items ?? []) : stripLineCost(r.received_line_items),
     rejectionReason: r.rejection_reason,
     transferType: r.transfer_type ?? 'internal',
     fromGstin: r.from_gstin ?? null,

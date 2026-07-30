@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import {
   ShieldCheck, ShieldOff, Save, Loader2, ChevronUp, Search,
   Eye, Plus, Pencil, Trash2, Download, Printer, BadgeCheck, Share2,
+  Check, Minus,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useGetMe, useListHierarchies, useListPermissions, setPermission } from '@workspace/api-client-react';
@@ -44,7 +45,8 @@ const ACTIONS: { key: ActionKey; label: string; icon: React.ElementType }[] = [
   { key: 'share',    label: 'Share',    icon: Share2 },
 ];
 
-const GRID = 'grid grid-cols-[1fr_repeat(8,3rem)] gap-x-1';
+// Page name · the per-row All control · the eight action columns.
+const GRID = 'grid grid-cols-[1fr_2.5rem_repeat(8,3rem)] gap-x-1';
 
 const NONE: PagePerm = { view: false, add: false, edit: false, del: false, download: false, print: false, approve: false, share: false };
 const allActions = (value: boolean): PagePerm =>
@@ -140,6 +142,23 @@ export default function Permissions() {
 
   const setAll = (value: boolean) =>
     patch(Object.fromEntries(PAGE_PERM_KEYS.map(k => [k, allActions(value)])));
+
+  /**
+   * Grant or revoke every action on ONE page. The patch is keyed by that page
+   * alone, so no other row can be touched — `patch` merges a single-entry object
+   * into the same `perms` state the individual checkboxes write to, which keeps
+   * one source of truth and leaves each box free to be changed afterwards.
+   *
+   * allActions() already satisfies the View invariant in both directions: all-on
+   * includes view, all-off is exactly NONE.
+   */
+  const setRowAll = (key: string, value: boolean) => patch({ [key]: allActions(value) });
+
+  /** How much of a row is granted — drives the row control's visual state. */
+  const rowState = (p: PagePerm): 'all' | 'some' | 'none' => {
+    const on = ACTIONS.filter(a => p[a.key]).length;
+    return on === ACTIONS.length ? 'all' : on === 0 ? 'none' : 'some';
+  };
 
   /** Grant or revoke one action across every page currently shown. */
   const toggleColumn = (action: ActionKey) => {
@@ -298,6 +317,10 @@ export default function Permissions() {
                 <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
                   Page
                 </span>
+                {/* Label only — the hierarchy-wide bulk actions stay above the table. */}
+                <span className="text-[9px] uppercase tracking-tight text-muted-foreground text-center leading-none">
+                  All
+                </span>
                 {ACTIONS.map(a => (
                   <button
                     key={a.key}
@@ -319,6 +342,9 @@ export default function Permissions() {
               <div className="divide-y divide-border/40">
                 {shownRows.map(row => {
                   const p = rolePerms[row.key] ?? NONE;
+                  // Top level is always full access, so the control reports 'all'
+                  // there rather than reading a map it is not allowed to edit.
+                  const state = isTopLevel ? 'all' : rowState(p);
                   return (
                     <div key={row.key} className={`${GRID} items-center px-4 py-2 hover:bg-muted/5`}>
                       <div className="pr-2 min-w-0">
@@ -328,6 +354,30 @@ export default function Permissions() {
                         <span className="text-[11px] text-muted-foreground/70 truncate block">
                           {row.section ? `${row.section} · ${row.href}` : row.href}
                         </span>
+                      </div>
+                      {/* Select all / clear all for THIS page only. A full row
+                          clears; anything less fills. Partial rows show a dash so
+                          the control never claims the row is fully granted. */}
+                      <div className="flex justify-center">
+                        <button
+                          type="button"
+                          role="checkbox"
+                          aria-checked={state === 'all' ? true : state === 'some' ? 'mixed' : false}
+                          disabled={isTopLevel}
+                          onClick={() => setRowAll(row.key, state !== 'all')}
+                          title={isTopLevel
+                            ? undefined
+                            : state === 'all'
+                              ? `Clear every action for ${row.name}`
+                              : `Select every action for ${row.name}`}
+                          aria-label={`Select all actions for ${row.name}`}
+                          className={`grid place-content-center h-4 w-4 shrink-0 rounded-sm border border-primary shadow disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
+                            state === 'none' ? '' : 'bg-primary text-primary-foreground'
+                          }`}
+                        >
+                          {state === 'all' && <Check className="h-4 w-4" />}
+                          {state === 'some' && <Minus className="h-4 w-4" />}
+                        </button>
                       </div>
                       {ACTIONS.map(a => (
                         <div key={a.key} className="flex justify-center">

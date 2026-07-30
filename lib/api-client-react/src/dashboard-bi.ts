@@ -25,6 +25,11 @@ export interface BiTopItem { itemId: number; name: string; qty: number; revenue:
 export interface BiTopCustomer { customerId: number; name: string; revenue: number; count: number }
 
 export interface DashboardBi {
+  /**
+   * False when this employee lacks the inventory-valuation right, in which
+   * case `inventory.valuation` is ABSENT rather than zero.
+   */
+  canViewValuation: boolean;
   period: { fromDate: string | null; toDate: string | null };
   scope: { locationType: string | null; locationId: number | null; label: string; isHeadOffice: boolean };
   sales: {
@@ -37,10 +42,18 @@ export interface DashboardBi {
   };
   purchases: { total: number; count: number; byDay: BiPurchaseDay[] };
   production: { batches: number; outputQty: number; wastageQty: number; wastagePct: number; byDay: BiProductionDay[] };
-  inventory: { valuation: number; itemCount: number; lowStockCount: number; expiringSoonCount: number };
+  inventory: { valuation?: number; itemCount: number; lowStockCount: number; expiringSoonCount: number };
   receivables: { total: number; overdue: number; count: number };
   payables: { total: number; count: number };
   cash: { inflow: number; outflow: number; net: number };
+  /**
+   * Direct + indirect expenses for the period, from the accounting postings.
+   * `null` when the caller is scoped to a single location — derived postings
+   * carry no location, so there is no honest per-branch figure to show.
+   */
+  expenses: { total: number | null; direct: number | null; indirect: number | null; companyWide: boolean };
+  /** Aggregate bank ledger balance (excludes physical cash). `null` as above. */
+  bank: { balance: number | null; companyWide: boolean };
   topItems: BiTopItem[];
   topCustomers: BiTopCustomer[];
 }

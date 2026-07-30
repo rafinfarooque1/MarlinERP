@@ -1,0 +1,65 @@
+Use these decisions:
+
+1. VALUE BASIS
+Use each source row's PRINTED LINE VALUE as authoritative.
+
+Expected sum of line values: ₹6,33,192.22.
+
+The source grand total says ₹6,33,192.21, so retain and report the ₹0.01 source discrepancy. Do NOT create a balancing journal, change a line arbitrarily, or force the total to ₹6,33,192.21.
+
+Keep the original printed unit costs for reference, but inventory/purchase value for this import must reconcile to the authoritative source line values.
+
+2. GST ON THIS PURCHASE
+NO input GST on this historical Frozen Hub purchase.
+
+Record the purchase at the inventory/stock value only. Do not add CGST/SGST/IGST to the vendor payable.
+
+Still store the confirmed 5% GST rate and correct HSN in Item Master for FUTURE taxable sales.
+
+Do not claim input tax credit from this import because there is currently no supporting Frozen Hub GSTIN/tax-invoice information in the data supplied.
+
+3. EXISTING "frozen avocado"
+Treat the existing generic "frozen avocado" record as unrelated/test data.
+
+Do NOT map AVOCADO SLICE AFP FS or MARLIN AVOCADO 1.5KG to it.
+
+Create the source-file items as their own Item Master records, subject to the normal duplicate check against exact/canonical source item identity.
+
+Do not modify or delete the existing frozen avocado record.
+
+4. HSN
+Where the source/PDF extraction has clearly dropped the leading zero from a frozen-fruit HSN, restore the leading zero.
+
+Show a BEFORE → AFTER HSN mapping for every corrected item in the preview.
+
+Do not silently correct an ambiguous HSN. Flag ambiguous codes for my approval.
+
+5. ACCOUNTING
+This remains:
+
+Frozen Hub vendor purchase → Finished Goods inventory at Ragiguda warehouse.
+
+Then settle the Frozen Hub vendor payable against the existing Frozen Hub Investment ledger using the ERP payment/voucher mechanism that correctly clears vendor ageing.
+
+There must be NO Cash or Bank movement.
+
+Before ANY live write, show the exact proposed accounting entries and confirm:
+
+Inventory/purchase value = ₹6,33,192.22
+Frozen Hub payable created = ₹6,33,192.22
+Frozen Hub payable settled = ₹6,33,192.22
+Cash impact = ₹0
+Bank impact = ₹0
+Remaining Frozen Hub payable from this import = ₹0
+
+Debit and credit totals must balance exactly.
+
+6. IMPORTANT
+Continue with PREVIEW/DRY RUN ONLY.
+
+Do not write to production yet.
+Do not publish automatically.
+Do not create balancing adjustments.
+Do not modify unrelated existing production data.
+
+Show me the complete item, batch, MFG, calculated MFG+18-month expiry, UOM, HSN, GST, quantity, value, purchase and accounting preview first, then STOP for my approval.

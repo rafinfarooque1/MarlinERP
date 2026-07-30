@@ -7,6 +7,8 @@
  * imported across sibling files.
  */
 
+import { useCallback, useRef, useState } from 'react';
+
 /* ── types ──────────────────────────────────────────────────────────────────── */
 export type ALType = 'asset' | 'liability' | 'income' | 'expense' | 'equity';
 
@@ -68,6 +70,72 @@ export const fmt = (n: number) =>
  */
 export const naturalSide = (type?: string | null): 'dr' | 'cr' =>
   type === 'liability' || type === 'equity' || type === 'income' ? 'cr' : 'dr';
+
+/* ── statement expansion ─────────────────────────────────────────────────────
+ * The Balance Sheet and the P&L render the same accounts from the same payload,
+ * so a node id can appear in both. Expansion state is therefore keyed by
+ * `${statement}:${id}` — collapsing "Current Assets" on the Balance Sheet must
+ * not reach across and collapse anything on the P&L.
+ *
+ * The set holds the nodes that are OPEN, so the default (empty set) is
+ * "top-level group heads visible, everything inside them collapsed" — the user
+ * sees the statement's shape and its totals without every ledger at once.
+ * Collapsing hides rows only; no figure is recomputed anywhere.
+ */
+export interface StatementExpansion {
+  isOpen: (id: number) => boolean;
+  toggle: (id: number) => void;
+  expandAll: (ids: number[]) => void;
+  collapseAll: () => void;
+}
+
+export function useStatementExpansion(statement: string): StatementExpansion {
+  const [open, setOpen] = useState<Set<string>>(() => new Set());
+  const statementRef = useRef(statement);
+  statementRef.current = statement;
+
+  const key = useCallback((id: number) => `${statementRef.current}:${id}`, []);
+
+  const isOpen = useCallback((id: number) => open.has(key(id)), [open, key]);
+
+  const toggle = useCallback((id: number) => {
+    setOpen(prev => {
+      const next = new Set(prev);
+      const k = key(id);
+      if (next.has(k)) next.delete(k); else next.add(k);
+      return next;
+    });
+  }, [key]);
+
+  const expandAll = useCallback((ids: number[]) => {
+    setOpen(new Set(ids.map(key)));
+  }, [key]);
+
+  const collapseAll = useCallback(() => setOpen(new Set()), []);
+
+  return { isOpen, toggle, expandAll, collapseAll };
+}
+
+/**
+ * Every node in these groups that actually has children — the exact set
+ * "Expand All" needs. Taken from the real children arrays, so a node without
+ * children never becomes expandable and never grows a dead chevron.
+ */
+export function collectExpandableIds(groups: (GroupSummary | undefined)[]): number[] {
+  const out: number[] = [];
+  const walk = (n: LedgerNode) => {
+    if (n.children && n.children.length > 0) {
+      out.push(n.id);
+      n.children.forEach(walk);
+    }
+  };
+  for (const g of groups) {
+    if (!g) continue;
+    if (g.id != null && g.children.length > 0) out.push(g.id);
+    g.children?.forEach(walk);
+  }
+  return out;
+}
 
 /** Inline balance tag — always renders, shows Dr/Cr suffix with colour. */
 export function BalTag({ balance, size = 'sm', natural = 'dr' }: {

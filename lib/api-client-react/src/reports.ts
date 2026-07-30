@@ -178,8 +178,11 @@ export interface SalesStockCombinedResponse {
   sales: { invoices: number; revenue: number; tax: number; collected: number; outstanding: number };
   salesByLocation: { locationType: string; locationName: string; invoices: number; revenue: number }[];
   topItems: { itemName: string; unit: string; qty: number; revenue: number }[];
-  stockByLocation: { locationType: string; locationName: string; skus: number; totalQty: number; stockValue: number }[];
-  stockValueTotal: number;
+  /** `stockValue` is omitted server-side for roles without the valuation right. */
+  stockByLocation: { locationType: string; locationName: string; skus: number; totalQty: number; stockValue?: number }[];
+  stockValueTotal?: number;
+  /** False when the server withheld the money fields above. */
+  canViewValuation: boolean;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

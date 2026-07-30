@@ -3,8 +3,9 @@ import { db, pool, itemsTable, salesTable, stockEntriesTable, employeesTable, st
 import { count, sum, eq, and, sql, inArray } from "drizzle-orm";
 import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
 import { stockValuation } from "../lib/valuation";
-import { requireModuleView } from "../middleware/permissions";
+import { requireModuleView, canViewStockValuation } from "../middleware/permissions";
 import { buildDerivedPostings } from "./journal";
+import { companyBalances, companyFinancials } from "../lib/dashboardFinancials";
 import { outstandingExpr } from "../lib/salePaymentPosition";
 import { isIsoDate } from "../lib/dateInput";
 
@@ -20,31 +21,6 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
   const today = new Date().toISOString().split("T")[0];
 
   // ── COA ledger-based bank & cash balances ─────────────────────────────
-  // Build a lightweight ledger tree to find STD-BANK / STD-CASH subtrees
-  const { rows: allLedgers } = await pool.query(
-    `SELECT id, parent_id, code FROM account_ledgers`
-  );
-  const childrenOf = new Map<number, number[]>();
-  const codeToId   = new Map<string, number>();
-  for (const r of allLedgers) {
-    const id = Number(r.id);
-    if (r.code) codeToId.set(r.code as string, id);
-    if (!childrenOf.has(id)) childrenOf.set(id, []);
-    if (r.parent_id) {
-      const pid = Number(r.parent_id);
-      if (!childrenOf.has(pid)) childrenOf.set(pid, []);
-      childrenOf.get(pid)!.push(id);
-    }
-  }
-  const subtreeIds = (code: string): number[] => {
-    const root = codeToId.get(code);
-    if (!root) return [];
-    const ids: number[] = [];
-    const visit = (id: number) => { ids.push(id); (childrenOf.get(id) ?? []).forEach(visit); };
-    visit(root);
-    return ids;
-  };
-
   // Cash and bank are read from the same derived posting stream that produces
   // the Trial Balance, the Cash Book and the Balance Sheet.
   //
@@ -54,18 +30,9 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
   // from a receipt — and it counted the few sale receipts that do exist, which
   // the books deliberately exclude to avoid double-counting. The dashboard
   // showed cash of -125.01 on a day the Cash Book and the Balance Sheet both
-  // said 29,609.90. One source now feeds all of them.
-  const postings = await buildDerivedPostings({});
-  const txnBalMap = new Map<number, number>();
-  for (const p of postings) {
-    txnBalMap.set(p.ledgerId, (txnBalMap.get(p.ledgerId) ?? 0) + (Number(p.debit) - Number(p.credit)));
-  }
-
-  const sumSubtree = (ids: number[]) =>
-    Math.round(ids.reduce((s, id) => s + (txnBalMap.get(id) ?? 0), 0) * 100) / 100;
-
-  const bankBalance = sumSubtree(subtreeIds('STD-BANK'));
-  const cashBalance = sumSubtree(subtreeIds('STD-CASH'));
+  // said 29,609.90. One source now feeds all of them — and the same helper
+  // feeds /dashboard/bi, so the two dashboards cannot disagree either.
+  const { bankBalance, cashBalance } = await companyBalances(buildDerivedPostings);
 
   // ── Other metrics ─────────────────────────────────────────────────────
   const [
@@ -109,12 +76,19 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
 
   const batchRow = (batchRows.rows[0] ?? {}) as any;
 
+  // Hiding the Value column on the Stock screen is pointless if the same
+  // number is sitting on a dashboard tile, so the tiles obey the same right.
+  const showValuation = await canViewStockValuation((req as any).employee?.hierarchyId);
+
   res.json({
     totalItemsProduced:   itemsCount.count,
     totalSalesAmount:     Number(salesSum.total ?? 0),
-    totalStockValue:      stockValue.grandTotal,
-    stockValueOnHand:     stockValue.onHandValue,
-    stockValueInTransit:  stockValue.inTransitValue,
+    canViewValuation:     showValuation,
+    ...(showValuation ? {
+      totalStockValue:     stockValue.grandTotal,
+      stockValueOnHand:    stockValue.onHandValue,
+      stockValueInTransit: stockValue.inTransitValue,
+    } : {}),
     activeEmployees:      activeEmps.count,
     pendingTransfers:     pendingTransfers.count,
     todayAttendance:      todayAtt.count,
@@ -403,6 +377,19 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
 
   const sc = salesConds();
 
+  // ── Company-level accounting figures (Expenses, Bank Balance) ────────────
+  // A derived posting carries a ledger, a date and an amount — it has no
+  // location, so these cannot honestly be reduced to one branch. Rather than
+  // build a second, location-aware expense aggregate (a parallel source of
+  // truth that would drift from the P&L), they are computed only for a caller
+  // whose scope is the whole company. A location-restricted employee gets
+  // nulls and the UI renders them as unavailable, which is also what the
+  // location-scoping rules require: no company-wide money figure leaks to a
+  // single-branch login.
+  const accountingP = scope.isHeadOffice
+    ? companyFinancials(buildDerivedPostings, { fromDate: fromDate || null, toDate: toDate || null })
+    : Promise.resolve(null);
+
   // ── Run everything in parallel ────────────────────────────────────────────
   const [
     salesTotals,
@@ -579,8 +566,12 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   const salesCount = Number(salesTotals.rows[0]?.count ?? 0);
   const outputQty = qty(productionAgg.rows[0]?.output_qty);
   const wastageQty = qty(productionAgg.rows[0]?.wastage_qty);
+  const accounting = await accountingP;
+  // Same rule as the Stock screen: no valuation right, no valuation figure.
+  const showValuation = await canViewStockValuation((req as any).employee?.hierarchyId);
 
   res.json({
+    canViewValuation: showValuation,
     period: { fromDate: fromDate || null, toDate: toDate || null },
     scope: {
       locationType: effLocType,
@@ -612,7 +603,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       byDay: productionByDay.rows.map((r: any) => ({ date: asISODate(r.date), qty: qty(r.qty) })),
     },
     inventory: {
-      valuation: valuation.grandTotal,
+      ...(showValuation ? { valuation: valuation.grandTotal } : {}),
       itemCount: valuation.byProduct.filter((p) => p.quantity > 0).length,
       lowStockCount: Number(lowStockRow.rows[0]?.count ?? 0),
       expiringSoonCount: Number(expiringRow.rows[0]?.count ?? 0),
@@ -632,6 +623,22 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       inflow: money(cashInRows.rows[0]?.total),
       outflow: money(cashOutRows.rows[0]?.total),
       net: money(Number(cashInRows.rows[0]?.total ?? 0) - Number(cashOutRows.rows[0]?.total ?? 0)),
+    },
+    // Direct + indirect expenses for the period, from the same derived
+    // postings as the P&L. Purchases are excluded because the Purchases tile
+    // above already shows them. `null` means the caller's scope is a single
+    // location, where a company-level figure would be both wrong and a leak.
+    expenses: {
+      total: accounting ? accounting.expenses.total : null,
+      direct: accounting ? accounting.expenses.direct : null,
+      indirect: accounting ? accounting.expenses.indirect : null,
+      companyWide: true,
+    },
+    // Bank only — physical cash stays in the separate `cash` figures, matching
+    // this ERP's existing STD-BANK / STD-CASH split.
+    bank: {
+      balance: accounting ? accounting.bankBalance : null,
+      companyWide: true,
     },
     topItems: topItemsRows.rows.map((r: any) => ({
       itemId: Number(r.item_id), name: r.name, qty: qty(r.qty), revenue: money(r.revenue),

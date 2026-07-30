@@ -12,7 +12,7 @@
  */
 import { Router } from "express";
 import { pool } from "@workspace/db";
-import { requireModuleView } from "../middleware/permissions";
+import { requireModuleView, canViewStockValuation } from "../middleware/permissions";
 import { lineTaxHeads } from "../lib/gst";
 import { creditAdjustmentsExpr, outstandingExpr, computePaymentPosition } from "../lib/salePaymentPosition";
 import { isIsoDate } from "../lib/dateInput";
@@ -691,20 +691,23 @@ router.get("/reports/sales-stock-combined", requireModuleView("page:/reports/sal
               -- Not revenue − collected: that ignores credit notes. Sum the
               -- shared per-invoice outstanding so this agrees with every other
               -- surface.
-              COALESCE(SUM(${outstandingExpr("sales")}),0) AS outstanding
-       FROM sales
-       WHERE branch_transfer_id IS NULL AND cancelled_at IS NULL
-         AND ($1 = '' OR sale_date >= $1::date) AND ($2 = '' OR sale_date <= $2::date)
+              COALESCE(SUM(${outstandingExpr("s")}),0) AS outstanding
+       FROM sales s
+       WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
+         AND ($1 = '' OR s.sale_date >= $1::date) AND ($2 = '' OR s.sale_date <= $2::date)
          AND ${aggScope}`,
       aggParams,
     ),
     pool.query<any>(
-      `SELECT COALESCE(location_type,'outlet') AS location_type,
-              COALESCE(location_id, outlet_id) AS location_id,
-              COUNT(*) AS invoices, SUM(total_amount) AS revenue
-       FROM sales
-       WHERE branch_transfer_id IS NULL AND cancelled_at IS NULL
-         AND ($1 = '' OR sale_date >= $1::date) AND ($2 = '' OR sale_date <= $2::date)
+      // Aliased `s` because scopeSalesWhere() emits `s.`-qualified columns.
+      // Head-office callers never noticed: their scope fragment is a constant
+      // TRUE, so the alias is only referenced for the branch users it restricts.
+      `SELECT COALESCE(s.location_type,'outlet') AS location_type,
+              COALESCE(s.location_id, s.outlet_id) AS location_id,
+              COUNT(*) AS invoices, SUM(s.total_amount) AS revenue
+       FROM sales s
+       WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
+         AND ($1 = '' OR s.sale_date >= $1::date) AND ($2 = '' OR s.sale_date <= $2::date)
          AND ${locScope}
        GROUP BY 1, 2 ORDER BY 4 DESC NULLS LAST`,
       locParams,
@@ -742,6 +745,12 @@ router.get("/reports/sales-stock-combined", requireModuleView("page:/reports/sal
   const collected = Number(s0.collected ?? 0);
   const outstanding = Number(s0.outstanding ?? 0);
 
+  // This report pairs sales with stock, so it carries the same closing value as
+  // the valuation report. Reaching it needs only the Reports right, which is a
+  // weaker key than the one guarding that report — so the money half is dropped
+  // for anyone who lacks the valuation right. Quantities and sales are untouched.
+  const showValuation = await canViewStockValuation((req as any).employee?.hierarchyId);
+
   res.json({
     period: { from: range.from || null, to: range.to || null },
     sales: {
@@ -766,14 +775,20 @@ router.get("/reports/sales-stock-combined", requireModuleView("page:/reports/sal
         revenue: r2(Number(r.revenue)),
       };
     }),
-    stockByLocation: stockRows.rows.map((r: any) => ({
-      locationType: r.branch_type,
-      locationName: locName(maps, r.branch_type, Number(r.branch_id)),
-      skus: Number(r.skus),
-      totalQty: r3(Number(r.total_qty)),
-      stockValue: r2(Number(r.stock_value)),
-    })),
-    stockValueTotal: r2(stockRows.rows.reduce((s: number, r: any) => s + Number(r.stock_value), 0)),
+    stockByLocation: stockRows.rows.map((r: any) => {
+      const row: Record<string, unknown> = {
+        locationType: r.branch_type,
+        locationName: locName(maps, r.branch_type, Number(r.branch_id)),
+        skus: Number(r.skus),
+        totalQty: r3(Number(r.total_qty)),
+      };
+      if (showValuation) row.stockValue = r2(Number(r.stock_value));
+      return row;
+    }),
+    ...(showValuation
+      ? { stockValueTotal: r2(stockRows.rows.reduce((s: number, r: any) => s + Number(r.stock_value), 0)) }
+      : {}),
+    canViewValuation: showValuation,
   });
 });
 
@@ -905,6 +920,301 @@ router.get("/reports/gst-transfers", requireModuleView("page:/reports/sales"), a
     },
     notInvoiced,
     rows,
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// BRANCH TRANSFERS (stock transfers between the company's own locations)
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Read-only. One row per transfer LINE, so item / batch / quantity are
+// meaningful instead of a challan-level lump.
+//
+// Terminology: the sending side is "Transfer Out", the receiving side is
+// "Transfer In". Operationally they behave like a sale and a purchase, but a
+// transfer is neither: no revenue is earned and nothing is bought, so the
+// figures here never join the sales or purchase totals.
+//
+// Location scope is enforced in SQL by scopeTransferWhere — a transfer is
+// visible only when one of the caller's own locations is its source and/or its
+// destination. The sourceType/sourceId and destType/destId query params can
+// only NARROW that set; asking for somebody else's location returns nothing.
+router.get("/reports/branch-transfers", requireModuleView("page:/reports/sales"), async (req, res): Promise<void> => {
+  const q = req.query as Record<string, unknown>;
+  const fromDate = typeof q.fromDate === "string" ? q.fromDate : "";
+  const toDate = typeof q.toDate === "string" ? q.toDate : "";
+  if ((fromDate && !isIsoDate(fromDate)) || (toDate && !isIsoDate(toDate))) {
+    res.status(400).json({ error: "fromDate/toDate must be YYYY-MM-DD dates" }); return;
+  }
+
+  const LOC_TYPES = ["warehouse", "outlet"];
+  const sourceType = typeof q.sourceType === "string" ? q.sourceType : "";
+  const destType = typeof q.destType === "string" ? q.destType : "";
+  if ((sourceType && !LOC_TYPES.includes(sourceType)) || (destType && !LOC_TYPES.includes(destType))) {
+    res.status(400).json({ error: "sourceType/destType must be warehouse or outlet" }); return;
+  }
+  const intParam = (v: unknown): number | null => {
+    if (typeof v !== "string" || v === "") return 0;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  };
+  const sourceId = intParam(q.sourceId);
+  const destId = intParam(q.destId);
+  const itemId = intParam(q.itemId);
+  if (sourceId === null || destId === null || itemId === null) {
+    res.status(400).json({ error: "sourceId/destId/itemId must be non-negative integers" }); return;
+  }
+
+  // Ids OVERLAP across the three product tables — item #7, material #7 and
+  // packing material #7 are different products. Filtering on the id alone
+  // therefore matches lines of the wrong kind, so the filter is compound and
+  // the caller may pin the kind alongside the id.
+  const MATERIAL_TYPES = ["item", "material", "raw_material"];
+  const materialTypeFilter = typeof q.materialType === "string" ? q.materialType : "";
+  if (materialTypeFilter && !MATERIAL_TYPES.includes(materialTypeFilter)) {
+    res.status(400).json({ error: "materialType must be item, material or raw_material" }); return;
+  }
+
+  // 'pending' is a legacy spelling of 'in_transit' (routes/stock.ts treats the
+  // two the same), so asking for one has to return the other as well.
+  const status = typeof q.status === "string" ? q.status : "";
+  const STATUSES = ["in_transit", "pending", "completed", "rejected"];
+  if (status && !STATUSES.includes(status)) {
+    res.status(400).json({ error: "status must be in_transit, completed or rejected" }); return;
+  }
+  const statusList = status === "" ? [] : (status === "in_transit" || status === "pending") ? ["in_transit", "pending"] : [status];
+
+  const { getUserDataScope: btScope, scopeTransferWhere: btWhere, isLocationInScope: btInScope } =
+    await import("../lib/dataScope");
+  const btEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  const scope = btEmp ? await btScope(btEmp) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
+
+  const params: unknown[] = [fromDate, toDate, sourceType, sourceId, destType, destId, statusList, itemId, materialTypeFilter];
+  // The alias below MUST be the alias used in the query, or the fragment would
+  // reference a relation that isn't there and the scope would silently break.
+  const scopeCond = btWhere(scope, params, "t");
+
+  const { rows: transfers } = await pool.query<any>(
+    `SELECT t.id, t.challan_number,
+            to_char(t.transfer_date,'YYYY-MM-DD')        AS transfer_date,
+            t.from_type, t.from_id, t.to_type, t.to_id,
+            t.line_items, t.received_line_items, t.status,
+            -- There is no dispatch timestamp column: the row is written at
+            -- dispatch, so created_at IS the dispatch moment. Receipt is
+            -- stamped by the approve transition.
+            to_char(t.created_at,'YYYY-MM-DD')           AS dispatch_date,
+            to_char(t.approved_at,'YYYY-MM-DD')          AS received_date,
+            t.approved_by, e.name                        AS handled_by_name
+       FROM stock_transfers t
+       LEFT JOIN LATERAL (
+         SELECT emp.name FROM employees emp
+          WHERE t.approved_by IS NOT NULL
+            AND (emp.username = t.approved_by OR emp.name = t.approved_by)
+          ORDER BY emp.id LIMIT 1
+       ) e ON TRUE
+      WHERE ($1 = '' OR t.transfer_date >= $1::date)
+        AND ($2 = '' OR t.transfer_date <= $2::date)
+        AND ($3 = '' OR t.from_type = $3)
+        AND ($4 = 0  OR t.from_id = $4)
+        AND ($5 = '' OR t.to_type = $5)
+        AND ($6 = 0  OR t.to_id = $6)
+        AND (cardinality($7::text[]) = 0 OR t.status = ANY($7::text[]))
+        -- line_items is free-form JSON written by the transfer routes. A blind
+        -- ::int cast on a value that isn't numeric aborts the whole query, so
+        -- the cast is guarded by CASE (which has defined evaluation order)
+        -- rather than by AND, and a junk id simply fails to match.
+        AND ($8 = 0 OR EXISTS (
+              SELECT 1 FROM jsonb_array_elements(COALESCE(t.line_items,'[]'::jsonb)) fli
+               WHERE CASE WHEN jsonb_typeof(fli->'itemId') = 'number' THEN (fli->>'itemId')::int
+                          WHEN fli->>'itemId' ~ '^[0-9]+$'            THEN (fli->>'itemId')::int
+                          ELSE NULL END = $8
+                 AND ($9 = '' OR COALESCE(fli->>'materialType', 'item') = $9)))
+        AND ($9 = '' OR EXISTS (
+              SELECT 1 FROM jsonb_array_elements(COALESCE(t.line_items,'[]'::jsonb)) mli
+               WHERE COALESCE(mli->>'materialType', 'item') = $9))
+        AND ${scopeCond}
+      ORDER BY t.transfer_date DESC, t.id DESC`,
+    params,
+  );
+
+  const [maps, nameMaps] = await Promise.all([locationMaps(), materialNameMaps()]);
+  // Ids OVERLAP between items / materials / raw_materials, so a line's name and
+  // UOM are only correct when resolved through its own materialType.
+  const resolve = (materialType: string, id: number) => nameMaps[materialType]?.get(id);
+  const TYPE_LABEL: Record<string, string> = { item: "Item (SKU)", material: "Raw Material", raw_material: "Packing Material" };
+
+  interface Row {
+    transferId: number; challanNumber: string; transferDate: string;
+    sourceType: string; sourceId: number; sourceName: string;
+    destType: string; destId: number; destName: string;
+    itemId: number; itemName: string; materialType: string; materialTypeLabel: string;
+    batchNumbers: string[]; quantity: number; unit: string; unitCost: number; lineValue: number;
+    status: string; quantityBasis: "received" | "dispatched";
+    dispatchDate: string | null; receivedDate: string | null;
+    handledBy: string | null;
+    /** No dispatcher is recorded anywhere on the transfer — there is no column
+     *  for it. Reported as null rather than guessed from approved_by. */
+    dispatchedBy: null;
+  }
+
+  const rows: Row[] = [];
+  const summary = {
+    transferOut: { qty: 0, value: 0, transfers: 0 },
+    transferIn: { qty: 0, value: 0, transfers: 0 },
+    inTransit: { qty: 0, value: 0, transfers: 0 },
+  };
+
+  for (const t of transfers) {
+    const statusRaw = String(t.status ?? "");
+    const isCompleted = statusRaw === "completed";
+    const isInTransit = statusRaw === "in_transit" || statusRaw === "pending";
+    const dispatched: any[] = Array.isArray(t.line_items) ? t.line_items : [];
+    const received: any[] = Array.isArray(t.received_line_items) ? t.received_line_items : [];
+
+    // A completed transfer is reported at what actually ARRIVED. Received lines
+    // are keyed on (materialType, itemId) because the three id spaces overlap.
+    //
+    // One transfer may carry SEVERAL dispatched lines for the same product —
+    // different batches of the same SKU, for instance. Holding one received
+    // line per product and reading it back for each of those dispatched lines
+    // would report the same arrival two or three times over. Received
+    // quantities are therefore pooled per product and drawn down across the
+    // dispatched lines in order, so the report can never exceed what the
+    // receiver actually recorded.
+    const receivedPool = new Map<string, { qty: number; costPrice: number | null }>();
+    for (const rl of received) {
+      const k = `${String(rl?.materialType ?? "item")}:${Number(rl?.itemId)}`;
+      const cur = receivedPool.get(k) ?? { qty: 0, costPrice: null };
+      cur.qty += Number(rl?.quantity ?? 0);
+      if (cur.costPrice === null && rl?.costPrice != null) cur.costPrice = Number(rl.costPrice);
+      receivedPool.set(k, cur);
+    }
+    const lastRowIndexByKey = new Map<string, number>();
+
+    let tQty = 0, tValue = 0;
+
+    for (const li of dispatched) {
+      const lineItemId = Number(li?.itemId);
+      const materialType = String(li?.materialType ?? "item");
+      if (itemId !== 0 && lineItemId !== itemId) continue;
+      if (materialTypeFilter !== "" && materialType !== materialTypeFilter) continue;
+
+      const poolKey = `${materialType}:${lineItemId}`;
+      const rpool = isCompleted ? receivedPool.get(poolKey) : undefined;
+      const useReceived = Boolean(rpool);
+      const dispatchedQty = Number(li?.quantity ?? 0);
+      let quantity: number;
+      if (rpool) {
+        const take = Math.min(rpool.qty, dispatchedQty);
+        rpool.qty = r3(rpool.qty - take);
+        quantity = r3(take);
+      } else {
+        quantity = r3(dispatchedQty);
+      }
+      const unitCost = r2(Number((useReceived ? (rpool!.costPrice ?? li?.costPrice) : li?.costPrice) ?? 0));
+      const info = resolve(materialType, lineItemId);
+      const bb: any[] = Array.isArray(li?.batchBreakdown) ? li.batchBreakdown : [];
+
+      const lineValue = r2(quantity * unitCost);
+      tQty += quantity;
+      tValue += lineValue;
+
+      lastRowIndexByKey.set(poolKey, rows.length);
+      rows.push({
+        transferId: Number(t.id),
+        challanNumber: t.challan_number ?? `#${t.id}`,
+        transferDate: t.transfer_date,
+        sourceType: String(t.from_type),
+        sourceId: Number(t.from_id),
+        sourceName: locName(maps, String(t.from_type), Number(t.from_id)),
+        destType: String(t.to_type),
+        destId: Number(t.to_id),
+        destName: locName(maps, String(t.to_type), Number(t.to_id)),
+        itemId: lineItemId,
+        itemName: info?.name ?? `${TYPE_LABEL[materialType] ?? "Product"} #${lineItemId}`,
+        materialType,
+        materialTypeLabel: TYPE_LABEL[materialType] ?? materialType,
+        batchNumbers: bb.map((b) => String(b?.batchNumber ?? "")).filter(Boolean),
+        quantity,
+        unit: info?.unit ?? "",
+        unitCost,
+        lineValue,
+        status: statusRaw,
+        quantityBasis: useReceived ? "received" : "dispatched",
+        dispatchDate: t.dispatch_date ?? null,
+        receivedDate: t.received_date ?? null,
+        handledBy: t.handled_by_name ?? t.approved_by ?? null,
+        dispatchedBy: null,
+      });
+    }
+
+    // If MORE arrived than was dispatched, the surplus is still sitting in the
+    // pool after every dispatched line has drawn from it. Dropping it would
+    // under-report the receipt, so it is attached to that product's last line.
+    if (isCompleted) {
+      for (const [k, rpool] of receivedPool) {
+        if (rpool.qty <= 0) continue;
+        const idx = lastRowIndexByKey.get(k);
+        if (idx === undefined) continue;      // product filtered out of this run
+        const row = rows[idx]!;
+        row.quantity = r3(row.quantity + rpool.qty);
+        const newValue = r2(row.quantity * row.unitCost);
+        tQty += rpool.qty;
+        tValue += newValue - row.lineValue;
+        row.lineValue = newValue;
+        rpool.qty = 0;
+      }
+    }
+
+    // Only COMPLETED movements count as Transfer Out / Transfer In. Goods still
+    // on the road are a separate figure — folding them in would report stock as
+    // delivered before anybody received it.
+    const sourceMine = btInScope(scope, String(t.from_type), Number(t.from_id));
+    const destMine = btInScope(scope, String(t.to_type), Number(t.to_id));
+    if (isCompleted) {
+      if (sourceMine) { summary.transferOut.qty += tQty; summary.transferOut.value += tValue; summary.transferOut.transfers += 1; }
+      if (destMine) { summary.transferIn.qty += tQty; summary.transferIn.value += tValue; summary.transferIn.transfers += 1; }
+    } else if (isInTransit) {
+      summary.inTransit.qty += tQty; summary.inTransit.value += tValue; summary.inTransit.transfers += 1;
+    }
+  }
+
+  for (const k of ["transferOut", "transferIn", "inTransit"] as const) {
+    summary[k].qty = r3(summary[k].qty);
+    summary[k].value = r2(summary[k].value);
+  }
+
+  const totals = {
+    lines: rows.length,
+    transfers: new Set(rows.map((r) => r.transferId)).size,
+    qty: r3(rows.reduce((s, r) => s + r.quantity, 0)),
+    value: r2(rows.reduce((s, r) => s + r.lineValue, 0)),
+  };
+
+  // Same rule as the Stock page: what a transfer's contents COST is withheld
+  // from roles without the valuation right. Quantities, batches, routes and
+  // dates — everything operational — stay. The figures are still computed
+  // above because the report's own arithmetic depends on them; only what is
+  // serialised changes.
+  const showValuation = await canViewStockValuation((req as any).employee?.hierarchyId);
+  const outRows = showValuation ? rows : rows.map(({ unitCost, lineValue, ...rest }) => rest);
+  const outTotals = showValuation ? totals : { lines: totals.lines, transfers: totals.transfers, qty: totals.qty };
+  const outSummary = showValuation
+    ? summary
+    : {
+        transferOut: { qty: summary.transferOut.qty, transfers: summary.transferOut.transfers },
+        transferIn: { qty: summary.transferIn.qty, transfers: summary.transferIn.transfers },
+        inTransit: { qty: summary.inTransit.qty, transfers: summary.inTransit.transfers },
+      };
+
+  res.json({
+    rows: outRows,
+    totals: outTotals,
+    summary: outSummary,
+    canViewValuation: showValuation,
+    scope: { isHeadOffice: scope.isHeadOffice },
+    basisNote:
+      "Completed transfers are reported at received quantities where the receiver recorded them, otherwise at dispatched quantities; in-transit transfers are always at dispatched quantities. Transfer Out and Transfer In count completed transfers only — goods still in transit are reported separately and never folded into either total.",
   });
 });
 

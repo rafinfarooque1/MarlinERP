@@ -210,6 +210,41 @@ export async function hasAnyModuleAction(
   return false;
 }
 
+/**
+ * The page key that decides whether a role may see what stock is WORTH, as
+ * opposed to how much of it there is.
+ *
+ * Inventory valuation is commercially sensitive in a way quantities are not: a
+ * warehouse manager has to know there are 947 kg of avocado on the floor, but
+ * the purchase cost behind it is the owner's business. The stock screen mixes
+ * both in one table, so the money columns need a right of their own.
+ *
+ * That right already exists — it is the Inventory Valuation report. Anyone who
+ * may open that report can already read the same avg-cost-times-quantity
+ * numbers there, so hiding them on the stock screen would protect nothing;
+ * anyone who may not is exactly who this is meant to stop. Reusing the key
+ * keeps one answer to "may this person see stock value", instead of a second
+ * flag that can drift out of step with the report.
+ */
+export const INVENTORY_VALUATION_PAGE = "page:/headoffice/inventory-reports";
+
+/**
+ * "May this role see inventory cost and value?"
+ *
+ * Level-1 Management passes through the bypass inside hasModuleAction, so
+ * admins keep full visibility without needing a permission row. Every other
+ * role is default-deny: a missing or false row hides the money.
+ *
+ * Call this in the route, never in the browser. The client is told the answer
+ * so it can drop the columns, but the fields themselves must already be absent
+ * from the payload — a hidden column is still readable in devtools.
+ */
+export function canViewStockValuation(
+  hierarchyId: number | undefined,
+): Promise<boolean> {
+  return hasModuleAction(hierarchyId, INVENTORY_VALUATION_PAGE, "view");
+}
+
 export const HEAD_OFFICE_ONLY_CODE = "HEAD_OFFICE_ONLY";
 
 /**

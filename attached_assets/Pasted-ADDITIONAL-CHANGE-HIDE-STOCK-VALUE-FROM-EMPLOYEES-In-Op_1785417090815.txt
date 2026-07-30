@@ -1,0 +1,67 @@
+ADDITIONAL CHANGE — HIDE STOCK VALUE FROM EMPLOYEES
+
+In Operations → Stock / Live Stock, do not show inventory monetary value to normal employees.
+
+Current screen contains:
+- a "Value" column for each stock row
+- "Page stock value" total at the bottom
+
+Required behavior:
+
+1. For Level-1 Management/Admin:
+   - Keep the Value column visible.
+   - Keep Page stock value visible.
+   - Existing valuation functionality remains unchanged.
+
+2. For non-admin employees, including Warehouse Manager:
+   - Hide the entire Value column.
+   - Hide Page stock value.
+   - Do not show stock cost/value anywhere in this Operations → Stock screen or its expanded row/details.
+   - They should still see Item, Item Type, Location, Quantity, Reserved, Available and Status according to their existing permissions and warehouse scope.
+
+3. IMPORTANT BACKEND SECURITY:
+   Do not make this frontend-only.
+   Check the API used by Operations → Stock.
+   For users who are not authorized to see inventory valuation, the backend response must NOT expose:
+   - stock value
+   - unit cost
+   - purchase cost
+   - average cost
+   - valuation totals
+   - any other cost-derived monetary field.
+
+   Hiding a table column in React is not sufficient because an employee could inspect the API response.
+
+4. Preserve all inventory valuation internally.
+   Do NOT:
+   - delete valuation data;
+   - set values to zero;
+   - change stock costing;
+   - change purchase values;
+   - change accounting entries;
+   - change inventory valuation reports;
+   - modify existing stock quantities or batches.
+
+5. RBAC:
+   Use the authenticated employee's effective permission/hierarchy on the server.
+   Do not trust a role, hierarchy level or permission supplied by the browser.
+
+   Level-1 Management/Admin retains full valuation visibility.
+
+6. EXPORT:
+   Check the Export function on this Stock screen.
+   If the logged-in employee cannot see stock valuation, exported data must also exclude all cost/value fields.
+   Admin export may continue to include them.
+
+7. TEST:
+   Verify with at least:
+   - Level-1 admin → value visible in UI and API.
+   - Warehouse Manager → quantities visible, value hidden.
+   - Warehouse Manager API call → valuation/cost fields absent.
+   - Warehouse Manager export → valuation/cost fields absent.
+   - Existing warehouse/location scoping still works.
+   - No stock, accounting, purchase, batch or ledger data changes.
+
+Do this as part of the RBAC/security model, not merely as CSS/UI hiding.
+
+Do not publish automatically. Complete and test in development first and report the results.

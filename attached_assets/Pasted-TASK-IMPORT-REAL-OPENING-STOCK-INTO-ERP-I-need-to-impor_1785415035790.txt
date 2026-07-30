@@ -1,0 +1,406 @@
+TASK: IMPORT REAL OPENING STOCK INTO ERP
+
+I need to import my actual current physical stock into the ERP as OPENING STOCK.
+
+IMPORTANT:
+This is real business stock data. Treat this as a controlled accounting/inventory migration, not test data.
+
+Do NOT modify, reset, delete, truncate, recreate, or overwrite unrelated production data.
+
+Do NOT treat these quantities as purchases, sales, production, or stock transfers.
+
+Before making any production write, inspect the uploaded stock file and the existing ERP database/schema and determine the safest import method.
+
+==================================================
+1. SOURCE OF TRUTH
+==================================================
+
+Use the stock file/PDF I upload with this task as the source of truth.
+
+Extract only information actually present in the uploaded document.
+
+For each stock line identify, where available:
+
+- Item name
+- Quantity
+- Unit/UOM
+- Warehouse/location
+- Manufacturing date (MFG)
+- Batch/lot information, if provided
+- Cost/rate/value, if provided
+
+Do NOT invent missing quantities, costs, locations, MFG dates, units, batch numbers, GST rates, HSN codes, or other business information.
+
+If an essential value cannot be determined safely, STOP that row and report it to me instead of guessing.
+
+==================================================
+2. ITEM MASTER
+==================================================
+
+Match every stock line against Item Master first.
+
+Use normalized matching carefully so differences in capitalization or harmless spacing do not create duplicate items.
+
+If the item already exists:
+- use the existing Item Master record;
+- do not create another item.
+
+If the item does not exist:
+- create the required Item Master record using the information available in the uploaded stock file;
+- classify it correctly according to the ERP's existing Item Master structure.
+
+Do not create duplicate SKUs/items.
+
+Provide a final list of:
+- existing items matched;
+- new items created;
+- unresolved items.
+
+==================================================
+3. LOCATION / WAREHOUSE
+==================================================
+
+Opening stock MUST belong to the correct physical location.
+
+Use the ERP's existing warehouse/outlet/location records.
+
+Never create a new warehouse/outlet merely because the name in the uploaded file is slightly different.
+
+Resolve location names against existing locations.
+
+If a location cannot be matched confidently, do not import those rows until I confirm the mapping.
+
+Warehouse/outlet permissions and the newly implemented RBAC/location-scope rules must NOT be bypassed or weakened to perform this import.
+
+==================================================
+4. OPENING STOCK ONLY
+==================================================
+
+Record these quantities specifically as OPENING STOCK.
+
+They must NOT create:
+- purchase invoices;
+- vendor payables;
+- sales;
+- customer receivables;
+- production transactions;
+- stock transfers;
+- cash/bank transactions.
+
+Opening stock must enter inventory through the ERP's proper opening-stock mechanism and stock ledger.
+
+The transaction/audit trail should clearly identify the source as:
+
+"Opening Stock Import"
+
+If the ERP already has an opening-stock transaction type, use it rather than creating an unrelated parallel mechanism.
+
+==================================================
+5. MFG AND EXPIRY
+==================================================
+
+Use the MFG date from the uploaded stock data.
+
+Expiry date must be:
+
+EXPIRY DATE = MFG DATE + 18 CALENDAR MONTHS
+
+Example:
+
+MFG: 15-07-2026
+Expiry: 15-01-2028
+
+Use proper calendar-month arithmetic, not a fixed number of days.
+
+Store both MFG and expiry using the ERP's real DATE columns.
+
+Do not convert date columns back to TEXT.
+
+The existing verified DATE-column migration/self-healing system must remain untouched.
+
+If MFG is missing for a row, do NOT invent it.
+
+Report that row for confirmation.
+
+==================================================
+6. BATCH / LOT HANDLING
+==================================================
+
+Opening stock must integrate with the existing batch/stock architecture.
+
+Before importing, specifically inspect the existing warning:
+
+stock_batches_opening_v1 DEFERRED
+"no unique or exclusion constraint matching the ON CONFLICT specification"
+
+Do NOT blindly execute a broken/deferred migration.
+
+Determine whether the current runtime opening-stock/batch path can safely create the required batches.
+
+If the constraint/index mismatch affects this opening-stock import, FIX THE ROOT CAUSE SAFELY first.
+
+Do not modify existing batch identities or merge unrelated batches.
+
+Opening stock must correctly preserve:
+
+Item
+Location
+Batch/Lot
+MFG
+Expiry
+Quantity
+UOM
+
+as supported by the existing schema.
+
+==================================================
+7. COST AND INVENTORY VALUE
+==================================================
+
+If the uploaded stock file contains cost/rate/value, use that actual supplied value.
+
+Do not use MRP as inventory cost.
+
+If cost is NOT provided, do not invent one.
+
+Report the missing cost/value to me before making accounting entries that require valuation.
+
+Opening stock quantity and opening inventory valuation must reconcile.
+
+Do not create artificial purchases or vendor balances simply to establish inventory value.
+
+==================================================
+8. ACCOUNTING
+==================================================
+
+Use the ERP's existing accounting design for opening stock.
+
+Do not create random balancing ledgers.
+
+Do not alter historical journal entries.
+
+Do not use Sales, Purchase, COGS, Cash, Bank, Vendor Payable or Customer Receivable simply to force the opening balance to balance.
+
+If the current accounting model requires an Opening Balance / Opening Stock counterpart ledger, inspect the Chart of Accounts first and use the correct existing architecture.
+
+If the required accounting treatment is ambiguous, STOP and ask me before posting financial entries.
+
+==================================================
+9. DUPLICATE PROTECTION
+==================================================
+
+This import MUST be idempotent.
+
+Running the task/import twice must NOT double the stock.
+
+Create a reliable import identity/fingerprint using appropriate fields such as:
+
+item + location + batch + MFG + opening-stock source
+
+or use the ERP's existing idempotency mechanism.
+
+Before inserting anything, check whether the opening stock has already been imported.
+
+Never duplicate:
+- stock batches;
+- stock ledger entries;
+- opening-stock transactions;
+- accounting entries.
+
+==================================================
+10. PRE-IMPORT VALIDATION
+==================================================
+
+BEFORE WRITING TO PRODUCTION, prepare a dry-run/preview.
+
+Show:
+
+Total source rows
+Total quantity
+Locations detected
+Existing items matched
+New items required
+Unresolved items
+Missing MFG dates
+Calculated expiry dates
+Missing costs
+Duplicate candidates
+Batch conflicts
+Location mapping problems
+Expected inventory value
+
+Also capture the production baseline:
+
+- Item Master count
+- stock batch count
+- stock ledger count
+- current quantity by item/location
+- current inventory valuation
+- relevant accounting balances
+
+Do not import until the source data passes validation.
+
+==================================================
+11. IMPORT
+==================================================
+
+After validation, perform the import transactionally where practical.
+
+For each successful row:
+
+Item Master
+    ↓
+Correct Location
+    ↓
+Opening Stock
+    ↓
+Batch/Lot
+    ↓
+MFG
+    ↓
+Expiry = MFG + 18 months
+    ↓
+Quantity
+    ↓
+Cost/value if supplied
+    ↓
+Stock Ledger
+    ↓
+Inventory accounting if applicable
+
+If one row is invalid, do not silently corrupt or partially fabricate it.
+
+Record/report failures clearly.
+
+==================================================
+12. POST-IMPORT VERIFICATION
+==================================================
+
+After import, verify from the DATABASE, API and ERP UI.
+
+For every imported item confirm:
+
+Opening quantity = source quantity
+
+Location = source location
+
+MFG = source MFG
+
+Expiry = MFG + 18 months
+
+Batch = correct batch
+
+Stock ledger = correct
+
+Available stock = correct
+
+No duplicate opening entries
+
+No purchase created
+
+No vendor payable created
+
+No customer transaction created
+
+No cash/bank transaction created
+
+No production transaction created
+
+==================================================
+13. LOCATION STOCK CHECK
+==================================================
+
+Verify that stock remains location-specific.
+
+If an item has:
+
+Karnataka Central Warehouse = 100 KG
+Indiranagar Outlet = 20 KG
+
+the ERP must NOT show 120 KG as available stock when making a transaction specifically from Indiranagar Outlet.
+
+The transaction screen must show only stock available at the selected/authorized location.
+
+Company-wide reports may show consolidated stock where appropriate.
+
+==================================================
+14. RBAC / SECURITY
+==================================================
+
+Do NOT weaken or bypass the new RBAC implementation.
+
+Warehouse employees must continue to see only the warehouse and mapped outlets permitted by their hierarchy/location assignment.
+
+Opening-stock import must not introduce a route that allows arbitrary location IDs from the client.
+
+Server-side location authorization remains authoritative.
+
+==================================================
+15. BACKUP
+==================================================
+
+Before writing real production stock, verify that Backup & Restore includes every table affected by this import.
+
+In particular inspect coverage for:
+
+- Item Master
+- stock batches
+- stock ledger
+- opening-stock records
+- accounting/journal records
+
+Also verify the recently introduced asset tables are included in backup coverage if that outstanding task has not already been completed.
+
+Do not rely only on a hardcoded outdated backup table list.
+
+Take/verify a restorable backup before the production import.
+
+==================================================
+16. PRODUCTION SAFETY
+==================================================
+
+Do NOT:
+
+- reset production;
+- truncate tables;
+- delete existing stock;
+- delete existing ledgers;
+- recreate the database;
+- replace production with development data;
+- copy development test records into production;
+- modify existing historical transactions;
+- disable RBAC;
+- change the 16 DATE columns back to TEXT.
+
+Do not publish unrelated code changes as part of the stock import.
+
+==================================================
+17. FINAL REPORT
+==================================================
+
+When finished, report:
+
+1. Source stock rows
+2. Items matched
+3. New Item Master records created
+4. Locations used
+5. Opening-stock records created
+6. Batches created
+7. Total quantity imported by item
+8. Total quantity imported by location
+9. MFG dates
+10. Calculated expiry dates
+11. Cost/value imported
+12. Inventory valuation before/after
+13. Accounting entries created, if any
+14. Duplicate-prevention result
+15. Backup verification
+16. Database reconciliation
+17. API verification
+18. UI verification
+19. Any rejected/unresolved rows
+20. Confirmation that no unrelated production data changed
+
+Do not report success merely because the UI displays the stock.
+
+Reconcile the uploaded source file against the final database quantities and prove that the complete opening-stock import matches the source.
