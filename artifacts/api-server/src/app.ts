@@ -64,7 +64,12 @@ app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 // the login endpoint, and tokenized public invoice links (secured by their
 // own HMAC-signed, time-limited tokens).
 app.use("/api", (req, res, next) => {
+  // Exact matches only — a startsWith("/health") bypass would also open every
+  // future /health* route, which is how an unintended hole was opened before.
   if (req.path === "/health" || req.path === "/healthz") { next(); return; }
+  // Column names and their live types only; no business data. Lets a publish be
+  // verified from outside without reading boot logs production throws away.
+  if (req.method === "GET" && req.path === "/healthz/schema") { next(); return; }
   if (req.path === "/auth/login" && req.method === "POST") { next(); return; }
   if (req.method === "GET" && req.path.startsWith("/public/invoices/")) { next(); return; }
   // Customer-facing invoice links. GET only, and every request is authorised

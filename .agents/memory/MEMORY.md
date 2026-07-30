@@ -12,7 +12,8 @@
 - [Inventory batch layer](inventory-batches.md) — additive lot layer over stock_entries (qty truth); FEFO clamped consumption, shortfall = "Untracked"; zod strips unknown keys so optional passthrough fields read from raw body.
 - [pg query gotchas](pg-gotchas.md) — date columns return JS Date; creates return 201; check-then-insert needs one txn + advisory lock; a backtick in a SQL template comment breaks the build.
 - [Codegen staleness trap](codegen-staleness.md) — cuts BOTH ways: codegen can flip optional→required, AND generated types under-declare what routes really return (auditing UI reads against them yields mass false positives).
-- [CREATE TABLE IF NOT EXISTS drift](migration-ddl-drift.md) — constraints added to an existing CREATE TABLE IF NOT EXISTS never apply to live DBs; a 42P10 is almost always this. Dedupe before adding a unique index.
+- [Migration DDL drift / 42P10](migration-ddl-drift.md) — two causes: constraints inside CREATE TABLE IF NOT EXISTS never reach live DBs, and widening a natural key strands every older ON CONFLICT target.
+- [Boot migration observability](boot-migration-observability.md) — prod discards stdout until the port opens, so a swallowed mid-migration throw silently skips everything after it; one-time conversions need their own top-level step + boot_status row.
 - [Sales settlement & discounts](sales-settlement.md) — cash/upi/card settle at creation; only 'credit' is credit-controlled; dues = total−paid; line discounts net into GST pre-tax, discount_total = bill-level coupon ONLY (post-tax).
 - [RBAC & branch scoping](rbac-branch-scoping.md) — branch_type 'headoffice' is a string, not null; permissions are default-DENY (a missing row denies); branch scoping is still client-side.
 - [Sales location gate](location-context-gate.md) — /sales/* pages render blank (null) in fresh sessions until a location is picked at /sales; not a crash — navigate via the picker in tests.

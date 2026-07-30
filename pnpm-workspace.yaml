@@ -158,3 +158,11 @@ overrides:
   # drizzle-kit uses esbuild internally on an older version that's vulnerable, this overrides it
   "@esbuild-kit/esm-loader": "npm:tsx@^4.21.0"
   esbuild: "0.27.3"
+  # Exactly ONE copy of the React types across the whole workspace. With two
+  # copies installed, TypeScript treats identically-named types from each copy
+  # as unrelated ("Two different types with this name exist"), so every `ref`
+  # and prop spread in the shared shadcn components fails to compile. That
+  # breaks the root `typecheck`, and the root build script is
+  # `typecheck && build` — so a duplicate here silently blocks every publish.
+  "@types/react": "19.2.17"
+  "@types/react-dom": "19.2.3"

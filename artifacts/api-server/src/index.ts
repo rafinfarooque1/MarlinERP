@@ -18,6 +18,7 @@ import { PRODUCT_KINDS, PRODUCT_TABLE, nextProductIdentity } from "./lib/product
 import { nextVoucherNumber } from "./lib/voucherNumber";
 import { PAGE_PERM_KEYS, LEGACY_MODULE_TO_PAGES } from "./lib/pagePermissions";
 import { ensureChartStructure } from "./lib/chartGroups";
+import { DATE_COLUMNS } from "./lib/dateColumns";
 
 async function runMigrations() {
   // Existing migrations
@@ -1244,10 +1245,16 @@ async function runMigrations() {
   // not throw: rethrowing here would abort runMigrations() and skip every
   // later migration. Instead fail LOUDLY so a broken index can't hide behind a
   // successful boot, and skip the two migrations that depend on the key.
+  // material_type is part of the check because it is part of the real key.
+  // stock_batches is polymorphic — items and materials share the table with
+  // overlapping ids — so the live unique index is the five-column
+  // stock_batches_natural_key_v2. A four-column check reports a healthy key
+  // that Postgres will not accept as an ON CONFLICT arbiter.
   const { rows: [batchKeyIdx] } = await pool.query(`
     SELECT 1 FROM pg_indexes
     WHERE tablename = 'stock_batches' AND indexdef ILIKE '%UNIQUE%'
-      AND indexdef ILIKE '%item_id%' AND indexdef ILIKE '%branch_type%'
+      AND indexdef ILIKE '%item_id%' AND indexdef ILIKE '%material_type%'
+      AND indexdef ILIKE '%branch_type%'
       AND indexdef ILIKE '%branch_id%' AND indexdef ILIKE '%batch_number%'
   `);
   const batchKeyOk = Boolean(batchKeyIdx);
@@ -1262,7 +1269,16 @@ async function runMigrations() {
   const { rows: [openingDone] } = await pool.query(
     `SELECT 1 FROM migration_log WHERE name = 'stock_batches_opening_v1'`
   );
+  // Its own try/catch. This statement's ON CONFLICT target is the OLD
+  // four-column key, so on any database carrying the five-column
+  // stock_batches_natural_key_v2 it raises 42P10 — and an uncaught 42P10 here
+  // aborts runMigrations() and silently skips every migration below it, which
+  // is exactly the class of failure this boot path must never have again.
+  // Applying it correctly means widening both the column list and the conflict
+  // target to include material_type, which is a data migration in its own right
+  // rather than something to slip into an unrelated fix.
   if (!openingDone) {
+    try {
     await pool.query(`
       INSERT INTO stock_batches (item_id, branch_type, branch_id, batch_number, quantity, unit_cost, source)
       SELECT se.item_id, se.branch_type, se.branch_id, 'OPENING',
@@ -1285,6 +1301,14 @@ async function runMigrations() {
     `);
     await pool.query(`INSERT INTO migration_log (name) VALUES ('stock_batches_opening_v1')`);
     console.log('[migration] stock_batches_opening_v1 applied');
+    } catch (e) {
+      // Deferred, not lost: no migration_log row is written, so a corrected
+      // version still applies on a later boot.
+      console.error(
+        '[migration] stock_batches_opening_v1 DEFERRED (migrations continue):',
+        (e as Error).message,
+      );
+    }
   }
 
   // One-time: retire the 'production' branch type. Production is a Head Office
@@ -1314,6 +1338,19 @@ async function runMigrations() {
       const seKey = mt
         ? `(item_id, material_type, branch_type, branch_id)`
         : `(item_id, branch_type, branch_id)`;
+      // stock_batches gained material_type in the same change and needs the
+      // identical treatment. It was left on the old four-column target, so the
+      // insert below raised 42P10 and aborted every migration after this block.
+      const { rows: [mtBatch] } = await client.query(
+        `SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'stock_batches' AND column_name = 'material_type'`
+      );
+      const sbKey = mtBatch
+        ? `(item_id, material_type, branch_type, branch_id, batch_number)`
+        : `(item_id, branch_type, branch_id, batch_number)`;
+      // Carried through the merge, and grouped on, so an item and a material
+      // sharing an id are never folded into one batch.
+      const sbMt = mtBatch ? 'material_type, ' : '';
       await client.query(`
         INSERT INTO stock_entries (item_id, branch_type, branch_id, quantity, cost_price)
         SELECT item_id, 'headoffice', 1, SUM(quantity::numeric), MAX(cost_price::numeric)
@@ -1326,17 +1363,17 @@ async function runMigrations() {
       `);
       await client.query(`DELETE FROM stock_entries WHERE branch_type = 'production'`);
       await client.query(`
-        INSERT INTO stock_batches (item_id, branch_type, branch_id, batch_number, mfg_date, expiry_date,
+        INSERT INTO stock_batches (item_id, ${sbMt}branch_type, branch_id, batch_number, mfg_date, expiry_date,
                                    quantity, unit_cost, source, source_id)
-        SELECT item_id, 'headoffice', 1, batch_number, MIN(mfg_date), MIN(expiry_date),
+        SELECT item_id, ${sbMt}'headoffice', 1, batch_number, MIN(mfg_date), MIN(expiry_date),
                SUM(quantity::numeric),
                CASE WHEN SUM(quantity::numeric) > 0
                     THEN ROUND((SUM(quantity::numeric * unit_cost::numeric) / SUM(quantity::numeric))::numeric, 2)
                     ELSE MAX(unit_cost::numeric) END,
                MIN(source), MIN(source_id)
         FROM stock_batches WHERE branch_type = 'production'
-        GROUP BY item_id, batch_number
-        ON CONFLICT (item_id, branch_type, branch_id, batch_number) DO UPDATE SET
+        GROUP BY item_id, ${sbMt}batch_number
+        ON CONFLICT ${sbKey} DO UPDATE SET
           quantity = stock_batches.quantity::numeric + EXCLUDED.quantity::numeric,
           updated_at = now()
       `);
@@ -1367,7 +1404,13 @@ async function runMigrations() {
   // anywhere it could be pointed at. Anything referenced is deliberately left in
   // place — deleting it would orphan real business documents. This block reports
   // what it removed and what it kept so the state is auditable on every boot.
-  {
+  // Skipped entirely in production. This block DELETEs rows, and a deletion
+  // that is merely believed to be safe has no place running unattended against
+  // real business data on every single boot; the test rows it targets only ever
+  // existed in development.
+  if (process.env.NODE_ENV === "production") {
+    console.error("[migration] test_data_cleanup: skipped (production never deletes rows)");
+  } else {
     const custIds = Array.from({ length: 15 }, (_, i) => i + 5); // 5..19
     // A customer is safe to remove only if NOTHING points at it.
     const { rows: safeCusts } = await pool.query(
@@ -1435,116 +1478,6 @@ async function runMigrations() {
   // hsn_code verbatim, so a hard CHECK could reject a legitimate future insert
   // that relies on a blank default. Recommendation reported to the main agent.
 
-  // ── (3) Convert text date columns to real DATE columns ─────────────────────
-  // The global pg type parser for OID 1082 (DATE) is registered in lib/db where
-  // the pool is created, so DATE reads back as a plain 'YYYY-MM-DD' string and
-  // the API contract is preserved.
-  //
-  // This migration is TYPE-DRIVEN, not log-gated, and that is deliberate. The
-  // earlier log-gated version converted production once and wrote its log row;
-  // a later deployment then diffed development (still text) against production
-  // (now date) and silently applied date->text, undoing it — and because the
-  // log row already existed, no subsequent boot could heal it. Every boot now
-  // inspects the LIVE column type and converts whatever is still text, so a
-  // reversal from any source repairs itself on the next restart. The log row is
-  // only a record that a full pass succeeded.
-  //
-  // Each column is converted independently: a missing column, an unexpected
-  // type, or a value that cannot be cast skips that one column rather than
-  // aborting the batch or the boot.
-  //
-  // HOLD_DATE_COLUMN_CONVERSION is a development-only escape hatch. A publish
-  // diffs the two live databases, and PostgreSQL cannot auto-cast text->date,
-  // so a deployment fails if development converts before production does.
-  // Setting it holds development on text for exactly one publish; it is removed
-  // once production has converted.
-  {
-    const dateCols: [string, string][] = [
-      ['cash_deposits', 'deposit_date'],
-      ['coupons', 'expiry_date'],
-      ['employees', 'date_of_birth'],
-      ['expenses', 'expense_date'],
-      ['journal_vouchers', 'voucher_date'],
-      ['payments', 'payment_date'],
-      ['productions', 'expiry_date'],
-      ['productions', 'mfg_date'],
-      ['purchase_returns', 'return_date'],
-      ['receipts', 'receipt_date'],
-      ['reconciliation_batches', 'settlement_date'],
-      ['sale_payments', 'payment_date'],
-      ['sales_returns', 'return_date'],
-      ['stock_batches', 'expiry_date'],
-      ['stock_batches', 'mfg_date'],
-      ['stock_verifications', 'verify_date'],
-    ];
-    const held = process.env.HOLD_DATE_COLUMN_CONVERSION === '1';
-    if (held) {
-      console.warn('[migration] text_date_columns_to_date_v2: HELD by HOLD_DATE_COLUMN_CONVERSION=1 — columns left as text');
-    } else {
-      let already = 0;
-      const converted: string[] = [];
-      const skipped: string[] = [];
-      for (const [table, col] of dateCols) {
-        try {
-          const { rows: [meta] } = await pool.query(
-            `SELECT data_type, is_nullable FROM information_schema.columns
-              WHERE table_name = $1 AND column_name = $2`,
-            [table, col],
-          );
-          if (!meta) { skipped.push(`${table}.${col} (column missing)`); continue; }
-          if (meta.data_type === 'date') { already++; continue; }
-          if (meta.data_type !== 'text' && meta.data_type !== 'character varying') {
-            skipped.push(`${table}.${col} (unexpected type ${meta.data_type})`);
-            continue;
-          }
-          // Validate every stored value BEFORE altering the column:
-          //  - bad_shape: not YYYY-MM-DD at all, so the cast would fail
-          //  - bad_value: right shape but not a real date (e.g. 2026-02-30).
-          //    to_date is lenient and would silently shift it to 2026-03-02, so
-          //    compare the round-trip instead of trusting the regex alone.
-          //  - blanks: '' becomes NULL, which a NOT NULL column would reject
-          const { rows: [audit] } = await pool.query(
-            `SELECT
-               count(*) FILTER (WHERE ${col} IS NOT NULL AND ${col} <> '' AND ${col} !~ '^\\d{4}-\\d{2}-\\d{2}$')::int AS bad_shape,
-               count(*) FILTER (WHERE ${col} IS NOT NULL AND ${col} <> '' AND ${col} ~ '^\\d{4}-\\d{2}-\\d{2}$'
-                                      AND to_date(${col}, 'YYYY-MM-DD')::text <> ${col})::int AS bad_value,
-               count(*) FILTER (WHERE ${col} = '')::int AS blanks
-             FROM ${table}`
-          );
-          if (audit.bad_shape > 0 || audit.bad_value > 0) {
-            skipped.push(`${table}.${col} (${audit.bad_shape} malformed + ${audit.bad_value} impossible value(s))`);
-            continue;
-          }
-          if (audit.blanks > 0 && meta.is_nullable === 'NO') {
-            skipped.push(`${table}.${col} (${audit.blanks} blank(s) in a NOT NULL column)`);
-            continue;
-          }
-          await pool.query(
-            `ALTER TABLE ${table} ALTER COLUMN ${col} TYPE date USING NULLIF(${col}, '')::date`
-          );
-          converted.push(`${table}.${col}`);
-        } catch (e) {
-          skipped.push(`${table}.${col} (error: ${(e as Error).message})`);
-        }
-      }
-      if (converted.length > 0) {
-        console.log(`[migration] text_date_columns_to_date_v2: converted ${converted.length} column(s) text->date: ${converted.join(', ')}`);
-      }
-      if (skipped.length === 0) {
-        // Record the successful full pass once. The row is informational only —
-        // the loop above never consults it, so a later reversal still heals.
-        await pool.query(
-          `INSERT INTO migration_log (name) SELECT 'text_date_columns_to_date_v2'
-            WHERE NOT EXISTS (SELECT 1 FROM migration_log WHERE name = 'text_date_columns_to_date_v2')`
-        );
-        if (converted.length === 0) {
-          console.log(`[migration] text_date_columns_to_date_v2: all ${already} date column(s) already correct`);
-        }
-      } else {
-        console.warn(`[migration] text_date_columns_to_date_v2: ${converted.length} converted, ${already} already date, SKIPPED: ${skipped.join('; ')} — will retry next boot`);
-      }
-    }
-  }
 
   // ── (5) Priority-3 performance indexes for hot query paths ─────────────────
   // Each index is created only if the table and every column it needs exist.
@@ -1726,12 +1659,193 @@ async function runMigrations() {
   }
 }
 
+// ── Boot-time observability ──────────────────────────────────────────────────
+// Production captures stderr from the moment the process starts but only picks
+// up stdout once the port is open, so every console.log emitted during boot is
+// discarded. That is how a migration failure stayed invisible in production for
+// days: its only report was a pino warning, and pino writes to stdout. Anything
+// that must be readable after a deploy goes to stderr AND to a boot_status row
+// that can be read back later with a plain SQL query.
+async function recordBootStatus(
+  migrationsError: string | null,
+  dateColumns: string,
+): Promise<void> {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS boot_status (
+        id               SERIAL PRIMARY KEY,
+        booted_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+        node_env         TEXT,
+        migrations_ok    BOOLEAN,
+        migrations_error TEXT,
+        date_columns     TEXT
+      )`);
+    await pool.query(
+      `INSERT INTO boot_status (node_env, migrations_ok, migrations_error, date_columns)
+       VALUES ($1, $2, $3, $4)`,
+      [
+        process.env.NODE_ENV ?? "unknown",
+        migrationsError === null,
+        migrationsError,
+        dateColumns,
+      ],
+    );
+    // A diagnostic tail, not an audit log — keep the last 50 boots.
+    await pool.query(
+      `DELETE FROM boot_status WHERE id <= (SELECT max(id) - 50 FROM boot_status)`,
+    );
+  } catch (e) {
+    console.error("[boot] could not record boot_status:", (e as Error).message);
+  }
+}
+
+// ── Text date columns → real DATE columns ────────────────────────────────────
+// This runs as its OWN top-level step, deliberately NOT inside runMigrations().
+// runMigrations() is one long function wrapped in a single catch, so any
+// statement that throws part-way through silently skips everything after it.
+// That is exactly how production kept these columns as text while every boot
+// still reported healthy — the conversion sat behind an earlier statement that
+// never completed, and the failure went to a stream nobody could read. Out
+// here, an unrelated failure earlier in the boot cannot skip it.
+//
+// The pass is TYPE-DRIVEN, not log-gated: it inspects the live column type on
+// every boot and converts whatever is still text. A publish that reverses the
+// type (PostgreSQL applies date->text silently) therefore heals itself on the
+// next restart instead of being locked out by an "already applied" log row.
+//
+// Each column is independent: a missing column, an unexpected type, or a value
+// that cannot be cast skips that one column instead of aborting the batch.
+async function convertTextDateColumns(): Promise<string> {
+  // Development-only escape hatch. A publish diffs the two LIVE databases and
+  // PostgreSQL cannot auto-cast text->date, so development has to stay on text
+  // until production has converted; the flag is removed straight afterwards.
+  //
+  // Production REFUSES the hold rather than honouring it. Honouring it there
+  // would recreate the exact failure this whole change exists to prevent —
+  // columns left as text while the boot reports itself healthy — and no
+  // environment variable should be able to quietly undo the conversion.
+  const holdRequested = process.env.HOLD_DATE_COLUMN_CONVERSION === "1";
+  if (holdRequested && process.env.NODE_ENV === "production") {
+    console.error(
+      "[migration] text_date_columns_to_date_v2: HOLD_DATE_COLUMN_CONVERSION=1 IGNORED in production — converting anyway",
+    );
+  } else if (holdRequested) {
+    const msg =
+      "HELD by HOLD_DATE_COLUMN_CONVERSION=1 — columns left as text (development only)";
+    console.error(`[migration] text_date_columns_to_date_v2: ${msg}`);
+    return msg;
+  }
+
+  let already = 0;
+  const converted: string[] = [];
+  const skipped: string[] = [];
+
+  for (const [table, col] of DATE_COLUMNS) {
+    try {
+      // table_schema = 'public' is not optional: this database also carries a
+      // backup_meta schema, and an unqualified lookup can answer for a
+      // same-named column in another schema.
+      const {
+        rows: [meta],
+      } = await pool.query(
+        `SELECT data_type, is_nullable FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2`,
+        [table, col],
+      );
+      if (!meta) {
+        skipped.push(`${table}.${col} (column missing)`);
+        continue;
+      }
+      if (meta.data_type === "date") {
+        already++;
+        continue;
+      }
+      if (meta.data_type !== "text" && meta.data_type !== "character varying") {
+        skipped.push(`${table}.${col} (unexpected type ${meta.data_type})`);
+        continue;
+      }
+      // Validate every stored value BEFORE altering the column:
+      //  - bad_shape: not YYYY-MM-DD at all, so the cast would fail
+      //  - bad_value: right shape but not a real date (e.g. 2026-02-30).
+      //    to_date is lenient and would silently shift it to 2026-03-02, so
+      //    compare the round-trip instead of trusting the regex alone.
+      //  - blanks: '' becomes NULL, which a NOT NULL column would reject
+      const {
+        rows: [audit],
+      } = await pool.query(
+        `SELECT
+           count(*) FILTER (WHERE ${col} IS NOT NULL AND ${col} <> '' AND ${col} !~ '^\\d{4}-\\d{2}-\\d{2}$')::int AS bad_shape,
+           count(*) FILTER (WHERE ${col} IS NOT NULL AND ${col} <> '' AND ${col} ~ '^\\d{4}-\\d{2}-\\d{2}$'
+                                  AND to_date(${col}, 'YYYY-MM-DD')::text <> ${col})::int AS bad_value,
+           count(*) FILTER (WHERE ${col} = '')::int AS blanks
+         FROM ${table}`,
+      );
+      if (audit.bad_shape > 0 || audit.bad_value > 0) {
+        skipped.push(
+          `${table}.${col} (${audit.bad_shape} malformed + ${audit.bad_value} impossible value(s))`,
+        );
+        continue;
+      }
+      if (audit.blanks > 0 && meta.is_nullable === "NO") {
+        skipped.push(`${table}.${col} (${audit.blanks} blank(s) in a NOT NULL column)`);
+        continue;
+      }
+      await pool.query(
+        `ALTER TABLE ${table} ALTER COLUMN ${col} TYPE date USING NULLIF(${col}, '')::date`,
+      );
+      converted.push(`${table}.${col}`);
+    } catch (e) {
+      skipped.push(`${table}.${col} (error: ${(e as Error).message})`);
+    }
+  }
+
+  if (skipped.length === 0) {
+    // Record that a full pass succeeded. Informational only — the loop above
+    // never consults it, so a later reversal still heals.
+    await pool.query(
+      `INSERT INTO migration_log (name) SELECT 'text_date_columns_to_date_v2'
+        WHERE NOT EXISTS (SELECT 1 FROM migration_log WHERE name = 'text_date_columns_to_date_v2')`,
+    );
+    const outcome =
+      converted.length > 0
+        ? `converted ${converted.length} column(s) text->date: ${converted.join(", ")}`
+        : `all ${already} date column(s) already correct`;
+    console.error(`[migration] text_date_columns_to_date_v2: ${outcome}`);
+    return outcome;
+  }
+
+  const outcome = `${converted.length} converted, ${already} already date, SKIPPED: ${skipped.join("; ")} — will retry next boot`;
+  console.error(`[migration] text_date_columns_to_date_v2: ${outcome}`);
+  return outcome;
+}
+
 // ── Run core migrations first so all tables exist before the top-level awaits ──
+let migrationsError: string | null = null;
 try {
   await runMigrations();
 } catch (err) {
+  // Reported on stderr as well as through the logger: pino writes to stdout,
+  // which production discards until the port opens, and this is precisely the
+  // failure that must never be silent again.
+  const e = err as Error;
+  migrationsError = e?.message ?? String(err);
+  console.error("[migration] runMigrations FAILED (non-fatal):", migrationsError);
+  console.error(e?.stack ?? "(no stack available)");
   logger.warn({ err }, "Migration warning (non-fatal)");
 }
+
+// Independent of the block above, on purpose — see convertTextDateColumns().
+let dateColumnsOutcome: string;
+try {
+  dateColumnsOutcome = await convertTextDateColumns();
+} catch (err) {
+  dateColumnsOutcome = `FAILED: ${(err as Error).message}`;
+  console.error(
+    "[migration] text_date_columns_to_date_v2 FAILED:",
+    (err as Error).message,
+  );
+}
+await recordBootStatus(migrationsError, dateColumnsOutcome);
 
 // ── MRP column on materials and raw_materials ────────────────────────────────
 await pool.query(`ALTER TABLE materials    ADD COLUMN IF NOT EXISTS mrp NUMERIC(10,2) DEFAULT 0`);
