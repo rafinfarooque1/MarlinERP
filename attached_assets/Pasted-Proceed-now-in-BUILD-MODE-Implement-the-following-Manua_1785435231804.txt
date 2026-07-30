@@ -1,0 +1,744 @@
+Proceed now in BUILD MODE.
+
+Implement the following Manual Purchase Bill improvements in DEVELOPMENT ONLY.
+
+IMPORTANT SCOPE / SAFETY RULES
+
+- Do not switch back to Plan mode unless you encounter a genuine business decision that cannot safely be inferred.
+- Do not publish or deploy.
+- Do not write, edit, delete, reset, truncate, migrate, or test against production data.
+- Do not create an opening-stock importer.
+- Do not revive any cancelled opening-stock import task.
+- Do not create CSV/PDF/bulk stock import functionality.
+- Do not modify purchase-payment functionality.
+- Do not automatically settle vendor balances.
+- Do not create payment vouchers as part of saving a purchase.
+- Do not add Frozen Hub Investment settlement logic.
+- I will handle purchase payments manually through the ERP's existing workflow.
+- Preserve the existing RBAC/warehouse-scope security work.
+- Preserve the existing 16 DATE-column/self-healing migration work.
+- Preserve existing historical purchase and stock data.
+- Do not redesign accounting unless an actual defect directly related to these requested changes is found. If one is found, report it rather than broadening the task unnecessarily.
+
+The purpose of this task is ONLY to improve the existing normal/manual Purchase Bill workflow.
+
+==================================================
+1. AUTOMATIC BATCH NUMBER
+==================================================
+
+Currently the Purchase Bill asks me to manually enter a batch number.
+
+Change this so that when a purchase line is created, the ERP automatically generates a unique batch number.
+
+Requirements:
+
+- Batch generation must ultimately be authoritative on the backend/server.
+- Do not rely only on frontend-generated values.
+- The frontend should display the generated batch number.
+- The generated batch number must be unique and concurrency-safe.
+- Two simultaneous purchase saves must not generate the same batch number.
+- Reuse an existing ERP sequence/generator if a suitable one already exists.
+- Otherwise implement a safe server-side generator.
+
+A readable format such as:
+
+PUR-YYYYMMDD-XXXXX
+
+is acceptable, but follow existing ERP numbering conventions where possible.
+
+The batch must remain linked to the correct:
+
+- purchase
+- purchase line
+- item
+- vendor
+- receiving location
+- quantity
+- MFG date
+- expiry date
+- purchase cost
+
+Do not regenerate historical batch numbers.
+
+Editing an existing purchase must not silently create a new batch unless the underlying stock/batch business operation genuinely requires it.
+
+If manual batch editing is retained for administrators, validate uniqueness on the backend.
+
+==================================================
+2. HSN AUTOMATICALLY FROM ITEM MASTER
+==================================================
+
+When I select an item in Purchase Bill, automatically populate its HSN from Item Master.
+
+Flow:
+
+Item Master HSN
+→ Purchase Bill HSN
+
+Requirements:
+
+- Automatically populate HSN after selecting the item.
+- HSN must remain editable on the purchase line.
+- Editing HSN on a Purchase Bill must NOT modify Item Master's HSN.
+- If Item Master has no HSN, leave it blank and allow manual entry.
+- HSN must be treated as TEXT/STRING, never numeric.
+- Preserve leading zeros.
+
+Example:
+
+08119090
+
+must remain:
+
+08119090
+
+and must never become:
+
+8119090
+
+Historical purchase HSN values must remain unchanged even if Item Master's HSN changes later.
+
+Therefore verify that Purchase Bill stores/snapshots the HSN used for that transaction.
+
+If the current schema/API does not support this correctly, implement the minimum safe change required.
+
+==================================================
+3. GST % AUTOMATICALLY FROM ITEM MASTER
+==================================================
+
+When an item is selected, also populate its default GST percentage from Item Master.
+
+Example:
+
+Item Master:
+HSN = 08119090
+GST = 5%
+
+Purchase Bill should automatically show:
+
+HSN = 08119090
+GST = 5%
+
+GST must remain editable on the Purchase Bill.
+
+Changing GST on a Purchase Bill must NOT modify Item Master.
+
+The Purchase Bill must retain the GST rate actually used for that transaction as historical data.
+
+==================================================
+4. GST INCLUSIVE / GST EXCLUSIVE RATE
+==================================================
+
+Add a clear rate-mode option to the Purchase Bill:
+
+GST Exclusive
+GST Inclusive
+
+Use a radio button, segmented control, select box, or another clear UI where exactly one mode is active.
+
+The selected mode must be persisted with the Purchase Bill so reopening/editing the purchase reproduces the original calculation.
+
+Do not attempt to infer the mode later from the amounts.
+
+-----------------------------
+GST EXCLUSIVE EXAMPLE
+-----------------------------
+
+Entered Rate = ₹100
+GST = 5%
+
+Taxable/Base = ₹100
+GST = ₹5
+Final = ₹105
+
+If intra-state:
+
+CGST = ₹2.50
+SGST = ₹2.50
+
+If inter-state:
+
+IGST = ₹5.00
+
+-----------------------------
+GST INCLUSIVE EXAMPLE
+-----------------------------
+
+Entered Rate = ₹105
+GST = 5%
+
+Taxable/Base:
+
+105 / 1.05 = ₹100
+
+GST:
+
+₹5
+
+Final:
+
+₹105
+
+For intra-state:
+
+CGST = ₹2.50
+SGST = ₹2.50
+
+For inter-state:
+
+IGST = ₹5.00
+
+DO NOT calculate inclusive GST as 5% of ₹105.
+
+Use reverse-tax calculation.
+
+==================================================
+5. DISCOUNT + GST CALCULATION
+==================================================
+
+Review the existing discount calculation and make it consistent with the ERP's existing purchase policy.
+
+Each line should be able to derive/display:
+
+- Quantity
+- Entered Rate
+- GST Inclusive/Exclusive mode
+- Gross amount
+- Discount %
+- Discount amount
+- Taxable amount
+- GST %
+- CGST
+- SGST
+- IGST
+- Final line total
+
+Use proper decimal/numeric monetary calculations.
+
+Do not introduce JavaScript floating-point accounting errors.
+
+Use the same rounding policy consistently on frontend, backend and accounting calculations.
+
+==================================================
+6. GST TYPE
+==================================================
+
+Preserve the ERP's existing intra-state/inter-state GST behavior.
+
+Where master data is sufficient:
+
+Same state:
+CGST + SGST
+
+Different state:
+IGST
+
+Do not trust a frontend tax selection as the only accounting authority if the server already has company/location/vendor state information.
+
+If the existing ERP intentionally supports authorized manual GST-type override, preserve it.
+
+Do not unnecessarily redesign GST architecture in this task.
+
+==================================================
+7. PURCHASE BILL TOTALS
+==================================================
+
+Update the Purchase Bill footer so the calculation is clear.
+
+Show applicable values such as:
+
+Subtotal
+Discount
+Taxable Amount
+CGST
+SGST
+IGST
+Total GST
+Grand Total
+
+Only display relevant tax components.
+
+The frontend result and backend result must match exactly.
+
+The backend must recalculate/validate totals rather than blindly trusting amounts supplied by the browser.
+
+==================================================
+8. MFG DATE AND EXPIRY DATE
+==================================================
+
+Keep MFG Date and Expiry Date on every applicable purchased stock batch.
+
+These must continue to be real calendar DATE values.
+
+Reject impossible dates such as:
+
+2026-02-30
+
+Do not globally force expiry = MFG + 18 months.
+
+For the stock I am manually entering, I may use an 18-month expiry, but that is not necessarily the shelf life of every future item.
+
+If Item Master already has or can safely support a shelf-life field, use it as a default:
+
+MFG date + Item Master shelf life
+→ suggested Expiry
+
+but allow authorized manual editing.
+
+If implementing shelf life would materially broaden this task, keep expiry manual and report the possible enhancement instead.
+
+==================================================
+9. STOCK CREATION
+==================================================
+
+The existing normal Purchase Bill must continue to create stock correctly.
+
+When a valid Purchase Bill is saved, verify the existing flow correctly updates:
+
+- purchase
+- purchase lines
+- stock movement/entry
+- stock batch
+- receiving warehouse/location quantity
+- inventory quantity
+- inventory valuation
+- vendor payable/accounting under the existing purchase accounting logic
+
+Stock must be created ONLY at the selected receiving location that the authenticated user is authorized to operate.
+
+Do not create duplicate stock because of:
+
+- page refresh
+- request retry
+- reopening the purchase
+- editing unrelated fields
+- duplicate API submission
+
+Review idempotency and transaction behavior.
+
+Where supported by the current architecture, purchase + stock + accounting should remain atomic.
+
+Do not leave a situation where:
+
+purchase saved but stock failed
+
+or:
+
+stock saved but purchase/accounting failed.
+
+==================================================
+10. INVENTORY COST / GST
+==================================================
+
+Do not redesign the existing accounting model.
+
+However, verify that the new Inclusive/Exclusive option feeds the existing stock valuation correctly.
+
+Where GST is recoverable input GST, the GST portion should not accidentally become inventory cost merely because the entered price was GST-inclusive.
+
+Example:
+
+Entered inclusive rate = ₹105
+GST = 5%
+
+Taxable purchase cost = ₹100
+Input GST = ₹5
+Invoice amount = ₹105
+
+Inventory valuation should use the appropriate existing accounting cost basis, not accidentally ₹105 simply because the user selected Inclusive.
+
+If existing ERP accounting policy differs, STOP and report the conflict rather than silently rewriting accounting behavior.
+
+==================================================
+11. PURCHASE PAYMENT — DO NOT CHANGE
+==================================================
+
+This task does NOT include purchase payment.
+
+Do NOT:
+
+- automatically pay the vendor
+- automatically settle vendor payable
+- create payment vouchers
+- create investment settlement
+- create cash payment
+- create bank payment
+- modify payment APIs
+- add Frozen Hub Investment logic
+- change vendor ageing settlement logic
+
+I will make purchase payments manually using the ERP's existing payment/accounting workflow.
+
+Saving the Purchase Bill should preserve the ERP's current normal purchase accounting behavior.
+
+==================================================
+12. NO OPENING-STOCK IMPORT
+==================================================
+
+The previous automated opening-stock import has been cancelled.
+
+Do NOT implement:
+
+- Opening Stock Import screen
+- PDF stock importer
+- CSV stock importer
+- Excel stock importer
+- bulk stock-import API
+- direct production stock import
+- opening-stock migration
+- automatic stock upload
+
+I will enter the stock manually through normal Purchase Bills.
+
+Do not touch or restart any cancelled opening-stock task.
+
+==================================================
+13. ITEM MASTER INTEGRATION
+==================================================
+
+Review Item Master only as necessary to support Purchase Bills.
+
+Purchase Bill should be able to obtain:
+
+- Item ID
+- Item Name
+- Unit/UOM
+- HSN
+- GST %
+- relevant existing stock/item metadata
+
+If Item Master already stores these fields, reuse them.
+
+Do not create duplicate fields.
+
+Do not automatically modify existing production items.
+
+Do not create duplicate items because of whitespace/case differences.
+
+==================================================
+14. RBAC AND WAREHOUSE SCOPE
+==================================================
+
+Do not weaken the recent RBAC/security work.
+
+Purchase Bill permissions must be enforced on the backend.
+
+VIEW:
+Only authorized users may view Purchase Bills.
+
+ADD:
+Only users with Add permission may create Purchase Bills.
+
+EDIT:
+Only users with Edit permission may modify them.
+
+DELETE/CANCEL:
+Must follow existing permission and accounting rules.
+
+DOWNLOAD/PRINT:
+Enforce corresponding permissions if applicable.
+
+Warehouse/location scope must be derived from the authenticated employee/session.
+
+Do NOT trust a client-supplied receivingLocation as authorization.
+
+A warehouse employee must not be able to forge another warehouse/location ID and create stock there.
+
+Level-1 administrator behavior must remain unchanged.
+
+==================================================
+15. STOCK VALUE / COST VISIBILITY
+==================================================
+
+Preserve the existing requirement for Operations → Stock / Live Stock:
+
+Normal warehouse employees may see operational stock information such as:
+
+- Item
+- Location
+- Quantity
+- Reserved
+- Available
+- Status
+
+But they should NOT see sensitive financial inventory information unless explicitly authorized:
+
+- Stock Value
+- Purchase Cost
+- Cost per Unit
+- Inventory Valuation
+
+Do not solve this only with CSS.
+
+Where practical, unauthorized API responses should not contain sensitive cost/value fields at all.
+
+Do not break administrator/authorized finance visibility.
+
+==================================================
+16. FRONTEND + BACKEND
+==================================================
+
+This is NOT a frontend-only task.
+
+Inspect and update whatever is genuinely required across:
+
+Frontend:
+- Purchase Bill form
+- item selection
+- HSN/GST defaults
+- inclusive/exclusive selector
+- calculations
+- validation
+- edit/reopen behavior
+
+Backend:
+- Purchase API contract
+- request validation
+- HSN persistence
+- GST persistence
+- rate-mode persistence
+- totals calculation/validation
+- automatic batch generation
+- stock creation
+- authorization/location scope
+- accounting integration
+
+Database:
+Only add/change schema if required.
+
+If schema changes are necessary:
+- use a safe forward migration
+- preserve all existing records
+- provide defaults/backfill only where logically safe
+- do not reset/recreate databases
+- do not alter production manually
+
+==================================================
+17. BACKUP / RESTORE
+==================================================
+
+If this task introduces any persisted field, column or table, inspect Backup & Restore.
+
+The ERP has previously used a hardcoded table allowlist.
+
+Make sure any new persisted Purchase Bill information is included in backup/restore.
+
+Do not consider the feature complete if backup/restore would lose:
+
+- GST rate mode
+- purchase-line HSN snapshot
+- batch information
+- or any other newly persisted field.
+
+==================================================
+18. EXISTING DATE MIGRATION MUST REMAIN HEALTHY
+==================================================
+
+Do not disturb the previously verified DATE-column work.
+
+The existing self-healing date conversion and:
+
+GET /api/healthz/schema
+
+must remain healthy.
+
+After your changes confirm the expected 16 DATE columns remain correct.
+
+Do not convert them back to TEXT.
+
+==================================================
+19. DEVELOPMENT TESTS REQUIRED
+==================================================
+
+Perform safe development testing.
+
+Do NOT create test purchases in production.
+
+Test at minimum:
+
+TEST 1 — HSN AUTO-FILL
+Select an item with HSN in Item Master.
+Purchase Bill automatically receives the correct HSN.
+
+TEST 2 — LEADING ZERO
+Use HSN such as:
+08119090
+
+Confirm it remains exactly:
+08119090
+
+through UI → API → database → readback.
+
+TEST 3 — HSN OVERRIDE
+Edit HSN on Purchase Bill.
+Purchase line changes.
+Item Master does NOT change.
+
+TEST 4 — GST AUTO-FILL
+Item Master GST = 5%.
+Purchase Bill defaults to 5%.
+
+TEST 5 — GST OVERRIDE
+Change Purchase Bill GST.
+Purchase changes.
+Item Master does not.
+
+TEST 6 — EXCLUSIVE
+Rate ₹100
+GST 5%
+
+Expected:
+Taxable ₹100
+GST ₹5
+Total ₹105
+
+TEST 7 — INCLUSIVE
+Rate ₹105
+GST 5%
+
+Expected:
+Taxable ₹100
+GST ₹5
+Total ₹105
+
+TEST 8 — INTRA-STATE
+Verify CGST + SGST split correctly.
+
+TEST 9 — INTER-STATE
+Verify IGST correctly.
+
+TEST 10 — DISCOUNT
+Test discount combined with GST and confirm frontend/backend totals match.
+
+TEST 11 — AUTO BATCH
+Confirm automatic batch is generated.
+
+TEST 12 — BATCH UNIQUENESS
+Confirm two generated batches cannot collide.
+
+TEST 13 — CONCURRENCY
+Where practical, test simultaneous generation and prove uniqueness is enforced server-side/database-side.
+
+TEST 14 — MFG/EXPIRY
+Confirm both persist and read back correctly.
+
+TEST 15 — INVALID DATE
+Impossible date such as:
+2026-02-30
+
+must be rejected.
+
+TEST 16 — LOCATION SCOPE
+Authorized receiving warehouse works.
+
+Forged unauthorized receiving location must be rejected BEFORE any stock/accounting mutation.
+
+TEST 17 — STOCK
+A valid development test purchase creates exactly the expected quantity once.
+
+TEST 18 — RETRY/DUPLICATE
+Verify a retry/reopen does not silently duplicate stock.
+
+TEST 19 — ACCOUNTING
+Confirm existing Purchase Bill accounting remains balanced.
+
+TEST 20 — NO PAYMENT
+Confirm saving Purchase Bill does NOT automatically create a payment/settlement.
+
+TEST 21 — RBAC
+Restricted employee cannot bypass Purchase permissions via direct API request.
+
+TEST 22 — STOCK VALUE SECURITY
+Restricted warehouse employee cannot obtain stock valuation/cost through the Stock UI/API.
+
+TEST 23 — HISTORICAL DATA
+Existing Purchase Bills, if any, still open/read correctly.
+
+TEST 24 — TYPECHECK
+Run frontend and backend typechecks.
+
+TEST 25 — BUILD
+Run the appropriate development/production-style builds without publishing.
+
+TEST 26 — DATE HEALTH
+Verify /api/healthz/schema remains healthy and all expected 16 columns remain DATE.
+
+TEST 27 — BACKUP/RESTORE
+If persisted schema changed, verify backup/restore coverage.
+
+Use disposable DEVELOPMENT fixtures where required and clean them up afterward.
+
+Never use production for test writes.
+
+==================================================
+20. FINAL RECONCILIATION
+==================================================
+
+After testing, verify development remains internally consistent.
+
+At minimum check:
+
+Purchase Grand Total
+=
+correct taxable amount + GST - applicable discount/adjustments
+
+Stock quantity
+=
+valid purchase stock movements
+
+Vendor payable
+=
+existing Purchase Bill accounting result
+
+Input GST
+=
+existing applicable GST posting
+
+Inventory valuation
+=
+correct existing inventory-cost basis
+
+Trial Balance:
+Debit = Credit
+
+Do NOT create artificial balancing journal entries to hide a discrepancy.
+
+If something does not reconcile, identify the actual cause.
+
+==================================================
+21. FINAL REPORT — THEN STOP
+==================================================
+
+After implementation/testing, STOP.
+
+Do NOT publish.
+
+Give me one final report containing:
+
+1. Exact frontend files/modules changed.
+2. Exact backend files/modules changed.
+3. Database/schema changes, if any.
+4. How automatic batch numbering works.
+5. Proof batch numbers are unique/concurrency-safe.
+6. How HSN is loaded from Item Master.
+7. How HSN override/history works.
+8. How GST % defaults and overrides work.
+9. GST Inclusive calculation.
+10. GST Exclusive calculation.
+11. Discount/tax calculation order.
+12. MFG/Expiry behavior.
+13. Stock creation and valuation behavior.
+14. Confirmation purchase-payment behavior was NOT changed.
+15. RBAC/location-scope verification.
+16. Stock-value/cost security verification.
+17. Backup/restore impact.
+18. Exact test results.
+19. Trial Balance/accounting reconciliation.
+20. Remaining warnings or unresolved issues.
+21. Confirmation whether any production data was touched.
+22. Confirmation whether anything was published.
+23. Whether you consider the changes safe for me to publish.
+
+Do not start unrelated ERP tasks after completing this work.
+
+Do not publish until I explicitly tell you to publish.
