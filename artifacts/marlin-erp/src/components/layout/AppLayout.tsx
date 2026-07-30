@@ -356,6 +356,15 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     setLocation(href);
   };
 
+  // ── Search group visibility: only show groups whose destination the user can view ──
+  // Uses the same checkCanView helper as the sidebar so the two stay in sync.
+  // Sales invoices (/headoffice/sales) has no registry entry → always accessible.
+  const userHierarchyId = (user as any)?.hierarchyId as number | undefined;
+  const searchCanViewItems    = isAdmin || checkCanView(pagePermKey('/production/item-master'), userHierarchyId, userLevel, allPerms as any[]);
+  const searchCanViewCustomers = isAdmin || checkCanView(pagePermKey('/customers'),             userHierarchyId, userLevel, allPerms as any[]);
+  const searchCanViewVendors   = isAdmin || checkCanView(pagePermKey('/vendors'),               userHierarchyId, userLevel, allPerms as any[]);
+  // Sales invoices: /headoffice/sales has no registry key — treat as always accessible
+
   // Change-password dialog state
   const [pwOpen, setPwOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
@@ -631,7 +640,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               ? 'Type at least 2 characters to search.'
               : searchFetching ? 'Searching…' : 'No results found.'}
           </CommandEmpty>
-          {searchResults && searchResults.items.length > 0 && (
+          {searchResults && searchResults.items.length > 0 && searchCanViewItems && (
             <CommandGroup heading="Items">
               {searchResults.items.map(r => (
                 <CommandItem key={`item-${r.id}`} value={`item-${r.id}-${r.title}`} onSelect={() => gotoResult('/production/item-master')}>
@@ -642,7 +651,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               ))}
             </CommandGroup>
           )}
-          {searchResults && searchResults.customers.length > 0 && (
+          {searchResults && searchResults.customers.length > 0 && searchCanViewCustomers && (
             <CommandGroup heading="Customers">
               {searchResults.customers.map(r => (
                 <CommandItem key={`cust-${r.id}`} value={`cust-${r.id}-${r.title}`} onSelect={() => gotoResult('/customers')}>
@@ -653,7 +662,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               ))}
             </CommandGroup>
           )}
-          {searchResults && searchResults.vendors.length > 0 && (
+          {searchResults && searchResults.vendors.length > 0 && searchCanViewVendors && (
             <CommandGroup heading="Vendors">
               {searchResults.vendors.map(r => (
                 <CommandItem key={`vend-${r.id}`} value={`vend-${r.id}-${r.title}`} onSelect={() => gotoResult('/vendors')}>

@@ -75,6 +75,7 @@ import SalesExpenses from './pages/sales/SalesExpenses';
 import SalesCashBalance from './pages/sales/SalesCashBalance';
 import SalesDashboard from './pages/sales/SalesDashboard';
 import { LocationProvider } from './lib/locationContext';
+import { RoutePermissionGuard } from './components/RoutePermissionGuard';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -113,99 +114,263 @@ function NotFound() {
   );
 }
 
+/**
+ * Convenience: AuthGuard + RoutePermissionGuard in one wrapper.
+ * The `href` is the canonical route href used to look up the permission key.
+ */
+function PermGuard({
+  href,
+  pageName,
+  children,
+  allowMustChange = false,
+  unrestricted = false,
+}: {
+  href: string;
+  pageName: string;
+  children: React.ReactNode;
+  allowMustChange?: boolean;
+  unrestricted?: boolean;
+}) {
+  return (
+    <AuthGuard allowMustChange={allowMustChange}>
+      <RoutePermissionGuard href={href} pageName={pageName} unrestricted={unrestricted}>
+        {children}
+      </RoutePermissionGuard>
+    </AuthGuard>
+  );
+}
+
 function Router() {
   return (
     <Switch>
       <Route path="/login" component={Login} />
 
       <Route path="/">
-        <AuthGuard><Dashboard /></AuthGuard>
+        <PermGuard href="/" pageName="Dashboard"><Dashboard /></PermGuard>
       </Route>
       <Route path="/dashboard">
-        <AuthGuard><Dashboard /></AuthGuard>
+        <PermGuard href="/" pageName="Dashboard"><Dashboard /></PermGuard>
       </Route>
       <Route path="/change-password">
-        <AuthGuard allowMustChange><ChangePassword /></AuthGuard>
+        <PermGuard href="/change-password" pageName="Change Password" allowMustChange unrestricted>
+          <ChangePassword />
+        </PermGuard>
       </Route>
 
-      <Route path="/production/units"><AuthGuard><Units /></AuthGuard></Route>
+      <Route path="/production/units">
+        <PermGuard href="/production/units" pageName="Units"><Units /></PermGuard>
+      </Route>
+      <Route path="/production/items">
+        {/* Satellite: governed by item-master permission */}
+        <PermGuard href="/production/items" pageName="Items"><Items /></PermGuard>
+      </Route>
+      <Route path="/production/purchase">
+        <PermGuard href="/production/purchase" pageName="Purchases"><Purchases /></PermGuard>
+      </Route>
+      <Route path="/production/production">
+        <PermGuard href="/production/production" pageName="Production Batches"><ProductionList /></PermGuard>
+      </Route>
+      <Route path="/production/reports">
+        <PermGuard href="/production/reports" pageName="Production Reports"><ProductionReports /></PermGuard>
+      </Route>
 
-      <Route path="/production/items"><AuthGuard><Items /></AuthGuard></Route>
-      <Route path="/production/purchase"><AuthGuard><Purchases /></AuthGuard></Route>
-      <Route path="/production/production"><AuthGuard><ProductionList /></AuthGuard></Route>
-      <Route path="/production/reports"><AuthGuard><ProductionReports /></AuthGuard></Route>
       {/* Unified transfers page — all roles */}
-      <Route path="/transfers"><AuthGuard><Transfers /></AuthGuard></Route>
+      <Route path="/transfers">
+        <PermGuard href="/transfers" pageName="Stock Transfer"><Transfers /></PermGuard>
+      </Route>
       {/* Legacy redirects so any bookmarks / old links still work */}
       <Route path="/production/stock-transfer"><Redirect to="/transfers" /></Route>
       <Route path="/headoffice/transfers"><Redirect to="/transfers" /></Route>
-      <Route path="/sales/transfers"><AuthGuard><Transfers /></AuthGuard></Route>
+      <Route path="/sales/transfers">
+        {/* Satellite: /sales/transfers → /transfers permission */}
+        <PermGuard href="/sales/transfers" pageName="Stock Transfer"><Transfers /></PermGuard>
+      </Route>
 
-      <Route path="/headoffice/warehouses"><AuthGuard><Warehouses /></AuthGuard></Route>
-      <Route path="/headoffice/outlets"><AuthGuard><OutletsEnabledRoute><Outlets /></OutletsEnabledRoute></AuthGuard></Route>
-      <Route path="/headoffice/stock"><AuthGuard><Stock /></AuthGuard></Route>
-      <Route path="/headoffice/inventory-reports"><AuthGuard><InventoryReports /></AuthGuard></Route>
-      <Route path="/headoffice/stock-verification"><AuthGuard><StockVerification /></AuthGuard></Route>
-      <Route path="/headoffice/stock-ledger"><AuthGuard><StockLedger /></AuthGuard></Route>
-      <Route path="/headoffice/item-price"><AuthGuard><ItemPrices /></AuthGuard></Route>
-      <Route path="/headoffice/sales"><AuthGuard><Sales /></AuthGuard></Route>
+      <Route path="/headoffice/warehouses">
+        <PermGuard href="/headoffice/warehouses" pageName="Warehouses"><Warehouses /></PermGuard>
+      </Route>
+      <Route path="/headoffice/outlets">
+        <PermGuard href="/headoffice/outlets" pageName="Outlets">
+          <OutletsEnabledRoute><Outlets /></OutletsEnabledRoute>
+        </PermGuard>
+      </Route>
+      <Route path="/headoffice/stock">
+        <PermGuard href="/headoffice/stock" pageName="Stock"><Stock /></PermGuard>
+      </Route>
+      <Route path="/headoffice/inventory-reports">
+        <PermGuard href="/headoffice/inventory-reports" pageName="Inventory Reports"><InventoryReports /></PermGuard>
+      </Route>
+      <Route path="/headoffice/stock-verification">
+        <PermGuard href="/headoffice/stock-verification" pageName="Stock Verification"><StockVerification /></PermGuard>
+      </Route>
+      <Route path="/headoffice/stock-ledger">
+        <PermGuard href="/headoffice/stock-ledger" pageName="Stock Ledger"><StockLedger /></PermGuard>
+      </Route>
+      <Route path="/headoffice/item-price">
+        <PermGuard href="/headoffice/item-price" pageName="Item Prices"><ItemPrices /></PermGuard>
+      </Route>
+      <Route path="/headoffice/sales">
+        {/* Legacy direct link; Sales is governed by Point of Sale. */}
+        <PermGuard href="/sales/pos" pageName="Sales"><Sales /></PermGuard>
+      </Route>
 
-      <Route path="/hr/hierarchy"><AuthGuard><Hierarchy /></AuthGuard></Route>
-      <Route path="/hr/employees"><AuthGuard><Employees /></AuthGuard></Route>
-      <Route path="/hr/payroll"><AuthGuard><Payroll /></AuthGuard></Route>
-      <Route path="/hr/attendance"><AuthGuard><Attendance /></AuthGuard></Route>
-      <Route path="/hr/leave"><AuthGuard><Leave /></AuthGuard></Route>
-      <Route path="/hr/advances"><AuthGuard><Advances /></AuthGuard></Route>
-      <Route path="/hr/rent"><AuthGuard><RentManagement /></AuthGuard></Route>
+      <Route path="/hr/hierarchy">
+        <PermGuard href="/hr/hierarchy" pageName="Hierarchy"><Hierarchy /></PermGuard>
+      </Route>
+      <Route path="/hr/employees">
+        <PermGuard href="/hr/employees" pageName="Employees"><Employees /></PermGuard>
+      </Route>
+      <Route path="/hr/payroll">
+        <PermGuard href="/hr/payroll" pageName="Payroll"><Payroll /></PermGuard>
+      </Route>
+      <Route path="/hr/attendance">
+        <PermGuard href="/hr/attendance" pageName="Attendance"><Attendance /></PermGuard>
+      </Route>
+      <Route path="/hr/leave">
+        {/* Satellite: /hr/leave → /hr/attendance permission */}
+        <PermGuard href="/hr/leave" pageName="Leave"><Leave /></PermGuard>
+      </Route>
+      <Route path="/hr/advances">
+        <PermGuard href="/hr/advances" pageName="Advances"><Advances /></PermGuard>
+      </Route>
+      <Route path="/hr/rent">
+        <PermGuard href="/hr/rent" pageName="Rent Management"><RentManagement /></PermGuard>
+      </Route>
 
-      <Route path="/customers"><AuthGuard><Customers /></AuthGuard></Route>
-      <Route path="/vendors"><AuthGuard><Vendors /></AuthGuard></Route>
-      <Route path="/coupons"><AuthGuard><Coupons /></AuthGuard></Route>
-      <Route path="/returns"><AuthGuard><Returns /></AuthGuard></Route>
-      <Route path="/outstanding"><AuthGuard><Outstanding /></AuthGuard></Route>
+      <Route path="/customers">
+        <PermGuard href="/customers" pageName="Customers"><Customers /></PermGuard>
+      </Route>
+      <Route path="/vendors">
+        <PermGuard href="/vendors" pageName="Vendors"><Vendors /></PermGuard>
+      </Route>
+      <Route path="/coupons">
+        <PermGuard href="/coupons" pageName="Coupons"><Coupons /></PermGuard>
+      </Route>
+      <Route path="/returns">
+        <PermGuard href="/returns" pageName="Returns"><Returns /></PermGuard>
+      </Route>
+      <Route path="/outstanding">
+        <PermGuard href="/outstanding" pageName="Outstanding"><Outstanding /></PermGuard>
+      </Route>
 
-      <Route path="/accounts/chart"><AuthGuard><ChartOfAccounts /></AuthGuard></Route>
-      <Route path="/accounts/ledger"><AuthGuard><Ledger /></AuthGuard></Route>
-      <Route path="/accounts/cash-bank"><AuthGuard><CashBank /></AuthGuard></Route>
-      <Route path="/accounts/expenses"><AuthGuard><Expenses /></AuthGuard></Route>
-      <Route path="/accounts/vouchers"><AuthGuard><Vouchers /></AuthGuard></Route>
-      <Route path="/accounts/payments"><AuthGuard><Payment /></AuthGuard></Route>
-      <Route path="/accounts/receipts"><AuthGuard><ReceiptPage /></AuthGuard></Route>
-      <Route path="/accounts/journal"><AuthGuard><Journal /></AuthGuard></Route>
-      <Route path="/accounts/contra"><AuthGuard><Contra /></AuthGuard></Route>
-      <Route path="/accounts/notes"><AuthGuard><Notes /></AuthGuard></Route>
-      <Route path="/accounts/day-book"><AuthGuard><DayBook /></AuthGuard></Route>
-      <Route path="/accounts/cash-book"><AuthGuard><CashBankBook kind="cash" /></AuthGuard></Route>
-      <Route path="/accounts/bank-book"><AuthGuard><CashBankBook kind="bank" /></AuthGuard></Route>
-      <Route path="/accounts/trial-balance"><AuthGuard><TrialBalance /></AuthGuard></Route>
-      <Route path="/accounts/gst"><AuthGuard><GstSummary /></AuthGuard></Route>
-      <Route path="/accounts/gst-returns"><AuthGuard><GstReturns /></AuthGuard></Route>
+      <Route path="/accounts/chart">
+        <PermGuard href="/accounts/chart" pageName="Chart of Accounts"><ChartOfAccounts /></PermGuard>
+      </Route>
+      <Route path="/accounts/ledger">
+        <PermGuard href="/accounts/ledger" pageName="Ledger Statement"><Ledger /></PermGuard>
+      </Route>
+      <Route path="/accounts/cash-bank">
+        <PermGuard href="/accounts/cash-bank" pageName="Cash & Bank"><CashBank /></PermGuard>
+      </Route>
+      <Route path="/accounts/expenses">
+        <PermGuard href="/accounts/expenses" pageName="Expenses"><Expenses /></PermGuard>
+      </Route>
+      <Route path="/accounts/vouchers">
+        <PermGuard href="/accounts/vouchers" pageName="Vouchers"><Vouchers /></PermGuard>
+      </Route>
+      <Route path="/accounts/payments">
+        {/* Satellite: /accounts/payments → /accounts/vouchers permission */}
+        <PermGuard href="/accounts/payments" pageName="Payments"><Payment /></PermGuard>
+      </Route>
+      <Route path="/accounts/receipts">
+        {/* Satellite: /accounts/receipts → /accounts/vouchers permission */}
+        <PermGuard href="/accounts/receipts" pageName="Receipts"><ReceiptPage /></PermGuard>
+      </Route>
+      <Route path="/accounts/journal">
+        {/* Satellite: /accounts/journal → /accounts/vouchers permission */}
+        <PermGuard href="/accounts/journal" pageName="Journal"><Journal /></PermGuard>
+      </Route>
+      <Route path="/accounts/contra">
+        {/* Satellite: /accounts/contra → /accounts/vouchers permission */}
+        <PermGuard href="/accounts/contra" pageName="Contra"><Contra /></PermGuard>
+      </Route>
+      <Route path="/accounts/notes">
+        {/* Satellite: /accounts/notes → /accounts/vouchers permission */}
+        <PermGuard href="/accounts/notes" pageName="Credit / Debit Notes"><Notes /></PermGuard>
+      </Route>
+      <Route path="/accounts/day-book">
+        <PermGuard href="/accounts/day-book" pageName="Day Book"><DayBook /></PermGuard>
+      </Route>
+      <Route path="/accounts/cash-book">
+        <PermGuard href="/accounts/cash-book" pageName="Cash Book"><CashBankBook kind="cash" /></PermGuard>
+      </Route>
+      <Route path="/accounts/bank-book">
+        <PermGuard href="/accounts/bank-book" pageName="Bank Book"><CashBankBook kind="bank" /></PermGuard>
+      </Route>
+      <Route path="/accounts/trial-balance">
+        <PermGuard href="/accounts/trial-balance" pageName="Trial Balance"><TrialBalance /></PermGuard>
+      </Route>
+      <Route path="/accounts/gst">
+        <PermGuard href="/accounts/gst" pageName="GST Summary"><GstSummary /></PermGuard>
+      </Route>
+      <Route path="/accounts/gst-returns">
+        <PermGuard href="/accounts/gst-returns" pageName="GST Returns"><GstReturns /></PermGuard>
+      </Route>
 
-      <Route path="/production/item-master"><AuthGuard><ItemMaster /></AuthGuard></Route>
+      <Route path="/production/item-master">
+        <PermGuard href="/production/item-master" pageName="Item Master"><ItemMaster /></PermGuard>
+      </Route>
 
-      <Route path="/company/settings"><AuthGuard><CompanySettings /></AuthGuard></Route>
-      <Route path="/company/permissions"><AuthGuard><Permissions /></AuthGuard></Route>
-      <Route path="/company/profile"><AuthGuard><Profile /></AuthGuard></Route>
-      <Route path="/company/audit"><AuthGuard><AuditLog /></AuthGuard></Route>
-      <Route path="/company/login-history"><AuthGuard><LoginHistory /></AuthGuard></Route>
-      <Route path="/company/backup"><AuthGuard><BackupRestore /></AuthGuard></Route>
+      <Route path="/company/settings">
+        <PermGuard href="/company/settings" pageName="Settings"><CompanySettings /></PermGuard>
+      </Route>
+      <Route path="/company/permissions">
+        <PermGuard href="/company/permissions" pageName="Permissions"><Permissions /></PermGuard>
+      </Route>
+      <Route path="/company/profile">
+        <PermGuard href="/company/profile" pageName="Company Profile"><Profile /></PermGuard>
+      </Route>
+      <Route path="/company/audit">
+        <PermGuard href="/company/audit" pageName="Audit Log"><AuditLog /></PermGuard>
+      </Route>
+      <Route path="/company/login-history">
+        <PermGuard href="/company/login-history" pageName="Login History"><LoginHistory /></PermGuard>
+      </Route>
+      <Route path="/company/backup">
+        <PermGuard href="/company/backup" pageName="Backup & Restore"><BackupRestore /></PermGuard>
+      </Route>
 
-      <Route path="/accounts/reconciliation"><AuthGuard><Reconciliation /></AuthGuard></Route>
-      <Route path="/accounts/cash-in-outlet"><AuthGuard><CashInOutlet /></AuthGuard></Route>
+      <Route path="/accounts/reconciliation">
+        <PermGuard href="/accounts/reconciliation" pageName="Reconciliation"><Reconciliation /></PermGuard>
+      </Route>
+      <Route path="/accounts/cash-in-outlet">
+        <PermGuard href="/accounts/cash-in-outlet" pageName="Cash Balance"><CashInOutlet /></PermGuard>
+      </Route>
       <Route path="/accounts/reports"><Redirect to="/reports/sales" /></Route>
       <Route path="/reports"><Redirect to="/reports/sales" /></Route>
-      <Route path="/reports/:cat"><AuthGuard><ReportsCenter /></AuthGuard></Route>
+      <Route path="/reports/:cat">
+        <PermGuard href="/reports/sales" pageName="Reports"><ReportsCenter /></PermGuard>
+      </Route>
 
-      <Route path="/profile/me"><AuthGuard><ProfileMe /></AuthGuard></Route>
+      {/* /profile/me has no permission row — unrestricted for all logged-in users */}
+      <Route path="/profile/me">
+        <AuthGuard><ProfileMe /></AuthGuard>
+      </Route>
 
       {/* Sales segment */}
-      <Route path="/sales"><AuthGuard><LocationPicker /></AuthGuard></Route>
-      <Route path="/sales/dashboard"><AuthGuard><SalesDashboard /></AuthGuard></Route>
-      <Route path="/sales/stock"><AuthGuard><SalesStock /></AuthGuard></Route>
+      <Route path="/sales">
+        {/* Location picker — no permission row needed */}
+        <AuthGuard><LocationPicker /></AuthGuard>
+      </Route>
+      <Route path="/sales/dashboard">
+        {/* Satellite: /sales/dashboard → / (Dashboard) permission */}
+        <PermGuard href="/sales/dashboard" pageName="Sales Dashboard"><SalesDashboard /></PermGuard>
+      </Route>
+      <Route path="/sales/stock">
+        {/* Satellite: /sales/stock → /headoffice/stock permission */}
+        <PermGuard href="/sales/stock" pageName="Stock"><SalesStock /></PermGuard>
+      </Route>
 
-      <Route path="/sales/pos"><AuthGuard><SalesPOS /></AuthGuard></Route>
-      <Route path="/sales/expenses"><AuthGuard><SalesExpenses /></AuthGuard></Route>
-      <Route path="/sales/cash-balance"><AuthGuard><SalesCashBalance /></AuthGuard></Route>
+      <Route path="/sales/pos">
+        <PermGuard href="/sales/pos" pageName="Point of Sale"><SalesPOS /></PermGuard>
+      </Route>
+      <Route path="/sales/expenses">
+        <PermGuard href="/sales/expenses" pageName="Expenses"><SalesExpenses /></PermGuard>
+      </Route>
+      <Route path="/sales/cash-balance">
+        {/* Satellite: /sales/cash-balance → /accounts/cash-in-outlet permission */}
+        <PermGuard href="/sales/cash-balance" pageName="Cash Balance"><SalesCashBalance /></PermGuard>
+      </Route>
 
       <Route component={NotFound} />
     </Switch>

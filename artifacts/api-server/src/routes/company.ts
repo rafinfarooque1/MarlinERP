@@ -327,10 +327,31 @@ router.get("/company/login-history", requireModuleView(["page:/company/login-his
 });
 
 // ── Permissions ────────────────────────────────────────────────────────────
-router.get("/company/permissions", async (_req, res): Promise<void> => {
-  const rows = await db.select().from(permissionsTable).orderBy(permissionsTable.id);
-  const hierarchies = await db.select().from(hierarchiesTable);
-  const hMap = new Map(hierarchies.map((h) => [h.id, h.name]));
+router.get("/company/permissions", async (req, res): Promise<void> => {
+  const employee = (req as any).employee as { hierarchyId?: number } | undefined;
+  if (!employee?.hierarchyId) {
+    res.status(403).json({ error: "Permission context is unavailable" });
+    return;
+  }
+  const [currentHierarchy] = await db.select().from(hierarchiesTable)
+    .where(eq(hierarchiesTable.id, employee.hierarchyId)).limit(1);
+  if (!currentHierarchy) {
+    res.status(403).json({ error: "Permission context is unavailable" });
+    return;
+  }
+  // The shell needs its own rows to decide which pages may render. Returning
+  // the complete cross-role matrix to every logged-in employee turned that
+  // bootstrap request into a permissions disclosure. Level 1 alone retains
+  // the full matrix required by the permission-administration screen.
+  const rows = currentHierarchy.level === 1
+    ? await db.select().from(permissionsTable).orderBy(permissionsTable.id)
+    : await db.select().from(permissionsTable)
+      .where(eq(permissionsTable.hierarchyId, employee.hierarchyId))
+      .orderBy(permissionsTable.id);
+  const hierarchyRows = currentHierarchy.level === 1
+    ? await db.select().from(hierarchiesTable)
+    : [currentHierarchy];
+  const hMap = new Map(hierarchyRows.map((h) => [h.id, h.name]));
   res.json(rows.map((r) => ({
     ...r,
     hierarchyName: hMap.get(r.hierarchyId) ?? "",
@@ -355,6 +376,87 @@ router.post("/company/permissions", requireModuleAction("page:/company/permissio
 
   const [h] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, row.hierarchyId)).limit(1);
   res.json({ ...row, hierarchyName: h?.name ?? "" });
+});
+
+// ── RBAC legacy all-true audit (read-only, no data changes) ──────────────────
+// Surfaces permission rows that have every flag set to true — the fingerprint
+// of the one-time seeding migrations (permission_seed_existing_v1 and the
+// per_link_permissions_v1 grant-fallback). Those migrations ran exactly once;
+// admins can use this endpoint to identify roles that still hold the seeded
+// all-true baseline and review whether finer-grained access is appropriate.
+//
+// This endpoint NEVER modifies permissions. It is an observability tool only.
+router.get("/company/permissions/rbac-audit", requireModuleView("page:/company/permissions"), async (_req, res): Promise<void> => {
+  // A row is considered "legacy all-true" when ALL six primary permission flags
+  // are true — that is the exact value written by both seeding migrations.
+  // Rows that an admin has partially revoked (e.g. can_view=true, can_delete=false)
+  // are NOT flagged — they show deliberate configuration, not an untouched seed.
+  const { rows: legacyRows } = await pool.query<any>(`
+    SELECT
+      p.id,
+      p.hierarchy_id,
+      h.name  AS hierarchy_name,
+      h.level AS hierarchy_level,
+      p.module,
+      p.can_view,
+      p.can_add,
+      p.can_edit,
+      p.can_delete,
+      p.can_download,
+      p.can_print,
+      p.can_approve,
+      p.can_share,
+      p.updated_at
+    FROM permissions p
+    JOIN hierarchies h ON h.id = p.hierarchy_id
+    WHERE p.can_view    = true
+      AND p.can_add     = true
+      AND p.can_edit    = true
+      AND p.can_delete  = true
+      AND p.can_download = true
+      AND p.can_print   = true
+    ORDER BY h.level ASC, h.name ASC, p.module ASC
+  `);
+
+  // Summary: how many unique (hierarchy, module) pairs are all-true vs. total
+  const { rows: [totals] } = await pool.query<any>(`
+    SELECT
+      COUNT(*) FILTER (
+        WHERE can_view AND can_add AND can_edit AND can_delete AND can_download AND can_print
+      )::int AS all_true_count,
+      COUNT(*)::int AS total_count
+    FROM permissions
+  `);
+
+  // Seeding migrations that write all-true rows; present so the caller can
+  // confirm whether those specific runs have been logged.
+  const SEED_MIGRATION_NAMES = [
+    'permission_seed_existing_v1',
+    'per_link_permissions_v1',
+  ];
+  const { rows: seedLog } = await pool.query<any>(
+    `SELECT name, applied_at FROM migration_log WHERE name = ANY($1::text[]) ORDER BY applied_at ASC`,
+    [SEED_MIGRATION_NAMES],
+  );
+
+  res.json({
+    summary: {
+      allTrueCount: Number(totals?.all_true_count ?? 0),
+      totalCount:   Number(totals?.total_count ?? 0),
+    },
+    seedingMigrations: seedLog.map((r: any) => ({
+      name:      r.name,
+      appliedAt: r.applied_at,
+    })),
+    legacyAllTrueRows: legacyRows.map((r: any) => ({
+      id:             r.id,
+      hierarchyId:    r.hierarchy_id,
+      hierarchyName:  r.hierarchy_name,
+      hierarchyLevel: Number(r.hierarchy_level),
+      module:         r.module,
+      updatedAt:      r.updated_at,
+    })),
+  });
 });
 
 // ── Reset all company data (dangerous — wipes all transactional records) ──────
@@ -399,7 +501,11 @@ router.post("/company/reset", requireModuleAction("page:/company/settings", "del
     'pay_components',
     // Logs
     'activity_log',
-    'migration_log',
+    // NOTE: migration_log is intentionally NOT truncated here. Schema-level
+    // migrations (per_link_permissions_v1, permission_seed_existing_v1, etc.)
+    // must not re-run after a data reset — re-running the permission seeder
+    // would widen every role created post-reset to all-true, defeating the
+    // default-deny model. Only business-data and auth records are wiped.
   ];
 
   // Truncate all transactional tables in one shot (RESTART IDENTITY cascades sequences)

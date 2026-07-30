@@ -3,15 +3,19 @@
  *
  * Server-side mirror of the UI permission rules (marlin-erp usePermission.ts):
  *   • level-1 hierarchy        → full access, always
- *   • no permissions row       → DENIED (default-deny; see seeding migration)
+ *   • no permissions row       → DENIED (default-deny)
  *   • row with can_view=true   → allowed
  *   • row with can_view=false  → denied
  *
- * The seeding migration in index.ts inserts all-true rows for every existing
- * non-level-1 hierarchy so that the switch to default-deny does not revoke
- * access for users that were relying on the old default-allow behaviour.
- * New hierarchies created after the migration start with no rows → denied until
- * an admin explicitly grants access on the Permissions page.
+ * The one-time seeding migrations in index.ts (permission_seed_existing_v1 and
+ * per_link_permissions_v1) inserted all-true rows for hierarchies that existed
+ * when default-deny was introduced, preserving their prior effective access.
+ * Those migrations are guarded by migration_log and cannot re-run. Hierarchies
+ * created after those migrations start with NO permission rows and are therefore
+ * denied everywhere until an admin grants access on the Permissions page.
+ *
+ * To identify rows still holding the seeded all-true baseline, use
+ * GET /company/permissions/rbac-audit (admin read-only, no data changes).
  *
  * Accepts one page key or an any-of list. An any-of list is the norm, not the
  * exception: one endpoint often feeds several pages (e.g. /items fills dropdowns

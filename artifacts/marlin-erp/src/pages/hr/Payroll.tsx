@@ -560,7 +560,7 @@ export default function Payroll() {
     count: acc.count + 1,
   }), { net: 0, paid: 0, accrued: 0, count: 0 }), [filtered, accruedByEmployee]);
 
-  if (!perm.canView) {
+  if (!perm.isLoading && !perm.canView) {
     return (
       <AppLayout>
         <div className="flex flex-col items-center justify-center h-64 text-muted-foreground gap-2">

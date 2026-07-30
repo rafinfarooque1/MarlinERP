@@ -20,6 +20,49 @@ export interface DataScope {
   outletIds: number[];
 }
 
+/**
+ * Returns whether a concrete branch belongs to a server-derived scope.
+ *
+ * Request location fields are a requested view, never proof of entitlement.
+ * Route handlers should use this before a write, and use the SQL helpers below
+ * when reading a stored record. Keeping the primitive here avoids every module
+ * inventing subtly different warehouse/outlet checks.
+ */
+export function isLocationInScope(
+  scope: DataScope,
+  locationType: string | null | undefined,
+  locationId: number | null | undefined,
+): boolean {
+  if (scope.isHeadOffice) return true;
+  if (!Number.isInteger(Number(locationId))) return false;
+  if (locationType === "warehouse") return scope.warehouseIds.includes(Number(locationId));
+  if (locationType === "outlet") return scope.outletIds.includes(Number(locationId));
+  return false;
+}
+
+/** A transfer is visible only when either endpoint belongs to the caller. */
+export function scopeTransferWhere(
+  scope: DataScope,
+  params: unknown[],
+  alias = "t",
+): string {
+  if (scope.isHeadOffice) return "TRUE";
+  const locations: string[] = [];
+  if (scope.warehouseIds.length > 0) {
+    params.push(scope.warehouseIds);
+    const p = params.length;
+    locations.push(`(${alias}.from_type = 'warehouse' AND ${alias}.from_id = ANY($${p}::int[]))`);
+    locations.push(`(${alias}.to_type = 'warehouse' AND ${alias}.to_id = ANY($${p}::int[]))`);
+  }
+  if (scope.outletIds.length > 0) {
+    params.push(scope.outletIds);
+    const p = params.length;
+    locations.push(`(${alias}.from_type = 'outlet' AND ${alias}.from_id = ANY($${p}::int[]))`);
+    locations.push(`(${alias}.to_type = 'outlet' AND ${alias}.to_id = ANY($${p}::int[]))`);
+  }
+  return locations.length ? `(${locations.join(" OR ")})` : "FALSE";
+}
+
 export async function getUserDataScope(employee: {
   branchType: string;
   branchId: number;

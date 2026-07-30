@@ -2162,6 +2162,12 @@ await pool.query(`
 // row covering it at all, it is GRANTED, not denied. Getting this backwards
 // would lock administrators out of the Permissions page itself, and the only way
 // back in would be a hand-written SQL statement.
+//
+// This migration runs EXACTLY ONCE, guarded by migration_log. It cannot re-run
+// on subsequent boots, and migration_log is intentionally excluded from the
+// company/reset truncation so a data reset cannot re-trigger it. The
+// all-true rows it may seed for uncovered links are visible via
+// GET /company/permissions/rbac-audit.
 {
   const { rows: mlRows } = await pool.query(
     `SELECT 1 FROM migration_log WHERE name = 'per_link_permissions_v1'`,
@@ -2246,13 +2252,21 @@ await pool.query(`
 // role that existed at that moment an explicit all-true row per page, so the
 // change is invisible to them and an admin can then take rights away.
 //
-// It must run exactly once, which is why it is behind migration_log. It used to
-// run on every boot, and that quietly destroyed the permission model: a role
-// created today with three pages granted came back from the next server restart
-// holding all forty-five, because the gap-fill treats "no row" as "needs an
-// all-true row". A role created after this point starts with no rows and is
-// therefore denied until an admin grants something — which is the whole promise
-// of per-page permissions.
+// This block runs EXACTLY ONCE, guarded by migration_log. It previously ran on
+// every boot (the "gap-fill"), which quietly destroyed the permission model: a
+// role created with three pages granted came back from the next restart holding
+// all pages with all-true, because the old loop treated "no row" as "grant
+// everything". That behaviour was removed when migration_log gating was added.
+//
+// IMPORTANT: migration_log is intentionally NOT truncated by POST /company/reset
+// (see routes/company.ts). This guarantees the seed cannot re-run after a data
+// reset and widen permissions for hierarchies created post-reset.
+//
+// A role created after this migration has run starts with NO permission rows and
+// is therefore denied everywhere until an admin explicitly grants access on the
+// Permissions page — that is the whole point of default-deny RBAC.
+//
+// All-true rows seeded here are visible via GET /company/permissions/rbac-audit.
 {
   const { rows: seeded } = await pool.query(
     `SELECT 1 FROM migration_log WHERE name = 'permission_seed_existing_v1'`,

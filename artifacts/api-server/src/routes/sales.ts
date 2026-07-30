@@ -10,7 +10,7 @@ import { consumeBatches, restoreBatches } from "../lib/batches";
 import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
 import { buildBranchMaps } from "./stock";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
-import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
+import { getUserDataScope, isLocationInScope, scopeSalesWhere } from "../lib/dataScope";
 import { blockedByInactiveProducts, INACTIVE_PRODUCT_CODE } from "../lib/productIdentity";
 import { CREATE_SALE_PAYMENT_MODES, isAllowedNewSaleMode, isSettledAtSale, clearsThroughBank, resolveEditedSaleMode } from "../lib/paymentModes";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
@@ -375,6 +375,13 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   const rawBody = req.body as any;
   const locationType: 'outlet' | 'warehouse' = rawBody.locationType === 'warehouse' ? 'warehouse' : 'outlet';
   const locationId: number = rawBody.locationId ? Number(rawBody.locationId) : parsed.data.outletId;
+  const createScope = await getUserDataScope((req as any).employee);
+  // Location fields are a request, not authority. Check the effective values
+  // before looking up stock, allocating an invoice number, or posting books.
+  if (!isLocationInScope(createScope, locationType, locationId)) {
+    res.status(403).json({ error: "You can only record sales for a location in your assigned scope." });
+    return;
+  }
 
   // Look up location name, UPI ID, and ledger IDs
   let cashLedgerId: number | null = null;
@@ -798,6 +805,16 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
   const { pool: pgPool } = await import("@workspace/db");
   const { rows: [existingRaw] } = await pgPool.query<any>(`SELECT * FROM sales WHERE id = $1`, [id]);
   if (!existingRaw) { res.status(404).json({ error: "Sale not found" }); return; }
+  const existingScope = await getUserDataScope((req as any).employee);
+  if (!isLocationInScope(
+    existingScope,
+    existingRaw.location_type ?? "outlet",
+    existingRaw.location_id ?? existingRaw.outlet_id,
+  )) {
+    // Deliberately indistinguishable from a missing invoice: do not let a
+    // branch user enumerate another location's sales by id.
+    res.status(404).json({ error: "Sale not found" }); return;
+  }
 
   const parsed = CreateSaleBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
@@ -856,6 +873,13 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
   const rawBody = req.body as any;
   const newLocationType: 'outlet' | 'warehouse' = rawBody.locationType === 'warehouse' ? 'warehouse' : 'outlet';
   const newLocationId: number = rawBody.locationId ? Number(rawBody.locationId) : parsed.data.outletId;
+  // Existing-record scope prevents edits to another branch's invoice. This
+  // independent check prevents using an otherwise permitted invoice as a
+  // vehicle to move stock and accounting effects into a foreign location.
+  if (!isLocationInScope(existingScope, newLocationType, newLocationId)) {
+    res.status(403).json({ error: "You can only move a sale to a location in your assigned scope." });
+    return;
+  }
 
   // Old location (for stock reversal)
   const oldLocationType: string = existingRaw.location_type ?? 'outlet';
@@ -1305,6 +1329,15 @@ router.post("/sales/:id/cancel", requireModuleAction("page:/sales/pos", "delete"
       await tx.query('ROLLBACK');
       res.status(404).json({ error: "Sale not found" }); return;
     }
+    const cancelScope = await getUserDataScope((req as any).employee);
+    if (!isLocationInScope(
+      cancelScope,
+      sale.location_type ?? "outlet",
+      sale.location_id ?? sale.outlet_id,
+    )) {
+      await tx.query('ROLLBACK');
+      res.status(404).json({ error: "Sale not found" }); return;
+    }
     if (sale.cancelled_at) {
       await tx.query('ROLLBACK');
       res.status(409).json({ error: `Invoice ${sale.invoice_number} is already cancelled.`, code: 'ALREADY_CANCELLED' }); return;
@@ -1555,7 +1588,12 @@ router.get("/sales/:id", requireModuleView("page:/sales/pos"), async (req, res):
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   const { pool: pgPool } = await import("@workspace/db");
-  const { rows: [row] } = await pgPool.query(`SELECT * FROM sales WHERE id = $1`, [id]);
+  const detailScope = await getUserDataScope((req as any).employee);
+  const detailParams: unknown[] = [id];
+  const { rows: [row] } = await pgPool.query(
+    `SELECT * FROM sales s WHERE s.id = $1 AND ${scopeSalesWhere(detailScope, detailParams)}`,
+    detailParams,
+  );
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const locationType: string = row.location_type ?? 'outlet';
   const locationId: number = row.location_id ?? row.outlet_id;

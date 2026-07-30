@@ -8,7 +8,7 @@ import {
   Eye, Plus, Pencil, Trash2, Download, Printer, BadgeCheck, Share2,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { useListHierarchies, useListPermissions, setPermission } from '@workspace/api-client-react';
+import { useGetMe, useListHierarchies, useListPermissions, setPermission } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
 import { getPagePermRows, PAGE_PERM_KEYS } from '@/lib/moduleRegistry';
 import type { Hierarchy, Permission } from '@workspace/api-client-react';
@@ -81,12 +81,15 @@ function buildPermMap(hierarchies: Hierarchy[], dbPerms: Permission[]): PermMap 
 
 export default function Permissions() {
   const selfPerm = usePermission('page:/company/permissions');
+  const { data: currentUser } = useGetMe();
   const { data: hierarchies = [], isLoading: loadingH } = useListHierarchies();
   const { data: dbPerms = [],    isLoading: loadingP, refetch } = useListPermissions();
 
   const sortedHierarchies = useMemo(
-    () => [...hierarchies as Hierarchy[]].sort((a, b) => (a.level ?? 99) - (b.level ?? 99)),
-    [hierarchies],
+    () => [...hierarchies as Hierarchy[]]
+      .filter(h => currentUser?.hierarchyId === h.id || (hierarchies.find(x => x.id === currentUser?.hierarchyId)?.level ?? 99) === 1)
+      .sort((a, b) => (a.level ?? 99) - (b.level ?? 99)),
+    [hierarchies, currentUser?.hierarchyId],
   );
 
   const [selectedId, setSelectedId] = useState<number | null>(null);

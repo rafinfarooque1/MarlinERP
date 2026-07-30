@@ -4,7 +4,7 @@ import { pool } from "@workspace/db";
 import { logActivity } from "../lib/audit";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import { isIsoDate } from "../lib/dateInput";
-import { getUserDataScope } from "../lib/dataScope";
+import { getUserDataScope, isLocationInScope } from "../lib/dataScope";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 
 const router = Router();
@@ -233,6 +233,10 @@ router.post("/cash-in-outlet/deposits", requireModuleAction("page:/accounts/cash
   const locationId  = isWarehouse ? warehouseId! : outletId!;
   const cashCode    = isWarehouse ? `WH-CASH-${locationId}` : `OUTLET-CASH-${locationId}`;
   const locLabel    = isWarehouse ? `warehouse ${locationId}` : `outlet ${locationId}`;
+  const depositScope = await getUserDataScope((req as any).employee);
+  if (!isLocationInScope(depositScope, isWarehouse ? "warehouse" : "outlet", locationId)) {
+    res.status(403).json({ error: "You cannot create a cash deposit for another location." }); return;
+  }
 
   const createdBy = (req as any).employee?.username ?? "system";
 
@@ -370,6 +374,13 @@ router.post("/cash-in-outlet/deposits/:id/reconcile", requireModuleAction(["page
       [depositId]
     );
     if (!deposit) { await client.query("ROLLBACK"); res.status(404).json({ error: "Deposit not found" }); return; }
+    const reconcileScope = await getUserDataScope((req as any).employee);
+    const depositType = deposit.warehouse_id != null ? "warehouse" : "outlet";
+    const depositLocation = Number(deposit.warehouse_id ?? deposit.outlet_id);
+    if (!isLocationInScope(reconcileScope, depositType, depositLocation)) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Deposit not found" }); return;
+    }
     if (deposit.status !== "pending_reconciliation") {
       await client.query("ROLLBACK");
       res.status(400).json({ error: `Deposit is already ${deposit.status}` }); return;

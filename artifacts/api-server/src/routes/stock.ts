@@ -14,7 +14,7 @@ import {
   createTransferSaleInvoice, createTransferPurchaseInvoice, createTransferCreditNote,
   type TaxType, type GstTotals, type TransferInvoiceLine,
 } from "../lib/gstTransfer";
-import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
+import { getUserDataScope, isLocationInScope, scopeBranchWhere, scopeTransferWhere } from "../lib/dataScope";
 import { deductMaterialAt, creditMaterialAt } from "../lib/materialStock";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { productBatchIdentity, blockedByInactiveProducts, INACTIVE_PRODUCT_CODE, isProductKind } from "../lib/productIdentity";
@@ -318,15 +318,11 @@ router.get("/stock/transfers", requireModuleView("page:/transfers"), async (req,
   if (to)   { params.push(to);   conds.push(`transfer_date::date <= $${params.length}::date`); }
   if (status) { params.push(status); conds.push(`status = $${params.length}`); }
 
-  // Non-headoffice employees only see transfers involving their own branch
+  // Non-HO employees only see transfers involving their warehouse OR one of
+  // that warehouse's mapped outlets. The old branchId equality leaked none of
+  // the child-outlet work to a warehouse manager and encouraged client filters.
   const emp = (req as any).employee as { branchType: string; branchId: number } | undefined;
-  if (emp && emp.branchType !== "headoffice" && emp.branchId) {
-    params.push(emp.branchType);
-    const btIdx = params.length;
-    params.push(Number(emp.branchId));
-    const biIdx = params.length;
-    conds.push(`((from_type = $${btIdx} AND from_id = $${biIdx}) OR (to_type = $${btIdx} AND to_id = $${biIdx}))`);
-  }
+  if (emp) conds.push(scopeTransferWhere(await getUserDataScope(emp), params));
 
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   const [result, branchName] = await Promise.all([
@@ -372,6 +368,13 @@ router.get("/stock/transfers", requireModuleView("page:/transfers"), async (req,
 router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), async (req, res): Promise<void> => {
   const parsed = CreateStockTransferBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+  const transferScope = await getUserDataScope((req as any).employee);
+  // Dispatch is authorized by the source. A warehouse manager may send its
+  // own stock to another warehouse; requiring the destination to be theirs
+  // would make legitimate inter-warehouse dispatch impossible.
+  if (!isLocationInScope(transferScope, parsed.data.fromType, parsed.data.fromId)) {
+    res.status(403).json({ error: "You can only dispatch stock from a location in your assigned scope." }); return;
+  }
 
   // batchOverride per line (optional) comes from the raw body — zod strips unknown keys
   const rawLines = (req.body?.lineItems ?? []) as Array<{ itemId: number; quantity: number; costPrice: number; batchOverride?: Array<{ batchId: number; quantity: number }> }>;
@@ -758,6 +761,7 @@ function allocateReceived(breakdown: BatchBreakdownEntry[], receivedQty: number)
 router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfers", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { receivedLineItems, approvedBy } = req.body as { receivedLineItems?: Array<{ itemId: number; quantity: number; costPrice?: number }>; approvedBy?: string };
+  const approveScope = await getUserDataScope((req as any).employee);
 
   const client = await pool.connect();
   let row: any;
@@ -765,6 +769,21 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
   const shortReceived: Array<{ itemId: number; materialType: string; dispatched: number; received: number; shortfall: number }> = [];
   try {
     await client.query("BEGIN");
+    // Receiving is authorized by the destination, not merely by either side of
+    // the transfer. Lock first so the scope check and status transition refer to
+    // the same immutable endpoints.
+    const { rows: [visible] } = await client.query(
+      `SELECT to_type, to_id FROM stock_transfers WHERE id = $1 FOR UPDATE`,
+      [id],
+    );
+    if (!visible) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Transfer not found" }); return;
+    }
+    if (!isLocationInScope(approveScope, visible.to_type, Number(visible.to_id))) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Transfer not found" }); return;
+    }
 
     // Atomic claim: flips status only if still in transit, so a concurrent
     // approve/reject gets zero rows instead of double-applying stock effects.
@@ -774,7 +793,7 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
        RETURNING id, from_type, from_id, to_type, to_id, line_items, challan_number,
                  transfer_type, tax_type, transfer_date, transfer_value, gst_amount,
                  document_mode, transfer_invoice_number`,
-      [approvedBy || 'admin', id]
+       [approvedBy || 'admin', id]
     );
     row = claim.rows[0];
     if (!row) {
@@ -1091,12 +1110,28 @@ router.patch("/stock/transfers/:id/approve", requireModuleAction("page:/transfer
 router.patch("/stock/transfers/:id/reject", requireModuleAction("page:/transfers", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const { rejectionReason } = req.body as { rejectionReason?: string };
+  const rejectScope = await getUserDataScope((req as any).employee);
 
   const client = await pool.connect();
   let row: any;
   let fromName = '';
   try {
     await client.query("BEGIN");
+    // A rejection reverses stock to the source, so it is a sender-side action.
+    // Do not let a user who only happens to know a challan id reverse another
+    // warehouse's outbound movement.
+    const { rows: [visible] } = await client.query(
+      `SELECT from_type, from_id FROM stock_transfers WHERE id = $1 FOR UPDATE`,
+      [id],
+    );
+    if (!visible) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Transfer not found" }); return;
+    }
+    if (!isLocationInScope(rejectScope, visible.from_type, Number(visible.from_id))) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Transfer not found" }); return;
+    }
 
     // Atomic claim (see approve): only one of approve/reject can win.
     const claim = await client.query(
@@ -1226,13 +1261,16 @@ router.patch("/stock/transfers/:id/reject", requireModuleAction("page:/transfers
 router.get("/stock/transfers/:id", requireModuleView("page:/transfers"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid transfer id" }); return; }
+  const transferScope = await getUserDataScope((req as any).employee);
+  const transferParams: unknown[] = [id];
   const result = await pool.query(
     `SELECT id, challan_number, from_type, from_id, to_type, to_id, transfer_date,
             line_items, is_interstate, status, notes, created_at,
             approved_by, approved_at, received_line_items, rejection_reason,
             transfer_type, from_gstin, to_gstin, tax_type, transfer_value, gst_amount
-     FROM stock_transfers WHERE id = $1 LIMIT 1`,
-    [id]
+     FROM stock_transfers t WHERE id = $1 AND ${scopeTransferWhere(transferScope, transferParams)} LIMIT 1`,
+    transferParams
   );
   const r = result.rows[0];
   if (!r) { res.status(404).json({ error: "Not found" }); return; }
