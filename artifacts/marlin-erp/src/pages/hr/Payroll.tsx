@@ -659,7 +659,7 @@ export default function Payroll() {
             <div className="rounded-lg border bg-card p-3">
               <p className="text-xs text-muted-foreground">Already Accrued Daily</p>
               <p className="font-semibold text-xl">{fmt(totals.accrued)}</p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">In the P&amp;L as it was earned</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">In the P&amp;L as it was attended</p>
             </div>
           </div>
         )}
@@ -704,10 +704,20 @@ export default function Payroll() {
                     {(p.lopDays ?? 0) > 0 && <span className="text-red-500 ml-1">({Number(p.lopDays).toFixed(1)} LOP)</span>}
                   </TableCell>
                   <TableCell className="text-right text-muted-foreground">
+                    {/* Paid days, not calendar days. Absent days are recorded as
+                        zero-value accrual rows, so the row count stopped meaning
+                        "days charged" — quoting it here read as a full month
+                        accrued when most of it had been earned by nobody. */}
                     {accrual ? (
-                      <span title={`${accrual.days} day(s) at ${fmt(accrual.dailyAccrual)}/day, already in the P&L`}>
+                      <span title={
+                        `${Number((accrual as any).paidDays ?? 0).toFixed(1)} paid day(s) of a ` +
+                        `${(accrual as any).workingDays}-day basis at ${fmt(accrual.dailyAccrual)}/day, ` +
+                        `already in the P&L`
+                      }>
                         {fmt(accrual.accrued)}
-                        <span className="block text-[11px]">{accrual.days}/{accrual.daysInMonth} days</span>
+                        <span className="block text-[11px]">
+                          {Number((accrual as any).paidDays ?? 0).toFixed(1)}/{(accrual as any).workingDays} paid
+                        </span>
                       </span>
                     ) : '—'}
                   </TableCell>

@@ -35,6 +35,7 @@
 - [Stock reservations](stock-reservations.md) — hold reduces available, in_transit does NOT (already deducted); lock the stock row inside the deducting txn; `hold` has no producer yet, keep it.
 - [Inventory valuation & ageing](inventory-valuation-ageing.md) — ONE at-cost valuation (3 kinds + in-transit, sender-owned) feeds report+dashboard+P&L; movement class = last OUTBOUND only.
 - [GST transfer invoicing](gst-transfer-invoicing.md) — cross-GSTIN transfers write REAL sales/purchase rows that replace the dispatch/receive JVs; every revenue/spend query must exclude branch_transfer_id.
+- [Attendance-driven salary accrual](salary-accrual-attendance.md) — copy payroll's rounding expression verbatim (unrounded rate); approval must re-check attendance inside the lock or it trues up to a stale figure.
 - [Statutory payroll](statutory-payroll.md) — rates snapshotted per run (never re-read); approved payroll is locked, corrections are reversals; salary JV recognises full cost incl. employer PF/ESI; attendance is fractional.
 - [Historical stock dating](historical-stock-dating.md) — stock_ledger.created_at is an INSERT time, not a business date; past-date stock is mostly not derivable; anchor "held nothing" on document dates.
 - [Sale location resolution](sale-location-resolution.md) — resolve via location_type+location_id; sale_payments.outlet_id is legacy+NULL for warehouse sales so joining it silently deletes rows; warehouses holds outlet rows too

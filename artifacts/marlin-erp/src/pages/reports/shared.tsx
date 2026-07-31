@@ -231,13 +231,22 @@ const TONE_CLS: Record<CardTone, string> = {
   accent: 'text-primary',
 };
 
-export function SummaryCards({ cards }: { cards: { label: string; value: ReactNode; tone?: CardTone }[] }) {
+export function SummaryCards({
+  cards,
+}: {
+  // `hint` is for a total made of parts the reader would otherwise have to
+  // guess at — it breaks the figure down without competing with it.
+  cards: { label: string; value: ReactNode; tone?: CardTone; hint?: ReactNode }[];
+}) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
       {cards.map((c) => (
         <div key={c.label} className="bg-card border border-border rounded-lg p-3 text-center">
           <p className="text-xs text-muted-foreground mb-1">{c.label}</p>
           <p className={`font-bold font-mono text-sm ${TONE_CLS[c.tone ?? 'default']}`}>{c.value}</p>
+          {c.hint ? (
+            <p className="text-[10px] text-muted-foreground/70 mt-1 leading-tight">{c.hint}</p>
+          ) : null}
         </div>
       ))}
     </div>

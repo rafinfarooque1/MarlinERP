@@ -3,7 +3,7 @@ import {
   useListAttendance, useCheckIn, useCheckOut, getListAttendanceQueryKey,
   useListEmployees, useListWarehouses, useListOutlets,
   useListLeaves, useApplyLeave, useApproveLeave, getListLeavesQueryKey,
-  useGetMe,
+  useGetMe, useCorrectAttendance,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -14,7 +14,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
-import { Search, Clock, Download, LogIn, LogOut, MapPin, Loader2, ShieldOff, CalendarDays, Plus, Eye, CheckCircle, XCircle } from 'lucide-react';
+import { Search, Clock, Download, LogIn, LogOut, MapPin, Loader2, ShieldOff, CalendarDays, Plus, Eye, CheckCircle, XCircle, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -89,6 +89,9 @@ export default function Attendance() {
   useClearOutletSelection(branchTypeFilter === 'outlet', () => { setBranchTypeFilter('all'); setBranchLocId('all'); });
   const [applyLeaveOpen, setApplyLeaveOpen] = useState(false);
   const [viewLeave, setViewLeave] = useState<any>(null);
+  // The row being corrected, plus the status being set on it.
+  const [correcting, setCorrecting] = useState<any>(null);
+  const [correctStatus, setCorrectStatus] = useState<string>('present');
 
   const { data: attendance = [], isLoading } = useListAttendance({ date });
   const { data: employees = [] } = useListEmployees();
@@ -100,6 +103,7 @@ export default function Attendance() {
   const checkOutMutation = useCheckOut();
   const applyMutation    = useApplyLeave();
   const approveMutation  = useApproveLeave();
+  const correctMutation  = useCorrectAttendance();
 
   // Employee view: own leave history
   const myId = (user as any)?.id as number | undefined;
@@ -175,6 +179,27 @@ export default function Attendance() {
     );
   };
 
+  const openCorrection = (row: any) => {
+    setCorrecting(row);
+    setCorrectStatus(row.status ?? 'present');
+  };
+
+  const submitCorrection = () => {
+    if (!correcting) return;
+    correctMutation.mutate(
+      { employeeId: correcting.employeeId, date, status: correctStatus as any },
+      {
+        onSuccess: () => {
+          toast.success(`Attendance corrected — salary for ${date} has been re-calculated`);
+          setCorrecting(null);
+        },
+        // The server refuses a signed-off month with the reason in the message,
+        // so show it rather than a generic failure.
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Correction failed'),
+      },
+    );
+  };
+
   // Admin: filtered employee list
   const filtered = (attendance as any[]).filter(a => {
     const matchSearch = a.employeeName?.toLowerCase().includes(search.toLowerCase());
@@ -241,6 +266,52 @@ export default function Attendance() {
             </DialogFooter>
           </form>
         </Form>
+      </DialogContent>
+    </Dialog>
+  );
+
+  // ── Attendance correction ───────────────────────────────────────────────────
+  // Salary is earned per attended day, so this dialog edits money as much as it
+  // edits a status. It says so, rather than looking like a harmless status flip.
+  const correctionDialog = (
+    <Dialog open={!!correcting} onOpenChange={v => !v && setCorrecting(null)}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader><DialogTitle>Correct Attendance</DialogTitle></DialogHeader>
+        <div className="space-y-4 pt-2">
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <p className="text-muted-foreground text-xs">Employee</p>
+              <p className="font-semibold">{correcting?.employeeName}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground text-xs">Date</p>
+              <p className="font-semibold font-mono">{date}</p>
+            </div>
+          </div>
+          <div>
+            <p className="text-sm font-medium mb-1.5">Status</p>
+            <Select value={correctStatus} onValueChange={setCorrectStatus}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="present">Present — earns a full day</SelectItem>
+                <SelectItem value="half_day">Half Day — earns half a day</SelectItem>
+                <SelectItem value="leave">On Leave — earns a full day</SelectItem>
+                <SelectItem value="absent">Absent — earns nothing</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <p className="text-xs text-muted-foreground bg-muted/40 border border-border rounded-lg p-3">
+            Saving re-calculates this employee's salary for the month straight away.
+            A month whose payroll is already approved or paid cannot be changed here —
+            post a journal adjustment instead.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" type="button" onClick={() => setCorrecting(null)}>Cancel</Button>
+            <Button type="button" onClick={submitCorrection} disabled={correctMutation.isPending}>
+              {correctMutation.isPending ? 'Saving…' : 'Save Correction'}
+            </Button>
+          </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -407,6 +478,14 @@ export default function Attendance() {
                           {locLoading === a.employeeId ? <Loader2 className="w-3 h-3 animate-spin" /> : <LogOut className="w-3 h-3" />} Out
                         </Button>
                         )}
+                        {/* Attendance decides what the day earns, so a wrong row
+                            is a wrong figure in the books. Head Office only. */}
+                        {isAdmin && perm.canEdit && (
+                        <Button variant="ghost" size="sm" className="h-7 text-xs gap-1"
+                          onClick={() => openCorrection(a)} title="Correct this day's attendance">
+                          <Pencil className="w-3 h-3" /> Fix
+                        </Button>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -417,6 +496,7 @@ export default function Attendance() {
         </div>
         {applyLeaveDialog}
         {leaveSheet}
+        {correctionDialog}
       </AppLayout>
     );
   }

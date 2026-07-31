@@ -130,7 +130,7 @@ export default function Dashboard() {
   const locMax = Math.max(0, ...(s?.byLocation.map(l => l.total) ?? [0]));
   const topItemMax = Math.max(0, ...(bi?.topItems.map(i => i.revenue) ?? [0]));
 
-  const summaryCards: { label: string; value: React.ReactNode; tone?: CardTone }[] = [
+  const summaryCards: { label: string; value: React.ReactNode; tone?: CardTone; hint?: React.ReactNode }[] = [
     { label: 'Sales', value: fmt(s?.total ?? 0), tone: 'accent' },
     // Expenses and Bank Balance come from the accounting postings, which carry
     // no location. The API returns null for a single-location login rather
@@ -158,10 +158,16 @@ export default function Dashboard() {
       value: bi?.receivables?.total == null ? '—' : fmt(bi.receivables.total),
       tone: (bi?.receivables?.overdue ?? 0) > 0 ? 'warn' : 'default',
     },
+    // Everything the company owes, not just its trade creditors. Salary accrues
+    // to a payable that sits outside Sundry Creditors, so the old tile read the
+    // control account alone and showed nothing at all for unpaid wages.
     {
       label: 'Payables',
-      value: bi?.payables?.total == null ? '—' : fmt(bi.payables.total),
-      tone: bi?.payables?.total == null ? 'default' : 'neg',
+      value: (bi?.payables as any)?.allPayables == null ? '—' : fmt((bi!.payables as any).allPayables),
+      tone: (bi?.payables as any)?.allPayables == null ? 'default' : 'neg',
+      hint: (bi?.payables as any)?.salaryPayable
+        ? `Suppliers ${fmt(bi!.payables.total ?? 0)} · Salary ${fmt((bi!.payables as any).salaryPayable)}`
+        : undefined,
     },
     {
       label: 'Cash Balance',

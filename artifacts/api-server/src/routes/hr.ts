@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { requireModuleAction, requireModuleView } from "../middleware/permissions";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import {
@@ -16,8 +16,10 @@ import { resolveChartParentId } from "../lib/chartGroups";
 import { provisionSalaryLedgers } from "../lib/payrollLedgers";
 import {
   accruedForMonth, lockSalaryAccrual, recalcUnapprovedSalaryAccruals,
-  runSalaryAccrual, dailyAccrualRate, type Querier,
+  runSalaryAccrual, dailyAccrualRate, reaccrueForAttendanceChange,
+  withEmployeeAccrualLock, DEFAULT_WORKING_DAYS, type Querier,
 } from "../lib/salaryAccrual";
+import { loadAttendanceThresholds, monthPresentDays } from "../lib/attendanceFactor";
 import {
   CreateHierarchyBody, UpdateHierarchyBody, DeleteHierarchyParams,
   CreateEmployeeBody, UpdateEmployeeBody, GetEmployeeParams, DeleteEmployeeParams,
@@ -29,6 +31,96 @@ const router = Router();
 
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Re-price an employee's open salary accruals after their attendance moved.
+ *
+ * Attendance is what a day of salary is now worth, so every path that writes an
+ * attendance row has to give the books a chance to follow it. This is a latency
+ * optimisation over the hourly sweep, not the only route to correctness — which
+ * is exactly why a failure is logged and swallowed rather than surfaced. An
+ * accounting hiccup must not stop someone recording that they turned up, and
+ * the sweep re-prices the day within the hour regardless.
+ */
+async function reaccrue(employeeId: number, cause: string): Promise<void> {
+  try {
+    await reaccrueForAttendanceChange(pool, employeeId);
+  } catch (e) {
+    console.error(`[hr] salary re-accrual after ${cause} failed for employee ${employeeId}:`, e);
+  }
+}
+
+/**
+ * Serialise an attendance write against the salary machinery, and refuse it if
+ * the month it lands in has been signed off.
+ *
+ * Approval takes the per-employee accrual lock and re-reads attendance inside it
+ * to check the payroll it is about to post still matches. That check is only
+ * worth anything if attendance writers take the same lock. Without it a
+ * correction can commit in the window between approval's read and its commit;
+ * the correction's own re-accrual then queues behind the approval, finds the
+ * month approved, and skips it. The correction is silently lost — after telling
+ * the user their salary had been recalculated.
+ *
+ * Holding the lock across the check and the write forces one order or the other:
+ * either approval goes first and this write is refused with a reason, or this
+ * write goes first and approval refuses itself as stale.
+ *
+ * `dates` are all the days the write touches; every one of their months is
+ * checked, so a leave range spanning a closed month is refused as a whole rather
+ * than applied in part.
+ */
+async function withAttendanceWrite<T>(
+  employeeId: number,
+  dates: string[],
+  write: (q: Querier) => Promise<T>,
+): Promise<T> {
+  return withEmployeeAccrualLock(pool, employeeId, async (q) => {
+    const months = new Map<string, [number, number]>();
+    for (const d of dates) {
+      const [y, m] = d.split("-").map(Number);
+      months.set(`${y}-${m}`, [y, m]);
+    }
+    for (const [y, m] of months.values()) {
+      const { rows: [locked] } = await q.query(
+        `SELECT status FROM payroll
+          WHERE employee_id = $1 AND year = $2 AND month = $3
+            AND status IN ('approved','paid') LIMIT 1`,
+        [employeeId, y, m],
+      );
+      if (locked) {
+        throw Object.assign(new Error(
+          `Payroll for ${String(m).padStart(2, "0")}/${y} is already ${locked.status}. `
+          + `Attendance for a signed-off month cannot be changed — post a journal adjustment instead.`,
+        ), { conflict: true });
+      }
+    }
+    return write(q);
+  });
+}
+
+/** Shape a raw `attendance` row as the API returns it (camelCase, no leaked columns). */
+function attendanceRowToApi(r: any) {
+  return {
+    id: r.id,
+    employeeId: r.employee_id,
+    date: r.date,
+    status: r.status,
+    checkIn: r.check_in,
+    checkOut: r.check_out,
+    checkInLat: r.check_in_lat,
+    checkInLng: r.check_in_lng,
+    checkOutLat: r.check_out_lat,
+    checkOutLng: r.check_out_lng,
+  };
+}
+
+/** Map a `{ conflict: true }` refusal to 409; anything else is a real failure. */
+function sendAttendanceWriteError(res: Response, e: any, context: string): void {
+  if (e?.conflict) { res.status(409).json({ error: e.message }); return; }
+  console.error(`[hr] ${context} failed:`, e);
+  res.status(500).json({ error: e?.message ?? "Attendance could not be saved" });
+}
 
 async function getBranchName(branchType: string, branchId: number): Promise<string> {
   if (branchType === "headoffice") return "Head Office";
@@ -374,7 +466,8 @@ async function postSalaryApproval(opts: {
     );
     if (!locked) throw new Error("Payroll record disappeared");
     if (locked.status === 'approved' || locked.status === 'paid') {
-      throw new Error("This payroll was already approved by someone else");
+      throw Object.assign(
+        new Error("This payroll was already approved by someone else"), { conflict: true });
     }
 
     // Serialise against the accrual sweep for this employee, then read what the
@@ -384,6 +477,41 @@ async function postSalaryApproval(opts: {
     // twice. Once this commits the month is 'approved', which is also what stops
     // the sweep adding any further day to it.
     await lockSalaryAccrual(client as unknown as Querier, employeeId);
+
+    // Refuse a payroll row that attendance has moved on from.
+    //
+    // Generation reads attendance and freezes gross/net onto the payroll row;
+    // approval posts the difference between that frozen figure and what the
+    // month has actually accrued. Attendance can be corrected in between, and
+    // the accrual re-prices itself immediately while the payroll row does not —
+    // so approving a stale draft would true up to a number the attendance no
+    // longer supports and quietly post the gap as salary cost. Recomputed here,
+    // inside the lock, because the check is only worth anything if no sweep can
+    // run between the check and the voucher.
+    const { rows: [pcRow] } = await client.query(
+      `SELECT working_days_per_month FROM pay_components WHERE employee_id = $1 LIMIT 1`,
+      [employeeId],
+    );
+    const wd = Number(pcRow?.working_days_per_month ?? 26);
+    const mStr = String(pr.month).padStart(2, "0");
+    const lastDay = new Date(Number(pr.year), Number(pr.month), 0).getDate();
+    const { rows: attRows } = await client.query(
+      `SELECT check_in AS "checkIn", check_out AS "checkOut", status
+         FROM attendance
+        WHERE employee_id = $1 AND date >= $2 AND date <= $3`,
+      [employeeId, `${pr.year}-${mStr}-01`, `${pr.year}-${mStr}-${String(lastDay).padStart(2, "0")}`],
+    );
+    const liveThresholds = await loadAttendanceThresholds(pool);
+    const livePresentDays = monthPresentDays(attRows, wd, liveThresholds);
+    const storedPresentDays = Number(pr.present_days ?? wd);
+    if (Math.abs(livePresentDays - storedPresentDays) > 0.005) {
+      throw Object.assign(new Error(
+        `Attendance for ${mStr}/${pr.year} changed after this payroll was generated ` +
+        `(${storedPresentDays} paid day(s) on the payroll, ${livePresentDays} in attendance now). ` +
+        `Regenerate the payroll so it matches, then approve it.`,
+      ), { conflict: true });
+    }
+
     const accrued = await accruedForMonth(
       client as unknown as Querier, employeeId, Number(pr.year), Number(pr.month),
     );
@@ -685,6 +813,14 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
       const now = new Date();
       const basis = recalc.monthsRecalculated[0]
         ?? { year: now.getFullYear(), month: now.getMonth() + 1 };
+      // The daily rate is per working-days basis now, not per calendar month, so
+      // the audit entry has to quote the same basis the engine priced with.
+      const { rows: [pcRow] } = await pool.query(
+        `SELECT COALESCE(working_days_per_month, ${DEFAULT_WORKING_DAYS}) AS working_days
+           FROM pay_components WHERE employee_id = $1 LIMIT 1`,
+        [id],
+      );
+      const revWorkingDays = Number(pcRow?.working_days ?? DEFAULT_WORKING_DAYS) || DEFAULT_WORKING_DAYS;
       const asLabel = (m: { year: number; month: number }) => `${String(m.month).padStart(2, "0")}/${m.year}`;
       const months = recalc.monthsRecalculated.map(asLabel);
 
@@ -700,9 +836,10 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
         metadata: {
           employeeId: id, employeeName: row.name,
           previousAmount: prevSalary, newAmount: newSalary,
-          previousDailyAccrual: dailyAccrualRate(prevSalary, basis.year, basis.month),
-          newDailyAccrual: dailyAccrualRate(newSalary, basis.year, basis.month),
+          previousDailyAccrual: dailyAccrualRate(prevSalary, revWorkingDays),
+          newDailyAccrual: dailyAccrualRate(newSalary, revWorkingDays),
           dailyRateBasisMonth: asLabel(basis),
+          dailyRateWorkingDays: revWorkingDays,
           reason: reason || null,
           monthsRecalculated: months,
           entriesReversed: recalc.entriesReversed,
@@ -871,13 +1008,10 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
   const { month, year, employeeId, forceRegenerate = false } = req.body;
   if (!month || !year) { res.status(400).json({ error: "month and year are required" }); return; }
 
-  // Fetch work-hour thresholds from company generalSettings
-  const { rows: [csRow] } = await pool.query(
-    `SELECT general_settings FROM company_settings LIMIT 1`
-  );
-  const gs = (csRow?.general_settings as Record<string, any>) ?? {};
-  const fullDayHours = Number(gs.fullDayHours ?? 9);
-  const halfDayHours = Number(gs.halfDayHours ?? 4.5);
+  // The same thresholds the daily accrual engine prices a day at, loaded from
+  // one place. Payroll and the books must not be able to disagree about what a
+  // given day of attendance was worth.
+  const thresholds = await loadAttendanceThresholds(pool);
 
   // Rates in force right now. Snapshotted onto every row this run writes, so
   // changing them later only affects runs generated after the change.
@@ -926,30 +1060,12 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
     const allowances: AllowanceComp[] = (pc?.allowances as AllowanceComp[]) ?? [];
     const deductions = stripStatutoryDuplicates((pc?.deductions as DeductionComp[]) ?? [], rates);
 
-    // Hours-based present-days calculation
+    // Hours-based present days, from the one shared rule. The daily accrual
+    // engine sums the very same per-day factors across the month, which is what
+    // makes the month-end true-up a rounding difference rather than a real
+    // correction.
     const empAtt = monthAttendance.filter((a: any) => Number(a.employeeId) === emp.id);
-    let effectivePresentDays: number;
-    if (empAtt.length === 0) {
-      effectivePresentDays = workingDays; // no data → assume full attendance
-    } else {
-      let pd = 0;
-      for (const a of empAtt) {
-        if (a.status === "leave") { pd += 1; continue; } // leave days count as full (no LOP)
-        if (a.checkIn && a.checkOut) {
-          const hrs = (new Date(a.checkOut).getTime() - new Date(a.checkIn).getTime()) / 3_600_000;
-          if (hrs >= fullDayHours) pd += 1;
-          else if (hrs >= halfDayHours) pd += 0.5;
-          // else 0 (LOP)
-        } else if (a.checkIn) {
-          pd += 1; // only checked in, no check-out yet → count as full day
-        } else if (a.status === "present") {
-          pd += 1;
-        } else if (a.status === "half_day") {
-          pd += 0.5;
-        }
-      }
-      effectivePresentDays = pd;
-    }
+    const effectivePresentDays = monthPresentDays(empAtt, workingDays, thresholds);
 
     // Advances awaiting recovery. A draft run *claims* the advances it nets off
     // (deducted_payroll_id) without marking them recovered; approval completes
@@ -1124,6 +1240,9 @@ router.get("/hr/salary-accruals", requireModuleView("page:/hr/payroll"), async (
             SUM(a.amount)::numeric(15,2) AS accrued,
             MAX(a.monthly_salary)::numeric(15,2) AS monthly_salary,
             MAX(a.days_in_month)::int AS days_in_month,
+            MAX(a.working_days)::int AS working_days,
+            SUM(a.attendance_factor)::numeric(6,2) AS paid_days,
+            COUNT(*) FILTER (WHERE a.amount > 0.004)::int AS earning_days,
             MIN(a.accrual_date) AS first_day, MAX(a.accrual_date) AS last_day,
             COALESCE(MAX(p.status), 'none') AS payroll_status
        FROM salary_accruals a
@@ -1144,7 +1263,16 @@ router.get("/hr/salary-accruals", requireModuleView("page:/hr/payroll"), async (
     accrued: Number(r.accrued),
     monthlySalary: Number(r.monthly_salary),
     daysInMonth: Number(r.days_in_month),
-    dailyAccrual: dailyAccrualRate(Number(r.monthly_salary), Number(r.year), Number(r.month)),
+    // Calendar days evaluated vs. days that actually earned, and the paid-day
+    // total attendance produced. `days` alone stopped meaning "days charged"
+    // once absent days began being recorded as zero-value rows.
+    earningDays: Number(r.earning_days ?? 0),
+    paidDays: Number(r.paid_days ?? 0),
+    workingDays: Number(r.working_days ?? DEFAULT_WORKING_DAYS),
+    dailyAccrual: dailyAccrualRate(
+      Number(r.monthly_salary),
+      Number(r.working_days ?? DEFAULT_WORKING_DAYS),
+    ),
     firstDay: r.first_day instanceof Date ? r.first_day.toISOString().slice(0, 10) : r.first_day,
     lastDay: r.last_day instanceof Date ? r.last_day.toISOString().slice(0, 10) : r.last_day,
     payrollStatus: r.payroll_status,
@@ -1217,6 +1345,12 @@ router.post("/hr/payroll/:id/approve", requireModuleAction("page:/hr/payroll", "
     // Approval used to swallow posting failures, leaving payroll marked
     // approved with no accounting behind it. The status now moves only if the
     // voucher committed, so a failure here means nothing changed.
+    //
+    // A refusal the approver can act on — stale attendance, someone else got
+    // there first — is a 409 with the reason verbatim. Only a genuine posting
+    // failure is a 500, so the UI can tell "you need to do something" apart
+    // from "the server broke".
+    if (e?.conflict) { res.status(409).json({ error: e.message }); return; }
     console.error("[payroll/approve] posting failed:", e);
     res.status(500).json({ error: `Could not post the salary entry, so the payroll was not approved: ${e?.message ?? "unknown error"}` });
   }
@@ -1531,21 +1665,30 @@ router.post("/hr/attendance/check-in", requireModuleAction("page:/hr/attendance"
     return;
   }
   const today = new Date().toISOString().split("T")[0];
-  const [existing] = await db.select().from(attendanceTable)
-    .where(and(eq(attendanceTable.employeeId, parsed.data.employeeId), eq(attendanceTable.date, today)))
-    .limit(1);
-  let row;
-  if (existing) {
-    [row] = await db.update(attendanceTable)
-      .set({ checkIn: new Date(), checkInLat: String(parsed.data.lat), checkInLng: String(parsed.data.lng) })
-      .where(eq(attendanceTable.id, existing.id)).returning();
-  } else {
-    [row] = await db.insert(attendanceTable).values({
-      employeeId: parsed.data.employeeId, date: today,
-      checkIn: new Date(), checkInLat: String(parsed.data.lat), checkInLng: String(parsed.data.lng),
-      status: "present",
-    }).returning();
+  // Checking in writes the same figure approval reads, so it queues on the same
+  // per-employee lock — see withAttendanceWrite.
+  let row: any;
+  try {
+    row = await withAttendanceWrite(parsed.data.employeeId, [today], async (q) => {
+      const { rows: [r] } = await q.query(
+        `INSERT INTO attendance (employee_id, date, status, check_in, check_in_lat, check_in_lng)
+         VALUES ($1, $2, 'present', now(), $3, $4)
+         ON CONFLICT (employee_id, date) DO UPDATE
+            SET check_in = now(), check_in_lat = EXCLUDED.check_in_lat,
+                check_in_lng = EXCLUDED.check_in_lng
+         RETURNING *`,
+        [parsed.data.employeeId, today, String(parsed.data.lat), String(parsed.data.lng)],
+      );
+      return r;
+    });
+  } catch (e: any) {
+    sendAttendanceWriteError(res, e, "check-in");
+    return;
   }
+  // Map the raw row explicitly rather than spreading it — spreading would leak
+  // the snake_case columns into the API response alongside the camelCase ones.
+  row = attendanceRowToApi(row);
+  await reaccrue(row.employeeId, "check-in");
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, row.employeeId)).limit(1);
   res.status(201).json({
     ...row, employeeName: emp?.name ?? "",
@@ -1566,13 +1709,28 @@ router.post("/hr/attendance/check-out", requireModuleAction("page:/hr/attendance
     return;
   }
   const today = new Date().toISOString().split("T")[0];
-  const [existing] = await db.select().from(attendanceTable)
-    .where(and(eq(attendanceTable.employeeId, parsed.data.employeeId), eq(attendanceTable.date, today)))
-    .limit(1);
-  if (!existing) { res.status(404).json({ error: "No check-in found for today" }); return; }
-  const [row] = await db.update(attendanceTable)
-    .set({ checkOut: new Date(), checkOutLat: String(parsed.data.lat), checkOutLng: String(parsed.data.lng) })
-    .where(eq(attendanceTable.id, existing.id)).returning();
+  let row: any;
+  try {
+    row = await withAttendanceWrite(parsed.data.employeeId, [today], async (q) => {
+      const { rows: [r] } = await q.query(
+        `UPDATE attendance
+            SET check_out = now(), check_out_lat = $3, check_out_lng = $4
+          WHERE employee_id = $1 AND date = $2
+          RETURNING *`,
+        [parsed.data.employeeId, today, String(parsed.data.lat), String(parsed.data.lng)],
+      );
+      if (!r) throw Object.assign(new Error("No check-in found for today"), { notFound: true });
+      return r;
+    });
+  } catch (e: any) {
+    if (e?.notFound) { res.status(404).json({ error: e.message }); return; }
+    sendAttendanceWriteError(res, e, "check-out");
+    return;
+  }
+  row = attendanceRowToApi(row);
+  // Check-out is the moment the day stops being provisionally whole and is
+  // priced on the hours actually worked, so the books have to be re-read here.
+  await reaccrue(row.employeeId, "check-out");
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, row.employeeId)).limit(1);
   res.json({
     ...row, employeeName: emp?.name ?? "",
@@ -1615,25 +1773,53 @@ router.post("/hr/leaves", requireModuleAction("page:/hr/attendance", "add"), asy
     return;
   }
 
-  const [row] = await db.insert(leavesTable).values({ ...parsed.data, status: "pending" }).returning();
-
-  // Sync leave days into attendance table as status = 'leave'
+  // Sync leave days into attendance table as status = 'leave'. Those days now
+  // earn a full paid day, so this is a salary write and takes the same lock, and
+  // a range reaching into a signed-off month is refused whole.
+  //
+  // The leave row is inserted on the SAME locked connection, inside the SAME
+  // transaction as the attendance rows. Writing the attendance first and the
+  // leave row afterwards on a separate connection would, if that second write
+  // failed, leave paid leave days committed with no leave application behind
+  // them — salary granted with no record of why.
   const startParts = parsed.data.fromDate.split('-').map(Number);
   const cur = new Date(Date.UTC(startParts[0], startParts[1] - 1, startParts[2]));
   const endParts = parsed.data.toDate.split('-').map(Number);
   const endD = new Date(Date.UTC(endParts[0], endParts[1] - 1, endParts[2]));
+  const leaveDates: string[] = [];
   while (cur <= endD) {
-    const dateStr = cur.toISOString().split('T')[0];
-    const [existing] = await db.select().from(attendanceTable)
-      .where(and(eq(attendanceTable.employeeId, parsed.data.employeeId), eq(attendanceTable.date, dateStr)))
-      .limit(1);
-    if (existing) {
-      await db.update(attendanceTable).set({ status: 'leave' }).where(eq(attendanceTable.id, existing.id));
-    } else {
-      await db.insert(attendanceTable).values({ employeeId: parsed.data.employeeId, date: dateStr, status: 'leave' });
-    }
+    leaveDates.push(cur.toISOString().split('T')[0]);
     cur.setUTCDate(cur.getUTCDate() + 1);
   }
+
+  let row: any;
+  try {
+    row = await withAttendanceWrite(parsed.data.employeeId, leaveDates, async (q) => {
+      for (const dateStr of leaveDates) {
+        await q.query(
+          `INSERT INTO attendance (employee_id, date, status)
+           VALUES ($1, $2, 'leave')
+           ON CONFLICT (employee_id, date) DO UPDATE SET status = 'leave'`,
+          [parsed.data.employeeId, dateStr],
+        );
+      }
+      const { rows: [r] } = await q.query(
+        `INSERT INTO leaves (employee_id, from_date, to_date, leave_type, reason, status)
+         VALUES ($1, $2, $3, $4, $5, 'pending')
+         RETURNING id, employee_id AS "employeeId", from_date AS "fromDate",
+                   to_date AS "toDate", leave_type AS "leaveType", reason, status,
+                   approved_by AS "approvedBy", approval_note AS "approvalNote",
+                   created_at AS "createdAt"`,
+        [parsed.data.employeeId, parsed.data.fromDate, parsed.data.toDate,
+         parsed.data.leaveType, parsed.data.reason ?? null],
+      );
+      return r;
+    });
+  } catch (e: any) {
+    sendAttendanceWriteError(res, e, "leave application");
+    return;
+  }
+  await reaccrue(parsed.data.employeeId, "leave applied");
 
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, row.employeeId)).limit(1);
   res.status(201).json({ ...row, employeeName: emp?.name ?? "", approverName: null });
@@ -1647,8 +1833,131 @@ router.post("/hr/leaves/:id/approve", requireModuleAction("page:/hr/attendance",
     .set({ status: parsed.data.status, approvalNote: parsed.data.note ?? null })
     .where(eq(leavesTable.id, id)).returning();
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
+
+  // Applying for leave stamps those days as `leave` immediately, which now earns
+  // a full paid day. Rejecting the request therefore has to take the stamp back
+  // off, or a refused leave is paid exactly like an approved one. Only days the
+  // sync itself created are reverted — a day the employee actually checked in on
+  // is their attendance record, not the leave's, and is left alone.
+  if (parsed.data.status === "rejected") {
+    try {
+      // Every month the range touches, not just its endpoints — a leave running
+      // Jan→Mar would otherwise skip February's lock check entirely.
+      const revertDates: string[] = [];
+      const rc = new Date(`${String(row.fromDate).slice(0, 10)}T00:00:00Z`);
+      const re = new Date(`${String(row.toDate).slice(0, 10)}T00:00:00Z`);
+      while (rc <= re) {
+        revertDates.push(rc.toISOString().slice(0, 10));
+        rc.setUTCDate(rc.getUTCDate() + 1);
+      }
+      await withAttendanceWrite(
+        row.employeeId,
+        revertDates,
+        (q) => q.query(
+          `UPDATE attendance SET status = 'absent'
+            WHERE employee_id = $1 AND date >= $2 AND date <= $3
+              AND status = 'leave' AND check_in IS NULL`,
+          [row.employeeId, row.fromDate, row.toDate],
+        ),
+      );
+    } catch (e: any) {
+      sendAttendanceWriteError(res, e, "leave rejection attendance revert");
+      return;
+    }
+  }
+  await reaccrue(row.employeeId, `leave ${parsed.data.status}`);
+
   const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, row.employeeId)).limit(1);
   res.json({ ...row, employeeName: emp?.name ?? "", approverName: null });
+});
+
+// ── Attendance correction ─────────────────────────────────────────────────
+//
+// Attendance now decides what a day of salary is worth, so a mistake in it is a
+// mistake in the books. Before this route there was no way to fix one: rows were
+// only ever created by check-in or by the leave sync, and nothing could edit
+// them. A manager who marked the wrong person present had no remedy.
+//
+// It upserts on (employee, date) rather than taking a row id, because the most
+// common correction — absent to present — has no row to address: an absent day
+// is synthesised for display and was never stored.
+router.put("/hr/attendance", requireModuleAction("page:/hr/attendance", "edit"), async (req, res): Promise<void> => {
+  // Correcting attendance moves money, so it is a Head Office action. The
+  // check-in routes let an employee record their own day; this one must not,
+  // or anyone could award themselves a full day's pay for a day they missed.
+  if ((req as any).employee?.branchType !== "headoffice") {
+    res.status(403).json({ error: "Only Head Office can correct attendance." });
+    return;
+  }
+
+  const employeeId = Number((req.body as any)?.employeeId);
+  const date = String((req.body as any)?.date ?? "").slice(0, 10);
+  const status = String((req.body as any)?.status ?? "");
+  const VALID = ["present", "half_day", "absent", "leave"];
+  if (!Number.isInteger(employeeId) || employeeId <= 0) {
+    res.status(400).json({ error: "employeeId is required" }); return;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    res.status(400).json({ error: "date must be YYYY-MM-DD" }); return;
+  }
+  if (!VALID.includes(status)) {
+    res.status(400).json({ error: `status must be one of ${VALID.join(", ")}` }); return;
+  }
+
+  const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, employeeId)).limit(1);
+  if (!emp) { res.status(404).json({ error: "Employee not found" }); return; }
+
+  // Explicit hours win over the status label when supplied, because that is what
+  // the day is priced on. Clearing them (null) drops the day back to being
+  // judged on its status alone.
+  const hasCheckIn = "checkIn" in (req.body as any);
+  const hasCheckOut = "checkOut" in (req.body as any);
+  const checkIn = hasCheckIn && (req.body as any).checkIn ? new Date((req.body as any).checkIn) : null;
+  const checkOut = hasCheckOut && (req.body as any).checkOut ? new Date((req.body as any).checkOut) : null;
+  if ((checkIn && isNaN(checkIn.getTime())) || (checkOut && isNaN(checkOut.getTime()))) {
+    res.status(400).json({ error: "checkIn/checkOut must be valid timestamps" }); return;
+  }
+
+  // The signed-off-month check lives inside the lock, not before it: an approval
+  // committing between check and write would otherwise leave this correction
+  // stranded in a month that is now closed.
+  let saved: any;
+  try {
+    saved = await withAttendanceWrite(employeeId, [date], async (q) => {
+      const { rows: [r] } = await q.query(
+        `INSERT INTO attendance (employee_id, date, status, check_in, check_out)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (employee_id, date) DO UPDATE
+            SET status    = EXCLUDED.status,
+                check_in  = CASE WHEN $6 THEN EXCLUDED.check_in  ELSE attendance.check_in  END,
+                check_out = CASE WHEN $7 THEN EXCLUDED.check_out ELSE attendance.check_out END
+         RETURNING id, employee_id, date, status, check_in, check_out`,
+        [employeeId, date, status, checkIn, checkOut, hasCheckIn, hasCheckOut],
+      );
+      return r;
+    });
+  } catch (e: any) {
+    sendAttendanceWriteError(res, e, "attendance correction");
+    return;
+  }
+
+  await reaccrue(employeeId, "attendance correction");
+
+  logActivity({
+    action: "UPDATE", module: "hr", entityType: "attendance", entityId: Number(saved?.id ?? 0),
+    user: (req as any).employee?.username ?? "system",
+    description: `Attendance corrected for ${emp.name} on ${date} → ${status}`,
+    metadata: { employeeId, date, status, checkIn, checkOut },
+  }).catch(() => {});
+
+  res.json({
+    ...saved,
+    employeeId: Number(saved?.employee_id),
+    employeeName: emp.name,
+    date,
+    checkIn: saved?.check_in ? new Date(saved.check_in).toISOString() : null,
+    checkOut: saved?.check_out ? new Date(saved.check_out).toISOString() : null,
+  });
 });
 
 // ── Password Reset (admin action) ─────────────────────────────────────────────

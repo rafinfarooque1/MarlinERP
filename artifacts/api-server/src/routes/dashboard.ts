@@ -629,6 +629,15 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       total: accounting ? accounting.accountsPayable : null,
       basis: accounting ? "ledger" : null,
       companyWide: true,
+      // Salary owed to employees. Kept as its own figure rather than folded into
+      // `total`, which is the Sundry Creditors control account and must keep
+      // agreeing with the Balance Sheet line of that name. `allPayables` is the
+      // number to show when the question is "what do we owe", because trade
+      // creditors alone silently omitted every rupee of accrued salary.
+      salaryPayable: accounting ? accounting.salaryPayable : null,
+      allPayables: accounting
+        ? Math.round((accounting.accountsPayable + accounting.salaryPayable) * 100) / 100
+        : null,
       // Source-document exposure for the selected period and location. Kept
       // because it is location-answerable and the control total is not, but
       // named so it can never be mistaken for the payables balance.

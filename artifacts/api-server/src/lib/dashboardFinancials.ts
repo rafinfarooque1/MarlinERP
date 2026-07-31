@@ -35,6 +35,19 @@ export interface CompanyFinancials {
   /** Control-account totals, signed to their natural side. */
   accountsReceivable: number;
   accountsPayable: number;
+  /**
+   * Net salary owed to employees, signed positive.
+   *
+   * Reported separately because it is NOT part of `accountsPayable`: that figure
+   * is the Sundry Creditors subtree, and salary payable hangs off Current
+   * Liabilities instead. Accrued salary was therefore money the company owed
+   * that the payables tile could not see at all.
+   *
+   * It comes off the posting stream like every other balance here, so a salary
+   * payment, a month-end true-up and a manual journal against the payable all
+   * move it. Re-summing unpaid payroll rows would ignore the journal entirely.
+   */
+  salaryPayable: number;
 }
 
 type Posting = { date: string; ledgerId: number; debit: number; credit: number };
@@ -83,6 +96,8 @@ export interface ControlBalances {
   cashBalance: number;
   accountsReceivable: number;
   accountsPayable: number;
+  /** Net salary owed to employees — see `CompanyFinancials.salaryPayable`. */
+  salaryPayable: number;
 }
 
 /**
@@ -109,6 +124,9 @@ async function balancesFrom(
     cashBalance: idx.cashBalance(),
     accountsReceivable: idx.controlTotal("customer"),
     accountsPayable: idx.controlTotal("vendor"),
+    // Negated because `subtreeNet` is debit-minus-credit and a liability sits on
+    // the credit side — the same convention `controlTotal` applies to creditors.
+    salaryPayable: r2(-idx.subtreeNet("STD-GRP-SAL-PAY")),
   };
 }
 

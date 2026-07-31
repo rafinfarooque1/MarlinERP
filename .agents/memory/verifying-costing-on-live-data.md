@@ -25,3 +25,19 @@ left no trace.
   item rows. A production document's positive-quantity ledger rows also include the
   **material returns** written by the delete, and counting those as deposits inflates
   the restored average.
+
+## A test fixture's cleanup can unbalance the books by itself
+
+Deleting a fixture's postings **by ledger id** (`DELETE FROM journal_voucher_lines
+WHERE ledger_id = …`) strips one leg off balanced vouchers and leaves the other
+behind. The trial balance then fails by exactly the value of the missing side, on the
+*next* run, and reads as a bug in whatever is under test.
+
+**Why:** a voucher is an atomic unit; the fixture only owns *some* of its lines.
+Payment and true-up vouchers pair the fixture's ledger against Cash/statutory ledgers
+that outlive it.
+
+**How to apply:** delete vouchers whole — resolve voucher ids (by narration stamped
+with the fixture name), then lines, then the voucher rows. Assert
+`SUM(debit) = SUM(credit)` across the whole voucher book *at the end of cleanup* so
+the harness blames itself instead of the next run.

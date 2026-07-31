@@ -1,0 +1,526 @@
+Update the ERP Salary Accrual / Salary Payable accounting logic.
+
+IMPORTANT:
+This is an accounting correction involving Attendance → Payroll → Salary Expense →
+Salary Payable → Dashboard/Reports.
+
+Do NOT make this a frontend-only change.
+
+First inspect the existing attendance, payroll, salary accrual, salary payable,
+journal posting, Chart of Accounts, P&L, dashboard payable, and salary payment logic.
+
+Do not publish automatically.
+Implement and test in development first.
+
+==================================================
+1. CURRENT PROBLEM
+==================================================
+
+Currently salary is being accrued daily using the employee's fixed monthly salary.
+
+Example:
+
+Monthly salary = ₹30,000
+
+The ERP may currently calculate a fixed daily amount and automatically post it every
+day to:
+
+Dr Salary Expense
+Cr Salary Payable
+
+This is NOT the required behaviour.
+
+An employee should not create a full day's salary expense simply because that
+calendar/work day exists.
+
+Actual salary earned depends on attendance/payroll information such as:
+
+- Present
+- Full Day
+- Half Day
+- Absent
+- LOP
+- Approved paid leave where applicable
+- Overtime where applicable
+- Earnings
+- Deductions
+- Other existing payroll rules
+
+Therefore accounting must follow the employee's ACTUAL EARNED / NET PAYABLE salary.
+
+==================================================
+2. AUTHORITATIVE SALARY AMOUNT
+==================================================
+
+Use the existing payroll engine as the source of truth.
+
+Attendance / payroll calculation
+        ↓
+Actual salary earned
+        ↓
+Applicable earnings/deductions
+        ↓
+NET PAYABLE
+        ↓
+Accounting
+
+Do NOT create a second independent salary calculation inside the accounting module.
+
+The same amount that payroll considers actually payable to the employee must drive
+Salary Expense / Salary Payable according to the ERP's payroll accounting policy.
+
+==================================================
+3. ATTENDANCE-BASED ACCRUAL
+==================================================
+
+As attendance becomes known, salary accrual must reflect the employee's actual
+earned salary.
+
+Example conceptually:
+
+Employee monthly salary = ₹30,000.
+
+If today's attendance results in a full paid day:
+→ accrue the applicable full-day earned salary.
+
+If today's attendance results in a half day:
+→ accrue only the applicable half-day earned salary.
+
+If today's attendance results in unpaid absence / LOP:
+→ do not accrue a full day's salary.
+
+If attendance/payroll is subsequently corrected:
+→ the salary accrual must adjust accordingly.
+
+Do not leave the original incorrect accrual in the books and then add another full
+entry on top.
+
+==================================================
+4. NET PAYABLE
+==================================================
+
+The key amount I need is the employee's NET PAYABLE salary.
+
+When payroll calculations include applicable deductions/adjustments, the accounting
+payable must ultimately agree with the amount actually owed to the employee.
+
+Example:
+
+Calculated earned salary       ₹20,000
+Applicable deductions           ₹2,000
+---------------------------------------
+Net Payable                     ₹18,000
+
+The Salary Payable representing the employee amount due must ultimately be ₹18,000,
+not blindly ₹30,000.
+
+IMPORTANT:
+Before implementing, inspect how the existing ERP accounts for deductions.
+
+If some deductions require separate liability ledgers such as statutory payable
+accounts, preserve proper double-entry accounting.
+
+Do NOT simply debit Salary Expense by "Net Pay" if that would incorrectly omit an
+expense or liability that must be separately recognized.
+
+The required result is:
+
+- Salary Expense must represent the correct payroll expense according to the payroll
+  calculation.
+- Salary Payable must represent the actual amount payable to the employee.
+- Separate deduction/payable ledgers must remain correct where applicable.
+- All entries must balance.
+
+==================================================
+5. DAILY PROFITABILITY
+==================================================
+
+I still need daily profitability to be accurate.
+
+But daily salary expense must be based on salary actually earned from attendance /
+payroll status, NOT a blind fixed monthly salary accrual.
+
+After attendance is finalized/updated for the day, the accounting books should
+reflect the appropriate earned salary.
+
+This should allow:
+
+Sales
+- Purchases
+- Other Expenses
+- Actual earned Salary Expense
+
+to produce a meaningful daily P&L.
+
+==================================================
+6. CHECK-IN / CHECK-OUT
+==================================================
+
+Use the ERP's existing attendance rules.
+
+Check-in / Check-out
+        ↓
+Attendance result
+        ↓
+Full Day / Half Day / Absent / etc.
+        ↓
+Payroll earned amount
+        ↓
+Net Payable / payroll accounting
+
+Do NOT invent new attendance thresholds if they already exist.
+
+Reuse the existing attendance/payroll engine.
+
+If attendance has not yet been finalized for the day, follow the ERP's existing
+attendance status rules rather than assuming a full paid day.
+
+==================================================
+7. ATTENDANCE CORRECTIONS
+==================================================
+
+This is critical.
+
+Suppose the ERP initially records:
+
+Full Day
+
+and later an authorized user corrects it to:
+
+Half Day.
+
+The salary accounting for that period must adjust to the new payroll result.
+
+Likewise:
+
+Absent → Present
+Half Day → Full Day
+Full Day → LOP
+etc.
+
+must produce the correct accounting adjustment.
+
+Use safe delta/reversal/recalculation logic.
+
+Never duplicate the original salary expense.
+
+==================================================
+8. MONTH-END PAYROLL
+==================================================
+
+At month end, payroll must reconcile exactly with accounting.
+
+For each employee:
+
+Final payroll Net Payable
+↔ employee Salary Payable balance attributable to that payroll
+
+The monthly payroll approval process should validate/finalize the accrued amounts.
+
+Approval must NOT create the entire salary expense again if the expense/payable has
+already been accrued through the attendance/payroll process.
+
+No duplicate salary expense.
+
+==================================================
+9. SALARY PAYMENT
+==================================================
+
+Salary payment remains separate from salary accrual.
+
+When salary is actually paid:
+
+Dr Salary Payable
+Cr Cash / Bank
+
+for the amount being paid, subject to existing payroll/payment rules.
+
+Payment must NOT create Salary Expense again.
+
+If partially paid:
+
+Salary Payable should retain only the remaining unpaid balance.
+
+Example:
+
+Salary Payable = ₹18,000
+Paid = ₹10,000
+
+Remaining Salary Payable = ₹8,000.
+
+==================================================
+10. CHART OF ACCOUNTS
+==================================================
+
+The accounting hierarchy must remain clear.
+
+Indirect Expenses
+    → Salary
+        → applicable salary expense ledgers
+
+Current Liabilities
+    → Salary Payable
+        → employee salary payable ledgers where the existing architecture uses them
+
+Example:
+
+Salary Payable
+    → Ramis
+    → Employee B
+    → Employee C
+
+Do not create duplicate employee salary ledgers if they already exist.
+
+==================================================
+11. DASHBOARD PAYABLE
+==================================================
+
+Salary Payable must be included correctly in the ERP's total current payable
+figures/dashboard where liabilities are represented.
+
+If accounting currently shows:
+
+Vendor Payable          ₹50,000
+Salary Payable          ₹18,000
+Rent Payable            ₹20,000
+
+then the relevant total payable/current-liability reporting should reconcile to the
+underlying ledgers.
+
+Do not maintain a separate dashboard salary number that disagrees with Chart of
+Accounts.
+
+Use the authoritative accounting balances.
+
+==================================================
+12. PROFIT & LOSS
+==================================================
+
+P&L must use the corrected Salary Expense.
+
+It must NOT show fixed salary expense for days where the employee did not actually
+earn that amount.
+
+The monthly P&L salary figure must reconcile to payroll expense.
+
+The daily P&L should reflect earned salary based on available/finalized attendance.
+
+==================================================
+13. BALANCE SHEET
+==================================================
+
+Salary Payable must appear correctly under Current Liabilities.
+
+Balance Sheet Salary Payable
+↔ Chart of Accounts Salary Payable
+
+must agree.
+
+Once salary is paid, the liability must decrease accordingly.
+
+==================================================
+14. GENERAL LEDGER / TRIAL BALANCE
+==================================================
+
+Verify the corrected salary postings flow through:
+
+- General Ledger
+- Trial Balance
+- Profit & Loss
+- Balance Sheet
+- Chart of Accounts
+- Dashboard
+- Payroll reports
+- Employee salary payable
+
+There must not be different versions of Salary Payable in different modules.
+
+==================================================
+15. DO NOT BREAK MANUAL ADJUSTMENTS
+==================================================
+
+If an authorized Journal/Payment/other valid accounting voucher adjusts an employee's
+Salary Payable ledger, the current accounting balance displayed elsewhere must
+respect that ledger movement.
+
+Do not calculate current Salary Payable solely as:
+
+Payroll generated - payroll payment records
+
+if that ignores valid accounting journal movements.
+
+Current accounting balance must reconcile with the ledger.
+
+Keep payroll history and accounting balance conceptually separate where necessary.
+
+==================================================
+16. BACKEND REVIEW
+==================================================
+
+Inspect all related backend logic, including:
+
+- attendance calculation
+- check-in/check-out
+- payroll calculation
+- daily salary accrual
+- monthly payroll
+- payroll approval
+- salary payable generation
+- salary payment
+- journal posting
+- employee salary ledgers
+- dashboard payable
+- P&L
+- Balance Sheet
+- Trial Balance
+- General Ledger
+
+Do not fix only the UI.
+
+Find the actual source of the current fixed daily salary accrual and replace/correct
+it using the existing payroll calculation source of truth.
+
+==================================================
+17. IDEMPOTENCY
+==================================================
+
+The accrual process must be idempotent.
+
+Running payroll/accrual calculation twice must NOT double:
+
+- Salary Expense
+- Salary Payable
+- deduction liabilities
+- employee payable
+
+Use deterministic payroll/accrual references or the existing safe architecture.
+
+==================================================
+18. TEST CASES
+==================================================
+
+Test in DEVELOPMENT using disposable fixtures.
+
+Test at minimum:
+
+A. Full day
+Verify correct earned salary and payable.
+
+B. Half day
+Verify only applicable half-day salary is recognized.
+
+C. Absent / LOP
+Verify the correct reduction/no full-day accrual.
+
+D. Full Day → Half Day correction
+Verify accounting adjusts rather than duplicates.
+
+E. Absent → Present correction
+Verify the correct additional earned salary is recognized.
+
+F. Multiple attendance days
+Verify accumulated Salary Expense and Salary Payable equal payroll.
+
+G. Payroll deduction
+Verify Net Payable agrees with employee Salary Payable and any separate deduction
+liabilities are correctly posted.
+
+H. Month-end approval
+Verify approval does NOT duplicate already accrued salary.
+
+I. Full salary payment
+Salary Payable reaches zero.
+
+J. Partial salary payment
+Only remaining amount stays payable.
+
+K. Journal adjustment to Salary Payable
+Verify Chart of Accounts, Balance Sheet and dashboard reflect the resulting ledger
+balance.
+
+L. Dashboard
+Salary Payable/current payable agrees with accounting.
+
+M. P&L
+Salary Expense agrees with payroll expense.
+
+N. Trial Balance
+Total Debit = Total Credit.
+
+==================================================
+19. EXISTING DATA SAFETY
+==================================================
+
+Do NOT automatically rewrite historical production payroll.
+
+Do NOT create balancing journal entries.
+
+Do NOT delete payroll records.
+
+Do NOT reset attendance.
+
+Do NOT alter production employee salary data during testing.
+
+If existing historical salary accruals are inconsistent with the new logic, report
+the affected records/periods and proposed correction separately before changing
+financial history.
+
+==================================================
+20. FINAL REQUIREMENT
+==================================================
+
+The fundamental rule is:
+
+DO NOT ACCRUE SALARY SIMPLY BECAUSE THE EMPLOYEE HAS A FIXED MONTHLY SALARY.
+
+Instead:
+
+Attendance
+→ payroll calculation
+→ actual earned salary
+→ deductions/adjustments
+→ employee Net Payable
+→ Salary Expense / Salary Payable accounting
+
+The amount actually owed to the employee must be reflected in Salary Payable.
+
+Salary accounting must then reconcile across:
+
+Payroll
+Chart of Accounts
+P&L
+Balance Sheet
+Trial Balance
+General Ledger
+Dashboard Payables
+
+No duplicate expense and no duplicate payable.
+
+==================================================
+21. FINAL REPORT
+==================================================
+
+When complete report:
+
+1. Previous salary-accrual logic/root cause
+2. New attendance-to-payroll-to-accounting flow
+3. Backend files changed
+4. Frontend files changed
+5. Database/schema changes, if any
+6. Full-day test
+7. Half-day test
+8. Absent/LOP test
+9. Attendance correction test
+10. Deduction/Net Payable test
+11. Month-end approval duplicate-prevention test
+12. Salary payment test
+13. Journal-adjustment test
+14. Dashboard reconciliation
+15. P&L reconciliation
+16. Balance Sheet reconciliation
+17. Trial Balance result
+18. Whether existing historical data needs correction
+19. Confirmation that production data was not modified during development testing
+
+Do NOT publish automatically.
+Stop after development verification and wait for my approval.
