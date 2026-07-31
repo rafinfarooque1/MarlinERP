@@ -2,7 +2,7 @@ import { useState, useMemo, Fragment } from 'react';
 import {
   useListPayments, useCreatePayment, useDeletePayment,
   useListReceipts, useCreateReceipt, useDeleteReceipt,
-  useListJournalVouchers, useCreateJournalVoucher, useDeleteJournalVoucher,
+  useListJournalVouchers, useCreateJournalVoucher, useDeleteJournalVoucher, useUpdateJournalVoucher,
   useListAccountsFlat, useCashBankLedgersFlat,
   useListCustomers, useListVendors,
 } from '@workspace/api-client-react';
@@ -19,8 +19,12 @@ import { Separator } from '@/components/ui/separator';
 import {
   Plus, Search, Trash2, ChevronDown, ChevronRight, Download, AlertTriangle,
   ArrowUpLeft, ArrowDownRight, BookOpen, ArrowLeftRight, FileMinus2, FilePlus2,
-  ReceiptText, FileDown,
+  ReceiptText, FileDown, Pencil, Lock,
 } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip';
+
+/** Shown when the server did not send a specific reason (older cached rows). */
+const LOCKED_FALLBACK = 'This voucher was generated automatically by another module and cannot be edited here.';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePermission } from '@/lib/usePermission';
@@ -406,6 +410,224 @@ function NewVoucherDialog({ onClose, defaultType }: { onClose: () => void; defau
   );
 }
 
+// ── Edit Voucher dialog (manually created vouchers only) ───────────────────
+/**
+ * Only ever opened for a voucher the SERVER marked editable. The same rule is
+ * re-checked on save, so this dialog is a convenience, not the gate — a
+ * system-generated voucher stays protected even if the button were forced.
+ *
+ * The voucher's type and number are fixed: the number is preserved so every
+ * existing reference to it keeps pointing at the same entry, and the type is
+ * implied by that number's prefix.
+ */
+function EditVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: () => void }) {
+  const qc = useQueryClient();
+  const v = row.raw ?? {};
+  const type = row.type as 'journal' | 'contra' | 'credit_note' | 'debit_note';
+
+  const { data: allAccounts = [] } = useListAccountsFlat();
+  const { data: cashBank = [] }    = useCashBankLedgersFlat();
+  const { data: customers = [] }   = useListCustomers();
+  const { data: vendors = [] }     = useListVendors();
+
+  const allLedgers  = (allAccounts as any[]).filter(a => !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code));
+  const cashLedgers = (cashBank as any[]).filter(a => !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code));
+
+  const updateJV = useUpdateJournalVoucher();
+
+  const existing: any[] = v.lines ?? [];
+  const drLine = existing.find((l: any) => Number(l.debit) > 0);
+  const crLine = existing.find((l: any) => Number(l.credit) > 0);
+
+  const [date, setDate]      = useState<string>((v.voucherDate ?? '').slice(0, 10));
+  const [narration, setNarr] = useState<string>(v.narration ?? '');
+  const [reason, setReason]  = useState<string>(v.reason ?? '');
+  const [amount, setAmount]  = useState<string>(String(Number(v.totalAmount ?? 0) || ''));
+
+  // contra
+  const [fromId, setFromId] = useState<number>(crLine?.ledgerId ?? 0);
+  const [toId, setToId]     = useState<number>(drLine?.ledgerId ?? 0);
+
+  // journal lines, prefilled from the stored entry
+  interface JLine { ledgerId: number; debit: string; credit: string }
+  const [lines, setLines] = useState<JLine[]>(() =>
+    existing.length
+      ? existing.map((l: any) => ({
+          ledgerId: l.ledgerId,
+          debit:  Number(l.debit)  > 0 ? String(Number(l.debit))  : '',
+          credit: Number(l.credit) > 0 ? String(Number(l.credit)) : '',
+        }))
+      : [{ ledgerId: 0, debit: '', credit: '' }, { ledgerId: 0, debit: '', credit: '' }],
+  );
+  const totalDr = lines.reduce((s, l) => s + (Number(l.debit) || 0), 0);
+  const totalCr = lines.reduce((s, l) => s + (Number(l.credit) || 0), 0);
+  const balanced = Math.abs(totalDr - totalCr) < 0.005 && totalDr > 0;
+
+  // credit / debit note. A credit note is Dr counter / Cr party; a debit note
+  // is the mirror — so the counter ledger sits on the opposite side each time.
+  const [partyId, setPartyId] = useState<number>(v.partyId ?? 0);
+  const [counterLedgerId, setCtrId] = useState<number>(
+    (type === 'credit_note' ? drLine?.ledgerId : crLine?.ledgerId) ?? 0,
+  );
+
+  const setLine = (i: number, patch: Partial<JLine>) =>
+    setLines(prev => prev.map((l, idx) => {
+      if (idx !== i) return l;
+      const next = { ...l, ...patch };
+      if (patch.debit !== undefined && Number(patch.debit) > 0) next.credit = '';
+      if (patch.credit !== undefined && Number(patch.credit) > 0) next.debit = '';
+      return next;
+    }));
+
+  const onErr = (e: any) => toast.error(e?.data?.error || e.message || 'Could not save the changes');
+  const onOk = () => { toast.success(`${row.voucherNumber} updated`); qc.invalidateQueries(); onClose(); };
+
+  const submit = () => {
+    if (!date) { toast.error('Date required'); return; }
+    if (!v.rev) { toast.error('Reload the page and try again'); return; }
+
+    const base = { id: row.id, expectedRev: String(v.rev), voucherDate: date, narration };
+
+    if (type === 'journal') {
+      const clean = lines.filter(l => l.ledgerId > 0 || Number(l.debit) > 0 || Number(l.credit) > 0);
+      if (clean.length < 2) { toast.error('A journal needs at least two lines'); return; }
+      if (clean.some(l => !l.ledgerId)) { toast.error('Every line needs a ledger'); return; }
+      if (!balanced) { toast.error(`Debits must equal credits — Dr ${inr(totalDr)} vs Cr ${inr(totalCr)}`); return; }
+      updateJV.mutate({
+        ...base,
+        lines: clean.map(l => ({ ledgerId: l.ledgerId, debit: Number(l.debit) || 0, credit: Number(l.credit) || 0 })),
+      } as any, { onSuccess: onOk, onError: onErr });
+    } else if (type === 'contra') {
+      if (!fromId || !toId) { toast.error('Select both accounts'); return; }
+      if (fromId === toId) { toast.error('From and To must be different accounts'); return; }
+      if (!(Number(amount) > 0)) { toast.error('Enter an amount'); return; }
+      updateJV.mutate({ ...base, fromLedgerId: fromId, toLedgerId: toId, amount: Number(amount) } as any,
+        { onSuccess: onOk, onError: onErr });
+    } else {
+      if (!partyId) { toast.error(`Select a ${type === 'credit_note' ? 'customer' : 'vendor'}`); return; }
+      if (!(Number(amount) > 0)) { toast.error('Enter an amount'); return; }
+      updateJV.mutate({
+        ...base, partyId, amount: Number(amount),
+        counterLedgerId: counterLedgerId || undefined, reason,
+      } as any, { onSuccess: onOk, onError: onErr });
+    }
+  };
+
+  const meta = TYPE_META[type];
+  const Icon = meta.icon;
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Pencil className="h-5 w-5 text-primary" /> Edit Voucher
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold ${meta.bg}`}>
+          <Icon className="h-3.5 w-3.5" />
+          {meta.label}
+          <span className="font-mono ml-auto">{row.voucherNumber}</span>
+        </div>
+        <p className="text-xs text-muted-foreground -mt-1">
+          The voucher number and type stay as they are — this updates the existing entry rather than
+          creating a new one, so the books follow the change.
+        </p>
+
+        <Separator />
+
+        <div className="space-y-1">
+          <Label>Date</Label>
+          <Input type="date" value={date} onChange={e => setDate(e.target.value)} />
+        </div>
+
+        {type === 'contra' && (
+          <>
+            <div className="space-y-1">
+              <Label>From Account</Label>
+              <AccountCombobox options={cashLedgers} value={fromId} onChange={setFromId} placeholder="Select account" />
+            </div>
+            <div className="space-y-1">
+              <Label>To Account</Label>
+              <AccountCombobox options={cashLedgers} value={toId} onChange={val => { if (val !== fromId) setToId(val); }} placeholder="Select account" />
+            </div>
+            <div className="space-y-1">
+              <Label>Amount (₹)</Label>
+              <Input type="number" min={0} value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" />
+            </div>
+          </>
+        )}
+
+        {type === 'journal' && (
+          <div className="space-y-3">
+            <Label>Ledger Lines</Label>
+            <div className="space-y-2">
+              {lines.map((l, i) => (
+                <div key={i} className="grid grid-cols-[1fr_100px_100px_24px] gap-2 items-center">
+                  <AccountCombobox options={allLedgers} value={l.ledgerId} onChange={val => setLine(i, { ledgerId: val })} placeholder="Ledger" />
+                  <Input type="number" min={0} placeholder="Dr" value={l.debit} onChange={e => setLine(i, { debit: e.target.value })} className="text-right" />
+                  <Input type="number" min={0} placeholder="Cr" value={l.credit} onChange={e => setLine(i, { credit: e.target.value })} className="text-right" />
+                  <button type="button" onClick={() => setLines(prev => prev.filter((_, idx) => idx !== i))} className="text-muted-foreground hover:text-destructive">×</button>
+                </div>
+              ))}
+            </div>
+            <Button type="button" variant="outline" size="sm" onClick={() => setLines(p => [...p, { ledgerId: 0, debit: '', credit: '' }])}>
+              <Plus className="h-3 w-3 mr-1" />Add Line
+            </Button>
+            <div className={`text-xs text-right font-mono ${balanced ? 'text-emerald-600' : 'text-red-500'}`}>
+              Dr {inr(totalDr)} | Cr {inr(totalCr)} {balanced ? '✓ Balanced' : '⚠ Unbalanced'}
+            </div>
+          </div>
+        )}
+
+        {(type === 'credit_note' || type === 'debit_note') && (
+          <>
+            <div className="space-y-1">
+              <Label>{type === 'credit_note' ? 'Customer' : 'Vendor'}</Label>
+              <Select value={String(partyId || '')} onValueChange={val => setPartyId(Number(val))}>
+                <SelectTrigger><SelectValue placeholder="Select party" /></SelectTrigger>
+                <SelectContent>
+                  {((type === 'credit_note' ? customers : vendors) as any[]).map((p: any) => (
+                    <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label>Amount (₹)</Label>
+              <Input type="number" min={0} value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" />
+            </div>
+            <div className="space-y-1">
+              <Label>Counter Ledger (optional)</Label>
+              <AccountCombobox options={allLedgers} value={counterLedgerId} onChange={setCtrId} placeholder="Select ledger (optional)" />
+            </div>
+            <div className="space-y-1">
+              <Label>Reason</Label>
+              <Input value={reason} onChange={e => setReason(e.target.value)} placeholder="Return, discount, etc." />
+            </div>
+          </>
+        )}
+
+        <div className="space-y-1">
+          <Label>Narration (optional)</Label>
+          <Textarea value={narration} onChange={e => setNarr(e.target.value)} rows={2} placeholder="Add a note…" />
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={submit}
+            disabled={updateJV.isPending || (type === 'journal' && !balanced)}
+          >
+            {updateJV.isPending ? 'Saving…' : 'Save Changes'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────
 export default function Vouchers() {
   const perm       = usePermission('page:/accounts/vouchers');
@@ -426,6 +648,7 @@ export default function Vouchers() {
   const [typeFilter, setTypeFilter] = useState<VoucherType | 'all'>('all');
   const [expanded, setExpanded]   = useState<string | null>(null);
   const [deleteRow, setDeleteRow] = useState<UnifiedRow | null>(null);
+  const [editRow, setEditRow]     = useState<UnifiedRow | null>(null);
   const [newOpen, setNewOpen]     = useState(false);
   const [newType, setNewType]     = useState<VoucherType>('payment');
 
@@ -491,6 +714,7 @@ export default function Vouchers() {
   const canView = perm.canView || permPay.canView;
   const canAdd  = perm.canAdd  || permPay.canAdd;
   const canDel  = perm.canDelete || permPay.canDelete;
+  const canEdit = perm.canEdit || permPay.canEdit;
   const canDownload = perm.canDownload || permPay.canDownload;
 
   const handleExport = () => {
@@ -663,7 +887,48 @@ export default function Vouchers() {
                             <FileDown className="h-3.5 w-3.5" />
                           </Button>
                           )}
-                          {canDel && (
+                          {/* Edit — manually created vouchers only. `editable`
+                              is the server's own verdict, so the button can
+                              never appear on an entry the API would refuse. */}
+                          {canEdit && isJV && (
+                            row.raw?.editable ? (
+                              <Button
+                                variant="ghost" size="icon"
+                                className="h-7 w-7 text-muted-foreground hover:text-primary"
+                                title="Edit voucher"
+                                onClick={() => setEditRow(row)}
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                            ) : (
+                              // A real tooltip, not a native `title` — the reason
+                              // a voucher is locked is the whole explanation, so
+                              // it has to be readable, not hover-guesswork.
+                              <TooltipProvider delayDuration={100}>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span
+                                      role="note"
+                                      tabIndex={0}
+                                      aria-label={row.raw?.lockedReason || LOCKED_FALLBACK}
+                                      title={row.raw?.lockedReason || LOCKED_FALLBACK}
+                                      className="inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground/50 hover:text-muted-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                    >
+                                      <Lock className="h-3.5 w-3.5" />
+                                    </span>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="left" className="max-w-xs text-xs leading-relaxed">
+                                    {row.raw?.lockedReason || LOCKED_FALLBACK}
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            )
+                          )}
+                          {/* Delete is hidden for vouchers another module owns —
+                              the API refuses them, so offering the button would
+                              only produce an error. Payments/receipts and older
+                              rows without recorded provenance are unaffected. */}
+                          {canDel && row.raw?.origin !== 'system' && (
                             <Button
                               variant="ghost" size="icon"
                               className="h-7 w-7 text-muted-foreground hover:text-destructive"
@@ -733,6 +998,7 @@ export default function Vouchers() {
       )}
 
       {newOpen && <NewVoucherDialog defaultType={newType} onClose={() => setNewOpen(false)} />}
+      {editRow && <EditVoucherDialog row={editRow} onClose={() => setEditRow(null)} />}
       {deleteRow && <DeleteConfirm row={deleteRow} onClose={() => setDeleteRow(null)} />}
     </AppLayout>
   );

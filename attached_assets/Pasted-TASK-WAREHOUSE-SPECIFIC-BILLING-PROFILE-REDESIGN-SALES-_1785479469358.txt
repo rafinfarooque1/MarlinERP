@@ -1,0 +1,822 @@
+TASK: WAREHOUSE-SPECIFIC BILLING PROFILE + REDESIGN SALES TAX INVOICE USING ATTACHED REFERENCE
+
+I am attaching an updated invoice/bill reference image.
+
+Use the attached image ONLY as the visual/layout reference.
+
+IMPORTANT:
+Do NOT embed the reference image into the invoice.
+Do NOT hard-code any data visible in the image.
+Rebuild the invoice using the ERP's actual HTML/PDF/print system.
+
+This task also changes where invoice identity/payment details come from:
+
+THE WAREHOUSE IS THE PRIMARY BILLING PROFILE.
+
+Every warehouse can have its own:
+- billing/trade name
+- address
+- GSTIN
+- FSSAI licence number
+- phone
+- email
+- bank details
+- UPI ID
+- payment QR details
+- invoice footer/details
+
+When a sales invoice is generated, these details must come from the WAREHOUSE THAT ISSUED THE SALE, not blindly from Company Profile.
+
+============================================================
+1. IMPORTANT ARCHITECTURE RULE
+============================================================
+
+Every sales invoice already belongs to / is issued from a location/warehouse.
+
+Use that warehouse as the authoritative billing profile.
+
+Example:
+
+Sale from Ragiguda
+-> invoice uses Ragiguda billing details.
+
+Sale from Warehouse 2
+-> invoice uses Warehouse 2 billing details.
+
+Do NOT choose the warehouse based on the currently logged-in user when reprinting an invoice.
+
+The invoice must use the warehouse/location STORED ON THE ORIGINAL SALE.
+
+This is critical because an admin may later print an invoice belonging to another warehouse.
+
+Historical invoices must therefore resolve their billing identity from their own stored warehouse/location relationship.
+
+============================================================
+2. EXTEND WAREHOUSE MASTER
+============================================================
+
+Update:
+
+Company / Warehouses
+
+Both:
+
+Add Warehouse
+Edit Warehouse
+
+Add a proper section:
+
+BILLING & INVOICE DETAILS
+
+Keep existing warehouse fields and add the required billing fields.
+
+Recommended structure:
+
+GENERAL
+
+Warehouse Name *
+Billing / Trade Name
+Contact Person
+Phone
+Email
+
+LEGAL / TAX
+
+Address *
+City
+District
+State *
+State Code *
+PIN Code
+GST Number / GSTIN
+FSSAI Licence Number
+
+BANK DETAILS
+
+Account Holder Name
+Bank Name
+Branch Name
+Account Number
+IFSC Code
+
+DIGITAL PAYMENT
+
+UPI ID
+
+INVOICE SETTINGS
+
+Invoice Prefix, only if compatible with the existing invoice numbering architecture
+Invoice Footer / Terms
+Authorized Signatory Name, optional
+
+Do NOT duplicate fields unnecessarily if some of these already exist.
+
+First inspect the current warehouse schema and reuse existing fields where possible.
+
+============================================================
+3. FSSAI
+============================================================
+
+Add:
+
+FSSAI Licence Number
+
+to each warehouse.
+
+It must:
+
+- save correctly
+- persist after refresh
+- load when editing warehouse
+- be available to invoice generation
+- display on invoices when configured
+- remain optional unless current business rules require otherwise
+
+Do reasonable format validation without rejecting legitimate FSSAI licence numbers.
+
+Do NOT hard-code one FSSAI number globally.
+
+Each warehouse can have its own FSSAI licence.
+
+============================================================
+4. FIX / VERIFY UPI PERSISTENCE
+============================================================
+
+There was previously an issue where Warehouse UPI ID could be entered but appeared blank after saving/reopening.
+
+While updating the warehouse billing profile, trace this end-to-end:
+
+Frontend form
+-> API request
+-> validation/schema
+-> database
+-> API response
+-> edit form hydration
+-> invoice renderer
+
+UPI ID must persist correctly.
+
+Do NOT merely make the field visually appear saved.
+
+Verify it survives:
+Save -> reload -> reopen warehouse.
+
+============================================================
+5. BANK DETAILS
+============================================================
+
+Bank information must belong to the individual warehouse billing profile.
+
+Add/support:
+
+Account Holder Name
+Bank Name
+Branch Name
+Account Number
+IFSC Code
+
+When generating an invoice from that warehouse, use that warehouse's bank information.
+
+Do NOT globally use Company Profile bank details if warehouse billing details are configured.
+
+============================================================
+6. WAREHOUSE LOGO / COMPANY LOGO
+============================================================
+
+For now, the invoice logo should use the logo uploaded in COMPANY PROFILE.
+
+Do NOT hard-code a logo into the invoice.
+
+Logic:
+
+Logo:
+Company Profile logo
+
+Billing identity/details:
+Invoice warehouse
+
+So the invoice can display:
+
+[Company Profile Logo]
+
+[Warehouse Billing/Trade Name]
+Warehouse Address
+Phone
+Email
+GSTIN
+FSSAI
+
+This allows the same company branding while individual warehouses retain their own legal/billing/payment information.
+
+If the existing architecture already supports warehouse-specific logos, do not remove that capability, but Company Profile logo should remain the default.
+
+============================================================
+7. INVOICE DATA SOURCE RULES
+============================================================
+
+For every sales invoice:
+
+LOGO
+-> Company Profile logo
+
+BILLING / TRADE NAME
+-> issuing warehouse
+
+ADDRESS
+-> issuing warehouse
+
+PHONE
+-> issuing warehouse
+
+EMAIL
+-> issuing warehouse
+
+GSTIN
+-> issuing warehouse
+
+FSSAI
+-> issuing warehouse
+
+STATE
+-> issuing warehouse
+
+STATE CODE
+-> issuing warehouse
+
+BANK DETAILS
+-> issuing warehouse
+
+UPI ID
+-> issuing warehouse
+
+QR PAYMENT
+-> dynamically generated using issuing warehouse UPI/payment details
+
+CUSTOMER DETAILS
+-> actual customer/sale
+
+ITEM DETAILS
+-> actual invoice lines
+
+GST / TAX
+-> existing authoritative GST calculation
+
+PAYMENT STATUS
+-> actual ERP receipt/payment/accounting state
+
+Do not use the currently logged-in user's warehouse to decide these values.
+
+Use the warehouse recorded against the invoice/sale.
+
+============================================================
+8. FALLBACK POLICY
+============================================================
+
+Avoid silently mixing warehouse and company data field-by-field because that can create a legally confusing invoice.
+
+Preferred behavior:
+
+If warehouse billing profile is configured:
+use warehouse billing details.
+
+Company Profile should primarily provide:
+- company logo
+- global company identity/configuration where genuinely required
+
+For missing warehouse fields, define an explicit fallback policy.
+
+Safe fallback:
+
+Warehouse billing/trade name missing
+-> warehouse name
+
+Optional field missing, such as FSSAI/email/bank details
+-> omit that field cleanly
+
+Do NOT automatically substitute a different warehouse's information.
+
+Do NOT display:
+undefined
+null
+N/A
+blank labels
+broken separators
+
+If GSTIN is legally required for the invoice but missing, show a clear validation/warning before final invoice issuance rather than silently inserting unrelated Company Profile GSTIN.
+
+============================================================
+9. ATTACHED INVOICE DESIGN
+============================================================
+
+Recreate the attached invoice reference as closely as practical.
+
+Target:
+
+Professional Indian GST Tax Invoice
+A4 portrait
+clean white background
+dark navy headers
+light borders
+good spacing
+high readability
+professional print/PDF quality
+
+The design must support multiple warehouses dynamically.
+
+Do not hard-code any values from the reference image.
+
+============================================================
+10. INVOICE HEADER
+============================================================
+
+LEFT:
+
+[Company Profile Logo]
+
+Warehouse Billing / Trade Name
+
+Warehouse Address
+City, District
+State - PIN
+
+Phone
+Email
+
+GSTIN: [warehouse GSTIN]
+FSSAI: [warehouse FSSAI licence number]
+
+RIGHT:
+
+TAX INVOICE
+
+Invoice No.
+Invoice Date
+Place of Supply
+Reverse Charge
+
+============================================================
+11. CUSTOMER SECTION
+============================================================
+
+Create:
+
+BILLED TO
+
+and
+
+SHIPPED TO
+
+Show where available:
+
+Customer Name
+Address
+Phone
+GSTIN
+State
+State Code
+
+Hide unavailable optional fields cleanly.
+
+============================================================
+12. ITEM TABLE
+============================================================
+
+Use a structured GST invoice table.
+
+Columns should include:
+
+SL NO.
+DESCRIPTION OF GOODS
+HSN CODE
+QTY
+UNIT
+UNIT PRICE
+TAXABLE VALUE
+
+CGST
+- Rate
+- Amount
+
+SGST
+- Rate
+- Amount
+
+IGST
+- Rate
+- Amount
+
+TOTAL
+
+Use the existing ERP tax calculations.
+
+Do NOT introduce a second GST calculation engine merely for PDF rendering.
+
+Support:
+
+multiple items
+long item names
+multiple pages
+proper wrapping
+repeating table headers where supported
+
+============================================================
+13. TAX SUMMARY
+============================================================
+
+Display:
+
+Taxable Value
+CGST
+SGST
+IGST
+Round Off
+GRAND TOTAL
+
+Use Indian currency formatting.
+
+Example:
+
+₹5,320.00
+
+Do not recalculate values differently from the actual invoice.
+
+============================================================
+14. AMOUNT IN WORDS
+============================================================
+
+Display:
+
+AMOUNT IN WORDS
+
+Example:
+
+Rupees Five Thousand Three Hundred Twenty Only
+
+Generate this dynamically from the actual invoice grand total.
+
+============================================================
+15. PAYMENT STATUS
+============================================================
+
+Display:
+
+Invoice Total
+Amount Received
+Balance Due
+
+Status:
+
+PAID
+PARTIALLY PAID
+UNPAID
+
+Use the ERP's authoritative receivable/payment balance.
+
+Do NOT determine payment status merely from whether a receipt voucher with a particular description exists.
+
+The accounting source of truth should be respected.
+
+============================================================
+16. AMOUNT PAYABLE
+============================================================
+
+Show:
+
+AMOUNT PAYABLE
+
+₹X,XXX.XX
+
+This must be the actual remaining receivable.
+
+Fully settled invoice:
+₹0.00
+
+Partially settled:
+remaining balance
+
+Unpaid:
+full outstanding amount
+
+============================================================
+17. BANK DETAILS
+============================================================
+
+Invoice bank details MUST come from the issuing warehouse.
+
+Show:
+
+Account Holder Name
+Bank Name
+Branch
+Account Number
+IFSC Code
+
+Do not show empty fields.
+
+Do not use another warehouse's bank account.
+
+============================================================
+18. SCAN & PAY / QR
+============================================================
+
+If issuing warehouse has a valid UPI ID:
+
+Show:
+
+SCAN & PAY
+
+[dynamically generated QR]
+
+UPI ID: xxxxx
+
+The QR must be generated dynamically.
+
+Do NOT use the QR image from the attached design.
+
+Do NOT hard-code any UPI ID.
+
+If warehouse UPI ID is absent:
+
+Hide the Scan & Pay block cleanly.
+
+Do not generate an invalid QR.
+
+============================================================
+19. INVOICE FOOTER
+============================================================
+
+Support warehouse-specific invoice footer/terms if configured.
+
+Example:
+
+Thank You For Your Business!
+
+For [Warehouse Billing Name]
+
+Authorized Signatory
+
+Computer Generated Invoice
+
+Do not require a signature if none is configured.
+
+============================================================
+20. WAREHOUSE EDIT FORM UX
+============================================================
+
+Make the Add/Edit Warehouse form organized and easy to understand.
+
+Use sections:
+
+GENERAL
+LEGAL & TAX
+ADDRESS
+BANK DETAILS
+DIGITAL PAYMENT
+INVOICE SETTINGS
+
+Do not put 15-20 unrelated fields into one visually confusing block.
+
+Make it responsive for desktop and mobile.
+
+============================================================
+21. BACKEND IS AUTHORITATIVE
+============================================================
+
+Do NOT implement this as frontend-only fields.
+
+Check whether backend/database changes are required.
+
+Warehouse billing details must persist server-side.
+
+API responses must expose only the required fields according to existing RBAC/security rules.
+
+Invoice generation must fetch the authoritative persisted warehouse record.
+
+Do not trust billing identity sent arbitrarily from the browser during invoice generation.
+
+============================================================
+22. HISTORICAL INVOICE SAFETY
+============================================================
+
+IMPORTANT:
+
+Do not rewrite existing sales/accounting records.
+
+Do not modify historical invoice totals.
+
+Do not modify historical GST postings.
+
+Do not modify stock.
+
+Do not modify customer balances.
+
+However, determine how the current ERP handles invoice master details historically.
+
+If invoice PDFs currently read live warehouse master data, document that changing a warehouse address/GSTIN/FSSAI later may change the appearance of an old reprinted invoice.
+
+If the architecture already snapshots legal invoice details at issuance, preserve that behavior.
+
+If it does not snapshot them, DO NOT silently introduce a risky migration.
+
+Report the issue and propose the safest backward-compatible solution.
+
+============================================================
+23. INVOICE NUMBERING
+============================================================
+
+Do NOT casually change invoice numbering.
+
+First inspect the current invoice numbering logic.
+
+If invoice numbers are company-wide, preserve them.
+
+If warehouse-specific numbering already exists, preserve it.
+
+Do not introduce duplicate invoice numbers.
+
+If warehouse-specific prefixes are added, enforce uniqueness/concurrency safely.
+
+============================================================
+24. PERMISSIONS / RBAC
+============================================================
+
+Respect existing permissions.
+
+Only users already authorized to Add/Edit Warehouses should be able to change:
+
+GSTIN
+FSSAI
+bank details
+UPI
+invoice configuration
+
+Do not expose sensitive bank/account configuration to unauthorized employees.
+
+Invoice viewing should continue following existing sales/location permissions.
+
+============================================================
+25. TEST TWO WAREHOUSES
+============================================================
+
+Test using at least two development warehouse profiles.
+
+Example:
+
+Warehouse A
+GSTIN A
+FSSAI A
+Bank A
+UPI A
+
+Warehouse B
+GSTIN B
+FSSAI B
+Bank B
+UPI B
+
+Generate/preview Invoice A:
+must contain ONLY Warehouse A billing/payment details.
+
+Generate/preview Invoice B:
+must contain ONLY Warehouse B billing/payment details.
+
+There must be no cross-warehouse leakage.
+
+============================================================
+26. PERSISTENCE TEST
+============================================================
+
+For every new warehouse billing field:
+
+Enter
+-> Save
+-> Reload page
+-> Reopen Edit Warehouse
+-> Confirm exact value remains
+
+Specifically verify:
+
+FSSAI
+Billing Name
+Email
+Address
+PIN
+GSTIN
+Account Holder
+Bank Name
+Branch
+Account Number
+IFSC
+UPI ID
+Invoice Footer
+
+============================================================
+27. PDF / PRINT TESTING
+============================================================
+
+Test:
+
+single-item invoice
+multi-item invoice
+long item description
+long warehouse address
+long customer address
+CGST + SGST
+IGST
+paid
+partially paid
+unpaid
+warehouse with FSSAI
+warehouse without FSSAI
+warehouse with bank details
+warehouse without bank details
+warehouse with UPI
+warehouse without UPI
+multi-page invoice
+
+Verify A4 print/PDF output.
+
+No:
+clipping
+overlap
+horizontal overflow
+broken ₹ symbols
+broken QR
+empty labels
+incorrect warehouse identity
+
+============================================================
+28. DO NOT TOUCH UNRELATED ACCOUNTING
+============================================================
+
+This task is warehouse billing profile + invoice presentation/data sourcing.
+
+Do NOT change:
+
+stock calculations
+purchase accounting
+sales accounting
+GST posting logic
+payroll
+journal vouchers
+vendor payable logic
+customer receivable logic
+cash/bank posting
+stock transfer accounting
+opening stock
+production
+existing historical values
+
+If an unrelated accounting defect is discovered, report it separately instead of silently changing it.
+
+============================================================
+29. NO PRODUCTION TEST WRITES
+============================================================
+
+Do not create fake production sales, payments, warehouses or accounting entries merely to test this.
+
+Use development/test data or non-writing previews.
+
+Do not modify live invoice/accounting data.
+
+============================================================
+30. FINAL VERIFICATION REPORT
+============================================================
+
+Before saying complete, report:
+
+1. Database/schema changes made
+2. Warehouse fields added/reused
+3. Add Warehouse changes
+4. Edit Warehouse changes
+5. FSSAI persistence result
+6. Bank details persistence result
+7. UPI persistence result
+8. Exact source used for invoice warehouse identity
+9. Exact source used for logo
+10. Exact source used for GSTIN
+11. Exact source used for FSSAI
+12. Exact source used for bank details
+13. Exact source used for UPI/QR
+14. Historical invoice behavior
+15. Two-warehouse isolation test result
+16. Invoice/PDF tests
+17. Typecheck result
+18. Production build result
+19. Confirmation that accounting/stock/GST posting logic was not changed
+
+IMPORTANT FINAL RULE:
+
+Do not consider this complete merely because the Warehouse form displays the new fields.
+
+Completion requires proving this full path:
+
+Warehouse form
+-> backend validation/API
+-> database persistence
+-> API read-back
+-> invoice warehouse resolution
+-> invoice preview
+-> downloadable/printable PDF
+
+The generated invoice must always use the billing profile belonging to the warehouse that actually issued that invoice.

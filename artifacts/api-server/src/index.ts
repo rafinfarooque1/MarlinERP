@@ -14,6 +14,7 @@ import { addBackupRestore } from "./migrations/backupRestore";
 import { addExpensePaymentModes } from "./migrations/expensePaymentModes";
 import { addFixedAssets } from "./migrations/fixedAssets";
 import { addPurchaseBillFields } from "./migrations/purchaseBills";
+import { addVoucherProvenance } from "./migrations/voucherProvenance";
 import { startBackupScheduler } from "./lib/backup/scheduler";
 import { PasswordService } from "./lib/password";
 import { PRODUCT_KINDS, PRODUCT_TABLE, nextProductIdentity } from "./lib/productIdentity";
@@ -52,6 +53,25 @@ async function runMigrations() {
     ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS cash_ledger_id integer;
     ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS sales_ledger_id integer;
     ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS purchase_ledger_id integer;
+
+    -- Warehouse billing profile. A warehouse is the legal identity that issues a
+    -- sales invoice, so everything a GST tax invoice must state about the seller
+    -- lives on the warehouse row. All nullable and additive: an unconfigured
+    -- warehouse keeps behaving exactly as it did, and the invoice omits the
+    -- fields it has no value for rather than borrowing another profile's.
+    ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS billing_name text;
+    ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS email text;
+    ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS city text;
+    ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS district text;
+    ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS pincode text;
+    ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS fssai_number text;
+    ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS bank_account_holder text;
+    ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS bank_name text;
+    ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS bank_branch text;
+    ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS bank_account_number text;
+    ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS ifsc_code text;
+    ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS invoice_footer text;
+    ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS authorized_signatory text;
     ALTER TABLE outlets    ADD COLUMN IF NOT EXISTS cash_ledger_id integer;
     ALTER TABLE outlets    ADD COLUMN IF NOT EXISTS sales_ledger_id integer;
 
@@ -2521,6 +2541,17 @@ await addFixedAssets(pool);
 // Manual Purchase Bill: stored rate mode, the batch-number allocator and the
 // duplicate-invoice guard. Independent of the ledger seeding above.
 await addPurchaseBillFields(pool);
+
+// Voucher provenance — records which journal vouchers a person actually typed,
+// so only those can be edited by hand. Additive and re-runnable: it only ever
+// fills rows whose origin is still unknown. Its own try/catch keeps a failure
+// here from taking down boot, and the outcome is on stderr where production
+// can read it.
+try {
+  await addVoucherProvenance(pool);
+} catch (err) {
+  console.error("[migration] voucher_provenance_v1 FAILED (non-fatal):", (err as Error).message);
+}
 
 // Automatic backups and retention. Starts after the migrations above so a
 // scheduled backup can never capture a half-upgraded schema.

@@ -6,7 +6,7 @@ import {
   leavesTable, warehousesTable, outletsTable, payComponentsTable,
 } from "@workspace/db";
 import { PasswordService } from '../lib/password';
-import { DEFAULT_INITIAL_PASSWORD } from '../lib/passwordPolicy';
+import { DEFAULT_INITIAL_PASSWORD, ADMIN_RESET_PASSWORD } from '../lib/passwordPolicy';
 import { eq, and, gte, lte, sql } from "drizzle-orm";
 import { logActivity } from "../lib/audit";
 import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
@@ -557,8 +557,9 @@ async function postSalaryApproval(opts: {
         ? `Salary Approved (true-up on ₹${accrued.toFixed(2)} accrued daily) — ${empLabel} — ${periodLabel}`
         : `Salary Approved — ${empLabel} — ${periodLabel}`;
       const { rows: [jv] } = await client.query(
-        `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by)
-         VALUES ('journal', $1, $2, $3, $4, $5) RETURNING id`,
+        `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by,
+                                      origin, source_module)
+         VALUES ('journal', $1, $2, $3, $4, $5, 'system', 'payroll') RETURNING id`,
         [voucherNumber, voucherDate, narration, debitTotal.toFixed(2), createdBy],
       );
 
@@ -1420,8 +1421,9 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("page:/hr/payroll", "edit
     const voucherNumber = await nextVoucherNumber(client, "journal", today);
     const narration = `Salary Payment${isFullyPaid ? '' : ' (Partial)'} — ${emp?.name ?? `Emp #${existing.employee_id}`} — ${monthStr}/${existing.year}`;
     const { rows: [jv] } = await client.query(
-      `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by)
-       VALUES ('journal', $1, $2, $3, $4, $5) RETURNING id`,
+      `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by,
+                                    origin, source_module)
+       VALUES ('journal', $1, $2, $3, $4, $5, 'system', 'payroll') RETURNING id`,
       [voucherNumber, today, narration, payNow.toFixed(2), req.employee?.username ?? "system"],
     );
     // Dr Salary Payable / Cr Cash or Bank
@@ -1521,8 +1523,9 @@ router.post("/hr/advances", requireModuleAction("page:/hr/advances", "add"), asy
         await client.query("BEGIN");
         const vn = await nextVoucherNumber(client, "journal", advDate);
         const { rows: [jv] } = await client.query(
-          `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by)
-           VALUES ('journal', $1, $2, $3, $4, $5) RETURNING id`,
+          `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by,
+                                        origin, source_module)
+           VALUES ('journal', $1, $2, $3, $4, $5, 'system', 'payroll') RETURNING id`,
           [vn, advDate, `Advance to ${emp?.name ?? `Employee #${employeeId}`}`, Number(amount).toFixed(2), req.employee?.username ?? "system"],
         );
         await client.query(
@@ -1963,22 +1966,50 @@ router.put("/hr/attendance", requireModuleAction("page:/hr/attendance", "edit"),
 // ── Password Reset (admin action) ─────────────────────────────────────────────
 router.post("/hr/employees/:id/reset-password", requireModuleAction("page:/hr/employees", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
-  const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, id)).limit(1);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid employee id" }); return; }
+
+  // Scope the lookup exactly like GET /hr/employees does. The edit right alone
+  // is not enough: without this, a warehouse or outlet manager who may edit
+  // their own team could reset a Head Office password — admin's included — by
+  // POSTing an id they were never shown. Out-of-scope reads as "not found", so
+  // the endpoint cannot be used to probe which ids exist.
+  const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+  const lookupParams: unknown[] = [id];
+  let scopeCond = 'TRUE';
+  if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
+    const scope = await getUserDataScope(scopeEmp);
+    scopeCond = scopeBranchWhere(scope, lookupParams, 'e');
+  }
+  const { rows: [emp] } = await pool.query(
+    `SELECT e.id, e.name, e.username FROM employees e WHERE e.id = $1 AND ${scopeCond}`,
+    lookupParams,
+  );
   if (!emp) { res.status(404).json({ error: "Employee not found" }); return; }
 
-  const newHash = await PasswordService.hash(DEFAULT_INITIAL_PASSWORD);
+  // must_change_password is cleared on purpose: the employee can sign in with
+  // the reset password straight away and change it from Settings only if they
+  // want to. See ADMIN_RESET_PASSWORD for why this is a deliberate trade-off.
+  const newHash = await PasswordService.hash(ADMIN_RESET_PASSWORD);
   await pool.query(
-    `UPDATE employees SET password_hash = $1, must_change_password = true WHERE id = $2`,
+    `UPDATE employees SET password_hash = $1, must_change_password = false WHERE id = $2`,
     [newHash, id],
   );
 
   logActivity({
     action: "UPDATE", module: "hr", entityType: "employee", entityId: id,
-    description: `PASSWORD_RESET for employee ${emp.name}`,
+    description: `PASSWORD_RESET for employee ${emp.name} (${emp.username}) — sign-in restored, no forced change`,
     user: (req as any).employee?.username ?? "admin",
   }).catch(() => {});
 
-  res.json({ success: true, message: "Password has been reset. The employee must change it on next login." });
+  // The password travels back so the screen shows exactly what the server set.
+  // It is a server-owned constant; duplicating it in the client would let the
+  // two drift and start telling employees the wrong thing.
+  res.json({
+    success: true,
+    username: emp.username,
+    password: ADMIN_RESET_PASSWORD,
+    message: `Password reset. ${emp.name} can sign in as "${emp.username}" with ${ADMIN_RESET_PASSWORD}.`,
+  });
 });
 
 export default router;

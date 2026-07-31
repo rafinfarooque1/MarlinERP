@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import {
   useListEmployees, useCreateEmployee, useUpdateEmployee, useDeleteEmployee, useListHierarchies, useListWarehouses,
   getListEmployeesQueryKey, useGetPayComponents, useSetPayComponents, getPayComponentsQueryKey,
+  useResetEmployeePassword,
   type PayComponent, type PayComponents,
 } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
@@ -19,7 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Users, Download, Eye, Settings2, Trash2, UserX, UserCheck, Edit2, AlertTriangle } from 'lucide-react';
+import { Plus, Search, Users, Download, Eye, Settings2, Trash2, UserX, UserCheck, Edit2, AlertTriangle, KeyRound, Copy } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -229,10 +230,41 @@ export default function Employees() {
   const [payStructureEmp, setPayStructureEmp] = useState<any>(null);
   const [confirmResign, setConfirmResign] = useState<any>(null);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [resetTarget, setResetTarget] = useState<any>(null);
+  // Set only after a successful reset, so one dialog covers confirm → result.
+  const [resetResult, setResetResult] = useState<{ username: string; password: string } | null>(null);
+  const [copied, setCopied] = useState(false);
   const queryClient = useQueryClient();
   const createMutation = useCreateEmployee();
   const updateMutation = useUpdateEmployee();
   const deleteMutation = useDeleteEmployee();
+  const resetPasswordMutation = useResetEmployeePassword();
+
+  const closeReset = () => { setResetTarget(null); setResetResult(null); setCopied(false); };
+
+  const handleResetPassword = () => {
+    if (!resetTarget) return;
+    // Remember who this run was for. If the dialog is closed and reopened on a
+    // different employee before the request lands, the late response must not
+    // paint one person's credentials under another person's name.
+    const target = resetTarget;
+    resetPasswordMutation.mutate({ id: target.id }, {
+      // The server owns the reset password, so the dialog shows what came back
+      // rather than a copy of the value kept here.
+      onSuccess: r => {
+        toast.success(`Password reset for ${target.name}`);
+        setResetResult(prevTargetStillOpen(target) ? { username: r.username, password: r.password } : null);
+      },
+      onError: (e: any) => toast.error(e?.message || 'Could not reset the password'),
+    });
+  };
+
+  // Reads the *current* target at resolution time, not the one captured above.
+  const resetTargetRef = useRef<any>(null);
+  resetTargetRef.current = resetTarget;
+  function prevTargetStillOpen(target: any) {
+    return resetTargetRef.current?.id === target.id;
+  }
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -447,6 +479,11 @@ export default function Employees() {
                       {perm.canEdit && (
                         <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(emp)} title="Edit"><Edit2 className="w-4 h-4" /></Button>
                       )}
+                      {perm.canEdit && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500" onClick={() => { setResetTarget(emp); setResetResult(null); setCopied(false); }} title="Reset Password">
+                          <KeyRound className="w-4 h-4" />
+                        </Button>
+                      )}
                       {perm.canEdit && (emp.isActive ? (
                         <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-rose-500" onClick={() => setConfirmResign(emp)} title="Mark as Resigned">
                           <UserX className="w-4 h-4" />
@@ -605,6 +642,65 @@ export default function Employees() {
             <Button variant="destructive" onClick={handleDelete} disabled={deleteMutation.isPending}>
               {deleteMutation.isPending ? 'Deleting…' : 'Delete Permanently'}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reset Password — confirm, then show the credentials the server set */}
+      <Dialog open={!!resetTarget} onOpenChange={v => { if (!v) closeReset(); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><KeyRound className="w-5 h-5 text-amber-500" /> Reset Password</DialogTitle>
+          </DialogHeader>
+          {resetResult ? (
+            <div className="py-2 space-y-3">
+              <p className="text-sm text-muted-foreground">
+                <span className="font-semibold text-foreground">{resetTarget?.name}</span> can sign in with these details right away.
+                They are not forced to change it at login — they can update it themselves from Settings whenever they want.
+              </p>
+              <div className="rounded-lg border bg-muted/40 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs uppercase tracking-wide text-muted-foreground">Username</span>
+                  <span className="font-mono text-sm">{resetResult.username}</span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs uppercase tracking-wide text-muted-foreground">Password</span>
+                  <div className="flex items-center gap-1">
+                    <span className="font-mono text-sm">{resetResult.password}</span>
+                    <Button
+                      variant="ghost" size="icon" className="h-7 w-7" title="Copy password"
+                      onClick={() => { navigator.clipboard?.writeText(resetResult.password); setCopied(true); }}
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+              {copied && <p className="text-xs text-emerald-500">Password copied to clipboard.</p>}
+            </div>
+          ) : (
+            <div className="py-2">
+              <p className="text-sm text-muted-foreground">
+                Reset the password for <span className="font-semibold text-foreground">{resetTarget?.name}</span>
+                {resetTarget?.username ? <> (<span className="font-mono">{resetTarget.username}</span>)</> : null}?
+              </p>
+              <p className="text-xs text-muted-foreground mt-2">
+                Their current password stops working immediately and is replaced by the company's standard reset password,
+                which is shown here as soon as you confirm.
+              </p>
+            </div>
+          )}
+          <DialogFooter>
+            {resetResult ? (
+              <Button onClick={closeReset}>Done</Button>
+            ) : (
+              <>
+                <Button variant="outline" onClick={closeReset}>Cancel</Button>
+                <Button onClick={handleResetPassword} disabled={resetPasswordMutation.isPending}>
+                  {resetPasswordMutation.isPending ? 'Resetting…' : 'Reset Password'}
+                </Button>
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -1,0 +1,455 @@
+TASK: REDESIGN THE SALES TAX INVOICE / PDF TO MATCH THE ATTACHED REFERENCE IMAGE
+
+I have attached a reference image showing the invoice format I want.
+
+IMPORTANT:
+The attached image is ONLY a visual/design reference.
+Do NOT use the image itself as the invoice background.
+Do NOT hard-code the sample values shown in the image.
+Rebuild this design using the ERP's existing invoice/PDF generation system and populate everything dynamically from the database.
+
+SCOPE
+Only update the invoice presentation/template and any strictly necessary supporting code.
+
+Do NOT change:
+- sales calculations
+- GST calculations
+- stock posting
+- accounting entries
+- receipt/payment logic
+- customer balances
+- invoice numbering
+- existing invoices/data
+- RBAC
+- any unrelated module
+
+==================================================
+1. COMPANY LOGO — VERY IMPORTANT
+==================================================
+
+Do NOT hard-code a Frozen Hub logo, snowflake icon, text logo, or static image.
+
+The invoice must use the COMPANY LOGO uploaded in:
+
+Company Profile / Company Settings
+
+Fetch the currently configured company logo dynamically from the company profile.
+
+Rules:
+
+- If company profile has a logo, show that logo in the invoice header.
+- Preserve its aspect ratio.
+- Do not stretch or crop it badly.
+- Keep it within a sensible maximum width/height.
+- If no company logo exists, gracefully fall back to the company name.
+- Do not break PDF generation if the logo URL/file is unavailable.
+- Changing the logo in Company Profile must automatically affect future generated invoices without editing invoice code.
+
+Also use the company profile dynamically for:
+
+Company name
+Registered/business address
+Phone
+Email
+GSTIN
+
+Do not hard-code these values into the invoice template.
+
+==================================================
+2. OVERALL DESIGN
+==================================================
+
+Recreate the attached reference invoice as closely as practical.
+
+Style:
+
+- clean professional Indian GST tax invoice
+- white background
+- dark navy primary headers
+- subtle light blue/grey borders and backgrounds
+- compact but readable
+- consistent typography
+- proper alignment
+- clear hierarchy
+- optimized for A4 printing/PDF
+- avoid unnecessary blank space
+
+The invoice should look professional enough to send directly to customers.
+
+==================================================
+3. HEADER
+==================================================
+
+LEFT:
+
+[Company Profile Logo]
+
+Company Name
+Company Address
+Phone
+Email
+GSTIN
+
+RIGHT:
+
+Large navy:
+
+TAX INVOICE
+
+Below it:
+
+Invoice No.
+Invoice Date
+Place of Supply
+Reverse Charge
+
+All values must come dynamically from the actual invoice/company data.
+
+==================================================
+4. CUSTOMER INFORMATION
+==================================================
+
+Create two clean side-by-side cards:
+
+BILLED TO
+SHIPPED TO
+
+Each should support:
+
+Name
+Address
+Mobile Number
+GSTIN, if available
+State / State Code where applicable
+
+If billing and shipping addresses are identical, it is still acceptable to display both sections.
+
+Do not show "undefined", "null", empty punctuation, or broken fields when optional information is unavailable.
+
+==================================================
+5. ITEM TABLE
+==================================================
+
+Use a structured GST invoice table similar to the reference.
+
+Columns:
+
+SL NO.
+DESCRIPTION OF GOODS
+HSN CODE
+QTY
+UNIT
+UNIT PRICE
+TAXABLE VALUE
+
+CGST:
+- RATE %
+- AMOUNT
+
+SGST:
+- RATE %
+- AMOUNT
+
+IGST:
+- RATE %
+- AMOUNT
+
+TOTAL
+
+Use the ERP's existing GST determination/calculation.
+
+Do NOT change tax calculation logic just to fit the design.
+
+The table must support multiple items and automatically continue correctly when there are many line items.
+
+Prevent:
+- text overlapping
+- clipped descriptions
+- columns running outside A4
+- totals becoming misaligned
+
+Long item names should wrap cleanly.
+
+==================================================
+6. TOTAL ROW
+==================================================
+
+At the bottom of the item table show a clear TOTAL row.
+
+Include appropriate totals for:
+
+Quantity
+Taxable Value
+CGST
+SGST
+IGST
+Grand Total
+
+==================================================
+7. AMOUNT IN WORDS + TAX SUMMARY
+==================================================
+
+Below the item table create two sections.
+
+LEFT:
+
+AMOUNT IN WORDS
+
+Example:
+Rupees Five Thousand Three Hundred Twenty Only
+
+Also show:
+
+Certified that the particulars given above are true and correct.
+
+RIGHT:
+
+Taxable Value
+CGST
+SGST
+IGST where applicable
+Round Off
+GRAND TOTAL
+
+Grand Total should be strongly highlighted with the navy background like the attached design.
+
+==================================================
+8. PAYMENT STATUS
+==================================================
+
+Add a clean PAYMENT STATUS section.
+
+Show:
+
+Invoice Total
+Amount Received
+Balance Due
+
+Status badge:
+
+PAID
+PARTIALLY PAID
+UNPAID
+
+Determine the status dynamically from the ERP's actual invoice/receipt/payment data.
+
+Do NOT create a separate payment calculation just for the PDF.
+
+Use the authoritative accounting/invoice balance already used by the ERP.
+
+Suggested status behavior:
+
+Balance = 0 -> PAID
+
+Amount received > 0 and balance > 0 -> PARTIALLY PAID
+
+Amount received = 0 and balance > 0 -> UNPAID
+
+==================================================
+9. AMOUNT PAYABLE
+==================================================
+
+Show a prominent:
+
+AMOUNT PAYABLE
+
+₹X,XXX.XX
+
+This should represent the actual remaining amount due, not blindly repeat the invoice total.
+
+If fully paid:
+
+Amount Payable = ₹0.00
+
+==================================================
+10. BANK DETAILS
+==================================================
+
+Create a professional BANK ACCOUNT DETAILS section.
+
+Use the relevant company/warehouse payment configuration already stored in the ERP.
+
+Show where available:
+
+Account Holder Name
+Bank Name
+Branch
+Account Number
+IFSC Code
+Payment Mode
+
+Do not invent missing bank information.
+
+==================================================
+11. UPI / QR PAYMENT
+==================================================
+
+If a valid UPI ID exists in the relevant Company/Warehouse profile, generate/display a payment QR section:
+
+SCAN & PAY
+
+QR code
+
+UPI ID below it
+
+IMPORTANT:
+
+The QR must be generated dynamically from the configured UPI ID/payment information.
+
+Do NOT use the QR code shown in the reference image.
+
+Do NOT hard-code a UPI ID.
+
+If no UPI ID is configured, hide the QR section cleanly rather than showing an empty/broken QR box.
+
+The warehouse/company UPI ID must come from the actual saved profile data.
+
+==================================================
+12. FOOTER
+==================================================
+
+Use a clean footer similar to the reference:
+
+THANK YOU FOR YOUR BUSINESS!
+
+This is a computer-generated invoice.
+
+If appropriate, also show:
+
+For [Company Name]
+
+Do not require a physical signature unless the existing ERP supports one.
+
+==================================================
+13. PRINT / PDF QUALITY
+==================================================
+
+This invoice must work correctly as:
+
+- browser preview
+- print
+- downloaded PDF
+
+Target:
+A4 portrait.
+
+Ensure:
+
+- no clipping
+- no horizontal overflow
+- proper margins
+- crisp logo
+- readable font sizes
+- correct ₹ symbol
+- proper Indian currency formatting
+- table headers repeat where supported on additional pages
+- page breaks do not split rows badly
+- footer does not overlap content
+- multiple-page invoices remain professional
+
+==================================================
+14. DATA MUST REMAIN DYNAMIC
+==================================================
+
+The reference invoice contains sample information.
+
+DO NOT hard-code:
+
+Frozen Hub
+Fasin
+invoice number
+dates
+address
+GSTIN
+items
+HSN
+quantities
+prices
+tax amounts
+bank details
+payment status
+UPI ID
+QR code
+or totals.
+
+Every field must come from the appropriate ERP record.
+
+==================================================
+15. EXISTING INVOICES
+==================================================
+
+Do NOT rewrite historical invoice/accounting records.
+
+The new design should render existing invoices using their existing stored invoice data wherever the current architecture supports it.
+
+This is a presentation/template upgrade, not an accounting migration.
+
+==================================================
+16. VERIFY COMPANY PROFILE LOGO PIPELINE
+==================================================
+
+Before completing, specifically test:
+
+1. Open Company Profile.
+2. Confirm the uploaded company logo is persisted.
+3. Generate/preview an invoice.
+4. Confirm that exact company logo appears.
+5. Change/reload the profile and confirm the invoice renderer reads the persisted logo rather than a bundled/static logo.
+
+Also confirm company name/address/GST details come from Company Profile rather than hard-coded invoice values.
+
+==================================================
+17. REGRESSION TESTS
+==================================================
+
+Test at least:
+
+- one-item invoice
+- multi-item invoice
+- intra-state CGST + SGST invoice
+- interstate IGST invoice
+- unpaid invoice
+- partially paid invoice
+- fully paid invoice
+- invoice with company logo
+- invoice without logo
+- invoice with UPI ID
+- invoice without UPI ID
+- long customer address
+- long item description
+- multi-page invoice
+
+Verify totals against the existing ERP calculations.
+
+==================================================
+18. SAFETY
+==================================================
+
+Do not create production sales merely for testing.
+
+Use existing records, development fixtures, or non-writing preview tests.
+
+Do not modify production accounting data.
+
+Do not touch unrelated modules.
+
+==================================================
+19. FINAL REPORT
+==================================================
+
+When complete, report:
+
+- files changed
+- invoice template/components changed
+- where company logo is loaded from
+- where company profile information is loaded from
+- where bank/UPI information is loaded from
+- whether QR is dynamically generated
+- how payment status is determined
+- print/PDF tests performed
+- typecheck/build results
+- confirmation that accounting/GST/stock logic was not changed
+
+Do not stop after changing only the frontend preview.
+
+Trace the complete invoice generation path and make sure the actual downloadable/printable PDF uses the same redesigned format.

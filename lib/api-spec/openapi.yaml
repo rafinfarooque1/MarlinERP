@@ -1963,6 +1963,12 @@ components:
           type: string
 
     # WAREHOUSE
+    # A warehouse is the billing profile a sales invoice is issued under: the
+    # seller name, address, GSTIN, FSSAI, bank account and UPI handle printed on
+    # the document all come from the warehouse recorded on the sale. Every
+    # billing field must appear in Input and Update as well as the response —
+    # a field missing from a request body is silently stripped before it ever
+    # reaches the column, which reads exactly like a database that will not save.
     Warehouse:
       type: object
       required: [id, name, state, gstNumber, createdAt]
@@ -1986,6 +1992,47 @@ components:
           description: >-
             UPI VPA used to build the payment QR on this location's invoices.
             Null when the location has none and the company-level UPI ID applies.
+        billingName:
+          type: ["string", "null"]
+          description: Legal/trade name printed on invoices. Falls back to `name` when unset.
+        email:
+          type: ["string", "null"]
+        city:
+          type: ["string", "null"]
+        district:
+          type: ["string", "null"]
+        pincode:
+          type: ["string", "null"]
+        stateCode:
+          type: ["string", "null"]
+          description: Two-digit GST state code, e.g. "29" for Karnataka.
+        fssaiNumber:
+          type: ["string", "null"]
+          description: 14-digit FSSAI licence number for this location.
+        bankAccountHolder:
+          type: ["string", "null"]
+        bankName:
+          type: ["string", "null"]
+        bankBranch:
+          type: ["string", "null"]
+        bankAccountNumber:
+          type: ["string", "null"]
+        ifscCode:
+          type: ["string", "null"]
+        invoiceFooter:
+          type: ["string", "null"]
+          description: Footer/terms text printed at the foot of this location's invoices.
+        authorizedSignatory:
+          type: ["string", "null"]
+        billingIncomplete:
+          type: array
+          items:
+            type: string
+          description: >-
+            Billing fields still missing from the seller identity this warehouse
+            will print on an invoice, e.g. ["GSTIN", "Bank details"]. Resolved
+            server-side after the company-level bank/UPI fallback, so an empty
+            array means invoices from here come out complete. Read-only.
         outletCount:
           type: integer
         createdAt:
@@ -2010,6 +2057,34 @@ components:
         upiId:
           type: ["string", "null"]
           description: UPI VPA for invoice QR payment. Empty string or null stores no UPI ID.
+        billingName:
+          type: ["string", "null"]
+        email:
+          type: ["string", "null"]
+        city:
+          type: ["string", "null"]
+        district:
+          type: ["string", "null"]
+        pincode:
+          type: ["string", "null"]
+        stateCode:
+          type: ["string", "null"]
+        fssaiNumber:
+          type: ["string", "null"]
+        bankAccountHolder:
+          type: ["string", "null"]
+        bankName:
+          type: ["string", "null"]
+        bankBranch:
+          type: ["string", "null"]
+        bankAccountNumber:
+          type: ["string", "null"]
+        ifscCode:
+          type: ["string", "null"]
+        invoiceFooter:
+          type: ["string", "null"]
+        authorizedSignatory:
+          type: ["string", "null"]
 
     WarehouseUpdate:
       type: object
@@ -2029,6 +2104,34 @@ components:
         upiId:
           type: ["string", "null"]
           description: UPI VPA for invoice QR payment. Empty string or null clears it.
+        billingName:
+          type: ["string", "null"]
+        email:
+          type: ["string", "null"]
+        city:
+          type: ["string", "null"]
+        district:
+          type: ["string", "null"]
+        pincode:
+          type: ["string", "null"]
+        stateCode:
+          type: ["string", "null"]
+        fssaiNumber:
+          type: ["string", "null"]
+        bankAccountHolder:
+          type: ["string", "null"]
+        bankName:
+          type: ["string", "null"]
+        bankBranch:
+          type: ["string", "null"]
+        bankAccountNumber:
+          type: ["string", "null"]
+        ifscCode:
+          type: ["string", "null"]
+        invoiceFooter:
+          type: ["string", "null"]
+        authorizedSignatory:
+          type: ["string", "null"]
 
     # OUTLET
     Outlet:

@@ -1386,8 +1386,9 @@ router.post("/asset-purchases", requireModuleAction("page:/production/purchase",
         + (vendorName ? ` (Vendor: ${vendorName})` : "");
       const { rows: [voucher] } = await client.query(
         `INSERT INTO journal_vouchers
-           (voucher_type, voucher_number, voucher_date, narration, party_ledger_id, total_amount, created_by)
-         VALUES ('journal', $1, $2, $3, $4, $5, $6) RETURNING id`,
+           (voucher_type, voucher_number, voucher_date, narration, party_ledger_id, total_amount, created_by,
+            origin, source_module)
+         VALUES ('journal', $1, $2, $3, $4, $5, $6, 'system', 'fixed_asset') RETURNING id`,
         [voucherNumber, purchaseDate, narration,
          vendorId != null ? creditLedgerId : null, totalCost, createdBy],
       );

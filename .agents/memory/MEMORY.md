@@ -63,3 +63,7 @@
 - [Ledger-authoritative balances](ledger-authoritative-balances.md) — documents never produce a competing "current balance"; never clamp, absent ≠ zero, build the index once, re-read subtrees.
 - [Query cache invalidation keys](query-cache-invalidation-keys.md) — a hand-written key matches no query and fails silently; the stale screen looks exactly like a backend bug.
 - [UI verification fixtures](ui-verification-fixtures.md) — a 1-row list or an out-of-package sandbox fakes "broken" interactions; count rows, grep the served CSS, dispatch the event yourself.
+- [Voucher edit & provenance](voucher-edit-provenance.md) — store origin, never infer it; unknown is locked for edit but still deletable; the preserved number forbids type and FY changes.
+- [Shared create/edit builders](shared-create-edit-builders.md) — reusing the create builder for an edit resets omitted optional fields to module defaults; pass the row's current values as defaults.
+- [Invoice seller identity](invoice-seller-identity.md) — seller = the location, never the company; bank/UPI may fall back but identity may not; judge "incomplete" on the RESOLVED issuer.
+- [Dev rows are test fixtures](dev-data-as-fixtures.md) — scratch-looking dev records are pinned by id AND attributes in the regression suites; grep tests/ before editing a row's state or GSTIN.

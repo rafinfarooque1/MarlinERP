@@ -35,9 +35,27 @@ export interface JournalVoucher {
   reason?: string | null;
   partyLedgerId?: number | null;
   partyName?: string | null;
+  /** Customer/vendor id behind partyLedgerId, for pre-selecting an edit form. */
+  partyId?: number | null;
   totalAmount: number;
   createdBy?: string | null;
   createdAt?: string;
+  /**
+   * How this voucher came to exist. 'manual' = a person entered it on the
+   * Vouchers screen; 'system' = another module generated it; null = predates
+   * provenance tracking. Only 'manual' may be edited.
+   */
+  origin?: 'manual' | 'system' | null;
+  /** For system vouchers, the module that owns it (payroll, production, …). */
+  sourceModule?: string | null;
+  /** Server's verdict on editability — never re-derive this in the UI. */
+  editable?: boolean;
+  /** When not editable, the reason to show the user. */
+  lockedReason?: string | null;
+  updatedAt?: string | null;
+  updatedBy?: string | null;
+  /** Concurrency token; echo back as expectedRev when editing. */
+  rev?: string | null;
   lines: JournalVoucherLine[];
 }
 
@@ -156,6 +174,29 @@ export function useCreateJournalVoucher() {
     mutationFn: (data: CreateJournalVoucherBody) =>
       customFetch<JournalVoucher>('/api/accounts/journal-vouchers', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => invalidateBooks(qc),
+  });
+}
+
+/**
+ * Body for editing a manually created voucher. The voucher type is fixed by the
+ * stored row (it is implied by the voucher number, which is preserved), so it is
+ * not sent. `expectedRev` is the `rev` read with the voucher — the server
+ * rejects the write if the row changed in the meantime.
+ */
+export type UpdateJournalVoucherBody = Omit<CreateJournalVoucherBody, 'voucherType'> & {
+  expectedRev: string;
+};
+
+export function useUpdateJournalVoucher() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...data }: UpdateJournalVoucherBody & { id: number }) =>
+      customFetch<JournalVoucher>(`/api/accounts/journal-vouchers/${id}`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
       }),

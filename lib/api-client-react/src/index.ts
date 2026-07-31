@@ -29,5 +29,6 @@ export * from "./rent";
 export * from "./backup";
 export * from "./invoice-share-links";
 export * from "./attendance-correction";
+export * from "./employee-password";
 export * from './generated/api';
 export * from './generated/api.schemas';

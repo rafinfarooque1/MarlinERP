@@ -18,4 +18,32 @@ export interface WarehouseInput {
      * @nullable
      */
   upiId?: string | null;
+  /** @nullable */
+  billingName?: string | null;
+  /** @nullable */
+  email?: string | null;
+  /** @nullable */
+  city?: string | null;
+  /** @nullable */
+  district?: string | null;
+  /** @nullable */
+  pincode?: string | null;
+  /** @nullable */
+  stateCode?: string | null;
+  /** @nullable */
+  fssaiNumber?: string | null;
+  /** @nullable */
+  bankAccountHolder?: string | null;
+  /** @nullable */
+  bankName?: string | null;
+  /** @nullable */
+  bankBranch?: string | null;
+  /** @nullable */
+  bankAccountNumber?: string | null;
+  /** @nullable */
+  ifscCode?: string | null;
+  /** @nullable */
+  invoiceFooter?: string | null;
+  /** @nullable */
+  authorizedSignatory?: string | null;
 }

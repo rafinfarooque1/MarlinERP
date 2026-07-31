@@ -323,8 +323,9 @@ export async function postProductionCostJv(c: Queryable, args: {
   const voucherNumber = await nextVoucherNumber(c, "journal", args.date);
   const { rows: [voucher] } = await c.query(
     `INSERT INTO journal_vouchers
-       (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by)
-     VALUES ('journal', $1, $2, $3, $4, $5) RETURNING id`,
+       (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by,
+        origin, source_module)
+     VALUES ('journal', $1, $2, $3, $4, $5, 'system', 'production') RETURNING id`,
     [voucherNumber, args.date, args.narration, amount, args.createdBy ?? "system"],
   );
   await c.query(

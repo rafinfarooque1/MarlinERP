@@ -403,8 +403,9 @@ export async function createDispatchVoucher(args: DispatchVoucherArgs): Promise<
 
   const { rows: [v] } = await client.query(
     `INSERT INTO journal_vouchers
-       (voucher_type, voucher_number, voucher_date, narration, party_ledger_id, reason, total_amount, created_by)
-     VALUES ('branch_transfer_sale', $1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+       (voucher_type, voucher_number, voucher_date, narration, party_ledger_id, reason, total_amount, created_by,
+        origin, source_module)
+     VALUES ('branch_transfer_sale', $1, $2, $3, $4, $5, $6, $7, 'system', 'branch_transfer') RETURNING id`,
     [`TRF-${challanNumber}`, transferDate, narration, branchDebtorId,
      'Inter-branch taxable transfer — source side', gst.totalWithGst, createdBy],
   );
@@ -477,8 +478,9 @@ export async function createReceiveVoucher(args: ReceiveVoucherArgs): Promise<nu
 
   const { rows: [v] } = await client.query(
     `INSERT INTO journal_vouchers
-       (voucher_type, voucher_number, voucher_date, narration, party_ledger_id, reason, total_amount, created_by)
-     VALUES ('branch_transfer_purchase', $1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+       (voucher_type, voucher_number, voucher_date, narration, party_ledger_id, reason, total_amount, created_by,
+        origin, source_module)
+     VALUES ('branch_transfer_purchase', $1, $2, $3, $4, $5, $6, $7, 'system', 'branch_transfer') RETURNING id`,
     [`TRF-RCV-${challanNumber}`, transferDate, narration, branchCreditorId,
      'Inter-branch taxable transfer — destination side', gst.totalWithGst, createdBy],
   );
@@ -696,8 +698,9 @@ export async function createTransferCreditNote(args: TransferCreditNoteArgs): Pr
 
   const { rows: [v] } = await client.query(
     `INSERT INTO journal_vouchers
-       (voucher_type, voucher_number, voucher_date, narration, party_ledger_id, reason, total_amount, created_by)
-     VALUES ('credit_note', $1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+       (voucher_type, voucher_number, voucher_date, narration, party_ledger_id, reason, total_amount, created_by,
+        origin, source_module)
+     VALUES ('credit_note', $1, $2, $3, $4, $5, $6, $7, 'system', 'branch_transfer') RETURNING id`,
     [`CN-${invoiceNumber}`, transferDate,
      `Credit note against transfer invoice ${invoiceNumber} — ${challanNumber} rejected by ${toLocation.name}`,
      branchDebtorId,

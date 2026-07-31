@@ -39,6 +39,21 @@ const DEFAULT_POLICY: PasswordPolicy = {
  */
 export const DEFAULT_INITIAL_PASSWORD = 'marlin1458';
 
+/**
+ * The password an administrator's "Reset Password" button restores an account
+ * to.
+ *
+ * Deliberately fixed, and deliberately NOT paired with must_change_password.
+ * The reset exists so a manager can hand a working login straight back to
+ * someone locked out; forcing a change at next login turns that into a second
+ * support call. Employees change it themselves from Settings whenever they want.
+ *
+ * The trade-off this encodes, stated plainly: every account reset this way
+ * shares one well-known password until its owner changes it. That is acceptable
+ * only because the reset is an authenticated, permission-gated, audited action.
+ */
+export const ADMIN_RESET_PASSWORD = '12341234';
+
 let cached: { policy: PasswordPolicy; at: number } | null = null;
 const CACHE_MS = 30_000;
 

@@ -8,6 +8,7 @@ import {
 } from "@workspace/api-zod";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { normalizeUpiId } from "../lib/upi";
+import { normalizeWarehouseBilling, validateGstin, stateCodeFromGstin, loadWarehouseIssuer, loadWarehouseIssuers } from "../lib/billingProfile";
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 import { provisionRentLedgers, syncRentLedgerNames, rentLedgerIdsFor } from "../lib/rentLedgers";
 import { resolveChartParentId } from "../lib/chartGroups";
@@ -154,13 +155,20 @@ router.get("/warehouses", requireModuleView(["page:/", "page:/production/item-ma
     .groupBy(outletsTable.warehouseId);
   const countMap = new Map(outletCounts.map((o) => [o.warehouseId, o.cnt]));
   // Fetch ledger IDs via raw query (columns not in Drizzle schema)
-  const { rows: raw } = await pool.query<{ id: number; cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null; state_code: string | null }>(
-    `SELECT id, cash_ledger_id, sales_ledger_id, purchase_ledger_id, COALESCE(state_code,'') AS state_code FROM warehouses ORDER BY id`
+  const { rows: raw } = await pool.query<{ id: number; cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null }>(
+    `SELECT id, cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses ORDER BY id`
   );
-  const ledgerMap = new Map(raw.map(r => [r.id, { cashLedgerId: r.cash_ledger_id, salesLedgerId: r.sales_ledger_id, purchaseLedgerId: r.purchase_ledger_id, stateCode: r.state_code ?? '' }]));
+  const ledgerMap = new Map(raw.map(r => [r.id, { cashLedgerId: r.cash_ledger_id, salesLedgerId: r.sales_ledger_id, purchaseLedgerId: r.purchase_ledger_id }]));
+  // What the invoice will actually print, not what this row happens to hold —
+  // the bank and UPI fall back to the company, so a warehouse without its own
+  // is not necessarily incomplete.
+  const issuers = await loadWarehouseIssuers(pool);
   const paging = parsePaging(_req.query as Record<string, unknown>);
   setPagingHeaders(res, rows.length, paging);
-  res.json(applyPaging(rows, paging).map((r) => ({ ...r, outletCount: countMap.get(r.id) ?? 0, ...ledgerMap.get(r.id) })));
+  res.json(applyPaging(rows, paging).map((r) => ({
+    ...r, outletCount: countMap.get(r.id) ?? 0, ...ledgerMap.get(r.id),
+    billingIncomplete: issuers.get(r.id)?.incomplete ?? [],
+  })));
 });
 
 router.post("/warehouses", requireModuleAction("page:/headoffice/warehouses", "add"), async (req, res): Promise<void> => {
@@ -170,10 +178,19 @@ router.post("/warehouses", requireModuleAction("page:/headoffice/warehouses", "a
   // column as NULL, or every UPI QR builder downstream has to special-case ''.
   const upi = normalizeUpiId(parsed.data.upiId);
   if (!upi.ok) { res.status(400).json({ error: upi.error }); return; }
-  const [row] = await db.insert(warehousesTable).values({ ...parsed.data, upiId: upi.value }).returning();
-  // Save state_code (raw column not in Drizzle schema)
-  const scNew = (req.body as any)?.stateCode ?? null;
-  if (scNew !== null) await pool.query(`UPDATE warehouses SET state_code = $1 WHERE id = $2`, [scNew || null, row.id]);
+  // This warehouse will be named as the seller on every invoice raised at it,
+  // so its billing details are checked here rather than left to the renderer.
+  const gstErr = validateGstin(parsed.data.gstNumber);
+  if (gstErr) { res.status(400).json({ error: gstErr, field: "gstNumber" }); return; }
+  const billing = normalizeWarehouseBilling(parsed.data as Record<string, unknown>);
+  if (!billing.ok) { res.status(400).json({ error: billing.error, field: billing.field }); return; }
+  const values = { ...parsed.data, ...billing.value, upiId: upi.value };
+  // The GST state code is the first two digits of the GSTIN, so it is derived
+  // rather than accepted: a client that submits both could otherwise store a
+  // code that contradicts the registration and silently flip the intra/inter
+  // -state split on every invoice raised here.
+  values.stateCode = stateCodeFromGstin(values.gstNumber) || null;
+  const [row] = await db.insert(warehousesTable).values(values).returning();
   // Auto-provision ledgers (non-fatal if CoA groups not ready)
   try { await provisionWarehouseLedgers(row.id, row.name); } catch (e) { console.warn('[branches] warehouse ledger provision failed:', e); }
   // Register the warehouse for rent straight away — inactive and at zero — so it
@@ -185,10 +202,10 @@ router.post("/warehouses", requireModuleAction("page:/headoffice/warehouses", "a
     );
     await provisionRentLedgers(pool, row.id, row.name);
   } catch (e) { console.warn('[branches] rent registration failed:', e); }
-  const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null; state_code: string | null }>(
-    `SELECT cash_ledger_id, sales_ledger_id, purchase_ledger_id, COALESCE(state_code,'') AS state_code FROM warehouses WHERE id = $1`, [row.id]
+  const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null }>(
+    `SELECT cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses WHERE id = $1`, [row.id]
   );
-  res.status(201).json({ ...row, outletCount: 0, cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, purchaseLedgerId: ledgers?.purchase_ledger_id ?? null, stateCode: ledgers?.state_code ?? '' });
+  res.status(201).json({ ...row, outletCount: 0, cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, purchaseLedgerId: ledgers?.purchase_ledger_id ?? null });
 });
 
 router.get("/warehouses/:id", requireModuleView("page:/headoffice/warehouses"), async (req, res): Promise<void> => {
@@ -196,10 +213,10 @@ router.get("/warehouses/:id", requireModuleView("page:/headoffice/warehouses"), 
   const [row] = await db.select().from(warehousesTable).where(eq(warehousesTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const [cnt] = await db.select({ cnt: count() }).from(outletsTable).where(eq(outletsTable.warehouseId, id));
-  const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null; state_code: string | null }>(
-    `SELECT cash_ledger_id, sales_ledger_id, purchase_ledger_id, COALESCE(state_code,'') AS state_code FROM warehouses WHERE id = $1`, [id]
+  const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null }>(
+    `SELECT cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses WHERE id = $1`, [id]
   );
-  res.json({ ...row, outletCount: cnt?.cnt ?? 0, cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, purchaseLedgerId: ledgers?.purchase_ledger_id ?? null, stateCode: ledgers?.state_code ?? '' });
+  res.json({ ...row, outletCount: cnt?.cnt ?? 0, cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, purchaseLedgerId: ledgers?.purchase_ledger_id ?? null, billingIncomplete: (await loadWarehouseIssuer(pool, id))?.incomplete ?? [] });
 });
 
 router.patch("/warehouses/:id", requireModuleAction("page:/headoffice/warehouses", "edit"), async (req, res): Promise<void> => {
@@ -214,11 +231,31 @@ router.patch("/warehouses/:id", requireModuleAction("page:/headoffice/warehouses
     if (!upi.ok) { res.status(400).json({ error: upi.error }); return; }
     patch['upiId'] = upi.value;
   }
-  // Fetch old name for comparison
-  const { rows: [before] } = await pool.query<{ name: string }>(`SELECT name FROM warehouses WHERE id = $1`, [id]);
-  // Drizzle throws on an empty SET, which a body carrying only raw columns
-  // (stateCode) would otherwise produce. Fall back to reading the row so those
-  // updates still apply and still answer 404 for a warehouse that is gone.
+  if ('gstNumber' in patch) {
+    const gstErr = validateGstin(patch['gstNumber']);
+    if (gstErr) { res.status(400).json({ error: gstErr, field: "gstNumber" }); return; }
+  }
+  const billing = normalizeWarehouseBilling(patch);
+  if (!billing.ok) { res.status(400).json({ error: billing.error, field: billing.field }); return; }
+  Object.assign(patch, billing.value);
+
+  // Fetch old name and GSTIN — the name drives ledger renames, and the state
+  // code is derived from whichever GSTIN this row ends up with.
+  const { rows: [before] } = await pool.query<{ name: string; gst_number: string | null }>(
+    `SELECT name, gst_number FROM warehouses WHERE id = $1`, [id],
+  );
+  // Derive from the effective value, never the submitted one. A submitted state
+  // code is ignored outright — accepting it would let `{gstNumber:'33…',
+  // stateCode:'29'}` persist a contradiction — and a PATCH that touches neither
+  // still backfills legacy rows that predate the column.
+  if (before) {
+    const effectiveGstin = 'gstNumber' in patch ? patch['gstNumber'] : before.gst_number;
+    patch['stateCode'] = stateCodeFromGstin(effectiveGstin) || null;
+  }
+
+  // Drizzle throws on an empty SET, which a body with no writable keys would
+  // otherwise produce. Fall back to reading the row so the request still
+  // answers 404 for a warehouse that is gone.
   let row: typeof warehousesTable.$inferSelect | undefined;
   if (Object.keys(patch).length > 0) {
     [row] = await db.update(warehousesTable).set(patch).where(eq(warehousesTable.id, id)).returning();
@@ -226,9 +263,6 @@ router.patch("/warehouses/:id", requireModuleAction("page:/headoffice/warehouses
     [row] = await db.select().from(warehousesTable).where(eq(warehousesTable.id, id)).limit(1);
   }
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
-  // Update state_code (raw column not in Drizzle schema)
-  const scUpd = (req.body as any)?.stateCode;
-  if (scUpd !== undefined) await pool.query(`UPDATE warehouses SET state_code = $1 WHERE id = $2`, [scUpd || null, id]);
   // Sync ledger display names if name changed
   if (before && parsed.data.name && parsed.data.name !== before.name) {
     try { await syncWarehouseLedgerNames(id, row.name); } catch (e) { console.warn('[branches] ledger name sync failed:', e); }
@@ -237,10 +271,10 @@ router.patch("/warehouses/:id", requireModuleAction("page:/headoffice/warehouses
     try { await syncRentLedgerNames(pool, id, row.name); } catch (e) { console.warn('[branches] rent ledger name sync failed:', e); }
   }
   const [cnt] = await db.select({ cnt: count() }).from(outletsTable).where(eq(outletsTable.warehouseId, id));
-  const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null; state_code: string | null }>(
-    `SELECT cash_ledger_id, sales_ledger_id, purchase_ledger_id, COALESCE(state_code,'') AS state_code FROM warehouses WHERE id = $1`, [id]
+  const { rows: [ledgers] } = await pool.query<{ cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null }>(
+    `SELECT cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses WHERE id = $1`, [id]
   );
-  res.json({ ...row, outletCount: cnt?.cnt ?? 0, cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, purchaseLedgerId: ledgers?.purchase_ledger_id ?? null, stateCode: ledgers?.state_code ?? '' });
+  res.json({ ...row, outletCount: cnt?.cnt ?? 0, cashLedgerId: ledgers?.cash_ledger_id ?? null, salesLedgerId: ledgers?.sales_ledger_id ?? null, purchaseLedgerId: ledgers?.purchase_ledger_id ?? null });
 });
 
 router.delete("/warehouses/:id", requireModuleAction("page:/headoffice/warehouses", "delete"), async (req, res): Promise<void> => {
@@ -265,7 +299,21 @@ router.delete("/warehouses/:id", requireModuleAction("page:/headoffice/warehouse
     res.status(400).json({ error: "This warehouse cannot be deleted because rent has already been accrued or paid against it. Deleting it would affect financial history." });
     return;
   }
-  // Note: a sales-count check will be added here in Task #33 when location_type is added to sales.
+  // Sales are the reason this row must outlive its usefulness: the warehouse is
+  // named as the seller on every invoice raised at it, and that identity is read
+  // live at render time. Delete it and every historical invoice reprints with an
+  // empty seller block. Outlet sales count too — an outlet inherits its parent's
+  // legal identity, so the parent going away breaks the child's invoices as well.
+  const { rows: [saleHistory] } = await pool.query<{ count: string }>(
+    `SELECT (SELECT COUNT(*) FROM sales WHERE location_type = 'warehouse' AND location_id = $1)
+          + (SELECT COUNT(*) FROM sales s JOIN outlets o
+               ON o.id = CASE WHEN s.location_type = 'outlet' THEN s.location_id ELSE s.outlet_id END
+             WHERE o.warehouse_id = $1) AS count`, [id],
+  );
+  if (Number(saleHistory?.count ?? 0) > 0) {
+    res.status(400).json({ error: "This warehouse cannot be deleted because sales have been invoiced from it. Its name and GSTIN appear on those invoices, which would no longer reprint correctly." });
+    return;
+  }
   await pool.query(`DELETE FROM warehouse_rent_agreements WHERE warehouse_id = $1`, [id]);
   // Take the auto-provisioned rent ledgers with it. They are safe to drop here
   // precisely because the check above already refused the delete if anything had

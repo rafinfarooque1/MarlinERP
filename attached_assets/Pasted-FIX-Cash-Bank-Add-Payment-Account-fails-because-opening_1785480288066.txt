@@ -1,0 +1,200 @@
+FIX: Cash & Bank → Add Payment Account fails because openingBalance is sent as a string
+
+Current error:
+
+{
+  "code": "invalid_type",
+  "expected": "number",
+  "received": "string",
+  "path": ["openingBalance"],
+  "message": "Expected number, received string"
+}
+
+The Add Payment Account form currently sends openingBalance from the HTML input as a string, while the backend/API schema expects a number.
+
+Please fix this properly end-to-end.
+
+REQUIREMENTS
+
+1. FRONTEND
+
+Before submitting Add Payment Account, convert openingBalance to a numeric value.
+
+Examples:
+
+"0" -> 0
+"1000" -> 1000
+"1250.50" -> 1250.50
+
+Do NOT send:
+
+openingBalance: "0"
+
+Send:
+
+openingBalance: 0
+
+Handle an empty field safely according to the existing business rule, preferably:
+
+empty -> 0
+
+Do not use unsafe parsing that can result in NaN being submitted.
+
+2. BACKEND VALIDATION
+
+Inspect the payment-account API validation/schema.
+
+Make it robust to normal form submissions.
+
+If appropriate for the existing validation framework, use numeric coercion for openingBalance so a valid numeric form value such as "1000.50" can safely become 1000.50.
+
+However:
+
+- reject non-numeric values
+- reject NaN
+- preserve decimal balances correctly
+- do not silently turn invalid text into 0
+
+Frontend AND backend should be correct; do not fix this only by weakening validation.
+
+3. CHECK ALL PAYMENT ACCOUNT FIELDS
+
+Verify the complete Add Payment Account payload:
+
+- Account Name
+- Type
+- Bank Name
+- IFSC Code
+- Account Number
+- Opening Balance
+
+Make sure frontend field names and backend schema names match exactly.
+
+For Cash accounts, bank-specific fields may remain optional according to the existing business rules.
+
+4. ACCOUNT NUMBER
+
+Treat bank account number as a STRING, not a numeric value.
+
+Do not parse account numbers into numbers because:
+
+- leading zeros may be significant
+- account numbers can exceed safe integer ranges
+
+Same principle for IFSC: always string.
+
+5. OPENING BALANCE ACCOUNTING
+
+IMPORTANT:
+
+Do not change accounting behavior simply to fix this validation error.
+
+Inspect how opening balances are currently supposed to be represented.
+
+Do not create duplicate ledger postings.
+
+Do not change:
+- Cash Book
+- Bank Book
+- Trial Balance
+- Balance Sheet
+- vouchers
+- journal logic
+
+unless there is an actual existing defect directly related to creating this payment account.
+
+6. VERIFY ACCOUNT CREATION
+
+Test in development with disposable data:
+
+Bank Account
+
+Account Name: QA Test Bank
+Bank Name: Test Bank
+IFSC: TEST0000001
+Account Number: 001234567890
+Opening Balance: 0
+
+Confirm:
+
+Save succeeds.
+Account appears in Cash & Bank.
+Refresh page.
+Account remains.
+Account number retains leading zeros.
+Opening balance displays ₹0.00 correctly.
+
+Then test:
+
+Opening Balance: 1250.50
+
+Confirm the exact decimal value persists correctly.
+
+Then delete/clean up the disposable test account if safe.
+
+7. TEST INVALID VALUES
+
+Confirm these do NOT create broken records:
+
+abc
+₹1000
+NaN
+Infinity
+
+Use normal validation messages rather than exposing raw Zod/backend JSON errors to the user.
+
+Instead of showing:
+
+[
+ {"code":"invalid_type"...}
+]
+
+show something user-friendly such as:
+
+"Please enter a valid opening balance."
+
+8. CHECK EDIT ACCOUNT TOO
+
+If Cash & Bank has Edit Payment Account functionality, verify it uses the same numeric conversion/validation.
+
+Do not fix Add and leave Edit with the same bug.
+
+9. CHECK API CONTRACT
+
+Check whether the frontend TypeScript/API contract incorrectly defines openingBalance as string.
+
+The canonical type should match the backend/domain model.
+
+Do not use `any` or type assertions just to silence TypeScript.
+
+10. REGRESSION TEST
+
+After fixing:
+
+- Add Bank Account with opening balance 0
+- Add Bank Account with decimal opening balance
+- Add Cash Account
+- refresh/reload
+- Cash & Bank list
+- Cash Book
+- Bank Book
+- Trial Balance
+- typecheck
+- production build
+
+Do not modify production accounting data during testing.
+
+FINAL REPORT
+
+Tell me:
+
+1. Root cause
+2. Frontend file changed
+3. Backend/schema file changed, if required
+4. Exact conversion/validation implemented
+5. Whether Add Account now works
+6. Whether Edit Account was checked
+7. Whether account-number leading zeros are preserved
+8. Whether decimal opening balances work
+9. Typecheck/build results
+10. Confirmation that unrelated accounting logic was not changed

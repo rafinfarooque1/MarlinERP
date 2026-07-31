@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireModuleAction, requireModuleView } from "../middleware/permissions";
 import { pool } from "@workspace/db";
-import { nextVoucherNumber, VOUCHER_TYPE_LABELS } from "../lib/voucherNumber";
+import { nextVoucherNumber, VOUCHER_TYPE_LABELS, financialYearLabel } from "../lib/voucherNumber";
 import { logActivity } from "../lib/audit";
 import { lineTaxHeads } from "../lib/gst";
 import { clearsThroughBank } from "../lib/paymentModes";
@@ -47,7 +47,7 @@ async function ledgerSubtreeIds(rootId: number): Promise<Set<number>> {
 
 async function fetchVoucher(id: number): Promise<any | null> {
   const { rows: [v] } = await pool.query(
-    `SELECT v.*, pl.name AS party_name
+    `SELECT v.*, pl.name AS party_name, pl.code AS party_code
      FROM journal_vouchers v
      LEFT JOIN account_ledgers pl ON pl.id = v.party_ledger_id
      WHERE v.id = $1`, [id]
@@ -62,19 +62,93 @@ async function fetchVoucher(id: number): Promise<any | null> {
   return serializeVoucher(v, lines);
 }
 
+/** Party ledgers are coded CUST-<id> / VEND-<id>; recover the id so an edit
+ *  form can pre-select the customer or vendor it was raised against. */
+function partyIdFromCode(code: unknown): number | null {
+  const m = /^(?:CUST|VEND)-(\d+)$/.exec(String(code ?? ""));
+  return m?.[1] ? Number(m[1]) : null;
+}
+
+/**
+ * Whether this voucher may be edited by hand. A voucher is editable only when
+ * it was PROVEN to be manually entered (origin='manual', stamped at insert or
+ * backfilled from the manual route's own audit trail) AND it is one of the
+ * types the Vouchers screen can actually produce. Anything system-generated or
+ * of unknown provenance is read-only — it belongs to a source document.
+ */
+function isEditableVoucher(v: any): boolean {
+  return v?.origin === "manual" && JV_TYPES.has(v?.voucher_type);
+}
+
+/** Human wording for the module that owns a system-generated voucher. */
+const SOURCE_MODULE_LABELS: Record<string, string> = {
+  production: "production costing",
+  payroll: "payroll",
+  rent: "warehouse rent",
+  fixed_asset: "a fixed-asset purchase",
+  returns: "a sales or purchase return",
+  branch_transfer: "an inter-branch transfer",
+  accounts: "the Vouchers screen",
+};
+
+/** Why a voucher cannot be edited — said plainly enough to act on. */
+function lockedReason(v: any, action: "edit" | "delete" = "edit"): string {
+  const label = v?.voucher_number ?? "This voucher";
+  const past = action === "delete" ? "deleted" : "edited";
+  const gerund = action === "delete" ? "deleting" : "editing";
+  if (!JV_TYPES.has(v?.voucher_type)) {
+    return `${label} is a ${VOUCHER_TYPE_LABELS[v?.voucher_type] ?? v?.voucher_type} voucher and cannot be ${past} from the Vouchers screen.`;
+  }
+  if (v?.origin === "system") {
+    const src = v?.source_module ? ` by ${SOURCE_MODULE_LABELS[v.source_module] ?? v.source_module}` : "";
+    return `${label} was generated automatically${src}, so it belongs to that record. Change the source record instead — ${gerund} the voucher here would put the books out of step with it.`;
+  }
+  return `${label} predates provenance tracking, so there is no reliable record of whether a person entered it or another module generated it. It stays locked rather than risk ${gerund} an automatic entry.`;
+}
+
+/** The financial year a voucher number was allocated under: JV/2026-27/0007 → "2026-27". */
+function fyFromVoucherNumber(n: unknown): string | null {
+  const parts = String(n ?? "").split("/");
+  const label = parts.length === 3 ? parts[1] : "";
+  return label && /^\d{4}(-\d{2})?$/.test(label) ? label : null;
+}
+
+async function companyFyStartMonth(): Promise<number> {
+  try {
+    const { rows } = await pool.query(`SELECT fy_start_month FROM company_settings LIMIT 1`);
+    return Number(rows[0]?.fy_start_month ?? 4) || 4;
+  } catch {
+    return 4;
+  }
+}
+
 function serializeVoucher(v: any, lines: any[]) {
   return {
     id: v.id,
     voucherType: v.voucher_type,
     voucherNumber: v.voucher_number,
-    voucherDate: v.voucher_date,
+    // A pg `date` reads back as a Date at LOCAL midnight; hand out the plain
+    // calendar day so an edit form round-trips the date it was shown.
+    voucherDate: v.voucher_date instanceof Date ? toLocalISODate(v.voucher_date) : v.voucher_date,
     narration: v.narration,
     reason: v.reason,
     partyLedgerId: v.party_ledger_id,
     partyName: v.party_name ?? null,
+    partyId: partyIdFromCode(v.party_code),
     totalAmount: Number(v.total_amount),
     createdBy: v.created_by,
     createdAt: v.created_at,
+    // Provenance. `editable` is computed here so the UI never has to re-derive
+    // the rule (and can never disagree with what the API will actually allow).
+    origin: v.origin ?? null,
+    sourceModule: v.source_module ?? null,
+    editable: isEditableVoucher(v),
+    /** Why not, in the same words the API would reject the edit with. */
+    lockedReason: isEditableVoucher(v) ? null : lockedReason(v),
+    updatedAt: v.updated_at ?? null,
+    updatedBy: v.updated_by ?? null,
+    /** Concurrency token — echo back on edit so a stale form is rejected. */
+    rev: v.updated_at ?? v.created_at ?? null,
     lines: lines.map((l: any) => ({
       id: l.id,
       ledgerId: l.ledger_id,
@@ -84,6 +158,123 @@ function serializeVoucher(v: any, lines: any[]) {
       credit: Number(l.credit),
     })),
   };
+}
+
+type LineDraft = { ledgerId: number; debit: number; credit: number };
+type BuildResult =
+  | { ok: true; lines: LineDraft[]; partyLedgerId: number | null; totalAmount: number }
+  | { ok: false; error: string };
+
+/**
+ * Turn a request body into balanced double-entry lines for the given voucher
+ * type. Shared by create and edit so both enforce exactly the same accounting
+ * rules — a voucher that could not have been created is not one an edit may
+ * produce either.
+ */
+async function buildVoucherLines(
+  voucherType: string,
+  body: Record<string, any>,
+  /**
+   * Values to fall back on when the body omits them. Edits pass the voucher's
+   * CURRENT values here so that a field left out of the request keeps what the
+   * voucher already had, instead of silently resetting to a module default.
+   */
+  defaults: { counterLedgerId?: number } = {},
+): Promise<BuildResult> {
+  let lines: LineDraft[] = [];
+  let partyLedgerId: number | null = null;
+
+  if (voucherType === "journal") {
+    const raw = Array.isArray(body.lines) ? body.lines : [];
+    lines = raw.map((l: any) => ({
+      ledgerId: Number(l?.ledgerId),
+      debit: round2(Number(l?.debit ?? 0)),
+      credit: round2(Number(l?.credit ?? 0)),
+    }));
+    if (lines.length < 2) return { ok: false, error: "A journal voucher needs at least two lines" };
+    for (const l of lines) {
+      if (!Number.isFinite(l.ledgerId) || l.ledgerId <= 0) return { ok: false, error: "Every line must have a ledger selected" };
+      if (!Number.isFinite(l.debit) || !Number.isFinite(l.credit) || l.debit < 0 || l.credit < 0) {
+        return { ok: false, error: "Amounts must be valid non-negative numbers" };
+      }
+      if ((l.debit > 0) === (l.credit > 0)) {
+        return { ok: false, error: "Each line must have either a debit or a credit amount (not both, not neither)" };
+      }
+    }
+    const totalDr = round2(lines.reduce((s, l) => s + l.debit, 0));
+    const totalCr = round2(lines.reduce((s, l) => s + l.credit, 0));
+    if (totalDr <= 0) return { ok: false, error: "Voucher amount must be greater than zero" };
+    if (Math.abs(totalDr - totalCr) > 0.005) {
+      return { ok: false, error: `Voucher does not balance: debits ₹${totalDr.toFixed(2)} vs credits ₹${totalCr.toFixed(2)}` };
+    }
+  } else if (voucherType === "contra") {
+    const fromLedgerId = Number(body.fromLedgerId);
+    const toLedgerId = Number(body.toLedgerId);
+    const amount = round2(Number(body.amount));
+    if (!fromLedgerId || !toLedgerId) return { ok: false, error: "fromLedgerId and toLedgerId are required" };
+    if (fromLedgerId === toLedgerId) return { ok: false, error: "From and To ledgers must be different" };
+    if (!(amount > 0)) return { ok: false, error: "amount must be greater than zero" };
+    const cashBank = await ledgerIdsUnderCodes(["STD-CASH", "STD-BANK"]);
+    if (!cashBank.has(fromLedgerId) || !cashBank.has(toLedgerId)) {
+      return { ok: false, error: "Contra entries move money between Cash and Bank ledgers only" };
+    }
+    lines = [
+      { ledgerId: toLedgerId, debit: amount, credit: 0 },
+      { ledgerId: fromLedgerId, debit: 0, credit: amount },
+    ];
+  } else {
+    // credit_note (customer) / debit_note (vendor)
+    const isCN = voucherType === "credit_note";
+    const partyType = isCN ? "customer" : "vendor";
+    const partyId = Number(body.partyId);
+    if (!partyId) return { ok: false, error: `partyId (${partyType} id) is required` };
+    const amount = round2(Number(body.amount));
+    if (!(amount > 0)) return { ok: false, error: "amount must be greater than zero" };
+
+    const partyCode = isCN ? `CUST-${partyId}` : `VEND-${partyId}`;
+    const { rows: [pl] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1`, [partyCode]);
+    if (!pl) {
+      return { ok: false, error: `No ledger found for this ${partyType}. Re-save the ${partyType} to create its ledger.` };
+    }
+    partyLedgerId = pl.id;
+
+    // Body first, then the voucher's existing leg (edits), then the module
+    // default. Without the middle step an edit that only changed the amount
+    // would quietly move the entry from Purchases to Sales, or vice versa.
+    let counterLedgerId = Number(body.counterLedgerId) || Number(defaults.counterLedgerId) || 0;
+    if (!counterLedgerId) {
+      const defCode = isCN ? "STD-SALES" : "STD-PUR";
+      const { rows: [def] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1`, [defCode]);
+      if (!def) return { ok: false, error: "counterLedgerId is required" };
+      counterLedgerId = def.id;
+    }
+    if (counterLedgerId === partyLedgerId) {
+      return { ok: false, error: "Counter ledger cannot be the party's own ledger" };
+    }
+
+    lines = isCN
+      ? [ // sales return / rate difference: Dr Sales (reversal), Cr Customer
+          { ledgerId: counterLedgerId, debit: amount, credit: 0 },
+          { ledgerId: partyLedgerId!, debit: 0, credit: amount },
+        ]
+      : [ // purchase return: Dr Vendor, Cr Purchases (reversal)
+          { ledgerId: partyLedgerId!, debit: amount, credit: 0 },
+          { ledgerId: counterLedgerId, debit: 0, credit: amount },
+        ];
+  }
+
+  // All referenced ledgers must exist and be postable (not groups)
+  const ledgerIds = [...new Set(lines.map(l => l.ledgerId))];
+  const { rows: ledgerRows } = await pool.query(
+    `SELECT id, name, is_group, is_system_group FROM account_ledgers WHERE id = ANY($1)`, [ledgerIds]
+  );
+  if (ledgerRows.length !== ledgerIds.length) {
+    return { ok: false, error: "One or more selected ledgers do not exist" };
+  }
+  const grp = ledgerRows.find((l: any) => l.is_group || l.is_system_group);
+  if (grp) return { ok: false, error: `"${grp.name}" is a group — post to a specific ledger under it instead` };
+
+  return { ok: true, lines, partyLedgerId, totalAmount: round2(lines.reduce((s, l) => s + l.debit, 0)) };
 }
 
 // ── Journal / Contra / Credit Note / Debit Note vouchers ──────────────────
@@ -102,7 +293,7 @@ router.get("/accounts/journal-vouchers", requireModuleView("page:/accounts/vouch
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
 
   const { rows: vouchers } = await pool.query(
-    `SELECT v.*, pl.name AS party_name
+    `SELECT v.*, pl.name AS party_name, pl.code AS party_code
      FROM journal_vouchers v
      LEFT JOIN account_ledgers pl ON pl.id = v.party_ledger_id
      ${where}
@@ -141,97 +332,9 @@ router.post("/accounts/journal-vouchers", requireModuleAction("page:/accounts/vo
   const reason = body.reason ? String(body.reason).trim() || null : null;
   const createdBy = (req as any).employee?.username ?? "system";
 
-  let lines: { ledgerId: number; debit: number; credit: number }[] = [];
-  let partyLedgerId: number | null = null;
-
-  if (voucherType === "journal") {
-    const raw = Array.isArray(body.lines) ? body.lines : [];
-    lines = raw.map((l: any) => ({
-      ledgerId: Number(l?.ledgerId),
-      debit: round2(Number(l?.debit ?? 0)),
-      credit: round2(Number(l?.credit ?? 0)),
-    }));
-    if (lines.length < 2) { res.status(400).json({ error: "A journal voucher needs at least two lines" }); return; }
-    for (const l of lines) {
-      if (!Number.isFinite(l.ledgerId) || l.ledgerId <= 0) { res.status(400).json({ error: "Every line must have a ledger selected" }); return; }
-      if (!Number.isFinite(l.debit) || !Number.isFinite(l.credit) || l.debit < 0 || l.credit < 0) {
-        res.status(400).json({ error: "Amounts must be valid non-negative numbers" }); return;
-      }
-      if ((l.debit > 0) === (l.credit > 0)) {
-        res.status(400).json({ error: "Each line must have either a debit or a credit amount (not both, not neither)" }); return;
-      }
-    }
-    const totalDr = round2(lines.reduce((s, l) => s + l.debit, 0));
-    const totalCr = round2(lines.reduce((s, l) => s + l.credit, 0));
-    if (totalDr <= 0) { res.status(400).json({ error: "Voucher amount must be greater than zero" }); return; }
-    if (Math.abs(totalDr - totalCr) > 0.005) {
-      res.status(400).json({ error: `Voucher does not balance: debits ₹${totalDr.toFixed(2)} vs credits ₹${totalCr.toFixed(2)}` }); return;
-    }
-  } else if (voucherType === "contra") {
-    const fromLedgerId = Number(body.fromLedgerId);
-    const toLedgerId = Number(body.toLedgerId);
-    const amount = round2(Number(body.amount));
-    if (!fromLedgerId || !toLedgerId) { res.status(400).json({ error: "fromLedgerId and toLedgerId are required" }); return; }
-    if (fromLedgerId === toLedgerId) { res.status(400).json({ error: "From and To ledgers must be different" }); return; }
-    if (!(amount > 0)) { res.status(400).json({ error: "amount must be greater than zero" }); return; }
-    const cashBank = await ledgerIdsUnderCodes(["STD-CASH", "STD-BANK"]);
-    if (!cashBank.has(fromLedgerId) || !cashBank.has(toLedgerId)) {
-      res.status(400).json({ error: "Contra entries move money between Cash and Bank ledgers only" }); return;
-    }
-    lines = [
-      { ledgerId: toLedgerId, debit: amount, credit: 0 },
-      { ledgerId: fromLedgerId, debit: 0, credit: amount },
-    ];
-  } else {
-    // credit_note (customer) / debit_note (vendor)
-    const isCN = voucherType === "credit_note";
-    const partyType = isCN ? "customer" : "vendor";
-    const partyId = Number(body.partyId);
-    if (!partyId) { res.status(400).json({ error: `partyId (${partyType} id) is required` }); return; }
-    const amount = round2(Number(body.amount));
-    if (!(amount > 0)) { res.status(400).json({ error: "amount must be greater than zero" }); return; }
-
-    const partyCode = isCN ? `CUST-${partyId}` : `VEND-${partyId}`;
-    const { rows: [pl] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1`, [partyCode]);
-    if (!pl) {
-      res.status(400).json({ error: `No ledger found for this ${partyType}. Re-save the ${partyType} to create its ledger.` }); return;
-    }
-    partyLedgerId = pl.id;
-
-    let counterLedgerId = Number(body.counterLedgerId) || 0;
-    if (!counterLedgerId) {
-      const defCode = isCN ? "STD-SALES" : "STD-PUR";
-      const { rows: [def] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = $1`, [defCode]);
-      if (!def) { res.status(400).json({ error: "counterLedgerId is required" }); return; }
-      counterLedgerId = def.id;
-    }
-    if (counterLedgerId === partyLedgerId) {
-      res.status(400).json({ error: "Counter ledger cannot be the party's own ledger" }); return;
-    }
-
-    lines = isCN
-      ? [ // sales return / rate difference: Dr Sales (reversal), Cr Customer
-          { ledgerId: counterLedgerId, debit: amount, credit: 0 },
-          { ledgerId: partyLedgerId!, debit: 0, credit: amount },
-        ]
-      : [ // purchase return: Dr Vendor, Cr Purchases (reversal)
-          { ledgerId: partyLedgerId!, debit: amount, credit: 0 },
-          { ledgerId: counterLedgerId, debit: 0, credit: amount },
-        ];
-  }
-
-  // All referenced ledgers must exist and be postable (not groups)
-  const ledgerIds = [...new Set(lines.map(l => l.ledgerId))];
-  const { rows: ledgerRows } = await pool.query(
-    `SELECT id, name, is_group, is_system_group FROM account_ledgers WHERE id = ANY($1)`, [ledgerIds]
-  );
-  if (ledgerRows.length !== ledgerIds.length) {
-    res.status(400).json({ error: "One or more selected ledgers do not exist" }); return;
-  }
-  const grp = ledgerRows.find((l: any) => l.is_group || l.is_system_group);
-  if (grp) { res.status(400).json({ error: `"${grp.name}" is a group — post to a specific ledger under it instead` }); return; }
-
-  const totalAmount = round2(lines.reduce((s, l) => s + l.debit, 0));
+  const built = await buildVoucherLines(voucherType, body);
+  if (!built.ok) { res.status(400).json({ error: built.error }); return; }
+  const { lines, partyLedgerId, totalAmount } = built;
 
   const client = await pool.connect();
   try {
@@ -239,8 +342,9 @@ router.post("/accounts/journal-vouchers", requireModuleAction("page:/accounts/vo
     const voucherNumber = await nextVoucherNumber(client, voucherType, voucherDate);
     const { rows: [v] } = await client.query(
       `INSERT INTO journal_vouchers
-         (voucher_type, voucher_number, voucher_date, narration, party_ledger_id, reason, total_amount, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+         (voucher_type, voucher_number, voucher_date, narration, party_ledger_id, reason, total_amount, created_by,
+          origin, source_module)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'manual', 'accounts') RETURNING id`,
       [voucherType, voucherNumber, voucherDate, narration, partyLedgerId, reason, totalAmount, createdBy]
     );
     for (const l of lines) {
@@ -273,17 +377,219 @@ router.get("/accounts/journal-vouchers/:id", requireModuleView("page:/accounts/v
   res.json(voucher);
 });
 
+/**
+ * Edit a MANUALLY created voucher.
+ *
+ * Only vouchers a person entered on this screen may be changed. Everything else
+ * — payroll, production costing, rent, fixed assets, returns, inter-branch
+ * transfers — is owned by a source document, and anything of unknown
+ * provenance is treated the same way. See migrations/voucherProvenance.ts for
+ * why the row's own `origin` column is the only trustworthy signal.
+ *
+ * The voucher id AND its number are preserved, and the lines are replaced in
+ * place inside one transaction, so the edit never leaves a second copy behind.
+ * Reports need no separate update: the Trial Balance, Day Book, Cash/Bank Book,
+ * P&L, Balance Sheet and every ledger read journal_voucher_lines through
+ * buildDerivedPostings() at query time.
+ */
+router.patch("/accounts/journal-vouchers/:id", requireModuleAction("page:/accounts/vouchers", "edit"), async (req, res): Promise<void> => {
+  // Same gate as the list route: journal vouchers are Head Office accounting.
+  // A non-HO user is not shown them at all, so they may not edit one either.
+  if ((req as any).employee?.branchType !== "headoffice") {
+    res.status(403).json({ error: "Journal vouchers are maintained at Head Office" }); return;
+  }
+
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid voucher id" }); return; }
+
+  const body = (req.body ?? {}) as Record<string, any>;
+
+  // Concurrency. The caller must echo the `rev` it read. Its absence means the
+  // form was not loaded from the row being written — precisely the case that
+  // silently discards someone else's edit.
+  const expectedRev = body.expectedRev ?? body.rev;
+  if (!expectedRev) {
+    res.status(400).json({ error: "expectedRev is required — reopen the voucher and try again" }); return;
+  }
+  const expectedMs = new Date(String(expectedRev)).getTime();
+  if (!Number.isFinite(expectedMs)) { res.status(400).json({ error: "expectedRev is not a valid timestamp" }); return; }
+
+  // Unlocked pre-read so the common rejections come back with a clear message
+  // without holding a row lock through validation.
+  const { rows: [pre] } = await pool.query(
+    `SELECT id, voucher_type, voucher_number, origin, source_module, party_ledger_id
+       FROM journal_vouchers WHERE id = $1`, [id]
+  );
+  if (!pre) { res.status(404).json({ error: "Voucher not found" }); return; }
+  if (!isEditableVoucher(pre)) { res.status(409).json({ error: lockedReason(pre) }); return; }
+
+  // The type is fixed. Changing it would contradict the voucher number's own
+  // prefix, and the number is preserved by design.
+  const voucherType = String(pre.voucher_type);
+  if (body.voucherType != null && String(body.voucherType) !== voucherType) {
+    res.status(400).json({
+      error: `${pre.voucher_number} is a ${VOUCHER_TYPE_LABELS[voucherType] ?? voucherType} voucher. Its type cannot be changed — delete it and raise the correct kind instead.`,
+    }); return;
+  }
+
+  const voucherDate = String(body.voucherDate ?? "").slice(0, 10);
+  if (!isDate(voucherDate)) { res.status(400).json({ error: "voucherDate (YYYY-MM-DD) is required" }); return; }
+  const narration = body.narration ? String(body.narration).trim() || null : null;
+  const reason = body.reason ? String(body.reason).trim() || null : null;
+
+  // The preserved number carries the financial year it was allocated under.
+  // A date crossing into another FY would leave e.g. JV/2026-27/0007 dated in
+  // 2027-28 — a number contradicting its own sequence. Renumbering instead is
+  // worse: it strands the allocator counter and breaks existing references.
+  const numberFy = fyFromVoucherNumber(pre.voucher_number);
+  if (numberFy) {
+    const dateFy = financialYearLabel(voucherDate, await companyFyStartMonth());
+    if (dateFy !== numberFy) {
+      res.status(400).json({
+        error: `${pre.voucher_number} belongs to financial year ${numberFy}, and its number is kept on edit. A date in ${dateFy} would contradict it — delete this voucher and raise a new one in ${dateFy} instead.`,
+      }); return;
+    }
+  }
+
+  // A note's counter leg is not something the edit form must re-state. Recover
+  // the one the voucher already carries so an omitted counterLedgerId preserves
+  // it. Reading it unlocked is safe: if anything about the row changes before
+  // we commit, the rev check inside the transaction rejects the whole write.
+  let existingCounterLedgerId = 0;
+  if (voucherType === "credit_note" || voucherType === "debit_note") {
+    const { rows: existing } = await pool.query(
+      `SELECT ledger_id FROM journal_voucher_lines
+        WHERE voucher_id = $1 AND ledger_id IS DISTINCT FROM $2 ORDER BY id LIMIT 1`,
+      [id, pre.party_ledger_id],
+    );
+    existingCounterLedgerId = Number(existing[0]?.ledger_id) || 0;
+  }
+
+  const built = await buildVoucherLines(voucherType, body, { counterLedgerId: existingCounterLedgerId });
+  if (!built.ok) { res.status(400).json({ error: built.error }); return; }
+  const { lines, partyLedgerId, totalAmount } = built;
+
+  const updatedBy = (req as any).employee?.username ?? "system";
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Re-read under a row lock. Provenance and the concurrency token must be
+    // checked against the row actually being written, not the one sampled above.
+    const { rows: [cur] } = await client.query(
+      `SELECT * FROM journal_vouchers WHERE id = $1 FOR UPDATE`, [id]
+    );
+    if (!cur) { await client.query("ROLLBACK"); res.status(404).json({ error: "Voucher not found" }); return; }
+    if (!isEditableVoucher(cur)) { await client.query("ROLLBACK"); res.status(409).json({ error: lockedReason(cur) }); return; }
+
+    const currentRev = cur.updated_at ?? cur.created_at;
+    const currentMs = currentRev ? new Date(currentRev).getTime() : NaN;
+    if (!Number.isFinite(currentMs) || currentMs !== expectedMs) {
+      await client.query("ROLLBACK");
+      res.status(409).json({
+        error: "Someone else changed this voucher while you were editing it. Reload the page and reapply your changes.",
+      });
+      return;
+    }
+
+    const { rows: beforeLines } = await client.query(
+      `SELECT ledger_id, debit, credit FROM journal_voucher_lines WHERE voucher_id = $1 ORDER BY id`, [id]
+    );
+
+    await client.query(
+      `UPDATE journal_vouchers
+          SET voucher_date = $2, narration = $3, reason = $4, party_ledger_id = $5,
+              total_amount = $6, updated_at = now(), updated_by = $7
+        WHERE id = $1`,
+      [id, voucherDate, narration, reason, partyLedgerId, totalAmount, updatedBy]
+    );
+
+    // Replace the lines in place. Same voucher id, same number — so every
+    // reference and every derived report follows the edit instead of seeing a
+    // second entry alongside the original.
+    await client.query(`DELETE FROM journal_voucher_lines WHERE voucher_id = $1`, [id]);
+    for (const l of lines) {
+      await client.query(
+        `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit) VALUES ($1, $2, $3, $4)`,
+        [id, l.ledgerId, l.debit, l.credit]
+      );
+    }
+
+    await client.query("COMMIT");
+
+    logActivity({
+      action: "UPDATE", module: "accounts", entityType: "journal_voucher", entityId: id,
+      user: updatedBy,
+      description: `Edited ${VOUCHER_TYPE_LABELS[voucherType] ?? voucherType} ${cur.voucher_number} — ₹${Number(cur.total_amount).toFixed(2)} → ₹${totalAmount.toFixed(2)}`,
+      metadata: {
+        before: {
+          voucherDate: cur.voucher_date instanceof Date ? toLocalISODate(cur.voucher_date) : cur.voucher_date,
+          narration: cur.narration,
+          reason: cur.reason,
+          partyLedgerId: cur.party_ledger_id,
+          totalAmount: Number(cur.total_amount),
+          lines: beforeLines.map((l: any) => ({ ledgerId: l.ledger_id, debit: Number(l.debit), credit: Number(l.credit) })),
+        },
+        after: {
+          voucherDate, narration, reason, partyLedgerId, totalAmount,
+          lines: lines.map(l => ({ ledgerId: l.ledgerId, debit: l.debit, credit: l.credit })),
+        },
+      },
+    }).catch(() => {});
+
+    res.json(await fetchVoucher(id));
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+});
+
 router.delete("/accounts/journal-vouchers/:id", requireModuleAction("page:/accounts/vouchers", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
-  const { rows: [v] } = await pool.query(
-    `DELETE FROM journal_vouchers WHERE id = $1 RETURNING voucher_number, voucher_type, total_amount`, [id]
-  );
-  if (!v) { res.status(404).json({ error: "Voucher not found" }); return; }
-  logActivity({
-    action: "DELETE", module: "accounts", entityType: "journal_voucher", entityId: id,
-    description: `Deleted ${VOUCHER_TYPE_LABELS[v.voucher_type] ?? v.voucher_type} ${v.voucher_number} — ₹${Number(v.total_amount).toFixed(2)}`,
-  }).catch(() => {});
-  res.status(204).send();
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid voucher id" }); return; }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Lock first, then decide. A voucher this screen refuses to EDIT because
+    // another module owns it must not be deletable here either — deleting it
+    // strands its source document (the payroll run, the production batch, the
+    // transfer) with no matching entry in the books.
+    //
+    // Deliberately narrow: only provenance we have PROVEN to be system-owned is
+    // blocked. Rows predating provenance tracking (origin IS NULL) stay
+    // deletable, because deletion is a capability this screen has always had and
+    // silently withdrawing it for every historical voucher is its own hazard.
+    const { rows: [v] } = await client.query(
+      `SELECT id, voucher_number, voucher_type, total_amount, origin, source_module
+         FROM journal_vouchers WHERE id = $1 FOR UPDATE`, [id]
+    );
+    if (!v) { await client.query("ROLLBACK"); res.status(404).json({ error: "Voucher not found" }); return; }
+    if (v.origin === "system") {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: lockedReason(v, "delete") });
+      return;
+    }
+
+    await client.query(`DELETE FROM journal_vouchers WHERE id = $1`, [id]);
+    await client.query("COMMIT");
+
+    logActivity({
+      action: "DELETE", module: "accounts", entityType: "journal_voucher", entityId: id,
+      user: (req as any).employee?.username,
+      description: `Deleted ${VOUCHER_TYPE_LABELS[v.voucher_type] ?? v.voucher_type} ${v.voucher_number} — ₹${Number(v.total_amount).toFixed(2)}`,
+    }).catch(() => {});
+    res.status(204).send();
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 });
 
 // ── Derived double-entry postings ──────────────────────────────────────────

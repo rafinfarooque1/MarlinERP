@@ -417,6 +417,48 @@ export interface Warehouse {
      * @nullable
      */
   upiId?: string | null;
+  /**
+     * Legal/trade name printed on invoices. Falls back to `name` when unset.
+     * @nullable
+     */
+  billingName?: string | null;
+  /** @nullable */
+  email?: string | null;
+  /** @nullable */
+  city?: string | null;
+  /** @nullable */
+  district?: string | null;
+  /** @nullable */
+  pincode?: string | null;
+  /**
+     * Two-digit GST state code, e.g. "29" for Karnataka.
+     * @nullable
+     */
+  stateCode?: string | null;
+  /**
+     * 14-digit FSSAI licence number for this location.
+     * @nullable
+     */
+  fssaiNumber?: string | null;
+  /** @nullable */
+  bankAccountHolder?: string | null;
+  /** @nullable */
+  bankName?: string | null;
+  /** @nullable */
+  bankBranch?: string | null;
+  /** @nullable */
+  bankAccountNumber?: string | null;
+  /** @nullable */
+  ifscCode?: string | null;
+  /**
+     * Footer/terms text printed at the foot of this location's invoices.
+     * @nullable
+     */
+  invoiceFooter?: string | null;
+  /** @nullable */
+  authorizedSignatory?: string | null;
+  /** Billing fields still missing from the seller identity this warehouse will print on an invoice, e.g. ["GSTIN", "Bank details"]. Resolved server-side after the company-level bank/UPI fallback, so an empty array means invoices from here come out complete. Read-only. */
+  billingIncomplete?: string[];
   outletCount?: number;
   createdAt: string;
 }
@@ -433,6 +475,34 @@ export interface WarehouseInput {
      * @nullable
      */
   upiId?: string | null;
+  /** @nullable */
+  billingName?: string | null;
+  /** @nullable */
+  email?: string | null;
+  /** @nullable */
+  city?: string | null;
+  /** @nullable */
+  district?: string | null;
+  /** @nullable */
+  pincode?: string | null;
+  /** @nullable */
+  stateCode?: string | null;
+  /** @nullable */
+  fssaiNumber?: string | null;
+  /** @nullable */
+  bankAccountHolder?: string | null;
+  /** @nullable */
+  bankName?: string | null;
+  /** @nullable */
+  bankBranch?: string | null;
+  /** @nullable */
+  bankAccountNumber?: string | null;
+  /** @nullable */
+  ifscCode?: string | null;
+  /** @nullable */
+  invoiceFooter?: string | null;
+  /** @nullable */
+  authorizedSignatory?: string | null;
 }
 
 export interface WarehouseUpdate {
@@ -447,6 +517,34 @@ export interface WarehouseUpdate {
      * @nullable
      */
   upiId?: string | null;
+  /** @nullable */
+  billingName?: string | null;
+  /** @nullable */
+  email?: string | null;
+  /** @nullable */
+  city?: string | null;
+  /** @nullable */
+  district?: string | null;
+  /** @nullable */
+  pincode?: string | null;
+  /** @nullable */
+  stateCode?: string | null;
+  /** @nullable */
+  fssaiNumber?: string | null;
+  /** @nullable */
+  bankAccountHolder?: string | null;
+  /** @nullable */
+  bankName?: string | null;
+  /** @nullable */
+  bankBranch?: string | null;
+  /** @nullable */
+  bankAccountNumber?: string | null;
+  /** @nullable */
+  ifscCode?: string | null;
+  /** @nullable */
+  invoiceFooter?: string | null;
+  /** @nullable */
+  authorizedSignatory?: string | null;
 }
 
 export interface Outlet {

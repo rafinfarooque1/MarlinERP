@@ -86,8 +86,9 @@ async function insertVoucher(c: Q, args: {
   lines: Array<{ ledgerId: number; debit: number; credit: number }>;
 }): Promise<number> {
   const { rows: [v] } = await c.query(
-    `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, party_ledger_id, reason, total_amount, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+    `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, party_ledger_id, reason, total_amount, created_by,
+                                  origin, source_module)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'system', 'returns') RETURNING id`,
     [args.voucherType, args.voucherNumber, args.voucherDate, args.narration,
      args.partyLedgerId, args.reason, args.totalAmount, args.createdBy]
   );

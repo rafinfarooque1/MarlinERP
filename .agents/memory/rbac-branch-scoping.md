@@ -73,6 +73,26 @@ A shared `scope*Where(scope, params, alias)` helper is invisible to head-office 
 - Outlet→warehouse mapping exists: `outlets.warehouse_id` — warehouse scope = own warehouse + mapped outlets.
 - Cash Balance is duplicated: two pages (`sales/SalesCashBalance.tsx`, `finance/CashInOutlet.tsx`) + two routes both reading `GET /cash-in-outlet`, which ignores the caller entirely (`(_req, res)`).
 
+## A scoped list does not scope the resource
+
+The list endpoint being scoped is routinely mistaken for the resource being
+scoped. Every **by-id write** on the same resource needs the scope predicate
+repeated in its own lookup; the page-permission decorator does not supply it.
+
+The give-away shape is a handler that checks `requireModuleAction(...)` and then
+fetches by primary key alone (`db.select().where(eq(table.id, id))`). Anyone
+holding the right on that page can then act on *any* row by guessing an id,
+including rows in locations they were never shown. For account-bearing
+resources this is privilege escalation, not just data leakage: a branch manager
+with employee-edit rights can take over a head-office login.
+
+**Why:** the two gates are independent (see above), and the permission
+decorator is the visible one, so the missing gate reads as "already guarded".
+
+**How to apply:** scope the SELECT that loads the target, before any mutation,
+and return **404** for out-of-scope so ids stay unenumerable. Audit by-id writes
+as a family — the omission is almost never limited to one verb.
+
 ## Alias bugs in scope SQL are invisible until a branch user hits them
 
 The scope helpers emit fragments qualified with a fixed table alias, and

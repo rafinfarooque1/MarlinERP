@@ -594,8 +594,9 @@ router.post("/rent/periods/:warehouseId/:year/:month/pay", requireModuleAction(P
     const isFinal = requested >= lockedOutstanding - 0.005;
     const narration = `Rent Payment${isFinal ? "" : " (Partial)"} — ${agg?.name ?? `Warehouse #${warehouseId}`} — ${String(month).padStart(2, "0")}/${year}`;
     const { rows: [jv] } = await client.query<{ id: number }>(
-      `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by)
-       VALUES ('journal', $1, $2, $3, $4, $5) RETURNING id`,
+      `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by,
+                                    origin, source_module)
+       VALUES ('journal', $1, $2, $3, $4, $5, 'system', 'rent') RETURNING id`,
       [voucherNumber, paymentDate, narration, requested.toFixed(2), req.employee?.username ?? "system"],
     );
     // Dr Rent Payable / Cr Cash or Bank
