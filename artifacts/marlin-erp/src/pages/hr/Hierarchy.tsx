@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useListHierarchies, useCreateHierarchy, getListHierarchiesQueryKey } from '@workspace/api-client-react';
+import { useListHierarchies, useCreateHierarchy, useUpdateHierarchy, getListHierarchiesQueryKey } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Network, Download, Eye, ShieldOff } from 'lucide-react';
+import { Plus, Search, Network, Download, Eye, Pencil, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -31,12 +31,30 @@ export default function Hierarchy() {
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [viewItem, setViewItem] = useState<any>(null);
+  // Editing UPDATES the same role record in place — employees keep pointing at
+  // the same hierarchy id, so assignments and permission rows follow the edit
+  // automatically. null = the dialog is in "Add" mode.
+  const [editItem, setEditItem] = useState<any>(null);
   const queryClient = useQueryClient();
   const createMutation = useCreateHierarchy();
+  const updateMutation = useUpdateHierarchy();
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', level: 3, description: '' } });
 
+  const openEdit = (h: any) => {
+    setEditItem(h);
+    form.reset({ name: h.name, level: h.level, description: h.description ?? '' });
+    setIsOpen(true);
+  };
+
   const onSubmit = (data: FormValues) => {
+    if (editItem) {
+      updateMutation.mutate({ id: editItem.id, data }, {
+        onSuccess: () => { toast.success('Role updated'); queryClient.invalidateQueries({ queryKey: getListHierarchiesQueryKey() }); setIsOpen(false); setEditItem(null); form.reset(); },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+      });
+      return;
+    }
     createMutation.mutate({ data }, {
       onSuccess: () => { toast.success('Role created'); queryClient.invalidateQueries({ queryKey: getListHierarchiesQueryKey() }); setIsOpen(false); form.reset(); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
@@ -82,7 +100,7 @@ export default function Hierarchy() {
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
             )}
-            {perm.canAdd && <Button onClick={() => { form.reset(); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Role</Button>}
+            {perm.canAdd && <Button onClick={() => { setEditItem(null); form.reset({ name: '', level: 3, description: '' }); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Role</Button>}
           </div>
         </div>
 
@@ -116,6 +134,9 @@ export default function Hierarchy() {
                   <TableCell className="text-sm text-muted-foreground max-w-[200px] truncate">{h.description || '—'}</TableCell>
                   <TableCell className="text-right">
                     <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(h)}><Eye className="w-4 h-4" /></Button>
+                    {perm.canEdit && (
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(h)}><Pencil className="w-4 h-4" /></Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
@@ -124,23 +145,38 @@ export default function Hierarchy() {
         </div>
       </div>
 
-      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) form.reset(); }}>
+      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditItem(null); form.reset(); } }}>
         <DialogContent className="sm:max-w-md">
-          <DialogHeader><DialogTitle>Add Role</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editItem ? 'Edit Role' : 'Add Role'}</DialogTitle></DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
               <FormField control={form.control} name="name" render={({ field }) => (
                 <FormItem><FormLabel>Role Name <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="e.g. Production Manager" {...field} /></FormControl><FormMessage /></FormItem>
               )} />
               <FormField control={form.control} name="level" render={({ field }) => (
-                <FormItem><FormLabel>Hierarchy Level (1 = highest)</FormLabel><FormControl><Input type="number" min={1} max={10} {...field} /></FormControl><FormMessage /></FormItem>
+                <FormItem>
+                  <FormLabel>Hierarchy Level (1 = highest)</FormLabel>
+                  <FormControl><Input type="number" min={1} max={10} disabled={editItem?.level === 1} {...field} /></FormControl>
+                  {/* Seniority only: the level orders the org chart and never
+                      grants or removes ERP permissions — those stay with the
+                      role's permission rows regardless of level. Level 1 is the
+                      administrative exception and is locked server-side. */}
+                  <p className="text-xs text-muted-foreground">
+                    {editItem?.level === 1
+                      ? 'Top-level administrative role — its level cannot be changed.'
+                      : 'Organisational seniority only. Changing the level does not change what this role can access — permissions are managed on the Permissions page.'}
+                  </p>
+                  <FormMessage />
+                </FormItem>
               )} />
               <FormField control={form.control} name="description" render={({ field }) => (
                 <FormItem><FormLabel>Description</FormLabel><FormControl><Textarea placeholder="Role responsibilities..." rows={2} {...field} /></FormControl></FormItem>
               )} />
               <DialogFooter>
                 <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
-                <Button type="submit" disabled={createMutation.isPending}>{createMutation.isPending ? 'Saving…' : 'Save'}</Button>
+                <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
+                  {(createMutation.isPending || updateMutation.isPending) ? 'Saving…' : 'Save'}
+                </Button>
               </DialogFooter>
             </form>
           </Form>

@@ -9,7 +9,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Store, Trash2, TriangleAlert, CalendarRange, FileText, ShieldCheck, ShieldOff } from 'lucide-react';
+import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Store, ScanBarcode, Trash2, TriangleAlert, CalendarRange, FileText, ShieldCheck, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { customFetch } from '@workspace/api-client-react';
@@ -68,6 +68,29 @@ const SETTING_GROUPS: SettingGroup[] = [
       { key: 'lowStockThreshold', label: 'Low Stock Threshold (units)', type: 'number', defaultValue: 50 },
       { key: 'leaveApprovalNotify', label: 'Leave Approval Notifications', type: 'toggle', defaultValue: true },
       { key: 'payrollDueNotify', label: 'Payroll Due Reminders', type: 'toggle', defaultValue: true },
+    ],
+  },
+  {
+    icon: ScanBarcode,
+    title: 'Point of Sale',
+    description: 'Which entry controls cashiers see when billing',
+    settings: [
+      {
+        key: 'posDiscountsEnabled',
+        label: 'Enable Discounts',
+        type: 'toggle',
+        defaultValue: true,
+        description:
+          'Shows the per-item and bill-level discount fields at the POS. Turning this off hides them for new sales and blocks new discounts server-side — invoices already carrying a discount keep it, unchanged, everywhere they are shown.',
+      },
+      {
+        key: 'posCouponsEnabled',
+        label: 'Enable Coupon Codes',
+        type: 'toggle',
+        defaultValue: true,
+        description:
+          'Shows the coupon-code field at the POS. Independent of the discount setting. Turning this off hides it for new sales and blocks new coupons server-side — past sales that used a coupon keep showing it.',
+      },
     ],
   },
   {

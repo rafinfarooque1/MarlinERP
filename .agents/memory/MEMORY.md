@@ -74,3 +74,4 @@
 - [List vs detail casing](list-detail-casing.md) — list endpoints can return raw snake_case rows while detail reads map camelCase; generated types lie about list shape — curl before keying UI on a field.
 - [GST paise split](gst-paise-split.md) — CGST/SGST = half + exact remainder, never two independent rounds; server and client math must match; regression on an odd-paise case.
 - [Prod runtime binaries](prod-runtime-binaries.md) — deployed runtime lacks dev-workspace CLIs (zip/unzip → spawn ENOENT only in prod); use in-process libs; pg_dump IS present.
+- [Guard route coverage & flag failure mode](guard-route-coverage.md) — privilege-bearing values (e.g. hierarchy level 1 = full access) need guards on CREATE/DELETE too, not just edit; permissive-default flags must fail closed on read errors.

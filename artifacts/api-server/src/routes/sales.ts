@@ -10,7 +10,11 @@ import { pool } from "@workspace/db";
 import { consumeBatches, restoreBatches } from "../lib/batches";
 import { writeStockLedger, batchResolveMeta, toTxnDate } from "../lib/stockLedger";
 import { buildBranchMaps } from "./stock";
-import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
+import {
+  outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE,
+  getPosEntryFlags, DISCOUNTS_DISABLED_MESSAGE, DISCOUNTS_DISABLED_CODE,
+  COUPONS_DISABLED_MESSAGE, COUPONS_DISABLED_CODE,
+} from "../lib/featureFlags";
 import { getUserDataScope, isLocationInScope, scopeSalesWhere } from "../lib/dataScope";
 import { blockedByInactiveProducts, INACTIVE_PRODUCT_CODE } from "../lib/productIdentity";
 import { CREATE_SALE_PAYMENT_MODES, isAllowedNewSaleMode, isSettledAtSale, clearsThroughBank, resolveEditedSaleMode } from "../lib/paymentModes";
@@ -599,6 +603,25 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   const discountTotal = Math.round(rawDiscountTotal * 100) / 100;
   const totalAmount = subtotal + taxTotal - discountTotal;
 
+  // ── POS entry flags: refuse NEW discounts/coupons while switched off ──────
+  // Settings-driven and server-enforced: hiding the inputs in the POS UI means
+  // nothing if a crafted request can still carry the fields. Creation is
+  // strict — any discount or coupon at all is refused while the flag is off.
+  {
+    const posFlags = await getPosEntryFlags(pgPool);
+    // Stored line `discount` = item discount + allocated bill-discount share,
+    // so summing it covers both pre-tax mechanisms in one figure.
+    const preTaxDiscount = lineItems.reduce((s, li) => s + Number(li.discount ?? 0), 0);
+    if (!posFlags.discountsEnabled && (preTaxDiscount > 0.004 || billDiscount > 0.004)) {
+      res.status(400).json({ error: DISCOUNTS_DISABLED_MESSAGE, code: DISCOUNTS_DISABLED_CODE });
+      return;
+    }
+    if (!posFlags.couponsEnabled && (discountTotal > 0.004 || (parsed.data.couponCode ?? '').trim() !== '')) {
+      res.status(400).json({ error: COUPONS_DISABLED_MESSAGE, code: COUPONS_DISABLED_CODE });
+      return;
+    }
+  }
+
   // ── Credit control + atomic sale insert ───────────────────────────────────
   // The credit-limit check, invoice-sequence increment, and sale INSERT run in
   // ONE transaction. A per-customer advisory lock serializes concurrent credit
@@ -1037,6 +1060,38 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
   }
   const discountTotal = Math.round(rawDiscountTotal * 100) / 100;
   const totalAmount = subtotal + taxTotal - discountTotal;
+
+  // ── POS entry flags: edits may keep, but not grow, existing amounts ───────
+  // Guard the EFFECTIVE value against what the sale already stored: a historical
+  // discounted/couponed invoice must stay editable (qty fixes, payment mode)
+  // after the flag is switched off, but the edit must not introduce a new
+  // discount/coupon or increase the recorded one. Strict zero here would strand
+  // every old discounted invoice; no guard at all would let edits route around
+  // the setting entirely.
+  {
+    const posFlags = await getPosEntryFlags(pgPool);
+    if (!posFlags.discountsEnabled || !posFlags.couponsEnabled) {
+      const existingLines: any[] = typeof existingRaw.line_items === 'string'
+        ? (() => { try { return JSON.parse(existingRaw.line_items); } catch { return []; } })()
+        : (existingRaw.line_items ?? []);
+      const existingPreTax = existingLines.reduce((s, li) => s + Number(li?.discount ?? 0), 0);
+      const newPreTax = lineItems.reduce((s, li) => s + Number(li.discount ?? 0), 0);
+      if (!posFlags.discountsEnabled && newPreTax > existingPreTax + 0.01) {
+        res.status(400).json({ error: DISCOUNTS_DISABLED_MESSAGE, code: DISCOUNTS_DISABLED_CODE });
+        return;
+      }
+      const existingCouponValue = Number(existingRaw.discount_total ?? 0);
+      const existingCouponCode = String(existingRaw.coupon_code ?? '').trim().toUpperCase();
+      const newCouponCode = (parsed.data.couponCode ?? '').trim().toUpperCase();
+      if (!posFlags.couponsEnabled && (
+        discountTotal > existingCouponValue + 0.01 ||
+        (newCouponCode !== '' && newCouponCode !== existingCouponCode)
+      )) {
+        res.status(400).json({ error: COUPONS_DISABLED_MESSAGE, code: COUPONS_DISABLED_CODE });
+        return;
+      }
+    }
+  }
 
   // ── Credit limit check on edit ────────────────────────────────────────────
   // Mirror of the POST credit-limit guard so edits can't silently bypass it.

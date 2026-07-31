@@ -616,24 +616,112 @@ router.get("/hr/hierarchies", async (req, res): Promise<void> => {
   res.json(applyPaging(all, paging));
 });
 
+// Shared field validation for role writes. Hierarchy level is organisational
+// seniority ONLY — permissions stay with the RBAC rows keyed by hierarchy_id,
+// with ONE exception: middleware/permissions.ts grants level-1 users full
+// access as a hardcoded override. That coupling is why level transitions
+// involving 1 are refused below rather than silently allowed.
+function validateHierarchyFields(data: { name?: string; level?: number }): string | null {
+  if (data.name !== undefined && data.name.trim() === "") return "Role name is required";
+  if (data.level !== undefined && (!Number.isInteger(data.level) || data.level < 1)) {
+    return "Hierarchy level must be a whole number of 1 or more (1 = highest)";
+  }
+  return null;
+}
+
+/** Case-insensitive duplicate-name check; `excludeId` skips the row being edited. */
+async function duplicateRoleName(name: string, excludeId?: number): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT id FROM hierarchies WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) ${excludeId ? "AND id <> $2" : ""} LIMIT 1`,
+    excludeId ? [name, excludeId] : [name],
+  );
+  return rows.length > 0;
+}
+
 router.post("/hr/hierarchies", requireModuleAction("page:/hr/hierarchy", "add"), async (req, res): Promise<void> => {
   const parsed = CreateHierarchyBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-  const [row] = await db.insert(hierarchiesTable).values(parsed.data).returning();
+  const invalid = validateHierarchyFields(parsed.data);
+  if (invalid) { res.status(400).json({ error: invalid }); return; }
+  // Same RBAC exception as the PATCH guard below: level 1 = unrestricted
+  // access, so CREATING a level-1 role is minting a super-admin role — refused
+  // through this route regardless of who asks.
+  if (parsed.data.level === 1) {
+    res.status(403).json({ error: "Level 1 is reserved for the top-level administrative role and cannot be assigned to a new role." });
+    return;
+  }
+  if (await duplicateRoleName(parsed.data.name)) {
+    res.status(409).json({ error: `A role named "${parsed.data.name.trim()}" already exists` }); return;
+  }
+  const [row] = await db.insert(hierarchiesTable).values({ ...parsed.data, name: parsed.data.name.trim() }).returning();
   res.status(201).json(row);
 });
 
 router.patch("/hr/hierarchies/:id", requireModuleAction("page:/hr/hierarchy", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid role id" }); return; }
   const parsed = UpdateHierarchyBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-  const [row] = await db.update(hierarchiesTable).set(parsed.data).where(eq(hierarchiesTable.id, id)).returning();
+  const invalid = validateHierarchyFields(parsed.data);
+  if (invalid) { res.status(400).json({ error: invalid }); return; }
+
+  const [existing] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, id));
+  if (!existing) { res.status(404).json({ error: "Not found" }); return; }
+
+  // Level 1 is not just seniority: the permission middleware grants level-1
+  // roles unrestricted access to everything. Letting an edit move a role into
+  // (or out of) level 1 would let anyone with hierarchy-edit rights mint —
+  // or revoke — a super-admin role in one request. Every other level change
+  // (L3 → L2 etc.) is pure reporting seniority and changes no permissions.
+  if (parsed.data.level !== undefined && parsed.data.level !== existing.level) {
+    if (existing.level === 1) {
+      res.status(403).json({ error: "This is the top-level administrative role. Its level cannot be changed; its name and description can." });
+      return;
+    }
+    if (parsed.data.level === 1) {
+      res.status(403).json({ error: "Level 1 is reserved for the top-level administrative role and cannot be assigned through an edit." });
+      return;
+    }
+  }
+
+  if (parsed.data.name !== undefined && await duplicateRoleName(parsed.data.name, id)) {
+    res.status(409).json({ error: `A role named "${parsed.data.name.trim()}" already exists` }); return;
+  }
+
+  // In-place UPDATE of the same row: employees.hierarchy_id and the permission
+  // rows both key off this id, so assignments and RBAC follow automatically.
+  const updates = { ...parsed.data, ...(parsed.data.name !== undefined ? { name: parsed.data.name.trim() } : {}) };
+  const [row] = await db.update(hierarchiesTable).set(updates).where(eq(hierarchiesTable.id, id)).returning();
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
+
+  const fields: Array<"name" | "level" | "description"> = ["name", "level", "description"];
+  const changedFields = fields.filter(f => f in updates && (updates as any)[f] !== (existing as any)[f]);
+  logActivity({
+    action: "UPDATE", module: "hr", entityType: "hierarchy", entityId: id,
+    description: `Role "${existing.name}" updated${changedFields.length ? ` (${changedFields.join(", ")})` : ""}`,
+    user: (req as any).employee?.username ?? undefined,
+    metadata: {
+      changedFields,
+      before: { name: existing.name, level: existing.level, description: existing.description },
+      after: { name: row.name, level: row.level, description: row.description },
+    },
+  }).catch(() => {});
+
   res.json(row);
 });
 
 router.delete("/hr/hierarchies/:id", requireModuleAction("page:/hr/hierarchy", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid role id" }); return; }
+  // Deleting the level-1 role would revoke the administrative override for
+  // everyone assigned to it — same RBAC exception the create/edit guards
+  // protect, closed off here too.
+  const [existing] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, id));
+  if (!existing) { res.status(404).json({ error: "Not found" }); return; }
+  if (existing.level === 1) {
+    res.status(403).json({ error: "The top-level administrative role cannot be deleted." });
+    return;
+  }
   await db.delete(hierarchiesTable).where(eq(hierarchiesTable.id, id));
   res.status(204).send();
 });

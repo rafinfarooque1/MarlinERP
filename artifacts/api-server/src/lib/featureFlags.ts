@@ -24,6 +24,11 @@
 
 const FLAG_DEFAULTS = {
   outletsEnabled: false,
+  // POS entry availability. Both default ON so deployments never silently hide
+  // functionality that exists today. These gate NEW/EDITED transaction entry
+  // only — historical invoices keep displaying whatever they stored.
+  posDiscountsEnabled: true,
+  posCouponsEnabled: true,
 } as const;
 
 export type FeatureFlag = keyof typeof FLAG_DEFAULTS;
@@ -56,4 +61,42 @@ export const OUTLETS_DISABLED_CODE = 'OUTLETS_DISABLED';
  *  the module is off. Read paths must never call this. */
 export async function outletWritesBlocked(db: Queryable): Promise<boolean> {
   return !(await getFeatureFlag(db, 'outletsEnabled'));
+}
+
+// ── POS discount / coupon availability ──────────────────────────────────────
+// UI hiding alone is not enforcement: the sale routes must refuse NEW discount
+// or coupon amounts while the matching flag is off. Edits of historical
+// discounted/couponed sales are still allowed to carry their EXISTING amounts —
+// the guard compares against what the sale already stored, so switching a flag
+// off never strands an old invoice (see "guard the effective value").
+
+export const DISCOUNTS_DISABLED_MESSAGE =
+  'Discounts are turned off in Settings. Remove the discount to save this sale, ' +
+  'or ask an administrator to enable discounts under Settings → Point of Sale.';
+export const DISCOUNTS_DISABLED_CODE = 'DISCOUNTS_DISABLED';
+
+export const COUPONS_DISABLED_MESSAGE =
+  'Coupon codes are turned off in Settings. Remove the coupon to save this sale, ' +
+  'or ask an administrator to enable coupons under Settings → Point of Sale.';
+export const COUPONS_DISABLED_CODE = 'COUPONS_DISABLED';
+
+/** Both POS entry flags in one round-trip — the sale routes need the pair.
+ *
+ *  FAIL CLOSED: unlike getFeatureFlag, a settings-read failure here is NOT
+ *  swallowed into the defaults. The defaults are `true` (permissive), so
+ *  falling back on a DB error would let discounts through at the exact moment
+ *  an admin has them switched off. A read error propagates, the sale write
+ *  500s, and nothing is permitted that couldn't be verified. An absent
+ *  settings row or absent key still means the documented default (true) —
+ *  only a FAILED read is refused. */
+export async function getPosEntryFlags(db: Queryable): Promise<{ discountsEnabled: boolean; couponsEnabled: boolean }> {
+  const { rows: [row] } = await db.query(`SELECT general_settings FROM company_settings LIMIT 1`);
+  const gs = (row?.general_settings as Record<string, unknown> | null) ?? {};
+  const read = (flag: FeatureFlag): boolean => {
+    const v = gs[flag];
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'string') return v === 'true';
+    return FLAG_DEFAULTS[flag];
+  };
+  return { discountsEnabled: read('posDiscountsEnabled'), couponsEnabled: read('posCouponsEnabled') };
 }

@@ -11,7 +11,7 @@ import {
 } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
 import { isActiveProduct } from '@/lib/productStatus';
-import { useOutletsEnabled } from '@/lib/useFeatureFlags';
+import { useOutletsEnabled, useFeatureFlags } from '@/lib/useFeatureFlags';
 import { useEnabledOutlets } from '@/lib/locationStructure';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -181,6 +181,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // so this page honours it too — an empty list while Outlet Management is off.
   const { data: outlets = [] } = useEnabledOutlets();
   const { outletsEnabled } = useOutletsEnabled();
+  // POS entry availability. Settings-driven, UI-availability ONLY: hiding a
+  // control never clears the form value behind it, so editing a historical
+  // discounted/couponed sale keeps its stored amounts intact and resubmits
+  // them unchanged — which the server explicitly allows while the flag is off.
+  const { flags: featureFlags } = useFeatureFlags();
+  const discountsEnabled = featureFlags.posDiscountsEnabled;
+  const couponsEnabled = featureFlags.posCouponsEnabled;
   // 'all' | 'warehouse:<id>' | 'outlet:<id>'
   const [locationFilter, setLocationFilter] = useState<string>('all');
   const { type: locFilterType, id: locFilterId } = parseLocationFilter(locationFilter);
@@ -745,33 +752,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     return `${window.location.origin}/api/public/invoices/${token}.pdf${intent === 'download' ? '?download=1' : ''}`;
   };
 
-  // Embedded invoice preview inside the View sheet: the sheet shows the actual
-  // invoice document (the same server-rendered PDF that Download/Print produce),
-  // not only a field summary — what you see is exactly what the customer gets.
-  // Fetched through the AUTHENTICATED /sales/:id/invoice.pdf endpoint as a blob,
-  // never via a share token: passively opening the sheet must not mint public
-  // bearer URLs.
-  const [viewInvoiceUrl, setViewInvoiceUrl] = useState<string | null>(null);
-  useEffect(() => {
-    let stale = false;
-    let objectUrl: string | null = null;
-    if (viewItem && perm.canDownload) {
-      customFetch<Blob>(`/api/sales/${viewItem.id}/invoice.pdf`, { responseType: 'blob' })
-        .then(blob => {
-          if (stale) return;
-          objectUrl = URL.createObjectURL(blob);
-          setViewInvoiceUrl(objectUrl);
-        })
-        .catch(() => { if (!stale) setViewInvoiceUrl(null); });
-    } else {
-      setViewInvoiceUrl(null);
-    }
-    return () => {
-      stale = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewItem?.id, perm.canDownload]);
+  // The View sheet shows the invoice details directly — no embedded PDF
+  // preview. The document itself is one click away via the PDF / Print
+  // actions, which render the exact same server-side PDF; dropping the inline
+  // iframe also saves a full PDF render on every open of the sheet.
 
   // Download: navigate to the attachment URL — the browser saves exactly one
   // file (Content-Disposition: attachment) and the page stays where it is.
@@ -1161,7 +1145,17 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 )} />
               </div>
 
-              {/* Coupon code */}
+              {/* Coupon code — hidden while coupons are off in Settings; a
+                  historical code on an edited sale stays visible read-only */}
+              {!couponsEnabled && watchCouponCode ? (
+                <div className="flex flex-col gap-1">
+                  <span className="text-sm font-medium">Coupon Code</span>
+                  <span className="font-mono uppercase tracking-wider text-sm text-muted-foreground">
+                    {watchCouponCode} <span className="normal-case font-sans">(applied when this sale was created — coupon entry is turned off in Settings)</span>
+                  </span>
+                </div>
+              ) : null}
+              {couponsEnabled && (
               <div className="flex gap-2 items-end">
                 <FormField control={form.control} name="couponCode" render={({ field }) => (
                   <FormItem className="flex-1">
@@ -1200,6 +1194,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   )}
                 </div>
               </div>
+              )}
 
               {/* Line items */}
               <div>
@@ -1318,8 +1313,21 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                 )} />
                               </div>
 
-                              {/* Item discount — ₹ off EVERY unit's MRP */}
+                              {/* Item discount — ₹ off EVERY unit's MRP.
+                                  Entry hidden while discounts are off; an
+                                  existing amount on an edited historical sale
+                                  stays visible read-only and is resubmitted
+                                  unchanged. */}
                               <div className="col-span-3">
+                                {!discountsEnabled ? (
+                                  unitDisc > 0 ? (
+                                    <div className="pt-5">
+                                      <p className="text-[10px] text-muted-foreground font-medium">
+                                        Disc ₹{unitDisc.toLocaleString('en-IN', { minimumFractionDigits: 2 })}/unit (existing)
+                                      </p>
+                                    </div>
+                                  ) : null
+                                ) : (
                                 <FormField control={form.control} name={`lineItems.${index}.unitDiscount`} render={({ field: f }) => (
                                   <FormItem>
                                     <FormLabel className="text-xs">Disc / Unit (₹)</FormLabel>
@@ -1342,6 +1350,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                     )}
                                   </FormItem>
                                 )} />
+                                )}
                               </div>
 
                               <div className="col-span-3 text-right pb-0.5 space-y-0.5">
@@ -1405,7 +1414,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         </div>
                       )}
                       {/* Bill discount — ONE pre-tax amount on the whole invoice,
-                          split across lines in proportion to their value */}
+                          split across lines in proportion to their value.
+                          Entry hidden while discounts are off; an existing
+                          amount on an edited historical sale shows read-only. */}
+                      {discountsEnabled ? (
                       <div className="flex justify-between items-center gap-2">
                         <span className="text-emerald-600 font-medium">Bill Discount (pre-tax)</span>
                         <FormField control={form.control} name="billDiscount" render={({ field: f }) => (
@@ -1422,6 +1434,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                           </FormItem>
                         )} />
                       </div>
+                      ) : Number(form.watch('billDiscount') ?? 0) > 0 ? (
+                        <div className="flex justify-between items-center gap-2">
+                          <span className="text-emerald-600 font-medium">Bill Discount (pre-tax, existing)</span>
+                          <span className="font-mono text-xs">−₹{Number(form.watch('billDiscount') ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      ) : null}
                       {/* Subtotal */}
                       <div className="flex justify-between text-muted-foreground">
                         <span>Taxable Amount</span>
@@ -1605,15 +1623,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           </SheetHeader>
           {viewItem && (
             <div className="mt-6 space-y-5">
-              {viewInvoiceUrl && (
-                <div className="rounded-lg border border-border overflow-hidden bg-muted/20">
-                  <iframe
-                    src={viewInvoiceUrl}
-                    title="Invoice preview"
-                    className="w-full h-[440px]"
-                  />
-                </div>
-              )}
               <div className="grid grid-cols-2 gap-3">
                 {[
                   ['Customer', viewItem.customerName || 'Walk-in'],

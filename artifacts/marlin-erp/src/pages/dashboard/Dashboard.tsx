@@ -165,8 +165,12 @@ export default function Dashboard() {
       label: 'Payables',
       value: (bi?.payables as any)?.allPayables == null ? '—' : fmt((bi!.payables as any).allPayables),
       tone: (bi?.payables as any)?.allPayables == null ? 'default' : 'neg',
-      hint: (bi?.payables as any)?.salaryPayable
-        ? `Suppliers ${fmt(bi!.payables.total ?? 0)} · Salary ${fmt((bi!.payables as any).salaryPayable)}`
+      // Breakdown of everything the company owes: trade creditors, accrued
+      // salary and accrued rent — the same three figures allPayables sums, so
+      // the hint always reconciles with the number above it. Rendered whenever
+      // the ledger figures are available (they are null for non-HO scopes).
+      hint: (bi?.payables as any)?.salaryPayable != null
+        ? `Suppliers ${fmt(bi!.payables.total ?? 0)} · Salary ${fmt((bi!.payables as any).salaryPayable)} · Rent ${fmt((bi!.payables as any).rentPayable ?? 0)}`
         : undefined,
     },
     {

@@ -635,8 +635,12 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       // number to show when the question is "what do we owe", because trade
       // creditors alone silently omitted every rupee of accrued salary.
       salaryPayable: accounting ? accounting.salaryPayable : null,
+      // Rent owed to landlords — accrued daily to RENT-PAY-* ledgers under
+      // Current Liabilities, so like salary it is invisible to the Sundry
+      // Creditors control account and needs its own line here.
+      rentPayable: accounting ? accounting.rentPayable : null,
       allPayables: accounting
-        ? Math.round((accounting.accountsPayable + accounting.salaryPayable) * 100) / 100
+        ? Math.round((accounting.accountsPayable + accounting.salaryPayable + accounting.rentPayable) * 100) / 100
         : null,
       // Source-document exposure for the selected period and location. Kept
       // because it is location-answerable and the control total is not, but

@@ -13,10 +13,19 @@ import { customFetch } from '@workspace/api-client-react';
  */
 export interface FeatureFlags {
   outletsEnabled: boolean;
+  /** POS discount entry (per-item + bill-level). UI availability only — the
+   *  sale routes enforce it server-side; historical invoices are untouched. */
+  posDiscountsEnabled: boolean;
+  /** POS coupon-code entry. Independent of the discount flag. */
+  posCouponsEnabled: boolean;
 }
 
 const FLAG_DEFAULTS: FeatureFlags = {
   outletsEnabled: false,
+  // Both ON by default so a deployment never silently hides existing POS
+  // functionality; an admin must explicitly switch them off in Settings.
+  posDiscountsEnabled: true,
+  posCouponsEnabled: true,
 };
 
 export function useFeatureFlags() {
@@ -31,7 +40,11 @@ export function useFeatureFlags() {
         if (typeof v === 'string') return v === 'true';
         return FLAG_DEFAULTS[k];
       };
-      return { outletsEnabled: bool('outletsEnabled') };
+      return {
+        outletsEnabled: bool('outletsEnabled'),
+        posDiscountsEnabled: bool('posDiscountsEnabled'),
+        posCouponsEnabled: bool('posCouponsEnabled'),
+      };
     },
     staleTime: 60_000,
   });

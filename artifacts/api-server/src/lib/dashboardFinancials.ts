@@ -48,6 +48,13 @@ export interface CompanyFinancials {
    * move it. Re-summing unpaid payroll rows would ignore the journal entirely.
    */
   salaryPayable: number;
+  /**
+   * Net rent owed to landlords, signed positive. Same reasoning as
+   * `salaryPayable`: the daily rent accrual credits `RENT-PAY-<warehouseId>`
+   * ledgers under `STD-GRP-RENT-PAY`, which also hangs off Current Liabilities
+   * and is invisible to the Sundry Creditors control account.
+   */
+  rentPayable: number;
 }
 
 type Posting = { date: string; ledgerId: number; debit: number; credit: number };
@@ -98,6 +105,8 @@ export interface ControlBalances {
   accountsPayable: number;
   /** Net salary owed to employees — see `CompanyFinancials.salaryPayable`. */
   salaryPayable: number;
+  /** Net rent owed to landlords — see `CompanyFinancials.rentPayable`. */
+  rentPayable: number;
 }
 
 /**
@@ -127,6 +136,7 @@ async function balancesFrom(
     // Negated because `subtreeNet` is debit-minus-credit and a liability sits on
     // the credit side — the same convention `controlTotal` applies to creditors.
     salaryPayable: r2(-idx.subtreeNet("STD-GRP-SAL-PAY")),
+    rentPayable: r2(-idx.subtreeNet("STD-GRP-RENT-PAY")),
   };
 }
 
