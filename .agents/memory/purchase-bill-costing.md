@@ -46,3 +46,8 @@ drifts the valuation further.
 computed from the balance that still includes the line. Exact while this inbound
 is the latest one; approximate once later purchases have rolled in — the only
 real fix is replaying movements, which the schema does not currently support.
+
+## Edits: lot upserts silently keep old dates; moves are reverse+re-apply
+- `creditBatch` UPSERTS on the natural key and COALESCEs mfg/expiry — so an edit that only corrects a lot's dates changes NOTHING unless the emptied lot row is deleted first. The reversal must delete the bill's own zero-qty lots (source='purchase' AND source_id=bill AND qty≈0) at the OLD location, and — when the bill is being moved — at the DESTINATION too, or a stale zero-lot there resurrects the old dates on re-apply.
+- Receiving-location moves are the same reverse+re-apply transaction: reverse stock/lots/avg-cost at the old location, re-run batch-conflict + lot-namespace + supply-tax resolution against the NEW location, re-apply there. Refused once the goods are consumed (the reversal floors at zero and would re-create consumed stock). A move request without full lineItems is a 400 — never guess lines.
+- Foreign lots at the destination with the same natural key are a 409, never a merge.

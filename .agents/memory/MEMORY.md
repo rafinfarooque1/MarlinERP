@@ -15,9 +15,10 @@
 - [Migration DDL drift / 42P10](migration-ddl-drift.md) — two causes: constraints inside CREATE TABLE IF NOT EXISTS never reach live DBs, and widening a natural key strands every older ON CONFLICT target.
 - [Boot migration observability](boot-migration-observability.md) — prod discards stdout until the port opens, so a swallowed mid-migration throw silently skips everything after it; one-time conversions need their own top-level step + boot_status row.
 - [Sales settlement & discounts](sales-settlement.md) — cash/upi/card settle at creation; only 'credit' is credit-controlled; dues = total−paid; line discounts net into GST pre-tax, discount_total = bill-level coupon ONLY (post-tax).
+- [Sale discount model](sale-discount-model.md) — per-unit item + pre-tax bill (allocated paise-exact into lines; stored line discount = item+share) + post-tax coupon; legacy lines keep line-total semantics forever.
 - [RBAC & branch scoping](rbac-branch-scoping.md) — two gates: page right (403) runs BEFORE location scope (404); body location is a request not authority; scope SQL needs the caller's table alias.
 - [Sales location gate](location-context-gate.md) — /sales/* pages render blank (null) in fresh sessions until a location is picked at /sales; not a crash — navigate via the picker in tests.
-- [Stock Ledger](stock-ledger.md) — append-only audit table; write strategy varies by route (fire-and-forget vs inside txn); running balance via window function at query time.
+- [Stock Ledger](stock-ledger.md) — append-only audit table; txn_date = business date (backdating, Closing(D)=Opening(D+1)); write strategy varies by route; running balance via window fn.
 - [GST transfer classification](gst-transfer-classification.md) — auto-detects internal/intrastate/interstate from GSTIN; JVs created inside transactions at dispatch+approve; STD-BRANCH-DEBTOR/CREDITOR auto-provisioned.
 - [Unified sidebar architecture](unified-sidebar.md) — ONE nav for all users; Sales/Accounts switcher removed; getNavGroups() replaces getAccountsNavGroups()+getSalesNavItems(); getPermissionGroups() replaces getPermissionSegments().
 - [Phase 1 stabilization changes](phase1-stabilization.md) — default-deny perms + seeding migration, 8-hr token expiry, payroll COA posting, negative-stock DB constraint, opening-balances table, CORS/body limits.
@@ -69,3 +70,7 @@
 - [Money input normalisation](money-input-normalisation.md) — number inputs post strings; zod.coerce maps ''/null/true to a number; validate the decimal STRING, reject >2dp, let NUMERIC do the maths.
 - [Dev rows are test fixtures](dev-data-as-fixtures.md) — scratch-looking dev records are pinned by id AND attributes in the regression suites; grep tests/ before editing a row's state or GSTIN.
 - [Client→server state migration](local-state-migration.md) — pushing localStorage state up must be one-shot-flagged per browser or stale copies resurrect deleted server state; server absence ≠ never existed.
+- [Blank dev error overlay](dev-error-overlay.md) — "(unknown runtime error)" = error event with no Error object (ResizeObserver loop); inline head script suppresses it — looks like broken clicks in UI tests.
+- [List vs detail casing](list-detail-casing.md) — list endpoints can return raw snake_case rows while detail reads map camelCase; generated types lie about list shape — curl before keying UI on a field.
+- [GST paise split](gst-paise-split.md) — CGST/SGST = half + exact remainder, never two independent rounds; server and client math must match; regression on an odd-paise case.
+- [Prod runtime binaries](prod-runtime-binaries.md) — deployed runtime lacks dev-workspace CLIs (zip/unzip → spawn ENOENT only in prod); use in-process libs; pg_dump IS present.

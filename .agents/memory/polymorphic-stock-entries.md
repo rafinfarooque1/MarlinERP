@@ -93,3 +93,17 @@ must NOT touch the mirror, while a purchase or production consumption must.
 Reversal paths clamp at zero; **forward** consumption must never clamp, because
 flooring a real shortfall manufactures stock. Verify mirror == located sum after
 any change to a write path.
+
+## Deleted items leave orphaned stock rows under reusable ids
+
+Deleting an item does not delete its `stock_batches`/`stock_entries` rows, and
+the items id sequence can hand a NEW item an old id — so a fresh fixture item
+can arrive already "owning" someone else's zero-qty lots (e.g. an old
+`OPENING` batch). Two consequences:
+- **Row-count assertions lie**: "exactly one lot" fails on rows that predate
+  the test. Snapshot pre-existing row ids (and quantities) at setup, exclude
+  them from assertions, and restore rather than delete them in cleanup —
+  credit paths select target rows by item+location, not provenance, so they
+  may write into a pre-existing row.
+- **Quantity assertions shift** if a pre-existing row holds stock: check the
+  pre-existing sum is zero at setup and refuse to run otherwise.

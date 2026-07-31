@@ -693,26 +693,29 @@ export default function Purchases() {
                 <FormField control={form.control} name="invoiceNumber" render={({ field }) => (
                   <FormItem><FormLabel>Invoice Ref #</FormLabel><FormControl><Input placeholder="Vendor's invoice no." {...field} /></FormControl></FormItem>
                 )} />
-                {/* Receiving location. Fixed once the bill exists: stock, the
-                    vendor payable and input GST all landed there already. */}
+                {/* Receiving location. Changeable on edit too: the server
+                    reverses stock at the old location and re-applies it (with
+                    the payable and input GST) at the new one, in one
+                    transaction — refused if the goods were already consumed. */}
                 <FormField control={form.control} name="location" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Receiving Location <span className="text-destructive">*</span></FormLabel>
-                    {locations.canChoose && editingId === null ? (
+                    {locations.canChoose ? (
                       <>
                         <Select onValueChange={field.onChange} value={field.value || locations.defaultValue}>
                           <FormControl><SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger></FormControl>
                           <SelectContent>{locations.options.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
                         </Select>
-                        <p className="text-[10px] text-muted-foreground">Stock, input GST and the vendor payable are booked here.</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {editingId !== null
+                            ? 'Changing this moves the bill\u2019s stock, vendor payable and input GST to the new location.'
+                            : 'Stock, input GST and the vendor payable are booked here.'}
+                        </p>
                       </>
                     ) : (
-                      <>
-                        <div className="h-9 flex items-center px-3 rounded-md border border-border bg-muted/30 text-sm font-medium">
-                          {locations.labelFor(field.value)}
-                        </div>
-                        {editingId !== null && <p className="text-[10px] text-muted-foreground">Cannot be moved after the bill is saved.</p>}
-                      </>
+                      <div className="h-9 flex items-center px-3 rounded-md border border-border bg-muted/30 text-sm font-medium">
+                        {locations.labelFor(field.value)}
+                      </div>
                     )}
                     <FormMessage />
                   </FormItem>

@@ -1,0 +1,295 @@
+TASK: FIX BACKUP & RESTORE — “spawn zip ENOENT” ERROR
+
+Current production error when I click:
+
+Company → Backup & Restore → Back up now → Everything
+
+Error:
+
+HTTP 500: The backup could not be created:
+zip failed: spawn zip ENOENT
+
+The Backup page therefore remains:
+Last Backup: Never
+Proven to Restore: —
+Copy Kept Off Replit: —
+
+IMPORTANT:
+Do not delete, modify, truncate, reset, migrate destructively, or recreate any production ERP data while fixing this.
+Do not test restore against the live production database.
+
+==================================================
+ROOT CAUSE TO INVESTIGATE
+==================================================
+
+The error:
+
+spawn zip ENOENT
+
+strongly indicates that the backend backup implementation is spawning an external OS command such as:
+
+zip
+
+but the zip executable is unavailable in the deployed Replit runtime or PATH.
+
+Inspect the actual backup implementation and confirm the exact failing code path.
+
+Do not simply install random packages or hide the error.
+
+==================================================
+REQUIRED FIX
+==================================================
+
+Remove the backup system's dependency on the external operating-system `zip` executable.
+
+Generate ZIP archives using a Node.js/library-based implementation that works inside the application runtime.
+
+Use an appropriate existing dependency if the project already has one.
+
+Otherwise use a maintained ZIP/archive library compatible with the current Node/runtime architecture.
+
+The backup feature must NOT depend on:
+
+child_process.exec("zip ...")
+spawn("zip", ...)
+execFile("zip", ...)
+shell zip commands
+
+or the presence of /usr/bin/zip.
+
+The backup must work identically in Replit development and deployed production environments.
+
+==================================================
+BACKUP CONTENTS
+==================================================
+
+Preserve the existing intended “Everything (recommended)” behaviour.
+
+The complete backup should include everything required to recover the ERP, including the application's intended backup scope such as:
+
+1. Database backup/dump
+2. Uploaded files
+3. Company profile data
+4. Company logo
+5. Warehouse data
+6. Warehouse billing information
+7. Customers
+8. Vendors
+9. Item masters
+10. Inventory/stock-related persistent records
+11. Purchases
+12. Sales
+13. Accounting vouchers
+14. Ledger/accounting persistent data
+15. HR/payroll persistent data
+16. Settings and other persistent ERP configuration
+17. Other application-managed uploaded documents/files that are part of the existing backup specification
+
+Do NOT blindly include:
+
+node_modules
+build caches
+temporary files
+runtime caches
+.git
+logs
+secrets that the existing backup design intentionally excludes
+
+Follow the existing application's backup manifest/scope rather than inventing a second backup architecture.
+
+==================================================
+ARCHIVE CREATION
+==================================================
+
+Create the ZIP through the Node process itself.
+
+The archive generation must:
+
+- stream files where practical;
+- handle nested directories;
+- preserve filenames/paths required for restore;
+- correctly finish/close the archive before marking the backup successful;
+- handle empty optional directories;
+- clean temporary files after completion;
+- clean partial archives after failure;
+- avoid loading the entire backup into memory unnecessarily;
+- return a meaningful error if a required backup component cannot be created.
+
+Do not mark a backup successful until the archive is completely written and validated.
+
+==================================================
+DATABASE CONSISTENCY
+==================================================
+
+The database portion must be a consistent backup.
+
+Do not merely copy an actively-written database file if that can produce an inconsistent/corrupted backup for the database technology currently used.
+
+Inspect which database/storage system this ERP actually uses and use the correct safe backup mechanism.
+
+Do not alter production records while creating the backup.
+
+==================================================
+BACKUP VALIDATION
+==================================================
+
+After creating the archive, validate it before recording the backup as successful.
+
+At minimum verify:
+
+- archive exists;
+- archive size > 0;
+- archive can be opened/read;
+- expected manifest/metadata exists;
+- expected database backup component exists;
+- required archive entries are present.
+
+If validation fails:
+
+do NOT show the backup as successful.
+
+Delete/mark the incomplete backup appropriately and return a useful error.
+
+==================================================
+BACKUP RECORD
+==================================================
+
+Only after successful archive generation + validation:
+
+create/update the backup record displayed in:
+
+Company → Backup & Restore.
+
+The UI should then correctly show:
+
+Last Backup
+backup timestamp
+backup size
+contents
+created by
+restore capability/status
+
+and the backup should appear in the backups table.
+
+==================================================
+DOWNLOAD / OFF-REPLIT COPY
+==================================================
+
+The generated backup must remain downloadable through the existing Backup & Restore interface.
+
+The download must serve the actual completed archive.
+
+Do not generate an empty ZIP or temporary URL pointing to a deleted temporary file.
+
+==================================================
+RESTORE SAFETY
+==================================================
+
+Do NOT perform a restore against production as part of this fix.
+
+If restore needs testing:
+
+use an isolated temporary/test database/environment.
+
+The production ERP must remain untouched.
+
+Before enabling “Proven to Restore”, actually verify that the archive structure is compatible with the existing restore implementation.
+
+Do not show “Proven to Restore” based merely on successful ZIP creation.
+
+==================================================
+ERROR HANDLING
+==================================================
+
+Replace the raw technical toast:
+
+spawn zip ENOENT
+
+with a user-friendly message such as:
+
+“Backup could not be created. No data was changed. Please try again or contact the administrator.”
+
+Keep the detailed underlying exception in server logs for diagnosis.
+
+==================================================
+IMPORTANT — DO NOT JUST PATCH THE UI
+==================================================
+
+This is a backend failure.
+
+Do not:
+
+- hide the error;
+- fake a successful backup;
+- manually insert a backup database record;
+- disable validation;
+- create an empty ZIP;
+- mark the backup as successful without an archive;
+- require me to log out/login;
+- rely on the local Replit workspace having zip installed.
+
+Fix the archive-generation implementation itself.
+
+==================================================
+TESTING
+==================================================
+
+After implementing, test using the development/test environment first.
+
+Test:
+
+1. Create “Everything” backup.
+2. Confirm no spawn zip ENOENT.
+3. Confirm HTTP response succeeds.
+4. Confirm backup record appears.
+5. Confirm archive size is non-zero.
+6. Open/read archive programmatically.
+7. Confirm database backup is present.
+8. Confirm expected uploaded-file structure is present.
+9. Confirm company/logo data required by the existing backup architecture is present.
+10. Download the archive through the UI.
+11. Verify downloaded ZIP opens correctly.
+12. Test failure cleanup using a controlled failure.
+13. Confirm a failed backup is NOT listed as successful.
+14. Confirm no production ERP records were changed by backup creation.
+
+Then test restore ONLY against an isolated disposable environment/database.
+
+==================================================
+REGRESSION CHECK
+==================================================
+
+Confirm the fix does not affect:
+
+Sales
+Purchases
+Stock
+Accounting
+Vouchers
+Cash & Bank
+HR/Payroll
+Company Profile
+Warehouse data
+Uploaded logos/files
+
+Backup creation should be read-only with respect to normal ERP business data.
+
+==================================================
+FINAL REPORT
+==================================================
+
+After completing the fix, tell me:
+
+1. Exact root cause of spawn zip ENOENT.
+2. File/function that was failing.
+3. Whether an external zip process was being spawned.
+4. What archive implementation replaced it.
+5. What “Everything” currently includes.
+6. Whether the archive passed integrity validation.
+7. Actual test backup size.
+8. Whether download was tested.
+9. Whether restore was tested in an ISOLATED environment.
+10. Confirm no live production data was modified or restored during testing.
+
+Do not stop after analyzing the problem.
+Implement the fix, run the safe tests, and report the results.

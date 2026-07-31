@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { SearchableItemSelect, type ItemOption } from '@/components/ui/searchable-item-select';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   usePaginatedSales, useCreateSale, useListCustomers, useCreateCustomer,
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
@@ -60,30 +61,47 @@ import {
 interface GstBreakdown {
   taxRate: number;
   taxType: 'cgst_sgst' | 'igst';
-  lineGross: number;    // MRP × qty (GST-inclusive total for this line)
-  lineSubtotal: number; // taxable amount (ex-GST, = lineGross / (1 + rate/100))
+  lineGross: number;    // FINAL line total (GST-inclusive), whichever pricing mode
+  lineSubtotal: number; // taxable amount (ex-GST)
   cgst: number;
   sgst: number;
   igst: number;
   taxAmount: number;
 }
 
-// GST is INCLUSIVE in MRP. Back-calculate taxable from gross.
-// `discount` is a flat ₹ amount off this line's gross (MRP × qty); GST is
-// back-calculated from the discounted gross — matches the backend exactly.
+// Two pricing modes per line, mirroring the backend exactly:
+//   taxableBase=false (default, historical behaviour): the MRP is the FINAL
+//     GST-inclusive price — taxable = gross / (1 + rate/100), tax extracted.
+//     (Never gross − rate%; that under-extracts the included GST.)
+//   taxableBase=true ("Taxable" checked): the MRP is the taxable BASE —
+//     GST is added on top, final = base + tax.
+// `discount` is a flat ₹ amount off qty × MRP, applied BEFORE the mode math,
+// so it is never applied twice.
 function computeLineGst(
-  qty: number, price: number, taxRate: number, isInterState: boolean, discount = 0
+  qty: number, price: number, taxRate: number, isInterState: boolean, discount = 0, taxableBase = false
 ): GstBreakdown {
-  const lineGross = Math.max(0, qty * price - discount); // MRP × qty − discount (inclusive)
-  const lineSubtotal = taxRate > 0
-    ? Math.round(lineGross / (1 + taxRate / 100) * 100) / 100
-    : lineGross; // taxable (ex-GST)
-  const rawTax = Math.round((lineGross - lineSubtotal) * 100) / 100;
+  const base = Math.max(0, qty * price - discount);
+  let lineGross: number, lineSubtotal: number, rawTax: number;
+  if (taxableBase) {
+    lineSubtotal = Math.round(base * 100) / 100;
+    rawTax = Math.round(lineSubtotal * taxRate / 100 * 100) / 100;
+    lineGross = Math.round((lineSubtotal + rawTax) * 100) / 100;
+  } else {
+    lineGross = base;
+    lineSubtotal = taxRate > 0
+      ? Math.round(base / (1 + taxRate / 100) * 100) / 100
+      : base;
+    rawTax = Math.round((lineGross - lineSubtotal) * 100) / 100;
+  }
   if (isInterState) {
     return { taxRate, taxType: 'igst', lineGross, lineSubtotal, cgst: 0, sgst: 0, igst: rawTax, taxAmount: rawTax };
   }
+  // Odd-paise tax: rounding both halves independently would make
+  // cgst + sgst ≠ taxAmount (e.g. 0.05 → 0.03 + 0.03). Round one half and
+  // give the remainder to the other so the heads always sum exactly.
   const half = Math.round(rawTax / 2 * 100) / 100;
-  return { taxRate, taxType: 'cgst_sgst', lineGross, lineSubtotal, cgst: half, sgst: half, igst: 0, taxAmount: rawTax };
+  const rest = Math.round((rawTax - half) * 100) / 100;
+  return { taxRate, taxType: 'cgst_sgst', lineGross, lineSubtotal, cgst: half, sgst: rest, igst: 0, taxAmount: rawTax };
 }
 
 // ── Form Schema ─────────────────────────────────────────────────────────────────
@@ -92,10 +110,18 @@ const saleLineSchema = z.object({
   itemId:    z.coerce.number().min(1, 'Item required'),
   quantity:  z.coerce.number().min(1, 'Qty ≥ 1'),
   unitPrice: z.coerce.number().min(0, 'Price required'),
-  discount:  z.coerce.number().min(0, 'Discount ≥ 0').optional(),
-}).refine(li => (li.discount ?? 0) <= li.quantity * li.unitPrice, {
-  message: 'Discount exceeds line amount',
-  path: ['discount'],
+  // Discount per UNIT off the MRP — ₹10 here on qty 10 means ₹100 off the
+  // line ((MRP − 10) × 10), never ₹10 off the line total.
+  unitDiscount: z.coerce.number().min(0, 'Discount ≥ 0').optional(),
+  // "Taxable" checked → MRP is the taxable base, GST added on top.
+  // Unchecked (default) → MRP is the final GST-inclusive price.
+  taxable:        z.boolean().optional(),
+  // Set once the user flips the box by hand — a later customer change must
+  // not stomp a deliberate override.
+  taxableTouched: z.boolean().optional(),
+}).refine(li => (li.unitDiscount ?? 0) <= li.unitPrice, {
+  message: 'Cannot exceed the unit price',
+  path: ['unitDiscount'],
 });
 const schema = z.object({
   locationType: z.enum(['outlet', 'warehouse']).default('outlet'),
@@ -104,6 +130,10 @@ const schema = z.object({
   saleDate: z.string().min(1, 'Date required'),
   paymentMode: z.enum(STORED_SALE_MODES).default('cash'),
   couponCode: z.string().optional(),
+  // ONE pre-tax discount on the whole invoice, allocated across lines by the
+  // server (proportional to each line's post-item-discount value). Separate
+  // from the coupon, which is a post-tax deduction off the grand total.
+  billDiscount: z.coerce.number().min(0, 'Discount ≥ 0').optional(),
   lineItems: z.array(saleLineSchema).min(1, 'Add at least one item'),
 });
 type FormValues = z.infer<typeof schema>;
@@ -126,7 +156,8 @@ const defaultFormValues: FormValues = {
   saleDate: new Date().toISOString().split('T')[0],
   paymentMode: 'cash',
   couponCode: '',
-  lineItems: [{ itemId: 0, quantity: 1, unitPrice: 0, discount: 0 }],
+  billDiscount: 0,
+  lineItems: [{ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: false, taxableTouched: false }],
 };
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -286,11 +317,26 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       // it as changing the sale's mode and refuse the edit.
       paymentMode: storedSaleMode(sale.paymentMode) as FormValues['paymentMode'],
       couponCode: sale.couponCode ?? '',
+      billDiscount: Number((sale as any).billDiscount ?? 0),
       lineItems: (sale.lineItems ?? []).map((li: any) => ({
         itemId: li.itemId,
         quantity: li.quantity,
         unitPrice: li.unitPrice,
-        discount: Number(li.discount ?? 0),
+        // New-format lines store the per-unit discount explicitly. Historical
+        // lines stored one line-TOTAL amount: convert ÷ qty at FULL precision
+        // (never pre-rounded) so unitDiscount × qty rounds back to the exact
+        // recorded amount and an untouched save cannot drift by a paisa.
+        unitDiscount: li.unitDiscount != null
+          ? Number(li.unitDiscount)
+          : Number(li.quantity) > 0
+            ? Math.max(0, Number(li.discount ?? 0) - Number(li.billDiscountShare ?? 0)) / Number(li.quantity)
+            : 0,
+        // Load the SAVED pricing mode — never re-derive from the customer's
+        // GSTIN here. Historical lines without the field were priced
+        // inclusive, so absent → unchecked. touched=true pins it against the
+        // customer-default effect.
+        taxable: li.priceMode === 'exclusive',
+        taxableTouched: true,
       })),
     });
     setIsOpen(true);
@@ -438,6 +484,30 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // Price comes from item MRP (set in Item Master) — not outlet-specific
   const getPrice = (itemId: number) => Number((items.find(i => i.id === itemId) as any)?.mrp ?? 0);
   const getAvailableQty = (itemId: number) => stockMap.get(itemId) ?? 0;
+
+  // Quantities on the sale being EDITED were already taken out of stock when
+  // the sale was first saved. The server credits them back before validating an
+  // edit, so the true ceiling for an edited line is (available now + what this
+  // sale already holds) — not today's shelf count. Without this, a bill of 60
+  // with 6 left in stock can't even have its discount changed: the browser
+  // blocks submit with "Value must be less than or equal to 6".
+  // The credit applies only at the sale's own location — moving the sale to a
+  // different location gets no allowance there (mirrors the server).
+  const editHeldQty = useMemo(() => {
+    const held = new Map<number, number>();
+    if (!editItem) return held;
+    const sameLocation =
+      String(editItem.locationType ?? 'outlet') === String(watchLocationType ?? 'outlet') &&
+      Number(editItem.locationId ?? editItem.outletId ?? 0) === Number(watchLocationId ?? 0);
+    if (!sameLocation) return held;
+    for (const li of editItem.lineItems ?? []) {
+      const itemId = Number(li.itemId);
+      held.set(itemId, (held.get(itemId) ?? 0) + Number(li.quantity ?? 0));
+    }
+    return held;
+  }, [editItem, watchLocationType, watchLocationId]);
+  /** Editable ceiling for a qty input: shelf stock plus this sale's own allocation. */
+  const getMaxQty = (itemId: number) => getAvailableQty(itemId) + (editHeldQty.get(itemId) ?? 0);
   const getItem = (itemId: number) => items.find(i => i.id === itemId);
 
   // GST state determination
@@ -445,6 +515,26 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const selectedCustomer = customers.find(c => c.id === watchCustomerId);
   const customerState = ((selectedCustomer as any)?.state ?? '').trim().toLowerCase();
   const isInterState = !!(companyState && customerState && companyState !== customerState);
+
+  // Default for the per-line "Taxable" box: a GSTIN-registered customer
+  // usually bills B2B (price = taxable base, GST on top); walk-in / no-GSTIN
+  // customers get MRP-inclusive pricing. Only a DEFAULT — the cashier can
+  // flip any line, and a flipped line is never overwritten by a later
+  // customer change (taxableTouched). Edit mode rehydrates from the saved
+  // sale with every line marked touched, so this effect leaves it alone.
+  // The customers LIST endpoint returns snake_case gst_number; single-customer
+  // reads return camelCase gstNumber. Check both.
+  const customerHasGstin = !!String(
+    (selectedCustomer as any)?.gstNumber ?? (selectedCustomer as any)?.gst_number ?? ''
+  ).trim();
+  useEffect(() => {
+    (form.getValues('lineItems') ?? []).forEach((l: any, i: number) => {
+      if (!l?.taxableTouched && !!l?.taxable !== customerHasGstin) {
+        form.setValue(`lineItems.${i}.taxable`, customerHasGstin);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customerHasGstin, watchCustomerId]);
 
   // Coupon validation
   const { data: coupons = [] } = useListCoupons();
@@ -472,24 +562,62 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
 
   // Compute aggregated GST totals for the cart (inclusive GST — MRP already includes tax)
   const computeCartTotals = () => {
-    let grossTotal = 0, subtotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0, taxTotal = 0, itemDiscountTotal = 0;
+    // Pass 1 — per-line ITEM discounts (₹/unit off the MRP) and each line's
+    // pre-bill-discount value ("basis").
+    const prepared: Array<{ qty: number; price: number; taxRate: number; itemDisc: number; basis: number; taxable: boolean }> = [];
+    let grossItemValue = 0, itemDiscountTotal = 0;
     fields.forEach((_, i) => {
       const itemId = form.watch(`lineItems.${i}.itemId`);
-      const qty    = form.watch(`lineItems.${i}.quantity`);
+      const qty    = Number(form.watch(`lineItems.${i}.quantity`) ?? 0);
       const price  = Number(form.watch(`lineItems.${i}.unitPrice`) ?? 0);
-      const disc   = Math.max(0, Number(form.watch(`lineItems.${i}.discount`) ?? 0));
+      const unitDisc = Math.min(Math.max(0, Number(form.watch(`lineItems.${i}.unitDiscount`) ?? 0)), price);
       if (!itemId || price <= 0) return;
-      const taxRate = Number((getItem(itemId) as any)?.taxRate ?? 0);
-      const gst     = computeLineGst(qty, price, taxRate, isInterState, disc);
-      grossTotal += gst.lineGross;            // net of item discount (inclusive)
-      itemDiscountTotal += Math.min(disc, qty * price);
+      const taxRate  = Number((getItem(itemId) as any)?.taxRate ?? 0);
+      const taxable  = !!form.watch(`lineItems.${i}.taxable`);
+      const itemDisc = Math.round(unitDisc * qty * 100) / 100;
+      grossItemValue    += Math.round(qty * price * 100) / 100;
+      itemDiscountTotal += itemDisc;
+      prepared.push({ qty, price, taxRate, itemDisc, basis: Math.max(0, Math.round((qty * price - itemDisc) * 100) / 100), taxable });
+    });
+
+    // Pass 2 — allocate the BILL discount paise-exactly across lines in
+    // proportion to their bases (largest remainder), mirroring the server's
+    // allocation so the preview and the stored invoice agree to the paisa.
+    const basisSum = Math.round(prepared.reduce((s, p) => s + p.basis, 0) * 100) / 100;
+    const billDiscount = Math.min(Math.max(0, Math.round(Number(form.watch('billDiscount') ?? 0) * 100) / 100), basisSum);
+    const basePaise = prepared.map(p => Math.max(0, Math.round(p.basis * 100)));
+    const weightSum = basePaise.reduce((s, b) => s + b, 0);
+    const totalPaise = Math.round(billDiscount * 100);
+    let shares = prepared.map(() => 0);
+    if (totalPaise > 0 && weightSum > 0) {
+      const raw    = basePaise.map(b => (totalPaise * b) / weightSum);
+      const floors = raw.map(Math.floor);
+      let rem = totalPaise - floors.reduce((s, f) => s + f, 0);
+      const order = raw.map((r, idx) => ({ idx, frac: r - Math.floor(r) })).sort((a, b) => b.frac - a.frac || a.idx - b.idx);
+      for (const { idx } of order) { if (rem <= 0) break; if (floors[idx] < basePaise[idx]) { floors[idx] += 1; rem -= 1; } }
+      shares = floors.map(f => f / 100);
+    }
+
+    // Pass 3 — GST from each line's post-discount value, per its own rate and
+    // inclusive/exclusive treatment. The summary therefore shows the FINAL
+    // taxable/GST figures, never pre-discount intermediates.
+    // The adjusted amount is rounded to the paisa BEFORE the tax math — the
+    // server taxes round2(basis − share), and with fractional quantities
+    // (kg goods) an unrounded qty×price−disc base would keep sub-paisa
+    // fractions and drift the preview off the persisted invoice.
+    let grossTotal = 0, subtotal = 0, cgstTotal = 0, sgstTotal = 0, igstTotal = 0, taxTotal = 0;
+    prepared.forEach((p, k) => {
+      const adjusted = Math.round((p.basis - shares[k]) * 100) / 100;
+      const gst = computeLineGst(1, adjusted, p.taxRate, isInterState, 0, p.taxable);
+      grossTotal += gst.lineGross;            // FINAL line total, either mode
       subtotal   += gst.lineSubtotal;
       cgstTotal  += gst.cgst;
       sgstTotal  += gst.sgst;
       igstTotal  += gst.igst;
       taxTotal   += gst.taxAmount;
     });
-    const grandTotal = grossTotal; // MRP × qty − item discounts — inclusive
+    const grandTotal = grossTotal;
+    // Coupon: post-tax flat deduction off the grand total — unchanged.
     const discountAmount = preservedBillDiscount !== null
       ? Math.min(preservedBillDiscount, grandTotal)
       : appliedCoupon
@@ -497,7 +625,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           ? Math.round(grandTotal * Number(appliedCoupon.discountValue) / 100 * 100) / 100
           : Math.min(Number(appliedCoupon.discountValue), grandTotal)
         : 0;
-    return { grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, itemDiscountTotal, grandTotal, discountAmount, finalAmount: grandTotal - discountAmount };
+    return { grossItemValue, grossTotal, subtotal, cgstTotal, sgstTotal, igstTotal, taxTotal, itemDiscountTotal, billDiscount, grandTotal, discountAmount, finalAmount: grandTotal - discountAmount };
   };
 
   const totals = computeCartTotals();
@@ -513,10 +641,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       itemId: li.itemId,
       quantity: li.quantity,
       unitPrice: Number(li.unitPrice),
-      discount: Math.max(0, Number(li.discount ?? 0)),
+      // Per-unit discount — the server derives the line total (× qty) and the
+      // bill-discount share; never send a pre-multiplied line amount here.
+      unitDiscount: Math.max(0, Number(li.unitDiscount ?? 0)),
+      priceMode: (li.taxable ? 'exclusive' : 'inclusive') as 'exclusive' | 'inclusive',
       taxAmount: 0, // backend recomputes authoritatively
     }));
-    const { discountAmount } = computeCartTotals();
+    const { discountAmount, billDiscount } = computeCartTotals();
     const payload = {
       ...data,
       locationType: data.locationType,
@@ -613,6 +744,34 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     );
     return `${window.location.origin}/api/public/invoices/${token}.pdf${intent === 'download' ? '?download=1' : ''}`;
   };
+
+  // Embedded invoice preview inside the View sheet: the sheet shows the actual
+  // invoice document (the same server-rendered PDF that Download/Print produce),
+  // not only a field summary — what you see is exactly what the customer gets.
+  // Fetched through the AUTHENTICATED /sales/:id/invoice.pdf endpoint as a blob,
+  // never via a share token: passively opening the sheet must not mint public
+  // bearer URLs.
+  const [viewInvoiceUrl, setViewInvoiceUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let stale = false;
+    let objectUrl: string | null = null;
+    if (viewItem && perm.canDownload) {
+      customFetch<Blob>(`/api/sales/${viewItem.id}/invoice.pdf`, { responseType: 'blob' })
+        .then(blob => {
+          if (stale) return;
+          objectUrl = URL.createObjectURL(blob);
+          setViewInvoiceUrl(objectUrl);
+        })
+        .catch(() => { if (!stale) setViewInvoiceUrl(null); });
+    } else {
+      setViewInvoiceUrl(null);
+    }
+    return () => {
+      stale = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewItem?.id, perm.canDownload]);
 
   // Download: navigate to the attachment URL — the browser saves exactly one
   // file (Content-Disposition: attachment) and the page stays where it is.
@@ -901,7 +1060,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         const [type, idStr] = v.split(':');
                         field.onChange(Number(idStr));
                         form.setValue('locationType', type as 'outlet' | 'warehouse');
-                        form.setValue('lineItems', [{ itemId: 0, quantity: 1, unitPrice: 0 }]);
+                        form.setValue('lineItems', [{ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false }]);
                       }}
                       value={field.value && field.value > 0 ? `${form.watch('locationType')}:${field.value}` : ''}
                     >
@@ -1046,7 +1205,10 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               <div>
                 {!watchLocationId || watchLocationId === 0 ? (
                   <div className="p-6 border border-dashed border-border rounded-lg text-center text-muted-foreground">Select a selling location above to load available stock</div>
-                ) : availableItems.length === 0 ? (
+                ) : availableItems.length === 0 && !editItem ? (
+                  /* Create mode only: an EDITED sale must stay saveable (discount,
+                     customer, qty reductions) even when the shelf is empty — its
+                     own lines carry the allowance. */
                   <div className="p-6 border border-dashed border-amber-500/40 rounded-lg text-center text-amber-500 bg-amber-500/5 flex flex-col items-center gap-2">
                     <PackageOpen className="w-8 h-8 opacity-60" />
                     <p className="font-medium">No stock available at this outlet</p>
@@ -1056,7 +1218,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   <>
                     <div className="flex justify-between items-center mb-3">
                       <p className="font-semibold">Cart Items <span className="text-xs text-muted-foreground font-normal ml-1">({availableItems.length} in stock)</span></p>
-                      <Button type="button" variant="outline" size="sm" onClick={() => append({ itemId: 0, quantity: 1, unitPrice: 0, discount: 0 })}>
+                      <Button type="button" variant="outline" size="sm" onClick={() => append({ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false })}>
                         <Plus className="w-3 h-3 mr-1" /> Add Item
                       </Button>
                     </div>
@@ -1065,11 +1227,27 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         const itemId   = form.watch(`lineItems.${index}.itemId`);
                         const qty      = form.watch(`lineItems.${index}.quantity`);
                         const unitPrice = Number(form.watch(`lineItems.${index}.unitPrice`) ?? 0);
-                        const availQty = getAvailableQty(itemId);
+                        // The per-item ceiling is shared across every line that
+                        // holds the same item: what other lines have already
+                        // claimed is not available to this one. Without the
+                        // subtraction, two lines of one item each advertise the
+                        // full ceiling and only the server catches the sum.
+                        const allLines = form.watch('lineItems') ?? [];
+                        const claimedElsewhere = allLines.reduce((s: number, l: any, i2: number) =>
+                          i2 !== index && Number(l?.itemId) === Number(itemId) ? s + Math.max(0, Number(l?.quantity) || 0) : s, 0);
+                        const maxQty   = Math.max(0, getMaxQty(itemId) - claimedElsewhere);
                         const taxRate  = Number((getItem(itemId) as any)?.taxRate ?? 0);
-                        const disc     = Math.max(0, Number(form.watch(`lineItems.${index}.discount`) ?? 0));
-                        const gst      = computeLineGst(qty, unitPrice, taxRate, isInterState, disc);
-                        const lineTotal = gst.lineGross; // MRP × qty − discount (inclusive of GST)
+                        // Item discount is PER UNIT: ₹10 off MRP ₹100 × qty 10
+                        // = ₹100 off the line, not ₹10. The line figures here
+                        // are pre-bill-discount; the summary below carries the
+                        // final post-allocation taxable/GST.
+                        const unitDisc = Math.min(Math.max(0, Number(form.watch(`lineItems.${index}.unitDiscount`) ?? 0)), unitPrice);
+                        const disc     = Math.round(unitDisc * qty * 100) / 100;
+                        const taxable  = !!form.watch(`lineItems.${index}.taxable`);
+                        // Same paise-rounded base the server taxes (fractional
+                        // qty would otherwise keep sub-paisa fractions).
+                        const gst      = computeLineGst(1, Math.max(0, Math.round((qty * unitPrice - disc) * 100) / 100), taxRate, isInterState, 0, taxable);
+                        const lineTotal = gst.lineGross; // final line total (GST-inclusive, either mode)
 
                         return (
                           <div key={field.id} className="p-3 bg-muted/20 rounded-lg border border-border space-y-2">
@@ -1096,8 +1274,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                               <div className="col-span-2">
                                 <FormField control={form.control} name={`lineItems.${index}.quantity`} render={({ field: f }) => (
                                   <FormItem>
-                                    <FormLabel className="text-xs">Qty {itemId > 0 && <span className="text-muted-foreground">(max {availQty})</span>}</FormLabel>
-                                    <FormControl><Input type="number" min={1} max={itemId > 0 ? availQty : undefined} className="h-8 text-xs" {...f} /></FormControl>
+                                    <FormLabel className="text-xs">Qty {itemId > 0 && <span className="text-muted-foreground">(max {maxQty})</span>}</FormLabel>
+                                    <FormControl><Input type="number" min={1} max={itemId > 0 ? maxQty : undefined} className="h-8 text-xs" {...f} /></FormControl>
                                   </FormItem>
                                 )} />
                               </div>
@@ -1116,17 +1294,39 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                     ? `₹${unitPrice.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
                                     : 'Set MRP in Item Master'}
                                 </div>
+                                {/* Taxable: checked → price is the taxable base, GST added on top;
+                                    unchecked → price is final, GST extracted from it. */}
+                                <FormField control={form.control} name={`lineItems.${index}.taxable`} render={({ field: f }) => (
+                                  <label
+                                    className="mt-1 flex items-center gap-1.5 cursor-pointer select-none w-fit"
+                                    title={f.value
+                                      ? 'Price is the taxable base — GST will be added on top'
+                                      : 'Price includes GST — tax is extracted from it'}
+                                  >
+                                    <Checkbox
+                                      className="h-3.5 w-3.5"
+                                      checked={!!f.value}
+                                      onCheckedChange={(v) => {
+                                        f.onChange(v === true);
+                                        form.setValue(`lineItems.${index}.taxableTouched`, true);
+                                      }}
+                                    />
+                                    <span className="text-[10px] text-muted-foreground">
+                                      Taxable{taxRate > 0 ? (f.value ? ' (+GST on top)' : ' (GST incl.)') : ''}
+                                    </span>
+                                  </label>
+                                )} />
                               </div>
 
-                              {/* Line discount — flat ₹ off this line's MRP total */}
+                              {/* Item discount — ₹ off EVERY unit's MRP */}
                               <div className="col-span-3">
-                                <FormField control={form.control} name={`lineItems.${index}.discount`} render={({ field: f }) => (
+                                <FormField control={form.control} name={`lineItems.${index}.unitDiscount`} render={({ field: f }) => (
                                   <FormItem>
-                                    <FormLabel className="text-xs">Discount (₹)</FormLabel>
+                                    <FormLabel className="text-xs">Disc / Unit (₹)</FormLabel>
                                     <FormControl>
                                       <Input
                                         type="number" min={0} step="0.01"
-                                        max={itemId > 0 ? qty * unitPrice : undefined}
+                                        max={itemId > 0 ? unitPrice : undefined}
                                         disabled={!itemId || unitPrice <= 0}
                                         placeholder="0"
                                         className="h-8 text-xs"
@@ -1135,6 +1335,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                       />
                                     </FormControl>
                                     <FormMessage className="text-[10px]" />
+                                    {unitDisc > 0 && unitPrice > 0 && (
+                                      <p className="text-[10px] text-emerald-600 font-medium mt-0.5">
+                                        Effective ₹{Math.max(0, unitPrice - unitDisc).toLocaleString('en-IN', { minimumFractionDigits: 2 })}/unit
+                                      </p>
+                                    )}
                                   </FormItem>
                                 )} />
                               </div>
@@ -1183,13 +1388,40 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       Invoice Summary
                     </div>
                     <div className="px-3 py-2 space-y-1.5">
-                      {/* Item discounts — already netted into the figures below */}
+                      {/* Gross → item discounts → bill discount → taxable.
+                          Both discounts are PRE-tax and already netted into the
+                          taxable/GST figures below — shown here so the cashier
+                          can follow the arithmetic, never deducted twice. */}
+                      {(totals.itemDiscountTotal > 0 || totals.billDiscount > 0) && (
+                        <div className="flex justify-between text-muted-foreground">
+                          <span>Gross Item Value</span>
+                          <span className="font-mono">₹{totals.grossItemValue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      )}
                       {totals.itemDiscountTotal > 0 && (
                         <div className="flex justify-between text-emerald-600 font-medium">
                           <span>Item Discounts (off MRP)</span>
                           <span className="font-mono">−₹{totals.itemDiscountTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                         </div>
                       )}
+                      {/* Bill discount — ONE pre-tax amount on the whole invoice,
+                          split across lines in proportion to their value */}
+                      <div className="flex justify-between items-center gap-2">
+                        <span className="text-emerald-600 font-medium">Bill Discount (pre-tax)</span>
+                        <FormField control={form.control} name="billDiscount" render={({ field: f }) => (
+                          <FormItem className="space-y-0">
+                            <FormControl>
+                              <Input
+                                type="number" min={0} step="0.01"
+                                placeholder="0"
+                                className="h-7 w-28 text-xs text-right font-mono"
+                                {...f}
+                                value={(f.value as any) ?? ''}
+                              />
+                            </FormControl>
+                          </FormItem>
+                        )} />
+                      </div>
                       {/* Subtotal */}
                       <div className="flex justify-between text-muted-foreground">
                         <span>Taxable Amount</span>
@@ -1244,7 +1476,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         <div className="flex justify-between text-emerald-600 font-medium">
                           <span className="flex items-center gap-1">
                             <Check className="w-3.5 h-3.5" />
-                            {watchCouponCode ? <>Coupon <span className="font-mono text-xs ml-1">{watchCouponCode}</span></> : 'Bill Discount'}
+                            {watchCouponCode ? <>Coupon <span className="font-mono text-xs ml-1">{watchCouponCode}</span></> : 'Flat Discount (post-tax)'}
                             {appliedCoupon?.discountType === 'percentage' && <span className="text-xs text-muted-foreground ml-1">({appliedCoupon.discountValue}%)</span>}
                             {!appliedCoupon && preservedBillDiscount !== null && preservedBillDiscount > 0 && <span className="text-xs text-muted-foreground ml-1">(original)</span>}
                           </span>
@@ -1261,7 +1493,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 )}
                 <div className="flex gap-2 justify-end w-full">
                   <Button variant="outline" type="button" onClick={() => { setIsOpen(false); setEditItem(null); form.reset(effectiveDefaultValues); }}>Cancel</Button>
-                  <Button type="submit" disabled={(editItem ? updateMutation.isPending : createMutation.isPending) || !watchLocationId || availableItems.length === 0 || totals.finalAmount === 0}>
+                  <Button type="submit" disabled={(editItem ? updateMutation.isPending : createMutation.isPending) || !watchLocationId || (!editItem && availableItems.length === 0) || totals.finalAmount === 0}>
                     {editItem
                       ? (updateMutation.isPending ? 'Saving…' : 'Save Changes')
                       : (createMutation.isPending ? 'Processing…' : 'Complete Sale')}
@@ -1373,6 +1605,15 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           </SheetHeader>
           {viewItem && (
             <div className="mt-6 space-y-5">
+              {viewInvoiceUrl && (
+                <div className="rounded-lg border border-border overflow-hidden bg-muted/20">
+                  <iframe
+                    src={viewInvoiceUrl}
+                    title="Invoice preview"
+                    className="w-full h-[440px]"
+                  />
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 {[
                   ['Customer', viewItem.customerName || 'Walk-in'],

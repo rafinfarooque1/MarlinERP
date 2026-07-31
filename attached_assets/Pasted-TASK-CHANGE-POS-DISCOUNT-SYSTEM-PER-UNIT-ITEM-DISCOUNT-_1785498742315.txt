@@ -1,0 +1,658 @@
+TASK: CHANGE POS DISCOUNT SYSTEM — PER-UNIT ITEM DISCOUNT + BILL-LEVEL DISCOUNT
+
+Implement this in the Point of Sale create AND edit-sale workflows.
+
+IMPORTANT:
+There must be TWO independent discount concepts:
+
+1. ITEM DISCOUNT — discount per unit / on MRP
+2. BILL DISCOUNT — one discount on the whole invoice
+
+Do not mix these two calculations.
+
+==================================================
+1. CHANGE CURRENT ITEM DISCOUNT BEHAVIOUR
+==================================================
+
+Currently the Discount ₹ field appears to deduct the entered amount only once
+from the total line amount.
+
+Example of CURRENT behaviour:
+
+MRP = ₹100
+Qty = 10
+Discount = ₹10
+
+Current system effectively calculates:
+
+₹100 × 10 = ₹1,000
+₹1,000 - ₹10 = ₹990
+
+THIS MUST CHANGE.
+
+The Discount ₹ field beside each item must mean:
+
+"DISCOUNT PER UNIT"
+
+or simply display:
+
+Discount / Unit (₹)
+
+Example:
+
+MRP = ₹100
+Discount / Unit = ₹10
+
+Effective selling price per unit = ₹90.
+
+Qty = 10
+
+Line value before applicable GST treatment =:
+
+₹90 × 10 = ₹900
+
+Therefore the ₹10 discount applies to EVERY UNIT.
+
+==================================================
+2. ITEM DISCOUNT FORMULA
+==================================================
+
+For every line:
+
+effectiveUnitPrice = MRP - unitDiscount
+
+Then calculate the line using:
+
+effectiveUnitPrice × quantity
+
+Example:
+
+MRP                  ₹100
+Discount / Unit       ₹10
+Effective Price       ₹90
+Qty                     10
+Effective Line Value ₹900
+
+Do NOT calculate:
+
+(MRP × Qty) - Discount
+
+Instead calculate:
+
+(MRP - DiscountPerUnit) × Qty
+
+==================================================
+3. VALIDATION
+==================================================
+
+Item discount cannot be:
+
+negative
+greater than MRP
+
+Therefore:
+
+0 <= unitDiscount <= MRP
+
+Example:
+
+MRP ₹100
+Discount ₹100 = allowed
+Discount ₹101 = rejected
+
+Backend must enforce this too.
+
+==================================================
+4. TAXABLE CHECKBOX MUST CONTINUE WORKING
+==================================================
+
+The POS already has the new:
+
+☑ Taxable (+GST on top)
+
+checkbox.
+
+The item discount must be applied BEFORE the GST calculation.
+
+The effective price after item discount becomes the price used for determining
+the taxable value.
+
+--------------------------------------------------
+A. TAXABLE CHECKED
+--------------------------------------------------
+
+Taxable checked means GST EXCLUSIVE.
+
+Example:
+
+MRP = ₹200
+Item Discount / Unit = ₹20
+
+Effective unit price = ₹180
+
+Qty = 1
+GST = 5%
+
+Taxable value = ₹180
+GST = ₹9
+Grand line amount = ₹189
+
+For Qty 10:
+
+Taxable value:
+₹180 × 10 = ₹1,800
+
+GST:
+₹90
+
+Line total:
+₹1,890
+
+--------------------------------------------------
+B. TAXABLE NOT CHECKED
+--------------------------------------------------
+
+Taxable unchecked means the effective selling price is GST INCLUSIVE.
+
+Example:
+
+MRP = ₹200
+Item Discount = ₹20
+
+Effective GST-inclusive price = ₹180
+
+GST 5%
+
+Taxable value must be extracted from ₹180:
+
+₹180 / 1.05 = ₹171.428...
+
+GST = ₹8.571...
+
+Final amount remains:
+
+₹180
+
+For Qty 10:
+
+Final line amount = ₹1,800
+
+Extract taxable value and GST from that ₹1,800 using the existing correct
+CGST/SGST/IGST rules.
+
+IMPORTANT:
+
+Do NOT calculate GST on ₹200 after applying a ₹20 discount.
+
+The discount reduces the selling price FIRST.
+
+==================================================
+5. ADD SECOND DISCOUNT — BILL DISCOUNT
+==================================================
+
+Add a completely separate field in:
+
+INVOICE SUMMARY
+
+called:
+
+Bill Discount (₹)
+
+This discount applies ONCE to the entire invoice.
+
+Example:
+
+Items after item-level discounts = ₹5,000
+Bill Discount = ₹500
+
+Final payable amount = ₹4,500
+subject to the correct GST/tax allocation rules described below.
+
+This must NOT be confused with item discount.
+
+==================================================
+6. BILL DISCOUNT TAX TREATMENT
+==================================================
+
+Do NOT simply calculate GST first and subtract ₹500 from Grand Total.
+
+The invoice-level discount reduces the consideration for the goods.
+
+Therefore distribute the Bill Discount proportionately across eligible invoice
+lines before determining the final taxable values and GST amounts.
+
+Example:
+
+Line A pre-bill-discount basis = ₹3,000
+Line B pre-bill-discount basis = ₹2,000
+
+Total = ₹5,000
+
+Bill Discount = ₹500
+
+Allocation:
+
+Line A gets 60% of discount = ₹300
+Line B gets 40% = ₹200
+
+Then calculate final taxable value/GST for each line using its adjusted amount
+and its own:
+
+GST rate
+CGST/SGST/IGST treatment
+taxable inclusive/exclusive setting
+
+This is especially important when the invoice contains items with different GST
+rates.
+
+Do not use a mathematically incorrect shortcut that changes GST disproportionately.
+
+Handle rounding carefully so allocated discount totals exactly equal the entered
+Bill Discount.
+
+==================================================
+7. POS UI
+==================================================
+
+For each item show clearly:
+
+Item
+Qty
+MRP
+Discount / Unit (₹)
+Taxable checkbox
+
+Do not label the existing field only "Discount ₹" because it is ambiguous.
+
+Use:
+
+Discount / Unit (₹)
+
+Optionally show a small calculated value near the line:
+
+Effective Rate: ₹90
+
+when:
+
+MRP = ₹100
+Discount / Unit = ₹10
+
+This will make it immediately clear what price is actually being charged.
+
+==================================================
+8. INVOICE SUMMARY
+==================================================
+
+Update the summary so the calculation is understandable.
+
+Suggested structure:
+
+Gross Item Value              ₹xxxxx
+Item Discounts                -₹xxxxx
+Taxable Amount                 ₹xxxxx
+CGST                           ₹xxxxx
+SGST                           ₹xxxxx
+IGST                           ₹xxxxx
+Bill Discount                 -₹xxxxx
+Grand Total                    ₹xxxxx
+
+However, make sure the displayed taxable/GST values represent the FINAL
+post-discount tax calculation.
+
+Do not show misleading intermediate values.
+
+==================================================
+9. ITEM DISCOUNT TOTAL
+==================================================
+
+For reporting/display:
+
+Total Item Discount =
+sum(DiscountPerUnit × Qty)
+
+Example:
+
+Item A:
+₹10 discount × 10 qty = ₹100
+
+Item B:
+₹20 discount × 5 qty = ₹100
+
+Total Item Discounts = ₹200.
+
+Bill Discount remains separate.
+
+Example:
+
+Total Item Discounts = ₹200
+Bill Discount = ₹500
+
+Total commercial discount = ₹700
+
+But preserve the distinction in database/reporting.
+
+==================================================
+10. DATABASE / API
+==================================================
+
+Do not implement this only in React/UI.
+
+Inspect the existing sale/invoice schema and API.
+
+Persist separately:
+
+item/unit discount
+invoice/bill discount
+
+Do NOT overload one existing discount field to represent both concepts.
+
+If the existing line discount column currently means line-total discount,
+carefully migrate/adjust semantics without corrupting historical invoices.
+
+CRITICAL:
+
+Existing historical sales must continue showing their original totals.
+
+Do NOT reinterpret old ₹10 line discounts as ₹10-per-unit if doing so would
+change historical invoices.
+
+If necessary introduce a new explicit field such as:
+
+unitDiscount
+
+and preserve the legacy field for old transactions.
+
+Similarly add an explicit invoice-level field such as:
+
+billDiscount
+
+using the project's existing naming conventions.
+
+==================================================
+11. CREATE SALE
+==================================================
+
+New sales must use the new calculation.
+
+Changing:
+
+MRP
+Qty
+Discount / Unit
+Taxable checkbox
+Bill Discount
+Customer
+
+must immediately recalculate the invoice preview correctly.
+
+==================================================
+12. EDIT SALE
+==================================================
+
+Edit Sale must support BOTH discount fields.
+
+When opening an existing new-format invoice:
+
+load its saved:
+
+unit discount per line
+bill discount
+
+exactly.
+
+Changing discount only must NOT affect inventory quantity.
+
+Do not trigger stock movement simply because:
+
+unit discount changed
+bill discount changed
+tax calculation changed
+
+Stock should change only when item/quantity/location changes according to the
+existing edit-sale stock reconciliation logic.
+
+==================================================
+13. CUSTOMER GST DEFAULT
+==================================================
+
+Preserve the intended Taxable checkbox behaviour:
+
+Customer HAS GSTIN:
+default Taxable checkbox = CHECKED
+
+Meaning effective item price is taxable value and GST is added on top.
+
+Customer DOES NOT have GSTIN / Walk-in:
+default Taxable checkbox = UNCHECKED
+
+Meaning effective selling price is GST-inclusive.
+
+But this is only the DEFAULT.
+
+Allow the user to manually change the checkbox when required.
+
+==================================================
+14. SALES INVOICE / PDF
+==================================================
+
+The generated sales invoice must reflect the new discount system correctly.
+
+For each item, ensure the invoice can clearly represent the actual:
+
+MRP/rate
+discount where applicable
+taxable value
+GST
+quantity
+final line value
+
+The invoice summary should separately represent bill-level discount where
+applicable.
+
+All CGST/SGST/IGST values printed on the invoice must reconcile exactly with the
+stored accounting transaction.
+
+==================================================
+15. ACCOUNTING
+==================================================
+
+This change must flow through the existing sales accounting correctly.
+
+After discounts, the final invoice accounting must reconcile with:
+
+Sales
+Output CGST
+Output SGST
+Output IGST
+Customer/Sundry Debtor
+Cash
+Bank
+Receivable
+
+as applicable.
+
+Do not create a difference between:
+
+POS total
+invoice PDF
+sales ledger
+GST reports
+customer balance
+cash/bank/receivable
+accounting voucher
+
+All must use the same canonical calculation.
+
+==================================================
+16. ROUNDING
+==================================================
+
+Use the ERP's existing currency precision policy consistently.
+
+Do calculations internally with sufficient precision and round only at the
+appropriate accounting boundary.
+
+Ensure:
+
+sum of line taxable values
++ GST
+- applicable discounts
++/- round off
+
+reconciles exactly to Grand Total.
+
+Do not allow ₹0.01 / ₹0.02 differences between invoice, GST and ledger postings.
+
+==================================================
+17. TEST CASES
+==================================================
+
+TEST A — PER-UNIT DISCOUNT
+
+MRP = ₹100
+Qty = 10
+Unit Discount = ₹10
+
+Expected effective rate:
+₹90
+
+Expected base line amount:
+₹900
+
+NOT ₹990.
+
+----------------------------------
+
+TEST B — NO ITEM DISCOUNT
+
+MRP = ₹100
+Qty = 10
+Discount = ₹0
+
+Expected:
+₹1,000 before applicable GST treatment.
+
+----------------------------------
+
+TEST C — TAXABLE CHECKED
+
+MRP = ₹200
+Discount = ₹20
+Qty = 1
+GST = 5%
+Taxable = checked
+
+Expected:
+
+Effective rate = ₹180
+Taxable = ₹180
+GST = ₹9
+Total = ₹189
+
+----------------------------------
+
+TEST D — TAXABLE UNCHECKED
+
+MRP = ₹200
+Discount = ₹20
+Qty = 1
+GST = 5%
+Taxable = unchecked
+
+Expected final selling amount:
+₹180
+
+Taxable and GST must be extracted from ₹180.
+
+----------------------------------
+
+TEST E — BILL DISCOUNT
+
+Invoice amount/basis = ₹5,000
+Bill Discount = ₹500
+
+Verify ₹500 is proportionately allocated across applicable lines and final
+taxable/GST values are recalculated correctly.
+
+----------------------------------
+
+TEST F — BOTH DISCOUNTS
+
+Multiple items with:
+
+different quantities
+different unit discounts
+different GST rates
+
+plus:
+
+Bill Discount = ₹500
+
+Verify exact taxable value, GST and Grand Total.
+
+----------------------------------
+
+TEST G — EDIT
+
+Open existing new-format invoice.
+
+Change only:
+
+Unit Discount ₹10 → ₹15
+
+Expected:
+
+invoice/tax/accounting recalculated
+inventory quantity unchanged.
+
+----------------------------------
+
+TEST H — HISTORICAL INVOICE
+
+Open an invoice created before this change.
+
+Expected:
+
+original amount and discount remain exactly as originally recorded.
+
+No historical financial values should change merely because this feature was
+deployed.
+
+==================================================
+18. SCOPE / SAFETY
+==================================================
+
+Do NOT change:
+
+purchase discount logic
+purchase accounting
+opening stock
+production accounting
+payroll
+warehouse stock quantities
+
+unless shared code absolutely requires a safe compatibility change.
+
+Do not modify existing production invoices while testing.
+
+Use disposable development/test sales.
+
+==================================================
+FINAL REPORT
+==================================================
+
+After implementation tell me:
+
+1. How the old discount calculation worked.
+2. How per-unit discount now works.
+3. Where unitDiscount is persisted.
+4. Where billDiscount is persisted.
+5. How bill discount is allocated for GST.
+6. How inclusive vs exclusive GST is calculated after discounts.
+7. How historical invoices were protected.
+8. How Edit Sale handles the new fields.
+9. How accounting/GST/PDF totals are kept synchronized.
+10. Results of the test cases above.
+
+Do not stop at planning.
+Implement and test the complete change in development.

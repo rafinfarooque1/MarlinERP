@@ -99,6 +99,7 @@ export * from './rawMaterialUpdate';
 export * from './sale';
 export * from './saleInput';
 export * from './saleLineItem';
+export * from './saleLineItemPriceMode';
 export * from './salesSummary';
 export * from './salesSummaryByOutletItem';
 export * from './stockAlert';

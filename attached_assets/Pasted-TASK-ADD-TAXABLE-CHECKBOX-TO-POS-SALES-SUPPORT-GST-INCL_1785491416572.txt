@@ -1,0 +1,581 @@
+TASK: ADD “TAXABLE” CHECKBOX TO POS SALES — SUPPORT GST-INCLUSIVE B2C AND GST-EXCLUSIVE B2B PRICING
+
+Implement this in the existing Point of Sale / Record Sale / Edit Sale workflow.
+
+Do NOT redesign the entire POS.
+Do NOT change purchase pricing.
+Do NOT change GST rates stored in Item Master.
+Do NOT change inventory/stock deduction logic except where necessary to preserve the correct sale totals.
+Do NOT modify existing production sales while implementing/testing.
+
+==================================================
+1. REQUIRED UI CHANGE
+==================================================
+
+In each POS cart item row, add a small checkbox near the MRP field.
+
+Label:
+
+Taxable
+
+The layout should approximately be:
+
+MRP (₹)
+₹200.00
+
+☐ Taxable
+
+Keep it compact and visually aligned with:
+
+Qty | MRP | Taxable checkbox | Discount
+
+The checkbox means:
+
+CHECKED:
+“The entered MRP/rate is the TAXABLE VALUE before GST.”
+
+UNCHECKED:
+“The entered MRP/rate is the FINAL PRICE INCLUDING GST.”
+
+This distinction is critical.
+
+==================================================
+2. AUTOMATIC DEFAULT BASED ON CUSTOMER GSTIN
+==================================================
+
+When a customer is selected:
+
+IF customer has a valid/non-empty GSTIN:
+    Taxable = CHECKED by default
+
+IF customer has no GSTIN:
+    Taxable = UNCHECKED by default
+
+Therefore:
+
+B2B / GST customer
+→ checked automatically
+→ MRP is treated as taxable/base value
+→ GST is added on top.
+
+B2C / customer without GSTIN
+→ unchecked automatically
+→ MRP is treated as GST-inclusive final selling price
+→ taxable value and GST are extracted from the MRP.
+
+For Walk-in Customer:
+→ default UNCHECKED.
+
+==================================================
+3. USER MUST STILL BE ABLE TO OVERRIDE IT
+==================================================
+
+The automatic customer rule is only the DEFAULT.
+
+The user must be able to manually tick/untick Taxable for a sale line when necessary.
+
+Do not permanently lock it based on GSTIN.
+
+If customer changes, recalculate the default intelligently.
+
+Do not unexpectedly overwrite a deliberate user override unless the POS form is being freshly initialized/customer selection genuinely resets the pricing mode.
+
+==================================================
+4. CHECKED CALCULATION — GST EXCLUSIVE
+==================================================
+
+Example:
+
+MRP / Rate = ₹200
+GST = 5%
+Taxable = CHECKED
+
+Then:
+
+Taxable Value = ₹200.00
+GST = ₹10.00
+
+For intra-state:
+
+CGST 2.5% = ₹5.00
+SGST 2.5% = ₹5.00
+
+Grand Total = ₹210.00
+
+So:
+
+CHECKED:
+MRP = taxable/base price
+GST is ADDED ON TOP.
+
+Formula:
+
+Taxable Value = selling rate after applicable discount
+GST = Taxable Value × GST rate
+Final = Taxable Value + GST
+
+==================================================
+5. UNCHECKED CALCULATION — GST INCLUSIVE
+==================================================
+
+Example:
+
+MRP = ₹200
+GST = 5%
+Taxable = UNCHECKED
+
+₹200 is already the final GST-inclusive price.
+
+Therefore:
+
+Taxable Value =
+200 / 1.05
+= ₹190.476...
+
+Rounded/displayed appropriately:
+₹190.48
+
+GST:
+₹200 - ₹190.476...
+= ₹9.523...
+
+Displayed:
+₹9.52
+
+For intra-state:
+
+CGST = ₹4.76
+SGST = ₹4.76
+
+Grand Total = ₹200.00
+
+So:
+
+UNCHECKED:
+MRP = GST-inclusive final price
+GST must be extracted from the price.
+
+IMPORTANT:
+Do NOT calculate:
+
+₹200 - 5% = ₹190
+
+That is mathematically incorrect for extracting included GST.
+
+Correct formula is:
+
+Taxable Value =
+Inclusive Price / (1 + GST Rate / 100)
+
+GST =
+Inclusive Price - Taxable Value
+
+==================================================
+6. DISCOUNT
+==================================================
+
+Preserve the existing POS discount behaviour but make it mathematically consistent with the selected pricing mode.
+
+For TAXABLE CHECKED:
+
+Base selling amount
+= MRP × Qty - applicable discount
+
+Taxable Value
+= discounted base amount
+
+GST
+= added on top.
+
+For TAXABLE UNCHECKED:
+
+Final GST-inclusive selling amount
+= MRP × Qty - applicable discount
+
+Taxable Value
+= discounted inclusive amount / (1 + GST rate)
+
+GST
+= discounted inclusive amount - taxable value.
+
+Do not apply discount twice.
+
+Test discount + GST carefully.
+
+==================================================
+7. MULTIPLE ITEMS
+==================================================
+
+This setting should preferably be stored PER SALE LINE.
+
+Example:
+
+Item A
+₹200
+5% GST
+Taxable checked
+→ ₹210 final
+
+Item B
+₹100
+5% GST
+Taxable unchecked
+→ ₹100 final
+
+Invoice:
+
+Taxable values and GST must aggregate correctly.
+
+Do not assume every item in an invoice necessarily uses the same pricing treatment.
+
+==================================================
+8. ITEM MASTER
+==================================================
+
+Continue loading:
+
+MRP
+GST %
+HSN
+UOM
+
+from Item Master as currently implemented.
+
+Do NOT change Item Master MRP when the POS user checks/unticks Taxable.
+
+This checkbox changes how the sale interprets the entered MRP/rate for THIS transaction.
+
+It does not change the Item Master price itself.
+
+==================================================
+9. POS DISPLAY
+==================================================
+
+The cart line should immediately recalculate when Taxable is toggled.
+
+Example unchecked:
+
+MRP             ₹200
+☐ Taxable
+
+Subtotal        ₹190.48
+CGST + SGST     ₹9.52
+Final           ₹200.00
+
+Example checked:
+
+MRP             ₹200
+☑ Taxable
+
+Subtotal        ₹200.00
+CGST + SGST     ₹10.00
+Final           ₹210.00
+
+Update the INVOICE SUMMARY immediately as well.
+
+No page refresh should be required.
+
+==================================================
+10. B2B EXAMPLE
+==================================================
+
+Customer:
+ABC Traders
+
+GSTIN:
+29XXXXXXXXXXXXX
+
+Item:
+₹200
+
+GST:
+5%
+
+On customer selection:
+
+Taxable checkbox = CHECKED automatically.
+
+Result:
+
+Taxable Amount    ₹200.00
+CGST 2.5%           ₹5.00
+SGST 2.5%           ₹5.00
+Total GST           ₹10.00
+Grand Total        ₹210.00
+
+==================================================
+11. B2C EXAMPLE
+==================================================
+
+Customer:
+Walk-in Customer
+
+No GSTIN.
+
+Item:
+₹200
+
+GST:
+5%
+
+Taxable checkbox = UNCHECKED automatically.
+
+Result:
+
+Taxable Amount    ₹190.48
+CGST 2.5%           ₹4.76
+SGST 2.5%           ₹4.76
+Total GST            ₹9.52
+Grand Total        ₹200.00
+
+This matches the current B2C behaviour shown in my screenshot.
+
+==================================================
+12. INTERSTATE GST
+==================================================
+
+Do not break the existing GST jurisdiction logic.
+
+If transaction requires CGST + SGST:
+
+split GST correctly.
+
+If transaction requires IGST:
+
+use IGST.
+
+Example B2B interstate:
+
+Rate ₹200
+GST 5%
+Taxable checked
+
+Taxable = ₹200
+IGST = ₹10
+Grand Total = ₹210
+
+Example B2C interstate:
+
+MRP ₹200
+GST 5%
+Taxable unchecked
+
+Taxable ≈ ₹190.48
+IGST ≈ ₹9.52
+Grand Total = ₹200.
+
+Use the ERP's existing place-of-supply/state determination.
+
+==================================================
+13. SAVE THE PRICING MODE
+==================================================
+
+IMPORTANT:
+
+Persist this information with each sales invoice line.
+
+Do not make it UI-only.
+
+Each sale line must retain enough information to know whether the sale was:
+
+GST inclusive
+or
+GST exclusive / taxable-base pricing.
+
+Use a clearly named field such as:
+
+priceIncludesTax
+
+or equivalent consistent with the existing schema.
+
+Do not use an ambiguous field if the existing project already has an established inclusive/exclusive convention.
+
+==================================================
+14. EDIT SALE
+==================================================
+
+The same checkbox MUST appear in:
+
+Edit Sale
+
+When reopening an existing sale:
+
+Do NOT determine the checkbox again from the customer's GSTIN.
+
+Load the pricing mode that was actually saved with that invoice line.
+
+Example:
+
+A GST customer had Taxable manually unchecked when the original sale was made.
+
+When editing later:
+→ it must remain unchecked.
+
+Do not silently convert historical pricing.
+
+==================================================
+15. EXISTING SALES / BACKWARD COMPATIBILITY
+==================================================
+
+Do NOT change existing invoices.
+
+For historical sale lines that predate this new field, infer their original inclusive/exclusive treatment from the existing stored transaction values where safely possible.
+
+If current POS historically treated MRP as GST-inclusive, use that as the backward-compatible fallback unless the stored data proves otherwise.
+
+Do not recalculate and rewrite old invoices through a migration.
+
+==================================================
+16. SALES INVOICE PDF
+==================================================
+
+The invoice PDF must use the actual stored values from the sale.
+
+For both pricing modes it should correctly show:
+
+Unit Price
+Taxable Value
+GST rate
+CGST
+SGST
+IGST
+Line Total
+Grand Total
+
+Do not independently reinterpret MRP inside the PDF renderer.
+
+The PDF should display the finalized sales calculation.
+
+==================================================
+17. ACCOUNTING
+==================================================
+
+Accounting postings must follow the FINAL calculated transaction.
+
+Example:
+
+B2C ₹200 inclusive at 5%:
+
+Customer/Cash/Bank Dr   ₹200
+    Sales Cr            ₹190.48
+    Output GST Cr         ₹9.52
+
+Example:
+
+B2B ₹200 + 5%:
+
+Customer Dr             ₹210
+    Sales Cr            ₹200
+    Output GST Cr         ₹10
+
+Use the ERP's existing CGST/SGST/IGST ledgers and posting architecture.
+
+Do not create duplicate GST postings.
+
+==================================================
+18. CASH / CREDIT / RECEIVABLE
+==================================================
+
+Preserve existing payment behaviour.
+
+Cash sale:
+Cash increases by final Grand Total.
+
+Bank/UPI sale:
+appropriate bank/payment ledger increases by final Grand Total.
+
+Credit sale:
+customer receivable increases by final Grand Total.
+
+The Taxable checkbox changes price interpretation only.
+
+It must not create a separate payment workflow.
+
+==================================================
+19. VALIDATION TESTS
+==================================================
+
+Test at minimum:
+
+A.
+No-GST customer
+MRP ₹200
+GST 5%
+unchecked
+Expected total = ₹200.
+
+B.
+GST customer
+MRP ₹200
+GST 5%
+checked
+Expected total = ₹210.
+
+C.
+Manually tick Taxable for no-GST customer
+Expected = ₹210.
+
+D.
+Manually untick Taxable for GST customer
+Expected = ₹200.
+
+E.
+Edit each of the above sales.
+Checkbox must retain the saved value.
+
+F.
+Test quantity > 1.
+
+G.
+Test discount.
+
+H.
+Test multiple items.
+
+I.
+Test CGST + SGST.
+
+J.
+Test IGST.
+
+K.
+Test GST 0%.
+
+L.
+Verify invoice PDF.
+
+M.
+Verify accounting voucher.
+
+N.
+Verify customer receivable/cash/bank equals Grand Total.
+
+==================================================
+20. PRODUCTION SAFETY
+==================================================
+
+Do not alter genuine existing production sales for testing.
+
+Use disposable development/test sales and clean them up afterward.
+
+Do not publish automatically unless already authorized.
+
+Do not modify unrelated ERP modules.
+
+==================================================
+FINAL REPORT
+==================================================
+
+After implementation report:
+
+1. Where the Taxable checkbox was added.
+2. Field used to persist inclusive/exclusive pricing.
+3. GST-customer automatic default behaviour.
+4. Non-GST-customer automatic default behaviour.
+5. B2C ₹200 @ 5% test result.
+6. B2B ₹200 @ 5% test result.
+7. Discount test result.
+8. Edit Sale persistence test.
+9. Invoice PDF result.
+10. Accounting posting result.
+11. Confirm existing historical invoices were not modified.

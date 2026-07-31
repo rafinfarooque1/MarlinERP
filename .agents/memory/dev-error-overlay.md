@@ -1,0 +1,9 @@
+---
+name: Blank dev error overlay
+description: What "(unknown runtime error)" in the Vite dev overlay means and how it is suppressed
+---
+The dev runtime-error overlay plugin only reads `evt.error` from window `error`/`unhandledrejection` events. Browser-generated events that carry a `message` but NO Error object (classically "ResizeObserver loop completed with undelivered notifications", fired constantly by Radix/floating-ui popovers and comboboxes) render as a blank full-screen "(unknown runtime error)" modal with an empty stack. It blocks all clicks — automated UI tests see "click produced no state change" and locator timeouts, which looks exactly like an app bug.
+
+**Fix in place:** an inline classic `<script>` at the very top of `<head>` in the web app's index.html registers a window `error` listener BEFORE the plugin's module script (classic scripts run before any module), and `stopImmediatePropagation()`s ONLY events matching `/ResizeObserver loop/i` with no `evt.error`. Other error events without an Error object are logged with `console.warn('[error-event without Error object]', ...)` — check browser console logs for that tag when diagnosing.
+
+**How to apply:** if a blank "(unknown runtime error)" overlay appears with an empty stack, it is almost never a real crash — check for error events without an Error object before hunting in app code. Do not remove the inline guard; it must stay ABOVE all module scripts to win listener-registration order.

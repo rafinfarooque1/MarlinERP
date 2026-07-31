@@ -258,10 +258,13 @@ router.get("/reports/sales-by-location", requireModuleView("page:/reports/sales"
 });
 
 // ── Discount report — one row per discounted invoice ────────────────────────
-// itemDiscount = Σ line_items[].discount (₹ off line gross, already netted
-// into subtotal/tax at sale time); billDiscount = discount_total (bill-level
-// coupon, subtracted after tax). gross = subtotal + tax + itemDiscount, i.e.
-// what the customer would have paid at full MRP.
+// itemDiscount = Σ per-line ITEM discounts only. New-format lines store
+// discount = itemDiscount + billDiscountShare, so the share is subtracted
+// back out (legacy lines have no share — the subtraction is a no-op).
+// billDiscount = the pre-tax invoice-level bill discount PLUS the post-tax
+// coupon (discount_total) — both are invoice-level, matching the UI's
+// "Bill / Coupon Discounts" column. gross = subtotal + tax + itemDiscount +
+// bill_discount, i.e. what the customer would have paid at full MRP.
 router.get("/reports/discounts", requireModuleView("page:/reports/sales"), async (req, res): Promise<void> => {
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
@@ -286,13 +289,16 @@ router.get("/reports/discounts", requireModuleView("page:/reports/sales"), async
             COALESCE(s.payment_mode,'cash') AS payment_mode,
             COALESCE(s.subtotal,0) AS subtotal,
             COALESCE(s.tax_total,0) AS tax_total,
-            COALESCE(s.discount_total,0) AS bill_discount,
+            COALESCE(s.discount_total,0) + COALESCE(s.bill_discount,0) AS bill_discount,
+            COALESCE(s.bill_discount,0) AS pre_tax_bill_discount,
             d.item_discount,
             s.total_amount
      FROM sales s
      LEFT JOIN customers c ON c.id = s.customer_id
      CROSS JOIN LATERAL (
-       SELECT COALESCE(SUM(COALESCE((li->>'discount')::numeric, 0)), 0) AS item_discount
+       SELECT COALESCE(SUM(GREATEST(0,
+                COALESCE((li->>'discount')::numeric, 0)
+                - COALESCE((li->>'billDiscountShare')::numeric, 0))), 0) AS item_discount
        FROM jsonb_array_elements(COALESCE(s.line_items, '[]'::jsonb)) AS li
      ) d
      WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
@@ -301,7 +307,7 @@ router.get("/reports/discounts", requireModuleView("page:/reports/sales"), async
        AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
        AND ($4 = 0 OR COALESCE(s.location_id, s.outlet_id) = $4)
        AND ${discScopeCond}
-       AND (d.item_discount > 0 OR COALESCE(s.discount_total,0) > 0)
+       AND (d.item_discount > 0 OR COALESCE(s.discount_total,0) > 0 OR COALESCE(s.bill_discount,0) > 0)
      ORDER BY s.sale_date, s.id`,
     args,
   );
@@ -325,7 +331,10 @@ router.get("/reports/discounts", requireModuleView("page:/reports/sales"), async
     const itemDiscount = Number(r.item_discount);
     const billDiscount = Number(r.bill_discount);
     const totalDiscount = itemDiscount + billDiscount;
-    const gross = Number(r.subtotal) + Number(r.tax_total) + itemDiscount;
+    // Full-MRP gross adds back the PRE-tax deductions only (item + bill
+    // discount reduced subtotal/tax); the coupon is post-tax, so
+    // subtotal + tax already stands before it.
+    const gross = Number(r.subtotal) + Number(r.tax_total) + itemDiscount + Number(r.pre_tax_bill_discount);
     return {
       id: Number(r.id),
       invoiceNumber: r.invoice_number ?? `#${r.id}`,

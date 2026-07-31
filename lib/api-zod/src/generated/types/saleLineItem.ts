@@ -5,11 +5,19 @@
  * Marlin Frozen Fruits ERP API
  * OpenAPI spec version: 0.1.0
  */
+import type { SaleLineItemPriceMode } from './saleLineItemPriceMode';
 
 export interface SaleLineItem {
   itemId: number;
   quantity: number;
   unitPrice?: number;
+  /** TOTAL pre-tax discount on the line in rupees. For historical lines this is the amount the cashier typed (deducted once from the line total). For lines written by the per-unit discount system it is the DERIVED sum unitDiscount×quantity + billDiscountShare, kept so every consumer that recomputes gross as qty×unitPrice−discount stays correct without knowing about the newer fields. */
   discount?: number;
+  /** Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose 'discount' is a line-total amount and must not be reinterpreted. */
+  unitDiscount?: number;
+  /** This line's paise-exact share of the invoice-level bill discount, allocated proportionally to the line's post-item-discount value. Shares across the invoice sum exactly to the sale's billDiscount. */
+  billDiscountShare?: number;
   taxAmount?: number;
+  /** How the entered unitPrice is interpreted for THIS line. 'inclusive' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. 'exclusive': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line. */
+  priceMode?: SaleLineItemPriceMode;
 }

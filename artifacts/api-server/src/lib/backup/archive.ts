@@ -1,10 +1,12 @@
 /**
  * Archive assembly, checksums and the manifest.
  *
- * Zipping shells out to the `zip`/`unzip` binaries for the same reason the dump
- * shells out to `pg_dump`: they are already present, battle-tested, and produce
- * an archive any administrator can open by double-clicking it. A backup nobody
- * can open without the application is not a disaster-recovery artefact.
+ * Zipping is done IN-PROCESS (archiver/unzipper), not by shelling out to the
+ * `zip`/`unzip` binaries. The workspace happens to have those binaries, but the
+ * deployed runtime does not — a backup implemented as `spawn("zip")` works in
+ * development and dies with `spawn zip ENOENT` exactly where it matters, in
+ * production. The output is still a standard ZIP any administrator can open by
+ * double-clicking it; only the producer changed, not the format.
  *
  * ── A note on "encrypt backup metadata" ─────────────────────────────────────
  * The brief asks for encrypted metadata. Implemented literally — encrypting the
@@ -22,15 +24,14 @@
  * with a broken signature reports tampering. Integrity of the *payload* is
  * covered separately by a SHA-256 over every member file.
  */
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { createReadStream, createWriteStream } from "node:fs";
+import { mkdir, stat } from "node:fs/promises";
+import { dirname, resolve, sep } from "node:path";
+import { pipeline } from "node:stream/promises";
 
-const run = promisify(execFile);
-
-const ZIP_TIMEOUT_MS = 10 * 60 * 1000;
+import { ZipArchive } from "archiver";
+import { Open as unzipOpen } from "unzipper";
 
 export const BACKUP_FORMAT_VERSION = 1;
 
@@ -132,41 +133,76 @@ export function verifyManifestSignature(manifest: SignedManifest): SignatureStat
 // Zip / unzip
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function zipTool(bin: string, args: string[], cwd?: string): Promise<string> {
-  try {
-    const { stdout, stderr } = await run(bin, args, {
-      cwd,
-      timeout: ZIP_TIMEOUT_MS,
-      maxBuffer: 4 * 1024 * 1024,
-    });
-    return `${stdout ?? ""}${stderr ?? ""}`;
-  } catch (e: any) {
-    const detail = String(e?.stderr || e?.stdout || e?.message || e).trim();
-    throw new Error(`${bin} failed: ${detail.slice(0, 2000)}`);
-  }
+/**
+ * Zip the contents of `stageDir` into `outFile`, in-process and streamed.
+ *
+ * Members are stored relative to `stageDir` — `database.sql`, `uploads/…` —
+ * never with the absolute staging path baked in. The paths inside the archive
+ * are the contract with the restore side and with the administrator reading
+ * the brief's expected layout.
+ */
+export async function createZip(stageDir: string, outFile: string): Promise<void> {
+  await new Promise<void>((resolvePromise, reject) => {
+    const output = createWriteStream(outFile);
+    const archive = new ZipArchive({ zlib: { level: 6 } });
+    const fail = (e: unknown) =>
+      reject(new Error(`The archive could not be written: ${String((e as any)?.message ?? e).slice(0, 500)}`));
+    // 'close' on the file stream — not archiver's own 'finish' — is the moment
+    // every byte is actually on disk. Resolving earlier would let the caller
+    // checksum a file that is still being flushed.
+    output.on("close", resolvePromise);
+    output.on("error", fail);
+    archive.on("error", fail);
+    // archiver downgrades "a staged file vanished mid-walk" to a warning. For a
+    // backup that is a corruption, not a footnote — fail the whole archive.
+    archive.on("warning", fail);
+    archive.pipe(output);
+    // `false` = no wrapping root directory; includes empty directories.
+    archive.directory(stageDir, false);
+    void archive.finalize();
+  });
 }
 
 /**
- * Zip the contents of `stageDir` into `outFile`.
- *
- * Run with `cwd: stageDir` and a `.` target so members are stored as
- * `database.sql` and `uploads/…` rather than with the absolute staging path
- * baked in. The paths inside the archive are the contract with the restore side
- * and with the administrator reading the brief's expected layout.
+ * Extract every member of `zipFile` under `destDir`, streamed one member at a
+ * time. Entry paths are re-anchored under `destDir` and any entry that would
+ * escape it (a `../` or absolute path smuggled into the archive) is refused —
+ * an uploaded restore archive is untrusted input.
  */
-export async function createZip(stageDir: string, outFile: string): Promise<void> {
-  // -r recurse, -q quiet, -X drop platform extras that would differ per run.
-  await zipTool("zip", ["-r", "-q", "-X", outFile, "."], stageDir);
-}
-
 export async function extractZip(zipFile: string, destDir: string): Promise<void> {
-  await zipTool("unzip", ["-q", "-o", zipFile, "-d", destDir]);
+  const root = resolve(destDir);
+  let directory;
+  try {
+    directory = await unzipOpen.file(zipFile);
+  } catch (e: any) {
+    throw new Error(`The file could not be opened as a ZIP archive: ${String(e?.message ?? e).slice(0, 500)}`);
+  }
+  for (const entry of directory.files) {
+    const rel = entry.path.replace(/\\/g, "/").replace(/^\.\//, "");
+    const target = resolve(root, rel);
+    if (target !== root && !target.startsWith(root + sep)) {
+      throw new Error(`The archive contains an unsafe path and was not extracted: ${rel.slice(0, 200)}`);
+    }
+    if (entry.type === "Directory" || rel.endsWith("/")) {
+      await mkdir(target, { recursive: true });
+      continue;
+    }
+    await mkdir(dirname(target), { recursive: true });
+    await pipeline(entry.stream(), createWriteStream(target));
+  }
 }
 
 /** Member names inside an archive, used to detect an incomplete backup. */
 export async function listZipEntries(zipFile: string): Promise<string[]> {
-  const out = await zipTool("unzip", ["-Z", "-1", zipFile]);
-  return out.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.endsWith("/"));
+  let directory;
+  try {
+    directory = await unzipOpen.file(zipFile);
+  } catch (e: any) {
+    throw new Error(`The file could not be opened as a ZIP archive: ${String(e?.message ?? e).slice(0, 500)}`);
+  }
+  return directory.files
+    .map((f) => f.path.replace(/\\/g, "/").replace(/^\.\//, "").trim())
+    .filter((p) => p.length > 0 && !p.endsWith("/"));
 }
 
 /**

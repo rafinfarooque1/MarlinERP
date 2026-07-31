@@ -12,6 +12,10 @@ export const salesTable = pgTable("sales", {
   subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull().default("0"),
   taxTotal: numeric("tax_total", { precision: 12, scale: 2 }).notNull().default("0"),
   discountTotal: numeric("discount_total", { precision: 12, scale: 2 }).notNull().default("0"),
+  // Pre-tax invoice-level discount, allocated proportionally across lines (each
+  // line stores its billDiscountShare). Distinct from discountTotal, which is
+  // the post-tax coupon deduction. Column added by boot migration.
+  billDiscount: numeric("bill_discount", { precision: 12, scale: 2 }).notNull().default("0"),
   totalAmount: numeric("total_amount", { precision: 12, scale: 2 }).notNull().default("0"),
   paymentMode: text("payment_mode").notNull(),
   couponCode: text("coupon_code"),

@@ -1,0 +1,534 @@
+TASK: FIX BALANCE SHEET CASH GROUPING + CORRECT DATE-BASED OPENING/CLOSING STOCK
+
+Work in BUILD mode.
+
+This is an accounting/reporting correction. Inspect the existing ledger, stock batch, purchase-edit, inventory movement, Balance Sheet, Profit & Loss, Trial Balance, Cash Book and related reporting logic before changing anything.
+
+IMPORTANT:
+- Do NOT create test data in production.
+- Do NOT delete or modify genuine production transactions.
+- Do NOT change sales, purchase, payroll, GST or voucher accounting unless required to make the reports correctly derive from the existing transactions.
+- Do NOT hard-code balances.
+- Reports must derive from the underlying ledger/inventory transactions.
+- Preserve existing RBAC.
+- Fix the source logic, not just the displayed numbers.
+
+==================================================
+1. BALANCE SHEET — GROUP ALL CASH LEDGERS UNDER CASH
+==================================================
+
+Current problem:
+
+In Balance Sheet → Assets → Current Assets → Cash, some warehouse/location cash accounts are not being presented correctly.
+
+Examples visible in the current data include:
+- warehouse cash
+- outlet cash
+- QA Test Outlet cash
+- QA Test WH cash
+- any other location/warehouse cash account
+
+I want ONE parent grouping:
+
+CURRENT ASSETS
+  Cash
+    Ragiguda Cash
+    [Warehouse 2] Cash
+    [Outlet] Cash
+    QA Test Outlet Cash
+    QA Test WH Cash
+    any future cash account...
+
+Do NOT create separate Balance Sheet categories for each warehouse/outlet cash account.
+
+Any ledger whose actual account classification/type is CASH must automatically appear underneath the Cash parent.
+
+This must be dynamic:
+If a new warehouse, outlet, branch or manual cash ledger is created later and it is classified as Cash, it must automatically appear under:
+
+Assets → Current Assets → Cash
+
+No future code change should be necessary.
+
+Each child cash ledger must show its own balance.
+
+The Cash parent should equal:
+
+Cash total = SUM(all active cash ledger balances)
+
+Do not merge the underlying ledgers. They remain separate ledgers/accounts; only their Balance Sheet presentation is grouped.
+
+Bank accounts must remain separately grouped under:
+
+Current Assets → Bank
+
+Do not classify bank accounts as cash.
+
+Cash Book, ledger statements, Trial Balance and Balance Sheet must reconcile to the same underlying postings.
+
+==================================================
+2. REMOVE/ISOLATE DISPOSABLE TEST CASH ACCOUNTS
+==================================================
+
+The screenshots show accounts such as:
+
+- REGR-TEST-WH Cash
+- RBAC-NEG-WH Cash
+- UPI-REPRO-WH Cash
+- UPI-TEST-CREATE Cash
+- UITEST-GTNQe Cash
+- QA Test Outlet
+- QA Test WH
+
+First determine whether these are genuine production masters or disposable test fixtures.
+
+DO NOT automatically delete them.
+
+Report which ones are test-generated and which ones are genuine.
+
+If disposable development/test accounts are contaminating production accounting reports, isolate or remove them safely only after confirming they have no genuine production transactions.
+
+Never delete genuine ledger history merely to make the Balance Sheet look correct.
+
+==================================================
+3. PROFIT & LOSS — CORRECT OPENING STOCK
+==================================================
+
+The current Opening Stock logic must represent the inventory physically/financially available at the START of the selected reporting period.
+
+For a single-day report:
+
+Opening Stock for date D =
+Closing Stock at the end of D-1.
+
+Example:
+
+Closing Stock on 01-07-2026
+=
+Opening Stock on 02-07-2026.
+
+This relationship must always hold unless a legitimate backdated inventory transaction changes historical inventory.
+
+Opening Stock must NOT mean:
+- opening-stock ledger balance,
+- today's purchases,
+- current stock,
+- manually stored arbitrary value.
+
+It must be reconstructed from actual inventory movements/batches as of the beginning of the reporting period.
+
+==================================================
+4. PROFIT & LOSS — CORRECT CLOSING STOCK
+==================================================
+
+Closing Stock must mean:
+
+The value of stock actually remaining at the END of the selected reporting period.
+
+Conceptually:
+
+Opening inventory
++ stock received/purchased/produced
++ legitimate inward adjustments
+- stock sold/consumed/transferred out/write-offs
++/- legitimate inventory adjustments
+= Closing inventory
+
+Use the ERP's actual inventory movement model rather than creating a second independent stock calculation if an authoritative stock movement source already exists.
+
+For a report ending on date D:
+
+Closing Stock = inventory position as of end-of-day D.
+
+==================================================
+5. PURCHASE EDITS MUST RETROACTIVELY CORRECT STOCK
+==================================================
+
+This is particularly important.
+
+If a purchase is edited after it was originally saved, inventory history must reflect the EDITED purchase, not stale data from the original purchase.
+
+Example:
+
+Purchase originally contains:
+
+Mango 10 KG
+Strawberry 5 KG
+Blueberry 8 KG
+
+Later I edit that purchase and REMOVE Strawberry.
+
+After saving:
+
+- Strawberry quantity from that purchase must be removed from inventory.
+- Its stock batch/inventory movement must be removed/reversed correctly.
+- Its value must no longer be included in stock valuation.
+- Historical Opening/Closing Stock calculations must use the corrected purchase.
+- Live Stock must use the corrected purchase.
+- Batch/expiry information from the deleted line must not remain as an orphan batch.
+
+Likewise, if I change:
+
+quantity
+rate/cost
+batch
+MFG date
+expiry date
+item
+warehouse/location
+
+the associated inventory records must synchronize with the edited purchase.
+
+Do NOT simply update the purchase_bill_lines table while leaving old stock_batches or inventory movements unchanged.
+
+==================================================
+6. EDITING A PURCHASE MUST RECONCILE INVENTORY
+==================================================
+
+Implement purchase editing transactionally.
+
+Compare:
+
+OLD purchase lines
+versus
+NEW purchase lines.
+
+Then reconcile the inventory effects.
+
+Handle:
+
+A. Existing line unchanged
+→ no duplicate stock movement.
+
+B. Existing line quantity changed
+→ update/reconcile inventory by the correct delta or rebuild the linked movement safely.
+
+C. Existing line deleted
+→ reverse/remove that purchase line's inventory effect.
+
+D. New line added
+→ create the appropriate inventory effect.
+
+E. Item changed
+→ reverse old item's effect and create new item's effect.
+
+F. Warehouse/location changed
+→ remove stock from the old receiving location and recreate/reassign it correctly to the new receiving location.
+
+G. Batch/MFG/expiry changed
+→ linked stock batch must reflect the new information.
+
+H. Rate/cost changed
+→ inventory valuation must use the corrected cost according to the ERP's existing valuation method.
+
+The purchase edit + inventory reconciliation must be ONE atomic database transaction.
+
+If any part fails, rollback everything.
+
+Never leave:
+purchase updated + inventory stale
+or
+inventory updated + purchase stale.
+
+==================================================
+7. HISTORICAL REPORTING
+==================================================
+
+Opening and Closing Stock must work for:
+
+- single day
+- custom date range
+- month
+- quarter
+- financial year
+
+For a range:
+
+01-07-2026 to 31-07-2026
+
+Opening Stock =
+inventory value at end of 30-06-2026.
+
+Closing Stock =
+inventory value at end of 31-07-2026.
+
+For:
+
+02-07-2026 only
+
+Opening Stock =
+closing stock at end of 01-07-2026.
+
+Closing Stock =
+stock remaining at end of 02-07-2026.
+
+Therefore this invariant must hold:
+
+Closing Stock(D)
+=
+Opening Stock(D + 1 day)
+
+provided no backdated transaction has subsequently changed history.
+
+==================================================
+8. BACKDATED EDITS
+==================================================
+
+If I edit an old purchase, the ERP must recalculate historical stock positions naturally from the corrected inventory transaction history.
+
+Example:
+
+A purchase dated 01-07-2026 is edited on 31-07-2026.
+
+The correction must affect stock calculations from 01-07-2026 onward because the underlying transaction belongs to 01-07-2026.
+
+Do not treat the edit date as a new stock purchase date.
+
+Preserve audit information showing when the edit actually occurred.
+
+==================================================
+9. P&L PRESENTATION
+==================================================
+
+Profit & Loss should clearly show:
+
+EXPENSE / DEBIT
+Opening Stock        ₹X
+Purchases            ₹X
+Other Expenses       ₹X
+
+INCOME / CREDIT
+Sales                ₹X
+Closing Stock        ₹X
+Other Income         ₹X
+
+Use the ERP's existing accounting presentation where appropriate, but Opening Stock and Closing Stock must use the corrected date-based inventory valuation described above.
+
+Do not create fake journal vouchers merely to display opening/closing stock in the P&L unless the existing accounting architecture explicitly requires such postings.
+
+Prefer report-derived inventory valuation where appropriate.
+
+==================================================
+10. IMPORTANT ACCOUNTING RELATIONSHIP
+==================================================
+
+For trading inventory, validate the underlying relationship:
+
+COGS =
+Opening Stock
++ Purchases / applicable inventory costs
+- Closing Stock
+
+Do not blindly change the existing P&L formula if the ERP already uses perpetual inventory/COGS postings.
+
+First inspect whether this ERP uses:
+
+A. periodic inventory accounting
+or
+B. perpetual inventory accounting.
+
+Then implement Opening/Closing Stock presentation without double-counting inventory expense.
+
+This is critical.
+
+Do not create a situation where:
+purchase is already expensed
+AND
+COGS is also expensed
+AND
+opening/closing stock adjustment is applied again.
+
+Report the accounting model you found before finalizing.
+
+==================================================
+11. STOCK VALUATION
+==================================================
+
+Use the ERP's existing authoritative inventory valuation method.
+
+Do NOT invent a new valuation method.
+
+Determine whether current stock uses:
+- batch cost,
+- purchase cost,
+- weighted average,
+- FIFO,
+or another method.
+
+Opening Stock, Closing Stock and Live Stock valuation must use a consistent authoritative basis.
+
+The same physical stock should not have one value on Live Stock and another unexplained value in the Balance Sheet/P&L.
+
+==================================================
+12. INTEGRITY WARNING CURRENTLY SHOWN
+==================================================
+
+The Chart of Accounts currently shows:
+
+"Books integrity check failed"
+
+and an unexplained Balance Sheet difference.
+
+DO NOT hide this warning.
+
+Investigate it separately.
+
+The screenshot also indicates postings referring to ledgers that no longer exist.
+
+Do not manufacture a balancing entry.
+
+Identify:
+- orphan ledger references,
+- deleted ledger IDs still referenced by transactions,
+- test fixtures,
+- broken foreign-key relationships,
+- incorrect classification,
+- genuine accounting imbalance.
+
+Fix only defects that can be proven.
+
+Do NOT use Suspense Account or a forced balancing journal merely to make Assets = Liabilities.
+
+==================================================
+13. TESTS / ACCEPTANCE CRITERIA
+==================================================
+
+Create targeted tests.
+
+TEST 1 — Cash grouping
+Create/use multiple cash ledgers.
+
+Expected:
+All appear under Current Assets → Cash.
+Parent total equals sum of children.
+
+TEST 2 — New cash account
+Create disposable test cash account.
+
+Expected:
+Automatically appears under Cash without code modification.
+
+Delete test fixture after testing.
+
+TEST 3 — Daily stock continuity
+
+Expected:
+
+Closing Stock 01-07-2026
+=
+Opening Stock 02-07-2026.
+
+TEST 4 — Purchase line deletion
+
+Create disposable purchase with two items.
+Confirm stock.
+Edit purchase and delete one item.
+
+Expected:
+Deleted item's stock effect disappears completely.
+
+TEST 5 — Purchase quantity edit
+
+10 KG → 6 KG.
+
+Expected:
+stock decreases by exactly 4 KG, with no duplicate batch/movement.
+
+TEST 6 — Purchase expiry edit
+
+Change expiry date.
+
+Expected:
+Live Stock/batch expiry uses the new date and old expiry no longer triggers an incorrect expired-stock warning.
+
+TEST 7 — Purchase cost edit
+
+Change purchase rate.
+
+Expected:
+stock valuation updates according to the authoritative valuation method.
+
+TEST 8 — Historical reporting
+
+Edit a backdated disposable purchase.
+
+Expected:
+historical closing stock and subsequent opening stock recalculate correctly.
+
+TEST 9 — Accounting integrity
+
+After changes verify:
+
+Trial Balance Dr = Cr.
+
+Balance Sheet:
+Assets = Liabilities + Equity
+according to the ERP's existing sign convention.
+
+No new unexplained difference.
+
+==================================================
+14. PRODUCTION SAFETY
+==================================================
+
+Do not use genuine production purchases for testing.
+
+Do not edit/delete genuine stock.
+
+Do not edit genuine cash balances.
+
+Use disposable development/test records only.
+
+Clean them up afterward.
+
+Do not publish/deploy automatically unless that is already explicitly authorized.
+
+==================================================
+15. EXECUTION PRIORITY
+==================================================
+
+Use TARGETED execution.
+
+Inspect only:
+- Balance Sheet / Chart of Accounts reporting
+- cash/bank account classification
+- inventory movement/batch logic
+- purchase edit logic
+- Opening/Closing Stock P&L calculation
+- directly related APIs/database models/tests
+
+Do not perform a general ERP redesign.
+
+Do not fix unrelated findings automatically.
+
+Report unrelated findings separately.
+
+Run:
+- targeted tests
+- accounting reconciliation tests
+- typecheck
+- build if required
+
+Then stop.
+
+==================================================
+FINAL REPORT
+==================================================
+
+When finished tell me:
+
+1. Why warehouse/outlet cash accounts were being shown incorrectly.
+2. How Cash is now dynamically grouped.
+3. Exact definition now used for Opening Stock.
+4. Exact definition now used for Closing Stock.
+5. How purchase edits synchronize inventory/batches.
+6. What happens when a purchase line is deleted.
+7. How backdated edits affect historical stock.
+8. Which stock valuation method the ERP actually uses.
+9. Whether the ERP is periodic or perpetual inventory accounting.
+10. Whether Closing Stock(D) = Opening Stock(D+1) passed.
+11. Whether Trial Balance balances.
+12. Whether Balance Sheet balances.
+13. Explain any remaining Books Integrity warning.
+14. List files/migrations changed.
+15. Confirm no genuine production data was modified during testing.

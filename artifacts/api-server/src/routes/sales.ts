@@ -5,9 +5,10 @@ import { eq, and, inArray, sql } from "drizzle-orm";
 import { CreateSaleBody, GetSaleParams, SetItemPriceBody, ListItemPricesQueryParams } from "@workspace/api-zod";
 import { logActivity } from "../lib/audit";
 import { createInvoiceShareToken } from "../lib/shareToken";
+import { assembleInvoiceData, renderInvoicePdf } from "../services/invoicePdf";
 import { pool } from "@workspace/db";
 import { consumeBatches, restoreBatches } from "../lib/batches";
-import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
+import { writeStockLedger, batchResolveMeta, toTxnDate } from "../lib/stockLedger";
 import { buildBranchMaps } from "./stock";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { getUserDataScope, isLocationInScope, scopeSalesWhere } from "../lib/dataScope";
@@ -51,21 +52,161 @@ function computeInvoiceNumber(prefix: string, fy: string, seq: number): string {
   return `${prefix}/${fy}/${String(seq).padStart(4, '0')}`;
 }
 
-// GST is INCLUSIVE in MRP. taxable = gross / (1 + rate/100), tax = gross - taxable.
+// Per-line price interpretation, mirroring the purchases priceMode convention:
+//   'inclusive' (default — the treatment of every historical line): the entered
+//     price is the FINAL GST-inclusive price; tax is EXTRACTED from it,
+//     taxable = gross / (1 + rate/100). Never gross − rate% — that is wrong.
+//   'exclusive': the entered price is the TAXABLE BASE; tax is ADDED ON TOP.
 function computeLineTax(
-  grossAmount: number,   // MRP × qty (GST-inclusive)
+  grossAmount: number,   // qty × unitPrice − line discount
   taxRate: number,
   isInterState: boolean,
+  priceMode: 'inclusive' | 'exclusive' = 'inclusive',
 ): { taxRate: number; taxType: string; cgst: number; sgst: number; igst: number; taxAmount: number; taxableAmount: number } {
-  const taxableAmount = taxRate > 0
-    ? Math.round(grossAmount / (1 + taxRate / 100) * 100) / 100
-    : grossAmount;
-  const taxAmount = Math.round((grossAmount - taxableAmount) * 100) / 100;
+  let taxableAmount: number;
+  let taxAmount: number;
+  if (priceMode === 'exclusive') {
+    taxableAmount = Math.round(grossAmount * 100) / 100;
+    taxAmount = Math.round(taxableAmount * taxRate / 100 * 100) / 100;
+  } else {
+    taxableAmount = taxRate > 0
+      ? Math.round(grossAmount / (1 + taxRate / 100) * 100) / 100
+      : grossAmount;
+    taxAmount = Math.round((grossAmount - taxableAmount) * 100) / 100;
+  }
   if (isInterState) {
     return { taxRate, taxType: 'igst', cgst: 0, sgst: 0, igst: taxAmount, taxAmount, taxableAmount };
   }
+  // Odd-paise tax: rounding both halves independently would make
+  // cgst + sgst ≠ taxAmount (e.g. 0.05 → 0.03 + 0.03), so accounting heads
+  // and GST reports would disagree with the stored line tax. Round one half
+  // and give the exact remainder to the other.
   const half = Math.round(taxAmount / 2 * 100) / 100;
-  return { taxRate, taxType: 'cgst_sgst', cgst: half, sgst: half, igst: 0, taxAmount, taxableAmount };
+  const rest = Math.round((taxAmount - half) * 100) / 100;
+  return { taxRate, taxType: 'cgst_sgst', cgst: half, sgst: rest, igst: 0, taxAmount, taxableAmount };
+}
+
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+// ── Discount model ────────────────────────────────────────────────────────────
+// TWO independent discount concepts, never mixed:
+//   1. ITEM discount — `unitDiscount` ₹ off EVERY UNIT's MRP
+//      (effective price = unitPrice − unitDiscount, then × qty).
+//      Historical lines instead carry a line-TOTAL `discount` typed by the
+//      cashier; lines without `unitDiscount` keep that meaning forever.
+//   2. BILL discount — one pre-tax amount for the whole invoice, allocated
+//      paise-exactly across lines in proportion to each line's
+//      post-item-discount value, so each line's taxable value and GST are
+//      computed from its share. (Distinct from the post-tax coupon
+//      `discountTotal`, which stays a flat deduction off the grand total.)
+// Every stored line keeps `discount` = itemDiscount + billDiscountShare (the
+// TOTAL pre-tax ₹ off that line), because accounting, GST reports and the PDF
+// all recompute gross as qty × unitPrice − discount. The explicit
+// `unitDiscount` / `billDiscountShare` fields preserve the decomposition.
+
+// Largest-remainder allocation in integer paise: shares sum EXACTLY to the
+// bill discount, and no line's share exceeds its basis.
+function allocateBillDiscount(bases: number[], billDiscount: number): number[] {
+  const totalPaise = Math.round(billDiscount * 100);
+  const basePaise = bases.map(b => Math.max(0, Math.round(b * 100)));
+  const weightSum = basePaise.reduce((s, b) => s + b, 0);
+  if (totalPaise <= 0 || weightSum <= 0) return bases.map(() => 0);
+  const raw = basePaise.map(b => (totalPaise * b) / weightSum);
+  const floors = raw.map(Math.floor);
+  let remainder = totalPaise - floors.reduce((s, f) => s + f, 0);
+  // Hand the leftover paise to the largest fractional parts (ties → earlier
+  // line), never pushing a share past its own basis.
+  const order = raw.map((r, i) => ({ i, frac: r - Math.floor(r) }))
+    .sort((a, b) => b.frac - a.frac || a.i - b.i);
+  for (const { i } of order) {
+    if (remainder <= 0) break;
+    if (floors[i] < basePaise[i]) { floors[i] += 1; remainder -= 1; }
+  }
+  return floors.map(f => f / 100);
+}
+
+type BuiltLines =
+  | { ok: true; lineItems: any[]; billDiscount: number }
+  | { ok: false; error: string };
+
+// Single canonical computation for BOTH create and edit — the invoice preview,
+// the stored lines, the accounting receipt and the GST reports must never see
+// different math for the same sale.
+function buildSaleLines(
+  rawLineItems: Array<{ itemId: number; quantity: number; unitPrice: number; discount?: number; unitDiscount?: number | null; priceMode?: string }>,
+  itemTaxMap: Map<number, { taxRate: number; name: string; hsnCode: string | null; unit: string | null }>,
+  isInterState: boolean,
+  rawBillDiscount: unknown,
+): BuiltLines {
+  // Pass 1 — item-level discount and each line's pre-bill-discount basis.
+  const prepared: Array<{ li: any; priceMode: 'inclusive' | 'exclusive'; itemDiscount: number; unitDiscount: number | null; basis: number }> = [];
+  for (const li of rawLineItems) {
+    const priceMode: 'inclusive' | 'exclusive' = (li as any).priceMode === 'exclusive' ? 'exclusive' : 'inclusive';
+    const unitPrice = Number(li.unitPrice ?? 0);
+    let itemDiscount: number;
+    let unitDiscount: number | null = null;
+    if (li.unitDiscount !== undefined && li.unitDiscount !== null) {
+      // Per-unit path: ₹ off EVERY unit, capped by the unit price itself.
+      const ud = Number(li.unitDiscount);
+      if (!Number.isFinite(ud) || ud < 0) {
+        return { ok: false, error: `Discount per unit must be a non-negative amount (item ${li.itemId})` };
+      }
+      if (ud > unitPrice + 0.004) {
+        return { ok: false, error: `Discount per unit ₹${ud.toFixed(2)} cannot exceed the unit price ₹${unitPrice.toFixed(2)} (item ${li.itemId})` };
+      }
+      unitDiscount = ud;
+      itemDiscount = round2(ud * li.quantity);
+    } else {
+      // Legacy path (historical invoices, old clients): `discount` is a
+      // line-TOTAL amount deducted once. Never reinterpret it per-unit.
+      const d = Number(li.discount ?? 0);
+      const lineAmount = li.quantity * unitPrice;
+      if (!Number.isFinite(d) || d < 0) {
+        return { ok: false, error: `Line discount must be a non-negative amount (item ${li.itemId})` };
+      }
+      if (d > lineAmount + 0.004) {
+        return { ok: false, error: `Line discount ₹${d.toFixed(2)} cannot exceed the line amount ₹${lineAmount.toFixed(2)} (item ${li.itemId})` };
+      }
+      itemDiscount = d;
+    }
+    prepared.push({ li, priceMode, itemDiscount, unitDiscount, basis: Math.max(0, round2(li.quantity * unitPrice - itemDiscount)) });
+  }
+
+  // Pass 2 — bill discount, validated against what the goods are worth AFTER
+  // item discounts, then allocated paise-exactly.
+  const billDiscount = round2(Number(rawBillDiscount ?? 0));
+  if (!Number.isFinite(billDiscount) || billDiscount < 0) {
+    return { ok: false, error: 'Bill discount must be a non-negative amount' };
+  }
+  const basisSum = round2(prepared.reduce((s, p) => s + p.basis, 0));
+  if (billDiscount > basisSum + 0.004) {
+    return { ok: false, error: `Bill discount ₹${billDiscount.toFixed(2)} cannot exceed the item value after item discounts ₹${basisSum.toFixed(2)}` };
+  }
+  const shares = allocateBillDiscount(prepared.map(p => p.basis), billDiscount);
+
+  // Pass 3 — tax from each line's post-discount consideration, per its own
+  // rate and inclusive/exclusive treatment.
+  const lineItems = prepared.map((p, i) => {
+    const itemInfo = itemTaxMap.get(p.li.itemId);
+    const taxRate = itemInfo?.taxRate ?? 0;
+    const adjusted = round2(p.basis - shares[i]);
+    const taxInfo = computeLineTax(adjusted, taxRate, isInterState, p.priceMode);
+    return {
+      itemId: p.li.itemId,
+      itemName: itemInfo?.name ?? '',
+      hsnCode: itemInfo?.hsnCode ?? '',
+      unit: itemInfo?.unit ?? '',
+      quantity: p.li.quantity,
+      unitPrice: p.li.unitPrice,
+      discount: round2(p.itemDiscount + shares[i]),
+      ...(p.unitDiscount !== null ? { unitDiscount: p.unitDiscount } : {}),
+      billDiscountShare: shares[i],
+      priceMode: p.priceMode,
+      lineSubtotal: taxInfo.taxableAmount,
+      ...taxInfo,
+    };
+  });
+  return { ok: true, lineItems, billDiscount };
 }
 
 // ── Item Prices ───────────────────────────────────────────────────────────────
@@ -303,6 +444,7 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
       subtotal: Number(r.subtotal),
       taxTotal: Number(r.tax_total),
       discountTotal: Number(r.discount_total),
+      billDiscount: Number(r.bill_discount ?? 0),
       totalAmount,
       paymentMode: r.payment_mode,
       couponCode: r.coupon_code,
@@ -344,24 +486,8 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   const { pool: pgPool } = await import("@workspace/db");
 
   const rawLineItems = parsed.data.lineItems as Array<{
-    itemId: number; quantity: number; unitPrice: number; discount: number; taxAmount: number;
+    itemId: number; quantity: number; unitPrice: number; discount?: number; unitDiscount?: number | null; taxAmount: number;
   }>;
-
-  // ── Validate per-line discounts ───────────────────────────────────────────
-  // A line discount is ₹ off that line's gross (MRP × qty) and must never
-  // exceed it — GST is back-calculated from the discounted gross.
-  for (const li of rawLineItems) {
-    const d = Number(li.discount ?? 0);
-    const lineAmount = li.quantity * (li.unitPrice ?? 0);
-    if (!Number.isFinite(d) || d < 0) {
-      res.status(400).json({ error: `Line discount must be a non-negative amount (item ${li.itemId})` });
-      return;
-    }
-    if (d > lineAmount + 0.004) {
-      res.status(400).json({ error: `Line discount ₹${d.toFixed(2)} cannot exceed the line amount ₹${lineAmount.toFixed(2)} (item ${li.itemId})` });
-      return;
-    }
-  }
 
   // ── Discontinued items can't be billed again ──────────────────────────────
   // Create-only: an existing invoice stays editable and refundable after the
@@ -448,37 +574,26 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   const itemTaxMap = new Map(itemsData.map(i => [i.id, { taxRate: Number(i.taxRate), name: i.name, hsnCode: i.hsnCode, unit: i.unit }]));
 
   // ── Build enriched line items with GST ────────────────────────────────────
-  const lineItems = rawLineItems.map(li => {
-    const itemInfo = itemTaxMap.get(li.itemId);
-    const taxRate = itemInfo?.taxRate ?? 0;
-    const grossAmount = li.quantity * li.unitPrice - (li.discount ?? 0);
-    const taxInfo = computeLineTax(grossAmount, taxRate, isInterState);
-    return {
-      itemId: li.itemId,
-      itemName: itemInfo?.name ?? '',
-      hsnCode: itemInfo?.hsnCode ?? '',
-      unit: itemInfo?.unit ?? '',
-      quantity: li.quantity,
-      unitPrice: li.unitPrice,
-      discount: li.discount ?? 0,
-      lineSubtotal: taxInfo.taxableAmount,
-      ...taxInfo,
-    };
-  });
+  // Item discounts, then the pre-tax bill discount allocation, then tax — the
+  // one canonical computation shared with PUT (see buildSaleLines).
+  const built = buildSaleLines(rawLineItems, itemTaxMap, isInterState, (parsed.data as any).billDiscount ?? rawBody.billDiscount);
+  if (!built.ok) { res.status(400).json({ error: built.error }); return; }
+  const lineItems = built.lineItems;
+  const billDiscount = built.billDiscount;
 
   const subtotal = lineItems.reduce((s, li) => s + li.lineSubtotal, 0);
   const taxTotal = lineItems.reduce((s, li) => s + li.taxAmount, 0);
-  // Bill-level (coupon) discount ONLY. Per-line discounts are already netted
-  // into lineSubtotal/taxAmount above — adding them here would double-count.
-  // CreateSaleBody strips unknown keys, so read the raw body (same pattern as
-  // locationType/locationId).
+  // Coupon discount ONLY — post-tax, off the grand total. Item discounts and
+  // the bill discount are already netted into lineSubtotal/taxAmount above —
+  // deducting either here would double-count. CreateSaleBody strips unknown
+  // keys, so read the raw body (same pattern as locationType/locationId).
   const rawDiscountTotal = Number(rawBody.discountTotal ?? 0);
   if (!Number.isFinite(rawDiscountTotal) || rawDiscountTotal < 0) {
     res.status(400).json({ error: 'discountTotal must be a non-negative amount' });
     return;
   }
   if (rawDiscountTotal > subtotal + taxTotal + 0.004) {
-    res.status(400).json({ error: 'Bill discount cannot exceed the invoice amount' });
+    res.status(400).json({ error: 'Coupon discount cannot exceed the invoice amount' });
     return;
   }
   const discountTotal = Math.round(rawDiscountTotal * 100) / 100;
@@ -683,13 +798,13 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     // Counter-settled modes are recorded fully paid; credit sales start unpaid.
     const outletIdForInsert = locationType === 'outlet' ? locationId : null;
     ({ rows: [row] } = await txClient.query<any>(
-      `INSERT INTO sales (invoice_number, outlet_id, location_type, location_id, customer_id, sale_date, line_items, subtotal, tax_total, discount_total, total_amount, payment_mode, coupon_code, amount_paid, payment_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+      `INSERT INTO sales (invoice_number, outlet_id, location_type, location_id, customer_id, sale_date, line_items, subtotal, tax_total, discount_total, bill_discount, total_amount, payment_mode, coupon_code, amount_paid, payment_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
       [invoiceNumber, outletIdForInsert, locationType, locationId,
        parsed.data.customerId ?? null, parsed.data.saleDate,
        // Stored WITH the batch trail already resolved above, so the served lots
        // are committed with the bill rather than patched in afterwards.
-       JSON.stringify(lineItemsWithBatches), subtotal, taxTotal, discountTotal, totalAmount,
+       JSON.stringify(lineItemsWithBatches), subtotal, taxTotal, discountTotal, billDiscount, totalAmount,
        paymentModeIn, parsed.data.couponCode ?? null,
        settledAtSale ? totalAmount : 0, settledAtSale ? 'paid' : 'unpaid']
     ));
@@ -710,6 +825,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
         qtyChange: -Number(li.quantity),
         unitCost: Number(li.unitPrice ?? 0),
         docType: 'sale', docId: row.id,
+        txnDate: parsed.data.saleDate,
         // The table has no doc_number column, so the invoice number rides in
         // notes — without it the trail can't be tied back to a bill.
         notes: invoiceNumber,
@@ -773,6 +889,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     subtotal: Number(row.subtotal),
     taxTotal: Number(row.tax_total),
     discountTotal: Number(row.discount_total),
+    billDiscount: Number(row.bill_discount ?? 0),
     totalAmount: Number(row.total_amount),
     paymentMode: row.payment_mode,
     couponCode: row.coupon_code,
@@ -852,22 +969,8 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
   }
 
   const rawLineItems = parsed.data.lineItems as Array<{
-    itemId: number; quantity: number; unitPrice: number; discount: number; taxAmount: number;
+    itemId: number; quantity: number; unitPrice: number; discount?: number; unitDiscount?: number | null; taxAmount: number;
   }>;
-
-  // ── Validate per-line discounts (same rule as creation) ──────────────────
-  for (const li of rawLineItems) {
-    const d = Number(li.discount ?? 0);
-    const lineAmount = li.quantity * (li.unitPrice ?? 0);
-    if (!Number.isFinite(d) || d < 0) {
-      res.status(400).json({ error: `Line discount must be a non-negative amount (item ${li.itemId})` });
-      return;
-    }
-    if (d > lineAmount + 0.004) {
-      res.status(400).json({ error: `Line discount ₹${d.toFixed(2)} cannot exceed the line amount ₹${lineAmount.toFixed(2)} (item ${li.itemId})` });
-      return;
-    }
-  }
 
   // ── Determine new location ────────────────────────────────────────────────
   const rawBody = req.body as any;
@@ -913,35 +1016,23 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     : [];
   const itemTaxMap = new Map(itemsData.map(i => [i.id, { taxRate: Number(i.taxRate), name: i.name, hsnCode: i.hsnCode, unit: i.unit }]));
 
-  // Build enriched line items
-  const lineItems = rawLineItems.map(li => {
-    const itemInfo = itemTaxMap.get(li.itemId);
-    const taxRate = itemInfo?.taxRate ?? 0;
-    const grossAmount = li.quantity * li.unitPrice - (li.discount ?? 0);
-    const taxInfo = computeLineTax(grossAmount, taxRate, isInterState);
-    return {
-      itemId: li.itemId,
-      itemName: itemInfo?.name ?? '',
-      hsnCode: itemInfo?.hsnCode ?? '',
-      unit: itemInfo?.unit ?? '',
-      quantity: li.quantity,
-      unitPrice: li.unitPrice,
-      discount: li.discount ?? 0,
-      lineSubtotal: taxInfo.taxableAmount,
-      ...taxInfo,
-    };
-  });
+  // Build enriched line items — the SAME canonical computation as creation
+  // (per-unit item discounts, pre-tax bill discount allocation, then tax).
+  const built = buildSaleLines(rawLineItems, itemTaxMap, isInterState, (parsed.data as any).billDiscount ?? rawBody.billDiscount);
+  if (!built.ok) { res.status(400).json({ error: built.error }); return; }
+  const lineItems = built.lineItems;
+  const billDiscount = built.billDiscount;
 
   const subtotal = lineItems.reduce((s, li) => s + li.lineSubtotal, 0);
   const taxTotal = lineItems.reduce((s, li) => s + li.taxAmount, 0);
-  // Bill-level (coupon) discount ONLY — see POST handler for the semantics.
+  // Coupon discount ONLY — post-tax; see POST handler for the semantics.
   const rawDiscountTotal = Number(rawBody.discountTotal ?? 0);
   if (!Number.isFinite(rawDiscountTotal) || rawDiscountTotal < 0) {
     res.status(400).json({ error: 'discountTotal must be a non-negative amount' });
     return;
   }
   if (rawDiscountTotal > subtotal + taxTotal + 0.004) {
-    res.status(400).json({ error: 'Bill discount cannot exceed the invoice amount' });
+    res.status(400).json({ error: 'Coupon discount cannot exceed the invoice amount' });
     return;
   }
   const discountTotal = Math.round(rawDiscountTotal * 100) / 100;
@@ -1173,11 +1264,11 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     // 3. The sale row, carrying the lots that now serve it.
     ({ rows: [updated] } = await editTx.query<any>(
       `UPDATE sales SET outlet_id=$1, location_type=$2, location_id=$3, customer_id=$4, sale_date=$5,
-       line_items=$6::jsonb, subtotal=$7, tax_total=$8, discount_total=$9, total_amount=$10,
-       payment_mode=$11, coupon_code=$12, amount_paid=$13, payment_status=$14
-       WHERE id=$15 RETURNING *`,
+       line_items=$6::jsonb, subtotal=$7, tax_total=$8, discount_total=$9, bill_discount=$10, total_amount=$11,
+       payment_mode=$12, coupon_code=$13, amount_paid=$14, payment_status=$15
+       WHERE id=$16 RETURNING *`,
       [newOutletId, newLocationType, newLocationId, parsed.data.customerId ?? null,
-       parsed.data.saleDate, JSON.stringify(newLineItemsWithBatches), subtotal, taxTotal, discountTotal, totalAmount,
+       parsed.data.saleDate, JSON.stringify(newLineItemsWithBatches), subtotal, taxTotal, discountTotal, billDiscount, totalAmount,
        newPaymentMode, parsed.data.couponCode ?? null, newAmountPaid, newPaymentStatus, id]
     ));
 
@@ -1195,6 +1286,7 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
         qtyChange: Number(li.quantity),
         unitCost: Number((li as any).unitPrice ?? 0),
         docType: 'sale', docId: id,
+        txnDate: toTxnDate(existingRaw.sale_date),
         notes: `${existingRaw.invoice_number} — reversed for edit`,
       };
     }));
@@ -1208,6 +1300,7 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
         qtyChange: -Number(li.quantity),
         unitCost: Number(li.unitPrice ?? 0),
         docType: 'sale', docId: id,
+        txnDate: parsed.data.saleDate,
         notes: `${existingRaw.invoice_number} — re-applied after edit`,
       };
     }));
@@ -1584,6 +1677,33 @@ router.post("/sales/:id/share-token", async (req, res): Promise<void> => {
   res.json({ token, expiresAt });
 });
 
+// Authenticated inline invoice PDF. The View sheet embeds the invoice document
+// directly; a passive sheet open must NOT be a token-issuance event (each
+// share-token is a public bearer URL), so this route serves the PDF under the
+// caller's own session instead. Same rights as the `preview` intent and the
+// same LBAC scope rule the sales list uses.
+router.get("/sales/:id/invoice.pdf", async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const id = parseInt(raw, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid sale id" }); return; }
+  const mayView = await hasAnyModuleAction(req.employee?.hierarchyId, SHARE_PAGES, SHARE_INTENT_ACTIONS.preview);
+  if (!mayView) { res.status(403).json({ error: "You don't have permission to view invoices" }); return; }
+  const pdfScope = await getUserDataScope((req as any).employee);
+  const pdfParams: unknown[] = [id];
+  const { rows: [pdfRow] } = await pool.query(
+    `SELECT s.id FROM sales s WHERE s.id = $1 AND ${scopeSalesWhere(pdfScope, pdfParams)}`,
+    pdfParams,
+  );
+  if (!pdfRow) { res.status(404).json({ error: "Not found" }); return; }
+  const data = await assembleInvoiceData(id);
+  if (!data) { res.status(404).json({ error: "Not found" }); return; }
+  const { buffer, fileName } = await renderInvoicePdf(data);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+  res.setHeader("Cache-Control", "no-store");
+  res.send(buffer);
+});
+
 router.get("/sales/:id", requireModuleView("page:/sales/pos"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
@@ -1640,6 +1760,7 @@ router.get("/sales/:id", requireModuleView("page:/sales/pos"), async (req, res):
     subtotal: Number(row.subtotal),
     taxTotal: Number(row.tax_total),
     discountTotal: Number(row.discount_total),
+    billDiscount: Number(row.bill_discount ?? 0),
     totalAmount,
     paymentMode: row.payment_mode,
     couponCode: row.coupon_code,

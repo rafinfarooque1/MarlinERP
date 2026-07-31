@@ -39,7 +39,12 @@ export interface InvoiceShareLine {
   itemName?: string;
   quantity: number | string;
   unitPrice: number | string;
+  /** TOTAL pre-tax ₹ off this line (item discount + bill-discount share). */
   discount?: number | string;
+  /** ₹ off every unit's MRP — present on lines from the per-unit system. */
+  unitDiscount?: number | string | null;
+  /** This line's slice of the invoice-level bill discount. */
+  billDiscountShare?: number | string | null;
 }
 
 export interface InvoiceShareSale {
@@ -53,6 +58,8 @@ export interface InvoiceShareSale {
   subtotal?: number | string | null;
   taxTotal?: number | string | null;
   discountTotal?: number | string | null;
+  /** Pre-tax invoice-level discount, already allocated into the line figures. */
+  billDiscount?: number | string | null;
   couponCode?: string | null;
   totalAmount: number | string;
   amountPaid?: number | string | null;
@@ -99,26 +106,40 @@ export function composeInvoiceMessage({
   const seller = sale.outletName || companyName;
   const lineItems = sale.lineItems ?? [];
 
+  // Each line shows only its ITEM discount — the bill discount is one
+  // invoice-level figure and reads as such in the totals, not smeared across
+  // lines the customer never asked about.
+  const lineItemDisc = (li: InvoiceShareLine): number => {
+    if (li.unitDiscount != null) {
+      return Math.round(Number(li.unitDiscount) * Number(li.quantity) * 100) / 100;
+    }
+    // Historical lines: `discount` is the recorded line total (share is 0 on
+    // pre-bill-discount invoices, so the subtraction is a no-op there).
+    return Math.max(0, Number(li.discount ?? 0) - Number(li.billDiscountShare ?? 0));
+  };
+
   const itemLines = lineItems.map((li, i) => {
     const name = li.itemName || resolveItemName?.(li.itemId) || `Item #${li.itemId}`;
     const qty = Number(li.quantity);
     const rate = Number(li.unitPrice);
-    const disc = Number(li.discount ?? 0);
+    const disc = lineItemDisc(li);
     const lineAmt = qty * rate - disc;
     const discPart = disc > 0 ? ` - ${inr(disc)} disc` : '';
     return `  ${i + 1}. ${name}\n     ${qty} × ${inr(rate)}${discPart} = *${inr(lineAmt)}*`;
   });
 
-  const itemDiscAmt = lineItems.reduce((s, li) => s + Number(li.discount ?? 0), 0);
+  const itemDiscAmt = lineItems.reduce((s, li) => s + lineItemDisc(li), 0);
+  const billDiscount = Number(sale.billDiscount ?? 0);
   const taxTotal = Number(sale.taxTotal ?? 0);
   const discTotal = Number(sale.discountTotal ?? 0);
 
   const totalsLines: string[] = [];
   if (itemDiscAmt > 0) totalsLines.push(`  Item discounts: -${inr(itemDiscAmt)}`);
+  if (billDiscount > 0) totalsLines.push(`  Bill discount: -${inr(billDiscount)}`);
   totalsLines.push(`  Subtotal: ${inr(sale.subtotal ?? 0)}`);
   if (taxTotal > 0) totalsLines.push(`  GST: ${inr(taxTotal)}`);
   if (discTotal > 0) {
-    totalsLines.push(`  Bill discount${sale.couponCode ? ` (${sale.couponCode})` : ''}: -${inr(discTotal)}`);
+    totalsLines.push(`  ${sale.couponCode ? `Coupon (${sale.couponCode})` : 'Discount'}: -${inr(discTotal)}`);
   }
   totalsLines.push(`  *Total: ${inr(sale.totalAmount)}*`);
 

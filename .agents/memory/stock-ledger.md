@@ -6,6 +6,12 @@ description: Append-only audit table for every inventory movement; how writes ar
 ## The rule
 Every stock mutation writes one or more rows to `stock_ledger` — an append-only table (no UPDATE/DELETE). Running balance is computed via a window function at query time, not stored.
 
+## Business date: `txn_date` (added later)
+- `txn_date DATE` = the document's BUSINESS date (bill/sale/production date); `created_at` stays the immutable insert-time stamp. Backfilled from `created_at::date` by boot migration.
+- Date-based stock (`stockAsOf` in lib/books.ts) filters on `COALESCE(txn_date, created_at::date)` — this is what makes Closing(D) = Opening(D+1) and lets backdated documents enter history on their own date.
+- Writers pass `txnDate` for purchases/sales/production create+edit+delete; reversal rows are dated the document's OLD date, re-apply rows the NEW date, so pairs cancel in every period. Transfers/returns intentionally use insert time (that IS their business date). Sale cancellation is dated today (the cancellation is the event).
+- ONE sanctioned exception to append-only: a metadata-only date edit restates `txn_date` for ALL of the document's rows in one UPDATE (pairs move together). `created_at` is never rewritten; the edit is in the activity log.
+
 ## Table (startup migration in index.ts)
 ```sql
 CREATE TABLE IF NOT EXISTS stock_ledger (

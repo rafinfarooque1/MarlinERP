@@ -661,6 +661,7 @@ router.post("/productions", requireModuleAction("page:/production/production", "
         unitCost: Number(mat.unitCost ?? 0),
         docType: 'production',
         docId: rowId,
+        txnDate: parsed.data.productionDate,
       })),
       {
         txnType: 'production_output',
@@ -675,6 +676,7 @@ router.post("/productions", requireModuleAction("page:/production/production", "
         unitCost,
         docType: 'production',
         docId: rowId,
+        txnDate: parsed.data.productionDate,
       },
     ]);
 
@@ -1010,6 +1012,7 @@ router.delete("/productions/:id", requireModuleAction("page:/production/producti
         unitCost: Number(mat.unitCost ?? 0),
         docType: 'production',
         docId: id,
+        txnDate: delDate,
         notes: 'Production deleted — consumption reversed',
       })),
       {
@@ -1025,6 +1028,7 @@ router.delete("/productions/:id", requireModuleAction("page:/production/producti
         unitCost: 0,
         docType: 'production',
         docId: id,
+        txnDate: delDate,
         notes: 'Production deleted — output reversed',
       },
     ]);

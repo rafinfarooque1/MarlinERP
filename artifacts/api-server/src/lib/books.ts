@@ -253,7 +253,7 @@ export async function stockAsOf(asOf: string | null | undefined): Promise<StockA
   // Movement after the as-at date, and total logged movement, per product+location.
   const { rows: moves } = await pool.query(
     `SELECT material_type, ref_id::int AS ref_id, branch_type, branch_id::int AS branch_id,
-            COALESCE(SUM(qty_change::numeric) FILTER (WHERE created_at::date > $1::date), 0) AS after_qty,
+            COALESCE(SUM(qty_change::numeric) FILTER (WHERE COALESCE(txn_date, created_at::date) > $1::date), 0) AS after_qty,
             COALESCE(SUM(qty_change::numeric), 0) AS all_qty
        FROM stock_ledger
       GROUP BY 1, 2, 3, 4`,

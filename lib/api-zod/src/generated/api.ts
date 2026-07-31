@@ -1028,12 +1028,16 @@ export const ListSalesResponseItem = zod.object({
   "itemId": zod.number(),
   "quantity": zod.number(),
   "unitPrice": zod.number().optional(),
-  "discount": zod.number().optional(),
-  "taxAmount": zod.number().optional()
+  "discount": zod.number().optional().describe('TOTAL pre-tax discount on the line in rupees. For historical lines this is the amount the cashier typed (deducted once from the line total). For lines written by the per-unit discount system it is the DERIVED sum unitDiscount×quantity + billDiscountShare, kept so every consumer that recomputes gross as qty×unitPrice−discount stays correct without knowing about the newer fields.\n'),
+  "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
+  "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
+  "taxAmount": zod.number().optional(),
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
 })),
   "subtotal": zod.number().optional(),
   "taxTotal": zod.number().optional(),
   "discountTotal": zod.number().optional(),
+  "billDiscount": zod.number().optional().describe('Invoice-level discount in rupees, applied BEFORE tax: allocated proportionally across lines, reducing each line\'s taxable value and GST. Distinct from discountTotal (the post-tax coupon deduction).\n'),
   "totalAmount": zod.number(),
   "paymentMode": zod.string().optional(),
   "couponCode": zod.string().nullish(),
@@ -1053,11 +1057,15 @@ export const CreateSaleBody = zod.object({
   "itemId": zod.number(),
   "quantity": zod.number(),
   "unitPrice": zod.number().optional(),
-  "discount": zod.number().optional(),
-  "taxAmount": zod.number().optional()
+  "discount": zod.number().optional().describe('TOTAL pre-tax discount on the line in rupees. For historical lines this is the amount the cashier typed (deducted once from the line total). For lines written by the per-unit discount system it is the DERIVED sum unitDiscount×quantity + billDiscountShare, kept so every consumer that recomputes gross as qty×unitPrice−discount stays correct without knowing about the newer fields.\n'),
+  "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
+  "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
+  "taxAmount": zod.number().optional(),
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
 })),
   "paymentMode": zod.string(),
-  "couponCode": zod.string().optional()
+  "couponCode": zod.string().optional(),
+  "billDiscount": zod.number().optional().describe('Pre-tax invoice-level discount, allocated across lines.')
 })
 
 export const CreateSaleResponse = zod.object({
@@ -1072,12 +1080,16 @@ export const CreateSaleResponse = zod.object({
   "itemId": zod.number(),
   "quantity": zod.number(),
   "unitPrice": zod.number().optional(),
-  "discount": zod.number().optional(),
-  "taxAmount": zod.number().optional()
+  "discount": zod.number().optional().describe('TOTAL pre-tax discount on the line in rupees. For historical lines this is the amount the cashier typed (deducted once from the line total). For lines written by the per-unit discount system it is the DERIVED sum unitDiscount×quantity + billDiscountShare, kept so every consumer that recomputes gross as qty×unitPrice−discount stays correct without knowing about the newer fields.\n'),
+  "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
+  "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
+  "taxAmount": zod.number().optional(),
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
 })),
   "subtotal": zod.number().optional(),
   "taxTotal": zod.number().optional(),
   "discountTotal": zod.number().optional(),
+  "billDiscount": zod.number().optional().describe('Invoice-level discount in rupees, applied BEFORE tax: allocated proportionally across lines, reducing each line\'s taxable value and GST. Distinct from discountTotal (the post-tax coupon deduction).\n'),
   "totalAmount": zod.number(),
   "paymentMode": zod.string().optional(),
   "couponCode": zod.string().nullish(),
@@ -1101,12 +1113,16 @@ export const GetSaleResponse = zod.object({
   "itemId": zod.number(),
   "quantity": zod.number(),
   "unitPrice": zod.number().optional(),
-  "discount": zod.number().optional(),
-  "taxAmount": zod.number().optional()
+  "discount": zod.number().optional().describe('TOTAL pre-tax discount on the line in rupees. For historical lines this is the amount the cashier typed (deducted once from the line total). For lines written by the per-unit discount system it is the DERIVED sum unitDiscount×quantity + billDiscountShare, kept so every consumer that recomputes gross as qty×unitPrice−discount stays correct without knowing about the newer fields.\n'),
+  "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
+  "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
+  "taxAmount": zod.number().optional(),
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
 })),
   "subtotal": zod.number().optional(),
   "taxTotal": zod.number().optional(),
   "discountTotal": zod.number().optional(),
+  "billDiscount": zod.number().optional().describe('Invoice-level discount in rupees, applied BEFORE tax: allocated proportionally across lines, reducing each line\'s taxable value and GST. Distinct from discountTotal (the post-tax coupon deduction).\n'),
   "totalAmount": zod.number(),
   "paymentMode": zod.string().optional(),
   "couponCode": zod.string().nullish(),

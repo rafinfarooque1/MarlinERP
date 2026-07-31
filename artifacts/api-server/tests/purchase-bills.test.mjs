@@ -509,6 +509,21 @@ console.log('\n[edit] Editing a bill');
   assert('An unchanged re-save does not drift the average cost', r2(avgBefore) === r2(avgAfter),
     `${avgBefore} → ${avgAfter}`);
 
+  // A date typo corrected on the bill must reach the lot itself — expiry
+  // reports and FEFO picking read stock_batches, not the bill. (Regression:
+  // creditBatch COALESCE used to keep the lot's original dates forever.)
+  const dateFix = await patch(`/purchases/${res.data.id}`, {
+    lineItems: [{ ...line({ quantity: 6, unitCost: 100, gstRate: 5, mfgDate: '2026-01-05', expiryDate: '2027-09-30' }), batchNumber: lot0 }],
+  });
+  assert('A date-only correction saves', dateFix.status === 200, JSON.stringify(dateFix.data).slice(0, 150));
+  const lotDates = (await sql(
+    `SELECT mfg_date::text AS m, expiry_date::text AS e, quantity::float8 AS q FROM stock_batches
+      WHERE item_id=$1 AND material_type='material' AND branch_type='warehouse' AND branch_id=$2 AND batch_number=$3`,
+    [fixtures.materialId, WH_OK, lot0])).rows[0] ?? {};
+  assert('The corrected expiry reaches the stock lot', lotDates.e === '2027-09-30', `lot expiry=${lotDates.e}`);
+  assert('The corrected mfg date reaches the stock lot', lotDates.m === '2026-01-05', `lot mfg=${lotDates.m}`);
+  assert('The date correction did not change the lot quantity', r2(lotDates.q ?? 0) === 6, `qty=${lotDates.q}`);
+
   // Once the goods have moved on, the reversal can no longer tell the truth:
   // it would floor at zero and then re-add the full quantity, inventing stock.
   const consumed = await createBill(bill({ lineItems: [line({ quantity: 10, unitCost: 50, gstRate: 5 })] }));

@@ -50,6 +50,8 @@ export interface InvoiceLineItem {
   quantity: number;
   unitPrice: number;
   discount?: number;
+  unitDiscount?: number;
+  billDiscountShare?: number;
   lineSubtotal?: number;
   taxRate?: number;
   taxType?: string;
@@ -68,6 +70,7 @@ export interface InvoiceData {
     subtotal: number;
     taxTotal: number;
     discountTotal: number;
+    billDiscount: number;
     totalAmount: number;
     lineItems: InvoiceLineItem[];
     cancelledAt: string | null;
@@ -185,6 +188,7 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
       subtotal: Number(sale.subtotal),
       taxTotal: Number(sale.taxTotal),
       discountTotal: Number(sale.discountTotal),
+      billDiscount: Number((sale as any).billDiscount ?? 0),
       totalAmount: Number(sale.totalAmount),
       lineItems,
       cancelledAt: locRow?.cancelled_at ? new Date(locRow.cancelled_at).toISOString() : null,
@@ -644,11 +648,33 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
       .sort((a, b) => a[0] - b[0])
       .map(([rate, amt]) => [rate > 0 ? `${label} (${+rate.toFixed(2)}%)` : label, rs(amt)]);
 
-  const taxRows: [string, string][] = [["Taxable Value", rs(sale.subtotal)]];
+  // Decompose the pre-tax discounts so the customer can follow the arithmetic:
+  // Gross − Item Discounts − Bill Discount = the post-discount value whose
+  // Taxable + GST breakdown follows. The stored line figures already carry
+  // both discounts, so these rows are informational — nothing is deducted
+  // twice. Per-unit lines total unitDiscount × qty; historical lines keep the
+  // recorded line-total amount.
+  const grossItemValue = sale.lineItems.reduce(
+    (s, li) => s + Math.round(Number(li.quantity ?? 0) * Number(li.unitPrice ?? 0) * 100) / 100, 0);
+  const itemDiscTotal = sale.lineItems.reduce((s, li) => {
+    const perLine = li.unitDiscount != null
+      ? Math.round(Number(li.unitDiscount) * Number(li.quantity ?? 0) * 100) / 100
+      : Math.max(0, Number(li.discount ?? 0) - Number(li.billDiscountShare ?? 0));
+    return s + perLine;
+  }, 0);
+  const billDiscount = Number(sale.billDiscount ?? 0);
+
+  const taxRows: [string, string][] = [];
+  if (itemDiscTotal > 0.004 || billDiscount > 0.004) {
+    taxRows.push(["Gross Item Value", rs(grossItemValue)]);
+    if (itemDiscTotal > 0.004) taxRows.push(["Item Discounts", `- ${rs(itemDiscTotal)}`]);
+    if (billDiscount > 0.004) taxRows.push(["Bill Discount", `- ${rs(billDiscount)}`]);
+  }
+  taxRows.push(["Taxable Value", rs(sale.subtotal)]);
   taxRows.push(...slabRows("CGST", byRate.cgst));
   taxRows.push(...slabRows("SGST", byRate.sgst));
   taxRows.push(...slabRows("IGST", byRate.igst));
-  if (discount > 0) taxRows.push(["Discount", `- ${rs(discount)}`]);
+  if (discount > 0) taxRows.push(["Coupon Discount", `- ${rs(discount)}`]);
   taxRows.push(["Round Off", rs(roundOff)]);
 
   const TR_H    = 6;

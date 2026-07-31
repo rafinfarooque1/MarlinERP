@@ -1,0 +1,480 @@
+TASK: REPLACE THE ACTUAL ERP SALES INVOICE / TAX INVOICE FORMAT WITH THE UPLOADED REFERENCE IMAGE
+
+BUILD MODE — IMPLEMENT THIS, DO NOT ONLY ANALYZE OR DESCRIBE IT.
+
+I am attaching/uploading the exact invoice design I want.
+
+IMPORTANT:
+The previous task reported that the invoice format had been changed, but when I generate/view/download the bill in the ERP there is NO visible change.
+
+This time, first trace the COMPLETE invoice-generation path and identify exactly which renderer/template/component is used by the real ERP when I:
+
+1. View a sales invoice
+2. Print an invoice
+3. Download/export the invoice PDF
+
+Then modify THAT ACTUAL PRODUCTION invoice renderer.
+
+Do not create a separate unused sample/template.
+Do not only modify a preview component.
+Do not create a second invoice generator that the ERP never calls.
+
+The invoice produced from the ERP itself must visibly match the uploaded reference.
+
+==================================================
+1. USE THE UPLOADED IMAGE AS THE DESIGN REFERENCE
+==================================================
+
+Study the attached invoice image carefully.
+
+Recreate its visual structure as closely as practical using the ERP's actual invoice data.
+
+The uploaded image is a DESIGN REFERENCE only.
+
+DO NOT:
+- embed the uploaded invoice image as the invoice
+- hard-code Frozen Hub
+- hard-code customer Fasin
+- hard-code invoice numbers
+- hard-code ₹5,320
+- hard-code bank details
+- hard-code GST values
+- hard-code QR codes
+
+Every value must come dynamically from the actual ERP transaction/master data.
+
+==================================================
+2. REQUIRED INVOICE LAYOUT
+==================================================
+
+The invoice should follow this structure.
+
+TOP LEFT:
+- Company Profile logo
+- Issuing warehouse/business name
+- Address
+- Phone
+- Email
+- GSTIN
+
+TOP RIGHT:
+Large dark header:
+
+TAX INVOICE
+
+Below:
+- Invoice No.
+- Invoice Date
+- Place of Supply
+- Reverse Charge
+
+Then a horizontal divider.
+
+CUSTOMER SECTION:
+
+Left card:
+BILLED TO
+
+Show:
+- Name
+- Address
+- Mobile No.
+- GSTIN where available
+
+Right card:
+SHIPPED TO
+
+Show:
+- Name
+- Shipping address
+- Mobile No.
+- GSTIN where appropriate
+
+==================================================
+3. ITEM TABLE
+==================================================
+
+Use a professional table like the reference image.
+
+Columns:
+
+SL NO.
+DESCRIPTION OF GOODS
+HSN CODE
+QTY
+UNIT
+UNIT PRICE (Rs.)
+TAXABLE VALUE (Rs.)
+CGST
+  RATE %
+  AMOUNT
+SGST
+  RATE %
+  AMOUNT
+IGST
+  RATE %
+  AMOUNT
+TOTAL (Rs.)
+
+Support multiple invoice lines correctly.
+
+The table must dynamically expand across pages when necessary.
+
+Do not allow text or numbers to overlap.
+
+Repeat the table header on subsequent PDF pages if required.
+
+==================================================
+4. GST CALCULATION DISPLAY
+==================================================
+
+Display CGST + SGST for intra-state sales.
+
+Example:
+
+GST 5%:
+CGST 2.5%
+SGST 2.5%
+
+For inter-state sales display IGST instead.
+
+Use the ERP's existing tax calculation engine.
+
+DO NOT recalculate accounting independently just for the PDF.
+
+The PDF must display the same amounts stored/calculated by the sales invoice.
+
+==================================================
+5. TOTAL SECTION
+==================================================
+
+Below the item table show:
+
+Left:
+
+AMOUNT IN WORDS
+
+Automatically convert the actual Grand Total to Indian currency words.
+
+Also show:
+
+"Certified that the particulars given above are true and correct."
+
+Right:
+
+Taxable Value
+CGST
+SGST
+IGST where applicable
+Round Off
+GRAND TOTAL
+
+The Grand Total should be visually prominent like the uploaded reference.
+
+==================================================
+6. PAYMENT STATUS
+==================================================
+
+Add the horizontal Payment Status section shown in the reference.
+
+Display:
+
+PAYMENT STATUS
+
+Invoice Total
+Amount Received
+Balance Due
+
+Then badge:
+
+PAID
+PARTIALLY PAID
+UNPAID
+
+The status MUST be derived dynamically from the actual customer receivable/settlement data.
+
+If a receipt/manual accounting settlement legitimately clears the receivable according to the ERP's accounting rules, the invoice status should reflect the real outstanding balance.
+
+Do not store an unrelated duplicate payment-status value.
+
+==================================================
+7. AMOUNT PAYABLE
+==================================================
+
+Add the bottom-left Amount Payable card.
+
+Example structure:
+
+AMOUNT PAYABLE
+
+Rs. X,XXX.XX
+
+If balance remains:
+
+"Please settle this balance by bank transfer using the details alongside."
+
+If fully paid, show the appropriate paid state instead of asking for payment.
+
+==================================================
+8. WAREHOUSE-SPECIFIC BILLING DETAILS
+==================================================
+
+IMPORTANT:
+
+The invoice is issued by the selected SALES WAREHOUSE / LOCATION.
+
+Therefore billing details should primarily come from that warehouse's billing profile.
+
+Use warehouse fields for:
+
+- warehouse/business display name
+- address
+- phone
+- email
+- GSTIN
+- FSSAI licence
+- bank account holder name
+- bank name
+- branch
+- account number
+- IFSC
+- UPI ID
+- any other warehouse-specific invoice information
+
+Different warehouses can therefore issue invoices with different bank/payment/contact details.
+
+Do NOT always use one global company bank account.
+
+==================================================
+9. COMPANY LOGO
+==================================================
+
+The LOGO is different.
+
+Use the logo uploaded in:
+
+Company → Profile
+
+as the invoice logo.
+
+There should be ONE authoritative company logo.
+
+Do not require the same logo to be uploaded separately for every warehouse.
+
+The invoice header should therefore use:
+
+Logo = Company Profile logo
+
+Invoice/business/contact/bank details = issuing Warehouse billing profile
+
+If no logo exists, render the invoice cleanly without a broken-image icon.
+
+==================================================
+10. FSSAI
+==================================================
+
+The warehouse profile should support:
+
+FSSAI Licence Number
+
+Save it correctly to the database/API.
+
+Display the issuing warehouse's FSSAI number on the invoice in an appropriate location near the GST/business information.
+
+Do not hard-code FSSAI.
+
+==================================================
+11. BANK ACCOUNT DETAILS
+==================================================
+
+Create the bottom Bank Account Details section matching the reference.
+
+Show:
+
+BANK ACCOUNT DETAILS
+
+Account Holder Name
+Bank Name
+Branch
+Account Number
+IFSC Code
+Payment Mode
+
+These values must come from the issuing warehouse's saved billing/bank profile.
+
+If some optional bank fields are blank, gracefully omit them instead of printing "undefined", "null", etc.
+
+==================================================
+12. SCAN & PAY / UPI QR
+==================================================
+
+If the issuing warehouse has a UPI ID, generate the QR dynamically.
+
+Section:
+
+SCAN & PAY
+
+[QR CODE]
+
+UPI ID: xxxxx
+
+Preferably encode a valid UPI payment URI using:
+
+- payee UPI ID
+- payee name
+- invoice balance payable
+- invoice/reference number
+
+Do NOT use a static QR image.
+
+If there is no UPI ID, hide the Scan & Pay block cleanly and allow Bank Account Details to use the available space.
+
+==================================================
+13. FOOTER
+==================================================
+
+Match the reference styling:
+
+"Thank You For Your Business!"
+
+and:
+
+"This is a computer-generated invoice."
+
+Do not require a physical signature unless the existing ERP business rules require one.
+
+==================================================
+14. LOGO BUG — VERIFY, DON'T ASSUME
+==================================================
+
+The previous implementation claimed the Company Profile logo was saved server-side.
+
+Verify this for real.
+
+Test:
+
+1. Upload/change logo in Company Profile.
+2. Save.
+3. Refresh browser.
+4. Reopen Company Profile.
+5. Verify logo persists.
+6. Generate a REAL ERP sales invoice PDF.
+7. Verify that exact logo appears in the PDF.
+
+If the browser UI uses a blob URL/base64/localStorage value that the server-side PDF renderer cannot access, fix the persistence architecture properly.
+
+Do not report "logo fixed" until the REAL downloaded invoice contains it.
+
+==================================================
+15. FIND THE ACTUAL INVOICE RENDERER
+==================================================
+
+Before coding, trace the route.
+
+Document internally:
+
+Sales invoice screen
+→ View/Print/Download action
+→ API endpoint
+→ invoice service
+→ PDF renderer/template
+→ returned PDF/file
+
+Modify the renderer actually reached by this path.
+
+Search for duplicate/legacy invoice templates.
+
+If there are multiple invoice renderers, determine which one is actually used.
+
+Do not leave the live ERP pointing to the old template.
+
+==================================================
+16. PRINT/PDF QUALITY
+==================================================
+
+The invoice must be professional enough to send directly to a customer.
+
+Requirements:
+
+- A4 portrait
+- consistent margins
+- readable typography
+- strong section hierarchy
+- clean borders
+- Indian ₹ formatting
+- Indian number grouping where already used by ERP
+- no clipping
+- no overlapping
+- no cut-off table
+- no broken logo
+- no broken QR
+- no unnecessary blank pages
+
+For long invoices:
+- support multiple pages
+- repeat appropriate table headings
+- keep totals/payment section together where practical
+
+==================================================
+17. DO NOT CHANGE ACCOUNTING
+==================================================
+
+This task is primarily an invoice presentation/data-source task.
+
+Do NOT change:
+- sales accounting postings
+- customer ledger postings
+- GST posting logic
+- stock deduction
+- COGS
+- inventory valuation
+- voucher generation
+- payment accounting
+
+unless an actual bug prevents the invoice from reading already-correct data.
+
+Do not create new accounting transactions merely for invoice presentation.
+
+==================================================
+18. VERIFY USING A REAL EXISTING INVOICE
+==================================================
+
+After implementation, use an existing invoice or safe development invoice and test the SAME buttons/routes that I use.
+
+Verify:
+
+ERP → Sales → Invoice → View/Print/Download
+
+The generated invoice MUST visibly use the new design.
+
+Do not consider a standalone test PDF sufficient.
+
+Compare the final PDF visually against my uploaded reference image.
+
+==================================================
+19. FINAL RESPONSE — SHOW EVIDENCE
+==================================================
+
+When complete, tell me:
+
+1. Which old invoice renderer/template was actually being used.
+2. Why the previous format change was not visible.
+3. Which files/components now generate the real invoice.
+4. Confirm Company Profile logo appears in the actual invoice.
+5. Confirm warehouse address/contact/GSTIN/FSSAI are used.
+6. Confirm warehouse bank details are used.
+7. Confirm warehouse UPI generates the QR.
+8. Confirm Billed To and Shipped To use actual customer/invoice data.
+9. Confirm GST columns work for CGST/SGST and IGST.
+10. Confirm Payment Status uses actual outstanding amount.
+11. Confirm multi-item/multi-page invoices render correctly.
+12. Confirm the actual ERP View/Print/Download invoice now uses this design.
+
+MOST IMPORTANT ACCEPTANCE TEST:
+
+Do not say this task is complete merely because a template was edited.
+
+Open/download an invoice through the REAL ERP invoice workflow after the change.
+
+If that invoice still shows the old format, the task is NOT complete.
+Continue tracing the live renderer until the actual generated invoice matches the uploaded reference.

@@ -1,0 +1,393 @@
+TASK: FIX POS EXISTING-SALE EDIT STOCK VALIDATION
+
+I have reproduced a bug in:
+
+Operations → Point of Sale → Edit Sale
+
+Please implement the fix in development first and do not modify existing production invoices during testing.
+
+PROBLEM OBSERVED
+
+When editing an existing sales invoice, an item can have an original sold quantity greater than the CURRENT available stock.
+
+Example from my recording:
+
+Existing invoice line:
+Qty = 60
+
+Current stock available now:
+6
+
+The edit form loads Qty = 60 correctly.
+
+I only changed the Discount field.
+
+The invoice totals recalculated correctly.
+
+But when I click "Save Changes", the browser prevents saving and shows:
+
+"Value must be less than or equal to 6."
+
+This is incorrect.
+
+The 60 units already belong to this existing invoice and were already deducted from stock when the invoice was originally created.
+
+The edit screen must NOT validate the entire existing quantity against today's remaining stock.
+
+==================================================
+CORRECT EDIT-SALE STOCK RULE
+==================================================
+
+For an EXISTING invoice line:
+
+originalQty = quantity currently saved on the invoice
+currentAvailableStock = stock currently available excluding this invoice
+newQty = quantity entered while editing
+
+Maximum allowed quantity should effectively be:
+
+originalQty + currentAvailableStock
+
+Example:
+
+Original invoice Qty = 60
+Current available stock = 6
+
+Maximum editable Qty = 66
+
+Therefore:
+
+60 → 60
+VALID
+No inventory movement.
+
+60 → 50
+VALID
+Return 10 units to inventory.
+
+60 → 64
+VALID
+Deduct only another 4 units from inventory.
+
+60 → 66
+VALID
+Deduct another 6 units.
+
+60 → 67
+INVALID
+Only 6 additional units are available.
+
+==================================================
+IMPORTANT: USE QUANTITY DELTA
+==================================================
+
+Editing a sale must adjust inventory using the difference between OLD and NEW quantities.
+
+delta = newQty - oldQty
+
+If delta = 0:
+Do not change stock.
+
+If delta > 0:
+Require available stock >= delta.
+Deduct only delta.
+
+If delta < 0:
+Return abs(delta) units to stock.
+
+Do NOT deduct the entire new quantity again.
+
+==================================================
+DISCOUNT-ONLY / NON-STOCK EDITS
+==================================================
+
+This is particularly important.
+
+If I edit only:
+
+discount
+customer
+taxable setting
+payment-related permitted fields
+date
+other non-quantity fields
+
+and item quantity has NOT changed:
+
+the existing quantity must not cause stock validation failure.
+
+Example:
+
+Original Qty = 60
+Current stock = 6
+New Qty remains = 60
+Discount changes 0 → 400
+
+SAVE MUST SUCCEED.
+
+Stock movement = ZERO.
+
+==================================================
+FRONTEND FIX
+==================================================
+
+Inspect the Edit Sale form.
+
+Do not use:
+
+max={currentAvailableStock}
+
+for an existing invoice line.
+
+For existing lines, calculate the editable maximum using the quantity already allocated to the invoice.
+
+For example:
+
+maxEditableQty =
+currentAvailableStock + originalInvoiceQty
+
+Display something understandable such as:
+
+Qty (max 66)
+
+if appropriate.
+
+But frontend validation is only UX protection.
+
+Do NOT rely on frontend validation for accounting/inventory correctness.
+
+==================================================
+BACKEND FIX — REQUIRED
+==================================================
+
+Apply the same rule on the server.
+
+When updating an existing sale:
+
+1. Load the ORIGINAL persisted invoice and invoice lines from the database.
+
+2. Compare them with the submitted edited lines.
+
+3. Calculate quantity delta per inventory/batch/location as required by the existing stock architecture.
+
+4. Validate only ADDITIONAL stock required.
+
+5. Apply inventory changes atomically with the invoice update.
+
+Do not trust originalQty sent by the browser.
+
+originalQty MUST come from the existing database invoice.
+
+==================================================
+ITEM REMOVED FROM INVOICE
+==================================================
+
+If an existing line is deleted while editing:
+
+return its previously sold quantity to the correct stock/batch/location according to the existing inventory architecture.
+
+Example:
+
+Original:
+Item A Qty 10
+
+Edited invoice:
+Item A removed
+
+Return 10 units to inventory.
+
+==================================================
+NEW ITEM ADDED DURING EDIT
+==================================================
+
+If a completely new item is added:
+
+there is no original quantity allocation.
+
+Therefore normal stock validation applies.
+
+Example:
+
+Current stock = 6
+New line Qty = 5 → VALID
+New line Qty = 7 → INVALID
+
+==================================================
+BATCH / LOCATION INTEGRITY
+==================================================
+
+Respect the existing:
+
+selling location
+warehouse/outlet
+batch
+expiry
+inventory movement
+
+architecture.
+
+When quantity is reduced or a line is removed, restore stock to the correct inventory source/batch according to the application's existing stock rules.
+
+Do not create duplicate batches or arbitrary replacement stock rows.
+
+==================================================
+ACCOUNTING / GST RECALCULATION
+==================================================
+
+After a legitimate edit, continue recalculating:
+
+line subtotal
+discount
+taxable value
+CGST
+SGST
+IGST
+invoice total
+amount due
+
+using the existing POS tax rules.
+
+Update the existing accounting posting correctly rather than creating duplicate sales postings.
+
+Do not change the existing invoice number simply because the invoice was edited.
+
+==================================================
+ATOMICITY
+==================================================
+
+The complete edit must be atomic.
+
+Invoice update,
+invoice lines,
+stock adjustment,
+tax/accounting posting,
+customer receivable/payment state where applicable
+
+must remain internally consistent.
+
+If validation or accounting update fails:
+
+ROLL BACK the entire edit.
+
+Do not leave:
+
+invoice changed but stock unchanged,
+stock changed but invoice unchanged,
+duplicate ledger postings,
+or partial accounting updates.
+
+==================================================
+DO NOT PATCH AROUND THE BUG
+==================================================
+
+Do NOT solve this by:
+
+removing all quantity validation,
+setting an arbitrarily huge max,
+temporarily adding fake stock,
+changing current stock,
+disabling backend stock checks,
+or recreating the invoice.
+
+Fix the existing-sale quantity reconciliation logic.
+
+==================================================
+REGRESSION TESTS
+==================================================
+
+Create disposable development test data and verify:
+
+TEST 1
+Original Qty 60
+Available stock 6
+Edit discount only
+Qty remains 60
+Expected:
+SAVE SUCCESS
+stock unchanged.
+
+TEST 2
+60 → 50
+Expected:
+SAVE SUCCESS
+10 returned to stock.
+
+TEST 3
+60 → 64
+Available = 6
+Expected:
+SAVE SUCCESS
+4 additional units deducted.
+
+TEST 4
+60 → 66
+Expected:
+SAVE SUCCESS
+6 additional units deducted.
+
+TEST 5
+60 → 67
+Expected:
+REJECT
+No invoice/stock/accounting changes.
+
+TEST 6
+Remove an existing invoice line.
+Expected:
+Original sold quantity returned correctly.
+
+TEST 7
+Add a new item.
+Expected:
+Normal current-stock validation applies.
+
+TEST 8
+Change only discount.
+Expected:
+Totals/accounting update but zero stock movement.
+
+TEST 9
+Attempt manipulated API request exceeding stock.
+Expected:
+Backend rejects it even if frontend validation is bypassed.
+
+TEST 10
+Verify edited invoice does not create duplicate stock movements or duplicate accounting entries.
+
+==================================================
+IMPORTANT SAFETY
+==================================================
+
+Do not alter my existing production invoice to test this.
+
+Use disposable development/test records.
+
+Do not reset inventory.
+
+Do not modify opening stock.
+
+Do not change purchase inventory.
+
+Do not change production accounting.
+
+Do not change unrelated POS tax logic.
+
+==================================================
+FINAL REPORT
+==================================================
+
+After implementation report:
+
+1. Exact root cause.
+2. Frontend file/function fixed.
+3. Backend route/service fixed.
+4. How originalQty is obtained securely.
+5. How quantity delta is calculated.
+6. How stock is restored when quantity decreases.
+7. How deleted lines restore stock.
+8. How new lines are validated.
+9. How batch/location integrity is maintained.
+10. Test results for all scenarios above.
+
+Do not only analyze or provide a plan.
+Implement the fix and run the development tests.

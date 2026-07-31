@@ -69,3 +69,18 @@ one of them is a 500 waiting for a fat-fingered filter.
   date straight through. Validate *after* normalising.
 - Verify by replaying every date-carrying URL with an impossible date and
   asserting no 5xx. Type-checking cannot see any of this.
+
+# Repair migrations: one bad legacy value must not block every good one
+
+A set-based `UPDATE ... SET col = value::date` repair migration aborts
+WHOLESALE on the first calendar-invalid legacy value (`'2026-02-30'` passes a
+shape regex, then throws at the cast). With the deferred-migration pattern (no
+migration_log row on failure) it retries and fails on every boot, repairing
+nothing, until someone hand-fixes the one bad row.
+
+**How to apply:** SELECT the candidates, validate each value in JS with a
+calendar-true helper (build the UTC date, read the fields back), and UPDATE
+row-by-row with parameterised, pre-validated strings. A bad value then skips
+only its own field/row. Verify with adversarial fixtures: one valid mismatch,
+one calendar-invalid value, one ambiguous duplicate — assert the valid one is
+repaired and the migration still completes and logs.

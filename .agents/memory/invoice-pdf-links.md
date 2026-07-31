@@ -17,6 +17,8 @@ ONE canonical renderer: `api-server/src/services/invoicePdf.ts` (jsPDF + qrcode 
 
 **2. Managed share link** (`invoice_share_links` row → `/api/share/invoice/<publicId>?token=…`). The customer-facing path: random-UUID publicId (never a sale id), 15-day TTL, one active link per invoice, revocable, replaceable, access-counted, audited. Requires the `share` right.
 
+**3. Authenticated inline PDF** (`GET /sales/:id/invoice.pdf`, Bearer) — for the View sheet's embedded iframe, fetched via `customFetch` `responseType:'blob'` → `URL.createObjectURL`. **Why:** a passive sheet open must NOT be a token-issuance event — auto-minting in-session tokens on every View proliferates unrevocable public URLs. Tokens (path 1) are only for navigations that cannot carry an Authorization header (window.open / download).
+
 ## Share-link rules worth keeping
 
 - **Store the link's token on the row; never derive it from SESSION_SECRET.** Deriving + storing only a hash ties every customer's link to a secret rotated for unrelated reasons — rotation kills links already in customers' hands AND makes the link the UI hands out next unopenable. The hashing bought nothing: the token opens one invoice PDF, and whoever can read the link table can read that invoice from `sales` beside it.

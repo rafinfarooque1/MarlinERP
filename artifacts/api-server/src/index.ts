@@ -30,6 +30,7 @@ async function runMigrations() {
     ALTER TABLE item_prices ADD COLUMN IF NOT EXISTS valid_to text;
     ALTER TABLE item_prices ADD COLUMN IF NOT EXISTS location_type text NOT NULL DEFAULT 'outlet';
     ALTER TABLE account_ledgers ADD COLUMN IF NOT EXISTS code text;
+    ALTER TABLE sales ADD COLUMN IF NOT EXISTS bill_discount numeric(12,2) NOT NULL DEFAULT 0;
     ALTER TABLE purchases ADD COLUMN IF NOT EXISTS tax_total numeric(12,2) DEFAULT 0;
     ALTER TABLE purchases ADD COLUMN IF NOT EXISTS discount_total numeric(12,2) DEFAULT 0;
     ALTER TABLE purchases ADD COLUMN IF NOT EXISTS round_off numeric(12,2) DEFAULT 0;
@@ -733,6 +734,24 @@ async function runMigrations() {
     }
   }
 
+  // ── Cash grouping self-heal (idempotent, every boot) ─────────────────────
+  // Every per-location cash ledger files under the standard Cash group. Older
+  // provisioning could parent one under Current Assets directly when STD-CASH
+  // resolved differently, which puts location cash BESIDE Cash on the Balance
+  // Sheet instead of inside it. Re-parent on every boot so the grouping stays
+  // dynamic — new locations, restores and legacy rows all end up under Cash
+  // with no manual chart surgery.
+  if (cashRootRow) {
+    await pool.query(
+      `UPDATE account_ledgers
+          SET parent_id = $1
+        WHERE (code LIKE 'WH-CASH-%' OR code LIKE 'OUTLET-CASH-%')
+          AND parent_id IS DISTINCT FROM $1
+          AND id <> $1`,
+      [cashRootRow.id],
+    );
+  }
+
   // ── Backfill warehouse & outlet ledger IDs (one-time, guarded) ───────────
   const { rows: [woBfApplied] } = await pool.query(
     `SELECT 1 FROM migration_log WHERE name = 'warehouse_outlet_ledger_backfill_v1'`
@@ -1328,6 +1347,83 @@ async function runMigrations() {
       // version still applies on a later boot.
       console.error(
         '[migration] stock_batches_opening_v1 DEFERRED (migrations continue):',
+        (e as Error).message,
+      );
+    }
+  }
+
+  // One-time: re-sync purchase-lot mfg/expiry dates from their owning bill.
+  // Purchase edits made on older builds updated the bill's line_items but left
+  // stock_batches untouched (creditBatch COALESCE kept the lot's original
+  // dates), so an expiry typo corrected on the bill lived on in stock, expiry
+  // reports and FEFO picking. The current edit path deletes and re-inserts the
+  // bill's own lots, so new edits propagate — this fixes the rows that
+  // diverged before that. The bill line is authoritative for purchase lots:
+  // dates are only ever entered on the bill. Lots whose batch number matches
+  // more than one line with DIFFERENT dates (the legacy one-lot-per-bill
+  // numbering) are skipped rather than guessed at, and only well-formed
+  // YYYY-MM-DD values are applied — a malformed bill value never nulls or
+  // corrupts a lot date. Own try/catch: a failure here must not skip the
+  // migrations below.
+  const { rows: [lotDatesDone] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'purchase_lot_dates_resync_v1'`
+  );
+  if (!lotDatesDone) {
+    try {
+      // Candidates are validated HERE, not in SQL: a shape regex cannot catch
+      // an impossible calendar date (2026-02-30), and a set-based UPDATE that
+      // throws on one bad legacy value aborts the whole repair — blocking
+      // every VALID stale lot until someone hand-fixes the bad line. Each lot
+      // is judged and written on its own, so a bad value skips only itself.
+      const asCalendarDate = (v: unknown): string | null => {
+        // Accept plain YYYY-MM-DD or an ISO timestamp prefix; nothing else.
+        const m = /^(\d{4})-(\d{2})-(\d{2})(?:T.*)?$/.exec(String(v ?? ""));
+        if (!m) return null;
+        const [, y, mo, d] = m;
+        const dt = new Date(Date.UTC(+y, +mo - 1, +d));
+        return dt.getUTCFullYear() === +y && dt.getUTCMonth() === +mo - 1 && dt.getUTCDate() === +d
+          ? `${y}-${mo}-${d}` : null;
+      };
+      const { rows: lotCandidates } = await pool.query(`
+        SELECT sb.id AS batch_id,
+               to_char(sb.expiry_date, 'YYYY-MM-DD') AS lot_exp,
+               to_char(sb.mfg_date,    'YYYY-MM-DD') AS lot_mfg,
+               min(li->>'expiryDate') AS bill_exp,
+               min(li->>'mfgDate')    AS bill_mfg
+        FROM stock_batches sb
+        JOIN purchases p ON p.id = sb.source_id
+        CROSS JOIN LATERAL jsonb_array_elements(p.line_items::jsonb) li
+        WHERE sb.source = 'purchase'
+          AND li->>'batchNumber' = sb.batch_number
+          AND (li->>'materialId')::int = sb.item_id
+          AND COALESCE(li->>'materialType', 'item') = sb.material_type
+        GROUP BY sb.id
+        -- Legacy one-lot-per-bill numbering can match several lines; when
+        -- they disagree on dates there is nothing safe to pick, so skip.
+        HAVING count(DISTINCT ROW(li->>'expiryDate', li->>'mfgDate')) = 1
+      `);
+      let lotsResynced = 0;
+      for (const c of lotCandidates) {
+        const exp = asCalendarDate(c.bill_exp);
+        const mfg = asCalendarDate(c.bill_mfg);
+        const wantExp = exp !== null && exp !== (c.lot_exp ?? null);
+        const wantMfg = mfg !== null && mfg !== (c.lot_mfg ?? null);
+        if (!wantExp && !wantMfg) continue;
+        await pool.query(
+          `UPDATE stock_batches SET
+             expiry_date = COALESCE($2::date, expiry_date),
+             mfg_date    = COALESCE($3::date, mfg_date),
+             updated_at  = now()
+           WHERE id = $1`,
+          [c.batch_id, wantExp ? exp : null, wantMfg ? mfg : null],
+        );
+        lotsResynced++;
+      }
+      await pool.query(`INSERT INTO migration_log (name) VALUES ('purchase_lot_dates_resync_v1')`);
+      console.log(`[migration] purchase_lot_dates_resync_v1: re-synced ${lotsResynced} lot date(s) from purchase bills`);
+    } catch (e) {
+      console.error(
+        '[migration] purchase_lot_dates_resync_v1 DEFERRED (migrations continue):',
         (e as Error).message,
       );
     }
@@ -1999,6 +2095,16 @@ await pool.query(`
 await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_ledger_ref      ON stock_ledger (material_type, ref_id, created_at)`);
 await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_ledger_doc      ON stock_ledger (doc_type, doc_id)`);
 await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_ledger_created  ON stock_ledger (created_at DESC)`);
+
+// txn_date = the movement's BUSINESS date (the document's own date), distinct
+// from created_at (the insert time). Date-based stock reports (opening/closing
+// stock, stock-as-of) read COALESCE(txn_date, created_at::date) so a backdated
+// purchase or an edit made days later lands on the bill's date, not the edit's.
+// Backfill: rows written before this column existed get their insert day —
+// the best information available for them.
+await pool.query(`ALTER TABLE stock_ledger ADD COLUMN IF NOT EXISTS txn_date DATE`);
+await pool.query(`UPDATE stock_ledger SET txn_date = created_at::date WHERE txn_date IS NULL`);
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_ledger_txn_date ON stock_ledger (txn_date)`);
 
 // ── stock_reservations table ──────────────────────────────────────────────────
 // One row per commitment against stock, so the same physical goods can never be

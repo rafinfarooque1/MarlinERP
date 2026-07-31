@@ -21,6 +21,8 @@ export interface Sale {
   subtotal?: number;
   taxTotal?: number;
   discountTotal?: number;
+  /** Invoice-level discount in rupees, applied BEFORE tax: allocated proportionally across lines, reducing each line's taxable value and GST. Distinct from discountTotal (the post-tax coupon deduction). */
+  billDiscount?: number;
   totalAmount: number;
   paymentMode?: string;
   /** @nullable */

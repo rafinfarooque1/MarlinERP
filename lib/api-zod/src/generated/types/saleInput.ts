@@ -14,4 +14,6 @@ export interface SaleInput {
   lineItems: SaleLineItem[];
   paymentMode: string;
   couponCode?: string;
+  /** Pre-tax invoice-level discount, allocated across lines. */
+  billDiscount?: number;
 }

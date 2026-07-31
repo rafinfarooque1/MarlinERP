@@ -1,6 +1,25 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
+    <script>
+      // Benign "ResizeObserver loop" error events (fired by browser layout,
+      // common with Radix/floating-ui popovers) carry a message but NO error
+      // object. The dev runtime-error overlay only looks at evt.error, so it
+      // renders them as a blank "(unknown runtime error)" modal that blocks
+      // the whole UI. This inline script runs before any module script, so
+      // its listener is registered first and can swallow ONLY those events.
+      // Anything else without an error object is logged (not suppressed) so
+      // real problems still surface.
+      window.addEventListener('error', function (evt) {
+        if (evt.error) return; // real errors: let the overlay handle them
+        var msg = String(evt.message || '');
+        if (/ResizeObserver loop/i.test(msg)) {
+          evt.stopImmediatePropagation();
+          return;
+        }
+        console.warn('[error-event without Error object]', msg, evt.filename || '', evt.lineno || '');
+      });
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
     <title>Marlin Frozen Fruits ERP</title>

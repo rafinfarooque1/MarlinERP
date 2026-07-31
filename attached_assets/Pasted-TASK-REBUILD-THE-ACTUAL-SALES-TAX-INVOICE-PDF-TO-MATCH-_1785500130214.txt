@@ -1,0 +1,714 @@
+TASK: REBUILD THE ACTUAL SALES TAX INVOICE PDF TO MATCH THE UPLOADED REFERENCE IMAGE PIXEL-CLOSE
+
+I am uploading TWO files with this task:
+
+1. REFERENCE IMAGE
+   - This is the exact invoice DESIGN I want.
+   - Treat this image as the visual source of truth.
+
+2. CURRENT ERP-GENERATED INVOICE PDF
+   - This is the invoice currently produced by my ERP.
+   - Use this only to understand what is currently wrong and to verify the data fields.
+   - DO NOT use its existing visual design as the target.
+
+IMPORTANT:
+I am NOT asking you to create a separate sample invoice, HTML preview, mockup, image, or alternative PDF.
+
+I need you to MODIFY THE ACTUAL INVOICE PDF RENDERER USED BY THE ERP.
+
+After this change, when I go to Sales / Point of Sale and click:
+
+- View Invoice
+- Print
+- Download PDF
+- Share invoice, if applicable
+
+the ACTUAL generated invoice must use the new design.
+
+==================================================
+1. VISUAL SOURCE OF TRUTH
+==================================================
+
+The uploaded REFERENCE IMAGE is the source of truth for the invoice appearance.
+
+Do not merely create something "similar".
+
+Study the image carefully and reproduce its:
+
+- page proportions
+- margins
+- spacing
+- alignment
+- section heights
+- typography hierarchy
+- font sizes
+- font weights
+- navy blue styling
+- light blue/grey backgrounds
+- borders
+- border thickness
+- corner treatment
+- table dimensions
+- column widths
+- header blocks
+- payment blocks
+- QR placement
+- whitespace
+- footer
+- overall visual density
+
+The final invoice should look as close as technically possible to the uploaded reference when viewed side-by-side.
+
+Do NOT redesign it based on your own preference.
+
+Do NOT simplify the reference.
+
+Do NOT preserve the current PDF styling merely because it already contains the same sections.
+
+REFERENCE IMAGE = DESIGN SPECIFICATION.
+
+==================================================
+2. FIRST IDENTIFY THE REAL PDF RENDERER
+==================================================
+
+Before changing code, trace the complete production flow:
+
+Sales/POS
+→ invoice View
+→ Print
+→ Download
+→ Share/public invoice
+→ backend endpoint
+→ actual PDF renderer/template.
+
+Find the ONE authoritative renderer responsible for the real invoice.
+
+Do not create a second invoice implementation.
+
+Do not modify an unused template.
+
+Report the exact file(s) responsible for rendering the invoice.
+
+All invoice entry points must ultimately render the SAME design.
+
+==================================================
+3. PAGE FORMAT
+==================================================
+
+The invoice must be a professional A4 portrait TAX INVOICE.
+
+The reference image should essentially be translated into a proper vector/text PDF layout.
+
+Do NOT simply insert the entire reference image as a background.
+
+The invoice must remain dynamically generated from ERP data.
+
+Text should remain selectable where practical.
+
+The invoice must print sharply.
+
+==================================================
+4. TOP HEADER — MATCH REFERENCE
+==================================================
+
+Reproduce the top section exactly like the reference.
+
+LEFT SIDE:
+
+Company logo
+Company / warehouse trading name
+Address
+Phone
+Email
+GSTIN
+FSSAI licence number
+
+RIGHT SIDE:
+
+Large navy TAX INVOICE heading box.
+
+Below it:
+
+Invoice No.
+Invoice Date
+Place of Supply
+Reverse Charge
+
+If the ERP currently has "Issued From", it may be included cleanly without destroying the reference layout.
+
+Maintain the same vertical divider and spacing relationship shown in the reference.
+
+==================================================
+5. LOGO — VERY IMPORTANT
+==================================================
+
+Use the ACTUAL uploaded logo from:
+
+Company → Company Profile
+
+Do NOT use:
+
+- a hardcoded F
+- text initials
+- a placeholder icon
+- a generated logo
+- warehouse initials
+
+when a company logo exists.
+
+Trace how the Company Profile logo is stored.
+
+The server-side invoice renderer must be able to access it.
+
+If the logo exists:
+
+render the real logo.
+
+Maintain its aspect ratio.
+
+Do not stretch or crop it.
+
+If no logo exists, use a clean fallback only then.
+
+IMPORTANT:
+Warehouse information controls invoice business details, but the LOGO comes from Company Profile.
+
+==================================================
+6. WAREHOUSE-SPECIFIC BILLING IDENTITY
+==================================================
+
+The invoice is issued from the selected Selling Location / Warehouse.
+
+Therefore retrieve invoice-specific details from that warehouse:
+
+- warehouse/trading name
+- billing address
+- state
+- state code
+- GSTIN
+- FSSAI licence number
+- phone
+- email
+- bank account holder
+- bank name
+- branch
+- account number
+- IFSC
+- UPI ID
+
+Do NOT blindly replace these with Company Profile details.
+
+Rule:
+
+COMPANY PROFILE
+→ logo
+
+SELECTED WAREHOUSE
+→ invoice/business/bank/UPI/FSSAI/contact details
+
+==================================================
+7. BILLED TO / SHIPPED TO
+==================================================
+
+Create two side-by-side bordered panels exactly like the reference.
+
+Each must have a navy heading tab:
+
+BILLED TO
+SHIPPED TO
+
+Display appropriate available customer information:
+
+Name
+Address
+State
+GSTIN if applicable
+Mobile No.
+
+Do not print empty meaningless rows.
+
+==================================================
+8. GOODS TABLE — MATCH REFERENCE VERY CLOSELY
+==================================================
+
+This is one of the most important visual areas.
+
+Use the same dark navy header structure as the reference.
+
+Columns:
+
+SL NO.
+DESCRIPTION OF GOODS
+HSN CODE
+QTY
+UNIT
+UNIT PRICE (Rs./₹)
+TAXABLE VALUE (Rs./₹)
+
+CGST
+  RATE (%)
+  AMOUNT
+
+SGST
+  RATE (%)
+  AMOUNT
+
+IGST
+  RATE (%)
+  AMOUNT
+
+TOTAL (Rs./₹)
+
+Use grouped GST headers exactly like the reference.
+
+Use compact professional row heights.
+
+Product descriptions must wrap safely.
+
+Numbers must align properly.
+
+Currency values should preferably align right.
+
+The final TOTAL (E&OE) row must use the same highlighted/light-blue treatment as the reference.
+
+==================================================
+9. TAX CALCULATION MUST USE STORED SALE DATA
+==================================================
+
+THIS IS A DESIGN TASK.
+
+Do not rewrite GST/accounting logic unless a genuine renderer bug requires it.
+
+The POS already supports:
+
+GST-inclusive pricing
+and
+GST-exclusive / Taxable (+GST on top) pricing.
+
+The PDF must display the stored sale values correctly.
+
+For GST-inclusive:
+
+entered MRP includes GST.
+
+For Taxable (+GST on top):
+
+entered amount is taxable base and GST is added.
+
+Do not recalculate the transaction differently inside the PDF renderer.
+
+Use authoritative stored invoice/line values.
+
+==================================================
+10. AMOUNT IN WORDS + TAX SUMMARY
+==================================================
+
+Below the goods table create two side-by-side sections matching the reference.
+
+LEFT:
+
+AMOUNT IN WORDS
+
+Example:
+
+Rupees Five Thousand Three Hundred Twenty Only
+
+Below:
+
+Certified that the particulars given above are true and correct.
+
+RIGHT:
+
+Taxable Value
+CGST (...)
+SGST (...)
+IGST (...) when applicable
+Round Off
+
+Then a strong NAVY:
+
+GRAND TOTAL
+
+with the total prominently displayed.
+
+==================================================
+11. PAYMENT STATUS STRIP
+==================================================
+
+Match the reference's single horizontal payment-status panel.
+
+Include:
+
+PAYMENT STATUS
+
+Invoice Total
+Amount Received
+Balance Due
+
+and status badge:
+
+PAID
+PARTIAL
+UNPAID
+
+Balance Due should receive appropriate emphasis when outstanding.
+
+Do not hardcode payment status.
+
+Derive it from the ERP's actual receivable/payment state.
+
+==================================================
+12. BOTTOM PAYMENT AREA
+==================================================
+
+Match the reference's three-column bottom structure.
+
+LEFT:
+
+AMOUNT PAYABLE
+
+Large outstanding amount.
+
+Text:
+
+"Please settle this balance by bank transfer using the details alongside."
+
+If useful, show:
+
+Ref: <invoice number>
+
+CENTER:
+
+BANK ACCOUNT DETAILS
+
+Account Holder Name
+Bank Name
+Branch
+Account Number
+IFSC Code
+Payment Mode
+
+Use the issuing warehouse's bank information.
+
+RIGHT:
+
+SCAN & PAY
+
+Generate a real QR code using the issuing warehouse's UPI ID.
+
+The QR should encode a valid UPI payment URI containing, where appropriate:
+
+- UPI ID
+- payee name
+- amount currently due
+- invoice reference
+
+Show:
+
+UPI ID: xxxxx
+
+under the QR.
+
+If UPI is unavailable:
+
+do not display a broken QR.
+
+Reflow the bank section gracefully.
+
+==================================================
+13. SIGNATURE AREA
+==================================================
+
+Follow the reference.
+
+Provide a clean authorised-signatory area where appropriate:
+
+For <warehouse/trading name>
+
+Authorised Signatory
+
+Do not allow this block to create a huge unnecessary blank area.
+
+==================================================
+14. FOOTER
+==================================================
+
+Reproduce the reference footer:
+
+horizontal decorative line
+Thank You For Your Business!
+horizontal decorative line
+
+Below:
+
+This is a computer-generated invoice.
+
+Keep this visually balanced and close to the reference.
+
+==================================================
+15. TYPOGRAPHY AND VISUAL DESIGN
+==================================================
+
+The existing generated PDF currently looks like a basic report/template.
+
+I specifically want the polished appearance of the uploaded reference image.
+
+Pay close attention to:
+
+- dark navy headers
+- light blue/grey section backgrounds
+- thin blue-grey borders
+- strong invoice title
+- compact information hierarchy
+- clean whitespace
+- consistent left/right padding
+- vertically centered table text
+- bold totals
+- subtle secondary text
+- proper ₹ formatting
+- consistent font family
+- professional invoice appearance
+
+Do not make the text extremely small simply to fit everything.
+
+==================================================
+16. MULTI-PAGE INVOICES
+==================================================
+
+The uploaded reference shows a one-page invoice, but the ERP can have many products.
+
+Implement safe multi-page behavior.
+
+For long invoices:
+
+- do not shrink everything to unreadable size
+- allow the goods table to continue onto additional pages
+- repeat the table header on subsequent pages
+- prevent rows from overlapping
+- prevent rows from splitting badly where possible
+- keep summary/payment sections together when possible
+- never overlap footer content
+- maintain the same visual language on subsequent pages
+
+==================================================
+17. VIEW / PRINT / DOWNLOAD CONSISTENCY
+==================================================
+
+The following MUST all display the same renderer:
+
+View Invoice
+Print Invoice
+Download PDF
+Shared/Public Invoice PDF, if supported
+
+Do not leave the View button showing an old HTML layout while Download shows the new PDF.
+
+There must be one authoritative invoice design.
+
+==================================================
+18. DO NOT CHANGE BUSINESS DATA
+==================================================
+
+This task is primarily presentation/rendering.
+
+DO NOT:
+
+- alter existing sales
+- alter stock
+- alter customer balances
+- alter GST ledgers
+- alter vouchers
+- alter payment history
+- change invoice numbers
+- change historical transactions
+- delete production records
+- create balancing accounting entries
+
+Do not modify historical invoice data merely to make the PDF look right.
+
+==================================================
+19. DO NOT USE THE REFERENCE IMAGE AS THE INVOICE
+==================================================
+
+Very important:
+
+Do NOT simply place the uploaded reference PNG/JPG into the PDF.
+
+The reference is a DESIGN TARGET.
+
+The actual invoice must be generated programmatically from ERP data.
+
+Every invoice must dynamically show its own:
+
+customer
+warehouse
+items
+quantities
+HSN
+GST
+totals
+payment status
+bank account
+UPI QR
+invoice number
+invoice date
+
+==================================================
+20. VISUAL COMPARISON IS REQUIRED
+==================================================
+
+After implementation:
+
+Generate a REAL test invoice using the actual ERP invoice route.
+
+Render that PDF to an image.
+
+Compare it visually side-by-side against my uploaded REFERENCE IMAGE.
+
+Do not consider the task complete merely because all required text exists.
+
+Specifically compare:
+
+A. overall page proportions
+B. header height
+C. logo size
+D. TAX INVOICE box
+E. company details positioning
+F. Billed To / Shipped To cards
+G. table header
+H. GST grouped columns
+I. table row height
+J. totals row
+K. amount-in-words block
+L. Grand Total block
+M. payment status strip
+N. Amount Payable
+O. bank details
+P. QR size/position
+Q. signature block
+R. footer
+S. whitespace
+T. font sizes and weights
+
+If the result visibly differs from the reference, adjust the renderer and render again.
+
+Repeat until it is genuinely close.
+
+==================================================
+21. USE MY CURRENT PDF AS A REGRESSION INPUT
+==================================================
+
+I have also uploaded the CURRENT invoice PDF.
+
+It contains real examples of the fields currently produced by the ERP, including:
+
+FROZEN HUB
+GSTIN
+FSSAI
+invoice information
+Billed To / Shipped To
+multiple products
+HSN
+GST
+payment status
+bank details
+UPI QR
+authorised signatory
+
+Use it to make sure no currently available information disappears.
+
+But again:
+
+CURRENT PDF = DATA/FUNCTIONAL REFERENCE
+UPLOADED IMAGE = VISUAL/DESIGN REFERENCE
+
+Do not confuse the two.
+
+==================================================
+22. ACCEPTANCE CRITERIA
+==================================================
+
+Do not mark this task complete until ALL of these pass:
+
+TEST 1
+Generate an actual ERP invoice and confirm the PDF visually matches the uploaded reference image closely.
+
+TEST 2
+Company Profile logo appears correctly.
+
+TEST 3
+Warehouse-specific GSTIN, FSSAI, address, phone and email appear correctly.
+
+TEST 4
+Warehouse-specific bank details appear correctly.
+
+TEST 5
+Warehouse-specific UPI QR works.
+
+TEST 6
+Billed To and Shipped To populate correctly.
+
+TEST 7
+One-line invoice renders correctly.
+
+TEST 8
+Multi-line invoice renders correctly.
+
+TEST 9
+Large/multi-page invoice renders without overlap.
+
+TEST 10
+CGST + SGST invoice displays correctly.
+
+TEST 11
+IGST invoice displays correctly.
+
+TEST 12
+GST-inclusive POS sale displays correctly.
+
+TEST 13
+Taxable/+GST POS sale displays correctly.
+
+TEST 14
+Paid invoice displays PAID correctly.
+
+TEST 15
+Partial invoice displays PARTIAL and correct balance.
+
+TEST 16
+Unpaid invoice displays UNPAID and correct balance.
+
+TEST 17
+View, Print and Download all show the SAME design.
+
+TEST 18
+Existing accounting/stock values remain unchanged.
+
+==================================================
+23. FINAL REPORT
+==================================================
+
+When finished, report:
+
+1. Exact PDF renderer file changed.
+2. Exact route used by View.
+3. Exact route used by Print.
+4. Exact route used by Download.
+5. Where the company logo is loaded from.
+6. Where warehouse billing details are loaded from.
+7. Where warehouse bank details are loaded from.
+8. How the UPI QR is generated.
+9. How payment status is determined.
+10. How multi-page invoices are handled.
+11. Whether any business/accounting data was changed.
+12. Tests performed and results.
+
+MOST IMPORTANT ACCEPTANCE RULE:
+
+Do not tell me "the invoice now follows the reference" merely because all the same sections are present.
+
+I need the ACTUAL GENERATED PDF to VISUALLY MATCH THE UPLOADED IMAGE.
+
+The uploaded reference image is the design specification.
+
+Keep iterating on the actual PDF renderer until the generated output is visually close to it.

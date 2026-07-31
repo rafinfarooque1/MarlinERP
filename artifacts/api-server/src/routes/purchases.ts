@@ -695,6 +695,7 @@ router.post("/purchases", requireModuleAction("page:/production/purchase", "add"
         branchType: loc.type, branchId: ledgerBranchId(loc, li.materialType ?? 'item'), branchName: locName,
         qtyChange: Number(li.quantity), unitCost: Number(li.costPerUnit ?? 0),
         docType: 'purchase', docId: newId,
+        txnDate: parsed.data.purchaseDate,
       };
     }));
 
@@ -779,9 +780,9 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     vendorId?: number; lineItems?: any[];
   };
 
-  // An edit stays at the location that recorded the bill: both the reversal of
-  // the old lines and the re-apply of the new ones happen there, so an edit can
-  // never quietly move stock between locations (that is a transfer).
+  // An edit always REVERSES the old lines at the location that recorded the
+  // bill. Unless a new location is sent explicitly, the re-apply happens there
+  // too — an edit can never quietly move stock between locations.
   const { rows: [curLocRow] } = await pool.query(
     `SELECT location_type, location_id FROM purchases WHERE id = $1`, [id]);
   const loc: ProdLocation = { type: curLocRow?.location_type ?? 'headoffice', id: Number(curLocRow?.location_id ?? 1) };
@@ -794,6 +795,29 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
       || (loc.type === 'outlet' && scope.outletIds.includes(loc.id));
     if (!allowed) { res.status(404).json({ error: "Not found" }); return; }
   }
+
+  // ── Optional receiving-location change ────────────────────────────────────
+  // A bill may be moved to another location on edit: old lines are reversed
+  // where they were, new lines applied at the new location, and the GST supply
+  // type re-derived against the NEW location's state. Resolved through the
+  // same gate as create, so a warehouse user can only move a bill to a
+  // location they are allowed to act for.
+  let newLoc: ProdLocation = loc;
+  if ((req.body as any).locationType !== undefined || (req.body as any).locationId !== undefined) {
+    const resolvedMove = await resolveActingLocation(pool, {
+      employee: (req as any).employee,
+      requested: { type: (req.body as any).locationType, id: (req.body as any).locationId },
+    });
+    if ("error" in resolvedMove) { res.status(400).json({ error: resolvedMove.error }); return; }
+    newLoc = resolvedMove.loc;
+  }
+  const isMove = newLoc.type !== loc.type || newLoc.id !== loc.id;
+  if (isMove && lineItems === undefined) {
+    res.status(400).json({
+      error: "To move this bill to another location, send its line items too so stock can be reversed at the old location and re-applied at the new one.",
+    }); return;
+  }
+  const newLocName = isMove ? await locationLabel(pool, newLoc) : locName;
 
   // purchase_date is a real DATE column — reject an impossible date up front.
   if (purchaseDate !== undefined && !isIsoDate(String(purchaseDate))) {
@@ -818,7 +842,8 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     const identityMsg = lineIdentityError(lineItems, maps, ownReserved);
     if (identityMsg) { res.status(400).json({ error: identityMsg }); return; }
 
-    const batchClash = await manualBatchConflict(pool, lineItems, loc, id);
+    // Checked at the location the new lines will LAND at.
+    const batchClash = await manualBatchConflict(pool, lineItems, newLoc, id);
     if (batchClash) { res.status(400).json({ error: batchClash }); return; }
 
     // Rate mode is part of the bill, so an edit that does not mention it keeps
@@ -837,7 +862,9 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
       : asPriceMode(modeRow?.price_mode);
 
     const effVendorId = Number(vendorId ?? current.vendorId);
-    const supply = await resolveSupplyTaxType(effVendorId, loc);
+    // GST intra/inter is judged against the location the goods are billed TO —
+    // after a move, that is the new location.
+    const supply = await resolveSupplyTaxType(effVendorId, newLoc);
 
     // 2. Calculate and enrich the new lines (before any write, so a bad line
     //    cannot leave the reversal applied)
@@ -904,8 +931,8 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
       // Same lock-then-recheck as the create path: the pre-flight check ran
       // outside this transaction, so a hand-typed number could have been taken
       // since. This bill's own lots are excluded — it is allowed to keep them.
-      await lockLotNamespace(client, enriched, loc);
-      const racedClash = await manualBatchConflict(client, enriched, loc, id);
+      await lockLotNamespace(client, enriched, newLoc);
+      const racedClash = await manualBatchConflict(client, enriched, newLoc, id);
       if (racedClash) {
         await client.query("ROLLBACK");
         res.status(409).json({ error: racedClash }); return;
@@ -975,13 +1002,31 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
       }
     }
 
+    // A fully-reversed line leaves its lot at zero. Delete this bill's own
+    // emptied lots so (a) a removed line leaves no orphan zero-quantity batch
+    // behind, and (b) a re-applied line re-INSERTS a fresh lot — creditBatch
+    // keeps an existing lot's mfg/expiry via COALESCE, so without this a
+    // date correction on an existing batch number would never take effect.
+    // Scoped to this bill's own purchase lots at the old location only.
+    await client.query(
+      `DELETE FROM stock_batches
+        WHERE source = 'purchase' AND source_id = $1
+          AND branch_type = $2 AND branch_id = $3
+          AND quantity::numeric <= 0.0005`,
+      [id, loc.type, loc.id],
+    );
+
     // ── Stock ledger (purchase edit reversal) ────────────────────────────────
+    // Dated on the bill's OLD business date: the reversal takes the old lines
+    // out of history exactly where they entered it, so date-based stock
+    // reports stay continuous (closing of D = opening of D+1).
     await writeStockLedger(client, (oldLines as any[]).map(li => ({
       txnType: 'purchase_reversal', materialType: li.materialType ?? 'item',
       refId: li.materialId, itemName: '', unit: '',
       branchType: loc.type, branchId: ledgerBranchId(loc, li.materialType ?? 'item'), branchName: locName,
       qtyChange: -Number(li.quantity), unitCost: 0,
       docType: 'purchase', docId: id,
+      txnDate: String(locked.purchase_date ?? '') || null,
       notes: 'Purchase edit — old lines reversed',
     })));
 
@@ -995,7 +1040,25 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
       needsBatch.forEach((l, i) => { l.batchNumber = issued[i]; });
     }
 
-    // 3. Apply stock for the new lines (mirror of the create handler).
+    // When the bill is being MOVED, the destination may still hold a stale
+    // zero-quantity lot this same bill created in an earlier life (a move
+    // away before emptied lots were deleted). creditBatch would upsert into
+    // it and COALESCE would resurrect its old mfg/expiry — clear the bill's
+    // own emptied lots at the destination too, so re-apply always INSERTs
+    // fresh rows. Other bills' lots are never touched: a live clash with a
+    // foreign lot was already rejected by manualBatchConflict above.
+    if (isMove) {
+      await client.query(
+        `DELETE FROM stock_batches
+          WHERE source = 'purchase' AND source_id = $1
+            AND branch_type = $2 AND branch_id = $3
+            AND quantity::numeric <= 0.0005`,
+        [id, newLoc.type, newLoc.id],
+      );
+    }
+
+    // 3. Apply stock for the new lines (mirror of the create handler), at the
+    //    EFFECTIVE location — the new one when the bill was moved.
     //    Valued at costPerUnit: net of discount, net of recoverable input GST.
     for (const li of enriched) {
       if (li.materialType === "material") {
@@ -1009,10 +1072,10 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
            WHERE id = $1`,
           [li.materialId, li.quantity, li.costPerUnit]
         );
-        await creditMaterialAt(client, "material", li.materialId, loc.type, loc.id, Number(li.quantity), Number(li.costPerUnit));
+        await creditMaterialAt(client, "material", li.materialId, newLoc.type, newLoc.id, Number(li.quantity), Number(li.costPerUnit));
         await creditBatch(client, {
           itemId: li.materialId, materialType: "material",
-          branchType: loc.type, branchId: loc.id,
+          branchType: newLoc.type, branchId: newLoc.id,
           batchNumber: li.batchNumber!,
           mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
           quantity: li.quantity, unitCost: li.costPerUnit,
@@ -1030,10 +1093,10 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
            WHERE id = $1`,
           [li.materialId, li.quantity, li.costPerUnit]
         );
-        await creditMaterialAt(client, "raw_material", li.materialId, loc.type, loc.id, Number(li.quantity), Number(li.costPerUnit));
+        await creditMaterialAt(client, "raw_material", li.materialId, newLoc.type, newLoc.id, Number(li.quantity), Number(li.costPerUnit));
         await creditBatch(client, {
           itemId: li.materialId, materialType: "raw_material",
-          branchType: loc.type, branchId: loc.id,
+          branchType: newLoc.type, branchId: newLoc.id,
           batchNumber: li.batchNumber!,
           mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
           quantity: li.quantity, unitCost: li.costPerUnit,
@@ -1052,11 +1115,11 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
              quantity = stock_entries.quantity::numeric + EXCLUDED.quantity::numeric,
              cost_price = EXCLUDED.cost_price,
              updated_at = now()`,
-          [li.materialId, li.quantity, li.costPerUnit, loc.type, loc.id],
+          [li.materialId, li.quantity, li.costPerUnit, newLoc.type, newLoc.id],
         );
         await updateAvgCostOnInbound(client, li.materialId, li.quantity, li.costPerUnit);
         await creditBatch(client, {
-          itemId: li.materialId, branchType: loc.type, branchId: loc.id,
+          itemId: li.materialId, branchType: newLoc.type, branchId: newLoc.id,
           batchNumber: li.batchNumber!,
           mfgDate: li.mfgDate ?? null, expiryDate: li.expiryDate ?? null,
           quantity: li.quantity, unitCost: li.costPerUnit,
@@ -1067,30 +1130,35 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     }
 
     // ── Stock ledger (purchase edit re-apply) ────────────────────────────────
+    // Dated on the bill's NEW business date at the effective location, so a
+    // backdated correction rewrites stock history from the date it claims.
     await writeStockLedger(client, (enriched as any[]).map(li => {
       const master = maps[li.materialType as keyof NameMaps]?.get(Number(li.materialId));
       return {
         txnType: 'purchase', materialType: li.materialType ?? 'item',
         refId: li.materialId, itemName: master?.name ?? '', unit: master?.unit ?? '',
-        branchType: loc.type, branchId: ledgerBranchId(loc, li.materialType ?? 'item'), branchName: locName,
+        branchType: newLoc.type, branchId: ledgerBranchId(newLoc, li.materialType ?? 'item'), branchName: newLocName,
         qtyChange: Number(li.quantity), unitCost: Number(li.costPerUnit ?? 0),
         docType: 'purchase', docId: id,
+        txnDate: String(purchaseDate ?? locked.purchase_date ?? '') || null,
         notes: 'Purchase edit — new lines applied',
       };
     }));
 
-    // 4. Persist the updated record
+    // 4. Persist the updated record (location included: after a move the
+    //    vendor payable and input GST re-derive against the new location's
+    //    purchase ledger from this row).
       await client.query(
         `UPDATE purchases SET vendor_id = $2, purchase_date = $3, invoice_number = $4, notes = $5,
                               line_items = $6::jsonb, total_amount = $7,
                               tax_total = $8, discount_total = $9, round_off = $10,
-                              price_mode = $11
+                              price_mode = $11, location_type = $12, location_id = $13
          WHERE id = $1`,
         [id, vendorId ?? locked.vendor_id, purchaseDate ?? locked.purchase_date,
          invoiceNumber !== undefined ? invoiceNumber : locked.invoice_number,
          notes !== undefined ? notes : locked.notes,
          JSON.stringify(enriched), String(totalAmount), taxTotal, discountTotal, roundOff,
-         priceMode],
+         priceMode, newLoc.type, newLoc.id],
       );
 
       await client.query("COMMIT");
@@ -1112,15 +1180,16 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
 
     logActivity({
       action: "UPDATE", module: "purchases", entityType: "purchase", entityId: id,
-      description: `Purchase Bill #${id} fully edited at ${locName} — ₹${totalAmount.toFixed(2)}`,
-      metadata: { before: { totalAmount: beforeTotal }, after: { totalAmount, lineCount: enriched.length, locationType: loc.type, locationId: loc.id, priceMode, taxableTotal, taxTotal } },
+      description: `Purchase Bill #${id} fully edited at ${newLocName}`
+        + (isMove ? ` (moved from ${locName})` : '') + ` — ₹${totalAmount.toFixed(2)}`,
+      metadata: { before: { totalAmount: beforeTotal, locationType: loc.type, locationId: loc.id }, after: { totalAmount, lineCount: enriched.length, locationType: newLoc.type, locationId: newLoc.id, priceMode, taxableTotal, taxTotal } },
     }).catch(() => {});
 
     const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, row.vendorId)).limit(1);
     res.json({
       ...row, vendorName: vendor?.name ?? "",
       totalAmount, subtotal, taxableTotal, taxTotal, discountTotal, roundOff, priceMode,
-      locationType: loc.type, locationId: loc.id, locationName: locName,
+      locationType: newLoc.type, locationId: newLoc.id, locationName: newLocName,
       ...(warnings.length ? { warnings } : {}),
       lineItems: enrichLines(enriched, maps),
     });
@@ -1135,6 +1204,17 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
   if (Object.keys(updateData).length === 0) { res.status(400).json({ error: "No fields to update" }); return; }
   const [row] = await db.update(purchasesTable).set(updateData).where(eq(purchasesTable.id, id)).returning();
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
+  // A date-only edit re-dates the bill — its stock movements must follow, or
+  // date-based stock reports keep the goods on the old day. txn_date is the
+  // movement's BUSINESS date, not audit information (created_at is untouched),
+  // so restating it here is the correction, not a rewrite of the trail. Every
+  // row of the bill moves together, so reversal pairs still cancel on any day.
+  if (purchaseDate !== undefined) {
+    await pool.query(
+      `UPDATE stock_ledger SET txn_date = $2::date WHERE doc_type = 'purchase' AND doc_id = $1`,
+      [id, purchaseDate],
+    );
+  }
   const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, row.vendorId)).limit(1);
   res.json({ ...row, vendorName: vendor?.name ?? "", totalAmount: Number(row.totalAmount), lineItems: row.lineItems ?? [] });
 });
@@ -1155,7 +1235,8 @@ router.delete("/purchases/:id", requireModuleAction("page:/production/purchase",
   try {
     await client.query("BEGIN");
     const { rows: [locked] } = await client.query(
-      `SELECT line_items, vendor_id, total_amount, location_type, location_id
+      `SELECT line_items, vendor_id, total_amount, location_type, location_id,
+              to_char(purchase_date, 'YYYY-MM-DD') AS purchase_date
        FROM purchases WHERE id = $1 FOR UPDATE`, [id]);
     if (!locked) {
       await client.query("ROLLBACK");
@@ -1217,12 +1298,23 @@ router.delete("/purchases/:id", requireModuleAction("page:/production/purchase",
       });
     }
   }
+    // Deleting a bill removes it from history: the reversal is dated on the
+    // bill's own business date so date-based stock reports on any day read as
+    // if the bill never existed. This bill's emptied lots go with it.
+    await client.query(
+      `DELETE FROM stock_batches
+        WHERE source = 'purchase' AND source_id = $1
+          AND branch_type = $2 AND branch_id = $3
+          AND quantity::numeric <= 0.0005`,
+      [id, loc.type, loc.id],
+    );
     await writeStockLedger(client, lineItems.map(li => ({
       txnType: 'purchase_reversal', materialType: li.materialType ?? 'item',
       refId: li.materialId, itemName: '', unit: '',
       branchType: loc.type, branchId: ledgerBranchId(loc, li.materialType ?? 'item'), branchName: locName,
       qtyChange: -Number(li.quantity), unitCost: 0,
       docType: 'purchase', docId: id,
+      txnDate: String(locked.purchase_date ?? '') || null,
       notes: 'Purchase deleted — stock reversed',
     })));
     const del = await client.query(`DELETE FROM purchases WHERE id = $1 RETURNING id`, [id]);
