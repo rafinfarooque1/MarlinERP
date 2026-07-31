@@ -60,6 +60,27 @@ export async function registerFonts(doc: jsPDF): Promise<void> {
   doc.setFont(FONT, "normal");
 }
 
+// ── Script face (invoice footer sign-off) ────────────────────────────────────
+
+export const SCRIPT_FONT = "GreatVibes";
+
+let scriptCache: string | null = null;
+
+/**
+ * Registers the calligraphic script face used for the invoice's
+ * "Thank You For Your Business!" sign-off. Separate from registerFonts and
+ * dynamically imported so the ~600 kB face is only ever loaded by the
+ * server-side renderer, never the browser bundle.
+ */
+export async function registerScriptFont(doc: jsPDF): Promise<void> {
+  if (!scriptCache) {
+    const m = await import("./fonts-script.js");
+    scriptCache = m.GREAT_VIBES_B64;
+  }
+  doc.addFileToVFS("GreatVibes-Regular.ttf", scriptCache);
+  doc.addFont("GreatVibes-Regular.ttf", SCRIPT_FONT, "normal");
+}
+
 // ── Formatting ───────────────────────────────────────────────────────────────
 
 /** Indian digit grouping: 6,33,194.00 — lakhs and crores, not thousands. */

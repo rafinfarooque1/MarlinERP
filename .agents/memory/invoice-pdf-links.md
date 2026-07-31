@@ -48,3 +48,11 @@ ONE canonical renderer: `api-server/src/services/invoicePdf.ts` (jsPDF + qrcode 
 ## Auth on PDF fetches
 - ALL /api routes require `Authorization: Bearer` (base64 `id:x`); `credentials: 'include'` alone → 401. `downloadPDFFromEndpoint` (marlin-erp `lib/download.ts`) attaches the token from localStorage `marlin_auth_token` — any new direct `fetch` to the API must do the same rather than relying on cookies.
 - **How to apply:** when a PDF/download flow 401s with "Authentication required", check the Bearer header first, not the server.
+
+## Rebuild lessons (reference-design renderer)
+- **pdfimages counts alpha as an image**: a PNG logo with an alpha channel embeds as image + soft mask, so "logo present" asserts `count >= 2` over the QR-only baseline of 1 — never `=== 2`.
+- **Dev DB never produces IGST**: `company_settings.state` is empty in dev and interstate = company state ≠ customer state, so every dev sale computes CGST/SGST. Tests of the IGST rendering path must pin the company state (by id) and restore it.
+- **Share-link raw-PDF fetches need the token**: `/api/share/invoice/:publicId/pdf?token=…` — a bare publicId returns the HTML notice page (deliberately, for customers on old links), which poisons pdftotext. Build the PDF URL from the returned `path` field.
+- **Embedded Roboto has no ☎/✉ glyphs** — dingbats print as garbage; draw tiny vector icons (bezier paths) instead.
+- **Single-page fitting is a mm budget**: with a floor-anchored signature+footer (~28mm) and guard `y + SIGN_H + FOOT_H > PH − pad`, fitting an N-line invoice is explicit arithmetic. The Scan&Pay panel (QR + UPI strip) is usually the tallest payment panel and the first place to reclaim height; then section gaps (0.5mm each compounds fast). Verify by rendering + pdfinfo pages, not by eyeballing code.
+- **Words panel must size to its own content**: height = max(tax-summary height, words lines + certification block) — a lakh-scale total wraps to 3-4 lines and overlaps the pinned certification otherwise.

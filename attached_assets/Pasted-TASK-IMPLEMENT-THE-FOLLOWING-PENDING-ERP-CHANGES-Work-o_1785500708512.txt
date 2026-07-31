@@ -1,0 +1,636 @@
+TASK: IMPLEMENT THE FOLLOWING PENDING ERP CHANGES
+
+Work on the EXISTING Marlin Frozen Fruits ERP codebase.
+
+IMPORTANT:
+This is an IMPLEMENTATION task, not a planning-only task.
+
+First inspect the existing code, database schema, API routes, accounting logic, POS calculations, settings architecture, RBAC, and audit-log implementation.
+
+Then implement the requirements below.
+
+CRITICAL SAFETY RULES
+
+1. Do NOT reset, delete, recreate, reseed, or replace the production database.
+2. Do NOT delete or rewrite historical sales, invoices, purchases, vouchers, payroll, attendance, stock, accounting entries, customers, warehouses, employees, or ledgers.
+3. Do NOT create fake production transactions for testing.
+4. Use disposable/dev test data only where testing is required.
+5. Do NOT alter unrelated accounting logic.
+6. Preserve existing invoice numbers, voucher numbers and transaction IDs.
+7. Use proper database migrations for schema changes.
+8. Backend validation must enforce important rules; do not rely only on frontend hiding.
+9. Existing historical transactions must continue displaying according to the values stored when they were created.
+10. Before modifying a calculation, trace its existing source of truth and all downstream effects.
+11. Run regression tests after implementation.
+12. Do not silently "repair" historical accounting data as part of this task.
+13. If an existing integrity problem is discovered, report it separately instead of changing unrelated historical records.
+
+==================================================
+1. BUSINESS DASHBOARD – PAYABLE BREAKDOWN
+==================================================
+
+Current Business Dashboard Payables card shows something similar to:
+
+Suppliers ₹0.00 · Salary ₹3,076.92
+
+Add Rent Payable to this breakdown.
+
+It should become:
+
+Suppliers ₹X · Salary ₹Y · Rent ₹Z
+
+Requirements:
+
+- Supplier amount must come from the existing supplier payable source.
+- Salary must come from the existing Salary Payable ledger/source.
+- Rent must come from the existing Rent Payable ledger/source.
+- Do NOT hardcode amounts.
+- Respect the dashboard's existing date/location filters where applicable.
+- Total Payables must remain based on the actual accounting balances.
+- Do not double-count Rent Payable if it is already included in the total.
+- This is primarily a breakdown/display enhancement; do not create new accounting postings merely to populate it.
+
+==================================================
+2. POINT OF SALE – REMOVE EMBEDDED PDF PREVIEW
+==================================================
+
+In Point of Sale, when opening/viewing an invoice, the right-side invoice detail drawer currently contains an embedded PDF/document preview.
+
+REMOVE that embedded PDF preview completely.
+
+The right-side drawer should directly show the invoice details.
+
+KEEP the top actions:
+
+PDF
+Print
+WhatsApp
+Edit
+
+Behaviour:
+
+PDF:
+Generate/open/download the existing invoice PDF.
+
+Print:
+Continue printing the invoice normally.
+
+WhatsApp:
+Continue the existing WhatsApp invoice sharing flow.
+
+Edit:
+Continue using the existing permitted sale-edit workflow.
+
+Do NOT remove the detailed information below the PDF preview.
+
+Keep information such as:
+
+Customer
+Coupon
+Items
+HSN
+Quantity
+Rate/MRP
+Discount
+Taxable amount
+GST
+Subtotal
+Grand Total
+Payment information/status
+
+The removal of the embedded preview must NOT change:
+
+- invoice PDF generation
+- invoice calculations
+- accounting entries
+- GST
+- stock
+- payments
+- historical invoices
+
+This is a UI simplification only.
+
+==================================================
+3. SETTINGS – ENABLE/DISABLE POS DISCOUNT
+==================================================
+
+Add a persistent ERP setting:
+
+Enable Discounts
+
+Use a proper toggle switch.
+
+When ON:
+
+Show the existing POS discount controls.
+
+This includes whichever discount mechanisms are currently supported by POS, including the existing per-item discount and bill-level discount if those features are present.
+
+When OFF:
+
+Hide discount-entry controls from the Point of Sale create/edit UI.
+
+IMPORTANT:
+
+This toggle is primarily a UI availability setting.
+
+Turning it OFF must NOT:
+
+- delete historical discounts
+- modify old invoices
+- recalculate old invoices
+- remove discount fields from database records
+- delete discount functionality
+- change accounting history
+
+Historical invoices containing discounts must continue displaying their original discount values.
+
+For NEW sales created while discounts are disabled, users must not be able to submit a new discount merely by manipulating the frontend/API. Enforce the setting server-side for new/edited POS transactions as appropriate.
+
+Existing historical discounted transactions must remain intact.
+
+Persist the setting in the database.
+
+It must survive:
+
+refresh
+logout/login
+browser change
+server restart
+deployment
+
+==================================================
+4. SETTINGS – ENABLE/DISABLE COUPON CODE
+==================================================
+
+Add another INDEPENDENT persistent setting:
+
+Enable Coupon Codes
+
+This must NOT be tied to the Discount toggle.
+
+When ON:
+
+Show the Coupon Code input in POS.
+
+When OFF:
+
+Hide the Coupon Code input from POS create/edit UI.
+
+Turning it OFF must NOT:
+
+- delete coupons
+- delete coupon history
+- modify historical invoices
+- remove existing coupon records
+- recalculate old transactions
+
+Historical sales that used coupons must continue showing the coupon used at the time.
+
+For NEW transactions while coupons are disabled, prevent applying a coupon through direct API manipulation as well.
+
+Persist the setting in the database.
+
+The two settings must work independently:
+
+Discount ON / Coupon ON
+Discount ON / Coupon OFF
+Discount OFF / Coupon ON
+Discount OFF / Coupon OFF
+
+Place these settings logically under the existing Company/ERP settings area, preferably under a POS/Sales settings section if such a structure already exists.
+
+Do not create a completely separate settings architecture if the ERP already has one.
+
+==================================================
+5. HR → HIERARCHY – EDIT EXISTING ROLE
+==================================================
+
+Current page:
+
+HR → Hierarchy
+
+Roles can currently be added and viewed.
+
+Add the ability to EDIT an existing role.
+
+Add an Edit icon/action in the Actions column.
+
+Clicking Edit should open:
+
+Edit Role
+
+Pre-populate the existing role information.
+
+Editable fields should include:
+
+Role Name
+Hierarchy Level
+Description
+Grade, if Grade is part of the existing role data model
+
+Do not invent a second Grade system if one already exists elsewhere.
+
+==================================================
+6. HIERARCHY LEVEL EDITING
+==================================================
+
+Hierarchy Level means organizational seniority.
+
+Existing convention:
+
+Level 1 = highest
+
+Example:
+
+L1 = Management
+L2 = senior management
+L3 = Warehouse Manager / Production Manager
+L4 = Supervisor
+L5 = Staff
+
+These examples are explanatory only. Do NOT hardcode these exact roles.
+
+Allow the hierarchy level of an existing role to be edited.
+
+Example:
+
+Warehouse Manager
+L3
+
+can be changed to:
+
+Warehouse Manager
+L2
+
+without deleting/recreating the role.
+
+IMPORTANT:
+
+Update the SAME role record.
+
+Do NOT:
+
+delete the old role
+create a replacement role
+duplicate the role
+detach employees from the role
+
+Employees assigned to that role must remain assigned.
+
+If the role name changes, employees using that role should automatically display the updated role name because they reference the same role record.
+
+==================================================
+7. HIERARCHY MUST NOT CONTROL PERMISSIONS
+==================================================
+
+This is critical.
+
+Hierarchy Level is organizational/reporting seniority ONLY.
+
+It must NOT automatically grant or revoke ERP permissions.
+
+For example:
+
+Changing:
+
+Warehouse Manager
+L3 → L2
+
+must NOT suddenly provide Management permissions.
+
+ERP access must continue being controlled through the existing:
+
+Permissions
+RBAC
+Role permissions
+
+system.
+
+Do not couple hierarchy ranking to authorization unless such explicit behaviour already exists and is intentionally configured.
+
+If the current code incorrectly derives permissions from hierarchy level, do NOT silently redesign the entire security model. Report the dependency first and make only the minimum safe change necessary.
+
+==================================================
+8. HIERARCHY ROLE VALIDATION
+==================================================
+
+Validate role edits.
+
+Role Name:
+Required.
+
+Hierarchy Level:
+Required.
+Positive integer.
+Minimum = 1.
+
+Description:
+Optional unless the existing schema requires it.
+
+Grade:
+Follow existing Grade validation.
+
+Prevent accidental duplicate roles according to the existing role uniqueness rules.
+
+If changing a role name conflicts with another existing role, show a clear validation error rather than silently merging them.
+
+==================================================
+9. SYSTEM/PROTECTED ROLES
+==================================================
+
+Inspect whether roles such as:
+
+Management
+Admin
+System Administrator
+
+are protected/system roles.
+
+Do NOT remove existing protection.
+
+If deletion is currently restricted, keep it restricted.
+
+Editing safe descriptive fields can be allowed if compatible with the current security model.
+
+Do NOT allow an edit to break login, RBAC, permissions, or system ownership.
+
+If a role identifier is internally used for authorization, preserve the immutable internal identifier and only change safe display/configuration fields.
+
+==================================================
+10. AUDIT LOG – HIERARCHY CHANGES
+==================================================
+
+Use the existing Audit Log infrastructure.
+
+When a hierarchy role is edited, record:
+
+action
+role ID
+role name
+changed fields
+old values
+new values
+user who changed it
+timestamp
+
+Do not create an unrelated second audit system.
+
+==================================================
+11. UI CONSISTENCY
+==================================================
+
+All new UI must match the existing ERP design system.
+
+Reuse existing:
+
+buttons
+modal components
+inputs
+toggle switches
+icons
+spacing
+typography
+toast messages
+validation styles
+
+Do not redesign the whole page.
+
+For hierarchy Actions, keep the existing View action and add Edit cleanly beside it.
+
+==================================================
+12. API / BACKEND REQUIREMENTS
+==================================================
+
+Do not implement these changes only in React/UI.
+
+Create/update the necessary backend endpoints and validation.
+
+Settings:
+
+- Read POS settings from persistent storage.
+- Update them only for authorized users.
+- Validate discount/coupon behaviour server-side where required.
+
+Hierarchy:
+
+- Update the existing role by primary ID.
+- Do not delete/recreate it.
+- Preserve employee relationships.
+- Preserve unrelated permissions.
+- Use a transaction if multiple dependent writes are necessary.
+
+Use the ERP's existing authentication and permission middleware.
+
+Only users with the appropriate administration/HR/company-settings permissions should be able to modify these settings.
+
+==================================================
+13. DATABASE MIGRATION
+==================================================
+
+If the settings do not currently exist, add them through a safe migration.
+
+Possible conceptual fields:
+
+posDiscountEnabled
+posCouponEnabled
+
+BUT:
+
+First inspect the existing settings schema and naming conventions.
+
+Use the existing architecture instead of blindly adding these exact columns if settings are stored differently.
+
+Set defaults to preserve CURRENT behaviour.
+
+Therefore, unless the current configuration indicates otherwise:
+
+Discount enabled = TRUE
+Coupon enabled = TRUE
+
+This prevents deployment from unexpectedly hiding existing functionality.
+
+Do not modify historical transaction data during the migration.
+
+==================================================
+14. HISTORICAL TRANSACTION RULE
+==================================================
+
+This applies to everything in this task.
+
+Old transactions are historical records.
+
+Changing a UI setting today must not retroactively change yesterday's invoice.
+
+Examples:
+
+If an old invoice has a ₹500 discount, disabling Discounts must NOT remove the ₹500 discount from that invoice.
+
+If an old invoice contains a coupon, disabling Coupon Codes must NOT hide/remove that coupon from the historical invoice detail/PDF where it is relevant.
+
+Settings control NEW transaction entry behaviour, not historical accounting truth.
+
+==================================================
+15. REGRESSION TESTS
+==================================================
+
+After implementation test at minimum:
+
+TEST A
+Dashboard Payables correctly displays:
+Suppliers
+Salary
+Rent
+
+and total Payables remains correct.
+
+TEST B
+Open a POS invoice.
+Embedded PDF preview is gone.
+
+TEST C
+Click PDF.
+PDF still works.
+
+TEST D
+Click Print.
+Print flow still works.
+
+TEST E
+Click WhatsApp.
+Existing WhatsApp flow still works.
+
+TEST F
+Discount ON.
+Discount inputs visible.
+
+TEST G
+Discount OFF.
+Discount-entry inputs hidden.
+
+TEST H
+Reload/login again.
+Discount setting remains OFF.
+
+TEST I
+Coupon ON.
+Coupon input visible.
+
+TEST J
+Coupon OFF.
+Coupon input hidden.
+
+TEST K
+Discount OFF + Coupon ON.
+Correct independent behaviour.
+
+TEST L
+Discount ON + Coupon OFF.
+Correct independent behaviour.
+
+TEST M
+Open historical discounted invoice while Discount is OFF.
+Historical discount remains visible/correct.
+
+TEST N
+Open historical coupon invoice while Coupon is OFF.
+Historical coupon remains intact.
+
+TEST O
+Edit Warehouse Manager hierarchy level from L3 to another test level using disposable/dev data.
+
+Confirm:
+same role ID
+employee assignments preserved
+permissions unchanged
+
+TEST P
+Change role description.
+Confirm audit log contains before/after values.
+
+TEST Q
+Try duplicate role name.
+Proper validation error.
+
+TEST R
+Verify unauthorized user cannot change protected settings/hierarchy data.
+
+==================================================
+16. DO NOT TOUCH THESE UNLESS REQUIRED
+==================================================
+
+Do not modify unrelated:
+
+Purchase calculations
+Stock valuation
+Opening Stock
+Closing Stock
+Payroll
+Salary accrual
+Salary Payable
+Rent accounting
+GST Returns
+Trial Balance
+Balance Sheet
+P&L calculations
+Sales invoice numbering
+Purchase numbering
+Voucher numbering
+Warehouse balances
+Customer balances
+Inventory batches
+Existing invoice PDF layout
+
+The dashboard requirement should READ existing Salary/Rent/Supplier payable balances, not redesign those accounting systems.
+
+==================================================
+17. IMPLEMENTATION PROCESS
+==================================================
+
+Do this in this order:
+
+1. Inspect current implementation.
+2. Identify exact frontend/backend/database files involved.
+3. Check existing settings architecture.
+4. Check current POS discount/coupon calculations.
+5. Check dashboard payable data source.
+6. Check hierarchy-role schema and employee relationships.
+7. Check RBAC and audit-log infrastructure.
+8. Make a checkpoint before changes.
+9. Implement database migration if required.
+10. Implement backend changes.
+11. Implement frontend changes.
+12. Run type checking/lint/build.
+13. Run targeted tests.
+14. Run regression tests.
+15. Review the diff for accidental unrelated changes.
+
+DO NOT stop after giving me a plan.
+
+After inspection, IMPLEMENT the changes.
+
+==================================================
+FINAL REPORT
+==================================================
+
+When finished, give me a concise report showing:
+
+1. Files changed
+2. Database/schema changes
+3. Dashboard Payables change
+4. POS invoice-view change
+5. Discount toggle implementation
+6. Coupon toggle implementation
+7. Hierarchy Edit implementation
+8. RBAC/security verification
+9. Audit logging verification
+10. Tests performed and results
+11. Any existing bugs discovered but intentionally NOT modified
+
+Most importantly:
+
+DO NOT DELETE OR REWRITE PRODUCTION DATA.
+DO NOT REPAIR UNRELATED ACCOUNTING ENTRIES.
+DO NOT RESET THE DATABASE.
+DO NOT CHANGE HISTORICAL TRANSACTIONS.
+DO NOT MODIFY EXISTING INVOICE PDF DESIGN AS PART OF THIS TASK.
