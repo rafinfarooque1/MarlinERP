@@ -13,4 +13,9 @@ export interface WarehouseUpdate {
   address?: string;
   contactPerson?: string;
   phone?: string;
+  /**
+     * UPI VPA for invoice QR payment. Empty string or null clears it.
+     * @nullable
+     */
+  upiId?: string | null;
 }

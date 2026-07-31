@@ -18,6 +18,11 @@ import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 
+// Mirrors the server-side rule in api-server/src/lib/upi.ts so a bad VPA is
+// caught before the round trip. Deliberately permissive about the provider
+// handle — new PSPs launch regularly and a whitelist would reject them.
+const UPI_PATTERN = /^[A-Za-z0-9.\-_]{2,64}@[A-Za-z][A-Za-z0-9.\-]{1,63}$/;
+
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
   state: z.string().min(1, 'State required'),
@@ -26,7 +31,11 @@ const schema = z.object({
   address: z.string().optional(),
   contactPerson: z.string().optional(),
   phone: z.string().optional(),
-  upiId: z.string().optional(),
+  // Trimmed, not rejected, for whitespace — the VPA is usually pasted out of a
+  // banking app. Blank is allowed and clears the stored value.
+  upiId: z.string().trim().refine(v => v === '' || UPI_PATTERN.test(v), {
+    message: 'Enter a valid UPI ID, e.g. warehouse@okhdfcbank',
+  }).optional(),
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -45,7 +54,7 @@ export default function Warehouses() {
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', state: '', stateCode: '', gstNumber: '', address: '', contactPerson: '', phone: '', upiId: '' } });
 
   const openAdd = () => { setEditingId(null); form.reset({ name: '', state: '', stateCode: '', gstNumber: '', address: '', contactPerson: '', phone: '', upiId: '' }); setIsOpen(true); };
-  const openEdit = (w: any) => { setEditingId(w.id); form.reset({ name: w.name, state: w.state, stateCode: (w as any).stateCode || '', gstNumber: w.gstNumber || '', address: w.address || '', contactPerson: w.contactPerson || '', phone: w.phone || '', upiId: (w as any).upiId || '' }); setIsOpen(true); };
+  const openEdit = (w: any) => { setEditingId(w.id); form.reset({ name: w.name, state: w.state, stateCode: (w as any).stateCode || '', gstNumber: w.gstNumber || '', address: w.address || '', contactPerson: w.contactPerson || '', phone: w.phone || '', upiId: w.upiId ?? '' }); setIsOpen(true); };
 
   const onSubmit = (data: FormValues) => {
     const opts = {

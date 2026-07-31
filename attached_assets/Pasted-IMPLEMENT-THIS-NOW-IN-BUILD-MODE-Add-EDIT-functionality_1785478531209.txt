@@ -1,0 +1,793 @@
+IMPLEMENT THIS NOW IN BUILD MODE.
+
+Add EDIT functionality to Accounts → Vouchers, but ONLY for genuinely MANUALLY CREATED vouchers.
+
+This is a focused accounting feature.
+
+Do NOT enter Plan mode.
+Do NOT only prepare a task or implementation plan.
+Do NOT stop after reviewing the code.
+
+Inspect the existing implementation, make the required code changes in DEVELOPMENT, run the tests/typechecks, and report the result.
+
+Do NOT publish automatically.
+
+==================================================
+1. EXACT REQUIREMENT
+==================================================
+
+I need to edit vouchers that I manually entered in:
+
+Accounts → Vouchers
+
+For example, I manually entered a Journal Voucher and later discovered that the amount was slightly wrong.
+
+I need to open that SAME manual voucher, click Edit, correct the amount/ledger/date/narration as permitted, and save it.
+
+The voucher must remain the same voucher.
+
+Example:
+
+JV/2026-27/0001
+
+must remain:
+
+JV/2026-27/0001
+
+after editing.
+
+DO NOT enable editing for system-generated vouchers.
+
+==================================================
+2. MANUAL VOUCHERS ONLY
+==================================================
+
+Allow Edit only for vouchers genuinely created manually from the Accounts/Vouchers workflow.
+
+Depending on the existing ERP architecture, this may include manually created:
+
+- Journal Voucher
+- Contra Voucher
+- Receipt Voucher
+- Payment Voucher
+- Credit Note
+- Debit Note
+
+BUT only if that specific voucher was manually created.
+
+A voucher type alone does NOT prove it is manual.
+
+For example, a Receipt Voucher generated automatically from a Sales/POS collection is SYSTEM-GENERATED and must remain locked.
+
+==================================================
+3. SYSTEM-GENERATED VOUCHERS MUST NOT BE EDITABLE
+==================================================
+
+DO NOT allow direct voucher editing for accounting entries generated from:
+
+- Sales
+- POS
+- Customer collection
+- Purchases
+- Vendor payments
+- Expenses
+- Payroll
+- Salary payments
+- Stock
+- Stock adjustments
+- Stock transfers
+- Production
+- GST
+- Rent
+- Fixed assets
+- Returns
+- automatic opening/system postings
+- any other source/business document
+
+Those vouchers/accounting entries must remain controlled by their source document.
+
+If appropriate, system-generated voucher rows may show:
+
+View
+View Source
+
+but NOT:
+
+Edit
+
+==================================================
+4. MANUAL VS SYSTEM PROVENANCE
+==================================================
+
+This is critical.
+
+Do NOT determine whether a voucher is manual based only on:
+
+- voucher number prefix
+- narration
+- reference
+- voucher type
+- description
+
+Use authoritative provenance.
+
+First inspect whether the current database already has fields such as:
+
+source_type
+source_id
+created_from
+origin
+is_manual
+is_system_generated
+
+or equivalent.
+
+If reliable provenance already exists, reuse it.
+
+If it does NOT exist, implement an explicit and safe provenance mechanism.
+
+Example conceptually:
+
+origin = MANUAL
+
+or
+
+is_manual = true
+
+New vouchers created manually through Accounts → Vouchers must be explicitly marked as manual.
+
+Automatically generated vouchers must be explicitly/systematically identifiable as system-generated.
+
+==================================================
+5. EXISTING HISTORICAL MANUAL VOUCHERS
+==================================================
+
+Very important:
+
+Do NOT blindly mark all existing journal_vouchers as manual.
+
+Some existing vouchers may have been generated automatically.
+
+Before enabling Edit for historical vouchers, inspect their relationships/source metadata.
+
+Only classify an existing voucher as manual when it can be determined safely.
+
+If an existing voucher's provenance is ambiguous:
+
+DO NOT enable Edit automatically.
+
+Report it as:
+
+"provenance unknown / edit locked"
+
+rather than risking editing a system-generated accounting transaction.
+
+==================================================
+6. MY EXISTING MANUAL JOURNAL
+==================================================
+
+I currently have an existing manually entered journal:
+
+JV/2026-27/0001
+
+I need the Edit functionality so that I can correct this journal myself later.
+
+DO NOT automatically change its amount.
+
+DO NOT delete it.
+
+DO NOT recreate it.
+
+DO NOT create another journal to compensate for it.
+
+During implementation, inspect whether its provenance can be safely confirmed as manual.
+
+If it can be confirmed from authoritative existing data, it may become editable after the feature is implemented.
+
+But DO NOT alter any financial values in JV/2026-27/0001.
+
+I will manually edit it through the ERP UI after the feature is available.
+
+==================================================
+7. UI — ADD EDIT ACTION
+==================================================
+
+In:
+
+Accounts → Vouchers
+
+For an authorized manual voucher show:
+
+View / Expand
+Edit
+Delete
+
+subject to the existing permissions.
+
+Use a clear Edit icon/button.
+
+For system-generated vouchers:
+
+DO NOT show Edit.
+
+If useful:
+
+View
+View Source
+
+may be shown.
+
+==================================================
+8. EDIT DIALOG / PAGE
+==================================================
+
+When Edit is clicked for a manual voucher, open a proper edit form/dialog.
+
+Pre-fill the CURRENT voucher values.
+
+For a manual Journal Voucher allow editing as appropriate:
+
+- Voucher Date
+- Reference
+- Narration
+- Debit ledger
+- Credit ledger
+- Debit amount
+- Credit amount
+- multiple debit/credit lines if the existing journal system supports them
+
+Do not require the user to recreate the voucher from scratch.
+
+==================================================
+9. VOUCHER NUMBER MUST NOT CHANGE
+==================================================
+
+Editing a voucher must preserve:
+
+voucher ID
+voucher number
+
+Example:
+
+Before:
+JV/2026-27/0001
+
+After:
+JV/2026-27/0001
+
+Do not generate:
+
+JV/2026-27/0002
+
+just because the original was edited.
+
+==================================================
+10. JOURNAL BALANCE VALIDATION
+==================================================
+
+A Journal Voucher must always remain balanced.
+
+Required rule:
+
+TOTAL DEBIT = TOTAL CREDIT
+
+Example valid correction:
+
+Before:
+
+Dr Frozen Hub                 ₹6,33,194.00
+Cr Frozen Hub Investment      ₹6,33,194.00
+
+User changes it to:
+
+Dr Frozen Hub                 ₹6,33,192.21
+Cr Frozen Hub Investment      ₹6,33,192.21
+
+SAVE should succeed.
+
+Example invalid:
+
+Dr Frozen Hub                 ₹6,33,192.21
+Cr Frozen Hub Investment      ₹6,33,194.00
+
+SAVE must be rejected.
+
+Show a clear validation message such as:
+
+"Journal voucher is not balanced. Total Debit must equal Total Credit."
+
+Perform this validation on BOTH frontend and backend.
+
+Backend validation is authoritative.
+
+==================================================
+11. UPDATE THE EXISTING ACCOUNTING POSTING
+==================================================
+
+This is extremely important.
+
+Editing a voucher must NOT create:
+
+OLD VOUCHER
++
+NEW VOUCHER
+
+It must update the existing voucher safely.
+
+Example:
+
+Existing:
+
+JV/2026-27/0001
+
+Dr Frozen Hub                 ₹6,33,194.00
+Cr Frozen Hub Investment      ₹6,33,194.00
+
+After edit:
+
+JV/2026-27/0001
+
+Dr Frozen Hub                 ₹6,33,192.21
+Cr Frozen Hub Investment      ₹6,33,192.21
+
+There must still be exactly ONE voucher.
+
+There must not be duplicate accounting legs.
+
+==================================================
+12. ATOMIC DATABASE UPDATE
+==================================================
+
+Perform the voucher edit inside a database transaction.
+
+The operation may need to update:
+
+journal_vouchers
+journal_voucher_lines
+audit log
+related metadata
+
+or the project's equivalent tables.
+
+Either ALL required updates succeed or ALL roll back.
+
+Never allow:
+
+voucher header updated
+but
+voucher lines still old
+
+or the reverse.
+
+==================================================
+13. GENERAL LEDGER MUST UPDATE
+==================================================
+
+After editing the manual voucher, the corrected accounting entries must automatically flow through every report derived from the General Ledger.
+
+Verify applicable:
+
+- Ledger Statement
+- Chart of Accounts balances
+- Trial Balance
+- Profit & Loss
+- Balance Sheet
+- Vendor ledger
+- Customer ledger
+- Salary Payable
+- other affected ledger balances
+- Dashboard financial balances
+
+Do NOT manually patch each dashboard card just to match the voucher.
+
+The authoritative accounting entries must drive the reports.
+
+==================================================
+14. CURRENT BALANCE CONSISTENCY
+==================================================
+
+If a manual Journal changes a vendor/customer/payable/receivable/cash/bank ledger, all CURRENT BALANCE representations that legitimately derive from the ledger should respond correctly.
+
+Example:
+
+Purchase:
+
+Cr Frozen Hub ₹6,33,194.00
+
+Manual journal:
+
+Dr Frozen Hub ₹6,33,192.21
+
+Vendor ledger should reflect the resulting balance.
+
+Do not create fake Payment/Receipt records merely because a Journal affected the ledger.
+
+Preserve the distinction between:
+
+A. General Ledger balance
+B. Invoice/payment allocation history
+
+Do not falsify invoice settlement records.
+
+==================================================
+15. MANUAL RECEIPT EDIT
+==================================================
+
+If manually created Receipt Vouchers exist and are supported by this same voucher architecture, allow authorized editing.
+
+Possible fields:
+
+- date
+- received-from ledger
+- cash/bank ledger
+- amount
+- narration
+- reference
+
+But ONLY for manually created Receipt Vouchers.
+
+A receipt generated automatically from POS/Sales/Customer Collection must remain locked.
+
+==================================================
+16. MANUAL PAYMENT EDIT
+==================================================
+
+Same principle.
+
+A manually created Payment Voucher may be editable if supported.
+
+A Payment generated by:
+
+- vendor payment workflow
+- payroll
+- expense
+- purchase
+- other source module
+
+must remain system-controlled and locked.
+
+==================================================
+17. MANUAL CONTRA EDIT
+==================================================
+
+Manual Contra may be editable.
+
+Example:
+
+Dr Bank
+Cr Cash
+
+If edited, both sides must update atomically.
+
+Contra must remain balanced.
+
+Do not create income/expense from a normal cash/bank transfer.
+
+==================================================
+18. CREDIT NOTE / DEBIT NOTE
+==================================================
+
+Only manually created Credit/Debit Notes may be edited through Vouchers.
+
+If generated from Sales Return, Purchase Return, GST, or another source document, keep them locked.
+
+==================================================
+19. RBAC
+==================================================
+
+Editing accounting vouchers is a sensitive financial operation.
+
+Use the existing Vouchers EDIT permission or the appropriate existing accounting edit permission.
+
+Frontend:
+
+Hide Edit when user lacks permission.
+
+Backend:
+
+Reject direct edit API calls when user lacks permission.
+
+Do NOT trust frontend hiding.
+
+Do NOT weaken the existing Task #161 RBAC/location security implementation.
+
+Level-1 administrator behaviour should remain according to existing ERP policy.
+
+==================================================
+20. DELETE RULES
+==================================================
+
+Do NOT broaden Delete permissions as part of this task.
+
+If existing manual-voucher Delete logic already exists, preserve its current rules unless a defect must be corrected to support provenance safely.
+
+System-generated vouchers must remain protected from manual deletion if that is the current intended architecture.
+
+This task is primarily EDIT.
+
+==================================================
+21. AUDIT LOG
+==================================================
+
+Every successful manual voucher edit must create an audit record.
+
+Use the existing ERP audit infrastructure if available.
+
+Capture at minimum:
+
+- voucher ID
+- voucher number
+- voucher type
+- edited by employee/user
+- timestamp
+- previous voucher values
+- new voucher values
+
+For journal lines capture enough information to identify:
+
+old ledger
+old debit/credit
+new ledger
+new debit/credit
+
+Do not store passwords/tokens or unrelated sensitive data.
+
+==================================================
+22. CONCURRENCY SAFETY
+==================================================
+
+Prevent accidental lost updates if two sessions try to edit the same voucher.
+
+Use the existing updated_at/version mechanism if available.
+
+At minimum detect that the voucher changed since the edit form was opened where the current architecture supports it.
+
+Do not silently overwrite a newer accounting edit.
+
+==================================================
+23. ACCOUNTING PERIOD / LOCK CHECKS
+==================================================
+
+Inspect whether the ERP has controls for:
+
+- closed accounting periods
+- GST filed periods
+- reconciled transactions
+- finalized periods
+
+Manual voucher Edit must not bypass existing locks.
+
+If no such locking system exists, do not invent a large new accounting-period module in this task.
+
+Just preserve existing controls.
+
+==================================================
+24. BACKEND API
+==================================================
+
+Add a dedicated safe edit endpoint according to the existing API conventions.
+
+Conceptually:
+
+PATCH /api/journal-vouchers/:id
+
+or the appropriate existing route.
+
+Backend must validate:
+
+1. authenticated user
+2. Edit permission
+3. voucher exists
+4. voucher provenance = manual
+5. voucher is not system-linked
+6. voucher is not otherwise locked
+7. debit = credit
+8. ledgers are valid/active
+9. values are valid
+10. update is atomic
+
+Direct API calls must NOT be able to edit system-generated vouchers.
+
+==================================================
+25. DO NOT CHANGE EXISTING FINANCIAL DATA DURING IMPLEMENTATION
+==================================================
+
+Do NOT edit my production vouchers during development.
+
+Specifically:
+
+DO NOT modify:
+JV/2026-27/0001
+
+Do NOT alter its amount.
+
+Do NOT delete it.
+
+Do NOT recreate it.
+
+Do NOT add a correction entry.
+
+The purpose of this task is to give ME the Edit button so I can correct it myself later.
+
+==================================================
+26. TEST WITH DISPOSABLE DEVELOPMENT VOUCHER
+==================================================
+
+Create/use a disposable DEVELOPMENT-only manual journal.
+
+Example:
+
+Dr Test Ledger A       ₹1,000
+Cr Test Ledger B       ₹1,000
+
+Save.
+
+Then edit the SAME voucher to:
+
+Dr Test Ledger A       ₹950
+Cr Test Ledger B       ₹950
+
+Verify:
+
+- same voucher ID
+- same voucher number
+- exactly one voucher
+- exactly the correct journal lines
+- ₹1,000 posting no longer affects the ledger
+- ₹950 posting affects the ledger
+- no duplicate entries
+- Trial Balance remains balanced
+
+==================================================
+27. INVALID EDIT TEST
+==================================================
+
+Attempt:
+
+Dr Test Ledger A       ₹950
+Cr Test Ledger B       ₹900
+
+Expected:
+
+HTTP/API rejection
++
+clear UI validation
+
+Nothing in the database should change.
+
+==================================================
+28. SYSTEM-GENERATED PROTECTION TEST
+==================================================
+
+Take a DEVELOPMENT system-generated voucher linked to a Sale/Purchase/etc.
+
+Verify:
+
+- Edit button is NOT displayed.
+- Direct edit API request returns 403/409 or the project's appropriate safe error.
+- underlying source document is unchanged.
+- journal entries are unchanged.
+
+==================================================
+29. MANUAL PROVENANCE TEST
+==================================================
+
+Create a new voucher manually.
+
+Verify it is explicitly identified as manual.
+
+Then verify a system-generated voucher is NOT identified as manual.
+
+Do not depend on narration or voucher prefix for this test.
+
+==================================================
+30. REPORT RECONCILIATION
+==================================================
+
+After editing the disposable voucher verify:
+
+Trial Balance:
+Total Debit = Total Credit
+
+Affected ledger balances:
+correct
+
+Chart of Accounts:
+correct
+
+P&L/Balance Sheet:
+correct where applicable
+
+Dashboard:
+correct where applicable
+
+No duplicate accounting lines.
+
+==================================================
+31. SCHEMA CHANGES
+==================================================
+
+Avoid unnecessary schema changes.
+
+However, if an explicit provenance field is genuinely required for safe manual/system distinction, a small additive migration is acceptable.
+
+If a migration is required:
+
+- make it additive
+- make it idempotent
+- preserve all existing data
+- do NOT automatically classify ambiguous historical vouchers as manual
+- verify dev/prod migration safety before asking to publish
+
+Do NOT modify the existing 16 DATE-column conversion architecture.
+
+==================================================
+32. SCOPE — DO NOT MIX OTHER TASKS
+==================================================
+
+Do NOT implement unrelated pending ERP changes in this task.
+
+Do NOT change:
+
+- purchase item selector
+- POS selector
+- stock transfer selector
+- stock expiry synchronization
+- salary accrual
+- dashboard design
+- purchase PDF
+- payslip PDF
+- opening stock
+- E-way bill
+- sales/receipt classification architecture
+- stock value visibility
+
+unless a tiny shared change is strictly necessary for this voucher edit feature.
+
+Keep this task focused.
+
+==================================================
+33. BUILD / TYPECHECK
+==================================================
+
+After implementation run:
+
+- backend typecheck
+- frontend typecheck
+- relevant tests
+- production frontend build using the correct project environment variables if safe
+
+Check API/server logs for errors.
+
+Do not publish.
+
+==================================================
+34. FINAL REPORT
+==================================================
+
+When complete, give me a concise but complete report containing:
+
+1. How manual vouchers are identified.
+2. Whether a schema migration was required.
+3. Which voucher types are editable.
+4. Which system-generated voucher types remain locked.
+5. Frontend files changed.
+6. Backend files changed.
+7. Edit API endpoint added/changed.
+8. RBAC enforcement result.
+9. Debit = Credit validation result.
+10. Atomic update mechanism.
+11. Audit-log result.
+12. Disposable ₹1,000 → ₹950 edit test.
+13. Invalid ₹950/₹900 rejection test.
+14. System-generated voucher direct-API protection test.
+15. Trial Balance reconciliation result.
+16. Confirmation no duplicate accounting lines were created.
+17. Confirmation JV/2026-27/0001 was NOT modified.
+18. Confirmation no production financial data was modified.
+19. Typecheck/build/test results.
+20. Any remaining limitation.
+
+DO NOT PUBLISH.
+
+Stop after successful development verification and wait for my approval.

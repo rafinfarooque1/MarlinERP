@@ -412,6 +412,11 @@ export interface Warehouse {
   contactPerson?: string | null;
   /** @nullable */
   phone?: string | null;
+  /**
+     * UPI VPA used to build the payment QR on this location's invoices. Null when the location has none and the company-level UPI ID applies.
+     * @nullable
+     */
+  upiId?: string | null;
   outletCount?: number;
   createdAt: string;
 }
@@ -423,6 +428,11 @@ export interface WarehouseInput {
   address?: string;
   contactPerson?: string;
   phone?: string;
+  /**
+     * UPI VPA for invoice QR payment. Empty string or null stores no UPI ID.
+     * @nullable
+     */
+  upiId?: string | null;
 }
 
 export interface WarehouseUpdate {
@@ -432,6 +442,11 @@ export interface WarehouseUpdate {
   address?: string;
   contactPerson?: string;
   phone?: string;
+  /**
+     * UPI VPA for invoice QR payment. Empty string or null clears it.
+     * @nullable
+     */
+  upiId?: string | null;
 }
 
 export interface Outlet {

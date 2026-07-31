@@ -7,6 +7,7 @@ import {
   CreateOutletBody, UpdateOutletBody,
 } from "@workspace/api-zod";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
+import { normalizeUpiId } from "../lib/upi";
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 import { provisionRentLedgers, syncRentLedgerNames, rentLedgerIdsFor } from "../lib/rentLedgers";
 import { resolveChartParentId } from "../lib/chartGroups";
@@ -165,7 +166,11 @@ router.get("/warehouses", requireModuleView(["page:/", "page:/production/item-ma
 router.post("/warehouses", requireModuleAction("page:/headoffice/warehouses", "add"), async (req, res): Promise<void> => {
   const parsed = CreateWarehouseBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-  const [row] = await db.insert(warehousesTable).values(parsed.data).returning();
+  // Normalise before the insert, not after: an empty string must reach the
+  // column as NULL, or every UPI QR builder downstream has to special-case ''.
+  const upi = normalizeUpiId(parsed.data.upiId);
+  if (!upi.ok) { res.status(400).json({ error: upi.error }); return; }
+  const [row] = await db.insert(warehousesTable).values({ ...parsed.data, upiId: upi.value }).returning();
   // Save state_code (raw column not in Drizzle schema)
   const scNew = (req.body as any)?.stateCode ?? null;
   if (scNew !== null) await pool.query(`UPDATE warehouses SET state_code = $1 WHERE id = $2`, [scNew || null, row.id]);
@@ -201,9 +206,25 @@ router.patch("/warehouses/:id", requireModuleAction("page:/headoffice/warehouses
   const id = parseInt(req.params.id, 10);
   const parsed = UpdateWarehouseBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+  // A PATCH is a partial update: only the keys actually present are written, so
+  // changing the UPI ID alone must not blank out the name, GSTIN or address.
+  const patch: Record<string, unknown> = { ...parsed.data };
+  if ('upiId' in patch) {
+    const upi = normalizeUpiId(patch['upiId']);
+    if (!upi.ok) { res.status(400).json({ error: upi.error }); return; }
+    patch['upiId'] = upi.value;
+  }
   // Fetch old name for comparison
   const { rows: [before] } = await pool.query<{ name: string }>(`SELECT name FROM warehouses WHERE id = $1`, [id]);
-  const [row] = await db.update(warehousesTable).set(parsed.data).where(eq(warehousesTable.id, id)).returning();
+  // Drizzle throws on an empty SET, which a body carrying only raw columns
+  // (stateCode) would otherwise produce. Fall back to reading the row so those
+  // updates still apply and still answer 404 for a warehouse that is gone.
+  let row: typeof warehousesTable.$inferSelect | undefined;
+  if (Object.keys(patch).length > 0) {
+    [row] = await db.update(warehousesTable).set(patch).where(eq(warehousesTable.id, id)).returning();
+  } else {
+    [row] = await db.select().from(warehousesTable).where(eq(warehousesTable.id, id)).limit(1);
+  }
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   // Update state_code (raw column not in Drizzle schema)
   const scUpd = (req.body as any)?.stateCode;

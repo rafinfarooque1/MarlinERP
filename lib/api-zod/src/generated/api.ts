@@ -709,6 +709,7 @@ export const ListWarehousesResponseItem = zod.object({
   "address": zod.string().nullish(),
   "contactPerson": zod.string().nullish(),
   "phone": zod.string().nullish(),
+  "upiId": zod.string().nullish().describe('UPI VPA used to build the payment QR on this location\'s invoices. Null when the location has none and the company-level UPI ID applies.'),
   "outletCount": zod.number().optional(),
   "createdAt": zod.string()
 })
@@ -724,7 +725,8 @@ export const CreateWarehouseBody = zod.object({
   "gstNumber": zod.string(),
   "address": zod.string().optional(),
   "contactPerson": zod.string().optional(),
-  "phone": zod.string().optional()
+  "phone": zod.string().optional(),
+  "upiId": zod.string().nullish().describe('UPI VPA for invoice QR payment. Empty string or null stores no UPI ID.')
 })
 
 export const CreateWarehouseResponse = zod.object({
@@ -735,6 +737,7 @@ export const CreateWarehouseResponse = zod.object({
   "address": zod.string().nullish(),
   "contactPerson": zod.string().nullish(),
   "phone": zod.string().nullish(),
+  "upiId": zod.string().nullish().describe('UPI VPA used to build the payment QR on this location\'s invoices. Null when the location has none and the company-level UPI ID applies.'),
   "outletCount": zod.number().optional(),
   "createdAt": zod.string()
 })
@@ -752,6 +755,7 @@ export const GetWarehouseResponse = zod.object({
   "address": zod.string().nullish(),
   "contactPerson": zod.string().nullish(),
   "phone": zod.string().nullish(),
+  "upiId": zod.string().nullish().describe('UPI VPA used to build the payment QR on this location\'s invoices. Null when the location has none and the company-level UPI ID applies.'),
   "outletCount": zod.number().optional(),
   "createdAt": zod.string()
 })
@@ -767,7 +771,8 @@ export const UpdateWarehouseBody = zod.object({
   "gstNumber": zod.string().optional(),
   "address": zod.string().optional(),
   "contactPerson": zod.string().optional(),
-  "phone": zod.string().optional()
+  "phone": zod.string().optional(),
+  "upiId": zod.string().nullish().describe('UPI VPA for invoice QR payment. Empty string or null clears it.')
 })
 
 export const UpdateWarehouseResponse = zod.object({
@@ -778,6 +783,7 @@ export const UpdateWarehouseResponse = zod.object({
   "address": zod.string().nullish(),
   "contactPerson": zod.string().nullish(),
   "phone": zod.string().nullish(),
+  "upiId": zod.string().nullish().describe('UPI VPA used to build the payment QR on this location\'s invoices. Null when the location has none and the company-level UPI ID applies.'),
   "outletCount": zod.number().optional(),
   "createdAt": zod.string()
 })

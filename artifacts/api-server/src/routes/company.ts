@@ -7,6 +7,7 @@ import { PasswordService } from "../lib/password";
 import { invalidatePolicyCache } from "../lib/passwordPolicy";
 import { getActiveLockouts } from "../middleware/auth";
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
+import { normalizeUpiId } from "../lib/upi";
 
 const router = Router();
 
@@ -216,15 +217,11 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
     }
   }
   if ('upiId' in req.body) {
-    const v = (req.body as any).upiId;
-    if (v !== null && typeof v !== 'string') { res.status(400).json({ error: 'upiId must be a string or null' }); return; }
-    const vpa = typeof v === 'string' ? v.trim() : '';
-    // A malformed VPA produces a QR that scans and then fails in the customer's
-    // UPI app, with nothing on the invoice to explain why. Reject it here.
-    if (vpa && !/^[A-Za-z0-9.\-_]{2,64}@[A-Za-z][A-Za-z0-9.\-]{1,63}$/.test(vpa)) {
-      res.status(400).json({ error: 'upiId must be a valid UPI address, e.g. marlin@okhdfcbank' }); return;
-    }
-    invoicePayUpdates.push(['upi_id', vpa || null]);
+    // Shared with the per-location UPI ID on warehouses: both feed the same
+    // invoice QR, so they must accept and reject exactly the same values.
+    const upi = normalizeUpiId((req.body as any).upiId);
+    if (!upi.ok) { res.status(400).json({ error: upi.error }); return; }
+    invoicePayUpdates.push(['upi_id', upi.value]);
   }
   for (const [bodyKey, column, max] of [
     ['upiPayeeName',      'upi_payee_name',      60],

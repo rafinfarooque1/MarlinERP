@@ -1981,6 +1981,11 @@ components:
           type: ["string", "null"]
         phone:
           type: ["string", "null"]
+        upiId:
+          type: ["string", "null"]
+          description: >-
+            UPI VPA used to build the payment QR on this location's invoices.
+            Null when the location has none and the company-level UPI ID applies.
         outletCount:
           type: integer
         createdAt:
@@ -2002,6 +2007,9 @@ components:
           type: string
         phone:
           type: string
+        upiId:
+          type: ["string", "null"]
+          description: UPI VPA for invoice QR payment. Empty string or null stores no UPI ID.
 
     WarehouseUpdate:
       type: object
@@ -2018,6 +2026,9 @@ components:
           type: string
         phone:
           type: string
+        upiId:
+          type: ["string", "null"]
+          description: UPI VPA for invoice QR payment. Empty string or null clears it.
 
     # OUTLET
     Outlet:

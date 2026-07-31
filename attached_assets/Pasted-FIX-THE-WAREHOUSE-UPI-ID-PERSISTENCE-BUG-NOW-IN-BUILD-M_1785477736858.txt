@@ -1,0 +1,358 @@
+FIX THE WAREHOUSE UPI ID PERSISTENCE BUG NOW IN BUILD MODE.
+
+Current problem:
+
+Company / Warehouse management has an Add/Edit Warehouse form with:
+
+"UPI ID (for invoice QR payment)"
+
+I enter a UPI ID and click Save.
+
+The warehouse saves successfully, but when I reopen Edit Warehouse, the UPI ID field is blank.
+
+So the UPI ID is either:
+- not being sent by the frontend,
+- being removed by validation,
+- not being saved by the backend,
+- missing/not persisted in the database,
+- not returned by the warehouse GET API,
+- or not being populated back into the edit form.
+
+Do not just patch the input visually.
+
+Trace and fix the COMPLETE persistence lifecycle.
+
+==================================================
+1. REPRODUCE FIRST
+==================================================
+
+In DEVELOPMENT only:
+
+1. Open an existing warehouse.
+2. Edit Warehouse.
+3. Enter a disposable UPI ID such as:
+
+testwarehouse@upi
+
+4. Save.
+5. Reopen the same warehouse.
+
+Confirm whether it becomes blank.
+
+Also inspect:
+- browser request payload
+- API response
+- backend request validation
+- database value
+- subsequent GET response
+
+Identify exactly where the value is being lost.
+
+Do not modify production data.
+
+==================================================
+2. FRONTEND
+==================================================
+
+Inspect the Add Warehouse and Edit Warehouse forms.
+
+Confirm the UPI field is actually bound to the warehouse form state.
+
+For example, use the project's existing naming convention consistently:
+
+upiId
+
+or
+
+upi_id
+
+Do NOT accidentally have mismatched names such as:
+
+Frontend:
+upiId
+
+Backend:
+upi_id
+
+Database:
+upiVpa
+
+without proper mapping.
+
+When Save is clicked, verify the UPI ID is included in the request payload.
+
+Example conceptually:
+
+{
+  name: "...",
+  state: "...",
+  stateCode: "...",
+  gstNumber: "...",
+  contactPerson: "...",
+  phone: "...",
+  address: "...",
+  upiId: "testwarehouse@upi"
+}
+
+Use the actual project contract rather than blindly copying this example.
+
+==================================================
+3. BACKEND
+==================================================
+
+Inspect BOTH:
+
+CREATE warehouse
+UPDATE warehouse
+
+The backend must accept and persist the UPI ID.
+
+Check:
+- request schema
+- Zod/validation schema if present
+- DTO/types
+- route handler
+- service/repository
+- SQL/ORM update statement
+
+Make sure the field isn't being silently stripped by validation.
+
+==================================================
+4. DATABASE
+==================================================
+
+Inspect the warehouse/location schema.
+
+Determine whether a proper UPI field already exists.
+
+If it already exists:
+USE IT.
+
+Do not create a duplicate column.
+
+If it does not exist, add the smallest safe additive migration required.
+
+Example conceptually:
+
+upi_id TEXT NULL
+
+but follow the existing project's naming conventions.
+
+Migration requirements:
+- additive
+- idempotent
+- nullable
+- preserve all existing warehouse/location data
+- no destructive migration
+
+==================================================
+5. READ API
+==================================================
+
+Saving alone is not enough.
+
+The warehouse GET/list/detail API must return the persisted UPI ID.
+
+Verify that reopening Edit Warehouse receives:
+
+upiId: "testwarehouse@upi"
+
+or the project's equivalent field.
+
+==================================================
+6. EDIT FORM HYDRATION
+==================================================
+
+When Edit Warehouse opens, initialize the UPI input from the warehouse's stored value.
+
+Do not initialize it permanently as:
+
+upiId: ""
+
+if a saved value exists.
+
+It should conceptually use:
+
+warehouse.upiId ?? ""
+
+according to the project's actual implementation.
+
+==================================================
+7. ADD + EDIT MUST BOTH WORK
+==================================================
+
+Test both flows.
+
+TEST A — CREATE
+
+Create a disposable DEVELOPMENT warehouse with:
+
+UPI:
+testcreate@upi
+
+Save.
+
+Reopen.
+
+Expected:
+
+testcreate@upi
+
+must still appear.
+
+TEST B — UPDATE
+
+Take a disposable DEVELOPMENT warehouse.
+
+Set:
+
+testold@upi
+
+Save and reopen.
+
+Then change it to:
+
+testnew@upi
+
+Save and reopen.
+
+Expected:
+
+testnew@upi
+
+must appear.
+
+The old value must not remain.
+
+==================================================
+8. CLEARING UPI
+==================================================
+
+Also support intentionally removing the UPI ID.
+
+If user deletes the UPI value and saves:
+
+the database should store NULL/empty according to existing project convention,
+
+and reopening the warehouse should show the field blank.
+
+Do not make an old UPI ID impossible to remove.
+
+==================================================
+9. VALIDATION
+==================================================
+
+Do not over-restrict valid Indian UPI VPAs.
+
+Trim accidental leading/trailing spaces.
+
+Do not invent a restrictive regex that rejects legitimate provider formats.
+
+If the project already has UPI validation, inspect and preserve/correct it appropriately.
+
+Invalid values should show a useful validation message rather than silently disappearing.
+
+==================================================
+10. INVOICE / QR DEPENDENCY
+==================================================
+
+The UI labels this field:
+
+"UPI ID (for invoice QR payment)"
+
+Therefore trace where warehouse UPI is used for invoice/payment QR generation.
+
+After fixing persistence, verify that the QR/payment logic reads the SAME authoritative warehouse UPI field.
+
+Do NOT redesign invoices or QR functionality in this task.
+
+Just make sure there are not two disconnected UPI fields.
+
+==================================================
+11. RBAC / LOCATION SECURITY
+==================================================
+
+Preserve existing warehouse permissions and location security.
+
+Only users currently authorized to Add/Edit warehouses should be able to change UPI IDs.
+
+Backend authorization must remain authoritative.
+
+Do not weaken RBAC.
+
+==================================================
+12. DO NOT TOUCH UNRELATED MODULES
+==================================================
+
+Do not change:
+- vouchers
+- sales accounting
+- purchases
+- stock
+- payroll
+- GST
+- stock transfers
+- opening stock
+- vendor balances
+- customer balances
+
+This task is only the Warehouse UPI persistence bug and its existing invoice QR dependency.
+
+==================================================
+13. REGRESSION TEST
+==================================================
+
+After the fix verify that editing other warehouse fields still works:
+
+- Warehouse Name
+- State
+- State Code
+- GST Number
+- Contact Person
+- Phone
+- Address
+- UPI ID
+
+Saving only a UPI change must NOT erase any of the other warehouse fields.
+
+Saving another warehouse field must NOT erase an existing UPI ID.
+
+==================================================
+14. TYPECHECK / BUILD
+==================================================
+
+Run:
+- backend typecheck
+- frontend typecheck
+- relevant tests
+- production web build with the project's required environment variables
+
+Check server/browser logs for errors.
+
+DO NOT PUBLISH.
+
+==================================================
+15. FINAL REPORT
+==================================================
+
+When finished report:
+
+1. Exact root cause.
+2. Whether frontend was sending the UPI ID.
+3. Whether backend validation accepted it.
+4. Whether database already had the UPI column.
+5. Whether a migration was required.
+6. Exact authoritative field name used.
+7. Confirmation CREATE persists UPI.
+8. Confirmation EDIT persists changed UPI.
+9. Confirmation reopening Edit displays the saved UPI.
+10. Confirmation clearing UPI works.
+11. Confirmation existing warehouse fields are preserved.
+12. Confirmation invoice QR uses the same stored UPI field.
+13. Files changed.
+14. Typecheck/build/test results.
+15. Confirmation no production data was modified.
+
+DO NOT PUBLISH.
+
+Stop after development verification and wait for my approval.
