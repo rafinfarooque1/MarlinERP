@@ -357,41 +357,60 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   // ══════════════════════════════════════════════════════════════════════════
   const BADGE_W = 70;
   const badgeX = M + CW - BADGE_W;
-  const nameW = badgeX - (M + 15) - 3;   // never run under the badge
+  const nameW = badgeX - (M + 21) - 7;   // never run under the badge
 
   // Logo: the company mark when one is uploaded, otherwise a navy lettermark
   // built from the seller's own initial.
+  const LOGO_S = 16;
+  const drawLettermark = () => {
+    fill(M, y, LOGO_S, LOGO_S, NAVY);
+    txt((issuer.tradeName[0] || "M").toUpperCase(), M + LOGO_S / 2, y + LOGO_S / 2 + 3.4,
+        { bold: true, size: 13, color: WHITE, align: "center" });
+  };
   if (logoDataUrl) {
     try {
-      doc.addImage(logoDataUrl, M, y, 12, 12, undefined, "FAST");
-    } catch {
-      fill(M, y, 12, 12, NAVY);
-      txt((issuer.tradeName[0] || "M").toUpperCase(), M + 6, y + 8.4, { bold: true, size: 10, color: WHITE, align: "center" });
-    }
+      // Fit inside the 16mm box preserving aspect ratio — a wide or tall mark
+      // is centred in the box rather than stretched square.
+      const props = doc.getImageProperties(logoDataUrl);
+      const s = Math.min(LOGO_S / (props.width || 1), LOGO_S / (props.height || 1));
+      const lw = (props.width || 1) * s;
+      const lh = (props.height || 1) * s;
+      doc.addImage(logoDataUrl, M + (LOGO_S - lw) / 2, y + (LOGO_S - lh) / 2, lw, lh, undefined, "FAST");
+    } catch { drawLettermark(); }
   } else {
-    fill(M, y, 12, 12, NAVY);
-    txt((issuer.tradeName[0] || "M").toUpperCase(), M + 6, y + 8.4, { bold: true, size: 10, color: WHITE, align: "center" });
+    drawLettermark();
   }
 
   // Seller name — wraps to a second line rather than colliding with the badge.
-  const nameLines = wrap(issuer.tradeName.toUpperCase() || "-", nameW, 14, true).slice(0, 2);
-  let ly = y + 6.4;
+  const nameLines = wrap(issuer.tradeName.toUpperCase() || "-", nameW, 15, true).slice(0, 2);
+  let ly = y + 6.8;
   for (const nl of nameLines) {
-    txt(nl, M + 15, ly, { bold: true, size: 14, color: NAVY });
-    ly += 5.6;
+    txt(nl, M + 21, ly, { bold: true, size: 15, color: NAVY });
+    ly += 6;
   }
-  ly += 0.6;
+  ly += 0.8;
 
   // Address, then the contact line. Both omitted entirely when unset — the
   // header closes up rather than printing an empty label.
   for (const line of issuer.addressLines.slice(0, 3)) {
-    cell(line, M + 15, ly, nameW, { size: 6.8, color: MGRAY });
+    cell(line, M + 21, ly, nameW, { size: 6.8, color: MGRAY });
     ly += 3.5;
   }
   const contactLine = [issuer.phone, issuer.email].filter(Boolean).join("   |   ");
   if (contactLine) {
-    cell(contactLine, M + 15, ly, nameW, { size: 6.5, color: MGRAY });
+    cell(contactLine, M + 21, ly, nameW, { size: 6.5, color: MGRAY });
     ly += 3.5;
+  }
+  // Registrations live inside the identity block, as on the reference layout —
+  // a full-width bar read like a system banner rather than who is billing.
+  if (issuer.gstin) {
+    ly += 1.2;
+    cell(`GSTIN: ${issuer.gstin}`, M + 21, ly + 2.4, nameW, { bold: true, size: 8, color: NAVY });
+    ly += 5.2;
+  }
+  if (issuer.fssai) {
+    cell(`FSSAI Lic. No.: ${issuer.fssai}`, M + 21, ly + 1.6, nameW, { bold: true, size: 7, color: NAVY });
+    ly += 4.6;
   }
 
   // Right: TAX INVOICE badge + invoice meta
@@ -420,22 +439,12 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     cell(`: ${v}`, badgeX + 28, ry, BADGE_W - 30, { size: 6.4, bold: true, color: NAVY });
   });
 
-  y = Math.max(ly, y + 8 + metaH) + 1.5;
-
-  // Compliance bar — GSTIN and the FSSAI licence of the issuing location.
-  // Rendered only when there is something to state: a bar reading "GSTIN: -"
-  // looks like a fault, and an invoice with no GSTIN should show a gap the
-  // seller can see rather than borrow another registration's number.
-  if (issuer.gstin || issuer.fssai) {
-    fill(M, y, CW, 7, LGRAY);
-    bx(M, y, CW, 7, BORDER);
-    if (issuer.gstin) txt(`GSTIN: ${issuer.gstin}`, M + 3, y + 4.8, { bold: true, size: 7.5, color: NAVY });
-    if (issuer.fssai) {
-      txt(`FSSAI Lic. No.: ${issuer.fssai}`, M + CW - 3, y + 4.8, { bold: true, size: 7.5, color: NAVY, align: "right" });
-    }
-    y += 7;
-  }
-  y += 2;
+  const headerBottom = Math.max(ly, y + 8 + metaH);
+  // Light divider between the identity block and the invoice-meta column, then
+  // a rule closing the header off from the body — both per the reference.
+  ln(badgeX - 3.5, y + 1, badgeX - 3.5, headerBottom - 1, BORDER, 0.25);
+  ln(M, headerBottom + 1.5, M + CW, headerBottom + 1.5, NAVY, 0.5);
+  y = headerBottom + 4.5;
 
   // ══════════════════════════════════════════════════════════════════════════
   // 2. BILLED TO / SHIPPED TO
@@ -693,22 +702,30 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   posCells.push(["Amount Received", rs(position.amountReceived)]);
   posCells.push(["Balance Due", rs(position.outstanding), statusColor]);
 
-  const STRIP_H = 19;
+  // One row, as on the reference: label block on the left, the figures across
+  // the middle, the status pill on the right.
+  const STRIP_H = 16;
   if (y + STRIP_H > PH - 34) { doc.addPage(); y = M; }
   bx(M, y, CW, STRIP_H, BORDER);
-  fill(M, y, CW, 7, LGRAY);
-  txt("PAYMENT STATUS", M + 3, y + 5, { bold: true, size: 7, color: NAVY });
-  const badgeW = 8 + statusText.length * 1.6;
-  fill(M + CW - badgeW - 2, y + 1.5, badgeW, 4.4, statusColor);
-  txt(statusText, M + CW - badgeW / 2 - 2, y + 4.7, { bold: true, size: 6.5, color: WHITE, align: "center" });
-
-  const cellW = CW / posCells.length;
+  const LBL_W = 32;
+  fill(M, y, LBL_W, STRIP_H, LGRAY);
+  txt("PAYMENT", M + 3, y + STRIP_H / 2 - 1, { bold: true, size: 7, color: NAVY });
+  txt("STATUS",  M + 3, y + STRIP_H / 2 + 2.6, { bold: true, size: 7, color: NAVY });
+  const pillW = 10 + statusText.length * 1.8;
+  const figW = (CW - LBL_W - (pillW + 8)) / posCells.length;
   posCells.forEach(([label, value, color], i) => {
-    if (i > 0) ln(M + i * cellW, y + 7, M + i * cellW, y + STRIP_H, BORDER);
-    txt(label, M + i * cellW + 3, y + 12, { size: 6.5, color: MGRAY });
-    cell(value, M + i * cellW + 3, y + 17, cellW - 6, { bold: true, size: 8.5, color: color ?? BK });
+    const cx = M + LBL_W + i * figW;
+    ln(cx, y, cx, y + STRIP_H, BORDER);
+    cell(label, cx + 3, y + 6.2, figW - 6, { size: 6.5, color: MGRAY });
+    cell(value, cx + 3, y + 11.8, figW - 6, { bold: true, size: 8.5, color: color ?? BK });
   });
+  fill(M + CW - pillW - 4, y + (STRIP_H - 6) / 2, pillW, 6, statusColor);
+  txt(statusText, M + CW - 4 - pillW / 2, y + STRIP_H / 2 + 1.5, { bold: true, size: 6.8, color: WHITE, align: "center" });
   y += STRIP_H + 2;
+
+  // Whether the arrangement the bill was raised under ("credit") was already
+  // stated inside the bank-details panel; if not, it gets its own bar below.
+  let paymentModeShown = false;
 
   if (position.isCancelled) {
     // Cancelled: the stock, revenue and receivable were all reversed. Asking for
@@ -737,6 +754,11 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
       if (bank.accountType)   bankRows.push(["Account Type", bank.accountType]);
       if (bank.ifsc)          bankRows.push(["IFSC Code", bank.ifsc]);
     }
+    // Payment mode joins the payment details, as on the reference layout.
+    if (bankRows.length > 0 && sale.paymentMode) {
+      bankRows.push(["Payment Mode", paymentModeLabel(sale.paymentMode)]);
+      paymentModeShown = true;
+    }
     const hasQr = Boolean(qrDataUrl && upiRequest);
     const QR_SIZE = 30;
 
@@ -753,9 +775,11 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     fill(M, y, payW, 7, LGRAY);
     txt("AMOUNT PAYABLE", M + 3, y + 5, { bold: true, size: 7, color: NAVY });
     cell(rs(position.outstanding), M + 3, y + 17, payW - 6, { bold: true, size: 14, color: statusColor });
-    txt(position.status === "partially_paid"
-          ? "Balance outstanding on this invoice"
-          : "Total amount outstanding on this invoice",
+    txt(bankRows.length > 0
+          ? "Please settle this balance by bank transfer using the details alongside."
+          : position.status === "partially_paid"
+            ? "Balance outstanding on this invoice"
+            : "Total amount outstanding on this invoice",
         M + 3, y + 22, { size: 6, color: MGRAY, maxWidth: payW - 6 });
     if (sale.invoiceNumber) {
       txt(`Ref: ${esc(sale.invoiceNumber)}`, M + 3, y + PAY_H - 2.5, { size: 6, color: MGRAY });
@@ -781,7 +805,7 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
       fill(qx, y, qrW, 7, LGRAY);
       txt("SCAN & PAY", qx + 3, y + 5, { bold: true, size: 7, color: NAVY });
       doc.addImage(qrDataUrl!, "PNG", qx + (qrW - QR_SIZE) / 2, y + 8.5, QR_SIZE, QR_SIZE);
-      cell(`UPI: ${upiRequest.upiId}`, qx + qrW / 2, y + QR_SIZE + 12.5, qrW - 4, { size: 5.8, color: MGRAY, align: "center" });
+      cell(`UPI ID: ${upiRequest.upiId}`, qx + qrW / 2, y + QR_SIZE + 12.5, qrW - 4, { size: 5.8, color: MGRAY, align: "center" });
     }
     y += PAY_H + 2;
   } else {
@@ -811,7 +835,7 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
 
   // The payment MODE is the arrangement the bill was raised under ("credit"), not
   // its status — the strip above owns the status, so the mode is stated once here.
-  if (sale.paymentMode) {
+  if (sale.paymentMode && !paymentModeShown) {
     bx(M, y, CW, 7, BORDER);
     fill(M, y, CW, 7, LGRAY);
     txt(`Payment Mode : ${esc(paymentModeLabel(sale.paymentMode))}`,
@@ -849,9 +873,11 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   // ══════════════════════════════════════════════════════════════════════════
   const footerLines = issuer.invoiceFooter ? wrap(issuer.invoiceFooter, CW - 10, 6.5) : [];
   if (y + 14 + footerLines.length * 3.8 > PH - 4) { doc.addPage(); y = M; }
-  fill(M, y, CW, 9, NAVY);
-  txt("THANK YOU FOR YOUR BUSINESS!", PW / 2, y + 6, { bold: true, size: 9, color: WHITE, align: "center" });
-  y += 11;
+  // A centred sign-off between two short rules, per the reference — not a bar.
+  ln(M + 12, y + 4, PW / 2 - 40, y + 4, NAVY, 0.4);
+  ln(PW / 2 + 40, y + 4, M + CW - 12, y + 4, NAVY, 0.4);
+  txt("Thank You For Your Business!", PW / 2, y + 5.6, { bold: true, size: 10.5, color: NAVY, align: "center" });
+  y += 10;
   for (const t of footerLines) {
     txt(t, PW / 2, y + 3, { size: 6.5, color: BK, align: "center" });
     y += 3.8;

@@ -28,6 +28,35 @@ function pickCompanyFields(body: Record<string, any>) {
   return result;
 }
 
+/**
+ * Read the pixel dimensions from a PNG or JPEG buffer without decoding it.
+ * A tiny compressed file can still declare enormous dimensions ("image bomb"),
+ * and the invoice renderer would pay the decode cost on every PDF — so the
+ * declared size is checked at upload time, from the format headers alone.
+ * Returns null when the header cannot be read (which callers should reject).
+ */
+function imagePixelDimensions(buf: Buffer): { width: number; height: number } | null {
+  // PNG: 8-byte signature, then the IHDR chunk with width/height at 16/20.
+  if (buf.length > 24 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+  }
+  // JPEG: walk the marker segments to the first SOF frame header.
+  if (buf.length > 4 && buf[0] === 0xff && buf[1] === 0xd8) {
+    let o = 2;
+    while (o + 9 < buf.length) {
+      if (buf[o] !== 0xff) { o++; continue; }
+      const marker = buf[o + 1];
+      if (marker === 0xff) { o++; continue; }
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        return { height: buf.readUInt16BE(o + 5), width: buf.readUInt16BE(o + 7) };
+      }
+      if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) { o += 2; continue; }
+      o += 2 + buf.readUInt16BE(o + 2);
+    }
+  }
+  return null;
+}
+
 // ── Company Settings ──────────────────────────────────────────────────────
 
 // Extra settings live in raw columns (not in the Drizzle schema): invoice-PDF
@@ -95,6 +124,33 @@ router.get("/company/settings", async (_req, res): Promise<void> => {
 
 router.patch("/company/settings", requireModuleAction("page:/company/settings", "edit"), async (req, res): Promise<void> => {
   const data = pickCompanyFields(req.body);
+
+  // Logo: only an inline PNG/JPEG data URI is stored — the invoice PDF embeds
+  // the image bytes directly (jsPDF cannot fetch a URL or draw an SVG). Empty
+  // string or null clears it. The app resizes uploads to ≤512px before
+  // sending, so anything near the body limit is rejected rather than stored.
+  if ('logoUrl' in data) {
+    const v = data.logoUrl;
+    if (v === null || v === '') {
+      data.logoUrl = null;
+    } else if (typeof v !== 'string' || !/^data:image\/(png|jpe?g);base64,[A-Za-z0-9+/=]+$/.test(v)) {
+      res.status(400).json({ error: 'logoUrl must be a PNG or JPEG data URI, or empty to remove the logo' });
+      return;
+    } else if (v.length > 700_000) {
+      res.status(400).json({ error: 'Logo image is too large — please upload a smaller image' });
+      return;
+    } else {
+      const dims = imagePixelDimensions(Buffer.from(v.slice(v.indexOf(',') + 1), 'base64'));
+      if (!dims || dims.width < 1 || dims.height < 1) {
+        res.status(400).json({ error: 'Logo image could not be read — please upload a valid PNG or JPEG' });
+        return;
+      }
+      if (dims.width > 4096 || dims.height > 4096) {
+        res.status(400).json({ error: 'Logo image dimensions are too large — maximum 4096×4096 pixels' });
+        return;
+      }
+    }
+  }
 
   // paymentTerms / invoiceFooter are handled via raw SQL (columns added by
   // startup migration; Drizzle's .set() would drop unknown keys).

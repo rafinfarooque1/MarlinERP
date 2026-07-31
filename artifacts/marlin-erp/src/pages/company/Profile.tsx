@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useGetCompanySettings, useUpdateCompanySettings } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,39 @@ import { INDIAN_STATES } from '@/lib/indianStates';
 import { usePermission } from '@/lib/usePermission';
 
 const LOGO_KEY = 'marlin_company_logo';
+/**
+ * Set once this browser has synced with the server's logo state. After that,
+ * an empty server logo means "removed on purpose" — never a cue to push a
+ * stale local copy back up.
+ */
+const LOGO_SYNCED_KEY = 'marlin_logo_synced_v1';
+
+/**
+ * Normalise any uploaded image to a small PNG data URI (≤512px on the long
+ * edge). The invoice PDF is rendered on the server and embeds these bytes
+ * directly — jsPDF cannot fetch a URL or draw an SVG — so everything is
+ * converted to a format it can draw, at a size the API accepts.
+ */
+async function normaliseLogo(dataUrl: string): Promise<string> {
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const i = new Image();
+    i.onload = () => resolve(i);
+    i.onerror = () => reject(new Error('Not a readable image'));
+    i.src = dataUrl;
+  });
+  const iw = img.naturalWidth || 512;
+  const ih = img.naturalHeight || 512;
+  const scale = Math.min(1, 512 / Math.max(iw, ih));
+  const w = Math.max(1, Math.round(iw * scale));
+  const h = Math.max(1, Math.round(ih * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas unavailable');
+  ctx.drawImage(img, 0, 0, w, h);
+  return canvas.toDataURL('image/png');
+}
 
 const schema = z.object({
   name: z.string().min(1, 'Company name required'),
@@ -137,27 +170,90 @@ export default function Profile() {
     });
   };
 
+  // The logo used to live only in this browser's localStorage, which the
+  // server-rendered invoice PDF can never see. Sync once per visit: the server
+  // copy wins when it exists; otherwise a logo already uploaded in this
+  // browser is pushed up so it starts printing on invoices.
+  const logoSynced = useRef(false);
+  useEffect(() => {
+    if (!p || perm.isLoading || logoSynced.current) return;
+    logoSynced.current = true;
+    const serverLogo = typeof p.logoUrl === 'string' && p.logoUrl.startsWith('data:image/') ? p.logoUrl : null;
+    const local = localStorage.getItem(LOGO_KEY);
+    const alreadySynced = localStorage.getItem(LOGO_SYNCED_KEY) === '1';
+    if (serverLogo) {
+      // Server is the source of truth — mirror it into this browser.
+      if (local !== serverLogo) {
+        localStorage.setItem(LOGO_KEY, serverLogo);
+        setLogo(serverLogo);
+        window.dispatchEvent(new CustomEvent('marlin_logo_changed', { detail: serverLogo }));
+      }
+      localStorage.setItem(LOGO_SYNCED_KEY, '1');
+    } else if (!alreadySynced && local && local.startsWith('data:image/') && perm.canEdit) {
+      // One-shot legacy migration: this browser has never synced and holds a
+      // logo from the localStorage-only era, so push it up once.
+      normaliseLogo(local)
+        .then((b64) => updateMutation.mutate({ data: { logoUrl: b64 } as any }, {
+          onSuccess: () => {
+            localStorage.setItem(LOGO_KEY, b64);
+            localStorage.setItem(LOGO_SYNCED_KEY, '1');
+            setLogo(b64);
+            window.dispatchEvent(new CustomEvent('marlin_logo_changed', { detail: b64 }));
+            toast.success('Logo saved to the company profile — it now prints on invoices');
+          },
+        }))
+        .catch(() => { /* unreadable stored logo — a manual re-upload will replace it */ });
+    } else {
+      // Server has no logo. If this browser already synced once, the logo was
+      // removed on purpose (possibly elsewhere) — clear the stale local copy
+      // instead of resurrecting it.
+      localStorage.setItem(LOGO_SYNCED_KEY, '1');
+      if (alreadySynced && local) {
+        localStorage.removeItem(LOGO_KEY);
+        setLogo(null);
+        window.dispatchEvent(new CustomEvent('marlin_logo_changed', { detail: null }));
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p, perm.isLoading, perm.canEdit]);
+
   const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
     if (file.size > 2 * 1024 * 1024) { toast.error('Logo must be under 2 MB'); return; }
     const reader = new FileReader();
-    reader.onload = () => {
-      const b64 = reader.result as string;
-      localStorage.setItem(LOGO_KEY, b64);
-      setLogo(b64);
-      window.dispatchEvent(new CustomEvent('marlin_logo_changed', { detail: b64 }));
-      toast.success('Logo saved — it now appears in the sidebar');
+    reader.onload = async () => {
+      try {
+        const b64 = await normaliseLogo(reader.result as string);
+        updateMutation.mutate({ data: { logoUrl: b64 } as any }, {
+          onSuccess: () => {
+            localStorage.setItem(LOGO_KEY, b64);
+            localStorage.setItem(LOGO_SYNCED_KEY, '1');
+            setLogo(b64);
+            window.dispatchEvent(new CustomEvent('marlin_logo_changed', { detail: b64 }));
+            toast.success('Logo saved — it appears in the sidebar and prints on invoices');
+          },
+          onError: (err: any) => toast.error(err?.data?.error || err?.message || 'Failed to save logo'),
+        });
+      } catch {
+        toast.error('Could not read that image — please use a PNG or JPEG');
+      }
     };
     reader.readAsDataURL(file);
-    e.target.value = '';
   };
 
   const removeLogo = () => {
-    localStorage.removeItem(LOGO_KEY);
-    setLogo(null);
-    window.dispatchEvent(new CustomEvent('marlin_logo_changed', { detail: null }));
-    toast.success('Logo removed');
+    updateMutation.mutate({ data: { logoUrl: '' } as any }, {
+      onSuccess: () => {
+        localStorage.removeItem(LOGO_KEY);
+        localStorage.setItem(LOGO_SYNCED_KEY, '1');
+        setLogo(null);
+        window.dispatchEvent(new CustomEvent('marlin_logo_changed', { detail: null }));
+        toast.success('Logo removed');
+      },
+      onError: (err: any) => toast.error(err?.data?.error || err?.message || 'Failed to remove logo'),
+    });
   };
 
   if (!perm.isLoading && !perm.canView) {
@@ -186,7 +282,7 @@ export default function Profile() {
         {/* Logo Upload */}
         <div className="bg-card border border-border rounded-xl p-5 space-y-4">
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider border-b border-border pb-2">Company Logo</h3>
-          <p className="text-xs text-muted-foreground">Upload your logo — it will appear in the sidebar. PNG or JPEG, max 2 MB.</p>
+          <p className="text-xs text-muted-foreground">Upload your logo — it appears in the sidebar and prints on your invoices. PNG or JPEG, max 2 MB.</p>
           <div className="flex items-center gap-5">
             <div className="w-28 h-20 rounded-lg border-2 border-dashed border-border flex items-center justify-center bg-muted/20 overflow-hidden shrink-0">
               {logo ? (

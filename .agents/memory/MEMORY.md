@@ -68,3 +68,4 @@
 - [Invoice seller identity](invoice-seller-identity.md) — seller = the location, never the company; bank/UPI may fall back but identity may not; judge "incomplete" on the RESOLVED issuer.
 - [Money input normalisation](money-input-normalisation.md) — number inputs post strings; zod.coerce maps ''/null/true to a number; validate the decimal STRING, reject >2dp, let NUMERIC do the maths.
 - [Dev rows are test fixtures](dev-data-as-fixtures.md) — scratch-looking dev records are pinned by id AND attributes in the regression suites; grep tests/ before editing a row's state or GSTIN.
+- [Client→server state migration](local-state-migration.md) — pushing localStorage state up must be one-shot-flagged per browser or stale copies resurrect deleted server state; server absence ≠ never existed.
