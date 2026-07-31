@@ -41,13 +41,15 @@ export function useFeatureFlags() {
   return {
     flags: query.data ?? FLAG_DEFAULTS,
     isLoading: query.isLoading,
+    isError: query.isError,
+    retry: query.refetch,
   };
 }
 
 /** Convenience: is the retired Outlet module currently active? */
-export function useOutletsEnabled(): { outletsEnabled: boolean; isLoading: boolean } {
-  const { flags, isLoading } = useFeatureFlags();
-  return { outletsEnabled: flags.outletsEnabled, isLoading };
+export function useOutletsEnabled(): { outletsEnabled: boolean; isLoading: boolean; isError: boolean; retry: () => void } {
+  const { flags, isLoading, isError, retry } = useFeatureFlags();
+  return { outletsEnabled: flags.outletsEnabled, isLoading, isError, retry: () => { void retry(); } };
 }
 
 /**

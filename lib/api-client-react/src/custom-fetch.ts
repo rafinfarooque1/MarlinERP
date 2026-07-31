@@ -9,6 +9,7 @@ export type BodyType<T> = T;
 export type AuthTokenGetter = () => Promise<string | null> | string | null;
 
 export type AuthTokenSetter = (token: string) => void;
+export type UnauthorizedHandler = () => void;
 
 const NO_BODY_STATUS = new Set([204, 205, 304]);
 const DEFAULT_JSON_ACCEPT = "application/json, application/problem+json";
@@ -47,6 +48,7 @@ export function setAuthTokenGetter(getter: AuthTokenGetter | null): void {
 }
 
 let _authTokenSetter: AuthTokenSetter | null = null;
+let _unauthorizedHandler: UnauthorizedHandler | null = null;
 
 /**
  * Register a setter invoked whenever the server sends a refreshed auth token
@@ -56,6 +58,16 @@ let _authTokenSetter: AuthTokenSetter | null = null;
  */
 export function setAuthTokenSetter(setter: AuthTokenSetter | null): void {
   _authTokenSetter = setter;
+}
+
+/**
+ * Optional application callback for a confirmed 401 response. Consumers that
+ * persist bearer tokens can clear that local session in one place. We
+ * intentionally do not call it for 403: a signed-in user may simply lack
+ * permission for a page.
+ */
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
+  _unauthorizedHandler = handler;
 }
 
 function isRequest(input: RequestInfo | URL): input is Request {
@@ -386,6 +398,9 @@ export async function customFetch<T = unknown>(
 
   if (!response.ok) {
     const errorData = await parseErrorBody(response, method);
+    if (response.status === 401) {
+      try { _unauthorizedHandler?.(); } catch { /* session cleanup is best-effort */ }
+    }
     throw new ApiError(response, errorData, requestInfo);
   }
 

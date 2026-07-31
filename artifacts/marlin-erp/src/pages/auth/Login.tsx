@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { useTheme } from '@/lib/theme';
+import { useSession } from '@/lib/sessionContext';
 
 const loginSchema = z.object({
   username: z.string().min(1, 'Username is required'),
@@ -34,13 +35,14 @@ export default function Login() {
   const loginMutation = useLogin();
   const queryClient = useQueryClient();
   const { setTheme } = useTheme();
+  const { stage, acceptSession } = useSession();
   const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
-    if (localStorage.getItem('marlin_auth_token')) {
+    if (stage === 'ready') {
       setLocation('/profile/me');
     }
-  }, []);
+  }, [setLocation, stage]);
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -54,6 +56,7 @@ export default function Login() {
         queryClient.clear();
         localStorage.setItem('marlin_auth_token', response.token);
         localStorage.setItem('marlin_user', JSON.stringify(response.employee));
+        acceptSession();
         if ((response.employee as any).mustChangePassword) {
           setLocation('/change-password');
         } else {

@@ -1,0 +1,321 @@
+Add a safe EDIT option in Accounts → Vouchers, but ONLY for manually created vouchers.
+
+CURRENT NEED
+
+I manually entered this Journal Voucher:
+
+Frozen Hub / Frozen Hub Investment
+JV/2026-27/0001
+
+There is a difference in the amount entered, so I need to correct the existing manual journal instead of deleting it and creating another one.
+
+==================================================
+REQUIREMENT
+==================================================
+
+Add an "Edit" button/action ONLY for manually created vouchers.
+
+Examples that can be editable if manually entered:
+
+- Manual Journal Voucher
+- Manual Receipt Voucher
+- Manual Payment Voucher
+- Manual Contra Voucher
+- Manual Debit Note
+- Manual Credit Note
+
+DO NOT enable Edit for automatically/system-generated vouchers created from:
+
+- Sales invoices / POS
+- Purchase bills
+- Payroll
+- Expenses
+- Stock transactions
+- Stock transfers
+- GST
+- automated accounting postings
+- any other source document
+
+System-generated vouchers must remain protected.
+
+==================================================
+MANUAL JOURNAL EDIT
+==================================================
+
+For a manually created Journal Voucher, allow an authorized user to edit:
+
+- Date
+- Debit ledger/account
+- Credit ledger/account
+- Debit amount
+- Credit amount
+- Additional journal lines, if supported
+- Narration
+- Reference/description
+
+The voucher number should remain unchanged.
+
+Example:
+
+JV/2026-27/0001
+
+must remain:
+
+JV/2026-27/0001
+
+after editing.
+
+==================================================
+ACCOUNTING VALIDATION
+==================================================
+
+A Journal Voucher must always remain balanced.
+
+Total Debit = Total Credit
+
+If:
+
+Debit ₹6,33,194
+Credit ₹6,33,194
+
+and I correct it to:
+
+Debit ₹6,33,192.21
+Credit ₹6,33,192.21
+
+the system should save the correction.
+
+But if:
+
+Debit ₹6,33,192.21
+Credit ₹6,33,194
+
+reject the save with:
+
+"Journal voucher is not balanced."
+
+==================================================
+VERY IMPORTANT — UPDATE EXISTING POSTING
+==================================================
+
+Editing must NOT create another journal voucher.
+
+It must update the existing manual voucher and its corresponding accounting legs safely.
+
+Before:
+
+Dr Frozen Hub              ₹6,33,194
+Cr Frozen Hub Investment   ₹6,33,194
+
+After correction:
+
+Dr Frozen Hub              ₹6,33,192.21
+Cr Frozen Hub Investment   ₹6,33,192.21
+
+There must NOT be:
+
+old journal
++
+new journal
+
+or duplicated ledger entries.
+
+After saving, there must still be exactly ONE JV/2026-27/0001.
+
+==================================================
+UPDATE ALL RELATED FINANCIAL VIEWS
+==================================================
+
+After editing the journal, all reports that derive from the General Ledger must immediately reflect the corrected amount, including where applicable:
+
+- Frozen Hub ledger
+- Frozen Hub Investment ledger
+- Ledger Statement
+- Trial Balance
+- Balance Sheet
+- Chart of Accounts balances
+- Vendor/customer balance where legitimately derived from the ledger
+- Dashboard accounting totals
+
+Do not manually patch individual dashboard values.
+
+They should recalculate from the authoritative accounting data.
+
+==================================================
+MANUAL VS SYSTEM-GENERATED IDENTIFICATION
+==================================================
+
+Do not identify manual vouchers only by voucher-number prefix.
+
+Use the existing source/origin metadata if available.
+
+For example:
+
+source_type
+source_id
+created_from
+is_system_generated
+
+or the project's equivalent.
+
+A voucher is editable only when it is genuinely a manually created accounting voucher.
+
+If the current database does not clearly identify manual vs system-generated vouchers, investigate and implement the safest explicit distinction.
+
+==================================================
+UI
+==================================================
+
+In Accounts → Vouchers:
+
+For manual voucher show:
+
+View / Expand
+Edit
+Delete
+
+subject to existing permissions.
+
+For system-generated voucher:
+
+DO NOT show Edit.
+
+If useful, show:
+
+View Source
+
+instead.
+
+==================================================
+RBAC
+==================================================
+
+Editing vouchers is an accounting write operation.
+
+Use the existing Vouchers EDIT permission.
+
+Frontend visibility is not sufficient.
+
+Backend API must independently verify that the logged-in user has permission to edit vouchers.
+
+Do not weaken existing RBAC.
+
+==================================================
+AUDIT LOG
+==================================================
+
+Because this changes accounting records, record the edit in the existing Audit Log.
+
+Capture:
+
+- voucher ID
+- voucher number
+- user who edited it
+- date/time
+- old values
+- new values
+
+Do not silently overwrite financial history without an audit record.
+
+==================================================
+TRANSACTION SAFETY
+==================================================
+
+Perform the update atomically.
+
+Voucher header + debit/credit legs + relevant accounting records must either all update successfully or all roll back.
+
+Never leave a partially edited voucher.
+
+==================================================
+IMPORTANT — EXISTING JV
+==================================================
+
+Do NOT automatically modify JV/2026-27/0001 during development.
+
+I will manually edit it through the ERP after the feature is ready.
+
+Use disposable development/test vouchers to test the feature.
+
+Do not change my existing production journal amount yourself.
+
+==================================================
+TEST
+==================================================
+
+Create a disposable manual journal:
+
+Dr Test Account A   ₹1,000
+Cr Test Account B   ₹1,000
+
+Edit it to:
+
+Dr Test Account A   ₹950
+Cr Test Account B   ₹950
+
+Verify:
+
+- same voucher number
+- exactly one voucher remains
+- debit = ₹950
+- credit = ₹950
+- old ₹1,000 posting is gone
+- no duplicate ledger entries
+- Trial Balance remains balanced
+
+Then try:
+
+Debit ₹950
+Credit ₹900
+
+Expected:
+
+SAVE REJECTED.
+
+Also verify that a system-generated Sales/Purchase voucher does NOT expose Edit and that the backend rejects a direct edit attempt.
+
+==================================================
+SCOPE
+==================================================
+
+Do not make the broader sales/receipt accounting changes in this task.
+
+Do not change:
+
+- Sales
+- Purchases
+- POS
+- Stock
+- Payroll
+- GST
+- Receipt-generation logic
+- Payable/receivable logic
+- existing production vouchers
+
+This task is ONLY:
+
+"Allow authorized editing of manually created vouchers while keeping system-generated vouchers protected."
+
+==================================================
+FINAL REPORT
+==================================================
+
+After implementation report:
+
+1. How manual vouchers are identified.
+2. Which voucher types are editable.
+3. Which system vouchers are protected.
+4. Backend authorization added/verified.
+5. Journal balance validation.
+6. How existing ledger legs are updated.
+7. Confirmation editing does not duplicate entries.
+8. Audit-log result.
+9. Trial Balance test result.
+10. System-generated voucher protection test.
+11. Files changed.
+12. Typecheck/build/test results.
+13. Confirmation JV/2026-27/0001 was NOT modified.
+
+Do not publish automatically.
+
+Stop after development testing and let me manually edit my existing journal after the feature is available.

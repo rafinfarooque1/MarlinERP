@@ -1,7 +1,7 @@
 export * from "./generated/api";
 export * from "./generated/api.schemas";
-export { setBaseUrl, setAuthTokenGetter, setAuthTokenSetter, customFetch } from "./custom-fetch";
-export type { AuthTokenGetter, AuthTokenSetter } from "./custom-fetch";
+export { setBaseUrl, setAuthTokenGetter, setAuthTokenSetter, setUnauthorizedHandler, customFetch } from "./custom-fetch";
+export type { AuthTokenGetter, AuthTokenSetter, UnauthorizedHandler } from "./custom-fetch";
 export * from "./analytics";
 export * from "./dashboard-bi";
 export * from "./bom";

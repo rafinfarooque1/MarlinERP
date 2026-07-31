@@ -1,0 +1,334 @@
+Fix purchase-edit → stock-batch synchronization.
+
+CURRENT BUG
+
+A purchase was created with an incorrect MFG/expiry date.
+
+I later edited the Purchase Bill, corrected the MFG/expiry date, and saved it successfully.
+
+The Purchase Bill now shows the corrected dates, BUT:
+
+Operations → Stock / Live Stock still shows the item as "Expired batch".
+
+This indicates that editing a purchase updates the purchase line but does NOT correctly update the corresponding stock batch / inventory record.
+
+This must be fixed at the backend/data level, not by hiding the "Expired batch" warning.
+
+==================================================
+1. TRACE THE CURRENT DATA FLOW
+==================================================
+
+Inspect exactly how a Purchase Bill creates inventory.
+
+Trace:
+
+Purchase Bill
+→ purchase line
+→ stock entry / stock ledger
+→ stock batch
+→ MFG date
+→ expiry date
+→ available stock
+→ Live Stock status
+
+Then inspect the Purchase Bill EDIT/UPDATE flow.
+
+Determine why the edited:
+
+- batch number
+- MFG date
+- expiry date
+
+are saved on the purchase but not reflected in the inventory batch used by Live Stock.
+
+==================================================
+2. REQUIRED BEHAVIOUR
+==================================================
+
+When an existing Purchase Bill is edited and saved, all inventory records created by that purchase must remain synchronized with the purchase.
+
+For each purchase line, if these fields are changed:
+
+- batch number
+- manufacturing date
+- expiry date
+
+update the corresponding stock batch created by THAT purchase line.
+
+Example:
+
+Original purchase:
+
+Item: Anjir OF
+Batch: PUR-xxxxx
+MFG: 21-04-2026
+Expiry: incorrect date
+
+User edits purchase and changes expiry to:
+
+21-04-2028
+
+After Save Purchase Bill:
+
+Purchase line expiry = 21-04-2028
+Stock batch expiry = 21-04-2028
+Live Stock expiry = 21-04-2028
+
+The "Expired batch" warning must disappear automatically if the corrected expiry date is in the future.
+
+Do NOT require a second manual stock edit.
+
+==================================================
+3. USE RECORD RELATIONSHIPS — NOT ITEM NAME
+==================================================
+
+Very important:
+
+Do NOT update batches by item name alone.
+
+A single item can have:
+
+- multiple purchases
+- multiple batches
+- multiple MFG dates
+- multiple expiry dates
+- multiple warehouses
+
+The update must target ONLY the stock batch/stock entry originating from the edited purchase line.
+
+Use the existing relationship such as:
+
+purchase_id
+purchase_line_id
+stock_entry_id
+batch_id
+
+or the project's equivalent authoritative relationship.
+
+If that relationship is currently missing, investigate the safest deterministic way to establish it.
+
+Do NOT update unrelated historical batches.
+
+==================================================
+4. LOCATION SAFETY
+==================================================
+
+Preserve warehouse/location ownership.
+
+If the purchase was received at Ragiguda, editing that purchase must update only the corresponding Ragiguda inventory batch.
+
+Never modify another warehouse/outlet's batch.
+
+Preserve all existing RBAC and warehouse-scope rules.
+
+==================================================
+5. QUANTITY / RATE SAFETY
+==================================================
+
+This task is primarily about correcting purchase-created inventory metadata.
+
+Do NOT accidentally:
+
+- duplicate stock
+- create another stock receipt
+- increase quantity again
+- decrease quantity unexpectedly
+- duplicate stock ledger entries
+- duplicate accounting entries
+- duplicate vendor payable
+- duplicate GST
+- create another purchase
+
+Editing MFG/expiry/batch metadata must update the existing associated inventory record.
+
+It must NOT behave like receiving the purchase again.
+
+==================================================
+6. ALSO AUDIT OTHER PURCHASE EDITABLE FIELDS
+==================================================
+
+While fixing this, verify whether Purchase Bill edits already synchronize correctly for:
+
+- quantity
+- rate
+- GST
+- discount
+- item
+- receiving location
+- batch number
+- MFG date
+- expiry date
+
+Do NOT blindly change accounting behaviour.
+
+Report which fields currently propagate to:
+
+A. purchase record
+B. stock quantity
+C. stock batch
+D. stock valuation
+E. vendor ledger
+F. GST/accounting entries
+
+If quantity/rate/GST/location edits require accounting reversal/reposting, preserve the existing accounting design and do not introduce an unsafe partial update.
+
+==================================================
+7. LIVE STOCK EXPIRY STATUS
+==================================================
+
+Live Stock must derive expiry status from the authoritative CURRENT batch expiry date.
+
+Do not cache or permanently store an "expired" status that becomes stale after the date is corrected.
+
+Logic should effectively be:
+
+current batch expiry date
+→ compare with current date
+→ determine expired / valid
+
+After correcting the purchase and batch date, refreshing Live Stock must immediately show the correct status.
+
+==================================================
+8. FIX EXISTING AFFECTED RECORDS CAREFULLY
+==================================================
+
+There may already be purchase lines where the purchase has the corrected date but the stock batch still contains the old date.
+
+DO NOT bulk-change production records automatically.
+
+First identify mismatches where:
+
+purchase line batch/MFG/expiry
+!=
+associated stock batch batch/MFG/expiry
+
+Report them.
+
+For the specific purchase shown in the current ERP, identify exactly which purchase lines are mismatched and what the purchase value vs stock-batch value currently is.
+
+Do not modify historical production records until the relationship and intended correction are verified.
+
+==================================================
+9. TRANSACTIONAL UPDATE
+==================================================
+
+Purchase editing must be atomic.
+
+If purchase + stock batch synchronization is required, perform it inside the appropriate DB transaction.
+
+Either everything succeeds or everything rolls back.
+
+Do not allow:
+
+purchase says new expiry
++
+stock batch still says old expiry
+
+because the second update failed.
+
+==================================================
+10. TEST CASE
+==================================================
+
+Use development/test data.
+
+Create or identify a purchase with:
+
+MFG = 21-04-2026
+Expiry = 21-04-2026
+
+Confirm Live Stock reports expired.
+
+Then edit the SAME purchase:
+
+Expiry = 21-04-2028
+
+Save.
+
+Verify:
+
+Purchase line = 21-04-2028
+Stock batch = 21-04-2028
+Stock ledger/batch reference remains correct
+Quantity unchanged
+Stock value unchanged
+No additional stock movement
+No duplicate purchase
+No duplicate vendor payable
+No duplicate journal/accounting entry
+
+Then open Live Stock.
+
+Expected:
+
+Expired warning is gone.
+
+==================================================
+11. TEST MULTIPLE BATCHES
+==================================================
+
+Also test:
+
+Same item
+Batch A → expired
+Batch B → valid
+
+Editing Batch A must NOT modify Batch B.
+
+Also test the same item in two different warehouses.
+
+Editing a Ragiguda purchase must not modify Freezologi/other warehouse stock.
+
+==================================================
+12. BACKEND FIRST
+==================================================
+
+Do not implement this as a frontend-only patch.
+
+The backend must guarantee synchronization even if the purchase update is called directly through the API.
+
+Frontend should simply display authoritative backend data.
+
+==================================================
+13. DO NOT TOUCH UNRELATED FEATURES
+==================================================
+
+Do not change:
+
+- payroll
+- sales
+- POS
+- stock transfer
+- vendor payments
+- journal/contra/receipt logic
+- dashboard accounting
+- RBAC
+- unrelated stock records
+
+Do not publish automatically.
+
+Implement and test in development first.
+
+==================================================
+FINAL REPORT REQUIRED
+
+After fixing, tell me:
+
+1. Root cause.
+2. Which table/model held the stale expiry date.
+3. How Purchase Bill lines relate to stock batches.
+4. Backend files changed.
+5. Frontend files changed, if any.
+6. Whether batch number now synchronizes.
+7. Whether MFG date now synchronizes.
+8. Whether expiry date now synchronizes.
+9. Whether Live Stock computes expiry dynamically.
+10. Proof that quantity was not duplicated.
+11. Proof that stock value was not duplicated.
+12. Proof that accounting/vendor payable was not duplicated.
+13. Multiple-batch test result.
+14. Cross-warehouse test result.
+15. Existing production mismatches found, if any.
+16. Typecheck/build/test results.
+
+STOP before publishing and ask for my approval.

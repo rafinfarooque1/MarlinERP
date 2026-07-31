@@ -76,6 +76,9 @@ import SalesCashBalance from './pages/sales/SalesCashBalance';
 import SalesDashboard from './pages/sales/SalesDashboard';
 import { LocationProvider } from './lib/locationContext';
 import { RoutePermissionGuard } from './components/RoutePermissionGuard';
+import { SessionProvider, useSession } from './lib/sessionContext';
+import { Button } from './components/ui/button';
+import { AlertTriangle, Loader2 } from 'lucide-react';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -90,15 +93,41 @@ const queryClient = new QueryClient({
 });
 
 function AuthGuard({ children, allowMustChange = false }: { children: React.ReactNode; allowMustChange?: boolean }) {
-  const token = localStorage.getItem('marlin_auth_token');
-  if (!token) return <Redirect to="/login" />;
-  // Enforce forced password-change before allowing access to any other page
-  if (!allowMustChange) {
-    try {
-      const user = JSON.parse(localStorage.getItem('marlin_user') ?? '{}');
-      if (user.mustChangePassword) return <Redirect to="/change-password" />;
-    } catch { /* ignore */ }
+  const { stage, retry, signOut, user } = useSession();
+  if (stage === 'unauthenticated') return <Redirect to="/login" />;
+  if (stage === 'restoring') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background text-foreground">
+        <div className="text-center space-y-3">
+          <Loader2 className="w-6 h-6 animate-spin text-primary mx-auto" />
+          <p className="text-sm text-muted-foreground">Restoring your secure session…</p>
+        </div>
+      </div>
+    );
   }
+  if (stage === 'error') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background text-foreground p-6">
+        <div className="max-w-md text-center space-y-4">
+          <AlertTriangle className="w-9 h-9 text-destructive mx-auto" />
+          <div>
+            <h1 className="text-xl font-semibold">Unable to start the ERP</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              We could not load your access settings. Your session is still active; please try again.
+            </p>
+          </div>
+          <div className="flex justify-center gap-2">
+            <Button onClick={retry}>Retry</Button>
+            <Button variant="outline" onClick={signOut}>Sign out</Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  // Enforce forced password-change before allowing access to any other page
+  // The value is derived only from the verified /auth/me bootstrap response;
+  // localStorage is user-controlled and must never decide this security gate.
+  if (!allowMustChange && user?.mustChangePassword) return <Redirect to="/change-password" />;
   return <>{children}</>;
 }
 
@@ -380,14 +409,16 @@ function Router() {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <LocationProvider>
-          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-            <Router />
-          </WouterRouter>
-          <Toaster richColors position="top-right" />
-        </LocationProvider>
-      </TooltipProvider>
+      <SessionProvider>
+        <TooltipProvider>
+          <LocationProvider>
+            <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+              <Router />
+            </WouterRouter>
+            <Toaster richColors position="top-right" />
+          </LocationProvider>
+        </TooltipProvider>
+      </SessionProvider>
     </QueryClientProvider>
   );
 }

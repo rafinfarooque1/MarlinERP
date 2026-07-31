@@ -1,0 +1,541 @@
+Update the Accounts → Vouchers module.
+
+There are TWO requirements:
+
+1. Add safe EDIT functionality for vouchers.
+2. Audit and correct the relationship between Sales Invoices and Receipt Vouchers.
+
+Do this at the accounting/backend level, not only in the frontend.
+
+Do NOT modify production accounting data automatically.
+First inspect the existing accounting flow, implement the correction in development, test it, and report before publishing.
+
+==================================================
+PART A — WHY IS A SALES INVOICE SHOWING AS RECEIPT?
+==================================================
+
+Current example visible in Accounts → Vouchers:
+
+Type: Receipt
+Voucher #: INV/2025-26/0001
+Description: Ragiguda Sales → Fasin
+Amount: ₹5,320
+
+Investigate exactly why a SALES INVOICE is appearing as a RECEIPT voucher.
+
+These are different accounting events.
+
+A SALES INVOICE represents revenue / customer receivable.
+
+A RECEIPT represents money actually received.
+
+They must not be treated as the same event unless the sale was genuinely paid immediately and the ERP intentionally generated a corresponding receipt transaction.
+
+==================================================
+1. CORRECT ACCOUNTING MODEL
+==================================================
+
+For CREDIT SALE:
+
+Invoice posting should normally be:
+
+Dr Customer / Sundry Debtors
+Cr Sales
+Cr Output GST, where applicable
+
+This creates customer receivable.
+
+It must NOT create a Receipt Voucher merely because the invoice was saved.
+
+Later, when customer pays:
+
+Dr Cash / Bank / appropriate payment-clearing ledger
+Cr Customer
+
+THAT payment should be represented as a Receipt Voucher.
+
+--------------------------------------------------
+
+For IMMEDIATE CASH/BANK SALE:
+
+If POS records payment at the time of sale, the ERP may create the appropriate receipt/payment settlement automatically.
+
+For example:
+
+Sales accounting:
+Dr Customer / settlement mechanism
+Cr Sales
+Cr Output GST
+
+Receipt:
+Dr Cash / Bank / payment clearing
+Cr Customer
+
+OR another valid equivalent accounting design already used by this ERP.
+
+But the system must preserve the distinction:
+
+INVOICE = sale
+RECEIPT = collection of money
+
+Do not simply label invoices as Receipt Vouchers.
+
+==================================================
+2. TRACE CURRENT ₹5,320 TRANSACTION
+==================================================
+
+Trace INV/2025-26/0001 end-to-end.
+
+Report:
+
+- sales invoice
+- customer
+- invoice total
+- payment method
+- amount paid
+- outstanding amount
+- journal/ledger postings
+- receipt record, if one exists
+- cash/bank/payment-clearing impact
+- voucher generated
+
+Tell me specifically why it currently appears as Receipt.
+
+Do NOT change this existing production transaction during investigation.
+
+==================================================
+3. VOUCHER NUMBERING
+==================================================
+
+Receipt Vouchers should have their own voucher identity/number according to the ERP's numbering design.
+
+For example:
+
+RV/2026-27/0001
+
+Journal:
+
+JV/2026-27/0001
+
+Contra:
+
+CV/2026-27/0001
+
+Payment:
+
+PV/2026-27/0001
+
+Debit Note / Credit Note:
+use their appropriate series.
+
+A receipt may REFERENCE:
+
+INV/2025-26/0001
+
+but the receipt itself should not misleadingly become the invoice.
+
+Example:
+
+Receipt #: RV/2026-27/0001
+Against Invoice: INV/2025-26/0001
+
+Preserve the project's established numbering conventions if different.
+
+==================================================
+PART B — ADD EDIT TO VOUCHERS
+==================================================
+
+Add an Edit action to Accounts → Vouchers.
+
+Current actions include view/expand and delete.
+
+Add:
+
+Edit
+
+using the same authorization/RBAC system as the rest of the ERP.
+
+Do NOT allow unauthorized employees to edit accounting vouchers.
+
+==================================================
+4. WHICH VOUCHERS CAN BE EDITED
+==================================================
+
+Audit all voucher types:
+
+- Journal
+- Receipt
+- Payment
+- Contra
+- Debit Note
+- Credit Note
+
+Determine which are:
+
+A. manually created vouchers
+B. automatically generated/system-linked vouchers
+
+Manual vouchers may be editable subject to permissions and accounting safety.
+
+System-generated vouchers linked to:
+
+- sales
+- purchases
+- payroll
+- expenses
+- stock transactions
+- GST
+- other source documents
+
+must NOT be independently edited if doing so would break the source-document/accounting relationship.
+
+For system-generated vouchers, either:
+
+- edit through the source document, or
+- make voucher fields read-only and provide "View Source".
+
+Do not allow independent editing that creates accounting inconsistencies.
+
+==================================================
+5. MANUAL JOURNAL EDITING
+==================================================
+
+The Journal shown in the screenshot:
+
+Frozen Hub / Frozen Hub Investment
+₹6,33,194
+
+was manually created.
+
+A permitted user should be able to edit a manual journal.
+
+Allow editing as appropriate:
+
+- Date
+- Ledger/account lines
+- Debit
+- Credit
+- Narration/reference
+
+Validation:
+
+Total Debit MUST equal Total Credit.
+
+Never save an unbalanced journal.
+
+==================================================
+6. DO NOT JUST EDIT DISPLAY DATA
+==================================================
+
+Editing a voucher must update the authoritative accounting transaction.
+
+Do not do:
+
+voucher UI changes
+but
+ledger entries remain old
+
+The ledger statement, trial balance, P&L, balance sheet, dashboard, payable/receivable, cash/bank etc. must all derive from the corrected accounting entries.
+
+Use the project's authoritative accounting model.
+
+==================================================
+7. EDIT ATOMICALLY
+==================================================
+
+Voucher editing must occur in a DB transaction.
+
+Example:
+
+Existing:
+
+Dr Frozen Hub                 ₹6,33,194
+Cr Frozen Hub Investment      ₹6,33,194
+
+If edited, the old posting must not remain in addition to the new posting.
+
+There must still be exactly one authoritative balanced voucher after save.
+
+No duplicate journal legs.
+
+==================================================
+8. RECEIPT EDITING
+==================================================
+
+For a manually entered Receipt Voucher, permitted fields may include:
+
+- date
+- received-from/customer ledger
+- cash/bank ledger
+- amount
+- narration
+- reference
+- invoice allocation if supported
+
+Changing a receipt must correctly update:
+
+Customer Ledger
+Cash/Bank Ledger
+Receivable
+Dashboard cash/bank
+Customer outstanding
+
+Do not update one without the others.
+
+==================================================
+9. PAYMENT EDITING
+==================================================
+
+Same principle for Payment Voucher.
+
+Editing must correctly update:
+
+Vendor/expense/other ledger
+Cash/Bank ledger
+Payable
+Dashboard
+Cash & Bank reports
+
+==================================================
+10. CONTRA EDITING
+==================================================
+
+Contra represents movement between cash/bank accounts.
+
+Example:
+
+Dr Bank
+Cr Cash
+
+or
+
+Dr Bank A
+Cr Bank B
+
+Editing Contra must update BOTH affected accounts.
+
+It must not create income, expense, payable or receivable unless the chosen ledger genuinely requires that accounting treatment.
+
+==================================================
+11. PAYABLE / RECEIVABLE CONSISTENCY
+==================================================
+
+This is important because we already identified cases where ledger balance and dashboard payable can disagree.
+
+The ERP must not maintain contradictory financial truths.
+
+If a valid Journal, Receipt, Payment or Contra changes an account balance, all relevant reports must use the authoritative ledger/posting information appropriately.
+
+Audit:
+
+- Vendor balance
+- Customer balance
+- Accounts Payable
+- Accounts Receivable
+- Cash balance
+- Bank balance
+- Dashboard Payables
+- Dashboard Receivables
+- Vendor list balance
+- Customer list balance
+- Vendor ledger
+- Customer ledger
+- Trial Balance
+- Balance Sheet
+- P&L
+
+Do not simply force dashboard numbers to zero.
+
+Fix the accounting source-of-truth logic.
+
+==================================================
+12. IMPORTANT — ALLOCATION VS LEDGER BALANCE
+==================================================
+
+Do not blindly assume:
+
+ledger balance = invoice outstanding
+
+There can be:
+
+- unapplied customer advances
+- vendor advances
+- partial payments
+- payments against specific invoices
+- credit notes
+- debit notes
+- journals
+- opening balances
+
+Preserve invoice-level allocation where required.
+
+But at account/customer/vendor summary level, the ERP must reconcile logically with the General Ledger.
+
+If the system has both:
+
+subledger outstanding
+and
+GL balance
+
+explicitly define and reconcile them.
+
+==================================================
+13. AUDIT TRAIL
+==================================================
+
+Voucher edits are financially sensitive.
+
+Do not silently overwrite history.
+
+Maintain an audit trail containing at minimum:
+
+- voucher ID
+- voucher number
+- edited by
+- edited timestamp
+- previous values
+- new values
+
+Use the existing Audit Log infrastructure if available.
+
+==================================================
+14. LOCKING / RESTRICTIONS
+==================================================
+
+Inspect whether the ERP already has:
+
+- closed accounting periods
+- GST filing locks
+- reconciled bank entries
+- approved payroll
+- finalized purchases
+- finalized sales
+
+Do not permit voucher editing to bypass these controls.
+
+==================================================
+15. UI
+==================================================
+
+In Accounts → Vouchers add a clear Edit icon/action.
+
+For editable manual voucher:
+
+View | Edit | Delete
+
+For system-generated voucher:
+
+View | View Source
+
+or appropriate restricted actions.
+
+Inside expanded voucher details, clearly show:
+
+Voucher Type
+Voucher #
+Date
+Reference
+Source document, if applicable
+Narration
+Ledger
+Debit
+Credit
+
+==================================================
+16. TESTS
+==================================================
+
+Test at minimum:
+
+TEST A — Manual Journal
+Create balanced journal.
+Edit narration.
+Edit date.
+Edit ledger.
+Edit amount.
+Confirm Dr = Cr.
+Confirm Trial Balance changes correctly.
+
+TEST B — Invalid Journal
+Debit != Credit.
+Expected: reject.
+
+TEST C — Receipt
+Create customer receipt.
+Verify customer receivable decreases.
+Verify cash/bank increases.
+Edit amount.
+Verify both sides recalculate.
+
+TEST D — Payment
+Verify payable and cash/bank respond correctly.
+
+TEST E — Contra
+Move Cash → Bank.
+Verify cash decreases and bank increases.
+Edit it.
+Verify both balances correctly change.
+
+TEST F — Sales Invoice
+Create unpaid credit invoice.
+Expected:
+Sales/Customer accounting exists.
+NO fake receipt merely from creating invoice.
+
+TEST G — Paid Sale
+Create sale and actually collect payment.
+Expected:
+sale posting exists
++
+real receipt/settlement exists
+and they are linked but distinguishable.
+
+TEST H — Source-linked voucher
+Attempt direct edit.
+Expected:
+blocked/read-only and user directed to source document if appropriate.
+
+==================================================
+17. EXISTING DATA
+==================================================
+
+Do NOT rewrite old production vouchers automatically.
+
+Specifically do NOT alter:
+
+JV/2026-27/0001
+INV/2025-26/0001
+
+during development/testing.
+
+First report whether existing voucher classification/data needs migration or correction.
+
+If historical correction is required, propose a separate safe migration/reconciliation plan for my approval.
+
+==================================================
+18. FINAL REPORT
+==================================================
+
+Before publishing, report:
+
+1. Why INV/2025-26/0001 appeared as Receipt.
+2. Whether it represents actual payment or only invoice creation.
+3. Exact accounting entries behind ₹5,320.
+4. Voucher edit functionality implemented.
+5. Manual vs system-generated edit rules.
+6. Receipt numbering behaviour.
+7. Journal edit test.
+8. Receipt edit test.
+9. Payment edit test.
+10. Contra edit test.
+11. Payable reconciliation result.
+12. Receivable reconciliation result.
+13. Cash/bank reconciliation result.
+14. Trial Balance result.
+15. Audit-log behaviour.
+16. Files changed.
+17. Typecheck/build/test results.
+18. Confirmation no production financial records were modified.
+
+Do NOT publish automatically.
+Stop after development verification and ask for approval.

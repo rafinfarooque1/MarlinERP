@@ -1,6 +1,7 @@
 import { useLocationContext } from '@/lib/locationContext';
 import { useAllOutlets } from '@/lib/locationStructure';
 import Sales from '@/pages/headoffice/Sales';
+import { Redirect } from 'wouter';
 
 export default function SalesPOS() {
   const { locationState } = useLocationContext();
@@ -17,8 +18,10 @@ export default function SalesPOS() {
     ? (outlets as any[]).filter(o => Number(o.warehouseId) === locationId).map((o: any) => o.id as number)
     : [];
 
-  // Nothing selected yet — show nothing (SalesDashboard handles the redirect)
-  if (!locationType) return null;
+  // A direct link or restored tab can arrive before an HO user has picked a
+  // selling location. Never render a blank page: continue through the existing
+  // picker, which applies the user's server-authorized location scope.
+  if (!locationType) return <Redirect to="/sales" />;
 
   // All Locations — show full sales list with no location filter
   if (isAll) {

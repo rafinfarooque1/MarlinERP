@@ -16,14 +16,33 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { PackageX } from 'lucide-react';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
+import { Loader2, RefreshCw } from 'lucide-react';
 
 export function OutletsEnabledRoute({ children }: { children: React.ReactNode }) {
-  const { outletsEnabled, isLoading } = useOutletsEnabled();
+  const { outletsEnabled, isLoading, isError, retry } = useOutletsEnabled();
 
   // The flags hook defaults to "disabled" so a failed fetch can never re-open
   // the module. That default would also flash this page on every hard load, so
   // hold the render until the real value has arrived.
-  if (isLoading) return null;
+  if (isLoading) {
+    return (
+      <AppLayout>
+        <div className="min-h-[50vh] flex items-center justify-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="w-4 h-4 animate-spin" /> Checking location settings…
+        </div>
+      </AppLayout>
+    );
+  }
+  if (isError) {
+    return (
+      <AppLayout>
+        <div className="min-h-[50vh] flex flex-col items-center justify-center gap-3 text-center">
+          <p className="text-sm text-muted-foreground">Unable to load location settings.</p>
+          <Button variant="outline" onClick={retry}><RefreshCw className="w-4 h-4 mr-2" />Retry</Button>
+        </div>
+      </AppLayout>
+    );
+  }
 
   if (!outletsEnabled) {
     return (
