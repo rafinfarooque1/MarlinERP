@@ -560,19 +560,29 @@ async function runMigrations() {
   // backfilled — a price is a point-in-time fact we don't have for old lots, so
   // it stays NULL ("not stamped") and the batch views fall back to the parent's
   // current MRP for display, exactly as the Phase 5 cost columns do.
-  await pool.query(`
-    UPDATE stock_batches sb SET barcode = p.barcode
-      FROM (
-        SELECT id, 'item'::text AS material_type, barcode FROM items         WHERE barcode IS NOT NULL AND barcode <> ''
-        UNION ALL
-        SELECT id, 'material',                    barcode FROM materials     WHERE barcode IS NOT NULL AND barcode <> ''
-        UNION ALL
-        SELECT id, 'raw_material',                barcode FROM raw_materials WHERE barcode IS NOT NULL AND barcode <> ''
-      ) p
-     WHERE sb.item_id = p.id
-       AND sb.material_type = p.material_type
-       AND (sb.barcode IS NULL OR sb.barcode = '')
-  `);
+  //
+  // Guard: stock_batches.material_type is added by a top-level migration that
+  // runs AFTER runMigrations(). On a fresh DB the column does not exist yet, so
+  // we skip the backfill here and let it run on the next boot. The try/catch
+  // prevents this from aborting the rest of runMigrations().
+  try {
+    await pool.query(`
+      UPDATE stock_batches sb SET barcode = p.barcode
+        FROM (
+          SELECT id, 'item'::text AS material_type, barcode FROM items         WHERE barcode IS NOT NULL AND barcode <> ''
+          UNION ALL
+          SELECT id, 'material',                    barcode FROM materials     WHERE barcode IS NOT NULL AND barcode <> ''
+          UNION ALL
+          SELECT id, 'raw_material',                barcode FROM raw_materials WHERE barcode IS NOT NULL AND barcode <> ''
+        ) p
+       WHERE sb.item_id = p.id
+         AND sb.material_type = p.material_type
+         AND (sb.barcode IS NULL OR sb.barcode = '')
+    `);
+  } catch (e) {
+    // material_type column not yet present (fresh DB, first boot) — will retry next boot
+    console.error('[migration] barcode_backfill skipped (material_type not ready):', (e as Error).message);
+  }
 
   // One-time backfill: mark all PRE-EXISTING sales (those created before the payment
   // tracking columns existed) as fully paid. Tracked in migration_log so it never
@@ -2121,6 +2131,23 @@ async function convertTextDateColumns(): Promise<string> {
   return outcome;
 }
 
+// ── Start HTTP server before migrations so the port opens within the deployment ─
+// Autoscale deployments kill the process if the configured port doesn't open
+// within a few seconds. runMigrations() does substantial DB work + bcrypt before
+// it returns, so opening the port after it completes always races (and loses)
+// the startup timeout. We start listening first so the port is detected, then
+// finish migrations in the background. /healthz returns 503 until ready.
+const rawPort = process.env["PORT"];
+if (!rawPort) throw new Error("PORT environment variable is required but was not provided.");
+const port = Number(rawPort);
+if (Number.isNaN(port) || port <= 0) throw new Error(`Invalid PORT value: "${rawPort}"`);
+
+app.locals.migrationsReady = false;
+app.listen(port, (err?: Error) => {
+  if (err) { logger.error({ err }, "Error listening on port"); process.exit(1); }
+  logger.info({ port }, "Server listening");
+});
+
 // ── Run core migrations first so all tables exist before the top-level awaits ──
 let migrationsError: string | null = null;
 try {
@@ -3247,12 +3274,6 @@ try {
 // scheduled backup can never capture a half-upgraded schema.
 startBackupScheduler();
 
-const rawPort = process.env["PORT"];
-if (!rawPort) throw new Error("PORT environment variable is required but was not provided.");
-const port = Number(rawPort);
-if (Number.isNaN(port) || port <= 0) throw new Error(`Invalid PORT value: "${rawPort}"`);
-
-app.listen(port, (err) => {
-  if (err) { logger.error({ err }, "Error listening on port"); process.exit(1); }
-  logger.info({ port }, "Server listening");
-});
+// All migrations and startup tasks complete — mark the server as ready.
+// /healthz starts returning 200 from this point.
+app.locals.migrationsReady = true;

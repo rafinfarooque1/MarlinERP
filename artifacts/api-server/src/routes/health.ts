@@ -5,7 +5,13 @@ import { censusDateColumns } from "../lib/dateColumns";
 
 const router: IRouter = Router();
 
-router.get("/healthz", (_req, res) => {
+router.get("/healthz", (req, res) => {
+  // Return 503 while startup migrations are still running so the deployment
+  // startup probe keeps retrying rather than accepting a half-initialised server.
+  if (!req.app.locals.migrationsReady) {
+    res.status(503).json({ status: "starting" });
+    return;
+  }
   const data = HealthCheckResponse.parse({ status: "ok" });
   res.json(data);
 });

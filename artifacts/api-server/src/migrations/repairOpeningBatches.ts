@@ -31,6 +31,18 @@ export async function repairOpeningBatches(pool: Pool): Promise<void> {
   );
   if (alreadyDone) return;
 
+  // Guard: stock_entries.material_type is added by addMaterialLocations() which
+  // runs AFTER this function is called. On a fresh DB the column does not exist
+  // yet. Skip and let it run on the next boot once the column is present.
+  const { rows: [seColExists] } = await pool.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'stock_entries' AND column_name = 'material_type'`,
+  );
+  if (!seColExists) {
+    console.log(`[migration] ${MIGRATION_NAME}: deferred — stock_entries.material_type not yet present (will run next boot)`);
+    return;
+  }
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
