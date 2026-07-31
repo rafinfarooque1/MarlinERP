@@ -1,0 +1,337 @@
+Fix the intermittent ERP login/page-loading issue shown in the attached screenshot.
+
+SYMPTOM:
+Sometimes after opening the ERP or logging in, the application shell loads successfully:
+- sidebar/header appear
+- user avatar appears
+- navigation layout appears
+
+But the main page remains stuck showing skeleton/loading placeholders indefinitely.
+
+If I log out and log in again, the problem usually disappears and the ERP works normally.
+
+This is intermittent, so DO NOT apply a cosmetic workaround or simply increase loading timeouts.
+
+==================================================
+1. INVESTIGATE ROOT CAUSE
+==================================================
+
+Trace the complete application startup flow:
+
+Login
+→ token/session creation
+→ session restoration
+→ current-user fetch
+→ employee/user profile
+→ role
+→ permissions
+→ warehouse/location scope
+→ company context
+→ frontend auth context
+→ protected routes
+→ page API requests
+→ loading-state completion
+
+Look specifically for race conditions where protected page queries execute before authentication,
+permissions, employee scope, location scope, or company context has finished initializing.
+
+==================================================
+2. CHECK SESSION RESTORATION
+==================================================
+
+The application must work correctly in ALL of these cases:
+
+- fresh login
+- browser refresh
+- reopening an existing logged-in tab
+- opening ERP in a new tab
+- session restored from stored credentials/token
+- navigation directly to a protected URL
+- temporary slow API response
+
+A restored session must initialize exactly as reliably as a fresh login.
+
+Do not require logout/login to repair application state.
+
+==================================================
+3. LOADING STATE MUST ALWAYS TERMINATE
+==================================================
+
+Audit every loading/skeleton condition involved in application startup.
+
+There must be no code path such as:
+
+loading = true
+→ request fails / auth not ready / permission request skipped
+→ loading never becomes false
+
+Every request must end in one of:
+
+SUCCESS
+ERROR
+UNAUTHORIZED
+FORBIDDEN
+SESSION EXPIRED
+RETRYABLE NETWORK ERROR
+
+Never infinite skeleton loading.
+
+Use try/catch/finally or the equivalent query-state handling so loading state always resolves.
+
+==================================================
+4. AUTH INITIALIZATION ORDER
+==================================================
+
+If pages depend on:
+
+currentUser
+employee
+role
+permissions
+location
+warehouse
+company
+
+then protected page queries must NOT execute prematurely.
+
+Use a deterministic initialization sequence.
+
+For example:
+
+restore session
+        ↓
+validate authentication
+        ↓
+load current user
+        ↓
+load permissions / role
+        ↓
+resolve authorized location scope
+        ↓
+mark auth context READY
+        ↓
+render protected application
+        ↓
+execute page queries
+
+Do not let individual pages guess whether authentication has finished.
+
+==================================================
+5. TOKEN / SESSION FAILURE
+==================================================
+
+Inspect:
+
+- access-token expiry
+- refresh-token handling if used
+- stale token/localStorage/cookie state
+- API 401 handling
+- API 403 handling
+- session restoration
+- duplicate refresh requests
+- simultaneous API requests during token refresh
+
+If the access token expires, the application must either:
+
+A. refresh/re-establish the session safely, if supported
+
+or
+
+B. clearly return the user to login.
+
+It must NOT remain indefinitely on a skeleton screen.
+
+==================================================
+6. CONCURRENT REQUEST / RACE CONDITION CHECK
+==================================================
+
+This issue is intermittent, so specifically test for race conditions.
+
+Look for situations such as:
+
+Page API request
+        ↓
+runs before user/location/permission initialization
+        ↓
+request gets rejected/skipped
+        ↓
+query is never retriggered
+        ↓
+skeleton remains forever
+
+Also inspect React Query/query cache, auth hooks, useEffect dependencies,
+enabled conditions, route guards and context providers.
+
+Make sure dependent queries automatically execute once their dependencies become ready.
+
+==================================================
+7. LOCATION / RBAC INITIALIZATION
+==================================================
+
+Because this ERP uses RBAC and warehouse/location scope, specifically verify that recent
+RBAC/location security changes have not introduced this issue.
+
+Check:
+
+- PermissionGuard
+- RoutePermissionGuard
+- current employee
+- role hierarchy
+- warehouse/outlet scope
+- selected/default location
+- location picker
+- permission API
+- protected API requests
+
+A missing or delayed location must not cause an infinite loading state.
+
+If the user has only one authorized location, resolve it deterministically according to
+existing ERP rules.
+
+Do NOT weaken RBAC or warehouse security to solve this.
+
+==================================================
+8. ERROR HANDLING
+==================================================
+
+If a dashboard/page request fails, show a proper error state.
+
+Example:
+
+"Unable to load this page"
+Retry
+
+Do not leave skeleton placeholders indefinitely.
+
+Retry must rerun only the required failed requests.
+
+Do not automatically log the user out for ordinary temporary network/API errors.
+
+==================================================
+9. DO NOT HIDE THE BUG
+==================================================
+
+Do NOT solve this by:
+
+- increasing skeleton timeout
+- forcing window.location.reload()
+- automatically refreshing the entire browser
+- disabling route guards
+- weakening RBAC
+- bypassing permissions
+- ignoring failed API calls
+- forcing logout/login
+- adding arbitrary setTimeout()
+- removing warehouse/location checks
+
+Find and fix the underlying initialization/state-management problem.
+
+==================================================
+10. TEST INTERMITTENT CONDITIONS
+==================================================
+
+After fixing, test repeatedly:
+
+1. Login normally.
+2. Refresh Dashboard 20+ times.
+3. Close/reopen ERP tab.
+4. Open direct protected URLs.
+5. Navigate quickly immediately after login.
+6. Simulate slow current-user API.
+7. Simulate slow permissions API.
+8. Simulate slow location API.
+9. Simulate one failed page API request.
+10. Simulate expired/invalid session.
+11. Test admin.
+12. Test restricted employee.
+13. Test warehouse-scoped employee.
+14. Test outlet-scoped employee.
+
+There must be ZERO cases where the UI remains permanently in skeleton/loading state.
+
+==================================================
+11. CHECK BACKEND TOO
+==================================================
+
+Do not assume this is frontend-only.
+
+Inspect backend logs/API responses during the stuck state.
+
+Check whether any startup requests are:
+
+- hanging
+- returning 401
+- returning 403
+- returning 404
+- returning 500
+- timing out
+- waiting for DB connection
+- failing due to location scope
+- failing due to permissions
+
+If backend behavior causes the frontend state problem, correct both sides appropriately.
+
+==================================================
+12. ADD SAFE DIAGNOSTICS
+==================================================
+
+Add useful development diagnostics around application initialization so this intermittent
+problem can be diagnosed if it happens again.
+
+Do not log passwords, tokens, cookies, sensitive financial information or personal data.
+
+Useful states may include:
+
+AUTH_RESTORING
+AUTH_READY
+USER_LOADING
+USER_READY
+PERMISSIONS_LOADING
+PERMISSIONS_READY
+LOCATION_LOADING
+LOCATION_READY
+APP_READY
+
+Errors should identify which initialization stage failed.
+
+==================================================
+13. REGRESSION SAFETY
+==================================================
+
+Do not change:
+
+- accounting calculations
+- payroll
+- inventory
+- stock
+- purchases
+- sales
+- journal entries
+- vouchers
+- existing production data
+
+This task is specifically application/session/loading reliability.
+
+Do not publish automatically.
+
+==================================================
+14. FINAL REPORT
+==================================================
+
+After fixing, report:
+
+1. Exact root cause
+2. Why logout/login temporarily fixed it
+3. Whether frontend or backend caused it
+4. Files changed
+5. Auth/session changes
+6. RBAC/location initialization changes
+7. Loading/error-state changes
+8. API errors discovered
+9. Refresh/reopen test results
+10. Restricted-user test result
+11. Confirmation RBAC was NOT weakened
+12. Confirmation no production business data was modified
+13. Typecheck/build results
+
+Test in development first and stop before publishing for my approval.
