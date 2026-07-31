@@ -17,13 +17,35 @@ import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 
+const BAD_BALANCE = 'Please enter a valid opening balance.';
+
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
   accountType: z.enum(['cash', 'bank', 'upi', 'other']),
+  // Never parsed as numbers: leading zeros are significant and real account
+  // numbers exceed the safe integer range.
   accountNumber: z.string().optional(),
   bankName: z.string().optional(),
   ifscCode: z.string().optional(),
-  openingBalance: z.coerce.number().min(0),
+  // Coercion turns the input element's string into a number, and blank into 0
+  // as the business rule requires. `.finite()` is what stops 'Infinity' —
+  // which Number() accepts and a bare .number() check would pass — from
+  // reaching the API.
+  openingBalance: z.coerce
+    .number({ invalid_type_error: BAD_BALANCE })
+    .finite(BAD_BALANCE)
+    .min(0, 'Opening balance cannot be negative.')
+    // Scale and range both mirror the server's NUMERIC(12,2), so the form
+    // cannot accept a figure the API will turn round and reject with a late
+    // 400. multipleOf uses decimal-safe remainder arithmetic, unlike a
+    // hand-rolled n * 100 check.
+    //
+    // The server additionally polices decimal *notation* ('1e5', '₹1000',
+    // '1,000'). That grammar is unreachable from here and deliberately not
+    // duplicated: onSubmit posts this schema's parsed output, so the API only
+    // ever receives an already-coerced number — never the raw field text.
+    .multipleOf(0.01, 'Opening balance can have at most two decimal places.')
+    .max(9999999999.99, 'Opening balance is larger than this field can store.'),
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -42,8 +64,12 @@ export default function CashBank() {
 
   const watchType = form.watch('accountType');
 
+  // `data` is already the parsed output of the schema above, so openingBalance
+  // is a number here. It used to be stringified back on the way out — with an
+  // `as any` hiding the resulting contract violation — which is what the API
+  // rejected with "Expected number, received string".
   const onSubmit = (data: FormValues) => {
-    createMutation.mutate({ data: { ...data, openingBalance: String(data.openingBalance) } as any }, {
+    createMutation.mutate({ data }, {
       onSuccess: () => { toast.success('Account added'); queryClient.invalidateQueries({ queryKey: getListCashBankAccountsQueryKey() }); setIsOpen(false); form.reset(); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
@@ -55,9 +81,9 @@ export default function CashBank() {
   // stored column instead would put lakhs of unreconciled rupees on screen under
   // the heading "Total Balance"; the reconciled cash and bank positions are on
   // the Cash & Bank Book and the Trial Balance.
-  const linked = filtered.filter(a => (a as any).currentBalance != null);
-  const totalBalance = linked.reduce((s, a) => s + Number((a as any).currentBalance || 0), 0);
-  const anyUnlinked = filtered.some(a => (a as any).currentBalance == null);
+  const linked = filtered.filter(a => a.currentBalance != null);
+  const totalBalance = linked.reduce((s, a) => s + Number(a.currentBalance ?? 0), 0);
+  const anyUnlinked = filtered.some(a => a.currentBalance == null);
 
   const typeColor = (t: string) => t === 'cash' ? 'bg-emerald-500/10 text-emerald-500' : t === 'bank' ? 'bg-primary/10 text-primary' : t === 'upi' ? 'bg-purple-500/10 text-purple-500' : 'bg-muted';
 
@@ -90,7 +116,7 @@ export default function CashBank() {
           </div>
           <div className="flex gap-2">
             {perm.canDownload && (
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('cash-bank.csv', filtered.map(a => ({ Name: a.name, Type: a.accountType, Bank: a.bankName || '', 'Account No': a.accountNumber || '', Balance: (a as any).currentBalance || 0 })))}>
+            <Button variant="outline" size="sm" onClick={() => downloadCSV('cash-bank.csv', filtered.map(a => ({ Name: a.name, Type: a.accountType, Bank: a.bankName || '', 'Account No': a.accountNumber || '', IFSC: a.ifscCode || '', 'Stored Balance': a.storedBalance ?? 0, Balance: a.currentBalance ?? '' })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
             )}
@@ -116,8 +142,10 @@ export default function CashBank() {
             <p className="font-medium text-amber-600">Not linked to the chart of accounts</p>
             <p className="text-muted-foreground mt-1">
               These payment accounts pre-date the ledgers and carry a stored figure that no
-              accounting entry maintains, so no current balance can be shown for them. For
-              reconciled cash and bank positions use{' '}
+              accounting entry maintains, so no current balance can be shown for them. The
+              Stored Balance column shows that unmaintained figure — it starts at the opening
+              balance entered when the account was added and is then reduced by expenses paid
+              from it. For reconciled cash and bank positions use{' '}
               <a href="/accounts/cash-bank-book" className="underline">Cash &amp; Bank Book</a>,{' '}
               <a href="/accounts/trial-balance" className="underline">Trial Balance</a> or the Balance Sheet.
             </p>
@@ -136,14 +164,22 @@ export default function CashBank() {
                 <TableHead>Type</TableHead>
                 <TableHead>Bank</TableHead>
                 <TableHead>Account No.</TableHead>
+                {/* Not "Opening Balance": creating an expense decrements this same
+                    column, so on any account that has been paid from it is a stale
+                    running figure rather than the amount originally entered. */}
+                <TableHead className="text-right">
+                  <span title="Seeded from the opening balance when the account was added, then reduced by expenses paid from it. No accounting entry maintains this figure.">
+                    Stored Balance
+                  </span>
+                </TableHead>
                 <TableHead className="text-right">Balance</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={5} className="text-center py-16 text-muted-foreground">
+                <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
                   <Banknote className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No payment accounts yet</p>
                 </TableCell></TableRow>
               ) : filtered.map(a => (
@@ -152,11 +188,14 @@ export default function CashBank() {
                   <TableCell><Badge variant="outline" className={`capitalize ${typeColor(a.accountType)}`}>{a.accountType}</Badge></TableCell>
                   <TableCell className="text-sm text-muted-foreground">{a.bankName || '—'}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{a.accountNumber || '—'}</TableCell>
+                  <TableCell className="text-right font-mono text-sm text-muted-foreground">
+                    ₹{Number(a.storedBalance ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </TableCell>
                   <TableCell className="text-right font-mono">
-                    {(a as any).currentBalance == null ? (
+                    {a.currentBalance == null ? (
                       <span className="text-muted-foreground" title="No ledger backs this account, so it has no reconciled balance">—</span>
                     ) : (
-                      <span className="font-bold text-primary text-lg">₹{Number((a as any).currentBalance).toLocaleString('en-IN')}</span>
+                      <span className="font-bold text-primary text-lg">₹{Number(a.currentBalance).toLocaleString('en-IN')}</span>
                     )}
                   </TableCell>
                 </TableRow>
@@ -184,23 +223,23 @@ export default function CashBank() {
                       <SelectItem value="upi">UPI / Digital</SelectItem>
                       <SelectItem value="other">Other</SelectItem>
                     </SelectContent>
-                  </Select></FormItem>
+                  </Select><FormMessage /></FormItem>
               )} />
               {watchType === 'bank' && (
                 <div className="grid grid-cols-2 gap-4">
                   <FormField control={form.control} name="bankName" render={({ field }) => (
-                    <FormItem><FormLabel>Bank Name</FormLabel><FormControl><Input placeholder="HDFC, SBI..." {...field} /></FormControl></FormItem>
+                    <FormItem><FormLabel>Bank Name</FormLabel><FormControl><Input placeholder="HDFC, SBI..." {...field} /></FormControl><FormMessage /></FormItem>
                   )} />
                   <FormField control={form.control} name="ifscCode" render={({ field }) => (
-                    <FormItem><FormLabel>IFSC Code</FormLabel><FormControl><Input className="font-mono" {...field} /></FormControl></FormItem>
+                    <FormItem><FormLabel>IFSC Code</FormLabel><FormControl><Input className="font-mono" placeholder="HDFC0001234" {...field} /></FormControl><FormMessage /></FormItem>
                   )} />
                   <FormField control={form.control} name="accountNumber" render={({ field }) => (
-                    <FormItem className="col-span-2"><FormLabel>Account Number</FormLabel><FormControl><Input className="font-mono" {...field} /></FormControl></FormItem>
+                    <FormItem className="col-span-2"><FormLabel>Account Number</FormLabel><FormControl><Input className="font-mono" inputMode="numeric" placeholder="001234567890" {...field} /></FormControl><FormMessage /></FormItem>
                   )} />
                 </div>
               )}
               <FormField control={form.control} name="openingBalance" render={({ field }) => (
-                <FormItem><FormLabel>Opening Balance ₹</FormLabel><FormControl><Input type="number" step="0.01" min={0} {...field} /></FormControl></FormItem>
+                <FormItem><FormLabel>Opening Balance ₹</FormLabel><FormControl><Input type="number" step="0.01" min={0} {...field} /></FormControl><FormMessage /></FormItem>
               )} />
               <DialogFooter>
                 <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>

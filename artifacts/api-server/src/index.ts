@@ -2425,6 +2425,11 @@ await pool.query(`
   -- either pays for a day not worked or docks a day that was.
   ALTER TABLE payroll ALTER COLUMN present_days TYPE NUMERIC(6,2);
   ALTER TABLE payroll ALTER COLUMN lop_days     TYPE NUMERIC(6,2);
+
+  -- The Add Payment Account form has always collected an IFSC code, but no
+  -- column existed to receive it and the API body schema did not declare it,
+  -- so every value entered was silently discarded on the way in.
+  ALTER TABLE cash_bank_accounts ADD COLUMN IF NOT EXISTS ifsc_code TEXT;
 `);
 
 // One-time: give every pre-existing expense an audit number in date order and

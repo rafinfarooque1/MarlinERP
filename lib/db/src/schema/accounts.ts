@@ -16,7 +16,11 @@ export const cashBankAccountsTable = pgTable("cash_bank_accounts", {
   name: text("name").notNull(),
   accountType: text("account_type").notNull(), // cash, bank
   bankName: text("bank_name"),
+  // Both are text on purpose. An account number's leading zeros are
+  // significant and it routinely exceeds Number.MAX_SAFE_INTEGER, so parsing
+  // either as a number corrupts it.
   accountNumber: text("account_number"),
+  ifscCode: text("ifsc_code"),
   balance: numeric("balance", { precision: 12, scale: 2 }).notNull().default("0"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

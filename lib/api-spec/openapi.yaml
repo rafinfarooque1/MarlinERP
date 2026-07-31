@@ -2793,13 +2793,34 @@ components:
           type: string
         accountType:
           type: string
-          enum: [cash, bank]
+          enum: [cash, bank, upi, other]
         bankName:
           type: ["string", "null"]
         accountNumber:
           type: ["string", "null"]
+          description: Always a string — leading zeros are significant and real account numbers exceed the safe integer range.
+        ifscCode:
+          type: ["string", "null"]
         balance:
           type: number
+          description: Deprecated alias of storedBalance, kept for existing consumers.
+        storedBalance:
+          type: number
+          description: >-
+            The figure held in the row's balance column, seeded from the opening
+            balance at creation. No accounting entry maintains it, so it is
+            reported under its own name and never as the account's balance.
+        currentBalance:
+          type: ["number", "null"]
+          description: >-
+            Reconciled balance from the posting stream, or null when no ledger
+            backs this account. Null renders as an explicit gap rather than a
+            confident number.
+        balanceSource:
+          type: string
+          enum: [unlinked, ledger]
+        ledgerId:
+          type: ["integer", "null"]
 
     CashBankInput:
       type: object
@@ -2809,13 +2830,19 @@ components:
           type: string
         accountType:
           type: string
-          enum: [cash, bank]
+          enum: [cash, bank, upi, other]
         bankName:
           type: string
         accountNumber:
           type: string
+        ifscCode:
+          type: string
         openingBalance:
           type: number
+          description: >-
+            Seeds the stored balance at creation. Absent or blank means 0. This
+            account type is not linked to the chart of accounts, so no ledger
+            posting is created from it.
 
     Expense:
       type: object

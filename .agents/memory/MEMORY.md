@@ -66,4 +66,5 @@
 - [Voucher edit & provenance](voucher-edit-provenance.md) — store origin, never infer it; unknown is locked for edit but still deletable; the preserved number forbids type and FY changes.
 - [Shared create/edit builders](shared-create-edit-builders.md) — reusing the create builder for an edit resets omitted optional fields to module defaults; pass the row's current values as defaults.
 - [Invoice seller identity](invoice-seller-identity.md) — seller = the location, never the company; bank/UPI may fall back but identity may not; judge "incomplete" on the RESOLVED issuer.
+- [Money input normalisation](money-input-normalisation.md) — number inputs post strings; zod.coerce maps ''/null/true to a number; validate the decimal STRING, reject >2dp, let NUMERIC do the maths.
 - [Dev rows are test fixtures](dev-data-as-fixtures.md) — scratch-looking dev records are pinned by id AND attributes in the regression suites; grep tests/ before editing a row's state or GSTIN.

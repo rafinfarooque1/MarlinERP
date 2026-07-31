@@ -12,5 +12,7 @@ export interface CashBankInput {
   accountType: CashBankInputAccountType;
   bankName?: string;
   accountNumber?: string;
+  ifscCode?: string;
+  /** Seeds the stored balance at creation. Absent or blank means 0. This account type is not linked to the chart of accounts, so no ledger posting is created from it. */
   openingBalance?: number;
 }

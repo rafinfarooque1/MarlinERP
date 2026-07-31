@@ -18,6 +18,7 @@ export * from './attendanceRecordStatus';
 export * from './authResponse';
 export * from './cashBankAccount';
 export * from './cashBankAccountAccountType';
+export * from './cashBankAccountBalanceSource';
 export * from './cashBankInput';
 export * from './cashBankInputAccountType';
 export * from './changePasswordInput';

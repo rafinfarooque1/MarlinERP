@@ -2,6 +2,8 @@ import { Router } from "express";
 import { db, pool, accountLedgersTable, cashBankAccountsTable, expensesTable, salesTable, purchasesTable, warehousesTable } from "@workspace/db";
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 import { isIsoDate } from "../lib/dateInput";
+import { optionalMoney } from "../lib/numericInput";
+import { validationMessage } from "../lib/validationMessage";
 import { eq, and, sql, gte, lte } from "drizzle-orm";
 import {
   CreateAccountLedgerBody, UpdateAccountLedgerBody,
@@ -753,12 +755,57 @@ router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"),
   })));
 });
 
+/** Form wording for validation messages, so a 400 names the field the user
+ *  filled in rather than the JSON key behind it. */
+const CASH_BANK_LABELS: Record<string, string> = {
+  name: "Account Name",
+  accountType: "Type",
+  bankName: "Bank Name",
+  accountNumber: "Account Number",
+  ifscCode: "IFSC Code",
+  openingBalance: "Opening Balance",
+};
+
 router.post("/accounts/cash-bank", requireModuleAction("page:/accounts/cash-bank", "add"), async (req, res): Promise<void> => {
-  const parsed = CreateCashBankAccountBody.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-  const { openingBalance, ...rest } = parsed.data as typeof parsed.data & { openingBalance?: number };
-  const [row] = await db.insert(cashBankAccountsTable).values({ ...rest, balance: String(openingBalance ?? 0) }).returning();
-  res.status(201).json({ ...row, balance: Number(row.balance) });
+  // `<input type="number">` submits its value as a string, so the money field
+  // is normalised before the generated schema — which rightly demands a
+  // number — ever sees it. Invalid text is refused here, never coerced to 0.
+  const money = optionalMoney(req.body?.openingBalance);
+  if (!money.ok) { res.status(400).json({ error: `Opening Balance ${money.reason}.` }); return; }
+  if (money.value < 0) { res.status(400).json({ error: "Opening Balance cannot be negative." }); return; }
+
+  // Identifiers stay strings throughout: an account number's leading zeros are
+  // significant and its length outruns Number.MAX_SAFE_INTEGER.
+  const text = (v: unknown) => (typeof v === "string" ? v.trim() : undefined);
+  const ifsc = text(req.body?.ifscCode)?.toUpperCase();
+
+  const parsed = CreateCashBankAccountBody.safeParse({
+    ...req.body,
+    openingBalance: money.value,
+    ...(ifsc !== undefined ? { ifscCode: ifsc } : {}),
+  });
+  if (!parsed.success) {
+    res.status(400).json({ error: validationMessage(parsed.error, CASH_BANK_LABELS) });
+    return;
+  }
+
+  // The opening balance seeds the stored figure and nothing else. This table
+  // has no link to the chart of accounts (see the block comment above), so
+  // creating a posting from it here would invent an entry no other module
+  // knows about and unbalance the trial balance.
+  // `money.text` rather than the parsed number: it is the caller's exact digits
+  // in canonical form, so the value reaches NUMERIC(12,2) without a float in
+  // the path to round a half-cent off it.
+  const { openingBalance: _seed, ...rest } = parsed.data as typeof parsed.data & { openingBalance?: number };
+  const [row] = await db.insert(cashBankAccountsTable).values({ ...rest, balance: money.text }).returning();
+  res.status(201).json({
+    ...row,
+    balance: Number(row.balance),
+    storedBalance: Number(row.balance),
+    currentBalance: null,
+    balanceSource: "unlinked" as const,
+    ledgerId: null,
+  });
 });
 
 // ── Expenses (merged: expenses table + location expense payments) ──────────

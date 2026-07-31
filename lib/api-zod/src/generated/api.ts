@@ -1834,10 +1834,15 @@ export const GetLedgerStatementResponse = zod.object({
 export const ListCashBankAccountsResponseItem = zod.object({
   "id": zod.number(),
   "name": zod.string(),
-  "accountType": zod.enum(['cash', 'bank']),
+  "accountType": zod.enum(['cash', 'bank', 'upi', 'other']),
   "bankName": zod.string().nullish(),
-  "accountNumber": zod.string().nullish(),
-  "balance": zod.number().optional()
+  "accountNumber": zod.string().nullish().describe('Always a string — leading zeros are significant and real account numbers exceed the safe integer range.'),
+  "ifscCode": zod.string().nullish(),
+  "balance": zod.number().optional().describe('Deprecated alias of storedBalance, kept for existing consumers.'),
+  "storedBalance": zod.number().optional().describe('The figure held in the row\'s balance column, seeded from the opening balance at creation. No accounting entry maintains it, so it is reported under its own name and never as the account\'s balance.'),
+  "currentBalance": zod.number().nullish().describe('Reconciled balance from the posting stream, or null when no ledger backs this account. Null renders as an explicit gap rather than a confident number.'),
+  "balanceSource": zod.enum(['unlinked', 'ledger']).optional(),
+  "ledgerId": zod.number().nullish()
 })
 export const ListCashBankAccountsResponse = zod.array(ListCashBankAccountsResponseItem)
 
@@ -1847,19 +1852,25 @@ export const ListCashBankAccountsResponse = zod.array(ListCashBankAccountsRespon
  */
 export const CreateCashBankAccountBody = zod.object({
   "name": zod.string(),
-  "accountType": zod.enum(['cash', 'bank']),
+  "accountType": zod.enum(['cash', 'bank', 'upi', 'other']),
   "bankName": zod.string().optional(),
   "accountNumber": zod.string().optional(),
-  "openingBalance": zod.number().optional()
+  "ifscCode": zod.string().optional(),
+  "openingBalance": zod.number().optional().describe('Seeds the stored balance at creation. Absent or blank means 0. This account type is not linked to the chart of accounts, so no ledger posting is created from it.')
 })
 
 export const CreateCashBankAccountResponse = zod.object({
   "id": zod.number(),
   "name": zod.string(),
-  "accountType": zod.enum(['cash', 'bank']),
+  "accountType": zod.enum(['cash', 'bank', 'upi', 'other']),
   "bankName": zod.string().nullish(),
-  "accountNumber": zod.string().nullish(),
-  "balance": zod.number().optional()
+  "accountNumber": zod.string().nullish().describe('Always a string — leading zeros are significant and real account numbers exceed the safe integer range.'),
+  "ifscCode": zod.string().nullish(),
+  "balance": zod.number().optional().describe('Deprecated alias of storedBalance, kept for existing consumers.'),
+  "storedBalance": zod.number().optional().describe('The figure held in the row\'s balance column, seeded from the opening balance at creation. No accounting entry maintains it, so it is reported under its own name and never as the account\'s balance.'),
+  "currentBalance": zod.number().nullish().describe('Reconciled balance from the posting stream, or null when no ledger backs this account. Null renders as an explicit gap rather than a confident number.'),
+  "balanceSource": zod.enum(['unlinked', 'ledger']).optional(),
+  "ledgerId": zod.number().nullish()
 })
 
 

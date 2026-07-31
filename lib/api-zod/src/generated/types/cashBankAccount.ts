@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { CashBankAccountAccountType } from './cashBankAccountAccountType';
+import type { CashBankAccountBalanceSource } from './cashBankAccountBalanceSource';
 
 export interface CashBankAccount {
   id: number;
@@ -13,7 +14,23 @@ export interface CashBankAccount {
   accountType: CashBankAccountAccountType;
   /** @nullable */
   bankName?: string | null;
-  /** @nullable */
+  /**
+     * Always a string — leading zeros are significant and real account numbers exceed the safe integer range.
+     * @nullable
+     */
   accountNumber?: string | null;
+  /** @nullable */
+  ifscCode?: string | null;
+  /** Deprecated alias of storedBalance, kept for existing consumers. */
   balance?: number;
+  /** The figure held in the row's balance column, seeded from the opening balance at creation. No accounting entry maintains it, so it is reported under its own name and never as the account's balance. */
+  storedBalance?: number;
+  /**
+     * Reconciled balance from the posting stream, or null when no ledger backs this account. Null renders as an explicit gap rather than a confident number.
+     * @nullable
+     */
+  currentBalance?: number | null;
+  balanceSource?: CashBankAccountBalanceSource;
+  /** @nullable */
+  ledgerId?: number | null;
 }

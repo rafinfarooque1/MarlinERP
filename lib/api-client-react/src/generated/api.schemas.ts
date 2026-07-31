@@ -1014,6 +1014,16 @@ export type CashBankAccountAccountType = typeof CashBankAccountAccountType[keyof
 export const CashBankAccountAccountType = {
   cash: 'cash',
   bank: 'bank',
+  upi: 'upi',
+  other: 'other',
+} as const;
+
+export type CashBankAccountBalanceSource = typeof CashBankAccountBalanceSource[keyof typeof CashBankAccountBalanceSource];
+
+
+export const CashBankAccountBalanceSource = {
+  unlinked: 'unlinked',
+  ledger: 'ledger',
 } as const;
 
 export interface CashBankAccount {
@@ -1022,9 +1032,25 @@ export interface CashBankAccount {
   accountType: CashBankAccountAccountType;
   /** @nullable */
   bankName?: string | null;
-  /** @nullable */
+  /**
+     * Always a string — leading zeros are significant and real account numbers exceed the safe integer range.
+     * @nullable
+     */
   accountNumber?: string | null;
+  /** @nullable */
+  ifscCode?: string | null;
+  /** Deprecated alias of storedBalance, kept for existing consumers. */
   balance?: number;
+  /** The figure held in the row's balance column, seeded from the opening balance at creation. No accounting entry maintains it, so it is reported under its own name and never as the account's balance. */
+  storedBalance?: number;
+  /**
+     * Reconciled balance from the posting stream, or null when no ledger backs this account. Null renders as an explicit gap rather than a confident number.
+     * @nullable
+     */
+  currentBalance?: number | null;
+  balanceSource?: CashBankAccountBalanceSource;
+  /** @nullable */
+  ledgerId?: number | null;
 }
 
 export type CashBankInputAccountType = typeof CashBankInputAccountType[keyof typeof CashBankInputAccountType];
@@ -1033,6 +1059,8 @@ export type CashBankInputAccountType = typeof CashBankInputAccountType[keyof typ
 export const CashBankInputAccountType = {
   cash: 'cash',
   bank: 'bank',
+  upi: 'upi',
+  other: 'other',
 } as const;
 
 export interface CashBankInput {
@@ -1040,6 +1068,8 @@ export interface CashBankInput {
   accountType: CashBankInputAccountType;
   bankName?: string;
   accountNumber?: string;
+  ifscCode?: string;
+  /** Seeds the stored balance at creation. Absent or blank means 0. This account type is not linked to the chart of accounts, so no ledger posting is created from it. */
   openingBalance?: number;
 }
 

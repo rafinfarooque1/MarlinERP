@@ -214,6 +214,9 @@ importers:
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4
+      zod:
+        specifier: 'catalog:'
+        version: 3.25.76
     devDependencies:
       '@types/bcryptjs':
         specifier: ^3.0.0
