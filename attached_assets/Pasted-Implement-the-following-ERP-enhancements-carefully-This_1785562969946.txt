@@ -1,0 +1,612 @@
+Implement the following ERP enhancements carefully. This is a production ERP, so do not break any existing functionality. Review all frontend, backend, APIs, database queries, reports, exports, permissions, and calculations before making changes. Maintain accounting integrity, stock integrity, GST integrity, and payroll integrity. Do not use temporary fixes or frontend-only filtering.
+
+=========================================================
+1. GLOBAL DATE FILTER (APPLICABLE TO ENTIRE ERP)
+=========================================================
+
+Standardize the date filtering across the entire ERP.
+
+Supported filters:
+• Today
+• Yesterday
+• Last 7 Days
+• This Month
+• Quarter
+• This Financial Year
+• Custom Date Range
+
+Every module must use the selected date range.
+
+Modules include (not limited to):
+
+• Dashboard
+• Sales
+• Point of Sale
+• Purchases
+• Purchase Bills
+• Production
+• Production Batches
+• Inventory
+• Stock Reports
+• Expenses
+• Customers
+• Vendors
+• Cash Book
+• Bank Book
+• Day Book
+• Ledger Statement
+• Trial Balance
+• Chart of Accounts
+• Balance Sheet
+• Profit & Loss
+• Payroll
+• Attendance
+• GST Summary
+• GST Returns
+• Receivables
+• Payables
+• Every report and dashboard card
+
+Nothing should calculate using today's balance when a historical date is selected.
+
+Example:
+
+If user selects
+
+01-Aug-2026
+to
+31-Aug-2026
+
+Everything should calculate only within that period.
+
+=========================================================
+2. OPENING & CLOSING STOCK LOGIC
+=========================================================
+
+Opening Stock
+
+=
+
+Stock available exactly at
+
+Start Date 00:00:00
+
+Example
+
+01-Aug-2026
+
+Opening stock must equal stock remaining after all transactions up to
+
+31-Jul-2026 23:59:59
+
+Closing Stock
+
+=
+
+Stock available at
+
+End Date 23:59:59
+
+Example
+
+31-Aug Closing Stock
+
+must become
+
+01-Sep Opening Stock
+
+automatically.
+
+If purchases, production, sales, stock transfers or edits are modified historically, opening and closing stock should automatically recalculate.
+
+=========================================================
+3. DATE FILTER MUST AFFECT PAYABLES & RECEIVABLES
+=========================================================
+
+Currently dashboard always shows current payable.
+
+Fix this.
+
+Salary Payable
+
+Rent Payable
+
+Supplier Payable
+
+Employee Payable
+
+Customer Receivable
+
+must all respect selected date.
+
+If viewing August report
+
+show only August outstanding.
+
+Never today's balance.
+
+=========================================================
+4. GLOBAL LOCATION SELECTOR
+=========================================================
+
+Create one global Location selector.
+
+Place it permanently in the ERP sidebar/header.
+
+Example
+
+All Locations
+
+▼
+
+Ragiguda
+
+Head Office
+
+QA Warehouse
+
+Cold Store
+
+Production Unit
+
+Future warehouses
+
+Changing location once should automatically update every module.
+
+Applicable everywhere.
+
+Examples
+
+Dashboard
+
+Chart of Accounts
+
+Ledger
+
+Trial Balance
+
+Balance Sheet
+
+Profit & Loss
+
+Cash Book
+
+Bank Book
+
+Day Book
+
+GST
+
+Sales
+
+POS
+
+Inventory
+
+Stock
+
+Payroll
+
+Attendance
+
+Production
+
+Purchase
+
+Expenses
+
+Reports
+
+Everything.
+
+Master data should remain global.
+
+Item Master
+
+Customer
+
+Vendor
+
+Employee
+
+Warehouse
+
+Company Profile
+
+Permissions
+
+must NOT filter.
+
+Remember selected location after refresh.
+
+=========================================================
+5. GST SUMMARY & GST RETURNS
+=========================================================
+
+Since multiple warehouses can share one GST number
+
+add
+
+GST Filter
+
+↓
+
+Warehouse Filter
+
+Warehouse list should depend on selected GST.
+
+Add new columns
+
+Warehouse
+
+Invoice Number
+
+Purchase Number
+
+Payment Status
+
+Payment Mode
+
+If paid
+
+show actual payment mode
+
+Cash
+
+UPI
+
+Card
+
+Bank
+
+Cheque
+
+NEFT
+
+RTGS
+
+Wallet
+
+If unpaid
+
+show
+
+Credit
+
+If partially paid
+
+show
+
+UPI + Credit
+
+(or equivalent)
+
+Exports should respect selected filters.
+
+=========================================================
+6. TRIAL BALANCE / CHART OF ACCOUNTS
+=========================================================
+
+Location filter must work here also.
+
+If
+
+All Locations
+
+selected
+
+show consolidated.
+
+If
+
+Ragiguda
+
+selected
+
+show only Ragiguda ledgers.
+
+Same for
+
+Trial Balance
+
+Chart of Accounts
+
+Ledger Statement
+
+Cash Book
+
+Bank Book
+
+Day Book
+
+Balance Sheet
+
+Profit & Loss
+
+=========================================================
+7. ATTENDANCE IMPROVEMENTS
+=========================================================
+
+HR Attendance
+
+Add
+
+Daily Attendance Register
+
+Attendance Calendar
+
+Working Hours
+
+Late Entry
+
+Overtime
+
+Leave
+
+Multiple Punches
+
+Summary cards
+
+Employee Portal
+
+Add
+
+Today's Attendance
+
+Attendance History
+
+Attendance Calendar
+
+Check-in
+
+Check-out
+
+Working Hours
+
+Live working duration
+
+Payroll must continue using attendance records correctly.
+
+=========================================================
+8. POS DATE FILTER
+=========================================================
+
+Add standard ERP date filter.
+
+Support
+
+Today
+
+Yesterday
+
+Last 7 Days
+
+This Month
+
+Quarter
+
+This FY
+
+Custom
+
+Location
+
+=========================================================
+9. PURCHASE BILLS
+=========================================================
+
+Add
+
+Date Filter
+
+Location Filter
+
+=========================================================
+10. PRODUCTION BATCHES
+=========================================================
+
+Add
+
+Date Filter
+
+Location Filter
+
+=========================================================
+11. PERMISSION SYSTEM FIX
+=========================================================
+
+Currently only View permission works.
+
+Fix
+
+View
+
+Add
+
+Edit
+
+Delete
+
+Download
+
+Backend validation required.
+
+Frontend validation required.
+
+Remove separate permissions
+
+Print
+
+Approve
+
+Share
+
+Instead
+
+Download permission should automatically allow
+
+Export
+
+Excel
+
+CSV
+
+PDF
+
+Print
+
+WhatsApp
+
+Email
+
+Example
+
+Item Master
+
+View ✔
+
+Add ✔
+
+Edit ✖
+
+Delete ✖
+
+Download ✔
+
+Employee should
+
+View
+
+Create
+
+Export
+
+Cannot Edit
+
+Cannot Delete
+
+=========================================================
+12. ROLE / HIERARCHY IMPROVEMENT
+=========================================================
+
+Replace confusing hierarchy level.
+
+Instead use
+
+Role Name
+
+Reports To
+
+Description
+
+Example
+
+Management
+
+↓
+
+Warehouse Manager
+
+↓
+
+Supervisor
+
+↓
+
+Staff
+
+Display reporting relationship instead of numeric hierarchy.
+
+=========================================================
+13. PERFORMANCE
+=========================================================
+
+Do NOT fetch all records and filter in React.
+
+Filtering must happen in backend.
+
+Create shared reusable services
+
+Global Date Filter
+
+Global Location Filter
+
+Global GST Filter
+
+Permission Middleware
+
+Reuse everywhere.
+
+=========================================================
+14. TESTING
+=========================================================
+
+Before completing verify
+
+✓ Dashboard
+
+✓ Sales
+
+✓ POS
+
+✓ Purchases
+
+✓ Production
+
+✓ Inventory
+
+✓ Payroll
+
+✓ Attendance
+
+✓ GST Summary
+
+✓ GST Returns
+
+✓ Trial Balance
+
+✓ Ledger
+
+✓ Chart of Accounts
+
+✓ Balance Sheet
+
+✓ Profit & Loss
+
+✓ Cash Book
+
+✓ Bank Book
+
+✓ Day Book
+
+✓ Receivables
+
+✓ Payables
+
+✓ Exports
+
+✓ Permissions
+
+✓ Performance
+
+=========================================================
+IMPORTANT
+=========================================================
+
+Do not implement quick fixes.
+
+Do not hardcode values.
+
+Do not duplicate logic.
+
+Maintain backward compatibility.
+
+Do not break accounting postings.
+
+Do not break stock valuation.
+
+Do not break GST.
+
+Do not break payroll.
+
+Implement this as a production-quality ERP enhancement with centralized filtering, reusable services, and proper backend validation.
