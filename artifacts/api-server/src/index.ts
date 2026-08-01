@@ -5,6 +5,8 @@ import { migrateOutletsToWarehouses } from "./migrations/outletToWarehouse";
 import { repairOpeningBatches } from "./migrations/repairOpeningBatches";
 import { addMaterialLocations } from "./migrations/materialLocations";
 import { addMaterialBatches } from "./migrations/materialBatches";
+import { cleanupPreResetGhosts } from "./migrations/prodResetGhostCleanup";
+import { sweepOrphanPartyLedgers } from "./migrations/orphanPartyLedgers";
 import { addWarehouseRent } from "./migrations/warehouseRent";
 import { addInvoiceShareLinks } from "./migrations/invoiceShareLinks";
 import { startRentAccrualScheduler } from "./lib/rentAccrual";
@@ -2120,7 +2122,36 @@ try {
 }
 console.error(`[migration] ${leaveRevertOutcome}`);
 
-await recordBootStatus(migrationsError, dateColumnsOutcome, leaveRevertOutcome);
+// ── One-time production ghost cleanup after the 2026-08-01 Company Reset ─────
+// Its own top-level step for the same reason as the two above: a swallowed
+// throw inside runMigrations() must not silently skip it. Gated to production
+// with a reset-signature check inside; see prodResetGhostCleanup.ts.
+let ghostCleanupOutcome: string;
+try {
+  ghostCleanupOutcome = await cleanupPreResetGhosts(pool);
+} catch (err) {
+  ghostCleanupOutcome = `prod_reset_ghost_cleanup FAILED: ${(err as Error).message} — nothing deleted (rolled back), will retry next boot`;
+}
+console.error(`[migration] ${ghostCleanupOutcome}`);
+
+// ── Orphaned party-ledger sweep ──────────────────────────────────────────────
+// Party dropdowns in voucher entry / receipts / payments are built from the
+// chart of accounts, so a vendor/customer row deleted straight in the database
+// leaves a ledger that keeps appearing in every picker. Runs every boot
+// (idempotent); see orphanPartyLedgers.ts for the delete-vs-deactivate rules.
+let orphanLedgerOutcome: string;
+try {
+  orphanLedgerOutcome = await sweepOrphanPartyLedgers(pool);
+} catch (err) {
+  orphanLedgerOutcome = `orphan_party_ledgers FAILED: ${(err as Error).message} — will retry next boot`;
+}
+console.error(`[migration] ${orphanLedgerOutcome}`);
+
+await recordBootStatus(
+  migrationsError,
+  dateColumnsOutcome,
+  `${leaveRevertOutcome} | ${ghostCleanupOutcome} | ${orphanLedgerOutcome}`,
+);
 
 // ── MRP column on materials and raw_materials ────────────────────────────────
 await pool.query(`ALTER TABLE materials    ADD COLUMN IF NOT EXISTS mrp NUMERIC(10,2) DEFAULT 0`);

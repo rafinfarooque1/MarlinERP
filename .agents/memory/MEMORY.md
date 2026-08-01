@@ -83,4 +83,6 @@
 - [Global filter plumbing](global-filter-plumbing.md) — shared from/to+location params narrow LBAC only; HO matches on TYPE alone (id placeholder differs per table); locked users' persisted context must be force-synced; drop partial dates client-side.
 - [drizzle push destroys raw schema](drizzle-push-destroys-raw-schema.md) — NEVER run drizzle-kit push here: schema.ts is a partial view; push --force dropped 27 raw-migration tables. DDL ships via boot migrations only.
 - [Destructive boot cleanups](destructive-boot-cleanups.md) — one-time DELETE blocks guarded only by data-shape probes re-fire when columns are re-added empty; guard on migration_log instead.
+- [Orphan party ledgers & dropdown sources](orphan-party-ledgers.md) — voucher/receipt/payment pickers read the chart of accounts, not masters; hand-deleted parties leave VEND-/CUST- ledgers; boot sweep heals.
+- [Company reset & ghost rows](company-reset-ghosts.md) — reset endpoints must share ONE table list; RESTART IDENTITY re-attaches surviving rows to new ids; batch coverage may undershoot entries, never exceed.
 - [Five-action permissions & role tree](five-action-permissions.md) — legacy print/approve/share cols are write-mirrors, never read; single-root role tree with derived levels; structure edits serialize on one advisory lock.

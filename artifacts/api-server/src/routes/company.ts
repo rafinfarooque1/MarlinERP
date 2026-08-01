@@ -525,46 +525,39 @@ router.get("/company/permissions/rbac-audit", requireModuleView("page:/company/p
 
 // ── Reset all company data (dangerous — wipes all transactional records) ──────
 router.post("/company/reset", requireModuleAction("page:/company/settings", "delete"), async (_req, res): Promise<void> => {
+  // EVERY transactional table comes from TXN_RESET_TABLES — the single,
+  // maintained list shared with the "CLEAR ALL TRANSACTIONS" endpoint below —
+  // so the two resets can never drift apart again. (This route once carried
+  // its own stale copy of that list: it missed stock_batches, stock_ledger,
+  // journal vouchers, accruals, rent and more, and the survivors re-attached
+  // themselves to the new company's records because RESTART IDENTITY reissued
+  // the same ids. See prod_reset_ghost_cleanup_v1.)
   const TRUNCATE_TABLES = [
-    // Payments & reconciliation (most dependent — clear first)
-    'sale_payments',
-    'reconciliation_batch_items',
-    'reconciliation_batches',
-    'cash_deposits',
-    'payments',
-    'receipts',
-    // Core transactional
-    'sales',
-    'purchases',
-    'stock_entries',
-    'stock_transfers',
-    'productions',
-    'expenses',
-    // Customer & vendor transactional
-    'customers',
-    'vendors',
+    ...TXN_RESET_TABLES,
+    // Master & register data — a full factory reset wipes masters too. The
+    // masters-preserving variant is the "CLEAR ALL TRANSACTIONS" endpoint.
+    'assets',
     'coupons',
-    // HR transactional
-    'payroll',
-    'attendance',
-    'leaves',
-    // Permissions (before hierarchies)
     'permissions',
-    // Dependent master data (before their parents)
     'item_prices',
     'bom_templates',
-    // Item & inventory master
+    'customers',
+    'vendors',
     'items',
     'raw_materials',
     'materials',
-    // Org & location master
+    'warehouse_rent_agreements',
     'warehouses',
     'outlets',
     'employees',
     'hierarchies',
     'pay_components',
-    // Logs
+    'cash_bank_accounts',
+    // Numbering & logs — a fresh company starts numbering from 1
+    'voucher_sequences',
+    'opening_balances',
     'activity_log',
+    'login_attempts',
     // NOTE: migration_log is intentionally NOT truncated here. Schema-level
     // migrations (per_link_permissions_v1, permission_seed_existing_v1, etc.)
     // must not re-run after a data reset — re-running the permission seeder
@@ -580,6 +573,24 @@ router.post("/company/reset", requireModuleAction("page:/company/settings", "del
       // table may not exist yet — skip silently
     }
   }
+
+  // ── Standalone sequences ───────────────────────────────────────────────────
+  // Document/batch/code numbering runs on global sequences not owned by any
+  // truncated table, so RESTART IDENTITY never touches them. A fresh company
+  // must not continue the old company's numbering. (Safe to restart here
+  // because stock_batches and the item masters were truncated above.)
+  for (const seq of ['purchase_batch_seq', 'item_code_seq_item', 'item_code_seq_material', 'item_code_seq_raw_material']) {
+    try {
+      await pool.query(`ALTER SEQUENCE ${seq} RESTART WITH 1`);
+    } catch { /* sequence may not exist yet */ }
+  }
+
+  // ── Salary accrual anchor ──────────────────────────────────────────────────
+  // The hourly sweep backfills accruals from this date; after a full reset it
+  // must start from today, not from the old company's anchor.
+  try {
+    await pool.query(`UPDATE salary_accrual_config SET attendance_from = CURRENT_DATE`);
+  } catch { /* table may not exist yet */ }
 
   // ── Purge dynamic account ledgers (warehouse, outlet, customer, vendor) ────
   // System ledger groups (SYS-*, STD-*) are kept so the chart of accounts
@@ -674,6 +685,9 @@ const TXN_RESET_TABLES = [
   "rent_accruals",
   "rent_payments",
   "rent_periods",
+  // Punch rows feed worked-hours; leaving them behind would silently re-feed
+  // stale hours into any attendance recreated after the reset.
+  "attendance_punches",
   "attendance",
   "leaves",
 ] as const;
