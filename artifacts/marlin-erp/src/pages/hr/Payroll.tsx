@@ -5,6 +5,7 @@ import {
   useListAdvances, useAddAdvance,
   useListEmployees, useListWarehouses, useListOutlets,
   useListSalaryAccruals, getSalaryAccrualsQueryKey,
+  useCashBankLedgersFlat,
   EnrichedPayrollRecord,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -115,11 +116,18 @@ function PayDialog({ item, onClose }: { item: EnrichedPayrollRecord; onClose: ()
   const remaining = Math.max(0, totalNet - (item.paidAmount ?? 0));
   const [amount, setAmount] = useState(String(remaining.toFixed(2)));
   const [mode, setMode]     = useState<string>('cash');
+  // Which till or bank account the salary leaves from. 'auto' keeps the
+  // standard Head Office Cash/Bank (by mode); branch users see only their own till.
+  const [payFrom, setPayFrom] = useState<string>('auto');
+  const { data: cashBank = [] } = useCashBankLedgersFlat();
   const qc = useQueryClient();
   const mutation = usePayPayroll();
 
   const pay = () => {
-    mutation.mutate({ id: item.id, amount: Number(amount), paymentMode: mode }, {
+    mutation.mutate({
+      id: item.id, amount: Number(amount), paymentMode: mode,
+      payLedgerId: payFrom !== 'auto' ? Number(payFrom) : undefined,
+    }, {
       onSuccess: (res) => {
         toast.success(res.status === 'paid' ? 'Salary paid' : 'Partial payment recorded');
         qc.invalidateQueries({ queryKey: getEnrichedPayrollQueryKey({ year: item.year, month: item.month }) });
@@ -165,6 +173,19 @@ function PayDialog({ item, onClose }: { item: EnrichedPayrollRecord; onClose: ()
                 <SelectItem value="upi">UPI</SelectItem>
               </SelectContent>
             </Select>
+          </div>
+          <div className="space-y-1">
+            <Label>Paid From Account</Label>
+            <Select value={payFrom} onValueChange={setPayFrom}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">Default — Head Office {mode === 'bank' ? 'Bank' : 'Cash'}</SelectItem>
+                {(cashBank as any[]).map((a) => (
+                  <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">Pick a warehouse or outlet cash box to pay from that till.</p>
           </div>
         </div>
         <DialogFooter>
@@ -348,13 +369,18 @@ function NewAdvanceDialog({ employees, onClose }: { employees: any[]; onClose: (
   const [amount, setAmount] = useState('');
   const [note, setNote]     = useState('');
   const [date, setDate]     = useState(new Date().toISOString().split('T')[0]);
+  const [payFrom, setPayFrom] = useState('auto');
+  const { data: cashBank = [] } = useCashBankLedgersFlat();
   const qc = useQueryClient();
   const mutation = useAddAdvance();
 
   const save = () => {
     if (!empId) { toast.error('Select an employee'); return; }
     if (!amount || Number(amount) <= 0) { toast.error('Enter a valid amount'); return; }
-    mutation.mutate({ employeeId: Number(empId), amount: Number(amount), date, note: note || undefined }, {
+    mutation.mutate({
+      employeeId: Number(empId), amount: Number(amount), date, note: note || undefined,
+      payLedgerId: payFrom !== 'auto' ? Number(payFrom) : undefined,
+    }, {
       onSuccess: () => {
         toast.success('Advance recorded');
         qc.invalidateQueries({ queryKey: ['/api/hr/advances'] });
@@ -385,6 +411,19 @@ function NewAdvanceDialog({ employees, onClose }: { employees: any[]; onClose: (
           <div className="space-y-1">
             <Label>Date</Label>
             <Input type="date" value={date} onChange={e => setDate(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label>Paid From Account</Label>
+            <Select value={payFrom} onValueChange={setPayFrom}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">Default — Head Office Cash</SelectItem>
+                {(cashBank as any[]).map((a: any) => (
+                  <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">Pick a warehouse or outlet cash box to pay from that till.</p>
           </div>
           <div className="space-y-1">
             <Label>Note</Label>

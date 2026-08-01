@@ -23,6 +23,7 @@ import {
   withEmployeeAccrualLock, DEFAULT_WORKING_DAYS, type Querier,
 } from "../lib/salaryAccrual";
 import { loadAttendanceThresholds, monthPresentDays, PUNCHED_HOURS_JOIN } from "../lib/attendanceFactor";
+import { ownLocationScope, scopeCashLedgerIds } from "../lib/moneyScope";
 import {
   CreateHierarchyBody, UpdateHierarchyBody, DeleteHierarchyParams,
   CreateEmployeeBody, UpdateEmployeeBody, GetEmployeeParams, DeleteEmployeeParams,
@@ -31,6 +32,99 @@ import {
 } from "@workspace/api-zod";
 
 const router = Router();
+
+/**
+ * Resolves which cash/bank ledger a salary payment or employee advance leaves
+ * from. Salary payable and advance ledgers stay payroll-owned (they never
+ * appear in manual voucher pickers — paying them anywhere else would let the
+ * payroll dues double-pay); only the MONEY side is selectable here.
+ *
+ * Rules mirror manual payment vouchers: the account must sit in the Cash/Bank
+ * tree and be active; Head Office may use any till or bank account, a branch
+ * caller only their own till. With no selection, Head Office keeps the
+ * standard Cash/Bank default; a branch caller falls back to their own till —
+ * NEVER silently to Head Office money — and must pick explicitly if their
+ * scope holds more than one till.
+ *
+ * Also reports which root the account sits under (`tree`, so the recorded
+ * payment mode cannot contradict the account) and the owning location when the
+ * account is a warehouse/outlet till (so the voucher can be stamped and located
+ * reports see the till movement). Head-office money returns a null location:
+ * payroll vouchers paid from HO cash stay company-level, as they always were.
+ */
+type ResolvedPayLedger = {
+  id: number;
+  tree: "cash" | "bank";
+  locationType: "warehouse" | "outlet" | null;
+  locationId: number | null;
+};
+
+async function resolvePayLedger(
+  employee: unknown,
+  payLedgerId: unknown,
+  fallbackCode: "STD-CASH" | "STD-BANK",
+): Promise<ResolvedPayLedger | { error: string }> {
+  const scope = ownLocationScope(employee as Parameters<typeof ownLocationScope>[0]);
+  let id: number;
+  if (payLedgerId === undefined || payLedgerId === null || payLedgerId === "") {
+    if (scope.isHeadOffice) {
+      const { rows: [std] } = await pool.query(
+        `SELECT id FROM account_ledgers WHERE code = $1 LIMIT 1`, [fallbackCode],
+      );
+      if (!std) return { error: `The standard ${fallbackCode === "STD-BANK" ? "bank" : "cash"} ledger is missing.` };
+      id = std.id;
+    } else {
+      const own = await scopeCashLedgerIds(scope);
+      if (own.length !== 1) return { error: "Pick which cash account this is paid from." };
+      id = own[0]!;
+    }
+  } else {
+    id = Number(payLedgerId);
+    if (!Number.isInteger(id) || id <= 0) return { error: "Invalid payment account." };
+  }
+  // Same descendant walk the cash/bank picker endpoint uses, so what the UI
+  // offers and what the server accepts can never drift apart.
+  const { rows } = await pool.query(
+    `SELECT id, parent_id, code, is_active FROM account_ledgers`,
+  );
+  const cashSet = new Set<number>();
+  const bankSet = new Set<number>();
+  for (const r of rows) {
+    if (r.code === "STD-CASH") cashSet.add(r.id);
+    if (r.code === "STD-BANK") bankSet.add(r.id);
+  }
+  for (let i = 0; i < 4; i++) {
+    for (const r of rows) {
+      if (!r.parent_id) continue;
+      if (cashSet.has(r.parent_id)) cashSet.add(r.id);
+      if (bankSet.has(r.parent_id)) bankSet.add(r.id);
+    }
+  }
+  const row = rows.find((r: any) => r.id === id);
+  const tree: "cash" | "bank" | null = cashSet.has(id) ? "cash" : bankSet.has(id) ? "bank" : null;
+  if (!row || !tree || row.is_active === false) {
+    return { error: "Pick an active cash or bank account for the payment." };
+  }
+  if (!scope.isHeadOffice) {
+    const own = await scopeCashLedgerIds(scope);
+    if (!own.includes(id)) return { error: "You can only pay from your own location's cash." };
+  }
+  // Owning location for the voucher stamp. Warehouse first: a mirror location
+  // (same place existing as warehouse AND outlet, one shared till) must
+  // resolve to ONE identity, not whichever row happens to come back.
+  const { rows: [locRow] } = await pool.query(
+    `SELECT lt, lid FROM (
+       SELECT 'warehouse' AS lt, id AS lid, 0 AS ord FROM warehouses WHERE cash_ledger_id = $1
+       UNION ALL
+       SELECT 'outlet' AS lt, id AS lid, 1 AS ord FROM outlets WHERE cash_ledger_id = $1
+     ) x ORDER BY ord LIMIT 1`, [id],
+  );
+  return {
+    id, tree,
+    locationType: (locRow?.lt as "warehouse" | "outlet" | undefined) ?? null,
+    locationId: locRow ? Number(locRow.lid) : null,
+  };
+}
 
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -1725,6 +1819,10 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("page:/hr/payroll", "edit
   const today = new Date().toISOString().split("T")[0];
   const payAmount = Number(req.body.amount ?? 0);
   const paymentMode: string = req.body.paymentMode ?? "cash";
+  if (!["cash", "bank", "upi"].includes(paymentMode)) {
+    res.status(400).json({ error: "Payment mode must be cash, bank or upi." });
+    return;
+  }
 
   const { rows: [existing] } = await pool.query(`SELECT * FROM payroll WHERE id = $1`, [id]);
   if (!existing) { res.status(404).json({ error: "Not found" }); return; }
@@ -1760,15 +1858,22 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("page:/hr/payroll", "edit
     'liability', 'SYS-CURL',
     `Salary payable to ${emp?.name ?? `Employee #${existing.employee_id}`}`,
   );
-  const { rows: [cashRow] } = await pool.query(
-    paymentMode === 'bank'
-      ? `SELECT id FROM account_ledgers WHERE code = 'STD-BANK' LIMIT 1`
-      : `SELECT id FROM account_ledgers WHERE code = 'STD-CASH' LIMIT 1`,
+  // The caller may pick WHICH till or bank account pays (e.g. a warehouse or
+  // outlet cash box). Head Office defaults to the standard Cash/Bank ledger by
+  // mode (UPI settles into the bank account, not the cash drawer). The
+  // RECORDED mode is then derived from the account actually used, so the
+  // payroll row can never claim "cash" for money that left a bank account.
+  const resolvedPay = await resolvePayLedger(
+    (req as any).employee, req.body.payLedgerId, paymentMode === 'cash' ? 'STD-CASH' : 'STD-BANK',
   );
-  const payLedgerId = cashRow?.id ?? null;
-  if (!salPayId || !payLedgerId) {
+  if ('error' in resolvedPay) { res.status(400).json({ error: resolvedPay.error }); return; }
+  const payLedgerId = resolvedPay.id;
+  const effectiveMode = resolvedPay.tree === 'bank'
+    ? (paymentMode === 'upi' ? 'upi' : 'bank')
+    : 'cash';
+  if (!salPayId) {
     res.status(500).json({
-      error: "Cannot record this payment: the salary payable or cash/bank ledger is missing. No payment was recorded.",
+      error: "Cannot record this payment: the salary payable ledger is missing. No payment was recorded.",
     });
     return;
   }
@@ -1782,11 +1887,15 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("page:/hr/payroll", "edit
     await client.query("BEGIN");
     const voucherNumber = await nextVoucherNumber(client, "journal", today);
     const narration = `Salary Payment${isFullyPaid ? '' : ' (Partial)'} — ${emp?.name ?? `Emp #${existing.employee_id}`} — ${monthStr}/${existing.year}`;
+    // Stamped with the paying till's location (null for HO money): a salary
+    // paid from a warehouse or outlet cash box must show up in that location's
+    // report slice, not vanish into the company bucket.
     const { rows: [jv] } = await client.query(
       `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by,
-                                    origin, source_module)
-       VALUES ('journal', $1, $2, $3, $4, $5, 'system', 'payroll') RETURNING id`,
-      [voucherNumber, today, narration, payNow.toFixed(2), req.employee?.username ?? "system"],
+                                    origin, source_module, location_type, location_id)
+       VALUES ('journal', $1, $2, $3, $4, $5, 'system', 'payroll', $6, $7) RETURNING id`,
+      [voucherNumber, today, narration, payNow.toFixed(2), req.employee?.username ?? "system",
+       resolvedPay.locationType, resolvedPay.locationId],
     );
     // Dr Salary Payable / Cr Cash or Bank
     await client.query(
@@ -1808,7 +1917,7 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("page:/hr/payroll", "edit
       `UPDATE payroll
        SET paid_amount = $1, payment_mode = $2, is_paid = $3, paid_date = $4, status = $5
        WHERE id = $6 RETURNING *`,
-      [String(lockedPaid), paymentMode, lockedFull, lockedFull ? today : null, lockedFull ? 'paid' : 'approved', id],
+      [String(lockedPaid), effectiveMode, lockedFull, lockedFull ? today : null, lockedFull ? 'paid' : 'approved', id],
     );
     await client.query("COMMIT");
     row = updated;
@@ -1826,7 +1935,7 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("page:/hr/payroll", "edit
   }
 
   logActivity({ action: "UPDATE", module: "payroll", entityType: "payroll", entityId: id,
-    description: `Salary ${isFullyPaid ? 'paid' : 'partial payment'} for ${emp?.name ?? `Emp #${existing.employee_id}`} — ₹${payNow.toLocaleString("en-IN")} via ${paymentMode}`,
+    description: `Salary ${isFullyPaid ? 'paid' : 'partial payment'} for ${emp?.name ?? `Emp #${existing.employee_id}`} — ₹${payNow.toLocaleString("en-IN")} via ${effectiveMode}`,
     metadata: { payNow, totalNet, newPaidAmt, isFullyPaid } }).catch(() => {});
 
   res.json({ ...enrichPayroll(row, emp), branchName: emp ? await getBranchName(emp.branchType, emp.branchId) : "" });
@@ -1874,6 +1983,12 @@ router.post("/hr/advances", requireModuleAction("page:/hr/advances", "add"), asy
   const today = new Date().toISOString().split("T")[0];
   const advDate = date ?? today;
 
+  // Resolve the paying account BEFORE the advance row exists: an invalid
+  // account must reject the whole request, not leave an advance with no
+  // accounting behind it.
+  const resolvedAdv = await resolvePayLedger((req as any).employee, req.body.payLedgerId, 'STD-CASH');
+  if ('error' in resolvedAdv) { res.status(400).json({ error: resolvedAdv.error }); return; }
+
   const { rows: [row] } = await pool.query(
     `INSERT INTO employee_advances (employee_id, amount, date, note, is_deducted)
      VALUES ($1, $2, $3, $4, false) RETURNING *`,
@@ -1889,22 +2004,22 @@ router.post("/hr/advances", requireModuleAction("page:/hr/advances", "add"), asy
       'asset', 'SYS-CURA',
       `Advance recoverable from ${emp?.name ?? `Employee #${employeeId}`}`,
     );
-    const { rows: [cashRow] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = 'STD-CASH' LIMIT 1`);
-    if (advLedgerId && cashRow && Number(amount) > 0.004) {
+    if (advLedgerId && Number(amount) > 0.004) {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
         const vn = await nextVoucherNumber(client, "journal", advDate);
         const { rows: [jv] } = await client.query(
           `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by,
-                                        origin, source_module)
-           VALUES ('journal', $1, $2, $3, $4, $5, 'system', 'payroll') RETURNING id`,
-          [vn, advDate, `Advance to ${emp?.name ?? `Employee #${employeeId}`}`, Number(amount).toFixed(2), req.employee?.username ?? "system"],
+                                        origin, source_module, location_type, location_id)
+           VALUES ('journal', $1, $2, $3, $4, $5, 'system', 'payroll', $6, $7) RETURNING id`,
+          [vn, advDate, `Advance to ${emp?.name ?? `Employee #${employeeId}`}`, Number(amount).toFixed(2), req.employee?.username ?? "system",
+           resolvedAdv.locationType, resolvedAdv.locationId],
         );
         await client.query(
           `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit)
            VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)`,
-          [jv.id, advLedgerId, Number(amount).toFixed(2), cashRow.id],
+          [jv.id, advLedgerId, Number(amount).toFixed(2), resolvedAdv.id],
         );
         await client.query("COMMIT");
       } catch (e) { await client.query("ROLLBACK").catch(() => {}); console.warn("[advances] JV error:", e); }

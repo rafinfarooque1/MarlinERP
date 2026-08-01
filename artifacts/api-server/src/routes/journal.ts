@@ -750,20 +750,21 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
 
   // 3. Journal voucher lines (journal, contra, credit/debit notes) — as stored.
   //
-  // Vouchers carry no location column, so most JVs are company-level — the
-  // honest answer for manual journals, payroll allocations and two-location
-  // transfer vouchers. RETURN vouchers are the exception: a sales-return
-  // credit note / purchase-return debit note is a system voucher raised from a
-  // location-bearing document, so it inherits that document's location —
-  // otherwise every return's reversal would vanish from the slice its sale or
-  // purchase posted into, silently overstating that location's books.
+  // Most JVs are company-level — the honest answer for manual journals,
+  // payroll allocations and two-location transfer vouchers. Two exceptions
+  // carry a location: RETURN vouchers inherit it from their source document
+  // (a sales-return credit note / purchase-return debit note must not vanish
+  // from the slice its sale or purchase posted into), and system vouchers
+  // whose money leg is a branch till carry their own stored stamp
+  // (v.location_type — salary/advance payments made from a warehouse or
+  // outlet cash box).
   // (credit_note_id / debit_note_id are one-to-one, so the joins cannot fan out.)
   const jp: any[] = [];
   const { rows: jls } = await pool.query(
     `SELECT v.id AS voucher_id, v.voucher_date AS date, v.voucher_number, v.voucher_type, v.narration,
             l.ledger_id, l.debit, l.credit,
-            COALESCE(sr.location_type, pu.location_type) AS location_type,
-            COALESCE(sr.location_id, pu.location_id) AS location_id
+            COALESCE(sr.location_type, pu.location_type, v.location_type) AS location_type,
+            COALESCE(sr.location_id, pu.location_id, v.location_id) AS location_id
      FROM journal_voucher_lines l
      JOIN journal_vouchers v ON v.id = l.voucher_id
      LEFT JOIN sales_returns sr ON sr.credit_note_id = v.id

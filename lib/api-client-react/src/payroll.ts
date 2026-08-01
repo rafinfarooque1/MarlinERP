@@ -159,12 +159,12 @@ export const useApprovePayroll = () =>
   });
 
 export const usePayPayroll = () =>
-  useMutation<EnrichedPayrollRecord, Error, { id: number; amount?: number; paymentMode: string }>({
-    mutationFn: ({ id, amount, paymentMode }) =>
+  useMutation<EnrichedPayrollRecord, Error, { id: number; amount?: number; paymentMode: string; payLedgerId?: number }>({
+    mutationFn: ({ id, amount, paymentMode, payLedgerId }) =>
       customFetch<EnrichedPayrollRecord>(`/api/hr/payroll/${id}/pay`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount, paymentMode }),
+        body: JSON.stringify({ amount, paymentMode, payLedgerId }),
       }),
   });
 
@@ -231,7 +231,7 @@ export const useListAdvances = (
   });
 
 export const useAddAdvance = () =>
-  useMutation<EmployeeAdvance, Error, { employeeId: number; amount: number; date?: string; note?: string }>({
+  useMutation<EmployeeAdvance, Error, { employeeId: number; amount: number; date?: string; note?: string; payLedgerId?: number }>({
     mutationFn: (body) =>
       customFetch<EmployeeAdvance>("/api/hr/advances", {
         method: "POST",

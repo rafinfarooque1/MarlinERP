@@ -1242,6 +1242,13 @@ async function runMigrations() {
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS password_require_number boolean NOT NULL DEFAULT false;
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS password_require_special boolean NOT NULL DEFAULT false;
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS general_settings jsonb;
+
+    -- Location stamp for system vouchers whose money leg is a branch till
+    -- (salary payments / employee advances paid from a warehouse or outlet
+    -- cash box). NULL = company-level, the long-standing default for journal
+    -- vouchers. Read by buildDerivedPostings for located report slices.
+    ALTER TABLE journal_vouchers ADD COLUMN IF NOT EXISTS location_type text;
+    ALTER TABLE journal_vouchers ADD COLUMN IF NOT EXISTS location_id integer;
   `);
 
   // Username identity normalization + uniqueness invariant. Login treats

@@ -16,6 +16,7 @@ import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
+import { isSystemLedger } from '@/lib/systemLedgers';
 
 const schema = z.object({
   paymentDate: z.string().min(1, 'Date required'),
@@ -39,8 +40,10 @@ export default function Payment() {
 
   // "Paid From" — only Bank / Cash and their sub-ledgers
   const fromOptions = cashBankAccounts as any[];
-  // "Paid To" — all non-system-group ledgers (expense, payable, etc.)
-  const toOptions = (allAccounts as any[]).filter(a => !a.isSystemGroup && !a.isGroup);
+  // "Paid To" — all non-system ledgers (expense, payable, vendor, etc.).
+  // Payroll/GST/internal ledgers stay module-owned — salary is paid from the
+  // Payroll screen, which can also pay from any till.
+  const toOptions = (allAccounts as any[]).filter(a => !a.isSystemGroup && !a.isGroup && !isSystemLedger(a.code));
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),

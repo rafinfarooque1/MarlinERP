@@ -90,4 +90,5 @@
 - [Login lockout & audit](login-lockout.md) — lockout state = DB table keyed LOWER(TRIM(username)), one atomic upsert; prod proxy logs every IP as 127.0.0.1; never lock 'admin' in dev tests.
 - [Dual toast systems](dual-toast-systems.md) — only sonner's Toaster is mounted; legacy use-toast toast() calls render NOWHERE, silently — grep the mount before trusting a toast.
 - [Five-action permissions & role tree](five-action-permissions.md) — legacy print/approve/share cols are write-mirrors, never read; single-root role tree with derived levels; structure edits serialize on one advisory lock.
+- [Payroll pay ledger & JV location stamps](payroll-pay-ledger.md) — salary/advances pay from any scoped till; mode derived from ledger tree; journal_vouchers has raw location columns; branch default must never fall back to HO cash.
 - [Quotations module](quotations-module.md) — parallel doc store, zero books impact by construction; one-sale-per-quote via 2 partial uniques + FOR UPDATE; explicit JSX generics break the vite build; pdftotext for PDF checks.

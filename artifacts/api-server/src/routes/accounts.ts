@@ -136,7 +136,7 @@ router.get("/accounts/chart/flat", requireModuleView(["page:/accounts/vouchers",
 
 // Cash/Bank ledgers only — for Received In / Paid From dropdowns
 // Serves Cash & Bank and Expenses pages.
-router.get("/accounts/cash-bank-ledgers", requireModuleView(["page:/accounts/cash-bank", "page:/accounts/expenses", "page:/accounts/vouchers", "page:/vendors", "page:/sales/expenses"]), async (req, res): Promise<void> => {
+router.get("/accounts/cash-bank-ledgers", requireModuleView(["page:/accounts/cash-bank", "page:/accounts/expenses", "page:/accounts/vouchers", "page:/vendors", "page:/sales/expenses", "page:/hr/payroll", "page:/hr/advances"]), async (req, res): Promise<void> => {
   const { rows } = await pool.query(`SELECT * FROM account_ledgers ORDER BY id`);
   const bankRoot = rows.find((r: any) => r.code === 'STD-BANK');
   const cashRoot = rows.find((r: any) => r.code === 'STD-CASH');

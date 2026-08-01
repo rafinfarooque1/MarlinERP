@@ -16,6 +16,7 @@ import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
+import { isSystemLedger } from '@/lib/systemLedgers';
 
 const schema = z.object({
   receiptDate: z.string().min(1, 'Date required'),
@@ -37,8 +38,9 @@ export default function ReceiptPage() {
   const createMutation = useCreateReceipt();
   const deleteMutation = useDeleteReceipt();
 
-  // "Received From" — all non-system-group ledgers
-  const fromOptions = (allAccounts as any[]).filter(a => !a.isSystemGroup && !a.isGroup);
+  // "Received From" — all non-system ledgers. Payroll/GST/internal ledgers
+  // stay module-owned (advances are recovered through payroll, not receipts).
+  const fromOptions = (allAccounts as any[]).filter(a => !a.isSystemGroup && !a.isGroup && !isSystemLedger(a.code));
   // "Received In" — only Bank / Cash and their sub-ledgers
   const inOptions = cashBankAccounts as any[];
 

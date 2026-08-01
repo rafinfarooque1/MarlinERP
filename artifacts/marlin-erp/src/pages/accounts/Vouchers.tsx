@@ -37,24 +37,7 @@ import { downloadVoucherPDF } from '@/lib/pdfUtils';
 const inr = (n: number) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 const today = () => new Date().toISOString().split('T')[0];
 
-/**
- * Returns true for ledgers that are auto-provisioned by the system and should
- * never appear in manual voucher account pickers.
- * Covers: payroll (SAL-EMP-*, SAL-PAY-*, ADV-EMP-*), GST accounts (GST-*),
- * inter-branch stock transfer ledgers (STD-BRANCH-*), and any remaining SYS-* nodes.
- */
-function isSystemLedger(code?: string | null): boolean {
-  if (!code) return false;
-  const c = code.toUpperCase();
-  return (
-    c.startsWith('SYS-') ||
-    c.startsWith('SAL-EMP-') ||
-    c.startsWith('SAL-PAY-') ||
-    c.startsWith('ADV-EMP-') ||
-    c.startsWith('GST-') ||
-    c.startsWith('STD-BRANCH-')
-  );
-}
+import { isSystemLedger } from '@/lib/systemLedgers';
 
 type VoucherType = 'payment' | 'receipt' | 'journal' | 'contra' | 'credit_note' | 'debit_note';
 

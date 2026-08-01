@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useListAdvances, useAddAdvance, useListEmployees, useGetCompanySettings } from '@workspace/api-client-react';
+import { useListAdvances, useAddAdvance, useListEmployees, useGetCompanySettings, useCashBankLedgersFlat } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -31,7 +31,9 @@ function NewAdvanceDialog({ onClose }: { onClose: () => void }) {
   const [amount, setAmount]       = useState('');
   const [date, setDate]           = useState(new Date().toISOString().split('T')[0]);
   const [note, setNote]           = useState('');
+  const [payFrom, setPayFrom]     = useState('auto');
   const [saving, setSaving]       = useState(false);
+  const { data: cashBank = [] } = useCashBankLedgersFlat();
 
   const submit = async () => {
     if (!employeeId) { toast.error('Select an employee'); return; }
@@ -39,7 +41,10 @@ function NewAdvanceDialog({ onClose }: { onClose: () => void }) {
     if (!amt || amt <= 0) { toast.error('Enter a valid amount'); return; }
     setSaving(true);
     try {
-      await mutation.mutateAsync({ employeeId: Number(employeeId), amount: amt, date, note: note || undefined });
+      await mutation.mutateAsync({
+        employeeId: Number(employeeId), amount: amt, date, note: note || undefined,
+        payLedgerId: payFrom !== 'auto' ? Number(payFrom) : undefined,
+      });
       toast.success('Advance recorded');
       qc.invalidateQueries({ queryKey: ['/api/hr/advances'] });
       onClose();
@@ -89,6 +94,20 @@ function NewAdvanceDialog({ onClose }: { onClose: () => void }) {
               <Label>Date</Label>
               <Input type="date" value={date} onChange={e => setDate(e.target.value)} />
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Paid From Account</Label>
+            <Select value={payFrom} onValueChange={setPayFrom}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">Default — Head Office Cash</SelectItem>
+                {(cashBank as any[]).map((a: any) => (
+                  <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">Pick a warehouse or outlet cash box to pay from that till.</p>
           </div>
 
           <div className="space-y-1.5">
