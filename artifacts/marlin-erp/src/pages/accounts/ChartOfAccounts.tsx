@@ -662,6 +662,28 @@ export default function ChartOfAccounts() {
     inc?.directIncomes, inc?.indirectIncomes,
   ]), [exp, inc]);
 
+  // ── Trading + P&L presentation figures ──
+  // Gross/Net Profit come from the SAME engine summary the dashboard tiles read
+  // — displayed, never recomputed here. Panel totals are the standard two-side
+  // sums; they tie to those figures by construction (tradingInc − tradingExp =
+  // GP, plInc − plExp = NP). `sales`/`purchases` arrive net of returns; the
+  // gross + "Less: Returns" rows only surface the split.
+  const salesReturns    = inc?.salesReturns ?? 0;
+  const grossSales      = inc?.grossSales ?? ((inc?.sales ?? 0) + salesReturns);
+  const purchaseReturns = exp?.purchaseReturns ?? 0;
+  const grossProfit     = pl ? (pl.summary?.grossProfit
+    ?? ((inc ? inc.sales + inc.closingStock + inc.directIncomes.total : 0)
+      - (exp ? exp.openingStock + exp.purchases + exp.directExpenses.total : 0))) : null;
+  // Each Trading side includes the GP c/d balancing row (debit when profit,
+  // credit when loss), so the two panel headers always show the SAME total —
+  // that is what makes it a balanced two-sided account.
+  const tradingExpBase  = exp ? exp.openingStock + exp.purchases + exp.directExpenses.total : 0;
+  const tradingIncBase  = inc ? inc.sales + inc.closingStock + inc.directIncomes.total : 0;
+  const tradingExpTotal = tradingExpBase + (grossProfit !== null && grossProfit > 0 ? grossProfit : 0);
+  const tradingIncTotal = tradingIncBase + (grossProfit !== null && grossProfit < 0 ? -grossProfit : 0);
+  const plExpTotal = (exp?.indirectExpenses.total ?? 0) + (grossProfit !== null && grossProfit < 0 ? -grossProfit : 0);
+  const plIncTotal = (inc?.indirectIncomes.total ?? 0) + (grossProfit !== null && grossProfit > 0 ? grossProfit : 0);
+
   // Managing the chart mutates it, so it follows the same 'edit' gate other
   // pages use. The backend guards stay authoritative regardless.
   const canManageChart = perm.canEdit;
@@ -859,7 +881,12 @@ export default function ChartOfAccounts() {
               </div>
             </TabsContent>
 
-            {/* ══════════════════ PROFIT & LOSS ══════════════════ */}
+            {/* ══════════════════ PROFIT & LOSS ══════════════════
+                Standard vertical order: Trading Account (Sales/Returns, Opening
+                Stock, Purchases/Returns, Direct Expenses, Closing Stock) → Gross
+                Profit banner → Profit & Loss Account (GP b/d, Other Income,
+                Indirect Expenses) → Net Profit banner. GP/NP are the engine's
+                own summary figures — identical to the dashboard tiles. */}
             <TabsContent value="profit_loss" className="mt-4">
               <StatementToolbar
                 statement="profit-loss"
@@ -868,24 +895,17 @@ export default function ChartOfAccounts() {
                 onManage={canManageChart ? () => setManageOpen(true) : undefined}
               />
 
-              {/* Net P&L banner */}
-              {pl && (
-                <div className={`flex items-center gap-3 px-4 py-3 rounded-xl mb-4 text-sm font-semibold
-                  ${pl.netProfit >= 0
-                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                    : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
-                  {pl.netProfit >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                  <span>{pl.netProfit >= 0 ? 'Net Profit' : 'Net Loss'}</span>
-                  <span className="font-mono text-base ml-auto">{fmt(Math.abs(pl.netProfit))}</span>
-                </div>
-              )}
-
+              {/* ── Trading Account ── */}
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Trading Account</span>
+                <div className="flex-1 border-t border-border/30" />
+              </div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
-                {/* ── Expense (Debit) ── */}
+                {/* ── Trading Expense (Debit) ── */}
                 <Panel
                   title="Expense (Debit)" icon={TrendingDown}
-                  total={exp?.total ?? 0}
+                  total={tradingExpTotal}
                   hdrClass="bg-red-500/10 text-red-400 border-b border-red-500/15"
                   borderClass="border-red-500/20"
                 >
@@ -898,31 +918,54 @@ export default function ChartOfAccounts() {
                         total={exp.openingStock}
                       />
 
-                      {/* Purchase Account (auto) */}
-                      <AutoRow label="Purchase Account" amount={exp.purchases} sub="auto · from purchase orders" />
+                      {/* Purchase Account (auto) — gross + returns split shown only
+                          when debit notes exist; `purchases` is already the net. */}
+                      {purchaseReturns !== 0 ? (
+                        <>
+                          <AutoRow label="Purchase Account" amount={exp.purchases + purchaseReturns} sub="auto · from purchase orders" />
+                          <AutoRow label="Less: Purchase Returns" amount={-purchaseReturns} sub="debit notes" />
+                          <AutoRow label="Net Purchases" amount={exp.purchases} accent="text-foreground/80" />
+                        </>
+                      ) : (
+                        <AutoRow label="Purchase Account" amount={exp.purchases} sub="auto · from purchase orders" />
+                      )}
 
                       <Divider />
 
                       {/* Direct Expenses */}
                       <GroupBlock group={exp.directExpenses} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
 
-                      {/* Indirect Expenses */}
-                      <GroupBlock group={exp.indirectExpenses} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                      {/* Balancing transfer — makes both Trading sides equal */}
+                      {grossProfit !== null && grossProfit > 0 && (
+                        <>
+                          <Divider />
+                          <AutoRow label="Gross Profit c/d" amount={grossProfit} accent="text-emerald-500" sub="carried down to P&L" />
+                        </>
+                      )}
                     </>
                   )}
                 </Panel>
 
-                {/* ── Income (Credit) ── */}
+                {/* ── Trading Income (Credit) ── */}
                 <Panel
                   title="Income (Credit)" icon={TrendingUp}
-                  total={inc?.total ?? 0}
+                  total={tradingIncTotal}
                   hdrClass="bg-emerald-500/10 text-emerald-400 border-b border-emerald-500/15"
                   borderClass="border-emerald-500/20"
                 >
                   {inc && (
                     <>
-                      {/* Sales Account (auto) */}
-                      <AutoRow label="Sales Account" amount={inc.sales} sub="auto · from sales invoices" />
+                      {/* Sales Account (auto) — gross + returns split shown only
+                          when credit notes exist; `sales` is already the net. */}
+                      {salesReturns !== 0 ? (
+                        <>
+                          <AutoRow label="Sales Account" amount={grossSales} sub="auto · from sales invoices" />
+                          <AutoRow label="Less: Sales Returns" amount={-salesReturns} sub="credit notes" />
+                          <AutoRow label="Net Sales" amount={inc.sales} accent="text-foreground/80" />
+                        </>
+                      ) : (
+                        <AutoRow label="Sales Account" amount={inc.sales} sub="auto · from sales invoices" />
+                      )}
 
                       <Divider />
 
@@ -936,14 +979,97 @@ export default function ChartOfAccounts() {
                         total={inc.closingStock}
                       />
 
-                      <Divider />
+                      {/* Balancing transfer — makes both Trading sides equal */}
+                      {grossProfit !== null && grossProfit < 0 && (
+                        <>
+                          <Divider />
+                          <AutoRow label="Gross Loss c/d" amount={-grossProfit} accent="text-red-400" sub="carried down to P&L" />
+                        </>
+                      )}
+                    </>
+                  )}
+                </Panel>
+              </div>
 
-                      {/* Indirect Incomes */}
+              {/* ── Gross Profit banner — same highlighted style as Net Profit ── */}
+              {pl && grossProfit !== null && (
+                <div
+                  data-testid="coa-gross-profit"
+                  className={`flex items-center gap-3 px-4 py-3 rounded-xl my-4 text-sm font-semibold
+                  ${grossProfit >= 0
+                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                    : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
+                  {grossProfit >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                  <span>{grossProfit >= 0 ? 'Gross Profit' : 'Gross Loss'}</span>
+                  <span className="text-[10px] font-normal opacity-70">Net Sales − Cost of Goods Sold · carried down</span>
+                  <span className="font-mono text-base ml-auto">{fmt(Math.abs(grossProfit))}</span>
+                </div>
+              )}
+
+              {/* ── Profit & Loss Account ── */}
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Profit &amp; Loss Account</span>
+                <div className="flex-1 border-t border-border/30" />
+              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+                {/* ── P&L Expense (Debit) ── */}
+                <Panel
+                  title="Expense (Debit)" icon={TrendingDown}
+                  total={plExpTotal}
+                  hdrClass="bg-red-500/10 text-red-400 border-b border-red-500/15"
+                  borderClass="border-red-500/20"
+                >
+                  {exp && (
+                    <>
+                      {grossProfit !== null && grossProfit < 0 && (
+                        <>
+                          <AutoRow label="Gross Loss b/d" amount={-grossProfit} accent="text-red-400" sub="from Trading Account" />
+                          <Divider />
+                        </>
+                      )}
+                      {/* Indirect Expenses */}
+                      <GroupBlock group={exp.indirectExpenses} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
+                    </>
+                  )}
+                </Panel>
+
+                {/* ── P&L Income (Credit) ── */}
+                <Panel
+                  title="Income (Credit)" icon={TrendingUp}
+                  total={plIncTotal}
+                  hdrClass="bg-emerald-500/10 text-emerald-400 border-b border-emerald-500/15"
+                  borderClass="border-emerald-500/20"
+                >
+                  {inc && (
+                    <>
+                      {grossProfit !== null && grossProfit >= 0 && (
+                        <>
+                          <AutoRow label="Gross Profit b/d" amount={grossProfit} accent="text-emerald-500" sub="from Trading Account" />
+                          <Divider />
+                        </>
+                      )}
+                      {/* Indirect Incomes (Other Income) */}
                       <GroupBlock group={inc.indirectIncomes} onCreated={onCreated} expansion={plExpansion} onDelete={onDelete} onRename={onRename} onViewStatement={onViewStatement} onMove={onMove} canAdd={perm.canAdd} canEdit={perm.canEdit} canDelete={perm.canDelete} />
                     </>
                   )}
                 </Panel>
               </div>
+
+              {/* ── Net P&L banner — unchanged, closing the statement ── */}
+              {pl && (
+                <div
+                  data-testid="coa-net-profit"
+                  className={`flex items-center gap-3 px-4 py-3 rounded-xl mt-4 text-sm font-semibold
+                  ${pl.netProfit >= 0
+                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                    : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
+                  {pl.netProfit >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                  <span>{pl.netProfit >= 0 ? 'Net Profit' : 'Net Loss'}</span>
+                  <span className="text-[10px] font-normal opacity-70">Gross {grossProfit !== null && grossProfit < 0 ? 'Loss' : 'Profit'} + Other Income − Indirect Expenses</span>
+                  <span className="font-mono text-base ml-auto">{fmt(Math.abs(pl.netProfit))}</span>
+                </div>
+              )}
             </TabsContent>
           </Tabs>
           </>

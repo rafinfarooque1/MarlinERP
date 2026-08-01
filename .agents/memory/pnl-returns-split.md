@@ -18,3 +18,6 @@ Caveat: a note whose counter ledger is OUTSIDE the sales/purchases subtree count
 When splitting a display line out of a group (e.g. Financial Charges / Depreciation out of Indirect Expenses by ledger-name match), always compute the residual line by subtraction from the group total. Then the statement ties to Net Profit regardless of how the split classifies. Never sum picked nodes into an independent total.
 
 Drill-down: dashboard GP/NP tiles navigate to `/reports/financial#pl-gross-profit|#pl-net-profit`; the P&L scroll-highlights the row (ids on statement rows, effect keyed on load).
+
+## Two-sided (T-form) presentation
+When rendering Trading/P&L as balanced debit/credit panels (Chart of Accounts page), each account needs its balancing carry-down row on the lighter side (GP c/d on trading debit when profit, credit when loss; GP b/d mirrored in the P&L account) and the panel header totals must include it — otherwise the two sides visibly differ by exactly GP. Returns rows (gross / Less: returns / net) render only when returns ≠ 0; `sales`/`purchases` fields arrive NET, gross = net + returns.

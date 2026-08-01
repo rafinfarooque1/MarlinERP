@@ -1,0 +1,220 @@
+Update the Profit & Loss statement to follow the standard accounting (Trading + Profit & Loss) format instead of showing only Net Profit.
+
+CURRENT ISSUE
+
+The Profit & Loss page only displays Net Profit.
+
+Gross Profit is calculated internally (for the dashboard) but is not shown in the Chart of Accounts → Profit & Loss.
+
+Implement the following standard format.
+
+========================================
+TRADING ACCOUNT
+========================================
+
+Sales
+
+Less:
+Sales Returns
+
+----------------------------------------
+Net Sales
+----------------------------------------
+
+Opening Stock
+
+Purchases
+
+Less:
+Purchase Returns
+
+Net Purchases
+
+Add:
+Direct Expenses
+
+Examples:
+
+Production Cost
+
+Freight Inward
+
+Carriage Inward
+
+Packing (Direct)
+
+Manufacturing Expenses
+
+Processing Charges
+
+Factory Wages
+
+Goods Available for Sale
+
+Less:
+
+Closing Stock
+
+----------------------------------------
+Cost of Goods Sold (COGS)
+----------------------------------------
+
+Gross Profit
+
+Display Gross Profit as a separate highlighted section.
+
+If Gross Profit is positive show it in green.
+
+If Gross Loss show it in red.
+
+========================================
+PROFIT & LOSS ACCOUNT
+========================================
+
+Gross Profit (brought down)
+
++
+
+Other Income
+
+-
+
+Indirect Expenses
+
+Examples:
+
+Salary Expense
+
+Rent Expense
+
+Bank Charges
+
+Office Expenses
+
+Electricity
+
+Internet
+
+Printing
+
+Travel
+
+Administration
+
+Depreciation
+
+Interest
+
+Taxes
+
+----------------------------------------
+
+Net Profit
+
+Display Net Profit exactly as it is now.
+
+========================================
+UI
+========================================
+
+Insert Gross Profit immediately before the Indirect Expense section.
+
+The screen should read:
+
+Sales
+
+Opening Stock
+
+Purchases
+
+Direct Expenses
+
+Closing Stock
+
+--------------------------------
+
+Gross Profit
+
+--------------------------------
+
+Other Income
+
+Indirect Expenses
+
+--------------------------------
+
+Net Profit
+
+Gross Profit should have the same highlighted style currently used for Net Profit.
+
+========================================
+CALCULATION
+========================================
+
+Gross Profit must be calculated automatically.
+
+Do NOT hardcode values.
+
+Formula:
+
+Gross Profit =
+Net Sales
+− Cost of Goods Sold (COGS)
+
+COGS =
+Opening Stock
++ Net Purchases
++ Direct Expenses
+− Closing Stock
+
+Net Profit =
+Gross Profit
++ Other Income
+− Indirect Expenses
+
+========================================
+REPORT CONSISTENCY
+========================================
+
+The Gross Profit shown in:
+
+• Dashboard (GP)
+• Profit & Loss
+• Financial Reports
+
+must always be identical.
+
+Changing:
+
+Sales
+
+Purchases
+
+Production
+
+Opening Stock
+
+Closing Stock
+
+Direct Expenses
+
+Purchase Returns
+
+Sales Returns
+
+must automatically recalculate Gross Profit everywhere.
+
+========================================
+TESTING
+========================================
+
+Verify that:
+
+• GP in Dashboard equals GP in Profit & Loss.
+• Net Profit remains correct.
+• Trial Balance still balances.
+• Balance Sheet still balances.
+• Ledger postings remain unchanged.
+• Existing reports continue working.
+
+Do not change the accounting engine. Only expose the existing Gross Profit calculation correctly in the Profit & Loss report using standard accounting presentation.

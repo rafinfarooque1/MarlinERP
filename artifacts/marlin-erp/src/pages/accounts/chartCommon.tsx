@@ -32,17 +32,24 @@ export interface FinancialStatements {
     expenses: {
       openingStock: number; openingStockItems: StockItem[];
       purchases: number;
+      /** Debit-note total on the purchases subtree — `purchases` is already net of it. */
+      purchaseReturns?: number;
       /** The Purchase group tree behind the single `purchases` figure. */
       purchasesGroup?: GroupSummary;
       directExpenses: GroupSummary; indirectExpenses: GroupSummary; total: number;
     };
     incomes: {
       sales: number;
+      /** Gross sales and the credit-note total netted into `sales` (gross − returns = sales). */
+      grossSales?: number;
+      salesReturns?: number;
       /** The Sales group tree behind the single `sales` figure. */
       salesGroup?: GroupSummary;
       closingStock: number; closingStockItems: StockItem[];
       directIncomes: GroupSummary; indirectIncomes: GroupSummary; total: number;
     };
+    /** Same engine figures the dashboard GP/NP tiles read — never recompute these. */
+    summary?: { grossProfit: number; netProfit: number };
     netProfit: number;
   };
   balanceSheet: {

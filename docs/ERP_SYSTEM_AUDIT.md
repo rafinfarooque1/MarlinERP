@@ -156,6 +156,8 @@ Never re-sum expense subtrees for a tile (capitalisation overlay); tiles must ag
 
 Card layout (Aug 2026): five fixed rows — Sales·Purchases·Expenses / Inventory·Cash·Bank / Receivables·Payables / Money In·Out Today / GP·NP — via a 6-col grid with col-spans; spec colors (sales green, expenses/payables/out red, inventory/receivables blue, balances & GP/NP signed).
 
+The Chart of Accounts → Profit & Loss tab renders the same figures as a two-sided Trading Account (with GP c/d balancing both sides and conditional gross/Less-returns rows) → Gross Profit banner → P&L Account (GP b/d + Other Income vs Indirect Expenses) → Net Profit banner; GP/NP displayed from `profitAndLoss.summary`, never recomputed.
+
 P&L report additionally renders a standard vertical Trading & P&L statement (Sales → Less: Sales Returns → Net Sales → Opening Stock → Purchases → Direct Expenses → Goods Available → Less: Closing Stock → COGS → GP → Other Income → Indirect/Financial Charges/Depreciation → NP). `buildBooks` surfaces `grossSales/salesReturns/purchaseReturns` by summing credit_note/debit_note-sourced postings on the SYS-SAL/SYS-PUR subtrees (group totals stay net). Financial Charges/Depreciation lines are name-matched with the Indirect remainder computed by subtraction, so the statement always ties to NP.
 
 ## 9. Permission Flow
