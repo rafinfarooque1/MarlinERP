@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { BookOpenCheck, Download, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
+import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 
 const inr = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 const today = () => new Date().toISOString().split('T')[0];
@@ -33,10 +34,13 @@ function shiftDate(date: string, days: number): string {
 export default function DayBook() {
   const perm = usePermission('page:/accounts/day-book');
   const [date, setDate] = useState(today());
-  const { data, isLoading } = useDayBook(date);
+  const { locationState } = useLocationContext();
+  const loc = locationFilterParams(locationState);
+  const { data, isLoading } = useDayBook(date, loc);
 
   const entries = data?.entries ?? [];
   const byType = data?.totals.byType ?? {};
+  const companyLevel = (data as any)?.location ? (data as any)?.companyLevel : null;
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -80,6 +84,16 @@ export default function DayBook() {
             )}
           </div>
         </div>
+
+        {/* Company-level bucket note — entries with no location dimension are
+            excluded from a location slice, never silently dropped. */}
+        {!isLoading && (data as any)?.location && companyLevel && companyLevel.entries > 0 && (
+          <div className="bg-muted/40 border border-border rounded-xl p-3 text-xs text-muted-foreground">
+            Showing <span className="font-medium text-foreground">{locationState.locationName}</span> only.
+            {' '}{companyLevel.entries} company-level {companyLevel.entries === 1 ? 'entry' : 'entries'} on this day
+            {' '}carry no location and are excluded — switch to All Locations to include them.
+          </div>
+        )}
 
         {/* Totals by type */}
         {Object.keys(byType).length > 0 && (

@@ -18,6 +18,10 @@ import { requireModuleView } from "../middleware/permissions";
 import { buildDerivedPostings, type Posting } from "./journal";
 import { loadChart, previousDay } from "../lib/books";
 import { isIsoDate } from "../lib/dateInput";
+import {
+  parsePostingLocationFilter, postingMatchesLocation, companyLevelSummary,
+  type PostingLocationFilter,
+} from "../lib/postingLocation";
 
 const router = Router();
 const REPORTS_KEY = "page:/reports/sales";
@@ -39,16 +43,34 @@ function headOfficeOnly(req: any): boolean {
   return (req as any).employee?.branchType === "headoffice";
 }
 
-/** Postings split into "before the window" (opening) and "inside it". */
-async function splitPostings(from: string | null, to: string | null) {
+/**
+ * Postings split into "before the window" (opening) and "inside it",
+ * optionally narrowed to one location's slice of the stream. The filter
+ * applies to BOTH halves — an opening balance is the location's own history,
+ * not the company's. `companyLevel` reports what the filter could not
+ * attribute inside the window, so a filtered report shows that bucket
+ * instead of silently dropping it.
+ */
+async function splitPostings(from: string | null, to: string | null, loc: PostingLocationFilter | null = null) {
   const all = await buildDerivedPostings({ toDate: to ?? undefined });
   const before: Posting[] = [];
   const inRange: Posting[] = [];
+  const windowAll: Posting[] = [];
   for (const p of all) {
-    if (from && p.date < from) before.push(p);
+    const isBefore = Boolean(from && p.date < from);
+    if (!isBefore) windowAll.push(p);
+    if (loc && !postingMatchesLocation(p, loc)) continue;
+    if (isBefore) before.push(p);
     else inRange.push(p);
   }
-  return { before, inRange };
+  const companyLevel = loc && loc.type !== "company" ? companyLevelSummary(windowAll) : null;
+  return { before, inRange, companyLevel };
+}
+
+/** Response fields a location-filtered report adds; {} when unfiltered so the
+ *  unfiltered payload stays byte-identical to what it always was. */
+function locationEcho(loc: PostingLocationFilter | null, companyLevel: { entries: number; debit: number; credit: number } | null) {
+  return loc ? { location: { type: loc.type, id: loc.id }, companyLevel } : {};
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -59,7 +81,8 @@ async function splitPostings(from: string | null, to: string | null) {
 router.get("/reports/fin/ledgers", requireModuleView(REPORTS_KEY), async (req, res): Promise<void> => {
   if (!headOfficeOnly(req)) { res.json({ rows: [], totals: null }); return; }
   const { from, to } = range(req);
-  const { before, inRange } = await splitPostings(from, to);
+  const loc = parsePostingLocationFilter(req.query as any);
+  const { before, inRange, companyLevel } = await splitPostings(from, to, loc);
 
   type Agg = { opening: number; debit: number; credit: number };
   const agg = new Map<number, Agg>();
@@ -102,6 +125,7 @@ router.get("/reports/fin/ledgers", requireModuleView(REPORTS_KEY), async (req, r
       credit: r2(rows.reduce((s, r) => s + r.credit, 0)),
       closing: r2(rows.reduce((s, r) => s + r.closing, 0)),
     },
+    ...locationEcho(loc, companyLevel),
   });
 });
 
@@ -118,7 +142,8 @@ router.get("/reports/fin/ledger-statement", requireModuleView(REPORTS_KEY), asyn
   // Selecting a group consolidates its whole subtree, the way the Cash Book does.
   const ids = chart.subtree(ledgerId);
 
-  const { before, inRange } = await splitPostings(from, to);
+  const loc = parsePostingLocationFilter(req.query as any);
+  const { before, inRange, companyLevel } = await splitPostings(from, to, loc);
   const opening = r2(before.filter((p) => ids.has(p.ledgerId)).reduce((s, p) => s + p.debit - p.credit, 0));
 
   const mine = inRange.filter((p) => ids.has(p.ledgerId));
@@ -143,6 +168,7 @@ router.get("/reports/fin/ledger-statement", requireModuleView(REPORTS_KEY), asyn
     totalDebit: r2(entries.reduce((s, e) => s + e.debit, 0)),
     totalCredit: r2(entries.reduce((s, e) => s + e.credit, 0)),
     closingBalance: balance,
+    ...locationEcho(loc, companyLevel),
   });
 });
 
@@ -166,7 +192,8 @@ router.get("/reports/fin/ledger-options", requireModuleView(REPORTS_KEY), async 
 router.get("/reports/fin/trial-balance", requireModuleView(REPORTS_KEY), async (req, res): Promise<void> => {
   if (!headOfficeOnly(req)) { res.json({ rows: [], totalDebit: 0, totalCredit: 0, balanced: true }); return; }
   const { from, to } = range(req);
-  const { inRange } = await splitPostings(from, to);
+  const loc = parsePostingLocationFilter(req.query as any);
+  const { inRange, companyLevel } = await splitPostings(from, to, loc);
 
   const agg = new Map<number, { dr: number; cr: number }>();
   for (const p of inRange) {
@@ -196,7 +223,7 @@ router.get("/reports/fin/trial-balance", requireModuleView(REPORTS_KEY), async (
   const totalDebit = r2(rows.reduce((s, r) => s + r.debit, 0));
   const totalCredit = r2(rows.reduce((s, r) => s + r.credit, 0));
   const difference = r2(totalDebit - totalCredit);
-  res.json({ fromDate: from, toDate: to, rows, totalDebit, totalCredit, difference, balanced: Math.abs(difference) < 0.01 });
+  res.json({ fromDate: from, toDate: to, rows, totalDebit, totalCredit, difference, balanced: Math.abs(difference) < 0.01, ...locationEcho(loc, companyLevel) });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -214,7 +241,8 @@ async function bookReport(req: any, rootCode: string) {
     ? chart.subtree(requested)
     : rootIds;
 
-  const { before, inRange } = await splitPostings(from, to);
+  const loc = parsePostingLocationFilter(req.query as any);
+  const { before, inRange, companyLevel } = await splitPostings(from, to, loc);
   const opening = r2(before.filter((p) => scopeIds.has(p.ledgerId)).reduce((s, p) => s + p.debit - p.credit, 0));
 
   const mine = inRange.filter((p) => scopeIds.has(p.ledgerId));
@@ -268,6 +296,7 @@ async function bookReport(req: any, rootCode: string) {
     totalPayments: r2(entries.reduce((s, e) => s + e.payment, 0)),
     closingBalance: balance,
     accounts,
+    ...locationEcho(loc, companyLevel),
   };
 }
 
@@ -564,7 +593,8 @@ router.get("/reports/fin/salary", requireModuleView(REPORTS_KEY), async (req, re
 router.get("/reports/fin/day-book", requireModuleView(REPORTS_KEY), async (req, res): Promise<void> => {
   if (!headOfficeOnly(req)) { res.json({ entries: [], totals: null }); return; }
   const { from, to } = range(req);
-  const { inRange } = await splitPostings(from, to);
+  const loc = parsePostingLocationFilter(req.query as any);
+  const { inRange, companyLevel } = await splitPostings(from, to, loc);
   const chart = await loadChart();
 
   const byEntry = new Map<string, {
@@ -601,6 +631,7 @@ router.get("/reports/fin/day-book", requireModuleView(REPORTS_KEY), async (req, 
       amount: r2(entries.reduce((s, e) => s + e.amount, 0)),
       debit, credit, balanced: Math.abs(debit - credit) < 0.01,
     },
+    ...locationEcho(loc, companyLevel),
   });
 });
 

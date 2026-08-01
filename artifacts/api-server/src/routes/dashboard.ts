@@ -6,7 +6,7 @@ import { stockValuation } from "../lib/valuation";
 import { requireModuleView, canViewStockValuation } from "../middleware/permissions";
 import { buildDerivedPostings } from "./journal";
 import { companyBalances, companyFinancials } from "../lib/dashboardFinancials";
-import { outstandingExpr } from "../lib/salePaymentPosition";
+import { outstandingExpr, outstandingAsOfExpr } from "../lib/salePaymentPosition";
 import { isIsoDate } from "../lib/dateInput";
 
 const router = Router();
@@ -490,8 +490,20 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       // Filtered on the derived figure rather than the stored payment_status: a
       // credit note can settle a bill without that column being rewritten, and
       // a stale status would keep money in receivables that nobody owes.
-      const conds = ["s.branch_transfer_id IS NULL", "s.cancelled_at IS NULL", `${outstandingExpr("s")} > 0.009`];
+      const conds = ["s.branch_transfer_id IS NULL", "s.cancelled_at IS NULL"];
       const params: unknown[] = [];
+      // With an end date the exposure is priced AT that date: only invoices
+      // issued by then, netted by only the payments and credit notes that had
+      // happened by then — the same as-of rule the receivables report uses.
+      // Undated keeps the original all-time expression untouched.
+      let outsSql = outstandingExpr("s");
+      if (toDate) {
+        params.push(toDate);
+        const ph = `$${params.length}`;
+        outsSql = outstandingAsOfExpr("s", ph);
+        conds.push(`s.sale_date::date <= ${ph}::date`);
+      }
+      conds.push(`${outsSql} > 0.009`);
       if (effLocType && effLocId != null) {
         params.push(effLocType); conds.push(`COALESCE(s.location_type,'outlet') = $${params.length}`);
         params.push(effLocId); conds.push(`COALESCE(s.location_id, s.outlet_id) = $${params.length}`);
@@ -502,10 +514,10 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       params.push(refDate);
       const refIdx = params.length;
       return pool.query(
-        `SELECT COALESCE(SUM(${outstandingExpr("s")}),0)::float AS total,
+        `SELECT COALESCE(SUM(${outsSql}),0)::float AS total,
                 COUNT(*)::int AS count,
                 COALESCE(SUM(CASE WHEN s.sale_date < (COALESCE($${refIdx}::date, CURRENT_DATE) - INTERVAL '30 day')
-                     THEN ${outstandingExpr("s")} ELSE 0 END),0)::float AS overdue
+                     THEN ${outsSql} ELSE 0 END),0)::float AS overdue
            FROM sales s WHERE ${conds.join(" AND ")}`, params); })(),
     // cash inflow — receipts
     (() => { const p = locConds("r", { dateCol: "receipt_date", dateCast: "::date" });

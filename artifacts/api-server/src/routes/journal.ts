@@ -608,7 +608,30 @@ export interface Posting {
   source: string;
   voucherNumber: string | null;
   description: string;
+  /**
+   * Where the source document belongs: 'warehouse' | 'outlet' | 'headoffice',
+   * or null for company-level entries that no location can honestly claim
+   * (journal-family vouchers, and legacy rows with no stored location).
+   * Both legs of an entry carry the SAME location — an entry is stamped as a
+   * whole, never split — so any location slice of the stream stays balanced
+   * and the slices plus the company-level bucket always sum to the whole.
+   */
+  locationType: string | null;
+  locationId: number | null;
 }
+
+// Location filtering over the posting stream lives in lib/postingLocation.ts
+// (shared with lib/books.ts). Re-exported here for the report routes.
+import {
+  parsePostingLocationFilter, postingMatchesLocation,
+  filterPostingsByLocation, companyLevelSummary,
+  type PostingLocationFilter,
+} from "../lib/postingLocation";
+export {
+  parsePostingLocationFilter, postingMatchesLocation,
+  filterPostingsByLocation, companyLevelSummary,
+  type PostingLocationFilter,
+};
 
 export async function buildDerivedPostings(opts: { toDate?: string } = {}): Promise<Posting[]> {
   const { toDate } = opts;
@@ -622,14 +645,26 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
    * "2026-07-28". Normalising once here makes the declared type true for every
    * consumer instead of asking each one to remember `String(p.date)`.
    */
-  const push = (p: Posting) => {
+  const push = (p: Omit<Posting, "locationType" | "locationId"> & { locationType?: string | null; locationId?: number | null }) => {
     if (!p.ledgerId || (p.debit <= 0.004 && p.credit <= 0.004)) return;
     const d = p.date as unknown;
-    postings.push(
-      typeof d === "string"
-        ? (d.length === 10 ? p : { ...p, date: d.slice(0, 10) })
-        : { ...p, date: d instanceof Date ? toLocalISODate(d) : String(d ?? "").slice(0, 10) },
-    );
+    const full: Posting = {
+      ...p,
+      // Undefined means the source did not stamp a location — company-level.
+      locationType: p.locationType ?? null,
+      locationId: p.locationType != null ? Number(p.locationId ?? 0) : null,
+      date: typeof d === "string"
+        ? (d.length === 10 ? d : d.slice(0, 10))
+        : d instanceof Date ? toLocalISODate(d) : String(d ?? "").slice(0, 10),
+    };
+    postings.push(full);
+  };
+  /** Normalise a stored location pair into a posting stamp. */
+  const locOf = (type: unknown, id: unknown): { locationType: string | null; locationId: number | null } => {
+    const t = typeof type === "string" && type.length > 0 ? type : null;
+    if (!t) return { locationType: null, locationId: null };
+    const n = Number(id);
+    return { locationType: t, locationId: Number.isFinite(n) ? n : 0 };
   };
   const upTo = (col: string, params: any[]) => {
     if (!isDate(toDate)) return "";
@@ -664,18 +699,28 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   const locMap = new Map<string, any>(locRows.map((r: any) => [`${r.lt}:${r.id}`, r]));
 
   // 1. Payments: Dr paid_to / Cr paid_from
+  // Sales-return cash refunds are payments rows; older ones were inserted
+  // without a location stamp, so the return document's location backfills it —
+  // otherwise every historical refund would misfile under Head Office.
   const pp: any[] = [];
   const { rows: pays } = await pool.query(
-    `SELECT id, payment_date AS date, paid_from_ledger_id AS f, paid_to_ledger_id AS t,
-            amount, voucher_number, narration
-     FROM payments WHERE 1=1${upTo("payment_date", pp)}`, pp
+    `SELECT p.id, p.payment_date AS date, p.paid_from_ledger_id AS f, p.paid_to_ledger_id AS t,
+            p.amount, p.voucher_number, p.narration,
+            COALESCE(p.location_type, sr.location_type) AS location_type,
+            COALESCE(p.location_id, sr.location_id) AS location_id
+     FROM payments p
+     LEFT JOIN sales_returns sr ON sr.refund_payment_id = p.id
+     WHERE 1=1${upTo("p.payment_date", pp)}`, pp
   );
   for (const r of pays) {
     const amt = Number(r.amount);
     const desc = r.narration || "Payment";
     const eid = `payment:${r.id}`;
-    push({ entryId: eid, date: r.date, ledgerId: r.t, debit: amt, credit: 0, source: "payment", voucherNumber: r.voucher_number, description: desc });
-    push({ entryId: eid, date: r.date, ledgerId: r.f, debit: 0, credit: amt, source: "payment", voucherNumber: r.voucher_number, description: desc });
+    // Money vouchers default to Head Office — the long-standing convention for
+    // rows recorded before location stamping existed (id placeholder 0).
+    const loc = locOf(r.location_type ?? "headoffice", r.location_id ?? 0);
+    push({ entryId: eid, date: r.date, ledgerId: r.t, debit: amt, credit: 0, source: "payment", voucherNumber: r.voucher_number, description: desc, ...loc });
+    push({ entryId: eid, date: r.date, ledgerId: r.f, debit: 0, credit: amt, source: "payment", voucherNumber: r.voucher_number, description: desc, ...loc });
   }
 
   // 2. Receipts: Dr received_in / Cr received_from
@@ -687,7 +732,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   const rp: any[] = [];
   const { rows: recs } = await pool.query(
     `SELECT id, receipt_date AS date, received_from_ledger_id AS f, received_in_ledger_id AS t,
-            amount, voucher_number, narration
+            amount, voucher_number, narration, location_type, location_id
      FROM receipts
      WHERE id NOT IN (SELECT clearing_receipt_id FROM sale_payments WHERE clearing_receipt_id IS NOT NULL)
        AND (voucher_number IS NULL OR voucher_number NOT IN (SELECT invoice_number FROM sales WHERE invoice_number IS NOT NULL))
@@ -697,17 +742,32 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     const amt = Number(r.amount);
     const desc = r.narration || "Receipt";
     const eid = `receipt:${r.id}`;
-    push({ entryId: eid, date: r.date, ledgerId: r.t, debit: amt, credit: 0, source: "receipt", voucherNumber: r.voucher_number, description: desc });
-    push({ entryId: eid, date: r.date, ledgerId: r.f, debit: 0, credit: amt, source: "receipt", voucherNumber: r.voucher_number, description: desc });
+    const loc = locOf(r.location_type ?? "headoffice", r.location_id ?? 0);
+    push({ entryId: eid, date: r.date, ledgerId: r.t, debit: amt, credit: 0, source: "receipt", voucherNumber: r.voucher_number, description: desc, ...loc });
+    push({ entryId: eid, date: r.date, ledgerId: r.f, debit: 0, credit: amt, source: "receipt", voucherNumber: r.voucher_number, description: desc, ...loc });
   }
 
-  // 3. Journal voucher lines (journal, contra, credit/debit notes) — as stored
+  // 3. Journal voucher lines (journal, contra, credit/debit notes) — as stored.
+  //
+  // Vouchers carry no location column, so most JVs are company-level — the
+  // honest answer for manual journals, payroll allocations and two-location
+  // transfer vouchers. RETURN vouchers are the exception: a sales-return
+  // credit note / purchase-return debit note is a system voucher raised from a
+  // location-bearing document, so it inherits that document's location —
+  // otherwise every return's reversal would vanish from the slice its sale or
+  // purchase posted into, silently overstating that location's books.
+  // (credit_note_id / debit_note_id are one-to-one, so the joins cannot fan out.)
   const jp: any[] = [];
   const { rows: jls } = await pool.query(
     `SELECT v.id AS voucher_id, v.voucher_date AS date, v.voucher_number, v.voucher_type, v.narration,
-            l.ledger_id, l.debit, l.credit
+            l.ledger_id, l.debit, l.credit,
+            COALESCE(sr.location_type, pu.location_type) AS location_type,
+            COALESCE(sr.location_id, pu.location_id) AS location_id
      FROM journal_voucher_lines l
      JOIN journal_vouchers v ON v.id = l.voucher_id
+     LEFT JOIN sales_returns sr ON sr.credit_note_id = v.id
+     LEFT JOIN purchase_returns pr ON pr.debit_note_id = v.id
+     LEFT JOIN purchases pu ON pu.id = pr.purchase_id
      WHERE 1=1${upTo("v.voucher_date", jp)}`, jp
   );
   for (const r of jls) {
@@ -716,6 +776,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
       date: r.date, ledgerId: r.ledger_id, debit: Number(r.debit), credit: Number(r.credit),
       source: r.voucher_type, voucherNumber: r.voucher_number,
       description: r.narration || VOUCHER_TYPE_LABELS[r.voucher_type] || "Journal",
+      ...locOf(r.location_type, r.location_id),
     });
   }
 
@@ -723,6 +784,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   const ep: any[] = [];
   const { rows: exps } = await pool.query(
     `SELECT e.id, e.expense_number, e.expense_date AS date, e.ledger_account_id AS lid, e.amount, e.description,
+            e.location_type, e.location_id,
             cb.account_type AS cb_type
      FROM expenses e
      LEFT JOIN cash_bank_accounts cb ON cb.id = e.payment_account_id
@@ -733,8 +795,9 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     const creditLedger = String(r.cb_type ?? "").toLowerCase().includes("bank") ? stdBank : stdCash;
     const desc = r.description || "Expense";
     const eid = `expense:${r.id}`;
-    push({ entryId: eid, date: r.date, ledgerId: r.lid, debit: amt, credit: 0, source: "expense", voucherNumber: r.expense_number ?? null, description: desc });
-    push({ entryId: eid, date: r.date, ledgerId: creditLedger, debit: 0, credit: amt, source: "expense", voucherNumber: r.expense_number ?? null, description: desc });
+    const loc = locOf(r.location_type ?? "headoffice", r.location_id ?? 0);
+    push({ entryId: eid, date: r.date, ledgerId: r.lid, debit: amt, credit: 0, source: "expense", voucherNumber: r.expense_number ?? null, description: desc, ...loc });
+    push({ entryId: eid, date: r.date, ledgerId: creditLedger, debit: 0, credit: amt, source: "expense", voucherNumber: r.expense_number ?? null, description: desc, ...loc });
   }
 
   // 5. Sales: Cr sales ledger (net) + Cr Output GST (split CGST/SGST/IGST when
@@ -785,8 +848,11 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
       : (loc?.sales_ledger_id ?? stdSales);
     const cashLedger = loc?.cash_ledger_id ?? stdCash;
     const eid = `sale:${s.id}`;
+    // Every leg of the sale — revenue, GST, cash, clearing, debtor — belongs to
+    // the location that rang it up, so the whole entry carries one stamp.
+    const sLoc = locOf(s.location_type, s.location_id);
 
-    push({ entryId: eid, date: s.sale_date, ledgerId: salesLedger, debit: 0, credit: net, source: "sale", voucherNumber: s.invoice_number, description: isBranchTransfer ? `Branch transfer out — ${inv}` : `Sales ${inv}` });
+    push({ entryId: eid, date: s.sale_date, ledgerId: salesLedger, debit: 0, credit: net, source: "sale", voucherNumber: s.invoice_number, description: isBranchTransfer ? `Branch transfer out — ${inv}` : `Sales ${inv}`, ...sLoc });
     if (tax > 0) {
       const sLines = (s.line_items ?? []) as any[];
       let cg = 0, sg = 0, ig = 0;
@@ -794,14 +860,14 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
       cg = round2(cg); sg = round2(sg); ig = round2(ig);
       const split = round2(cg + sg + ig);
       if (outCgst && outSgst && outIgst && split > 0.004 && Math.abs(split - tax) <= 0.05) {
-        if (cg > 0.004) push({ entryId: eid, date: s.sale_date, ledgerId: outCgst, debit: 0, credit: cg, source: "sale", voucherNumber: s.invoice_number, description: `Output CGST — ${inv}` });
-        if (sg > 0.004) push({ entryId: eid, date: s.sale_date, ledgerId: outSgst, debit: 0, credit: sg, source: "sale", voucherNumber: s.invoice_number, description: `Output SGST — ${inv}` });
-        if (ig > 0.004) push({ entryId: eid, date: s.sale_date, ledgerId: outIgst, debit: 0, credit: ig, source: "sale", voucherNumber: s.invoice_number, description: `Output IGST — ${inv}` });
+        if (cg > 0.004) push({ entryId: eid, date: s.sale_date, ledgerId: outCgst, debit: 0, credit: cg, source: "sale", voucherNumber: s.invoice_number, description: `Output CGST — ${inv}`, ...sLoc });
+        if (sg > 0.004) push({ entryId: eid, date: s.sale_date, ledgerId: outSgst, debit: 0, credit: sg, source: "sale", voucherNumber: s.invoice_number, description: `Output SGST — ${inv}`, ...sLoc });
+        if (ig > 0.004) push({ entryId: eid, date: s.sale_date, ledgerId: outIgst, debit: 0, credit: ig, source: "sale", voucherNumber: s.invoice_number, description: `Output IGST — ${inv}`, ...sLoc });
         const resid = round2(tax - split);
-        if (resid > 0.004) push({ entryId: eid, date: s.sale_date, ledgerId: stdDtx, debit: 0, credit: resid, source: "sale", voucherNumber: s.invoice_number, description: `GST rounding — ${inv}` });
-        else if (resid < -0.004) push({ entryId: eid, date: s.sale_date, ledgerId: stdDtx, debit: -resid, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `GST rounding — ${inv}` });
+        if (resid > 0.004) push({ entryId: eid, date: s.sale_date, ledgerId: stdDtx, debit: 0, credit: resid, source: "sale", voucherNumber: s.invoice_number, description: `GST rounding — ${inv}`, ...sLoc });
+        else if (resid < -0.004) push({ entryId: eid, date: s.sale_date, ledgerId: stdDtx, debit: -resid, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `GST rounding — ${inv}`, ...sLoc });
       } else {
-        push({ entryId: eid, date: s.sale_date, ledgerId: stdDtx, debit: 0, credit: tax, source: "sale", voucherNumber: s.invoice_number, description: `GST on ${inv}` });
+        push({ entryId: eid, date: s.sale_date, ledgerId: stdDtx, debit: 0, credit: tax, source: "sale", voucherNumber: s.invoice_number, description: `GST on ${inv}`, ...sLoc });
       }
     }
 
@@ -811,7 +877,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     // note raised at rejection is what reverses it, and skipping the invoice
     // as well would subtract the same amount twice.
     if (isBranchTransfer) {
-      push({ entryId: eid, date: s.sale_date, ledgerId: branchDebtor || debtors, debit: total, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Due from branch — ${inv}` });
+      push({ entryId: eid, date: s.sale_date, ledgerId: branchDebtor || debtors, debit: total, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Due from branch — ${inv}`, ...sLoc });
       continue;
     }
 
@@ -820,7 +886,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
       const amt = Number(p.amount);
       paidViaSp += amt;
       const drLedger = p.method === "cash" ? cashLedger : elecClr;
-      push({ entryId: eid, date: p.payment_date, ledgerId: drLedger, debit: amt, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `${p.method === "cash" ? "Cash" : "Electronic"} received — ${inv}` });
+      push({ entryId: eid, date: p.payment_date, ledgerId: drLedger, debit: amt, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `${p.method === "cash" ? "Cash" : "Electronic"} received — ${inv}`, ...sLoc });
     }
 
     const amountPaid = Number(s.amount_paid ?? 0);
@@ -828,13 +894,13 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     if (extra > 0.004) {
       // Cash sits in the cash box; bank/UPI/card clear through Electronic Clearing.
       const drLedger = clearsThroughBank(s.payment_mode) ? elecClr : cashLedger;
-      push({ entryId: eid, date: s.sale_date, ledgerId: drLedger, debit: extra, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Received — ${inv}` });
+      push({ entryId: eid, date: s.sale_date, ledgerId: drLedger, debit: extra, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Received — ${inv}`, ...sLoc });
     }
 
     const due = round2(total - amountPaid);
     if (due > 0.004) {
       const custLedger = s.customer_id ? (byCode.get(`CUST-${s.customer_id}`)?.id ?? debtors) : debtors;
-      push({ entryId: eid, date: s.sale_date, ledgerId: custLedger, debit: due, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Outstanding — ${inv}` });
+      push({ entryId: eid, date: s.sale_date, ledgerId: custLedger, debit: due, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `Outstanding — ${inv}`, ...sLoc });
     }
   }
 
@@ -879,15 +945,18 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
       (lineTaxSum <= 0.004 || Math.abs(inputTax - lineTaxSum) <= 0.05) &&
       (pTaxTotal <= 0.004 || Math.abs(inputTax - pTaxTotal) <= 0.05);
     const eid = `purchase:${p.id}`;
+    // Bills without a stored location are Head Office bills — same convention
+    // the purchase-ledger fallback above already applies.
+    const puLoc = locOf(p.location_type ?? "headoffice", p.location_id ?? 0);
     if (inpCgst && inpSgst && inpIgst && inputTax > 0.004 && inputTax < amt && consistent) {
-      push({ entryId: eid, date: p.purchase_date, ledgerId: purLedger, debit: round2(amt - inputTax), credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}` });
-      if (cg > 0.004) push({ entryId: eid, date: p.purchase_date, ledgerId: inpCgst, debit: cg, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Input CGST — ${bill}` });
-      if (sg > 0.004) push({ entryId: eid, date: p.purchase_date, ledgerId: inpSgst, debit: sg, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Input SGST — ${bill}` });
-      if (ig > 0.004) push({ entryId: eid, date: p.purchase_date, ledgerId: inpIgst, debit: ig, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Input IGST — ${bill}` });
+      push({ entryId: eid, date: p.purchase_date, ledgerId: purLedger, debit: round2(amt - inputTax), credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}`, ...puLoc });
+      if (cg > 0.004) push({ entryId: eid, date: p.purchase_date, ledgerId: inpCgst, debit: cg, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Input CGST — ${bill}`, ...puLoc });
+      if (sg > 0.004) push({ entryId: eid, date: p.purchase_date, ledgerId: inpSgst, debit: sg, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Input SGST — ${bill}`, ...puLoc });
+      if (ig > 0.004) push({ entryId: eid, date: p.purchase_date, ledgerId: inpIgst, debit: ig, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Input IGST — ${bill}`, ...puLoc });
     } else {
-      push({ entryId: eid, date: p.purchase_date, ledgerId: purLedger, debit: amt, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}` });
+      push({ entryId: eid, date: p.purchase_date, ledgerId: purLedger, debit: amt, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}`, ...puLoc });
     }
-    push({ entryId: eid, date: p.purchase_date, ledgerId: vendLedger, debit: 0, credit: amt, source: "purchase", voucherNumber: p.invoice_number, description: isBranchTransfer ? `Due to branch — ${bill}` : `Purchase ${bill}` });
+    push({ entryId: eid, date: p.purchase_date, ledgerId: vendLedger, debit: 0, credit: amt, source: "purchase", voucherNumber: p.invoice_number, description: isBranchTransfer ? `Due to branch — ${bill}` : `Purchase ${bill}`, ...puLoc });
   }
 
   // 7. Warehouse rent: Dr Rent Expense / Cr Rent Payable, per accrued day.
@@ -910,7 +979,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   // credited here and debited there — no double count.
   const rap: any[] = [];
   const { rows: rentRows } = await pool.query(
-    `SELECT r.id, r.accrual_date AS date, r.amount, w.name AS warehouse_name,
+    `SELECT r.id, r.accrual_date AS date, r.amount, r.warehouse_id, w.name AS warehouse_name,
             a.expense_ledger_id, a.payable_ledger_id
      FROM rent_accruals r
      JOIN warehouse_rent_agreements a ON a.warehouse_id = r.warehouse_id
@@ -923,8 +992,9 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     if (!(amt > 0.004)) continue;
     const eid = `rent:${r.id}`;
     const desc = `Rent — ${r.warehouse_name}`;
-    push({ entryId: eid, date: r.date, ledgerId: r.expense_ledger_id, debit: amt, credit: 0, source: "rent", voucherNumber: null, description: desc });
-    push({ entryId: eid, date: r.date, ledgerId: r.payable_ledger_id, debit: 0, credit: amt, source: "rent", voucherNumber: null, description: desc });
+    const rLoc = locOf("warehouse", r.warehouse_id);
+    push({ entryId: eid, date: r.date, ledgerId: r.expense_ledger_id, debit: amt, credit: 0, source: "rent", voucherNumber: null, description: desc, ...rLoc });
+    push({ entryId: eid, date: r.date, ledgerId: r.payable_ledger_id, debit: 0, credit: amt, source: "rent", voucherNumber: null, description: desc, ...rLoc });
   }
 
   // 8. Salary: Dr Salary Expense / Cr Salary Payable, per accrued day.
@@ -944,6 +1014,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   const sap: any[] = [];
   const { rows: salaryRows } = await pool.query(
     `SELECT a.id, a.accrual_date AS date, a.amount, e.name AS employee_name,
+            e.branch_type, e.branch_id,
             le.id AS expense_ledger_id, lp.id AS payable_ledger_id
      FROM salary_accruals a
      JOIN employees e ON e.id = a.employee_id
@@ -956,8 +1027,10 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     if (!(amt > 0.004)) continue;
     const eid = `salary:${s.id}`;
     const desc = `Salary — ${s.employee_name}`;
-    push({ entryId: eid, date: s.date, ledgerId: s.expense_ledger_id, debit: amt, credit: 0, source: "salary", voucherNumber: null, description: desc });
-    push({ entryId: eid, date: s.date, ledgerId: s.payable_ledger_id, debit: 0, credit: amt, source: "salary", voucherNumber: null, description: desc });
+    // Salary belongs to the branch the employee works at.
+    const eLoc = locOf(s.branch_type, s.branch_id);
+    push({ entryId: eid, date: s.date, ledgerId: s.expense_ledger_id, debit: amt, credit: 0, source: "salary", voucherNumber: null, description: desc, ...eLoc });
+    push({ entryId: eid, date: s.date, ledgerId: s.payable_ledger_id, debit: 0, credit: amt, source: "salary", voucherNumber: null, description: desc, ...eLoc });
   }
 
   return postings;
@@ -978,9 +1051,14 @@ router.get("/accounts/day-book", requireModuleView("page:/accounts/day-book"), a
   }
   const q = String((req.query as any).date ?? "");
   const date = isDate(q) ? q : new Date().toISOString().slice(0, 10);
+  const locFilter = parsePostingLocationFilter(req.query as any);
 
-  const postings = (await buildDerivedPostings({ toDate: date }))
+  const dayPostings = (await buildDerivedPostings({ toDate: date }))
     .filter((p) => String(p.date).slice(0, 10) === date);
+  // The company-level bucket is reported, never dropped: a filtered day book
+  // says how much of the day it cannot attribute to any location.
+  const companyLevel = locFilter && locFilter.type !== "company" ? companyLevelSummary(dayPostings) : null;
+  const postings = filterPostingsByLocation(dayPostings, locFilter);
 
   const { rows: ledgerRows } = await pool.query(`SELECT id, name FROM account_ledgers`);
   const nameOf = new Map<number, string>(ledgerRows.map((l: any) => [Number(l.id), l.name as string]));
@@ -1054,6 +1132,7 @@ router.get("/accounts/day-book", requireModuleView("page:/accounts/day-book"), a
       balanced: Math.abs(debit - credit) < 0.01,
       byType,
     },
+    ...(locFilter ? { location: { type: locFilter.type, id: locFilter.id }, companyLevel } : {}),
   });
 });
 
@@ -1089,9 +1168,11 @@ router.get("/accounts/cash-bank-book", requireModuleView(["page:/accounts/cash-b
 
   // Selecting a group (e.g. the Cash root) consolidates its whole subtree
   const subtree = await ledgerSubtreeIds(ledgerId);
+  const locFilter = parsePostingLocationFilter(req.query as any);
 
-  const postings = (await buildDerivedPostings({ toDate: isDate(toDate) ? toDate : undefined }))
+  const subtreePostings = (await buildDerivedPostings({ toDate: isDate(toDate) ? toDate : undefined }))
     .filter(p => subtree.has(p.ledgerId));
+  const postings = filterPostingsByLocation(subtreePostings, locFilter);
   postings.sort((a, b) => a.date.localeCompare(b.date) || a.source.localeCompare(b.source));
 
   const from = isDate(fromDate) ? fromDate : null;
@@ -1118,6 +1199,10 @@ router.get("/accounts/cash-bank-book", requireModuleView(["page:/accounts/cash-b
     totalDebit: round2(entries.reduce((s, e) => s + e.debit, 0)),
     totalCredit: round2(entries.reduce((s, e) => s + e.credit, 0)),
     closingBalance: balance,
+    ...(locFilter ? {
+      location: { type: locFilter.type, id: locFilter.id },
+      companyLevel: locFilter.type !== "company" ? companyLevelSummary(subtreePostings) : null,
+    } : {}),
   });
 });
 
@@ -1127,9 +1212,15 @@ router.get("/accounts/trial-balance", requireModuleView("page:/accounts/trial-ba
   // LBAC: the trial balance is a Head Office accounting view
   if ((req as any).employee?.branchType !== 'headoffice') { res.json([]); return; }
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
+  const locFilter = parsePostingLocationFilter(req.query as any);
 
   let postings = await buildDerivedPostings({ toDate: isDate(toDate) ? toDate : undefined });
   if (isDate(fromDate)) postings = postings.filter(p => p.date >= fromDate);
+  // Bucket totals are computed over the SAME window the rows use, so a
+  // location's TB plus its siblings plus this bucket reproduces the
+  // consolidated TB exactly.
+  const companyLevel = locFilter && locFilter.type !== "company" ? companyLevelSummary(postings) : null;
+  postings = filterPostingsByLocation(postings, locFilter);
 
   const agg = new Map<number, { dr: number; cr: number }>();
   for (const p of postings) {
@@ -1175,6 +1266,7 @@ router.get("/accounts/trial-balance", requireModuleView("page:/accounts/trial-ba
     totalCredit,
     difference,
     balanced: Math.abs(difference) < 0.01,
+    ...(locFilter ? { location: { type: locFilter.type, id: locFilter.id }, companyLevel } : {}),
   });
 });
 

@@ -137,9 +137,13 @@ export default function Outstanding() {
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<number | null>(null);
   const [collectItem, setCollectItem] = useState<any | null>(null);
+  // Historical position: empty = today (the original, current view). Aging is
+  // a position, so a single as-of date is the whole date dimension here.
+  // Collections is a worklist of what to chase NOW and stays at today.
+  const [asOf, setAsOf] = useState('');
 
-  const { data: recv, isLoading: recvLoading } = useReceivablesAging();
-  const { data: pay, isLoading: payLoading } = usePayablesAging();
+  const { data: recv, isLoading: recvLoading } = useReceivablesAging(asOf || undefined);
+  const { data: pay, isLoading: payLoading } = usePayablesAging(asOf || undefined);
   const { data: coll, isLoading: collLoading } = useCollections();
 
   const q = search.trim().toLowerCase();
@@ -197,7 +201,23 @@ export default function Outstanding() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input className="pl-9" placeholder={tab === 'collections' ? 'Search invoice or customer…' : 'Search party…'} value={search} onChange={e => setSearch(e.target.value)} />
           </div>
+          {tab !== 'collections' && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-muted-foreground whitespace-nowrap">As of</span>
+              <Input type="date" className="w-36 h-9" value={asOf} onChange={e => setAsOf(e.target.value)} />
+              {asOf && (
+                <button onClick={() => setAsOf('')} className="text-xs text-muted-foreground hover:text-foreground underline">
+                  Today
+                </button>
+              )}
+            </div>
+          )}
         </div>
+        {tab !== 'collections' && asOf && (
+          <p className="text-xs text-muted-foreground -mt-3">
+            Showing the position as it stood on {asOf} — bills, payments and notes after that date are ignored.
+          </p>
+        )}
 
         {/* ── Aging summary cards (receivables / payables) ── */}
         {tab !== 'collections' && (

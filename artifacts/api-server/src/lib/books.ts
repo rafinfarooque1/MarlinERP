@@ -29,6 +29,7 @@
 import { pool } from "@workspace/db";
 import { closingStockValuation, stockValuation, resolveProductNames, type ValuedItem } from "./valuation";
 import { isIsoDate } from "./dateInput";
+import { filterPostingsByLocation, type PostingLocationFilter } from "./postingLocation";
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 // Shape AND calendar validity (rejects 2026-02-30) — these values reach real
@@ -178,9 +179,19 @@ export interface StockAtDate {
   note: string | null;
 }
 
-/** Closing stock: every product kind, every location, in-transit included. */
-export async function closingStockAt(): Promise<StockAtDate> {
-  const v = await closingStockValuation(pool);
+/** One branch's stock filter for the historic rewind and the current read. */
+export interface StockBranchScope {
+  branchType: string;
+  /** null = every branch of that type (Head Office matches on type alone). */
+  branchId: number | null;
+}
+
+/** Closing stock: every product kind, in-transit included; optionally one branch. */
+export async function closingStockAt(scope?: StockBranchScope | null): Promise<StockAtDate> {
+  const v = await closingStockValuation(pool, scope ? {
+    branchType: scope.branchType,
+    ...(scope.branchId != null ? { branchId: scope.branchId } : {}),
+  } : {});
   return { total: v.total, inTransit: v.inTransit, items: v.items, reliable: true, note: null };
 }
 
@@ -227,10 +238,25 @@ async function inceptionDate(): Promise<string | null> {
  *
  * Cost is today's weighted-average cost — per-date cost history is not stored.
  */
-export async function stockAsOf(asOf: string | null | undefined): Promise<StockAtDate> {
+export async function stockAsOf(asOf: string | null | undefined, scope?: StockBranchScope | null): Promise<StockAtDate> {
   if (!isDate(asOf)) {
     return { total: 0, inTransit: 0, items: [], reliable: true, note: null };
   }
+
+  // Branch narrowing applies to BOTH the movement log and today's quantities —
+  // scoping one side only would rewind one branch's stock through another's
+  // movements. Reconciliation then also runs per-branch, so a gap in a branch
+  // outside the scope cannot flag a clean branch as unreliable (or vice versa).
+  const branchWhere = (alias: string, params: unknown[]): string => {
+    if (!scope) return "";
+    params.push(scope.branchType);
+    let sql = ` WHERE ${alias}.branch_type = $${params.length}`;
+    if (scope.branchId != null) {
+      params.push(scope.branchId);
+      sql += ` AND ${alias}.branch_id = $${params.length}`;
+    }
+    return sql;
+  };
 
   // Earliest movement ever recorded. On its own this does NOT mean the business
   // held nothing before it — `created_at` is when the row was written, not when
@@ -251,13 +277,15 @@ export async function stockAsOf(asOf: string | null | undefined): Promise<StockA
   }
 
   // Movement after the as-at date, and total logged movement, per product+location.
+  const mvParams: unknown[] = [asOf];
+  const mvWhere = branchWhere("sl", mvParams);
   const { rows: moves } = await pool.query(
     `SELECT material_type, ref_id::int AS ref_id, branch_type, branch_id::int AS branch_id,
             COALESCE(SUM(qty_change::numeric) FILTER (WHERE COALESCE(txn_date, created_at::date) > $1::date), 0) AS after_qty,
             COALESCE(SUM(qty_change::numeric), 0) AS all_qty
-       FROM stock_ledger
+       FROM stock_ledger sl${mvWhere}
       GROUP BY 1, 2, 3, 4`,
-    [asOf],
+    mvParams,
   );
   const afterByKey = new Map<string, number>();
   const loggedByKey = new Map<string, number>();
@@ -275,10 +303,13 @@ export async function stockAsOf(asOf: string | null | undefined): Promise<StockA
   // Sourcing the rewind only from positive lines would drop it silently, and
   // because a dropped line is never reconciled either, the result would still
   // be reported as reliable.
+  const ohParams: unknown[] = [];
+  const ohWhere = branchWhere("se", ohParams);
   const { rows: onHand } = await pool.query(
     `SELECT material_type, item_id::int AS ref_id, branch_type, branch_id::int AS branch_id,
             quantity::numeric AS quantity
-       FROM stock_entries`,
+       FROM stock_entries se${ohWhere}`,
+    ohParams,
   );
   const todayByKey = new Map<string, number>();
   for (const r of onHand) {
@@ -426,6 +457,18 @@ const netOf = (a: LedgerAgg | undefined) => (a ? r2(a.dr - a.cr) : 0);
 export interface BooksOptions {
   fromDate?: string | null;
   toDate?: string | null;
+  /**
+   * Narrow the statements to one location's slice of the posting stream, or to
+   * the company-level ('company') bucket of entries no location owns. With no
+   * filter, behaviour is byte-for-byte the consolidated statements.
+   *
+   * Every entry is stamped with exactly one location (or none), so each slice
+   * is internally balanced and the slices plus the company bucket sum to the
+   * consolidated books. Opening balances are company-level records, so they
+   * appear in the 'company' slice (and consolidated view) only; stock is
+   * scoped to the location's branches.
+   */
+  location?: PostingLocationFilter | null;
 }
 
 export interface Books {
@@ -496,14 +539,24 @@ export interface Books {
  * not depend on the route file that owns it.
  */
 export async function buildBooks(
-  buildDerivedPostings: (opts: { toDate?: string }) => Promise<Array<{ date: string; ledgerId: number; debit: number; credit: number }>>,
+  buildDerivedPostings: (opts: { toDate?: string }) => Promise<Array<{
+    date: string; ledgerId: number; debit: number; credit: number;
+    locationType?: string | null; locationId?: number | null;
+  }>>,
   opts: BooksOptions = {},
 ): Promise<Books> {
   const fromDate = isDate(opts.fromDate) ? opts.fromDate : null;
   const toDate = isDate(opts.toDate) ? opts.toDate : null;
+  const location = opts.location ?? null;
 
   const chart = await loadChart();
-  const postings = await buildDerivedPostings(toDate ? { toDate } : {});
+  const allPostings = await buildDerivedPostings(toDate ? { toDate } : {});
+  const postings = location
+    ? filterPostingsByLocation(
+        allPostings.map((p) => ({ ...p, locationType: p.locationType ?? null, locationId: p.locationId ?? null })),
+        location,
+      )
+    : allPostings;
 
   const overlayIds = new Set<number>();
   for (const code of CAPITALISATION_LEDGERS) {
@@ -539,14 +592,20 @@ export async function buildBooks(
   }
 
   // Opening balances are outside the posting stream, so they are added to the
-  // cumulative (balance-sheet) view only, and must self-balance.
+  // cumulative (balance-sheet) view only, and must self-balance. They carry no
+  // location, so they are company-level records: included in the consolidated
+  // view and the 'company' slice, excluded from every location slice — the
+  // same partition rule the postings follow, so slices still sum to the whole.
+  const includeOpeningBalances = !location || location.type === "company";
   const obParams: any[] = [];
   let obWhere = "";
   if (toDate) { obParams.push(toDate); obWhere = `WHERE as_of_date <= $1`; }
-  const { rows: obRows } = await pool.query(
-    `SELECT ledger_id, balance::numeric AS balance, balance_type FROM opening_balances ${obWhere}`,
-    obParams,
-  );
+  const { rows: obRows } = includeOpeningBalances
+    ? await pool.query(
+        `SELECT ledger_id, balance::numeric AS balance, balance_type FROM opening_balances ${obWhere}`,
+        obParams,
+      )
+    : { rows: [] as any[] };
   const openingBalances: OpeningBalanceSummary = { debit: 0, credit: 0, balanced: true, lines: obRows.length };
   for (const ob of obRows) {
     const id = Number(ob.ledger_id);
@@ -569,9 +628,19 @@ export async function buildBooks(
   // corrupts COGS, net profit and the balance sheet's "as at" inventory alike.
   // Only when the statement genuinely runs to today (or has no end date) is the
   // current position the right answer, and only then is it exact.
+  // Location slices carry their own stock: goods sit at branches, so a
+  // warehouse/outlet slice values only that branch's holdings (Head Office
+  // matches every headoffice-typed branch row). The 'company' slice holds no
+  // goods at all — stock is always somewhere — so it reads zero.
+  const emptyStock: StockAtDate = { total: 0, inTransit: 0, items: [], reliable: true, note: null };
+  const stockScope: StockBranchScope | null =
+    location && location.type !== "company" ? { branchType: location.type, branchId: location.id } : null;
+  const skipStock = location?.type === "company";
   const historicalClose = toDate !== null && toDate < todayISO();
-  const closing = historicalClose ? await stockAsOf(toDate) : await closingStockAt();
-  const opening = fromDate ? await stockAsOf(previousDay(fromDate)) : await stockAsOf(null);
+  const closing = skipStock ? emptyStock
+    : historicalClose ? await stockAsOf(toDate, stockScope) : await closingStockAt(stockScope);
+  const opening = skipStock ? emptyStock
+    : fromDate ? await stockAsOf(previousDay(fromDate), stockScope) : await stockAsOf(null);
 
   // ── Group builders ────────────────────────────────────────────────────────
 

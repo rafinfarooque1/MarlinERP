@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'wouter';
 import { useListCashBankAccounts, useCreateCashBankAccount, getListCashBankAccountsQueryKey } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -146,8 +147,9 @@ export default function CashBank() {
               Stored Balance column shows that unmaintained figure — it starts at the opening
               balance entered when the account was added and is then reduced by expenses paid
               from it. For reconciled cash and bank positions use{' '}
-              <a href="/accounts/cash-bank-book" className="underline">Cash &amp; Bank Book</a>,{' '}
-              <a href="/accounts/trial-balance" className="underline">Trial Balance</a> or the Balance Sheet.
+              the <Link href="/accounts/cash-book" className="underline">Cash Book</Link>,{' '}
+              <Link href="/accounts/bank-book" className="underline">Bank Book</Link>,{' '}
+              <Link href="/accounts/trial-balance" className="underline">Trial Balance</Link> or the Balance Sheet.
             </p>
           </div>
         )}

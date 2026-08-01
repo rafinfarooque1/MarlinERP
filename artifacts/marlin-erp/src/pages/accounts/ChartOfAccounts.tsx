@@ -12,6 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { CalendarDays, Store, TrendingDown, TrendingUp, Landmark, BarChart3, ChevronDown, ChevronRight, Package, Lock, Trash2, ScrollText, ArrowUpRight, ArrowDownLeft, ShieldOff, AlertTriangle, Settings2, FoldVertical, UnfoldVertical, Folder } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePermission } from '@/lib/usePermission';
+import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 import { useIsLocationKindEnabled } from '@/lib/locationStructure';
 import { useClearOutletSelection } from '@/lib/useFeatureFlags';
 
@@ -54,13 +55,22 @@ function LedgerCreationRetiredNote({ depth = 1 }: { depth?: number }) {
 function LedgerStatementSheet({ ledgerNode, fromDate, toDate, onClose }: {
   ledgerNode: StatementTarget; fromDate?: string; toDate?: string; onClose: () => void;
 }) {
+  // Global location selector narrows the statement to that location's slice of
+  // the books; the query key must carry the same params or a location change
+  // would keep serving the cached slice.
+  const { locationState } = useLocationContext();
+  const locParams = locationFilterParams(locationState);
   const qs = new URLSearchParams();
   if (fromDate) qs.set('fromDate', fromDate);
   if (toDate)   qs.set('toDate', toDate);
+  if (locParams.locationType) {
+    qs.set('locationType', locParams.locationType);
+    qs.set('locationId', String(locParams.locationId));
+  }
   const q = qs.toString();
 
   const { data, isLoading } = useQuery<any>({
-    queryKey: ['ledger-statement', ledgerNode.id, fromDate, toDate],
+    queryKey: ['ledger-statement', ledgerNode.id, fromDate, toDate, locParams.locationType ?? null, locParams.locationId ?? null],
     queryFn: () => customFetch(`/api/accounts/ledger/${ledgerNode.id}/statement${q ? `?${q}` : ''}`),
     staleTime: 30_000,
   });
@@ -559,6 +569,10 @@ export default function ChartOfAccounts() {
   const plExpansion               = useStatementExpansion('profit_loss');
   const queryClient               = useQueryClient();
   const outletsVisible            = useIsLocationKindEnabled('outlet');
+  // Global location selector scopes the statements to that location's slice of
+  // the books (the page's own outlet dropdown is a separate, legacy narrowing).
+  const { locationState }         = useLocationContext();
+  const locParams                 = locationFilterParams(locationState);
   // A filter still holding an outlet would keep scoping the statements after the
   // control to clear it disappears, quietly narrowing every figure on screen.
   useClearOutletSelection(outletId !== 'all', () => setOutletId('all'));
@@ -604,7 +618,10 @@ export default function ChartOfAccounts() {
     [period, customFrom, customTo],
   );
 
-  const qKey = useMemo(() => ['fin-stmt', fromDate, toDate, outletId], [fromDate, toDate, outletId]);
+  const qKey = useMemo(
+    () => ['fin-stmt', fromDate, toDate, outletId, locParams.locationType ?? null, locParams.locationId ?? null],
+    [fromDate, toDate, outletId, locParams.locationType, locParams.locationId],
+  );
 
   const { data: fs, isLoading, isError, error } = useQuery<FinancialStatements>({
     queryKey: qKey,
@@ -613,6 +630,10 @@ export default function ChartOfAccounts() {
       if (fromDate) p.set('fromDate', fromDate);
       if (toDate)   p.set('toDate', toDate);
       if (outletId && outletId !== 'all') p.set('outletId', outletId);
+      if (locParams.locationType) {
+        p.set('locationType', locParams.locationType);
+        p.set('locationId', String(locParams.locationId));
+      }
       const qs = p.toString();
       return customFetch(`/api/accounts/financial-statements${qs ? `?${qs}` : ''}`, { method: 'GET' });
     },

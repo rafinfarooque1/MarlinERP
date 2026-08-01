@@ -142,15 +142,17 @@ function Statement({ kind, range, canDownload }: { kind: 'customer' | 'vendor'; 
 }
 
 // ── Receivables aging ─────────────────────────────────────────────────────────
-function ReceivablesReport({ canDownload }: { canDownload: boolean }) {
-  const { data, isLoading } = useReceivablesAging();
+function ReceivablesReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
+  // Aging is a position, not a flow: only the END of the selected range
+  // matters. `range.to` empty means "today" — the original current view.
+  const { data, isLoading } = useReceivablesAging(range.to || undefined);
   const rows = data?.customers ?? [];
   const t = data?.totals;
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <p className="text-xs text-muted-foreground">As of {fmtDate(data?.asOf)} — aging is always current, not date-filtered</p>
+      <RangeBar range={range}>
+        <p className="text-xs text-muted-foreground">Position as of {fmtDate(data?.asOf)} — only the end date matters for aging</p>
         <ExportButtons
           canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
@@ -179,7 +181,7 @@ function ReceivablesReport({ canDownload }: { canDownload: boolean }) {
             }],
           })}
         />
-      </div>
+      </RangeBar>
 
       <SummaryCards cards={[
         { label: 'Total Due', value: fmt(t?.totalDue), tone: 'neg' },
@@ -208,8 +210,9 @@ function ReceivablesReport({ canDownload }: { canDownload: boolean }) {
 }
 
 // ── Payables aging ────────────────────────────────────────────────────────────
-function PayablesReport({ canDownload }: { canDownload: boolean }) {
-  const { data, isLoading } = usePayablesAging();
+function PayablesReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
+  // Same as-of contract as receivables: position at the range END.
+  const { data, isLoading } = usePayablesAging(range.to || undefined);
   const rows = data?.vendors ?? [];
   const t = data?.totals;
   // The control figure from the payables report: the sum of the vendor ledger
@@ -219,8 +222,8 @@ function PayablesReport({ canDownload }: { canDownload: boolean }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <p className="text-xs text-muted-foreground">As of {fmtDate(data?.asOf)} — aging is always current, not date-filtered</p>
+      <RangeBar range={range}>
+        <p className="text-xs text-muted-foreground">Position as of {fmtDate(data?.asOf)} — only the end date matters for aging</p>
         <ExportButtons
           canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
@@ -249,7 +252,7 @@ function PayablesReport({ canDownload }: { canDownload: boolean }) {
             }],
           })}
         />
-      </div>
+      </RangeBar>
 
       <SummaryCards cards={[
         { label: 'Net Payable', value: fmt(netPayable), tone: 'warn' },
@@ -303,8 +306,8 @@ export default function PartiesSection({ canCustomers = true, canVendors = true 
       />
       {active === 'customerStatement' && <Statement kind="customer" range={range} canDownload={canDownload} />}
       {active === 'vendorStatement' && <Statement kind="vendor" range={range} canDownload={canDownload} />}
-      {active === 'receivables' && <ReceivablesReport canDownload={canDownload} />}
-      {active === 'payables' && <PayablesReport canDownload={canDownload} />}
+      {active === 'receivables' && <ReceivablesReport range={range} canDownload={canDownload} />}
+      {active === 'payables' && <PayablesReport range={range} canDownload={canDownload} />}
     </div>
   );
 }

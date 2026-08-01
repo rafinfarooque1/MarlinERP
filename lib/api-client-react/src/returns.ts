@@ -197,8 +197,10 @@ export interface CollectionsResponse {
 
 export const getSalesReturnsQueryKey = () => ['/api/sales-returns'] as const;
 export const getPurchaseReturnsQueryKey = () => ['/api/purchase-returns'] as const;
-export const getReceivablesAgingQueryKey = () => ['/api/outstanding/receivables'] as const;
-export const getPayablesAgingQueryKey = () => ['/api/outstanding/payables'] as const;
+export const getReceivablesAgingQueryKey = (asOf?: string) =>
+  asOf ? (['/api/outstanding/receivables', asOf] as const) : (['/api/outstanding/receivables'] as const);
+export const getPayablesAgingQueryKey = (asOf?: string) =>
+  asOf ? (['/api/outstanding/payables', asOf] as const) : (['/api/outstanding/payables'] as const);
 export const getCollectionsQueryKey = () => ['/api/outstanding/collections'] as const;
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
@@ -253,17 +255,23 @@ export function useCreatePurchaseReturn() {
   });
 }
 
-export function useReceivablesAging() {
+/**
+ * @param asOf optional YYYY-MM-DD — prices the report at that date (bills,
+ * payments and credit notes capped there), matching a Balance Sheet dated the
+ * same day. Omit for today.
+ */
+export function useReceivablesAging(asOf?: string) {
   return useQuery({
-    queryKey: getReceivablesAgingQueryKey(),
-    queryFn: () => customFetch<ReceivablesAging>('/api/outstanding/receivables'),
+    queryKey: getReceivablesAgingQueryKey(asOf),
+    queryFn: () => customFetch<ReceivablesAging>(`/api/outstanding/receivables${asOf ? `?asOf=${asOf}` : ''}`),
   });
 }
 
-export function usePayablesAging() {
+/** Same `asOf` contract as {@link useReceivablesAging}. */
+export function usePayablesAging(asOf?: string) {
   return useQuery({
-    queryKey: getPayablesAgingQueryKey(),
-    queryFn: () => customFetch<PayablesAging>('/api/outstanding/payables'),
+    queryKey: getPayablesAgingQueryKey(asOf),
+    queryFn: () => customFetch<PayablesAging>(`/api/outstanding/payables${asOf ? `?asOf=${asOf}` : ''}`),
   });
 }
 

@@ -25,6 +25,37 @@ import {
   checkVoucherLegs, foreignLocationLedgerIds,
 } from "../lib/moneyScope";
 import { loadLedgerUsage, deleteBlockReason } from "../lib/chartGroups";
+import { parsePostingLocationFilter, companyLevelSummary, type PostingLocationFilter } from "../lib/postingLocation";
+
+/**
+ * Location condition on a SOURCE DOCUMENT row, mirroring how the derived
+ * posting stream stamps that document's postings (lib/postingLocation.ts):
+ *
+ *  - `fallback: 'headoffice'` for tables whose unstamped rows have always been
+ *    treated as Head Office (payments, receipts, expenses, purchases).
+ *  - `fallback: null` for tables where an unstamped row is company-level
+ *    (sales) — such rows match only the 'company' filter.
+ *  - 'headoffice' matches on type alone; the placeholder id differs per table.
+ *
+ * Returns " AND ..." to splice after an existing WHERE, pushing bind values
+ * onto `params`.
+ */
+function documentLocationCond(
+  f: PostingLocationFilter | null,
+  alias: string,
+  params: unknown[],
+  fallback: "headoffice" | null,
+): string {
+  if (!f) return "";
+  const typeExpr = fallback ? `COALESCE(${alias}.location_type, '${fallback}')` : `${alias}.location_type`;
+  if (f.type === "company") return fallback ? ` AND FALSE` : ` AND ${alias}.location_type IS NULL`;
+  if (f.type === "headoffice") return ` AND ${typeExpr} = 'headoffice'`;
+  params.push(f.type);
+  const t = `$${params.length}`;
+  params.push(f.id);
+  const i = `$${params.length}`;
+  return ` AND ${typeExpr} = ${t} AND COALESCE(${alias}.location_id, 0) = ${i}::int`;
+}
 
 const router = Router();
 
@@ -568,6 +599,10 @@ router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledge
   const accountId = Number(qp.data.accountId);
   const fromDate = qp.data.fromDate as string | undefined;
   const toDate = qp.data.toDate as string | undefined;
+  // Presentation narrowing only — LBAC above/below still decides what the
+  // caller may see at all. NOTE: read from req.query, not qp.data — the zod
+  // schema predates the location params and strips unknown keys.
+  const locFilter = parsePostingLocationFilter(req.query as Record<string, unknown>);
 
   const [account] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, accountId)).limit(1);
   if (!account) { res.status(404).json({ error: "Account not found" }); return; }
@@ -592,7 +627,7 @@ router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledge
   const pmtScope = scopeMoneyWhere(moneyScopeCtx, ledgerIds, pmtParams, 'p', ['paid_from_ledger_id', 'paid_to_ledger_id']);
   const pmtRes = await pool.query(
     `SELECT p.* FROM payments p
-     WHERE (p.paid_from_ledger_id = $1 OR p.paid_to_ledger_id = $1) AND ${pmtScope}`,
+     WHERE (p.paid_from_ledger_id = $1 OR p.paid_to_ledger_id = $1) AND ${pmtScope}${documentLocationCond(locFilter, 'p', pmtParams, 'headoffice')}`,
     pmtParams,
   );
   for (const p of pmtRes.rows) {
@@ -610,7 +645,7 @@ router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledge
   const recScope = scopeMoneyWhere(moneyScopeCtx, ledgerIds, recParams, 'r', ['received_in_ledger_id', 'received_from_ledger_id']);
   const recRes = await pool.query(
     `SELECT r.* FROM receipts r
-     WHERE (r.received_from_ledger_id = $1 OR r.received_in_ledger_id = $1) AND ${recScope}`,
+     WHERE (r.received_from_ledger_id = $1 OR r.received_in_ledger_id = $1) AND ${recScope}${documentLocationCond(locFilter, 'r', recParams, 'headoffice')}`,
     recParams,
   );
   for (const r of recRes.rows) {
@@ -625,10 +660,17 @@ router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledge
 
   // Expenses tagged to this account — the expenses table is Head Office only
   // (branch spending is recorded as location-expense payments, already above).
+  // Raw SQL, not drizzle: location_type/location_id are startup-migration
+  // columns that db.select() cannot see.
   if (scope.isHeadOffice) {
-    const exps = await db.select().from(expensesTable).where(eq(expensesTable.ledgerAccountId, accountId));
-    entries.push(...exps.map(e => ({
-      date: e.expenseDate, description: e.description ?? "Expense",
+    const expParams: unknown[] = [accountId];
+    const { rows: exps } = await pool.query(
+      `SELECT e.expense_date, e.description, e.amount FROM expenses e
+       WHERE e.ledger_account_id = $1${documentLocationCond(locFilter, 'e', expParams, 'headoffice')}`,
+      expParams,
+    );
+    entries.push(...exps.map((e: any) => ({
+      date: e.expense_date, description: e.description ?? "Expense",
       debit: Number(e.amount), credit: 0, entryType: 'expense',
     })));
   }
@@ -639,9 +681,11 @@ router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledge
   if (needsSales) {
     const salesParams: unknown[] = [];
     const salesWhere = scopeSalesWhere(scope, salesParams);
+    // fallback null: a sale with no stored location posts as company-level in
+    // the derived stream, so it matches only the 'company' slice here too.
     const { rows } = await pool.query(
       `SELECT s.id, s.sale_date, s.invoice_number, s.total_amount, s.tax_total
-       FROM sales s WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL AND ${salesWhere}`, salesParams,
+       FROM sales s WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL AND ${salesWhere}${documentLocationCond(locFilter, 's', salesParams, null)}`, salesParams,
     );
     scopedSales = rows as typeof scopedSales;
   }
@@ -677,7 +721,7 @@ router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledge
     const purWhere = scopeBranchWhere(scope, purParams, 'p');
     const { rows: purRows } = await pool.query(
       `SELECT p.id, p.purchase_date, p.invoice_number, p.total_amount
-       FROM purchases p WHERE p.branch_transfer_id IS NULL AND ${purWhere}`, purParams,
+       FROM purchases p WHERE p.branch_transfer_id IS NULL AND ${purWhere}${documentLocationCond(locFilter, 'p', purParams, 'headoffice')}`, purParams,
     );
     entries.push(...purRows.map((p: any) => ({
       date: p.purchase_date,
@@ -687,8 +731,11 @@ router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledge
   }
 
   // Journal-family voucher lines touching this ledger (journal/contra/CN/DN).
-  // Journal vouchers carry no location dimension, so they stay Head Office.
-  const { rows: jvLines } = scope.isHeadOffice ? await pool.query(
+  // Journal vouchers carry no location dimension, so they stay Head Office —
+  // and in a location-sliced statement they are company-level: shown for the
+  // 'company' slice and the unfiltered view, dropped for every location slice.
+  const includeJvs = scope.isHeadOffice && (!locFilter || locFilter.type === "company");
+  const { rows: jvLines } = includeJvs ? await pool.query(
     `SELECT v.voucher_date AS date, v.voucher_number, v.voucher_type, v.narration,
             l.debit, l.credit
      FROM journal_voucher_lines l
@@ -722,6 +769,7 @@ router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledge
     openingBalance: 0, closingBalance: balance,
     entries: entriesWithBalance,
     transactions: entriesWithBalance,
+    ...(locFilter ? { location: locFilter } : {}),
   });
 });
 
@@ -1640,20 +1688,32 @@ router.get("/accounts/financial-statements", requireModuleView(["page:/accounts/
   // LBAC: P&L and Balance Sheet are Head Office accounting
   if ((req as any).employee?.branchType !== 'headoffice') { res.json({ pl: null, bs: null }); return; }
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
+  const location = parsePostingLocationFilter(req.query as any);
 
-  const books = await buildBooks(buildDerivedPostings, { fromDate, toDate });
+  const books = await buildBooks(buildDerivedPostings, { fromDate, toDate, location });
 
   const [{ rows: warehouses }, { rows: outlets }] = await Promise.all([
     pool.query(`SELECT id, name FROM warehouses ORDER BY id`),
     pool.query(`SELECT id, name FROM outlets ORDER BY id`),
   ]);
 
+  // A filtered view must say what it could NOT attribute: journal-family
+  // vouchers and legacy unstamped rows are company-level, and dropping them
+  // silently would make per-location statements look like they sum to less
+  // than the consolidated books.
+  let companyLevel: { entries: number; debit: number; credit: number } | null = null;
+  if (location && location.type !== "company") {
+    let postings = await buildDerivedPostings(isIsoDate(toDate) ? { toDate } : {});
+    if (isIsoDate(fromDate)) postings = postings.filter((p) => p.date >= fromDate);
+    companyLevel = companyLevelSummary(postings);
+  }
+
   res.json({
-    // Statutory statements are company-wide: the posting stream carries no
-    // location, so a per-warehouse slice of it would be an unbalanced fragment
-    // rather than a smaller balance sheet. Location profit lives in the
-    // Profitability report and the dashboard instead.
-    locationScoped: false,
+    // Every posting now carries its source document's location (both legs the
+    // same stamp), so a location slice is a balanced set of whole entries, not
+    // an unbalanced fragment. Unfiltered output is unchanged.
+    locationScoped: location != null,
+    ...(location ? { location: { type: location.type, id: location.id }, companyLevel } : {}),
     filters: { warehouses, outlets },
     ...books,
   });
@@ -1666,6 +1726,8 @@ router.get("/accounts/ledger/:id/statement", requireModuleView("page:/accounts/l
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid ledger id" }); return; }
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
+  // Presentation narrowing only; LBAC below still applies first.
+  const locFilter = parsePostingLocationFilter(req.query as Record<string, unknown>);
 
   const { rows: [ledger] } = await pool.query(
     `SELECT id, name, type, code FROM account_ledgers WHERE id = $1`, [id]
@@ -1703,7 +1765,7 @@ router.get("/accounts/ledger/:id/statement", requireModuleView("page:/accounts/l
             pt.name AS other_name
      FROM payments p
      LEFT JOIN account_ledgers pt ON pt.id = p.paid_to_ledger_id
-     WHERE p.paid_from_ledger_id = $1${dateClause('p.payment_date', pFromParams)}${moneyScope(pFromParams, 'p')}
+     WHERE p.paid_from_ledger_id = $1${dateClause('p.payment_date', pFromParams)}${moneyScope(pFromParams, 'p')}${documentLocationCond(locFilter, 'p', pFromParams, 'headoffice')}
      ORDER BY p.payment_date, p.id`, pFromParams
   );
 
@@ -1714,7 +1776,7 @@ router.get("/accounts/ledger/:id/statement", requireModuleView("page:/accounts/l
             pf.name AS other_name
      FROM payments p
      LEFT JOIN account_ledgers pf ON pf.id = p.paid_from_ledger_id
-     WHERE p.paid_to_ledger_id = $1${dateClause('p.payment_date', pToParams)}${moneyScope(pToParams, 'p')}
+     WHERE p.paid_to_ledger_id = $1${dateClause('p.payment_date', pToParams)}${moneyScope(pToParams, 'p')}${documentLocationCond(locFilter, 'p', pToParams, 'headoffice')}
      ORDER BY p.payment_date, p.id`, pToParams
   );
 
@@ -1725,7 +1787,7 @@ router.get("/accounts/ledger/:id/statement", requireModuleView("page:/accounts/l
             ri.name AS other_name
      FROM receipts r
      LEFT JOIN account_ledgers ri ON ri.id = r.received_in_ledger_id
-     WHERE r.received_from_ledger_id = $1${dateClause('r.receipt_date', rFromParams)}${moneyScope(rFromParams, 'r')}
+     WHERE r.received_from_ledger_id = $1${dateClause('r.receipt_date', rFromParams)}${moneyScope(rFromParams, 'r')}${documentLocationCond(locFilter, 'r', rFromParams, 'headoffice')}
      ORDER BY r.receipt_date, r.id`, rFromParams
   ).catch(() => ({ rows: [] }));
 
@@ -1736,7 +1798,7 @@ router.get("/accounts/ledger/:id/statement", requireModuleView("page:/accounts/l
             rf.name AS other_name
      FROM receipts r
      LEFT JOIN account_ledgers rf ON rf.id = r.received_from_ledger_id
-     WHERE r.received_in_ledger_id = $1${dateClause('r.receipt_date', rToParams)}${moneyScope(rToParams, 'r')}
+     WHERE r.received_in_ledger_id = $1${dateClause('r.receipt_date', rToParams)}${moneyScope(rToParams, 'r')}${documentLocationCond(locFilter, 'r', rToParams, 'headoffice')}
      ORDER BY r.receipt_date, r.id`, rToParams
   ).catch(() => ({ rows: [] }));
 
@@ -1745,14 +1807,17 @@ router.get("/accounts/ledger/:id/statement", requireModuleView("page:/accounts/l
   const { rows: expRows } = scope.isHeadOffice ? await pool.query(
     `SELECT e.id, e.expense_date AS date, e.amount, e.description, e.category
      FROM expenses e
-     WHERE e.ledger_account_id = $1${dateClause('e.expense_date', expParams)}
+     WHERE e.ledger_account_id = $1${dateClause('e.expense_date', expParams)}${documentLocationCond(locFilter, 'e', expParams, 'headoffice')}
      ORDER BY e.expense_date, e.id`, expParams
   ).catch(() => ({ rows: [] })) : { rows: [] as any[] };
 
   // Journal-family voucher lines touching this ledger — no location dimension,
-  // so branch users don't see them (they never create them either).
+  // so branch users don't see them (they never create them either). In a
+  // location-sliced statement they are company-level: 'company' slice and the
+  // unfiltered view only.
+  const includeJvRows = scope.isHeadOffice && (!locFilter || locFilter.type === "company");
   const jvParams: any[] = [id];
-  const { rows: jvRows } = scope.isHeadOffice ? await pool.query(
+  const { rows: jvRows } = includeJvRows ? await pool.query(
     `SELECT l.id, v.voucher_date AS date, v.voucher_number, v.voucher_type, v.narration,
             l.debit, l.credit
      FROM journal_voucher_lines l
@@ -1817,6 +1882,7 @@ router.get("/accounts/ledger/:id/statement", requireModuleView("page:/accounts/l
   res.json({
     ledger: { id: ledger.id, name: ledger.name, type: ledger.type, code: ledger.code },
     entries, totalDebit, totalCredit, closingBalance: balance,
+    ...(locFilter ? { location: locFilter } : {}),
   });
 });
 

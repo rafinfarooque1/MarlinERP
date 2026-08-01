@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Wallet, Landmark, Download, AlertTriangle } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
+import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 
 const inr = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 const today = () => new Date().toISOString().split('T')[0];
@@ -36,8 +37,11 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
     }
   }, [ledgers, ledgerId, isCash]);
 
-  const { data, isLoading } = useCashBankBook(ledgerId, fromDate || undefined, toDate || undefined);
+  const { locationState } = useLocationContext();
+  const loc = locationFilterParams(locationState);
+  const { data, isLoading } = useCashBankBook(ledgerId, fromDate || undefined, toDate || undefined, loc);
   const entries = data?.entries ?? [];
+  const companyLevel = (data as any)?.location ? (data as any)?.companyLevel : null;
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -66,7 +70,9 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Select value={ledgerId ? String(ledgerId) : undefined} onValueChange={v => setLedgerId(Number(v))}>
+            {/* '' keeps the select controlled while no ledger is chosen — undefined
+                would flip it uncontrolled→controlled and trigger a React warning */}
+            <Select value={ledgerId ? String(ledgerId) : ''} onValueChange={v => setLedgerId(Number(v))}>
               <SelectTrigger className="w-56"><SelectValue placeholder="Select ledger" /></SelectTrigger>
               <SelectContent>
                 {ledgers.map(l => (
@@ -92,6 +98,15 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
             )}
           </div>
         </div>
+
+        {/* Company-level bucket note */}
+        {!isLoading && (data as any)?.location && companyLevel && companyLevel.entries > 0 && (
+          <div className="bg-muted/40 border border-border rounded-xl p-3 text-xs text-muted-foreground">
+            Showing <span className="font-medium text-foreground">{locationState.locationName}</span> only.
+            {' '}{companyLevel.entries} company-level {companyLevel.entries === 1 ? 'entry' : 'entries'} in this period
+            {' '}carry no location and are excluded — switch to All Locations to include them.
+          </div>
+        )}
 
         {/* Summary cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">

@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { Route, Switch, Router as WouterRouter, useLocation, Redirect } from 'wouter';
+import { Route, Switch, Router as WouterRouter, useLocation, Redirect, Link } from 'wouter';
 
 import Login from './pages/auth/Login';
 import ChangePassword from './pages/auth/ChangePassword';
@@ -137,7 +137,7 @@ function NotFound() {
       <div className="text-center space-y-4">
         <h1 className="text-6xl font-bold font-mono text-primary">404</h1>
         <p className="text-xl text-muted-foreground">Location not found in database.</p>
-        <a href="/" className="inline-block mt-4 px-4 py-2 bg-primary text-primary-foreground rounded-md">Return to Dashboard</a>
+        <Link href="/" className="inline-block mt-4 px-4 py-2 bg-primary text-primary-foreground rounded-md">Return to Dashboard</Link>
       </div>
     </div>
   );

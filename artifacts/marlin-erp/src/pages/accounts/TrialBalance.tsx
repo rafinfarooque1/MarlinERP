@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Scale, Download, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
+import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 
 const inr = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 
@@ -19,9 +20,12 @@ export default function TrialBalance() {
   const perm = usePermission('page:/accounts/trial-balance');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
-  const { data, isLoading } = useTrialBalance(fromDate || undefined, toDate || undefined);
+  const { locationState } = useLocationContext();
+  const loc = locationFilterParams(locationState);
+  const { data, isLoading } = useTrialBalance(fromDate || undefined, toDate || undefined, loc);
 
   const rows = data?.rows ?? [];
+  const companyLevel = data?.location ? data?.companyLevel : null;
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -64,6 +68,17 @@ export default function TrialBalance() {
             )}
           </div>
         </div>
+
+        {/* Company-level bucket note — postings with no location dimension
+            (journal vouchers, opening balances) sit outside every location
+            slice, so a filtered view says what it is not showing. */}
+        {!isLoading && data?.location && companyLevel && companyLevel.entries > 0 && (
+          <div className="bg-muted/40 border border-border rounded-xl p-3 text-xs text-muted-foreground">
+            Showing <span className="font-medium text-foreground">{locationState.locationName}</span> only.
+            {' '}{companyLevel.entries} company-level {companyLevel.entries === 1 ? 'entry' : 'entries'} (₹{companyLevel.debit.toLocaleString('en-IN', { minimumFractionDigits: 2 })} Dr)
+            {' '}carry no location and are excluded — switch to All Locations to include them.
+          </div>
+        )}
 
         {/* Balance status banner */}
         {!isLoading && rows.length > 0 && (

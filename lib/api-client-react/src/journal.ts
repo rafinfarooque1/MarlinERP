@@ -6,13 +6,34 @@ export const getJournalVouchersQueryKey = (params?: Record<string, string>) =>
   params && Object.keys(params).length
     ? (['/api/accounts/journal-vouchers', params] as const)
     : (['/api/accounts/journal-vouchers'] as const);
-export const getDayBookQueryKey = (date?: string) => ['/api/accounts/day-book', date ?? 'today'] as const;
-export const getCashBankBookQueryKey = (ledgerId: number, fromDate?: string, toDate?: string) =>
-  ['/api/accounts/cash-bank-book', ledgerId, fromDate ?? '', toDate ?? ''] as const;
+/**
+ * Optional location slice for the books endpoints. Matches the global
+ * location selector: a concrete warehouse/outlet, 'headoffice', or 'company'
+ * (postings with no location dimension). Omit for the consolidated view.
+ */
+export interface BooksLocationParams {
+  locationType?: 'warehouse' | 'outlet' | 'headoffice' | 'company';
+  locationId?: number;
+}
+
+const locKey = (loc?: BooksLocationParams) =>
+  loc?.locationType ? `${loc.locationType}:${loc.locationId ?? ''}` : '';
+
+const locQs = (qs: URLSearchParams, loc?: BooksLocationParams) => {
+  if (loc?.locationType) {
+    qs.set('locationType', loc.locationType);
+    if (loc.locationId != null) qs.set('locationId', String(loc.locationId));
+  }
+};
+
+export const getDayBookQueryKey = (date?: string, loc?: BooksLocationParams) =>
+  ['/api/accounts/day-book', date ?? 'today', locKey(loc)] as const;
+export const getCashBankBookQueryKey = (ledgerId: number, fromDate?: string, toDate?: string, loc?: BooksLocationParams) =>
+  ['/api/accounts/cash-bank-book', ledgerId, fromDate ?? '', toDate ?? '', locKey(loc)] as const;
 export const getCashBankBookLedgersQueryKey = (kind: 'cash' | 'bank') =>
   ['/api/accounts/cash-bank-book/ledgers', kind] as const;
-export const getTrialBalanceQueryKey = (fromDate?: string, toDate?: string) =>
-  ['/api/accounts/trial-balance', fromDate ?? '', toDate ?? ''] as const;
+export const getTrialBalanceQueryKey = (fromDate?: string, toDate?: string, loc?: BooksLocationParams) =>
+  ['/api/accounts/trial-balance', fromDate ?? '', toDate ?? '', locKey(loc)] as const;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type JournalVoucherType = 'journal' | 'contra' | 'credit_note' | 'debit_note';
@@ -132,6 +153,17 @@ export interface TrialBalanceRow {
   credit: number;
 }
 
+/**
+ * Present on filtered books responses: how much of the same window is
+ * company-level (no location dimension) and therefore lives outside every
+ * location slice. Null when the filter IS the company slice.
+ */
+export interface CompanyLevelSummary {
+  entries: number;
+  debit: number;
+  credit: number;
+}
+
 export interface TrialBalanceResponse {
   fromDate?: string | null;
   toDate?: string | null;
@@ -140,6 +172,9 @@ export interface TrialBalanceResponse {
   totalCredit: number;
   difference: number;
   balanced: boolean;
+  /** Echoed only when a location filter was applied. */
+  location?: { type: string; id: number | null };
+  companyLevel?: CompanyLevelSummary | null;
 }
 
 // ── Books invalidation (anything that changes postings) ──────────────────────
@@ -214,11 +249,15 @@ export function useDeleteJournalVoucher() {
 }
 
 // ── Day Book ──────────────────────────────────────────────────────────────────
-export function useDayBook(date?: string) {
+export function useDayBook(date?: string, loc?: BooksLocationParams) {
+  const qs = new URLSearchParams();
+  if (date) qs.set('date', date);
+  locQs(qs, loc);
+  const s = qs.toString();
   return useQuery({
-    queryKey: getDayBookQueryKey(date),
+    queryKey: getDayBookQueryKey(date, loc),
     queryFn: ({ signal }) =>
-      customFetch<DayBookResponse>(`/api/accounts/day-book${date ? `?date=${date}` : ''}`, { signal }),
+      customFetch<DayBookResponse>(`/api/accounts/day-book${s ? `?${s}` : ''}`, { signal }),
   });
 }
 
@@ -231,12 +270,13 @@ export function useCashBankBookLedgers(kind: 'cash' | 'bank') {
   });
 }
 
-export function useCashBankBook(ledgerId: number, fromDate?: string, toDate?: string) {
+export function useCashBankBook(ledgerId: number, fromDate?: string, toDate?: string, loc?: BooksLocationParams) {
   const qs = new URLSearchParams({ ledgerId: String(ledgerId) });
   if (fromDate) qs.set('fromDate', fromDate);
   if (toDate) qs.set('toDate', toDate);
+  locQs(qs, loc);
   return useQuery({
-    queryKey: getCashBankBookQueryKey(ledgerId, fromDate, toDate),
+    queryKey: getCashBankBookQueryKey(ledgerId, fromDate, toDate, loc),
     queryFn: ({ signal }) =>
       customFetch<CashBankBookResponse>(`/api/accounts/cash-bank-book?${qs.toString()}`, { signal }),
     enabled: ledgerId > 0,
@@ -244,13 +284,14 @@ export function useCashBankBook(ledgerId: number, fromDate?: string, toDate?: st
 }
 
 // ── Trial Balance ─────────────────────────────────────────────────────────────
-export function useTrialBalance(fromDate?: string, toDate?: string) {
+export function useTrialBalance(fromDate?: string, toDate?: string, loc?: BooksLocationParams) {
   const qs = new URLSearchParams();
   if (fromDate) qs.set('fromDate', fromDate);
   if (toDate) qs.set('toDate', toDate);
+  locQs(qs, loc);
   const s = qs.toString();
   return useQuery({
-    queryKey: getTrialBalanceQueryKey(fromDate, toDate),
+    queryKey: getTrialBalanceQueryKey(fromDate, toDate, loc),
     queryFn: ({ signal }) =>
       customFetch<TrialBalanceResponse>(`/api/accounts/trial-balance${s ? `?${s}` : ''}`, { signal }),
   });

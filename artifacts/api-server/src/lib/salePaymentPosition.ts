@@ -137,6 +137,62 @@ export function outstandingExpr(saleAlias = "s"): string {
   ) END)`;
 }
 
+// ── As-of (historical) variants ──────────────────────────────────────────────
+// For "receivables as at the end of the selected period". Same rules as above,
+// with every money movement capped at the as-of date:
+//
+//  - sale_payments count only when payment_date ≤ asOf.
+//  - The legacy "extra" (amount_paid beyond the sum of sale_payments — counter
+//    settlements recorded before sale_payments existed) is treated as received
+//    on the SALE date, exactly as the derived posting stream books it.
+//  - Credit-note returns count by their BUSINESS date (`return_date`, the date
+//    the linked credit-note voucher posts under), not the row's created_at —
+//    a backdated return recorded later was still effective on that date.
+//  - Cancellation stays retroactive: the posting stream drops a cancelled
+//    invoice entirely, so it owes nothing at ANY as-of date, not just after
+//    the cancellation timestamp.
+//
+// `asOfParam` is the caller's SQL placeholder (e.g. "$1") so these compose
+// into parameterised queries without string-splicing a date.
+
+export function creditAdjustmentsAsOfExpr(saleAlias: string, asOfParam: string): string {
+  return `COALESCE((
+    SELECT SUM(sr.total_amount::numeric)
+      FROM sales_returns sr
+     WHERE sr.sale_id = ${saleAlias}.id
+       AND sr.refund_mode = 'credit_note'
+       AND sr.return_date::date <= ${asOfParam}::date
+  ), 0)`;
+}
+
+export function amountReceivedAsOfExpr(saleAlias: string, asOfParam: string): string {
+  return `(
+    COALESCE((
+      SELECT SUM(sp.amount::numeric)
+        FROM sale_payments sp
+       WHERE sp.sale_id = ${saleAlias}.id
+         AND sp.payment_date::date <= ${asOfParam}::date
+    ), 0)
+    + CASE WHEN ${saleAlias}.sale_date::date <= ${asOfParam}::date THEN GREATEST(
+        0,
+        COALESCE(${saleAlias}.amount_paid, 0)::numeric - COALESCE((
+          SELECT SUM(sp2.amount::numeric) FROM sale_payments sp2 WHERE sp2.sale_id = ${saleAlias}.id
+        ), 0)
+      ) ELSE 0 END
+  )`;
+}
+
+export function amountDueAsOfExpr(saleAlias: string, asOfParam: string): string {
+  return `(${saleAlias}.total_amount::numeric - ${creditAdjustmentsAsOfExpr(saleAlias, asOfParam)})`;
+}
+
+export function outstandingAsOfExpr(saleAlias: string, asOfParam: string): string {
+  return `(CASE WHEN ${saleAlias}.cancelled_at IS NOT NULL THEN 0 ELSE GREATEST(
+    0,
+    ${amountDueAsOfExpr(saleAlias, asOfParam)} - ${amountReceivedAsOfExpr(saleAlias, asOfParam)}
+  ) END)`;
+}
+
 // ── Loading ───────────────────────────────────────────────────────────────────
 
 /** Anything that can run a query: the pool, or a client inside a transaction. */

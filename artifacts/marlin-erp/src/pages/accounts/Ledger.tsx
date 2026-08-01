@@ -9,6 +9,7 @@ import { FileText, Download, Calendar, ShieldOff } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
+import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 
 export default function Ledger() {
   const perm = usePermission('page:/accounts/ledger');
@@ -17,9 +18,19 @@ export default function Ledger() {
   const now = new Date();
   const [fromDate, setFromDate] = useState(`${now.getFullYear()}-01-01`);
   const [toDate, setToDate] = useState(now.toISOString().split('T')[0]);
+  // Global location selector narrows the statement to that location's slice of
+  // the books. The generated hook serialises every key of its params object
+  // into the query string AND the cache key, so spreading the extra params is
+  // both transport and cache-correct (the generated type just doesn't know
+  // about them — hence the cast).
+  const { locationState } = useLocationContext();
+  const locParams = locationFilterParams(locationState);
 
   const { data: statement, isLoading } = useGetLedgerStatement(
-    accountId && fromDate && toDate ? { accountId: Number(accountId), fromDate, toDate } : { accountId: 0, fromDate, toDate },
+    {
+      ...(accountId && fromDate && toDate ? { accountId: Number(accountId), fromDate, toDate } : { accountId: 0, fromDate, toDate }),
+      ...locParams,
+    } as any,
     { query: { enabled: !!accountId } as any }
   );
 

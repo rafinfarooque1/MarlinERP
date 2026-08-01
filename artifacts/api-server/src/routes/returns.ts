@@ -16,7 +16,10 @@ import { restoreBatches, consumeBatches, debitBatchByNumber, type BatchBreakdown
 import { logActivity } from "../lib/audit";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { writeStockLedger, batchResolveMeta } from "../lib/stockLedger";
-import { outstandingExpr, creditAdjustmentsExpr, computePaymentPosition } from "../lib/salePaymentPosition";
+import {
+  outstandingExpr, creditAdjustmentsExpr, computePaymentPosition,
+  outstandingAsOfExpr, creditAdjustmentsAsOfExpr, amountReceivedAsOfExpr,
+} from "../lib/salePaymentPosition";
 import { deductMaterialAt, isMaterialKind } from "../lib/materialStock";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 import { isIsoDate } from "../lib/dateInput";
@@ -357,10 +360,11 @@ router.post("/sales-returns", requireModuleAction(["page:/returns", "page:/sales
       }
       const payNumber = await nextVoucherNumber(client, "payment", returnDate);
       const { rows: [pay] } = await client.query(
-        `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
         [payNumber, returnDate, cashLedgerId, salesLedger, totalAmount,
-         `Cash refund ${returnNumber} against ${invoiceRef}${locationName ? ` at ${locationName}` : ""}`]
+         `Cash refund ${returnNumber} against ${invoiceRef}${locationName ? ` at ${locationName}` : ""}`,
+         locationType, locationId]
       );
       refundPaymentId = pay.id;
       refundMode = "cash";
@@ -832,22 +836,41 @@ const addDays = (iso: string, days: number): string =>
 // credit notes shown as unallocated credits.
 router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "page:/customers"]), async (req: Request, res: Response) => {
   try {
-    const asOf = todayISO();
+    // `?asOf=` (or `?to=`) prices the report at the END of a selected period:
+    // bills, payments, credit notes and ledger balances are all capped at that
+    // date, so the total agrees with Sundry Debtors on the Balance Sheet dated
+    // the same day. No parameter keeps the original "today" path untouched.
+    const asOfQ = (req.query as any).asOf ?? (req.query as any).to ?? (req.query as any).toDate;
+    const dated = isDateStr(asOfQ);
+    const asOf = dated ? asOfQ : todayISO();
     const { getUserDataScope, scopeSalesWhere } = await import("../lib/dataScope");
     const rcvEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
     const rcvScope = rcvEmp ? await getUserDataScope(rcvEmp) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
     const rcvParams: any[] = [];
+    let outsSql = outstandingExpr("s");
+    let credSql = creditAdjustmentsExpr("s");
+    let paidSql = `COALESCE(s.amount_paid, 0)::numeric`;
+    let saleDateCond = "TRUE";
+    if (dated) {
+      rcvParams.push(asOf);
+      const ph = `$${rcvParams.length}`;
+      outsSql = outstandingAsOfExpr("s", ph);
+      credSql = creditAdjustmentsAsOfExpr("s", ph);
+      paidSql = amountReceivedAsOfExpr("s", ph);
+      saleDateCond = `s.sale_date::date <= ${ph}::date`;
+    }
     const rcvScopeCond = scopeSalesWhere(rcvScope, rcvParams);
     const { rows: invoices } = await pool.query(
       `SELECT s.id, s.invoice_number, s.sale_date, s.customer_id,
-              s.total_amount::numeric AS total, COALESCE(s.amount_paid, 0)::numeric AS paid,
-              ${creditAdjustmentsExpr("s")} AS credit_notes,
-              ${outstandingExpr("s")} AS outstanding,
+              s.total_amount::numeric AS total, ${paidSql} AS paid,
+              ${credSql} AS credit_notes,
+              ${outsSql} AS outstanding,
               c.name, c.phone, COALESCE(c.credit_days, 0) AS credit_days, COALESCE(c.credit_limit, 0)::numeric AS credit_limit
        FROM sales s
        JOIN customers c ON c.id = s.customer_id
-       WHERE ${outstandingExpr("s")} > 0.009
+       WHERE ${outsSql} > 0.009
          AND s.branch_transfer_id IS NULL
+         AND ${saleDateCond}
          AND ${rcvScopeCond}
        ORDER BY s.sale_date ASC, s.id ASC`,
       rcvParams
@@ -861,7 +884,9 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
        JOIN account_ledgers l ON l.id = v.party_ledger_id
        WHERE v.voucher_type = 'credit_note' AND l.code LIKE 'CUST-%'
          AND NOT EXISTS (SELECT 1 FROM sales_returns sr WHERE sr.credit_note_id = v.id)
-       GROUP BY l.code`
+         ${dated ? `AND v.voucher_date::date <= $1::date` : ""}
+       GROUP BY l.code`,
+      dated ? [asOf] : []
     );
     const cnByCustomer = new Map<number, number>();
     for (const r of cnRows) {
@@ -879,7 +904,7 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
     // under a branch heading.
     const rcvLedgerAnchored = rcvScope.isHeadOffice;
     const ledgerByCustomer = rcvLedgerAnchored
-      ? (await (await import("../lib/ledgerBalances")).currentBalanceIndex()).partyBalances("customer")
+      ? (await (await import("../lib/ledgerBalances")).currentBalanceIndex(dated ? { toDate: asOf } : {})).partyBalances("customer")
       : new Map<number, { balance: number }>();
 
     const byCustomer = new Map<number, any>();
@@ -1024,7 +1049,12 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
       res.json({ asOf: todayISO(), totals: { b0_30: 0, b31_60: 0, b61_90: 0, b90p: 0, totalDue: 0, debitNotes: 0, netDue: 0 }, vendors: [] });
       return;
     }
-    const asOf = todayISO();
+    // `?asOf=` (or `?to=`) prices the report at the END of a selected period —
+    // same contract as receivables: bills, payments, debit notes and the
+    // ledger pool are all capped at that date. No parameter = today, unchanged.
+    const payAsOfQ = (req.query as any).asOf ?? (req.query as any).to ?? (req.query as any).toDate;
+    const payDated = isDateStr(payAsOfQ);
+    const asOf = payDated ? payAsOfQ : todayISO();
     // An asset bought on credit credits the vendor's payable ledger exactly as a
     // stock purchase does, but it lives in asset_purchases, not purchases. Left
     // out, this report would understate what is owed and disagree with the
@@ -1034,6 +1064,7 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
     const { rows: [assetTbl] } = await pool.query<{ ok: boolean }>(
       `SELECT to_regclass('public.asset_purchases') IS NOT NULL AS ok`
     );
+    const billDateCond = payDated ? `AND purchase_date::date <= $1::date` : "";
     const assetBillsSql = assetTbl?.ok
       ? `UNION ALL
          SELECT 'asset_purchase'::text AS source, ap.id,
@@ -1055,7 +1086,9 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
            JOIN vendors v ON v.id = p.vendor_id
          ${assetBillsSql}
        ) bills
-       ORDER BY purchase_date ASC, source ASC, id ASC`
+       WHERE TRUE ${billDateCond}
+       ORDER BY purchase_date ASC, source ASC, id ASC`,
+      payDated ? [asOf] : []
     );
     // Payments and debit notes, kept for display only. They are NOT what the
     // ageing settles bills with any more: that pool is derived from the vendor's
@@ -1067,14 +1100,18 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
        FROM payments p
        JOIN account_ledgers l ON l.id = p.paid_to_ledger_id
        WHERE l.code LIKE 'VEND-%'
-       GROUP BY l.code`
+         ${payDated ? `AND p.payment_date::date <= $1::date` : ""}
+       GROUP BY l.code`,
+      payDated ? [asOf] : []
     );
     const { rows: dnRows } = await pool.query(
       `SELECT l.code, COALESCE(SUM(v.total_amount::numeric), 0) AS amt
        FROM journal_vouchers v
        JOIN account_ledgers l ON l.id = v.party_ledger_id
        WHERE v.voucher_type = 'debit_note' AND l.code LIKE 'VEND-%'
-       GROUP BY l.code`
+         ${payDated ? `AND v.voucher_date::date <= $1::date` : ""}
+       GROUP BY l.code`,
+      payDated ? [asOf] : []
     );
     const paidByVendor = new Map<number, number>();
     for (const r of payRows) {
@@ -1087,9 +1124,10 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
       if (Number.isFinite(id)) dnByVendor.set(id, r2((dnByVendor.get(id) ?? 0) + Number(r.amt)));
     }
 
-    // The authoritative payable per vendor.
+    // The authoritative payable per vendor — capped at asOf when dated, so the
+    // FIFO pool below settles bills with only the money that had moved by then.
     const { currentBalanceIndex } = await import("../lib/ledgerBalances");
-    const balIdx = await currentBalanceIndex();
+    const balIdx = await currentBalanceIndex(payDated ? { toDate: asOf } : {});
     const ledgerByVendor = balIdx.partyBalances("vendor");
 
     const newVendorRow = (vendorId: number, name: string, phone: string | null) => ({

@@ -324,9 +324,16 @@ export type ValuedItem = {
 /**
  * Closing stock for the financial statements: every product kind, every
  * location, in-transit included, valued at cost. One number, one source.
+ *
+ * `scope` narrows to one branch for location-filtered statements. In-transit
+ * stock stays sender-owned, so a branch slice includes what it has dispatched
+ * but the destination has not yet received.
  */
-export async function closingStockValuation(q: Queryable): Promise<{ items: ValuedItem[]; total: number; inTransit: number }> {
-  const summary = await stockValuation(q, { includeInTransit: true });
+export async function closingStockValuation(
+  q: Queryable,
+  scope: { branchType?: string; branchId?: number } = {},
+): Promise<{ items: ValuedItem[]; total: number; inTransit: number }> {
+  const summary = await stockValuation(q, { includeInTransit: true, ...scope });
   return {
     items: summary.byProduct
       .filter((p) => p.quantity > 0)
