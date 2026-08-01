@@ -157,15 +157,49 @@ async function runMigrations() {
   await pool.query(`UPDATE account_ledgers SET is_group = true WHERE is_system_group = true AND is_group = false`);
 
   // ── One-time: clean up old user-created ledgers, create standard ones ──────
-  const { rows: stdCheck } = await pool.query(
-    `SELECT 1 FROM account_ledgers WHERE code = 'STD-SALES' LIMIT 1`
+  // Guarded by migration_log, NOT just by data shape: the old STD-SALES probe
+  // re-fired on 2026-08-01 when the `code`/`is_system_group` columns were
+  // re-added empty after an incident, making every ledger look user-created —
+  // and this block then deleted all ledgers, receipts and payments. A
+  // freshly-defaulted column must never be the only thing standing between a
+  // boot and a destructive DELETE.
+  // migration_log is also created further below, but this block reads it first,
+  // so make sure it exists before the read (fresh databases would crash otherwise).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS migration_log (
+      name text PRIMARY KEY,
+      applied_at timestamptz NOT NULL DEFAULT now()
+    );
+  `);
+  const { rows: stdCleanupDone } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'std_ledgers_cleanup_v1'`
   );
-  if (stdCheck.length === 0) {
-    // Remove transaction rows that reference user-created ledgers (safe: system groups have no such refs)
-    await pool.query(`DELETE FROM expenses WHERE ledger_account_id IN (SELECT id FROM account_ledgers WHERE NOT is_system_group)`);
-    await pool.query(`DELETE FROM payments WHERE paid_from_ledger_id IN (SELECT id FROM account_ledgers WHERE NOT is_system_group) OR paid_to_ledger_id IN (SELECT id FROM account_ledgers WHERE NOT is_system_group)`);
-    await pool.query(`DELETE FROM receipts WHERE received_from_ledger_id IN (SELECT id FROM account_ledgers WHERE NOT is_system_group) OR received_in_ledger_id IN (SELECT id FROM account_ledgers WHERE NOT is_system_group)`);
-    await pool.query(`DELETE FROM account_ledgers WHERE NOT is_system_group`);
+  if (stdCleanupDone.length === 0) {
+    const { rows: stdCheck } = await pool.query(
+      `SELECT 1 FROM account_ledgers WHERE code = 'STD-SALES' LIMIT 1`
+    );
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      if (stdCheck.length === 0) {
+        // Remove transaction rows that reference user-created ledgers (safe: system groups have no such refs)
+        await client.query(`DELETE FROM expenses WHERE ledger_account_id IN (SELECT id FROM account_ledgers WHERE NOT is_system_group)`);
+        await client.query(`DELETE FROM payments WHERE paid_from_ledger_id IN (SELECT id FROM account_ledgers WHERE NOT is_system_group) OR paid_to_ledger_id IN (SELECT id FROM account_ledgers WHERE NOT is_system_group)`);
+        await client.query(`DELETE FROM receipts WHERE received_from_ledger_id IN (SELECT id FROM account_ledgers WHERE NOT is_system_group) OR received_in_ledger_id IN (SELECT id FROM account_ledgers WHERE NOT is_system_group)`);
+        await client.query(`DELETE FROM account_ledgers WHERE NOT is_system_group`);
+      }
+      // Record the marker in the SAME transaction as the cleanup (or as the
+      // recognition that the canonical STD ledgers already exist), so every
+      // environment converges to the logged state and a partial cleanup
+      // failure never writes the marker.
+      await client.query(`INSERT INTO migration_log (name) VALUES ('std_ledgers_cleanup_v1') ON CONFLICT (name) DO NOTHING`);
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 
   // Seed Tally-standard system group heads — parameterised INSERT to avoid dollar-quoting
@@ -2520,8 +2554,12 @@ await pool.query(`
 //
 // All-true rows seeded here are visible via GET /company/permissions/rbac-audit.
 {
+  // Guard MUST check the same name this block records ('permission_seed_existing_v1').
+  // It previously checked 'assets_page_perms_v1' (copy-paste from the block below),
+  // which made this one-time seed re-run — and crash on the duplicate log insert —
+  // on any database where the assets entry was absent.
   const { rows: seeded } = await pool.query(
-    `SELECT 1 FROM migration_log WHERE name = 'assets_page_perms_v1'`,
+    `SELECT 1 FROM migration_log WHERE name = 'permission_seed_existing_v1'`,
   );
   if (seeded.length === 0) {
     const { rows: hRows } = await pool.query(
@@ -2537,7 +2575,7 @@ await pool.query(`
         );
       }
     }
-    await pool.query(`INSERT INTO migration_log (name) VALUES ('permission_seed_existing_v1')`);
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('permission_seed_existing_v1') ON CONFLICT (name) DO NOTHING`);
     console.log(`[migration] permission_seed_existing_v1 — seeded ${hRows.length} pre-existing roles`);
   }
 }

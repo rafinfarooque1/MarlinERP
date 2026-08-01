@@ -82,4 +82,5 @@
 - [Leave approval workflow](leave-approval-workflow.md) — pending = zero pay; stamp at approval under the attendance lock; rejection must NOT take it (signed-off months); revert = DELETE, never 'absent'.
 - [Global filter plumbing](global-filter-plumbing.md) — shared from/to+location params narrow LBAC only; HO matches on TYPE alone (id placeholder differs per table); locked users' persisted context must be force-synced; drop partial dates client-side.
 - [drizzle push destroys raw schema](drizzle-push-destroys-raw-schema.md) — NEVER run drizzle-kit push here: schema.ts is a partial view; push --force dropped 27 raw-migration tables. DDL ships via boot migrations only.
+- [Destructive boot cleanups](destructive-boot-cleanups.md) — one-time DELETE blocks guarded only by data-shape probes re-fire when columns are re-added empty; guard on migration_log instead.
 - [Five-action permissions & role tree](five-action-permissions.md) — legacy print/approve/share cols are write-mirrors, never read; single-root role tree with derived levels; structure edits serialize on one advisory lock.
