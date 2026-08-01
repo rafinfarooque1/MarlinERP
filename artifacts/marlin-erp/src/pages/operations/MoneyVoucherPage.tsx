@@ -11,11 +11,11 @@
  * entry form on top — no popup dialogs — and the voucher register below with
  * search, filters, print/PDF and edit/delete for manual vouchers.
  */
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   useListPayments, useCreatePayment, useUpdatePayment, useDeletePayment,
   useListReceipts, useCreateReceipt, useUpdateReceipt, useDeleteReceipt,
-  useListAccountsFlat, useCashBankLedgersFlat,
+  useListAccountsFlat, useCashBankLedgersFlat, useGetMe,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -27,7 +27,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import {
   ArrowDownLeft, ArrowUpRight, Download, Trash2, Search, Calendar,
-  AlertTriangle, Lock, Printer, FileDown, Pencil, RotateCcw, Save, Paperclip, X,
+  AlertTriangle, Lock, Printer, FileDown, Pencil, RotateCcw, Save, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Form, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
@@ -38,8 +38,6 @@ import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { isSystemLedger } from '@/lib/systemLedgers';
-import { VOUCHER_MODE_OPTIONS, voucherModeLabel } from '@/lib/voucherModes';
-import { AttachmentField } from '@/components/AttachmentField';
 
 // ── Per-kind wiring ───────────────────────────────────────────────────────────
 
@@ -89,12 +87,14 @@ const PARTY_TYPES = [
   { value: 'ledger', label: 'Other Ledger', match: (_c: string) => true },
 ] as const;
 
+// No payment "mode" field: the selected Cash / Bank account IS the instrument
+// (its ledger drives the posting), so a separate mode was redundant and could
+// contradict the account. Attachments were likewise retired from vouchers.
 const schema = z.object({
   voucherDate: z.string().min(1, 'Date required'),
   cashBankLedgerId: z.coerce.number().min(1, 'Select the Cash / Bank account'),
   partyLedgerId: z.coerce.number().min(1, 'Select the party account'),
   amount: z.coerce.number().min(0.01, 'Amount must be greater than 0'),
-  paymentMode: z.string().optional(),
   referenceNumber: z.string().max(100).optional(),
   narration: z.string().optional(),
 });
@@ -103,7 +103,7 @@ type FormValues = z.infer<typeof schema>;
 const today = () => new Date().toISOString().split('T')[0];
 const EMPTY: FormValues = {
   voucherDate: today(), cashBankLedgerId: 0, partyLedgerId: 0,
-  amount: 0, paymentMode: '', referenceNumber: '', narration: '',
+  amount: 0, referenceNumber: '', narration: '',
 };
 
 /**
@@ -148,13 +148,13 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
   const deleteM = (isReceipt ? useDeleteReceipt : useDeletePayment)();
   const { data: allAccounts = [] } = useListAccountsFlat();
   const { data: cashBankAccounts = [] } = useCashBankLedgersFlat();
+  const { data: me } = useGetMe();
 
   const rows = (listQ.data ?? []) as any[];
   const isLoading = listQ.isLoading;
 
   // ── Form state ──────────────────────────────────────────────────────────────
   const [partyType, setPartyType] = useState<string>('customer');
-  const [attachmentUrl, setAttachmentUrl] = useState<string | null>(null);
   const [editing, setEditing] = useState<any>(null);
   const [lastSaved, setLastSaved] = useState<{ id: number; voucherNumber: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
@@ -170,9 +170,21 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     [allAccounts, partyTypeDef],
   );
 
+  // Branch users (warehouse/outlet) get exactly their own till from the
+  // server-scoped cash/bank list — pre-select it so the voucher can only move
+  // their location's money. Head Office keeps the full picker and chooses.
+  const isBranchUser = !!me?.branchType && me.branchType !== 'headoffice';
+  const defaultCashId = isBranchUser && (cashBankAccounts as any[]).length === 1
+    ? Number((cashBankAccounts as any[])[0].id) : 0;
+  useEffect(() => {
+    if (defaultCashId && !editing && !form.getValues('cashBankLedgerId')) {
+      form.setValue('cashBankLedgerId', defaultCashId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaultCashId]);
+
   const resetForm = () => {
-    form.reset({ ...EMPTY, voucherDate: today() });
-    setAttachmentUrl(null);
+    form.reset({ ...EMPTY, voucherDate: today(), cashBankLedgerId: defaultCashId });
     setEditing(null);
   };
 
@@ -185,11 +197,9 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
       cashBankLedgerId: Number(row[C.cashField]),
       partyLedgerId: partyId,
       amount: Number(row.amount),
-      paymentMode: row.paymentMode ?? '',
       referenceNumber: row.referenceNumber ?? '',
       narration: row.narration ?? '',
     });
-    setAttachmentUrl(row.attachmentUrl ?? null);
     setEditing(row);
     setLastSaved(null);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -200,10 +210,8 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     [C.cashField]: v.cashBankLedgerId,
     [C.partyField]: v.partyLedgerId,
     amount: v.amount,
-    paymentMode: v.paymentMode ?? '',
     referenceNumber: v.referenceNumber ?? '',
     narration: v.narration ?? '',
-    attachmentUrl: attachmentUrl ?? '',
   });
 
   const submit = (values: FormValues) => {
@@ -243,7 +251,6 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
   const [search, setSearch] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
-  const [modeFilter, setModeFilter] = useState('all');
   const [cashFilter, setCashFilter] = useState('all');
   const [byFilter, setByFilter] = useState('all');
 
@@ -264,14 +271,13 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     const d = String(r[C.dateField]).split('T')[0];
     if (fromDate && d < fromDate) return false;
     if (toDate && d > toDate) return false;
-    if (modeFilter !== 'all' && (r.paymentMode ?? '') !== modeFilter) return false;
     if (cashFilter !== 'all' && Number(r[C.cashField]) !== Number(cashFilter)) return false;
     if (byFilter !== 'all' && (r.createdBy ?? '') !== byFilter) return false;
     return true;
   });
 
   const total = filtered.reduce((s, r) => s + Number(r.amount), 0);
-  const hasFilters = search || fromDate || toDate || modeFilter !== 'all' || cashFilter !== 'all' || byFilter !== 'all';
+  const hasFilters = search || fromDate || toDate || cashFilter !== 'all' || byFilter !== 'all';
 
   const exportCsv = () => downloadCSV(C.csvName, filtered.map(r => ({
     Voucher: r.voucherNumber,
@@ -279,7 +285,6 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     [C.partyLabel]: r[C.partyNameField],
     'Cash / Bank': r[C.cashNameField],
     Amount: r.amount,
-    Mode: voucherModeLabel(r.paymentMode),
     Reference: r.referenceNumber || '',
     Narration: r.narration || '',
     'Created By': r.createdBy || '',
@@ -379,17 +384,6 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                       <FormMessage />
                     </FormItem>
                   )} />
-                  <FormField control={form.control} name="paymentMode" render={({ field }) => (
-                    <FormItem><FormLabel>Mode</FormLabel>
-                      <Select value={field.value || ''} onValueChange={field.onChange}>
-                        <SelectTrigger><SelectValue placeholder="Cash / UPI / Bank…" /></SelectTrigger>
-                        <SelectContent>
-                          {VOUCHER_MODE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )} />
                   <FormField control={form.control} name="referenceNumber" render={({ field }) => (
                     <FormItem><FormLabel>Reference #</FormLabel>
                       <Input placeholder="Cheque / UTR / Txn no." {...field} />
@@ -403,11 +397,6 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                     <Textarea rows={2} placeholder={isReceipt ? 'Being amount received towards…' : 'Being amount paid towards…'} {...field} />
                   </FormItem>
                 )} />
-
-                <div className="max-w-md space-y-2">
-                  <label className="text-sm font-medium leading-none">Attachment</label>
-                  <AttachmentField value={attachmentUrl} onChange={setAttachmentUrl} />
-                </div>
 
                 <div className="flex flex-wrap gap-2 pt-2 border-t border-border">
                   <Button type="submit" disabled={busy}>
@@ -478,13 +467,6 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                   {(cashBankAccounts as any[]).map(a => <SelectItem key={a.id} value={String(a.id)}>{a.name}</SelectItem>)}
                 </SelectContent>
               </Select>
-              <Select value={modeFilter} onValueChange={setModeFilter}>
-                <SelectTrigger className="w-[130px] h-8 text-xs"><SelectValue placeholder="Mode" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All modes</SelectItem>
-                  {VOUCHER_MODE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
               <Select value={byFilter} onValueChange={setByFilter}>
                 <SelectTrigger className="w-[150px] h-8 text-xs"><SelectValue placeholder="Created by" /></SelectTrigger>
                 <SelectContent>
@@ -494,7 +476,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
               </Select>
               {hasFilters && (
                 <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => {
-                  setSearch(''); setFromDate(''); setToDate(''); setModeFilter('all'); setCashFilter('all'); setByFilter('all');
+                  setSearch(''); setFromDate(''); setToDate(''); setCashFilter('all'); setByFilter('all');
                 }}>Clear</Button>
               )}
             </div>
@@ -507,7 +489,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                 <TableHead>Date</TableHead>
                 <TableHead>{C.partyLabel}</TableHead>
                 <TableHead>Cash / Bank</TableHead>
-                <TableHead>Mode / Ref</TableHead>
+                <TableHead>Reference</TableHead>
                 <TableHead>Narration</TableHead>
                 <TableHead>By</TableHead>
                 <TableHead className="text-right">Amount</TableHead>
@@ -526,7 +508,6 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                 <TableRow key={r.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-primary font-bold text-sm whitespace-nowrap">
                     {r.voucherNumber}
-                    {r.attachmentUrl && <Paperclip className="w-3 h-3 inline-block ml-1.5 text-muted-foreground" />}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                     <div className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(r[C.dateField]).toLocaleDateString('en-IN')}</div>
@@ -534,8 +515,9 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                   <TableCell className="font-medium text-sm">{r[C.partyNameField]}</TableCell>
                   <TableCell><Badge variant="outline" className="text-xs">{r[C.cashNameField]}</Badge></TableCell>
                   <TableCell className="text-sm">
-                    {r.paymentMode ? <Badge variant="secondary" className="text-xs">{voucherModeLabel(r.paymentMode)}</Badge> : <span className="text-muted-foreground">—</span>}
-                    {r.referenceNumber && <div className="text-[11px] text-muted-foreground font-mono mt-0.5 max-w-[110px] truncate" title={r.referenceNumber}>{r.referenceNumber}</div>}
+                    {r.referenceNumber
+                      ? <span className="text-[11px] text-muted-foreground font-mono max-w-[110px] truncate inline-block" title={r.referenceNumber}>{r.referenceNumber}</span>
+                      : <span className="text-muted-foreground">—</span>}
                   </TableCell>
                   <TableCell className="text-muted-foreground text-sm max-w-[180px] truncate">{r.narration || '—'}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{r.createdBy || '—'}</TableCell>

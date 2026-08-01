@@ -23,7 +23,7 @@ import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocat
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 import {
   callerLocation, ownLocationScope, scopeLedgerIds, scopeCashLedgerIds, scopeMoneyWhere,
-  checkVoucherLegs, foreignLocationLedgerIds,
+  checkVoucherLegs, foreignLocationLedgerIds, foreignPartyLedgerIds, headOfficeCashBankLedgerIds,
 } from "../lib/moneyScope";
 import { loadLedgerUsage, deleteBlockReason } from "../lib/chartGroups";
 import { parsePostingLocationFilter, companyLevelSummary, type PostingLocationFilter } from "../lib/postingLocation";
@@ -57,6 +57,56 @@ function documentLocationCond(
   params.push(f.id);
   const i = `$${params.length}`;
   return ` AND ${typeExpr} = ${t} AND COALESCE(${alias}.location_id, 0) = ${i}::int`;
+}
+
+/**
+ * Location condition for journal-family voucher lines. A voucher's effective
+ * location mirrors buildDerivedPostings(): a return-linked note inherits its
+ * return document's location, otherwise the voucher's own stamp counts.
+ * Manual vouchers are stamped 'headoffice' at creation (and backfilled), so
+ * they follow the books into the Head Office slice; unstamped SYSTEM vouchers
+ * (payroll allocations, transfer clearing) stay company-level — visible
+ * unfiltered and in the 'company' slice only.
+ * Requires the caller's query to join: sales_returns sr (credit_note_id),
+ * purchase_returns pr (debit_note_id) and purchases pu (pr.purchase_id),
+ * with the voucher aliased `v`.
+ */
+function jvLocationCond(f: PostingLocationFilter | null, params: unknown[]): string {
+  if (!f) return "";
+  const typeExpr = `COALESCE(sr.location_type, pu.location_type, v.location_type)`;
+  const idExpr = `COALESCE(sr.location_id, pu.location_id, v.location_id, 0)`;
+  if (f.type === "company") return ` AND ${typeExpr} IS NULL`;
+  if (f.type === "headoffice") return ` AND ${typeExpr} = 'headoffice'`;
+  params.push(f.type);
+  const t = `$${params.length}`;
+  params.push(f.id);
+  const i = `$${params.length}`;
+  return ` AND ${typeExpr} = ${t} AND ${idExpr} = ${i}::int`;
+}
+
+/**
+ * LBAC gate for journal-family voucher lines — who is ALLOWED to see them
+ * (jvLocationCond above is the view filter layered on top). Head Office sees
+ * everything. A branch caller sees only vouchers whose EFFECTIVE location is
+ * their own: their sales-return credit notes and purchase-return debit notes,
+ * which the derived posting stream already attributes to them — excluding
+ * those here would make a branch's statement disagree with its own books.
+ * Manual/HO-stamped vouchers and company-level system vouchers stay Head
+ * Office reading. Same join requirements as jvLocationCond.
+ */
+function jvScopeCond(
+  scope: { isHeadOffice: boolean; warehouseIds: number[]; outletIds: number[] },
+  params: unknown[],
+): string {
+  if (scope.isHeadOffice) return "";
+  const typeExpr = `COALESCE(sr.location_type, pu.location_type, v.location_type)`;
+  const idExpr = `COALESCE(sr.location_id, pu.location_id, v.location_id, 0)`;
+  params.push(scope.warehouseIds);
+  const w = `$${params.length}`;
+  params.push(scope.outletIds);
+  const o = `$${params.length}`;
+  return ` AND ((${typeExpr} = 'warehouse' AND ${idExpr} = ANY(${w}::int[]))
+             OR (${typeExpr} = 'outlet' AND ${idExpr} = ANY(${o}::int[])))`;
 }
 
 const router = Router();
@@ -115,10 +165,28 @@ router.get("/accounts/chart", requireModuleView(["page:/accounts/chart", "page:/
 
 // Also expose flat list for dropdowns
 // Fills account dropdowns on Journal, Contra/Notes, Vouchers and Ledger.
-router.get("/accounts/chart/flat", requireModuleView(["page:/accounts/vouchers", "page:/accounts/ledger", "page:/operations/receipt-voucher", "page:/operations/payment-voucher"]), async (_req, res): Promise<void> => {
+router.get("/accounts/chart/flat", requireModuleView(["page:/accounts/vouchers", "page:/accounts/ledger", "page:/operations/receipt-voucher", "page:/operations/payment-voucher"]), async (req, res): Promise<void> => {
   // Deactivated ledgers are withheld: this list exists to be selected from, and
   // a deactivated ledger must not attract new postings.
   const result = await pool.query(`SELECT * FROM account_ledgers WHERE COALESCE(is_active, true) ORDER BY id`);
+  // LBAC: a branch user's pickers offer only what the write path would accept —
+  // never another location's ledgers, never another branch's parties, and no
+  // Head Office cash/bank. The dropdown matching the guard beats a 403 later.
+  const flatScope = ownLocationScope((req as any).employee);
+  if (!flatScope.isHeadOffice) {
+    const [foreignLoc, foreignParty, hoCashBank, ownCash] = await Promise.all([
+      foreignLocationLedgerIds(flatScope),
+      foreignPartyLedgerIds(flatScope),
+      headOfficeCashBankLedgerIds(),
+      scopeCashLedgerIds(flatScope),
+    ]);
+    const ownCashSet = new Set(ownCash);
+    const blocked = new Set<number>([
+      ...foreignLoc, ...foreignParty,
+      ...hoCashBank.filter((lid) => !ownCashSet.has(lid)),
+    ]);
+    result.rows = result.rows.filter((r: any) => !blocked.has(Number(r.id)));
+  }
   res.json(result.rows.map((r: any) => ({
     id: r.id,
     name: r.name,
@@ -468,9 +536,7 @@ router.get("/accounts/payments", requireModuleView(["page:/accounts/vouchers", "
       paidToName: r.paid_to_name,
       amount: Number(r.amount),
       narration: r.narration,
-      paymentMode: r.payment_mode ?? null,
       referenceNumber: r.reference_number ?? null,
-      attachmentUrl: r.attachment_url ?? null,
       createdBy: r.created_by ?? null,
       origin: isSystem ? 'system' : 'manual',
       editable: !isSystem,
@@ -481,13 +547,12 @@ router.get("/accounts/payments", requireModuleView(["page:/accounts/vouchers", "
   }));
 });
 
-/**
- * Instrument modes a MANUAL receipt/payment voucher may record. Display and
- * filter metadata only — the accounting posting is driven entirely by which
- * ledgers the voucher names, so a "cheque" mode never changes the books.
- * (Sales settlement modes are a different, credit-controlled list.)
- */
-const MANUAL_VOUCHER_MODES = new Set(["cash", "upi", "bank", "card", "cheque", "neft", "rtgs"]);
+// Manual receipt/payment vouchers no longer record a payment "mode" or an
+// attachment: the selected cash/bank account IS the instrument (posting is
+// driven entirely by the ledger legs), so a separate mode was redundant and
+// could contradict the account. The payment_mode / attachment_url columns
+// stay in the DB for legacy rows but are never read or written any more.
+// (Sales settlement modes are a different, credit-controlled list.)
 
 /** Shared create/edit field validation for manual money vouchers. */
 function validateVoucherFields(body: any): { amount?: number; error?: string } {
@@ -499,12 +564,6 @@ function validateVoucherFields(body: any): { amount?: number; error?: string } {
   }
   return {};
 }
-function validateVoucherMode(mode: unknown): string | null | undefined {
-  if (mode === undefined) return undefined;      // not supplied — keep current
-  if (mode === null || mode === "") return null; // explicit clear
-  return MANUAL_VOUCHER_MODES.has(String(mode)) ? String(mode) : undefined;
-}
-
 /**
  * A payments-table row is only a MANUAL voucher when no other module owns it.
  * Ownership is STORED (payments.source / receipts.source, stamped by every
@@ -565,9 +624,11 @@ async function loadManualReceipt(client: { query: Function }, id: number, scopeW
 }
 
 router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers", "page:/operations/payment-voucher"], "add"), async (req, res): Promise<void> => {
-  const { paymentDate, paidFromLedgerId, paidToLedgerId, amount, narration, paymentMode, referenceNumber, attachmentUrl } = req.body as {
+  // paymentMode/attachmentUrl are deliberately NOT read: the chosen account is
+  // the instrument, and old clients still sending them are silently ignored.
+  const { paymentDate, paidFromLedgerId, paidToLedgerId, amount, narration, referenceNumber } = req.body as {
     paymentDate: string; paidFromLedgerId: number; paidToLedgerId: number; amount: number; narration?: string;
-    paymentMode?: string; referenceNumber?: string; attachmentUrl?: string;
+    referenceNumber?: string;
   };
   if (!paymentDate || !paidFromLedgerId || !paidToLedgerId || !amount) {
     res.status(400).json({ error: "paymentDate, paidFromLedgerId, paidToLedgerId and amount are required" }); return;
@@ -580,10 +641,6 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
   if (Number(paidFromLedgerId) === Number(paidToLedgerId)) {
     res.status(400).json({ error: "Paid From and Paid To cannot be the same account." }); return;
   }
-  const mode = validateVoucherMode(paymentMode);
-  if (paymentMode !== undefined && mode === undefined) {
-    res.status(400).json({ error: "Payment mode must be one of cash, upi, bank, card, cheque, neft, rtgs." }); return;
-  }
   // A branch user may only pay out of its own cash box, and never into another
   // location's or Head Office's cash/bank accounts.
   const scope = ownLocationScope((req as any).employee);
@@ -594,24 +651,24 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
   const voucherNumber = await nextVoucherNumber(pool, 'payment', paymentDate);
   const result = await pool.query(
     `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id,
-                           payment_mode, reference_number, attachment_url, created_by, source)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'manual') RETURNING *`,
+                           reference_number, created_by, source)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'manual') RETURNING *`,
     [voucherNumber, paymentDate, paidFromLedgerId, paidToLedgerId, av.amount, narration ?? null, locationType, locationId,
-     mode ?? null, referenceNumber?.trim() || null, attachmentUrl?.trim() || null, (req as any).employee?.username ?? null]
+     referenceNumber?.trim() || null, (req as any).employee?.username ?? null]
   );
   const r = result.rows[0];
   const [pf] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, Number(paidFromLedgerId))).limit(1);
   const [pt] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, Number(paidToLedgerId))).limit(1);
   logActivity({ action: "CREATE", module: "accounts", entityType: "payment_voucher", entityId: r.id,
     description: `Payment voucher ${r.voucher_number} — ₹${Number(r.amount).toLocaleString("en-IN")} from ${pf?.name ?? paidFromLedgerId} to ${pt?.name ?? paidToLedgerId}`,
-    metadata: { voucherNumber: r.voucher_number, date: r.payment_date, amount: Number(r.amount), paidFrom: pf?.name, paidTo: pt?.name, mode: r.payment_mode, reference: r.reference_number },
+    metadata: { voucherNumber: r.voucher_number, date: r.payment_date, amount: Number(r.amount), paidFrom: pf?.name, paidTo: pt?.name, reference: r.reference_number },
   }).catch(() => {});
   res.status(201).json({
     id: r.id, voucherNumber: r.voucher_number, paymentDate: r.payment_date,
     paidFromLedgerId: r.paid_from_ledger_id, paidFromName: pf?.name ?? '',
     paidToLedgerId: r.paid_to_ledger_id, paidToName: pt?.name ?? '',
     amount: Number(r.amount), narration: r.narration,
-    paymentMode: r.payment_mode, referenceNumber: r.reference_number, attachmentUrl: r.attachment_url, createdBy: r.created_by,
+    referenceNumber: r.reference_number, createdBy: r.created_by,
     locationType: r.location_type ?? 'headoffice', locationId: r.location_id ?? 0,
     createdAt: r.created_at,
   });
@@ -630,10 +687,6 @@ router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouc
   }
   const av = validateVoucherFields(b);
   if (av.error) { res.status(400).json({ error: av.error }); return; }
-  const mode = validateVoucherMode(b.paymentMode);
-  if (b.paymentMode !== undefined && mode === undefined) {
-    res.status(400).json({ error: "Payment mode must be one of cash, upi, bank, card, cheque, neft, rtgs." }); return;
-  }
   const scope = ownLocationScope((req as any).employee);
   const ledgerIds = await scopeLedgerIds(scope);
   const client = await pool.connect();
@@ -661,16 +714,14 @@ router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouc
     const upd = await client.query(
       `UPDATE payments SET
          payment_date = $2, paid_from_ledger_id = $3, paid_to_ledger_id = $4, amount = $5,
-         narration = $6, payment_mode = $7, reference_number = $8, attachment_url = $9
+         narration = $6, reference_number = $7
        WHERE id = $1 RETURNING *`,
       [id,
        b.paymentDate !== undefined ? String(b.paymentDate) : row.payment_date,
        newFrom, newTo,
        av.amount !== undefined ? av.amount : row.amount,
        b.narration !== undefined ? (String(b.narration).trim() || null) : row.narration,
-       b.paymentMode !== undefined ? mode : row.payment_mode,
        b.referenceNumber !== undefined ? (String(b.referenceNumber).trim() || null) : row.reference_number,
-       b.attachmentUrl !== undefined ? (String(b.attachmentUrl).trim() || null) : row.attachment_url,
       ],
     );
     await client.query("COMMIT");
@@ -680,8 +731,8 @@ router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouc
     logActivity({ action: "UPDATE", module: "accounts", entityType: "payment_voucher", entityId: id,
       description: `Payment voucher ${r.voucher_number} edited`,
       metadata: {
-        old: { date: row.payment_date, from: row.paid_from_ledger_id, to: row.paid_to_ledger_id, amount: Number(row.amount), narration: row.narration, mode: row.payment_mode, reference: row.reference_number },
-        new: { date: r.payment_date, from: r.paid_from_ledger_id, to: r.paid_to_ledger_id, amount: Number(r.amount), narration: r.narration, mode: r.payment_mode, reference: r.reference_number },
+        old: { date: row.payment_date, from: row.paid_from_ledger_id, to: row.paid_to_ledger_id, amount: Number(row.amount), narration: row.narration, reference: row.reference_number },
+        new: { date: r.payment_date, from: r.paid_from_ledger_id, to: r.paid_to_ledger_id, amount: Number(r.amount), narration: r.narration, reference: r.reference_number },
       },
     }).catch(() => {});
     res.json({
@@ -689,7 +740,7 @@ router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouc
       paidFromLedgerId: r.paid_from_ledger_id, paidFromName: pf?.name ?? '',
       paidToLedgerId: r.paid_to_ledger_id, paidToName: pt?.name ?? '',
       amount: Number(r.amount), narration: r.narration,
-      paymentMode: r.payment_mode, referenceNumber: r.reference_number, attachmentUrl: r.attachment_url, createdBy: r.created_by,
+      referenceNumber: r.reference_number, createdBy: r.created_by,
       locationType: r.location_type ?? 'headoffice', locationId: r.location_id ?? 0,
       createdAt: r.created_at,
     });
@@ -719,7 +770,7 @@ router.delete("/accounts/payments/:id", requireModuleAction(["page:/accounts/vou
   await pool.query(`DELETE FROM payments WHERE id = $1`, [id]);
   logActivity({ action: "DELETE", module: "accounts", entityType: "payment_voucher", entityId: id,
     description: `Payment voucher ${loaded.row.voucher_number} deleted — ₹${Number(loaded.row.amount).toLocaleString("en-IN")}`,
-    metadata: { old: { voucherNumber: loaded.row.voucher_number, date: loaded.row.payment_date, from: loaded.row.paid_from_ledger_id, to: loaded.row.paid_to_ledger_id, amount: Number(loaded.row.amount), narration: loaded.row.narration, mode: loaded.row.payment_mode, reference: loaded.row.reference_number } },
+    metadata: { old: { voucherNumber: loaded.row.voucher_number, date: loaded.row.payment_date, from: loaded.row.paid_from_ledger_id, to: loaded.row.paid_to_ledger_id, amount: Number(loaded.row.amount), narration: loaded.row.narration, reference: loaded.row.reference_number } },
   }).catch(() => {});
   res.status(204).send();
 });
@@ -767,9 +818,7 @@ router.get("/accounts/receipts", requireModuleView(["page:/accounts/vouchers", "
       receivedInName: r.received_in_name,
       amount: Number(r.amount),
       narration: r.narration,
-      paymentMode: r.payment_mode ?? null,
       referenceNumber: r.reference_number ?? null,
-      attachmentUrl: r.attachment_url ?? null,
       createdBy: r.created_by ?? null,
       origin: isSystem ? 'system' : 'manual',
       editable: !isSystem,
@@ -781,9 +830,11 @@ router.get("/accounts/receipts", requireModuleView(["page:/accounts/vouchers", "
 });
 
 router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers", "page:/operations/receipt-voucher"], "add"), async (req, res): Promise<void> => {
-  const { receiptDate, receivedFromLedgerId, receivedInLedgerId, amount, narration, paymentMode, referenceNumber, attachmentUrl } = req.body as {
+  // paymentMode/attachmentUrl are deliberately NOT read: the chosen account is
+  // the instrument, and old clients still sending them are silently ignored.
+  const { receiptDate, receivedFromLedgerId, receivedInLedgerId, amount, narration, referenceNumber } = req.body as {
     receiptDate: string; receivedFromLedgerId: number; receivedInLedgerId: number; amount: number; narration?: string;
-    paymentMode?: string; referenceNumber?: string; attachmentUrl?: string;
+    referenceNumber?: string;
   };
   if (!receiptDate || !receivedFromLedgerId || !receivedInLedgerId || !amount) {
     res.status(400).json({ error: "receiptDate, receivedFromLedgerId, receivedInLedgerId and amount are required" }); return;
@@ -796,10 +847,6 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
   if (Number(receivedFromLedgerId) === Number(receivedInLedgerId)) {
     res.status(400).json({ error: "Received From and Received In cannot be the same account." }); return;
   }
-  const mode = validateVoucherMode(paymentMode);
-  if (paymentMode !== undefined && mode === undefined) {
-    res.status(400).json({ error: "Payment mode must be one of cash, upi, bank, card, cheque, neft, rtgs." }); return;
-  }
   // A branch user may only collect into its own cash box.
   const scope = ownLocationScope((req as any).employee);
   const legCheck = await checkVoucherLegs(scope, Number(receivedInLedgerId), Number(receivedFromLedgerId), 'Received in');
@@ -809,24 +856,24 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
   const voucherNumber = await nextVoucherNumber(pool, 'receipt', receiptDate);
   const result = await pool.query(
     `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id,
-                           payment_mode, reference_number, attachment_url, created_by, source)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'manual') RETURNING *`,
+                           reference_number, created_by, source)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'manual') RETURNING *`,
     [voucherNumber, receiptDate, receivedFromLedgerId, receivedInLedgerId, av.amount, narration ?? null, locationType, locationId,
-     mode ?? null, referenceNumber?.trim() || null, attachmentUrl?.trim() || null, (req as any).employee?.username ?? null]
+     referenceNumber?.trim() || null, (req as any).employee?.username ?? null]
   );
   const r = result.rows[0];
   const [rf] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, Number(receivedFromLedgerId))).limit(1);
   const [ri] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, Number(receivedInLedgerId))).limit(1);
   logActivity({ action: "CREATE", module: "accounts", entityType: "receipt_voucher", entityId: r.id,
     description: `Receipt voucher ${r.voucher_number} — ₹${Number(r.amount).toLocaleString("en-IN")} from ${rf?.name ?? receivedFromLedgerId} into ${ri?.name ?? receivedInLedgerId}`,
-    metadata: { voucherNumber: r.voucher_number, date: r.receipt_date, amount: Number(r.amount), receivedFrom: rf?.name, receivedIn: ri?.name, mode: r.payment_mode, reference: r.reference_number },
+    metadata: { voucherNumber: r.voucher_number, date: r.receipt_date, amount: Number(r.amount), receivedFrom: rf?.name, receivedIn: ri?.name, reference: r.reference_number },
   }).catch(() => {});
   res.status(201).json({
     id: r.id, voucherNumber: r.voucher_number, receiptDate: r.receipt_date,
     receivedFromLedgerId: r.received_from_ledger_id, receivedFromName: rf?.name ?? '',
     receivedInLedgerId: r.received_in_ledger_id, receivedInName: ri?.name ?? '',
     amount: Number(r.amount), narration: r.narration,
-    paymentMode: r.payment_mode, referenceNumber: r.reference_number, attachmentUrl: r.attachment_url, createdBy: r.created_by,
+    referenceNumber: r.reference_number, createdBy: r.created_by,
     locationType: r.location_type ?? 'headoffice', locationId: r.location_id ?? 0,
     createdAt: r.created_at,
   });
@@ -843,10 +890,6 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
   }
   const av = validateVoucherFields(b);
   if (av.error) { res.status(400).json({ error: av.error }); return; }
-  const mode = validateVoucherMode(b.paymentMode);
-  if (b.paymentMode !== undefined && mode === undefined) {
-    res.status(400).json({ error: "Payment mode must be one of cash, upi, bank, card, cheque, neft, rtgs." }); return;
-  }
   const scope = ownLocationScope((req as any).employee);
   const ledgerIds = await scopeLedgerIds(scope);
   const client = await pool.connect();
@@ -874,16 +917,14 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
     const upd = await client.query(
       `UPDATE receipts SET
          receipt_date = $2, received_from_ledger_id = $3, received_in_ledger_id = $4, amount = $5,
-         narration = $6, payment_mode = $7, reference_number = $8, attachment_url = $9
+         narration = $6, reference_number = $7
        WHERE id = $1 RETURNING *`,
       [id,
        b.receiptDate !== undefined ? String(b.receiptDate) : row.receipt_date,
        newFrom, newIn,
        av.amount !== undefined ? av.amount : row.amount,
        b.narration !== undefined ? (String(b.narration).trim() || null) : row.narration,
-       b.paymentMode !== undefined ? mode : row.payment_mode,
        b.referenceNumber !== undefined ? (String(b.referenceNumber).trim() || null) : row.reference_number,
-       b.attachmentUrl !== undefined ? (String(b.attachmentUrl).trim() || null) : row.attachment_url,
       ],
     );
     await client.query("COMMIT");
@@ -893,8 +934,8 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
     logActivity({ action: "UPDATE", module: "accounts", entityType: "receipt_voucher", entityId: id,
       description: `Receipt voucher ${r.voucher_number} edited`,
       metadata: {
-        old: { date: row.receipt_date, from: row.received_from_ledger_id, into: row.received_in_ledger_id, amount: Number(row.amount), narration: row.narration, mode: row.payment_mode, reference: row.reference_number },
-        new: { date: r.receipt_date, from: r.received_from_ledger_id, into: r.received_in_ledger_id, amount: Number(r.amount), narration: r.narration, mode: r.payment_mode, reference: r.reference_number },
+        old: { date: row.receipt_date, from: row.received_from_ledger_id, into: row.received_in_ledger_id, amount: Number(row.amount), narration: row.narration, reference: row.reference_number },
+        new: { date: r.receipt_date, from: r.received_from_ledger_id, into: r.received_in_ledger_id, amount: Number(r.amount), narration: r.narration, reference: r.reference_number },
       },
     }).catch(() => {});
     res.json({
@@ -902,7 +943,7 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
       receivedFromLedgerId: r.received_from_ledger_id, receivedFromName: rf?.name ?? '',
       receivedInLedgerId: r.received_in_ledger_id, receivedInName: ri?.name ?? '',
       amount: Number(r.amount), narration: r.narration,
-      paymentMode: r.payment_mode, referenceNumber: r.reference_number, attachmentUrl: r.attachment_url, createdBy: r.created_by,
+      referenceNumber: r.reference_number, createdBy: r.created_by,
       locationType: r.location_type ?? 'headoffice', locationId: r.location_id ?? 0,
       createdAt: r.created_at,
     });
@@ -930,7 +971,7 @@ router.delete("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vou
   await pool.query(`DELETE FROM receipts WHERE id = $1`, [id]);
   logActivity({ action: "DELETE", module: "accounts", entityType: "receipt_voucher", entityId: id,
     description: `Receipt voucher ${loaded.row.voucher_number} deleted — ₹${Number(loaded.row.amount).toLocaleString("en-IN")}`,
-    metadata: { old: { voucherNumber: loaded.row.voucher_number, date: loaded.row.receipt_date, from: loaded.row.received_from_ledger_id, into: loaded.row.received_in_ledger_id, amount: Number(loaded.row.amount), narration: loaded.row.narration, mode: loaded.row.payment_mode, reference: loaded.row.reference_number } },
+    metadata: { old: { voucherNumber: loaded.row.voucher_number, date: loaded.row.receipt_date, from: loaded.row.received_from_ledger_id, into: loaded.row.received_in_ledger_id, amount: Number(loaded.row.amount), narration: loaded.row.narration, reference: loaded.row.reference_number } },
   }).catch(() => {});
   res.status(204).send();
 });
@@ -1079,17 +1120,21 @@ router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledge
   }
 
   // Journal-family voucher lines touching this ledger (journal/contra/CN/DN).
-  // Journal vouchers carry no location dimension, so they stay Head Office —
-  // and in a location-sliced statement they are company-level: shown for the
-  // 'company' slice and the unfiltered view, dropped for every location slice.
-  const includeJvs = scope.isHeadOffice && (!locFilter || locFilter.type === "company");
-  const { rows: jvLines } = includeJvs ? await pool.query(
+  // Location-aware since Aug 2026: manual vouchers carry a 'headoffice' stamp
+  // and return-linked notes inherit their document's location, so a location
+  // slice keeps the vouchers it can attribute instead of dropping them all.
+  // Branch callers see exactly their own return-linked notes (jvScopeCond).
+  const jvParams: unknown[] = [accountId];
+  const { rows: jvLines } = await pool.query(
     `SELECT v.voucher_date AS date, v.voucher_number, v.voucher_type, v.narration,
             l.debit, l.credit
      FROM journal_voucher_lines l
      JOIN journal_vouchers v ON v.id = l.voucher_id
-     WHERE l.ledger_id = $1`, [accountId]
-  ).catch(() => ({ rows: [] as any[] })) : { rows: [] as any[] };
+     LEFT JOIN sales_returns sr ON sr.credit_note_id = v.id
+     LEFT JOIN purchase_returns pr ON pr.debit_note_id = v.id
+     LEFT JOIN purchases pu ON pu.id = pr.purchase_id
+     WHERE l.ledger_id = $1${jvScopeCond(scope, jvParams)}${jvLocationCond(locFilter, jvParams)}`, jvParams
+  ).catch(() => ({ rows: [] as any[] }));
   for (const jl of jvLines) {
     entries.push({
       date: jl.date,
@@ -2159,20 +2204,23 @@ router.get("/accounts/ledger/:id/statement", requireModuleView("page:/accounts/l
      ORDER BY e.expense_date, e.id`, expParams
   ).catch(() => ({ rows: [] })) : { rows: [] as any[] };
 
-  // Journal-family voucher lines touching this ledger — no location dimension,
-  // so branch users don't see them (they never create them either). In a
-  // location-sliced statement they are company-level: 'company' slice and the
-  // unfiltered view only.
-  const includeJvRows = scope.isHeadOffice && (!locFilter || locFilter.type === "company");
+  // Journal-family voucher lines touching this ledger. Location-aware since
+  // Aug 2026: manual vouchers are stamped 'headoffice', return-linked notes
+  // inherit their document's location, unstamped system vouchers stay
+  // company-level. Branch callers see exactly their own return-linked notes
+  // (jvScopeCond); manual/HO vouchers remain Head Office reading.
   const jvParams: any[] = [id];
-  const { rows: jvRows } = includeJvRows ? await pool.query(
+  const { rows: jvRows } = await pool.query(
     `SELECT l.id, v.voucher_date AS date, v.voucher_number, v.voucher_type, v.narration,
             l.debit, l.credit
      FROM journal_voucher_lines l
      JOIN journal_vouchers v ON v.id = l.voucher_id
-     WHERE l.ledger_id = $1${dateClause('v.voucher_date', jvParams)}
+     LEFT JOIN sales_returns sr ON sr.credit_note_id = v.id
+     LEFT JOIN purchase_returns pr ON pr.debit_note_id = v.id
+     LEFT JOIN purchases pu ON pu.id = pr.purchase_id
+     WHERE l.ledger_id = $1${dateClause('v.voucher_date', jvParams)}${jvScopeCond(scope, jvParams)}${jvLocationCond(locFilter, jvParams)}
      ORDER BY v.voucher_date, l.id`, jvParams
-  ).catch(() => ({ rows: [] })) : { rows: [] as any[] };
+  ).catch(() => ({ rows: [] }));
 
   // Merge all entries
   const combined: { sortKey: string; date: string; description: string; reference: string; entryType: string; debit: number; credit: number }[] = [];

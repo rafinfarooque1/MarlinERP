@@ -3,9 +3,9 @@
  *
  * The formal instrument for money received or paid outside the sale/purchase
  * documents: who the money came from or went to, which cash box or bank it
- * touched, the mode and reference, and the signatures. Rendered only from the
- * stored row (never client JSON) so the print can never disagree with the
- * books.
+ * touched, the reference, and the signatures. The account itself is the
+ * instrument — no separate "mode" is printed. Rendered only from the stored
+ * row (never client JSON) so the print can never disagree with the books.
  */
 import { jsPDF } from "jspdf";
 
@@ -25,13 +25,11 @@ export interface MoneyVoucherPdfInput {
   partyName: string;
   /** Cash/bank ledger (the Dr leg on a receipt, the Cr leg on a payment). */
   cashBankName: string;
-  paymentMode: string | null;
   referenceNumber: string | null;
   narration: string | null;
   locationName: string;
   recordedBy: string | null;
   recordedAt: string | null;
-  attachmentUrl: string | null;
 }
 
 /** Amount in words — a voucher without it is not a complete instrument. */
@@ -70,11 +68,6 @@ function fmtDate(v: string | null | undefined): string {
     return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
   } catch { return String(v); }
 }
-
-const MODE_LABELS: Record<string, string> = {
-  cash: "Cash", upi: "UPI", bank: "Bank Transfer", card: "Card",
-  cheque: "Cheque", neft: "NEFT", rtgs: "RTGS",
-};
 
 export function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Buffer {
   const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
@@ -134,12 +127,7 @@ export function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Buffer {
 
   txt("Date", M + CW / 2 + 3, y + 5, { size: 6.5, color: [100, 100, 100] });
   txt(fmtDate(data.voucherDate), M + CW / 2 + 3, y + 11, { size: 10, bold: true });
-  const modeLabel = data.paymentMode ? (MODE_LABELS[data.paymentMode] ?? data.paymentMode) : null;
-  const modeLine = [
-    modeLabel ? `Mode: ${modeLabel}` : "",
-    data.referenceNumber ? `Ref: ${data.referenceNumber}` : "",
-  ].filter(Boolean).join("   ");
-  if (modeLine) txt(modeLine, M + CW / 2 + 3, y + 16, { size: 7, color: [80, 80, 80] });
+  if (data.referenceNumber) txt(`Ref: ${data.referenceNumber}`, M + CW / 2 + 3, y + 16, { size: 7, color: [80, 80, 80] });
   y += 21;
 
   // ── Detail table ──────────────────────────────────────────────────────────
@@ -187,16 +175,6 @@ export function generateMoneyVoucherPdf(data: MoneyVoucherPdfInput): Buffer {
 
   txt(`Amount in words: ${amountInWords(data.amount)}`, M, y, { size: 7.5, bold: true, color: [60, 60, 60] });
   y += 8;
-
-  // ── Supporting document ───────────────────────────────────────────────────
-  outlineRect(M, y, CW, 10, 0.2);
-  txt("Supporting document", M + 3, y + 4, { size: 6.5, color: [100, 100, 100] });
-  txt(
-    data.attachmentUrl ? "Attached in the system against this voucher" : "Not attached",
-    M + 3, y + 8,
-    { size: 7.5, bold: true, color: data.attachmentUrl ? [22, 130, 74] : [180, 100, 0] },
-  );
-  y += 13;
 
   // ── Audit trail ───────────────────────────────────────────────────────────
   const trail = [

@@ -15,7 +15,7 @@
  *    The warehouse control is rendered disabled with that reason rather than
  *    hidden, so it reads as a rule instead of an oversight.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { customFetch } from '@workspace/api-client-react';
 import { Link } from 'wouter';
@@ -24,6 +24,7 @@ import {
   AlertTriangle, Info, ChevronDown, ChevronRight, FoldVertical, UnfoldVertical,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
 import { usePermission } from '@/lib/usePermission';
 import { useEnabledOutlets } from '@/lib/locationStructure';
 import { downloadCSV } from '@/lib/download';
@@ -368,6 +369,73 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
   const s = pl?.summary;
   const locLabel = loc.key ? (options.find((o) => `${o.type}:${o.id}` === loc.key)?.name ?? loc.key) : COMPANY_WIDE;
 
+  // ── Standard trading-account presentation ─────────────────────────────────
+  // Sales returns are netted into the sales subtree by the books (a credit
+  // note debits Sales), so the server sends the split separately. The
+  // generated response type predates these fields, hence the casts.
+  const salesReturns = Number((pl?.incomes as any)?.salesReturns ?? 0);
+  const grossSales = Number((pl?.incomes as any)?.grossSales ?? (pl?.incomes.sales ?? 0));
+  const directIncome = pl?.incomes.directIncomes.total ?? 0;
+  const goodsAvailable = pl
+    ? pl.expenses.openingStock + pl.expenses.purchases + pl.expenses.directExpenses.total
+    : 0;
+  // Financial charges and depreciation are ordinary indirect-expense ledgers;
+  // they get their own statement lines when such ledgers exist. Topmost match
+  // only — a node's balance already includes its whole subtree. The match is
+  // deliberately narrow (charges/paid/expense phrasing, not any "interest…"
+  // mention) so recovery/receipt-named contra ledgers are never pulled in;
+  // anything unmatched stays inside the Indirect Expenses remainder, which is
+  // computed by subtraction, so the statement always ties to Net Profit
+  // regardless of how the split classifies.
+  const pickByName = (nodes: { name: string; balance: number; children: any[] }[], re: RegExp): number => {
+    let t = 0;
+    for (const n of nodes) {
+      if (re.test(n.name)) t += n.balance;
+      else t += pickByName(n.children ?? [], re);
+    }
+    return t;
+  };
+  const indirectNodes = (pl?.expenses.indirectExpenses.children ?? []) as { name: string; balance: number; children: any[] }[];
+  const depreciation = pickByName(indirectNodes, /\bdeprec/i);
+  const financialCharges = pickByName(
+    indirectNodes,
+    /(bank|financ\w*|loan) charg|interest (paid|expense|on )|\bfinance cost/i,
+  );
+  const otherIndirect = (pl?.expenses.indirectExpenses.total ?? 0) - depreciation - financialCharges;
+
+  type StmtRow = { name: string; amount: number | null; kind?: 'line' | 'sub' | 'total'; less?: boolean; id?: string };
+  const stmtRows: StmtRow[] = pl ? [
+    { name: 'Sales (net of GST)', amount: grossSales },
+    { name: 'Less: Sales Returns', amount: salesReturns, less: true },
+    { name: 'Net Sales', amount: pl.incomes.sales, kind: 'sub' },
+    ...(Math.abs(directIncome) > 0.005 ? [{ name: 'Add: Direct Income', amount: directIncome }] : []),
+    { name: 'Opening Stock', amount: pl.expenses.openingStock },
+    { name: 'Add: Purchases (net of returns)', amount: pl.expenses.purchases },
+    { name: 'Add: Direct Expenses', amount: pl.expenses.directExpenses.total },
+    { name: 'Goods Available for Sale', amount: goodsAvailable, kind: 'sub' },
+    { name: 'Less: Closing Stock', amount: pl.incomes.closingStock, less: true },
+    { name: 'Cost of Goods Sold (COGS)', amount: s?.costOfGoodsSold ?? 0, kind: 'sub' },
+    { name: `Gross ${(s?.grossProfit ?? 0) >= 0 ? 'Profit' : 'Loss'} (GP)`, amount: Math.abs(s?.grossProfit ?? 0), kind: 'total', id: 'pl-gross-profit' },
+    { name: 'Add: Other Income', amount: s?.otherIncome ?? 0 },
+    { name: 'Less: Indirect Expenses', amount: otherIndirect, less: true },
+    { name: 'Less: Financial Charges', amount: financialCharges, less: true },
+    { name: 'Less: Depreciation', amount: depreciation, less: true },
+    { name: `Net ${(s?.netProfit ?? 0) >= 0 ? 'Profit' : 'Loss'} (NP)`, amount: Math.abs(s?.netProfit ?? 0), kind: 'total', id: 'pl-net-profit' },
+  ] : [];
+
+  // Dashboard GP/NP tiles link here with #pl-gross-profit / #pl-net-profit.
+  useEffect(() => {
+    if (isLoading) return undefined;
+    const h = window.location.hash.slice(1);
+    if (h !== 'pl-gross-profit' && h !== 'pl-net-profit') return undefined;
+    const el = document.getElementById(h);
+    if (!el) return undefined;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('bg-primary/10');
+    const t = setTimeout(() => el.classList.remove('bg-primary/10'), 2500);
+    return () => clearTimeout(t);
+  }, [isLoading]);
+
   const expenseLines: Line[] = pl ? [
     { name: 'Opening Stock', amount: pl.expenses.openingStock, depth: 0, key: 'pl:openingStock', parentKey: null },
     { name: 'Purchases', amount: pl.expenses.purchases, depth: 0, key: 'pl:purchases', parentKey: null },
@@ -404,18 +472,13 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
     ],
     sections: [
       {
-        heading: 'Summary',
-        columns: [{ label: 'Measure', width: 3 }, MONEY_COL],
-        rows: [
-          ['Revenue (net of GST)', pdfMoney(s?.revenue)],
-          ['Cost of Goods Sold', pdfMoney(s?.costOfGoodsSold)],
-          ['Gross Profit', pdfMoney(s?.grossProfit)],
-          ['Gross Margin', pct(s?.grossMarginPct)],
-          ['Other Income', pdfMoney(s?.otherIncome)],
-          ['Operating Expenses', pdfMoney(s?.operatingExpenses)],
-          ['Net Margin', pct(s?.netMarginPct)],
-        ],
-        totalsRow: ['Net Profit', pdfMoney(s?.netProfit)],
+        heading: 'Trading and Profit & Loss (standard format)',
+        columns: [{ label: 'Particulars', width: 3 }, MONEY_COL],
+        rows: stmtRows.map((r) => [
+          r.kind === 'total' ? r.name.toUpperCase() : r.name,
+          pdfMoney(r.amount ?? 0),
+        ] as (string | number)[]),
+        totalsRow: [`Net ${(s?.netProfit ?? 0) >= 0 ? 'Profit' : 'Loss'}`, pdfMoney(Math.abs(s?.netProfit ?? 0))],
       },
       {
         heading: 'Expenses',
@@ -444,6 +507,7 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
           disabled={isLoading || !pl}
           doc={doc}
           onCSV={() => downloadCSV('profit-and-loss.csv', [
+            ...stmtRows.map((r) => ({ Side: 'Statement', Particulars: r.name, 'Amount (₹)': (r.amount ?? 0).toFixed(2) })),
             ...expenseLines.map((l) => ({ Side: 'Expenses', Particulars: l.name, 'Amount (₹)': l.amount.toFixed(2) })),
             { Side: 'Expenses', Particulars: 'TOTAL', 'Amount (₹)': (pl?.expenses.total ?? 0).toFixed(2) },
             ...incomeLines.map((l) => ({ Side: 'Incomes', Particulars: l.name, 'Amount (₹)': l.amount.toFixed(2) })),
@@ -476,6 +540,47 @@ function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: Locati
         which computes gross profit per item from actual batch cost (perpetual method); the two
         gross-profit figures are legitimately different and will not tie out.
       </NoteLine>
+
+      {/* ── Standard trading-account statement ──────────────────────────── */}
+      <div className="rounded-lg border border-border bg-card overflow-hidden">
+        <div className="px-4 py-2.5 border-b border-border bg-muted/30">
+          <h3 className="text-sm font-semibold">Trading and Profit &amp; Loss Account</h3>
+          <p className="text-xs text-muted-foreground">Standard vertical format · {periodLabel(range.from, range.to)} · {locLabel}</p>
+        </div>
+        {isLoading ? (
+          <div className="p-4 space-y-2">{[...Array(8)].map((_, i) => <Skeleton key={i} className="h-5" />)}</div>
+        ) : (
+          <table className="w-full text-sm">
+            <tbody>
+              {stmtRows.map((r) => (
+                <tr
+                  key={r.name}
+                  id={r.id}
+                  className={`transition-colors ${
+                    r.kind === 'total'
+                      ? 'border-t-2 border-b-2 border-border font-bold'
+                      : r.kind === 'sub'
+                        ? 'border-t border-border/60 font-semibold'
+                        : ''
+                  }`}
+                >
+                  <td className={`px-4 py-1.5 ${r.less ? 'pl-8 text-muted-foreground' : r.kind ? '' : 'pl-8'}`}>{r.name}</td>
+                  <td className={`px-4 py-1.5 text-right font-mono ${
+                    r.kind === 'total'
+                      ? (r.name.startsWith('Gross') ? ((s?.grossProfit ?? 0) >= 0 ? 'text-emerald-600' : 'text-red-500')
+                        : ((s?.netProfit ?? 0) >= 0 ? 'text-emerald-600' : 'text-red-500'))
+                      : ''
+                  }`}>
+                    {r.less ? `(${fmt(r.amount ?? 0)})` : fmt(r.amount ?? 0)}
+                    {r.id === 'pl-gross-profit' && s?.grossMarginPct != null ? <span className="text-xs text-muted-foreground font-sans"> · {pct(s.grossMarginPct)}</span> : null}
+                    {r.id === 'pl-net-profit' && s?.netMarginPct != null ? <span className="text-xs text-muted-foreground font-sans"> · {pct(s.netMarginPct)}</span> : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
 
       <div className="grid lg:grid-cols-2 gap-4">
         <div className="space-y-2">

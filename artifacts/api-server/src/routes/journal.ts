@@ -6,6 +6,7 @@ import { logActivity } from "../lib/audit";
 import { lineTaxHeads } from "../lib/gst";
 import { clearsThroughBank } from "../lib/paymentModes";
 import { isIsoDate } from "../lib/dateInput";
+import { callerLocation } from "../lib/moneyScope";
 
 const router = Router();
 
@@ -321,6 +322,13 @@ router.get("/accounts/journal-vouchers", requireModuleView("page:/accounts/vouch
 });
 
 router.post("/accounts/journal-vouchers", requireModuleAction("page:/accounts/vouchers", "add"), async (req, res): Promise<void> => {
+  // Same gate as the list route: journal vouchers are Head Office accounting.
+  // A non-HO user is not shown them at all, so they may not create one either —
+  // otherwise they'd write a voucher into books they cannot read back.
+  if ((req as any).employee?.branchType !== "headoffice") {
+    res.status(403).json({ error: "Journal vouchers are Head Office accounting. Sign in from Head Office to create them." });
+    return;
+  }
   const body = (req.body ?? {}) as Record<string, any>;
   const voucherType = String(body.voucherType ?? "journal");
   if (!JV_TYPES.has(voucherType)) {
@@ -336,6 +344,13 @@ router.post("/accounts/journal-vouchers", requireModuleAction("page:/accounts/vo
   if (!built.ok) { res.status(400).json({ error: built.error }); return; }
   const { lines, partyLedgerId, totalAmount } = built;
 
+  // Manual vouchers are stamped with the creator's location (session-derived,
+  // never the body). Voucher entry is Head Office accounting, so in practice
+  // this stamps 'headoffice'/0 — which is what keeps manual journals visible
+  // when the books are viewed under the Head Office location slice instead of
+  // silently falling into the unattributable company bucket.
+  const { locationType, locationId } = callerLocation((req as any).employee);
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -343,9 +358,9 @@ router.post("/accounts/journal-vouchers", requireModuleAction("page:/accounts/vo
     const { rows: [v] } = await client.query(
       `INSERT INTO journal_vouchers
          (voucher_type, voucher_number, voucher_date, narration, party_ledger_id, reason, total_amount, created_by,
-          origin, source_module)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'manual', 'accounts') RETURNING id`,
-      [voucherType, voucherNumber, voucherDate, narration, partyLedgerId, reason, totalAmount, createdBy]
+          origin, source_module, location_type, location_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'manual', 'accounts', $9, $10) RETURNING id`,
+      [voucherType, voucherNumber, voucherDate, narration, partyLedgerId, reason, totalAmount, createdBy, locationType, locationId]
     );
     for (const l of lines) {
       await client.query(
@@ -371,6 +386,12 @@ router.post("/accounts/journal-vouchers", requireModuleAction("page:/accounts/vo
 });
 
 router.get("/accounts/journal-vouchers/:id", requireModuleView("page:/accounts/vouchers"), async (req, res): Promise<void> => {
+  // Same gate as the list route: journal vouchers are Head Office accounting.
+  // 404 (not 403) — a branch user must not learn which voucher ids exist.
+  if ((req as any).employee?.branchType !== "headoffice") {
+    res.status(404).json({ error: "Voucher not found" });
+    return;
+  }
   const id = parseInt(req.params.id, 10);
   const voucher = await fetchVoucher(id);
   if (!voucher) { res.status(404).json({ error: "Voucher not found" }); return; }
@@ -548,6 +569,12 @@ router.patch("/accounts/journal-vouchers/:id", requireModuleAction("page:/accoun
 });
 
 router.delete("/accounts/journal-vouchers/:id", requireModuleAction("page:/accounts/vouchers", "delete"), async (req, res): Promise<void> => {
+  // Same gate as the list route: journal vouchers are Head Office accounting.
+  // A non-HO user is not shown them at all, so they may not delete one either.
+  if ((req as any).employee?.branchType !== "headoffice") {
+    res.status(403).json({ error: "Journal vouchers are Head Office accounting. Sign in from Head Office to delete them." });
+    return;
+  }
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid voucher id" }); return; }
 

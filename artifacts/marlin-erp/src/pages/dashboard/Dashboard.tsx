@@ -17,10 +17,11 @@ import {
   Landmark, Trophy, Users, AlertTriangle, Clock, MapPin,
   Warehouse, Store, ArrowUpRight, ArrowDownRight, Wallet,
 } from 'lucide-react';
+import { useLocation } from 'wouter';
 import {
   fmt, num, fmtDate, periodLabel,
   useDateRange, RangeBar, SummaryCards, LocationBadge,
-  type CardTone,
+  type CardTone, type SummaryCard,
 } from '@/pages/reports/shared';
 
 // ── Small helpers ───────────────────────────────────────────────────────────
@@ -134,12 +135,32 @@ export default function Dashboard() {
     totalIn: number; totalOut: number;
   } | null | undefined;
 
-  const summaryCards: { label: string; value: React.ReactNode; tone?: CardTone; hint?: React.ReactNode }[] = [
-    { label: 'Sales', value: fmt(s?.total ?? 0), tone: 'accent' },
-    // Expenses and Bank Balance come from the accounting postings, which carry
-    // no location. The API returns null for a single-location login rather
-    // than passing off a company-wide number as that branch's — render the
-    // gap instead of a misleading zero.
+  // GP / NP for the selected period — served off the SAME P&L build as the
+  // Expenses tile, so they always equal the Profit & Loss report for the same
+  // range and location. The generated type predates the field, hence the cast.
+  const pf = (bi as any)?.profit as { gross: number | null; net: number | null } | null | undefined;
+
+  const [, navigate] = useLocation();
+  const drill = (anchor: string) => () => navigate(`/reports/financial#${anchor}`);
+
+  // Fixed row layout (3 / 3 / 2 / 2 / 2) on md+: a 6-column grid where the
+  // first two rows' cards span 2 columns and the rest span 3. On mobile the
+  // grid falls back to two columns and the rows simply stack.
+  const SPAN2 = 'md:col-span-2';
+  const SPAN3 = 'md:col-span-3';
+  // Inventory Value is hidden entirely for employees without the valuation
+  // right (the server omits the figure) — Cash and Bank then split row 2.
+  const hasInventory = !!bi?.canViewValuation;
+  const rowTwoSpan = hasInventory ? SPAN2 : SPAN3;
+
+  const summaryCards: SummaryCard[] = [
+    // ── Row 1: Sales · Purchases · Expenses ─────────────────────────────────
+    { label: 'Sales', value: fmt(s?.total ?? 0), tone: 'pos', className: SPAN2 },
+    { label: 'Purchases', value: fmt(bi?.purchases.total ?? 0), className: SPAN2 },
+    // Expenses and the balance tiles come from the accounting postings, which
+    // carry no location. The API returns null for a single-location login
+    // rather than passing off a company-wide number as that branch's — render
+    // the gap instead of a misleading zero.
     {
       label: 'Expenses',
       value: bi?.expenses?.total == null ? '—' : fmt(bi.expenses.total),
@@ -151,23 +172,32 @@ export default function Dashboard() {
       hint: bi?.expenses?.total != null && bi.expenses.salary != null
         ? `Salary ${fmt(bi.expenses.salary)} · Rent ${fmt(bi.expenses.rent ?? 0)} · Other ${fmt(bi.expenses.other ?? 0)}`
         : undefined,
+      className: SPAN2,
+    },
+    // ── Row 2: Inventory · Cash · Bank ──────────────────────────────────────
+    ...(hasInventory
+      ? [{ label: 'Inventory Value', value: fmt(bi!.inventory.valuation ?? 0), tone: 'info' as CardTone, className: SPAN2 }]
+      : []),
+    {
+      label: 'Cash Balance',
+      value: bi?.cash?.balance == null ? '—' : fmt(bi.cash.balance),
+      tone: bi?.cash?.balance == null ? 'default' : bi.cash.balance >= 0 ? 'pos' : 'neg',
+      className: rowTwoSpan,
     },
     {
       label: 'Bank Balance',
       value: bi?.bank?.balance == null ? '—' : fmt(bi.bank.balance),
       tone: bi?.bank?.balance == null ? 'default' : bi.bank.balance >= 0 ? 'pos' : 'neg',
+      className: rowTwoSpan,
     },
-    { label: 'Purchases', value: fmt(bi?.purchases.total ?? 0) },
-    // Hidden entirely for employees without the inventory-valuation right —
-    // the server omits the figure, so there is nothing honest to show.
-    ...(bi?.canViewValuation ? [{ label: 'Inventory Value', value: fmt(bi.inventory.valuation ?? 0) }] : []),
-    // Receivables, Payables and Cash Balance are Balance Sheet positions taken
-    // from the accounting ledgers, so they carry no location and read '—' for a
-    // single-location login, exactly like Expenses and Bank Balance above.
+    // ── Row 3: Receivables · Payables ───────────────────────────────────────
+    // Balance Sheet positions taken from the accounting ledgers, so they carry
+    // no location and read '—' for a single-location login, like Expenses.
     {
       label: 'Receivables',
       value: bi?.receivables?.total == null ? '—' : fmt(bi.receivables.total),
-      tone: (bi?.receivables?.overdue ?? 0) > 0 ? 'warn' : 'default',
+      tone: bi?.receivables?.total == null ? 'default' : (bi?.receivables?.overdue ?? 0) > 0 ? 'warn' : 'info',
+      className: SPAN3,
     },
     // Everything the company owes, not just its trade creditors. Salary accrues
     // to a payable that sits outside Sundry Creditors, so the old tile read the
@@ -183,26 +213,42 @@ export default function Dashboard() {
       hint: (bi?.payables as any)?.salaryPayable != null
         ? `Suppliers ${fmt(bi!.payables.total ?? 0)} · Salary ${fmt((bi!.payables as any).salaryPayable)} · Rent ${fmt((bi!.payables as any).rentPayable ?? 0)}`
         : undefined,
+      className: SPAN3,
     },
-    {
-      label: 'Cash Balance',
-      value: bi?.cash?.balance == null ? '—' : fmt(bi.cash.balance),
-      tone: bi?.cash?.balance == null ? 'default' : bi.cash.balance >= 0 ? 'pos' : 'neg',
-    },
-    // Money in / out TODAY across all tills and bank accounts — read off the
-    // same books as the balances, so a till sale, a voucher or a journal all
-    // move it. '—' exactly when the balance tiles read '—'.
+    // ── Row 4: Money In Today · Money Out Today ─────────────────────────────
+    // Across all tills and bank accounts — read off the same books as the
+    // balances, so a till sale, a voucher or a journal all move it. '—'
+    // exactly when the balance tiles read '—'.
     {
       label: 'Money In Today',
       value: tm == null ? '—' : fmt(tm.totalIn),
       tone: (tm?.totalIn ?? 0) > 0 ? 'pos' : 'default',
       hint: tm ? `Cash ${fmt(tm.cashIn)} · Bank ${fmt(tm.bankIn)}` : undefined,
+      className: SPAN3,
     },
     {
       label: 'Money Out Today',
       value: tm == null ? '—' : fmt(tm.totalOut),
       tone: (tm?.totalOut ?? 0) > 0 ? 'neg' : 'default',
       hint: tm ? `Cash ${fmt(tm.cashOut)} · Bank ${fmt(tm.bankOut)}` : undefined,
+      className: SPAN3,
+    },
+    // ── Row 5: GP · NP — click either to open the Profit & Loss report ──────
+    {
+      label: 'GP',
+      value: pf?.gross == null ? '—' : fmt(pf.gross),
+      tone: pf?.gross == null ? 'default' : pf.gross >= 0 ? 'pos' : 'neg',
+      hint: 'Gross Profit · tap for P&L',
+      onClick: drill('pl-gross-profit'),
+      className: SPAN3,
+    },
+    {
+      label: 'NP',
+      value: pf?.net == null ? '—' : fmt(pf.net),
+      tone: pf?.net == null ? 'default' : pf.net >= 0 ? 'pos' : 'neg',
+      hint: 'Net Profit · tap for P&L',
+      onClick: drill('pl-net-profit'),
+      className: SPAN3,
     },
   ];
 
@@ -239,11 +285,11 @@ export default function Dashboard() {
         {/* ── Summary cards ──────────────────────────────────────────────── */}
         {isLoading ? (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {[...Array(8)].map((_, i) => <Skeleton key={i} className="h-[68px] rounded-lg" />)}
+            {[...Array(12)].map((_, i) => <Skeleton key={i} className="h-[68px] rounded-lg" />)}
           </div>
         ) : (
           <>
-            <SummaryCards cards={summaryCards} />
+            <SummaryCards cards={summaryCards} gridClassName="grid grid-cols-2 md:grid-cols-6 gap-3" />
             {bi && bi.expenses?.total == null && (
               <p className="text-xs text-muted-foreground">
                 Expenses and Bank Balance are company-level accounting figures and are not

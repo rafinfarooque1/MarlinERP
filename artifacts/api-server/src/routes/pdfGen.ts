@@ -319,7 +319,7 @@ router.post("/pdf/money-voucher", (req, res, next) => {
       params.push(id);
       const { rows: [r] } = await pool.query<any>(`
         SELECT p.voucher_number, p.payment_date AS voucher_date, p.amount, p.narration,
-               p.payment_mode, p.reference_number, p.attachment_url, p.created_by, p.created_at,
+               p.reference_number, p.created_by, p.created_at,
                pf.name AS cash_bank_name, pt.name AS party_name,
                COALESCE(w.name, o.name) AS location_name
           FROM payments p
@@ -334,7 +334,7 @@ router.post("/pdf/money-voucher", (req, res, next) => {
       params.push(id);
       const { rows: [r] } = await pool.query<any>(`
         SELECT p.voucher_number, p.receipt_date AS voucher_date, p.amount, p.narration,
-               p.payment_mode, p.reference_number, p.attachment_url, p.created_by, p.created_at,
+               p.reference_number, p.created_by, p.created_at,
                ri.name AS cash_bank_name, rf.name AS party_name,
                COALESCE(w.name, o.name) AS location_name
           FROM receipts p
@@ -355,13 +355,11 @@ router.post("/pdf/money-voucher", (req, res, next) => {
       amount: Number(row.amount),
       partyName: row.party_name ?? "",
       cashBankName: row.cash_bank_name ?? "",
-      paymentMode: row.payment_mode ?? null,
       referenceNumber: row.reference_number ?? null,
       narration: row.narration ?? null,
       locationName: row.location_name ?? "Head Office",
       recordedBy: row.created_by ?? null,
       recordedAt: row.created_at ?? null,
-      attachmentUrl: row.attachment_url ?? null,
     });
     const safe = String(row.voucher_number ?? id).replace(/[^A-Za-z0-9_-]+/g, "-");
     res.setHeader("Content-Type", "application/pdf");

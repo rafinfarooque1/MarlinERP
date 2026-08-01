@@ -43,6 +43,15 @@ export interface CompanyFinancials {
     direct: number; indirect: number; total: number;
     salary: number; rent: number; other: number;
   };
+  /**
+   * Gross and net profit for the period, straight off the SAME buildBooks
+   * output as `expenses` — never recomputed here. Gross = net sales − COGS
+   * (opening stock + purchases + direct expenses − closing stock); net adds
+   * other income and subtracts indirect expenses. Reading the P&L's own
+   * figures is what guarantees the dashboard tiles always reconcile with the
+   * Profit & Loss statement for the same period and location slice.
+   */
+  profit: { gross: number; net: number };
   /** Cumulative to `toDate` — a balance is a position, not a period flow. */
   bankBalance: number;
   cashBalance: number;
@@ -275,6 +284,10 @@ export async function companyFinancials(
     expenses: {
       direct: r2(direct), indirect: r2(indirect), total,
       salary, rent, other: r2(total - salary - rent),
+    },
+    profit: {
+      gross: r2(books.profitAndLoss.summary.grossProfit),
+      net: r2(books.profitAndLoss.summary.netProfit),
     },
     ...controls,
   };

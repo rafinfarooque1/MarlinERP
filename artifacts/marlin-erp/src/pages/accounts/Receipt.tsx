@@ -18,16 +18,12 @@ import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { isSystemLedger } from '@/lib/systemLedgers';
-import { VOUCHER_MODE_OPTIONS, voucherModeLabel } from '@/lib/voucherModes';
 
 const schema = z.object({
   receiptDate: z.string().min(1, 'Date required'),
   receivedFromLedgerId: z.coerce.number().min(1, 'Select account'),
   receivedInLedgerId: z.coerce.number().min(1, 'Select account'),
   amount: z.coerce.number().min(0.01, 'Amount > 0'),
-  // Metadata only — the accounting legs come from the ledgers above. '' means
-  // "not specified" and the server stores it as null.
-  paymentMode: z.string().optional(),
   referenceNumber: z.string().max(100).optional(),
   narration: z.string().optional(),
 });
@@ -52,7 +48,7 @@ export default function ReceiptPage() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { receiptDate: new Date().toISOString().split('T')[0], receivedFromLedgerId: 0, receivedInLedgerId: 0, amount: 0, paymentMode: '', referenceNumber: '', narration: '' },
+    defaultValues: { receiptDate: new Date().toISOString().split('T')[0], receivedFromLedgerId: 0, receivedInLedgerId: 0, amount: 0, referenceNumber: '', narration: '' },
   });
 
   const onSubmit = (data: FormValues) => {
@@ -104,7 +100,7 @@ export default function ReceiptPage() {
             {perm.canDownload && (
               <Button variant="outline" size="sm" onClick={() => downloadCSV('receipts.csv', filtered.map((r: any) => ({
                 Voucher: r.voucherNumber, Date: r.receiptDate, 'Received From': r.receivedFromName,
-                'Received In': r.receivedInName, Amount: r.amount, Mode: voucherModeLabel(r.paymentMode),
+                'Received In': r.receivedInName, Amount: r.amount,
                 Reference: r.referenceNumber || '', Narration: r.narration || '',
               })))}>
                 <Download className="w-4 h-4 mr-2" /> Export
@@ -112,7 +108,7 @@ export default function ReceiptPage() {
             )}
             {perm.canAdd && (
               <Button onClick={() => {
-                form.reset({ receiptDate: new Date().toISOString().split('T')[0], receivedFromLedgerId: 0, receivedInLedgerId: 0, amount: 0, paymentMode: '', referenceNumber: '', narration: '' });
+                form.reset({ receiptDate: new Date().toISOString().split('T')[0], receivedFromLedgerId: 0, receivedInLedgerId: 0, amount: 0, referenceNumber: '', narration: '' });
                 setIsOpen(true);
               }}>
                 <Plus className="w-4 h-4 mr-2" /> New Receipt
@@ -140,7 +136,7 @@ export default function ReceiptPage() {
                 <TableHead>Date</TableHead>
                 <TableHead>Received From</TableHead>
                 <TableHead>Received In</TableHead>
-                <TableHead>Mode / Ref</TableHead>
+                <TableHead>Reference</TableHead>
                 <TableHead>Narration</TableHead>
                 <TableHead className="text-right">Amount</TableHead>
                 <TableHead />
@@ -162,8 +158,9 @@ export default function ReceiptPage() {
                   <TableCell className="font-medium text-sm">{r.receivedFromName}</TableCell>
                   <TableCell><Badge variant="outline" className="text-xs">{r.receivedInName}</Badge></TableCell>
                   <TableCell className="text-sm">
-                    {r.paymentMode ? <Badge variant="secondary" className="text-xs">{voucherModeLabel(r.paymentMode)}</Badge> : <span className="text-muted-foreground">—</span>}
-                    {r.referenceNumber && <div className="text-[11px] text-muted-foreground font-mono mt-0.5 max-w-[120px] truncate" title={r.referenceNumber}>{r.referenceNumber}</div>}
+                    {r.referenceNumber
+                      ? <span className="text-[11px] text-muted-foreground font-mono max-w-[120px] truncate inline-block" title={r.referenceNumber}>{r.referenceNumber}</span>
+                      : <span className="text-muted-foreground">—</span>}
                   </TableCell>
                   <TableCell className="text-muted-foreground text-sm max-w-[200px] truncate">{r.narration || '—'}</TableCell>
                   <TableCell className="text-right font-mono font-bold text-emerald-500">₹{Number(r.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</TableCell>
@@ -238,28 +235,13 @@ export default function ReceiptPage() {
                 </FormItem>
               )} />
 
-              {/* Mode + Reference — descriptive metadata only */}
-              <div className="grid grid-cols-2 gap-3">
-                <FormField control={form.control} name="paymentMode" render={({ field }) => (
-                  <FormItem><FormLabel>Mode</FormLabel>
-                    <Select value={field.value || ''} onValueChange={field.onChange}>
-                      <SelectTrigger><SelectValue placeholder="Optional" /></SelectTrigger>
-                      <SelectContent>
-                        {VOUCHER_MODE_OPTIONS.map(o => (
-                          <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-                <FormField control={form.control} name="referenceNumber" render={({ field }) => (
-                  <FormItem><FormLabel>Reference #</FormLabel>
-                    <Input placeholder="Cheque / UTR / Txn no." {...field} />
-                    <FormMessage />
-                  </FormItem>
-                )} />
-              </div>
+              {/* Reference — descriptive metadata only */}
+              <FormField control={form.control} name="referenceNumber" render={({ field }) => (
+                <FormItem><FormLabel>Reference #</FormLabel>
+                  <Input placeholder="Cheque / UTR / Txn no." {...field} />
+                  <FormMessage />
+                </FormItem>
+              )} />
 
               {/* Narration */}
               <FormField control={form.control} name="narration" render={({ field }) => (

@@ -480,6 +480,9 @@ export interface Books {
       openingStockReliable: boolean;
       openingStockNote: string | null;
       purchases: number;
+      /** Period total of debit-note lines hitting the purchases subtree;
+       *  `purchases` is already net of these. */
+      purchaseReturns: number;
       purchasesGroup: StatementGroup;
       directExpenses: StatementGroup;
       indirectExpenses: StatementGroup;
@@ -487,6 +490,12 @@ export interface Books {
     };
     incomes: {
       sales: number;
+      /** Gross sales before returns: `sales` is net (credit notes debit the
+       *  sales subtree), so grossSales = sales + salesReturns. */
+      grossSales: number;
+      /** Period total of credit-note lines hitting the sales subtree —
+       *  sales returns and rate-difference allowances alike. */
+      salesReturns: number;
       salesGroup: StatementGroup;
       closingStock: number;
       closingStockItems: ValuedItem[];
@@ -541,6 +550,7 @@ export interface Books {
 export async function buildBooks(
   buildDerivedPostings: (opts: { toDate?: string }) => Promise<Array<{
     date: string; ledgerId: number; debit: number; credit: number;
+    source?: string;
     locationType?: string | null; locationId?: number | null;
   }>>,
   opts: BooksOptions = {},
@@ -578,6 +588,23 @@ export async function buildBooks(
     map.set(id, a);
   };
 
+  // Returns split for the standard (Sales / Less: Returns / Net Sales)
+  // presentation. The groups net returns into their subtree totals — a credit
+  // note debits Sales, a debit note credits Purchases — so the gross figure
+  // is recovered by summing exactly those note lines. Identified by posting
+  // source (the voucher_type of the journal line), never by re-classifying.
+  const subtreeIds = (code: string): Set<number> => {
+    const ids = new Set<number>();
+    const root = chart.byCode.get(code);
+    const walk = (n: ChartNode) => { ids.add(n.id); n.children.forEach(walk); };
+    if (root) walk(root);
+    return ids;
+  };
+  const salesSubtree = subtreeIds("SYS-SAL");
+  const purchasesSubtree = subtreeIds("SYS-PUR");
+  let salesReturns = 0;
+  let purchaseReturns = 0;
+
   for (const p of postings) {
     const id = Number(p.ledgerId);
     if (!chart.byId.has(id)) { missingLedgerIds.add(id); continue; }
@@ -588,7 +615,15 @@ export async function buildBooks(
       continue;
     }
     bump(cumulativeAgg, id, p.debit, p.credit);
-    if (!fromDate || String(p.date).slice(0, 10) >= fromDate) bump(periodAgg, id, p.debit, p.credit);
+    if (!fromDate || String(p.date).slice(0, 10) >= fromDate) {
+      bump(periodAgg, id, p.debit, p.credit);
+      const src = (p as { source?: string }).source;
+      if (src === "credit_note" && salesSubtree.has(id)) {
+        salesReturns = r2(salesReturns + p.debit - p.credit);
+      } else if (src === "debit_note" && purchasesSubtree.has(id)) {
+        purchaseReturns = r2(purchaseReturns + p.credit - p.debit);
+      }
+    }
   }
 
   // Opening balances are outside the posting stream, so they are added to the
@@ -780,6 +815,7 @@ export async function buildBooks(
         openingStockReliable: opening.reliable,
         openingStockNote: opening.note,
         purchases: purchasesGroup.total,
+        purchaseReturns,
         purchasesGroup,
         directExpenses: directExp,
         indirectExpenses: indirectExp,
@@ -787,6 +823,8 @@ export async function buildBooks(
       },
       incomes: {
         sales: salesGroup.total,
+        grossSales: r2(salesGroup.total + salesReturns),
+        salesReturns,
         salesGroup,
         closingStock: closing.total,
         closingStockItems: closing.items,

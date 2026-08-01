@@ -1,0 +1,257 @@
+Implement the following corrections and improvements to the Receipt Voucher, Payment Voucher, and Accounting integration.
+
+====================================================
+1. REMOVE DUPLICATE PAYMENT MODE
+====================================================
+
+Currently the Receipt Voucher has:
+
+• Received Into (Cash / Bank)
+• Mode (Cash / UPI / Bank / Card / etc.)
+
+This is redundant.
+
+Remove the "Mode" dropdown completely from both:
+
+• Receipt Voucher
+• Payment Voucher
+
+Reason:
+
+The selected account itself determines the mode.
+
+Examples:
+
+HDFC Bank
+→ Bank transaction
+
+Warehouse Cash
+→ Cash transaction
+
+Outlet Cash
+→ Cash transaction
+
+UPI Collection Account
+→ UPI transaction
+
+There should be only ONE account selector.
+
+Do NOT store a separate payment mode.
+
+Remove it from:
+
+• UI
+• Validation
+• Backend request
+• Database writes
+• Print format
+
+====================================================
+2. REMOVE ATTACHMENT
+====================================================
+
+Remove Attachment upload from:
+
+• Receipt Voucher
+• Payment Voucher
+
+Remove completely.
+
+No upload.
+
+No database field.
+
+No API handling.
+
+No print reference.
+
+====================================================
+3. JOURNAL / CONTRA / DEBIT / CREDIT NOT POSTING
+====================================================
+
+This is a critical accounting issue.
+
+Some Journal, Contra, Debit Note and Credit Note vouchers are already entered.
+
+However they are NOT appearing correctly in:
+
+• Ledger Statement
+• Ledger Balance
+• Trial Balance
+• Balance Sheet
+• Profit & Loss
+• Customer Ledger
+• Vendor Ledger
+
+Investigate the posting engine.
+
+Find why manually entered vouchers are not updating the corresponding ledgers.
+
+Possible causes include:
+
+• Voucher lines not written correctly
+• Ledger balance not recalculated
+• Ledger cache not refreshed
+• Wrong ledger ids
+• Journal lines ignored in ledger queries
+• Missing transaction commit
+
+Do NOT patch balances.
+
+Fix the actual posting engine.
+
+After fixing:
+
+Every Journal Voucher
+
+Every Contra Voucher
+
+Every Debit Note
+
+Every Credit Note
+
+must immediately update:
+
+• Ledger Statement
+• Ledger Closing
+• Trial Balance
+• Balance Sheet
+• Profit & Loss
+• Dashboard
+• Customer/Vendor balances (where applicable)
+
+Backfill all existing vouchers so previously entered vouchers also appear correctly.
+
+====================================================
+4. LOCATION RESTRICTION
+====================================================
+
+Receipt and Payment vouchers must always use the logged-in user's assigned location.
+
+Examples
+
+Head Office User
+
+Can choose Head Office accounts only.
+
+Warehouse Employee
+
+Can only use:
+
+Warehouse Cash
+
+Warehouse Bank
+
+Warehouse Accounts
+
+assigned to THAT warehouse.
+
+Outlet Employee
+
+Can only use:
+
+Outlet Cash
+
+Outlet Bank
+
+Outlet Accounts
+
+assigned to THAT outlet.
+
+Do NOT allow selecting another warehouse.
+
+Do NOT allow selecting Head Office accounts.
+
+Do NOT allow selecting another outlet.
+
+Enforce this on BOTH:
+
+Backend
+
+Frontend
+
+====================================================
+5. AUTO LOCATION
+====================================================
+
+When Warehouse Employee logs in:
+
+Automatically fill:
+
+Location
+
+Cash Account
+
+Warehouse
+
+Hide location selector.
+
+When Outlet Employee logs in:
+
+Automatically fill:
+
+Outlet
+
+Cash Account
+
+Hide location selector.
+
+Head Office users may continue selecting locations if permitted.
+
+====================================================
+6. PERMISSION VALIDATION
+====================================================
+
+Backend must reject any attempt to post a Receipt or Payment Voucher using a location or cash/bank account that does not belong to the logged-in user's assigned location.
+
+Never rely only on frontend filtering.
+
+====================================================
+7. VERIFY ACCOUNTING
+====================================================
+
+Verify end-to-end that the following vouchers correctly update the books:
+
+• Receipt Voucher
+• Payment Voucher
+• Journal Voucher
+• Contra Voucher
+• Debit Note
+• Credit Note
+
+Confirm they all update:
+
+✓ Ledger Statement
+
+✓ Trial Balance
+
+✓ Balance Sheet
+
+✓ Profit & Loss
+
+✓ Customer Ledger
+
+✓ Vendor Ledger
+
+✓ Employee Ledger
+
+✓ Cash Book
+
+✓ Bank Book
+
+✓ Day Book
+
+without requiring manual recalculation or cache clearing.
+
+====================================================
+FINAL REPORT
+====================================================
+
+After implementation provide:
+
+1. Root cause of Journal/Contra/Debit/Credit posting issue.
+2. Files modified.
+3. How existing vouchers were backfilled.
+4. Confirmation that Receipt/Payment no longer have Mode or Attachment.
+5. Confirmation that warehouse/outlet users are restricted to their own assigned location.
+6. Tests performed and results.

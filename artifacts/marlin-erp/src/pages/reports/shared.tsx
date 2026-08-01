@@ -256,33 +256,65 @@ export function ReportPicker<const T extends string>({ options, value, onChange 
 }
 
 // ── Summary cards ─────────────────────────────────────────────────────────────
-export type CardTone = 'default' | 'pos' | 'neg' | 'warn' | 'accent';
+export type CardTone = 'default' | 'pos' | 'neg' | 'warn' | 'accent' | 'info';
 const TONE_CLS: Record<CardTone, string> = {
   default: '',
   pos: 'text-emerald-600',
   neg: 'text-red-500',
   warn: 'text-amber-600',
   accent: 'text-primary',
+  info: 'text-blue-600',
 };
+
+export interface SummaryCard {
+  label: string;
+  value: ReactNode;
+  tone?: CardTone;
+  // `hint` is for a total made of parts the reader would otherwise have to
+  // guess at — it breaks the figure down without competing with it.
+  hint?: ReactNode;
+  /** Extra classes on the card itself (e.g. col-span for custom grids). */
+  className?: string;
+  /** Makes the card a real button — used for drill-down navigation. */
+  onClick?: () => void;
+}
 
 export function SummaryCards({
   cards,
+  gridClassName,
 }: {
-  // `hint` is for a total made of parts the reader would otherwise have to
-  // guess at — it breaks the figure down without competing with it.
-  cards: { label: string; value: ReactNode; tone?: CardTone; hint?: ReactNode }[];
+  cards: SummaryCard[];
+  /** Overrides the default responsive grid, e.g. for fixed row layouts. */
+  gridClassName?: string;
 }) {
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-      {cards.map((c) => (
-        <div key={c.label} className="bg-card border border-border rounded-lg p-3 text-center">
-          <p className="text-xs text-muted-foreground mb-1">{c.label}</p>
-          <p className={`font-bold font-mono text-sm ${TONE_CLS[c.tone ?? 'default']}`}>{c.value}</p>
-          {c.hint ? (
-            <p className="text-[10px] text-muted-foreground/70 mt-1 leading-tight">{c.hint}</p>
-          ) : null}
-        </div>
-      ))}
+    <div className={gridClassName ?? 'grid grid-cols-2 md:grid-cols-4 gap-3'}>
+      {cards.map((c) => {
+        const body = (
+          <>
+            <p className="text-xs text-muted-foreground mb-1">{c.label}</p>
+            <p className={`font-bold font-mono text-sm ${TONE_CLS[c.tone ?? 'default']}`}>{c.value}</p>
+            {c.hint ? (
+              <p className="text-[10px] text-muted-foreground/70 mt-1 leading-tight">{c.hint}</p>
+            ) : null}
+          </>
+        );
+        const base = `bg-card border border-border rounded-lg p-3 text-center ${c.className ?? ''}`;
+        return c.onClick ? (
+          <button
+            key={c.label}
+            type="button"
+            onClick={c.onClick}
+            className={`${base} cursor-pointer transition-colors hover:border-primary/50 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
+          >
+            {body}
+          </button>
+        ) : (
+          <div key={c.label} className={base}>
+            {body}
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -6,7 +6,6 @@ import {
   useListAccountsFlat, useCashBankLedgersFlat,
   useListCustomers, useListVendors,
 } from '@workspace/api-client-react';
-import { VOUCHER_MODE_OPTIONS, voucherModeLabel } from '@/lib/voucherModes';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -636,7 +635,6 @@ function EditMoneyVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: ()
   const [fromId, setFromId] = useState<number>(isPayment ? (v.paidFromLedgerId ?? 0) : (v.receivedFromLedgerId ?? 0));
   const [toId, setToId]     = useState<number>(isPayment ? (v.paidToLedgerId ?? 0) : (v.receivedInLedgerId ?? 0));
   const [amount, setAmount] = useState<string>(String(Number(v.amount ?? 0) || ''));
-  const [mode, setMode]     = useState<string>(v.paymentMode ?? '');
   const [refNo, setRefNo]   = useState<string>(v.referenceNumber ?? '');
   const [narration, setNarr] = useState<string>(v.narration ?? '');
 
@@ -649,17 +647,16 @@ function EditMoneyVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: ()
     if (fromId === toId) { toast.error('The two accounts must be different'); return; }
     if (!(Number(amount) > 0)) { toast.error('Enter an amount'); return; }
 
-    // paymentMode: '' clears the stored mode (server maps '' → null).
     if (isPayment) {
       updatePayment.mutate({
         id: row.id, paymentDate: date, paidFromLedgerId: fromId, paidToLedgerId: toId,
-        amount: Number(amount), paymentMode: (mode || null) as any,
+        amount: Number(amount),
         referenceNumber: refNo || null, narration,
       } as any, { onSuccess: onOk, onError: onErr });
     } else {
       updateReceipt.mutate({
         id: row.id, receiptDate: date, receivedFromLedgerId: fromId, receivedInLedgerId: toId,
-        amount: Number(amount), paymentMode: (mode || null) as any,
+        amount: Number(amount),
         referenceNumber: refNo || null, narration,
       } as any, { onSuccess: onOk, onError: onErr });
     }
@@ -716,23 +713,9 @@ function EditMoneyVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: ()
           <Input type="number" min={0} step="0.01" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" />
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1">
-            <Label>Mode</Label>
-            <Select value={mode || 'none'} onValueChange={val => setMode(val === 'none' ? '' : val)}>
-              <SelectTrigger><SelectValue placeholder="Optional" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">— None —</SelectItem>
-                {VOUCHER_MODE_OPTIONS.map(o => (
-                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1">
-            <Label>Reference #</Label>
-            <Input value={refNo} onChange={e => setRefNo(e.target.value)} placeholder="Cheque / UTR / Txn no." />
-          </div>
+        <div className="space-y-1">
+          <Label>Reference #</Label>
+          <Input value={refNo} onChange={e => setRefNo(e.target.value)} placeholder="Cheque / UTR / Txn no." />
         </div>
 
         <div className="space-y-1">
@@ -849,7 +832,7 @@ export default function Vouchers() {
     downloadCSV('vouchers.csv', filtered.map(r => ({
       Voucher: r.voucherNumber, Type: TYPE_META[r.type].label,
       Date: r.date, Description: r.description,
-      Mode: voucherModeLabel(r.raw?.paymentMode), Reference: r.raw?.referenceNumber || '',
+      Reference: r.raw?.referenceNumber || '',
       Narration: r.narration || '', Amount: r.amount,
     })));
     toast.success('Exported');

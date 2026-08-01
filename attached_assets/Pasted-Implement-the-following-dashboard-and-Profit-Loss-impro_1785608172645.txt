@@ -1,0 +1,313 @@
+Implement the following dashboard and Profit & Loss improvements. These changes must follow standard accounting principles. Do not hardcode any values. Everything must be calculated automatically from accounting entries.
+
+====================================================
+1. ADD GROSS PROFIT (GP) & NET PROFIT (NP) TO DASHBOARD
+====================================================
+
+Add two new dashboard KPI cards:
+
+• GP (Gross Profit)
+• NP (Net Profit)
+
+Use the abbreviations exactly:
+
+GP
+NP
+
+Do not use the full names on the dashboard cards.
+
+Both values must be calculated automatically from the accounting data.
+
+====================================================
+2. CALCULATE GROSS PROFIT USING STANDARD ACCOUNTING
+====================================================
+
+Gross Profit must NOT be manually entered.
+
+Calculate it using the standard accounting formula:
+
+Gross Profit =
+Net Sales
++ Closing Stock
+− Opening Stock
+− Cost of Goods Sold (COGS)
+
+Where:
+
+Net Sales
+= Sales - Sales Returns
+
+COGS =
+Opening Stock
++ Purchases
++ Direct Expenses
+− Closing Stock
+
+Direct Expenses include production/manufacturing costs that are mapped as direct expenses.
+
+Do NOT include:
+
+Rent
+Salary
+Office expenses
+Interest
+Administrative expenses
+Bank charges
+Selling expenses
+
+These belong to indirect expenses.
+
+====================================================
+3. CALCULATE NET PROFIT
+====================================================
+
+Net Profit must also be automatic.
+
+Net Profit =
+Gross Profit
++ Other Income
+− Indirect Expenses
+− Financial Charges
+− Depreciation
+− Taxes (if applicable)
+
+Use the existing Chart of Accounts classification.
+
+====================================================
+4. PROFIT & LOSS STATEMENT
+====================================================
+
+Update the Profit & Loss report to show:
+
+Sales
+
+Less:
+Sales Returns
+
+Net Sales
+
+Opening Stock
+
+Purchases
+
+Direct Expenses
+
+Goods Available for Sale
+
+Less:
+Closing Stock
+
+Cost of Goods Sold
+
+----------------------------------
+
+Gross Profit
+
+----------------------------------
+
+Other Income
+
+Indirect Expenses
+
+Financial Charges
+
+Depreciation
+
+----------------------------------
+
+Net Profit
+
+This should follow a standard accounting presentation.
+
+Gross Profit and Net Profit must always reconcile with the ledger balances.
+
+====================================================
+5. DASHBOARD LAYOUT
+====================================================
+
+Rearrange the dashboard cards exactly in this order.
+
+Row 1
+
+Sales
+Purchases
+Expenses
+
+Row 2
+
+Inventory Value
+Cash Balance
+Bank Balance
+
+Row 3
+
+Receivables
+Payables
+
+Row 4
+
+Money In Today
+Money Out Today
+
+Row 5
+
+GP
+NP
+
+Maintain the existing responsive layout.
+
+Desktop:
+Same number of columns as current dashboard.
+
+Tablet/mobile:
+Continue using responsive stacking.
+
+====================================================
+6. KPI COLOURS
+====================================================
+
+Sales
+Green
+
+Purchases
+Black
+
+Expenses
+Red
+
+Inventory Value
+Blue
+
+Cash Balance
+Green when positive
+Red when negative
+
+Bank Balance
+Green when positive
+Red when negative
+
+Receivables
+Blue
+
+Payables
+Red
+
+Money In
+Green
+
+Money Out
+Red
+
+GP
+Green if positive
+Red if negative
+
+NP
+Green if positive
+Red if negative
+
+====================================================
+7. DRILL DOWN
+====================================================
+
+Clicking GP should open the Gross Profit section in Profit & Loss.
+
+Clicking NP should open the Net Profit section in Profit & Loss.
+
+====================================================
+8. DATE FILTERS
+====================================================
+
+GP and NP must respond to every dashboard filter:
+
+Today
+
+Yesterday
+
+Last 7 Days
+
+This Month
+
+Quarter
+
+This FY
+
+All Time
+
+Custom Range
+
+They must always match the Profit & Loss report for the same period.
+
+====================================================
+9. ACCOUNTING VALIDATION
+====================================================
+
+Verify the following automatically:
+
+Opening Stock
+
+Purchases
+
+Sales
+
+Closing Stock
+
+Direct Expenses
+
+Indirect Expenses
+
+Gross Profit
+
+Net Profit
+
+must all reconcile correctly with:
+
+Trial Balance
+
+Balance Sheet
+
+Profit & Loss
+
+Ledger Statements
+
+Dashboard
+
+====================================================
+10. FINAL TESTING
+====================================================
+
+Test with:
+
+Only Sales
+
+Sales + Purchases
+
+Production entries
+
+Inventory adjustments
+
+Sales Returns
+
+Purchase Returns
+
+Opening Stock edits
+
+Closing Stock edits
+
+Multiple warehouses
+
+Verify GP and NP remain correct for all scenarios.
+
+====================================================
+FINAL REPORT
+====================================================
+
+Provide:
+
+1. Gross Profit calculation formula used.
+2. Net Profit calculation formula used.
+3. Files modified.
+4. Dashboard layout changes.
+5. Profit & Loss report changes.
+6. Tests performed.
+7. Confirmation that GP and NP always reconcile with the accounting reports.

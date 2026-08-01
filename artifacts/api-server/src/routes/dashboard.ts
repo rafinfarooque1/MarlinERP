@@ -849,6 +849,15 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       other: accounting ? accounting.expenses.other : null,
       companyWide: !postingLoc,
     },
+    // Gross and net profit for the selected period, read off the SAME
+    // buildBooks output as the expenses tile (never recomputed here), so the
+    // GP/NP tiles always equal the Profit & Loss for the same range and
+    // location. Null exactly when the other accounting figures are null.
+    profit: {
+      gross: accounting ? accounting.profit.gross : null,
+      net: accounting ? accounting.profit.net : null,
+      companyWide: !postingLoc,
+    },
     // Bank only — physical cash stays in the separate `cash` figures, matching
     // this ERP's existing STD-BANK / STD-CASH split.
     bank: {

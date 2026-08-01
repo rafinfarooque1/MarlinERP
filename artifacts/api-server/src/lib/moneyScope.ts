@@ -215,6 +215,16 @@ export async function checkVoucherLegs(
     return { ok: false, error: "That account belongs to another location." };
   }
 
+  // Party ledgers (customers, vendors, employees) are owned by the location
+  // their MASTER record is stamped with. A branch may not settle another
+  // branch's customer or pay another branch's employee. Head-Office-stamped
+  // and unstamped (company-wide) parties stay usable everywhere — central
+  // relationships are shared, other branches' books are not.
+  const foreignParties = await foreignPartyLedgerIds(scope);
+  if (foreignParties.includes(Number(otherLeg))) {
+    return { ok: false, error: "That account belongs to another location." };
+  }
+
   // Head Office cash/bank accounts are off-limits to branch users: letting a
   // warehouse post against them would move company money with no HO approval.
   const hoCashBank = await headOfficeCashBankLedgerIds();
@@ -226,6 +236,36 @@ export async function checkVoucherLegs(
   }
 
   return { ok: true };
+}
+
+/**
+ * Party ledgers whose MASTER record (customer, vendor, employee) is stamped to
+ * a warehouse/outlet OUTSIDE the caller's scope. Ledger↔master linkage is by
+ * code (CUST-<id>, VEND-<id>, SAL-EMP-/SAL-PAY-/ADV-EMP-<id>) — the same
+ * convention every provisioning path writes. Masters stamped 'headoffice' or
+ * not stamped at all are company-wide and never come back as foreign.
+ * Empty for Head Office.
+ */
+export async function foreignPartyLedgerIds(scope: DataScope): Promise<number[]> {
+  if (scope.isHeadOffice) return [];
+  const { rows } = await pool.query<{ id: number }>(
+    `SELECT al.id
+     FROM account_ledgers al
+     JOIN (
+       SELECT 'CUST-' || id AS code, location_type, location_id FROM customers
+       UNION ALL SELECT 'VEND-' || id, location_type, location_id FROM vendors
+       UNION ALL SELECT 'SAL-EMP-' || id, branch_type, branch_id FROM employees
+       UNION ALL SELECT 'SAL-PAY-' || id, branch_type, branch_id FROM employees
+       UNION ALL SELECT 'ADV-EMP-' || id, branch_type, branch_id FROM employees
+     ) m ON m.code = al.code
+     WHERE m.location_type IN ('warehouse', 'outlet')
+       AND NOT (
+         (m.location_type = 'warehouse' AND m.location_id = ANY($1::int[]))
+         OR (m.location_type = 'outlet' AND m.location_id = ANY($2::int[]))
+       )`,
+    [scope.warehouseIds, scope.outletIds],
+  );
+  return rows.map((r) => Number(r.id));
 }
 
 /**

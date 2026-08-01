@@ -50,7 +50,7 @@
 ## 2. Module List (complete)
 
 **Standalone:** Dashboard · My Profile
-**Operations:** Point of Sale (`/sales/pos`) · Stock (branch) · Stock Transfer · Expenses · Cash Balance · Customers · Receipt Voucher (`/operations/receipt-voucher`) · Payment Voucher (`/operations/payment-voucher`) — full-page surfaces over the SAME receipts/payments engine as Accounts › Vouchers (same REC-/PAT- numbering, postings, provenance locks); own page keys; kind-bound PDF print via `POST /pdf/money-voucher`
+**Operations:** Point of Sale (`/sales/pos`) · Stock (branch) · Stock Transfer · Expenses · Cash Balance · Customers · Receipt Voucher (`/operations/receipt-voucher`) · Payment Voucher (`/operations/payment-voucher`) — full-page surfaces over the SAME receipts/payments engine as Accounts › Vouchers (same REC-/PAT- numbering, postings, provenance locks); own page keys; kind-bound PDF print via `POST /pdf/money-voucher`. Payment mode & attachment REMOVED from money vouchers (Aug 2026): columns kept for legacy rows, writes silently ignore the fields, no read surface (list/PDF/CSV/delete-audit) exposes them. Branch users: sole own-till cash account auto-selected.
 **Stock:** Production batches · Stock (HO) · Stock Ledger · Inventory Reports · Stock Verification
 **Production:** Purchases · Vendors · Item Master · Units · BOM templates · Production Reports
 **Inventory (HO):** Warehouses · Outlets · Item Prices
@@ -118,7 +118,7 @@ Single source of truth: `buildDerivedPostings()` (routes/journal.ts) derives the
 | Sale-linked receipt | **Excluded** from stream (sale already carries the settlement) — double-count trap |
 | Purchase | Dr Purchases + Dr Input GST / Cr `VEND-n` (settlement per mode) |
 | Receipt / Payment | Dr received_in / Cr received_from · Dr paid_to / Cr paid_from |
-| Contra / Journal | As entered; voucher provenance stored (system vouchers locked for edit; unknown-origin locked but deletable; number preserved ⇒ type & FY frozen) |
+| Contra / Journal | As entered; voucher provenance stored (system vouchers locked for edit; unknown-origin locked but deletable; number preserved ⇒ type & FY frozen). Manual vouchers stamped `headoffice`/0 at creation (session-derived; legacy rows backfilled via `manual_jv_location_backfill_v1`); all journal-voucher routes HO-only; statements include JV lines with effective location = COALESCE(return doc, voucher stamp) — branch callers see exactly their own return-linked notes |
 | Credit note | Dr Sales / Cr Customer · Debit note: Dr Vendor / Cr Purchases (location inherited from source) |
 | Salary accrual | Daily, attendance-driven: Dr `SAL-EMP-n` / Cr `SAL-PAY-n` (payroll approval = delta true-up under the attendance lock; month locks; full employer cost incl. PF/ESI at snapshot rates) |
 | Rent accrual | Daily derived: Dr `RENT-EXP-wh` / Cr `RENT-PAY-wh`; payments are vouchers |
@@ -150,8 +150,13 @@ Statements: Trial Balance, P&L (period aggregate + opening/closing stock), Balan
 | Cash / Bank balance | Same index (STD-CASH/STD-BANK walks incl. opening balances) |
 | Inventory value | Shared valuation engine; hidden entirely without the valuation right (server omits the key) |
 | Production trend | productions by day |
+| GP / NP tiles | `companyFinancials().profit` — read straight off the SAME `buildBooks` P&L summary as Expenses (GP = net sales + direct income − COGS; NP adds other income, less indirect). Null exactly when the other accounting figures are null. Click-through to `/reports/financial#pl-gross-profit` / `#pl-net-profit`. |
 
 Never re-sum expense subtrees for a tile (capitalisation overlay); tiles must agree with the statements by construction.
+
+Card layout (Aug 2026): five fixed rows — Sales·Purchases·Expenses / Inventory·Cash·Bank / Receivables·Payables / Money In·Out Today / GP·NP — via a 6-col grid with col-spans; spec colors (sales green, expenses/payables/out red, inventory/receivables blue, balances & GP/NP signed).
+
+P&L report additionally renders a standard vertical Trading & P&L statement (Sales → Less: Sales Returns → Net Sales → Opening Stock → Purchases → Direct Expenses → Goods Available → Less: Closing Stock → COGS → GP → Other Income → Indirect/Financial Charges/Depreciation → NP). `buildBooks` surfaces `grossSales/salesReturns/purchaseReturns` by summing credit_note/debit_note-sourced postings on the SYS-SAL/SYS-PUR subtrees (group totals stay net). Financial Charges/Depreciation lines are name-matched with the Indirect remainder computed by subtraction, so the statement always ties to NP.
 
 ## 9. Permission Flow
 
@@ -183,7 +188,7 @@ Attendance: multi-punch (`attendance_punches`), paid on TOTAL closed-session hou
 |---|---|---|
 | Quotation | — | Module in development (task #202) with follow-ups #203–205 queued |
 | Sales invoice | `prefix/FY/seq` unique, allocator-backed (never renumber) | Edit reverses/reapplies stock; cancel is terminal; PDF server-side; share via revocable HMAC links or short-lived in-session token |
-| Receipt / Payment / JV / Contra / Notes | `REC/PAY/JV…/FY/seq` | Provenance-gated edits; system vouchers locked; deletes allowed with ledger sweep |
+| Receipt / Payment / JV / Contra / Notes | `REC/PAY/JV…/FY/seq` | Provenance-gated edits; system vouchers locked; deletes allowed with ledger sweep; JV-family routes HO-only (all verbs); receipts/payments reject foreign-location and foreign-party ledger legs for branch callers |
 | Purchase bill | vendor ref or `PUR/FY/seq` | Edit refused once goods consumed/moved |
 | Expense | `EXP/FY/seq` | Location-stamped; delete pending task #40 |
 | Asset purchase | user ref + code | Row IS the register entry; transfers/disposals tracked |

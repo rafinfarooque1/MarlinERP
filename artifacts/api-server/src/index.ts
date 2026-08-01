@@ -2821,6 +2821,47 @@ await pool.query(`
   }
 }
 
+// ── Manual journal-voucher location backfill (ONE TIME) ─────────────────────
+// Manual journal/contra/credit-note/debit-note vouchers used to carry no
+// location stamp, so any location-sliced view (including the sidebar's
+// "Head Office" selection) dropped them from the Trial Balance, P&L, Balance
+// Sheet and ledger statements. New manual vouchers are stamped at creation
+// (journal.ts); this stamps the pre-existing ones the same way. Voucher entry
+// is Head Office accounting, so 'headoffice'/0 is the honest stamp. SYSTEM
+// vouchers (origin='system': payroll allocations, branch-transfer clearing)
+// stay company-level ON PURPOSE — they span locations by nature.
+// Guarded by migration_log, not by data shape: a re-run must not re-stamp
+// vouchers a user later re-classified (destructive-boot-cleanup rule).
+// UPDATE and marker commit ATOMICALLY in one transaction, serialized on the
+// marker row itself (the INSERT takes a row lock): a crash between the two
+// can otherwise leave the stamp applied but unrecorded, and a later boot
+// would re-stamp vouchers someone re-classified in between.
+{
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [marker] } = await client.query(
+      `INSERT INTO migration_log (name) VALUES ('manual_jv_location_backfill_v1')
+       ON CONFLICT (name) DO NOTHING RETURNING name`,
+    );
+    if (marker) { // first boot to claim the marker does the work — same txn
+      const upd = await client.query(
+        `UPDATE journal_vouchers
+         SET location_type = 'headoffice', location_id = 0
+         WHERE location_type IS NULL
+           AND (origin IS NULL OR origin = 'manual')`,
+      );
+      console.log(`[migration] manual_jv_location_backfill_v1 — stamped ${upd.rowCount} manual journal vouchers as Head Office`);
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 // ── Five-action permission model (ONE TIME) ──────────────────────────────────
 // Print, Approve and Share stopped being separate user-facing rights: Download
 // now covers every output channel (export, PDF save, print, WhatsApp/email
