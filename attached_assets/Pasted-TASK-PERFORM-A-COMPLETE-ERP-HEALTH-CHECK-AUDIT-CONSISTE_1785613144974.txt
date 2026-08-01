@@ -1,0 +1,667 @@
+TASK: PERFORM A COMPLETE ERP HEALTH CHECK, AUDIT & CONSISTENCY REVIEW
+
+This is NOT a feature implementation task.
+
+This is a complete health check of the ERP.
+
+Act as a senior ERP architect, accountant, QA engineer, and code reviewer.
+
+Do NOT make assumptions.
+
+Investigate every module and verify that the ERP is internally consistent.
+
+Fix only genuine bugs found during the audit.
+
+Do NOT redesign the ERP.
+
+Do NOT change existing business logic unless it is incorrect.
+
+==========================================================
+1. ACCOUNTING HEALTH CHECK
+==========================================================
+
+Verify every accounting transaction.
+
+Check:
+
+Sales
+
+Purchases
+
+Expenses
+
+Production
+
+Payroll
+
+Rent
+
+Receipt Voucher
+
+Payment Voucher
+
+Journal Voucher
+
+Contra Voucher
+
+Debit Note
+
+Credit Note
+
+Cash Transfer
+
+Bank Transactions
+
+Inventory Adjustments
+
+Opening Entries
+
+Closing Entries
+
+Every transaction must correctly generate ledger postings.
+
+Verify:
+
+Trial Balance balances.
+
+Balance Sheet balances.
+
+Profit & Loss balances.
+
+No orphan journal entries.
+
+No orphan voucher lines.
+
+No negative debit/credit mismatches.
+
+No duplicate postings.
+
+No missing postings.
+
+==========================================================
+2. LEDGER CONSISTENCY
+==========================================================
+
+Check every ledger.
+
+Customer
+
+Vendor
+
+Employee
+
+Cash
+
+Bank
+
+Warehouse Cash
+
+Outlet Cash
+
+Expense
+
+Income
+
+Assets
+
+Liabilities
+
+Capital
+
+Verify:
+
+Ledger balance
+
+Ledger statement
+
+Voucher drill-down
+
+Opening balance
+
+Closing balance
+
+Running balance
+
+must all match.
+
+==========================================================
+3. INVENTORY HEALTH CHECK
+==========================================================
+
+Verify:
+
+Live Stock
+
+Batch Stock
+
+Warehouse Stock
+
+Outlet Stock
+
+Reserved Quantity
+
+Available Quantity
+
+Inventory Value
+
+Expiry Dates
+
+FIFO/LIFO calculations (whichever is implemented)
+
+Opening Stock
+
+Closing Stock
+
+Purchase edits
+
+Sales edits
+
+Production
+
+Stock Transfer
+
+Inventory Adjustments
+
+Deleting vouchers
+
+Editing vouchers
+
+No duplicate batches.
+
+No orphan batches.
+
+No incorrect expiry.
+
+No inventory mismatch.
+
+==========================================================
+4. FINANCIAL REPORTS
+==========================================================
+
+Verify:
+
+Dashboard
+
+Cash Book
+
+Bank Book
+
+Day Book
+
+Ledger Statement
+
+Trial Balance
+
+Balance Sheet
+
+Profit & Loss
+
+GST Reports
+
+Receivables
+
+Payables
+
+Customer Statements
+
+Vendor Statements
+
+Employee Statements
+
+Verify every report matches the ledger.
+
+==========================================================
+5. DASHBOARD
+==========================================================
+
+Verify all dashboard cards.
+
+Sales
+
+Purchases
+
+Expenses
+
+Inventory Value
+
+Cash Balance
+
+Bank Balance
+
+Receivables
+
+Payables
+
+Money In Today
+
+Money Out Today
+
+Gross Profit
+
+Net Profit
+
+Check every date filter:
+
+Today
+
+Yesterday
+
+Last 7 Days
+
+This Month
+
+Quarter
+
+This FY
+
+All Time
+
+Custom
+
+Every card must match the underlying reports.
+
+==========================================================
+6. PAYROLL
+==========================================================
+
+Verify:
+
+Attendance
+
+Salary
+
+Salary Payable
+
+PF
+
+ESI
+
+Rent Recovery
+
+Advance Recovery
+
+Leave deduction
+
+Payroll Posting
+
+Payroll Approval
+
+Salary Payment
+
+Verify accounting entries.
+
+==========================================================
+7. RECEIPT & PAYMENT
+==========================================================
+
+Verify:
+
+Receipt Voucher
+
+Payment Voucher
+
+Cash
+
+Bank
+
+Warehouse Cash
+
+Outlet Cash
+
+Customer
+
+Vendor
+
+Employee
+
+Ledger
+
+Reports
+
+Location restriction
+
+Permissions
+
+==========================================================
+8. SALES
+==========================================================
+
+Verify:
+
+Quotation
+
+POS
+
+Sales Invoice
+
+Taxable Mode
+
+Inclusive GST
+
+Exclusive GST
+
+Discount
+
+Coupon
+
+Customer GST
+
+B2B
+
+B2C
+
+Invoice Print
+
+Payment Status
+
+Outstanding
+
+Returns
+
+Credit Notes
+
+==========================================================
+9. PURCHASE
+==========================================================
+
+Verify:
+
+Purchase Bills
+
+Purchase Return
+
+Vendor Outstanding
+
+Inventory Posting
+
+Batch Update
+
+Expiry
+
+HSN
+
+GST
+
+==========================================================
+10. PRODUCTION
+==========================================================
+
+Verify:
+
+BOM
+
+Production Entry
+
+Raw Material Consumption
+
+Finished Goods
+
+Production Cost
+
+Inventory Posting
+
+Accounting Posting
+
+==========================================================
+11. HR
+==========================================================
+
+Verify:
+
+Employees
+
+Attendance
+
+Leave
+
+Payroll
+
+Advances
+
+Rent
+
+Hierarchy
+
+Permissions
+
+==========================================================
+12. ROLE & SECURITY
+==========================================================
+
+Verify:
+
+RBAC
+
+Warehouse User
+
+Outlet User
+
+Head Office
+
+Admin
+
+Manager
+
+Permission leakage
+
+Cross-location access
+
+Unauthorized editing
+
+Manual voucher editing
+
+System voucher locking
+
+==========================================================
+13. LOCATION CHECK
+==========================================================
+
+Verify:
+
+Warehouse
+
+Outlet
+
+Head Office
+
+Cash Accounts
+
+Bank Accounts
+
+Inventory
+
+Reports
+
+Dashboard
+
+Restrictions
+
+==========================================================
+14. GST
+==========================================================
+
+Verify:
+
+CGST
+
+SGST
+
+IGST
+
+Inclusive
+
+Exclusive
+
+GST Summary
+
+GST Return
+
+HSN Summary
+
+Purchase GST
+
+Sales GST
+
+Credit Note GST
+
+Debit Note GST
+
+==========================================================
+15. PRINTING
+==========================================================
+
+Verify:
+
+Sales Invoice
+
+Purchase Bill
+
+Receipt Voucher
+
+Payment Voucher
+
+Journal
+
+Debit Note
+
+Credit Note
+
+PDF
+
+Logo
+
+Warehouse Details
+
+Bank Details
+
+QR
+
+FSSAI
+
+GST
+
+==========================================================
+16. PERFORMANCE
+==========================================================
+
+Check:
+
+Slow pages
+
+Duplicate queries
+
+N+1 queries
+
+Memory leaks
+
+Large tables
+
+Pagination
+
+Indexes
+
+API response
+
+Dashboard loading
+
+==========================================================
+17. DATABASE HEALTH
+==========================================================
+
+Check:
+
+Foreign keys
+
+Missing indexes
+
+Duplicate data
+
+Orphan rows
+
+Broken references
+
+Unused tables
+
+Migration issues
+
+==========================================================
+18. CODE REVIEW
+==========================================================
+
+Review:
+
+Backend
+
+Frontend
+
+API
+
+Accounting Engine
+
+Inventory Engine
+
+Voucher Engine
+
+Payroll Engine
+
+Authentication
+
+Authorization
+
+Validation
+
+==========================================================
+19. BUG FIX POLICY
+==========================================================
+
+Fix only real bugs.
+
+Do NOT introduce new features.
+
+Do NOT redesign UI.
+
+Do NOT modify working business logic.
+
+Keep fixes minimal and safe.
+
+==========================================================
+20. REGRESSION TEST
+==========================================================
+
+After every fix verify:
+
+Accounting still balances.
+
+Inventory still balances.
+
+Reports still match.
+
+Dashboard still matches.
+
+Printing still works.
+
+Permissions still work.
+
+==========================================================
+FINAL REPORT
+==========================================================
+
+Provide a detailed ERP Health Report containing:
+
+1. Overall ERP Health Score (/100)
+2. Critical Issues
+3. High Priority Issues
+4. Medium Priority Issues
+5. Low Priority Issues
+6. Accounting Integrity Status
+7. Inventory Integrity Status
+8. Financial Report Integrity
+9. Database Health
+10. Performance Health
+11. Security Review
+12. Bugs Fixed
+13. Files Modified
+14. Remaining Recommendations
+15. Confirmation that Trial Balance, Balance Sheet, Profit & Loss, Inventory, Dashboard, and Ledgers are internally consistent.
+
+Do not stop after finding issues. Investigate the entire ERP and produce a complete health audit before making any fixes.

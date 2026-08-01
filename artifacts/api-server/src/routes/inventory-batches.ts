@@ -6,6 +6,7 @@ import { logActivity } from "../lib/audit";
 import { isIsoDate } from "../lib/dateInput";
 import { buildBranchMaps } from "./stock";
 import { consumeBatches, creditBatch, planFEFO, inboundCostForItem } from "../lib/batches";
+import { writeStockLedger } from "../lib/stockLedger";
 import { productBatchIdentity } from "../lib/productIdentity";
 import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
 import { stockValuation, PRODUCT_UNIT_COST_SQL, PRODUCT_MASTER_JOINS, PRODUCT_KIND_LABELS, type ProductKind } from "../lib/valuation";
@@ -545,6 +546,7 @@ router.post("/stock/verifications", requireModuleAction("page:/headoffice/stock-
     );
 
     const resultLines: any[] = [];
+    const ledgerEntries: Array<Record<string, unknown>> = [];
     let adjustedCount = 0;
 
     for (const l of lines) {
@@ -580,17 +582,28 @@ router.post("/stock/verifications", requireModuleAction("page:/headoffice/stock-
         }
         // Batches: shrinkage consumes FEFO (oldest stock is what spoils/breaks);
         // surplus lands in an explicit, auditable adjustment batch.
+        let adjUnitCost = 0;
         if (variance < 0) {
           await consumeBatches(client, { itemId, materialType: "item", branchType, branchId: bId, quantity: -variance });
         } else {
-          const unitCost = await inboundCostForItem(client, itemId);
+          adjUnitCost = await inboundCostForItem(client, itemId);
           await creditBatch(client, {
             itemId, materialType: "item", branchType, branchId: bId,
-            batchNumber: `ADJ-${verif.id}`, quantity: variance, unitCost,
+            batchNumber: `ADJ-${verif.id}`, quantity: variance, unitCost: adjUnitCost,
             source: "adjustment", sourceId: verif.id,
             ...(await productBatchIdentity(client, "item", itemId)),
           });
         }
+        // Physical adjustments are stock movements like any other: without a
+        // ledger row the audit trail shows quantities jumping with no cause.
+        ledgerEntries.push({
+          txnType: 'adjustment', materialType: 'item', refId: itemId,
+          itemName: item?.name ?? '', unit: item?.unit ?? '',
+          branchType, branchId: bId, branchName: '',
+          qtyChange: variance, unitCost: adjUnitCost,
+          docType: 'stock_verification', docId: verif.id,
+          notes: reason, txnDate: verifyDate,
+        });
       }
 
       resultLines.push({
@@ -605,6 +618,7 @@ router.post("/stock/verifications", requireModuleAction("page:/headoffice/stock-
     }
 
     await client.query(`UPDATE stock_verifications SET lines = $1 WHERE id = $2`, [JSON.stringify(resultLines), verif.id]);
+    await writeStockLedger(client, ledgerEntries as any);
     await client.query("COMMIT");
 
     const branchName = await buildBranchMaps();

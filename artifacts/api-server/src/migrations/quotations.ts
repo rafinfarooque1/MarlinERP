@@ -137,8 +137,8 @@ export async function addQuotations(pool: Pool): Promise<void> {
     );
     for (const h of hRows) {
       await pool.query(
-        `INSERT INTO permissions (hierarchy_id, module, can_view, can_add, can_edit, can_delete, can_download, can_print)
-         VALUES ($1, 'page:/sales/quotations', true, true, true, true, true, true)
+        `INSERT INTO permissions (hierarchy_id, module, can_view, can_add, can_edit, can_delete, can_download, can_print, can_approve, can_share)
+         VALUES ($1, 'page:/sales/quotations', true, true, true, true, true, true, true, true)
          ON CONFLICT (hierarchy_id, module) DO NOTHING`,
         [h.id],
       );

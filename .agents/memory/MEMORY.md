@@ -99,3 +99,4 @@
 - [Shared surface guards](shared-surface-guards.md) — a second page over existing endpoints: widen the lookup GETs too, bind any-of guards to the request kind, seed new page keys + regenerate pagePermissions.
 - [shadcn Form context](shadcn-form-context.md) — FormItem/FormLabel outside a FormField render prop crash the whole route at runtime; plain label for non-RHF controls.
 - [JV location & visibility](jv-location-visibility.md) — manual JVs stamped headoffice at creation (NULL stamp vanished from every located view); statements gate JV lines on EFFECTIVE location; journal routes HO-only on every verb.
+- [Ghost transfer documents](ghost-transfer-documents.md) — deleting a transfer nulls its twins' branch_transfer_id: ghost BTR invoices leak into lists/books, reservations stick; detect via BTR/% + NULL FK.

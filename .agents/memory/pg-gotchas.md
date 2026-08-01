@@ -41,3 +41,6 @@ fails somewhere further down the file with a meaningless syntax error
 **How to apply:** in comments inside these queries, use plain single quotes.
 When esbuild reports a syntax error in a route file full of SQL and the flagged
 line looks fine, search that file for a stray backtick before anything else.
+
+## executeSql around environment restarts
+A write via executeSql that runs while the environment is being recycled can RETURN rows yet never commit (the txn dies with the connection). Evidence: an INSERT's RETURNING ids were later re-issued by the sequence to a different insert. After any environment restart, re-verify recent writes before building on them.

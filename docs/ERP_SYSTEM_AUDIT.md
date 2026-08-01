@@ -203,7 +203,20 @@ Attendance: multi-punch (`attendance_punches`), paid on TOTAL closed-session hou
 
 **Read-only verification this audit (Phase 17, GETs only — writes not exercised per the no-modification directive; write-path behavior is covered by the regression suites in `artifacts/api-server/tests/`):** 60+ endpoints across every module returned 200 with correct shapes — masters, documents, stock, batches, ledger, all statements, GST returns, HR, rent, assets, dashboards, permissions, audit/login history, with date + location filter variants. Expenses KPI reconciliation re-verified across 9 filter combinations. **One defect found** (see §15 bug B1).
 
-## 15. Known Bugs (found; NOT fixed — per instructions)
+## 15. Known Bugs
+
+### Fixed by the Aug 1, 2026 full health-check (code)
+- **Sale-edit location corruption vector (Critical, root cause of the books drift):** `PUT /sales/:id` defaulted omitted location fields to `outlet`/`undefined`, silently stripping the sale's location. 35 historical rows (₹19,288.53) had been corrupted this way — the exact receivables-vs-TB and location-books drift. Edits now preserve the row's existing location; `POST /sales` rejects non-finite location ids.
+- **Transfer-invoice edits locked:** editing a transfer-generated invoice through the sales editor is now a 409 (it must be managed via the transfer).
+- **Sales-return & purchase-return stock-ledger writes were fire-and-forget** (pool write before COMMIT — a rollback kept phantom audit rows, a crash lost them). Both now write inside the transaction with the business return date.
+- **Stock verification wrote no stock_ledger rows** — physical adjustments appeared as unexplained quantity jumps in the audit trail. Now writes `adjustment` rows per non-zero variance, in-transaction.
+- **Product master deletes orphaned live stock:** items/materials/raw materials could be deleted with stock on hand or an active reservation, leaving invisible orphan quantities in valuation. Deletes are now guarded in a single transaction (master row locked FOR UPDATE, stock re-checked under the lock → 409).
+- **Permission seeder mirror drift:** 5 seeding INSERTs omitted `can_approve`/`can_share`, breaking the five-action mirror invariant for new hierarchies (3 live rows had drifted). Seeders fixed; rows healed.
+
+### Data heals applied (dev DB, Aug 1, 2026)
+32 corrupted sales restored from their CREATE audit metadata (location + settled `amount_paid` on cash sales); 3 ghost `BTR/` invoices removed (their transfers and purchase twins had been deleted, FK nulled); 2 ghost in-transit reservations removed; missing `CUST-`/`VEND-` ledgers provisioned for parties that predate auto-provisioning (books re-attach their postings retroactively — this alone reconciled TB vs receivables/payables ageing). All 21 regression suites now pass except two stale pre-auth-era tests (task #190).
+
+### Open (found; tracked, NOT fixed — per task backlog discipline)
 
 **Critical** — none observed in dev. (Production has two fixes awaiting your publish: pre-reset ghost data cleanup and orphan vendor-ledger sweep — both already built and reviewed.)
 
@@ -241,7 +254,7 @@ Full backlog: 60+ curated tasks in the project task list (each one a vetted find
 
 ## 17. Scores & Risk Assessment
 
-**Overall ERP Health: 82 / 100.** Exceptionally strong: single-source accounting derivation (statements cannot disagree), batch/FEFO inventory with append-only audit ledger, default-deny RBAC + LBAC, GST returns with reconciliation, daily accrual engine, boot-migration discipline with self-healing sweeps, extensive regression suites. Deductions: type-safety debt, god-file maintainability, derived-stream scaling ceiling, sparse DB-level FK enforcement, open GST-correctness gap (#54).
+**Overall ERP Health: 86 / 100** (82 before the Aug 1, 2026 health-check fixes — the books-drift root cause, atomic stock-audit writes, guarded master deletes, and full reconciliation of TB vs ageing raised it). Exceptionally strong: single-source accounting derivation (statements cannot disagree), batch/FEFO inventory with append-only audit ledger, default-deny RBAC + LBAC, GST returns with reconciliation, daily accrual engine, boot-migration discipline with self-healing sweeps, extensive regression suites. Deductions: type-safety debt, god-file maintainability, derived-stream scaling ceiling, sparse DB-level FK enforcement, open GST-correctness gap (#54).
 
 **Production Readiness: 85 / 100.** Already live and in daily use; hardened auth, backups + verified restore path, audit trails, boot observability. Held back by: the two fixes awaiting publish, #54 (tax filing accuracy), #37 (reporting accuracy), and no CI gate on type errors.
 

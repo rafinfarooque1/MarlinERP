@@ -17,3 +17,6 @@ description: Post-consolidation permission model (View/Add/Edit/Delete/Download)
 - **Structure edits (reparent) serialize on one transaction-scoped advisory lock**, and the cycle check is repeated inside that transaction against the stable tree. A pre-transaction check alone lets two concurrent reparents (A→B, B→A) commit a loop that the level-1 override then walks. Recursive CTEs over the tree carry a depth bound as defense in depth.
 - The reports-to backfill migration refuses to guess when no level-1 root exists (skips WITHOUT marking done → retries next boot) and folds extra level-1 rows under the oldest one (narrowing their access — deliberate).
 - **How to apply:** any future route that mutates `reports_to_id` (bulk import, org restructure) must take the same advisory lock and re-validate inside the transaction; never trust a check made outside it.
+
+## Seeder drift trap (fixed Aug 2026)
+Any INSERT INTO permissions that omits can_approve/can_share leaves them FALSE and breaks the mirror invariant (can_print=can_share=can_download, can_approve=can_edit) for newly seeded hierarchies. All 5 seed sites now set them; when adding a new seed site, include both columns explicitly.

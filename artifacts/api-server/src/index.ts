@@ -2703,8 +2703,8 @@ await pool.query(`
 
           await client.query(
             `INSERT INTO permissions
-               (hierarchy_id, module, can_view, can_add, can_edit, can_delete, can_download, can_print)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+               (hierarchy_id, module, can_view, can_add, can_edit, can_delete, can_download, can_print, can_approve, can_share)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $5, $7)
              ON CONFLICT (hierarchy_id, module) DO NOTHING`,
             [h.id, pageKey, flags.v, flags.a, flags.e, flags.d, flags.dl],
           );
@@ -2770,8 +2770,8 @@ await pool.query(`
     for (const h of hRows) {
       for (const mod of PAGE_PERM_KEYS) {
         await pool.query(
-          `INSERT INTO permissions (hierarchy_id, module, can_view, can_add, can_edit, can_delete, can_download, can_print)
-           VALUES ($1, $2, true, true, true, true, true, true)
+          `INSERT INTO permissions (hierarchy_id, module, can_view, can_add, can_edit, can_delete, can_download, can_print, can_approve, can_share)
+           VALUES ($1, $2, true, true, true, true, true, true, true, true)
            ON CONFLICT (hierarchy_id, module) DO NOTHING`,
           [h.id, mod]
         );
@@ -2805,8 +2805,8 @@ await pool.query(`
     for (const h of hRows) {
       for (const mod of ASSET_PAGE_KEYS) {
         await pool.query(
-          `INSERT INTO permissions (hierarchy_id, module, can_view, can_add, can_edit, can_delete, can_download, can_print)
-           VALUES ($1, $2, true, true, true, true, true, true)
+          `INSERT INTO permissions (hierarchy_id, module, can_view, can_add, can_edit, can_delete, can_download, can_print, can_approve, can_share)
+           VALUES ($1, $2, true, true, true, true, true, true, true, true)
            ON CONFLICT (hierarchy_id, module) DO NOTHING`,
           [h.id, mod],
         );
@@ -2836,8 +2836,8 @@ await pool.query(`
     for (const h of hRows) {
       for (const mod of VOUCHER_PAGE_KEYS) {
         await pool.query(
-          `INSERT INTO permissions (hierarchy_id, module, can_view, can_add, can_edit, can_delete, can_download, can_print)
-           VALUES ($1, $2, true, true, true, true, true, true)
+          `INSERT INTO permissions (hierarchy_id, module, can_view, can_add, can_edit, can_delete, can_download, can_print, can_approve, can_share)
+           VALUES ($1, $2, true, true, true, true, true, true, true, true)
            ON CONFLICT (hierarchy_id, module) DO NOTHING`,
           [h.id, mod],
         );

@@ -408,14 +408,18 @@ router.post("/sales-returns", requireModuleAction(["page:/returns", "page:/sales
       }
     }
 
-    // ── Stock ledger (sales return — fire-and-forget) ─────────────────────────
-    ;(async () => {
-      const meta = await batchResolveMeta(pool, retLines.map(rl => ({ materialType: 'item', refId: rl.itemId })));
-      await writeStockLedger(pool, retLines.map(rl => {
+    // ── Stock ledger (sales return) ────────────────────────────────────────
+    // Written INSIDE the transaction so the movement trail commits or rolls
+    // back atomically with the return itself. The old fire-and-forget version
+    // wrote through the shared pool before COMMIT: a rollback kept its phantom
+    // ledger rows, and a write failure lost the trail silently.
+    {
+      const meta = await batchResolveMeta(client, retLines.map(rl => ({ materialType: 'item', refId: rl.itemId })));
+      await writeStockLedger(client, retLines.map(rl => {
         const info = meta.get(`item:${rl.itemId}`) ?? { name: (rl as any).itemName ?? '', unit: '' };
-        return { txnType: 'sales_return', materialType: 'item', refId: rl.itemId, itemName: info.name, unit: info.unit, branchType: locationType, branchId: locationId, branchName: '', qtyChange: Number(rl.quantity), unitCost: 0, docType: 'sales_return', docId: ret.id };
+        return { txnType: 'sales_return', materialType: 'item', refId: rl.itemId, itemName: info.name, unit: info.unit, branchType: locationType, branchId: locationId, branchName: '', qtyChange: Number(rl.quantity), unitCost: 0, docType: 'sales_return', docId: ret.id, txnDate: returnDate };
       }));
-    })().catch((e: any) => console.error('[stock-ledger] sales return write failed', e));
+    }
 
     await client.query("COMMIT");
 
@@ -733,16 +737,17 @@ router.post("/purchase-returns", requireModuleAction(["page:/returns", "page:/pr
        subtotal, taxTotal, totalAmount, dnId, reason, userOf(req)]
     );
 
-    // ── Stock ledger (purchase return — fire-and-forget) ──────────────────────
-    ;(async () => {
-      await writeStockLedger(pool, retLines.map((rl: any) => ({
-        txnType: 'purchase_return', materialType: rl.materialType ?? 'material',
-        refId: rl.materialId, itemName: rl.materialName ?? '', unit: '',
-        branchType: 'headoffice', branchId: rl.materialType === 'item' ? 1 : 0, branchName: 'Head Office',
-        qtyChange: -Number(rl.quantity), unitCost: Number(rl.unitCost ?? 0),
-        docType: 'purchase_return', docId: ret.id,
-      })));
-    })().catch((e: any) => console.error('[stock-ledger] purchase return write failed', e));
+    // ── Stock ledger (purchase return) ─────────────────────────────────────
+    // Written inside the transaction: a fire-and-forget write through the
+    // shared pool before COMMIT could leave a phantom ledger row if the
+    // transaction rolled back, or lose the row if the process died mid-flight.
+    await writeStockLedger(client, retLines.map((rl: any) => ({
+      txnType: 'purchase_return', materialType: rl.materialType ?? 'material',
+      refId: rl.materialId, itemName: rl.materialName ?? '', unit: '',
+      branchType: 'headoffice', branchId: rl.materialType === 'item' ? 1 : 0, branchName: 'Head Office',
+      qtyChange: -Number(rl.quantity), unitCost: Number(rl.unitCost ?? 0),
+      docType: 'purchase_return', docId: ret.id, txnDate: returnDate,
+    })));
 
     await client.query("COMMIT");
 

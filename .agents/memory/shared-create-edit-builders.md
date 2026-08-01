@@ -30,3 +30,6 @@ rev check and rolls the whole edit back.
 
 Related: `effective-value-guards.md` (guard the resulting state, not the body)
 and `document-renderers.md` (absent ≠ zero).
+
+## Case: sale PUT location corruption (Aug 2026)
+`PUT /sales/:id` defaulted omitted `locationType`/`locationId` to `'outlet'`/`undefined`, silently wiping the sale's location. 35 rows (₹19,288.53) corrupted this way were the entire receivables-vs-TB drift. Fix: omitted location fields preserve the row's current values; recovery came from activity_log CREATE metadata (`metadata->'after'`). Corollary: cash-mode sales with `amount_paid < total` are a corruption signal — cash settles in full at creation.

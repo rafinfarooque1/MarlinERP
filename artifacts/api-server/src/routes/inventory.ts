@@ -202,10 +202,60 @@ router.patch("/materials/:id", hoOnly, requireModuleAction("page:/production/ite
   });
 });
 
+// A master with live stock or an active reservation must not be deleted: its
+// stock_entries/stock_batches rows would become invisible orphans (every stock
+// query joins back to the master for names and costs) while still counting in
+// valuation totals.
+//
+// The check and the delete run in ONE transaction with the master row locked
+// FOR UPDATE: a plain check-then-delete races with concurrent stock writers
+// (purchase, production, transfer, verification), which could add stock after
+// the guard read zero but before the delete landed. Writers that touch the
+// master row (avg-cost rolls etc.) serialize on the same lock; the re-check
+// under the lock closes the window for the rest.
+const DELETE_TABLE: Record<string, string> = { item: "items", material: "materials", raw_material: "raw_materials" };
+
+async function guardedMasterDelete(materialType: "item" | "material" | "raw_material", id: number): Promise<{ status: number; error?: string }> {
+  const table = DELETE_TABLE[materialType];
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [master] } = await client.query(`SELECT id FROM ${table} WHERE id = $1 FOR UPDATE`, [id]);
+    if (!master) { await client.query("ROLLBACK"); return { status: 204 }; } // deleting a missing row was a no-op before
+    const { rows: [r] } = await client.query(
+      `SELECT COALESCE((SELECT SUM(quantity::numeric) FROM stock_entries WHERE material_type = $1 AND item_id = $2), 0) AS entry_qty,
+              COALESCE((SELECT SUM(quantity::numeric)  FROM stock_batches  WHERE material_type = $1 AND item_id = $2), 0) AS batch_qty,
+              (SELECT COUNT(*)::int FROM stock_reservations WHERE material_type = $1 AND ref_id = $2 AND status IN ('hold', 'in_transit')) AS active_res`,
+      [materialType, id],
+    );
+    const entryQty = Number(r?.entry_qty ?? 0);
+    const batchQty = Number(r?.batch_qty ?? 0);
+    const activeRes = Number(r?.active_res ?? 0);
+    if (entryQty > 0.0005 || batchQty > 0.0005) {
+      await client.query("ROLLBACK");
+      const qty = Math.max(entryQty, batchQty);
+      return { status: 409, error: `This product still has ${qty} unit(s) of stock on hand. Adjust or transfer the stock out before deleting it.` };
+    }
+    if (activeRes > 0) {
+      await client.query("ROLLBACK");
+      return { status: 409, error: `This product has stock reserved or in transit on an open transfer. Complete or cancel the transfer before deleting it.` };
+    }
+    await client.query(`DELETE FROM ${table} WHERE id = $1`, [id]);
+    await client.query("COMMIT");
+    return { status: 204 };
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 router.delete("/materials/:id", hoOnly, requireModuleAction("page:/production/item-master", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
-  await pool.query(`DELETE FROM materials WHERE id = $1`, [id]);
-  res.status(204).send();
+  const out = await guardedMasterDelete("material", id);
+  if (out.error) { res.status(out.status).json({ error: out.error }); return; }
+  res.status(out.status).send();
 });
 
 // ── Raw Materials ──────────────────────────────────────────────────────────
@@ -280,8 +330,9 @@ router.patch("/raw-materials/:id", hoOnly, requireModuleAction("page:/production
 
 router.delete("/raw-materials/:id", hoOnly, requireModuleAction("page:/production/item-master", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
-  await pool.query(`DELETE FROM raw_materials WHERE id = $1`, [id]);
-  res.status(204).send();
+  const out = await guardedMasterDelete("raw_material", id);
+  if (out.error) { res.status(out.status).json({ error: out.error }); return; }
+  res.status(out.status).send();
 });
 
 // ── Items (Finished SKUs) ──────────────────────────────────────────────────
@@ -364,8 +415,9 @@ router.patch("/items/:id", hoOnly, requireModuleAction("page:/production/item-ma
 
 router.delete("/items/:id", hoOnly, requireModuleAction("page:/production/item-master", "delete"), async (req, res): Promise<void> => {
   const { id } = DeleteItemParams.parse(req.params);
-  await db.delete(itemsTable).where(eq(itemsTable.id, id));
-  res.status(204).send();
+  const out = await guardedMasterDelete("item", id);
+  if (out.error) { res.status(out.status).json({ error: out.error }); return; }
+  res.status(out.status).send();
 });
 
 // ── Assets (Fixed-asset master) ────────────────────────────────────────────
