@@ -9,7 +9,7 @@ import { addWarehouseRent } from "./migrations/warehouseRent";
 import { addInvoiceShareLinks } from "./migrations/invoiceShareLinks";
 import { startRentAccrualScheduler } from "./lib/rentAccrual";
 import { addSalaryAccrual } from "./migrations/salaryAccrual";
-import { startSalaryAccrualScheduler } from "./lib/salaryAccrual";
+import { startSalaryAccrualScheduler, reaccrueForAttendanceChange } from "./lib/salaryAccrual";
 import { addBackupRestore } from "./migrations/backupRestore";
 import { addExpensePaymentModes } from "./migrations/expensePaymentModes";
 import { addFixedAssets } from "./migrations/fixedAssets";
@@ -1788,6 +1788,7 @@ async function runMigrations() {
 async function recordBootStatus(
   migrationsError: string | null,
   dateColumns: string,
+  notes: string | null = null,
 ): Promise<void> {
   try {
     await pool.query(`
@@ -1799,14 +1800,16 @@ async function recordBootStatus(
         migrations_error TEXT,
         date_columns     TEXT
       )`);
+    await pool.query(`ALTER TABLE boot_status ADD COLUMN IF NOT EXISTS notes TEXT`);
     await pool.query(
-      `INSERT INTO boot_status (node_env, migrations_ok, migrations_error, date_columns)
-       VALUES ($1, $2, $3, $4)`,
+      `INSERT INTO boot_status (node_env, migrations_ok, migrations_error, date_columns, notes)
+       VALUES ($1, $2, $3, $4, $5)`,
       [
         process.env.NODE_ENV ?? "unknown",
         migrationsError === null,
         migrationsError,
         dateColumns,
+        notes,
       ],
     );
     // A diagnostic tail, not an audit log — keep the last 50 boots.
@@ -1964,7 +1967,126 @@ try {
     (err as Error).message,
   );
 }
-await recordBootStatus(migrationsError, dateColumnsOutcome);
+
+// ── Leave approval workflow: columns + one-time pending-stamp revert ─────────
+// Leave used to stamp attendance `leave` (a full paid day) at APPLY time, with
+// approval an afterthought. The workflow now stamps at approval only, so any
+// still-pending request that already stamped days is quietly paying unapproved
+// leave. This one-time pass takes those stamps back and re-prices the affected
+// employees' open accruals.
+//
+// Its own top-level step, NOT inside runMigrations(), for the same reason as
+// convertTextDateColumns() above: a swallowed mid-migration throw there would
+// skip it silently. Outcome goes to stderr AND the boot_status row.
+//
+// A stamp is only removed when the day is unambiguously the old sync's own
+// work: still `leave`, no check-in, no punch sessions, not covered by any
+// APPROVED leave, and not inside a signed-off (approved/paid) payroll month —
+// a signed-off month's attendance is contractually frozen, and its money is
+// already locked either way.
+//
+// Deleted rather than flipped to 'absent': for an employee whose month is
+// otherwise untracked (no attendance rows at all = paid in full), one leftover
+// 'absent' row would flip the whole month to tracked and zero their pay.
+// Deleting restores exactly the pre-application state.
+async function revertPendingLeaveStamps(): Promise<string> {
+  // Columns first, unconditionally — the routes read them on every request.
+  await pool.query(`ALTER TABLE leaves ADD COLUMN IF NOT EXISTS approved_at  TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE leaves ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`);
+
+  const { rows: [done] } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'leave_pending_attendance_revert_v1'`,
+  );
+  if (done) return "leave_revert: already applied";
+
+  // What is being kept, and why — counted before deleting so the boot record
+  // explains itself even after the rows are gone.
+  const { rows: [stat] } = await pool.query(`
+    SELECT count(*) FILTER (WHERE a.check_in IS NOT NULL
+             OR EXISTS (SELECT 1 FROM attendance_punches p
+                         WHERE p.employee_id = a.employee_id AND p.date = a.date))::int AS kept_worked,
+           count(*) FILTER (WHERE EXISTS (SELECT 1 FROM payroll pr
+                         WHERE pr.employee_id = a.employee_id
+                           AND pr.year  = EXTRACT(YEAR  FROM a.date)::int
+                           AND pr.month = EXTRACT(MONTH FROM a.date)::int
+                           AND pr.status IN ('approved','paid')))::int AS kept_locked
+      FROM attendance a
+     WHERE a.status = 'leave'
+       AND EXISTS (SELECT 1 FROM leaves l
+                    WHERE l.status = 'pending' AND l.employee_id = a.employee_id
+                      AND a.date BETWEEN l.from_date AND l.to_date)
+       AND NOT EXISTS (SELECT 1 FROM leaves al
+                        WHERE al.status = 'approved' AND al.employee_id = a.employee_id
+                          AND a.date BETWEEN al.from_date AND al.to_date)`);
+
+  const client = await pool.connect();
+  let reverted: Array<{ employee_id: number }> = [];
+  try {
+    await client.query("BEGIN");
+    const del = await client.query(
+      `DELETE FROM attendance a
+        WHERE a.status = 'leave' AND a.check_in IS NULL
+          AND EXISTS (SELECT 1 FROM leaves l
+                       WHERE l.status = 'pending' AND l.employee_id = a.employee_id
+                         AND a.date BETWEEN l.from_date AND l.to_date)
+          AND NOT EXISTS (SELECT 1 FROM leaves al
+                           WHERE al.status = 'approved' AND al.employee_id = a.employee_id
+                             AND a.date BETWEEN al.from_date AND al.to_date)
+          AND NOT EXISTS (SELECT 1 FROM attendance_punches p
+                           WHERE p.employee_id = a.employee_id AND p.date = a.date)
+          AND NOT EXISTS (SELECT 1 FROM payroll pr
+                           WHERE pr.employee_id = a.employee_id
+                             AND pr.year  = EXTRACT(YEAR  FROM a.date)::int
+                             AND pr.month = EXTRACT(MONTH FROM a.date)::int
+                             AND pr.status IN ('approved','paid'))
+        RETURNING a.employee_id`,
+    );
+    reverted = del.rows as Array<{ employee_id: number }>;
+    await client.query(
+      `INSERT INTO migration_log (name) VALUES ('leave_pending_attendance_revert_v1')`,
+    );
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+
+  // Re-price outside the transaction: the deletes are committed truth now, and
+  // each employee's accrual takes its own per-employee lock.
+  const empIds = [...new Set(reverted.map((r) => r.employee_id))];
+  let reaccrued = 0;
+  const failed: number[] = [];
+  for (const empId of empIds) {
+    try {
+      await reaccrueForAttendanceChange(pool, empId);
+      reaccrued++;
+    } catch (e) {
+      failed.push(empId);
+      console.error(
+        `[migration] leave_revert: re-accrual failed for employee ${empId}:`,
+        (e as Error).message,
+      );
+    }
+  }
+  return (
+    `leave_revert: removed ${reverted.length} pending-leave stamp(s) across ${empIds.length} employee(s); ` +
+    `kept ${stat.kept_worked} worked day(s) and ${stat.kept_locked} signed-off-month day(s); ` +
+    `re-accrued ${reaccrued}` +
+    (failed.length ? `, FAILED for employee(s) ${failed.join(", ")} — hourly sweep will retry` : "")
+  );
+}
+
+let leaveRevertOutcome: string;
+try {
+  leaveRevertOutcome = await revertPendingLeaveStamps();
+} catch (err) {
+  leaveRevertOutcome = `leave_revert FAILED: ${(err as Error).message} — will retry next boot`;
+}
+console.error(`[migration] ${leaveRevertOutcome}`);
+
+await recordBootStatus(migrationsError, dateColumnsOutcome, leaveRevertOutcome);
 
 // ── MRP column on materials and raw_materials ────────────────────────────────
 await pool.query(`ALTER TABLE materials    ADD COLUMN IF NOT EXISTS mrp NUMERIC(10,2) DEFAULT 0`);
@@ -2204,7 +2326,7 @@ await pool.query(`CREATE INDEX IF NOT EXISTS idx_receipts_location ON receipts (
 // above so the columns are guaranteed to exist; migration_log keeps it one-time.
 {
   const { rows: mlRows } = await pool.query(
-    `SELECT 1 FROM migration_log WHERE name = 'money_voucher_location_backfill_v1'`,
+    `SELECT 1 FROM migration_log WHERE name = 'per_link_permissions_v1'`,
   );
   if (mlRows.length === 0) {
     for (const [table, legs] of [
@@ -2213,7 +2335,7 @@ await pool.query(`CREATE INDEX IF NOT EXISTS idx_receipts_location ON receipts (
     ] as const) {
       // Cash leg (money physically leaves/enters a location's cash box)
       for (const loc of ["warehouse", "outlet"] as const) {
-        const locTable = loc === "warehouse" ? "warehouses" : "outlets";
+      const locTable = loc === "warehouse" ? "warehouses" : "outlets";
         await pool.query(`
           UPDATE ${table} t SET location_type = '${loc}', location_id = l.id
           FROM ${locTable} l
@@ -2305,7 +2427,9 @@ await pool.query(`
     try {
       await client.query("BEGIN");
 
-      const { rows: hRows } = await client.query(`SELECT id FROM hierarchies WHERE level != 1`);
+    const { rows: hRows } = await pool.query(
+      `SELECT id FROM hierarchies WHERE level != 1`,
+    );
       let expanded = 0;
       let granted = 0;
 
@@ -2397,11 +2521,11 @@ await pool.query(`
 // All-true rows seeded here are visible via GET /company/permissions/rbac-audit.
 {
   const { rows: seeded } = await pool.query(
-    `SELECT 1 FROM migration_log WHERE name = 'permission_seed_existing_v1'`,
+    `SELECT 1 FROM migration_log WHERE name = 'assets_page_perms_v1'`,
   );
   if (seeded.length === 0) {
     const { rows: hRows } = await pool.query(
-      `SELECT id FROM hierarchies WHERE level != 1`
+      `SELECT id FROM hierarchies WHERE level != 1`,
     );
     for (const h of hRows) {
       for (const mod of PAGE_PERM_KEYS) {
@@ -2468,7 +2592,7 @@ await pool.query(`
 // with the live model. The guards never read them again.
 {
   const { rows: done } = await pool.query(
-    `SELECT 1 FROM migration_log WHERE name = 'permission_five_action_fold_v1'`,
+    `SELECT 1 FROM migration_log WHERE name = 'hierarchy_reports_to_v1'`,
   );
   if (done.length === 0) {
     // Every SET expression reads the row's OLD values (SQL semantics), so the
@@ -2701,7 +2825,7 @@ await pool.query(`
 // attribute it to Head Office, which is where all of them were recorded.
 {
   const { rows: [done] } = await pool.query(
-    `SELECT 1 FROM migration_log WHERE name = 'expense_audit_fields_v1'`
+    `SELECT 1 FROM migration_log WHERE name = 'pay_components_seed_v1'`
   );
   if (!done) {
     await pool.query(

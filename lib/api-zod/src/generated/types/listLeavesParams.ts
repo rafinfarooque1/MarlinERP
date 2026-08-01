@@ -5,9 +5,16 @@
  * Marlin Frozen Fruits ERP API
  * OpenAPI spec version: 0.1.0
  */
+import type { ListLeavesBranchType } from './listLeavesBranchType';
+import type { ListLeavesLeaveType } from './listLeavesLeaveType';
 import type { ListLeavesStatus } from './listLeavesStatus';
 
 export type ListLeavesParams = {
 employeeId?: number;
 status?: ListLeavesStatus;
+leaveType?: ListLeavesLeaveType;
+fromDate?: string;
+toDate?: string;
+branchType?: ListLeavesBranchType;
+branchId?: number;
 };

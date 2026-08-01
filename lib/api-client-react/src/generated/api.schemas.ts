@@ -801,14 +801,24 @@ export const LeaveApplicationStatus = {
   pending: 'pending',
   approved: 'approved',
   rejected: 'rejected',
+  cancelled: 'cancelled',
 } as const;
 
 export interface LeaveApplication {
   id: number;
   employeeId: number;
   employeeName?: string;
+  /** @nullable */
+  branchType?: string | null;
+  /** @nullable */
+  branchId?: number | null;
+  /** @nullable */
+  branchName?: string | null;
+  /** @nullable */
+  roleName?: string | null;
   fromDate: string;
   toDate: string;
+  days?: number;
   leaveType: LeaveApplicationLeaveType;
   /** @nullable */
   reason?: string | null;
@@ -819,6 +829,12 @@ export interface LeaveApplication {
   approverName?: string | null;
   /** @nullable */
   approvalNote?: string | null;
+  /** @nullable */
+  approvedAt?: string | null;
+  /** @nullable */
+  cancelledAt?: string | null;
+  /** @nullable */
+  createdAt?: string | null;
 }
 
 export type LeaveInputLeaveType = typeof LeaveInputLeaveType[keyof typeof LeaveInputLeaveType];
@@ -1235,6 +1251,11 @@ date?: string;
 export type ListLeavesParams = {
 employeeId?: number;
 status?: ListLeavesStatus;
+leaveType?: ListLeavesLeaveType;
+fromDate?: string;
+toDate?: string;
+branchType?: ListLeavesBranchType;
+branchId?: number;
 };
 
 export type ListLeavesStatus = typeof ListLeavesStatus[keyof typeof ListLeavesStatus];
@@ -1244,6 +1265,26 @@ export const ListLeavesStatus = {
   pending: 'pending',
   approved: 'approved',
   rejected: 'rejected',
+  cancelled: 'cancelled',
+} as const;
+
+export type ListLeavesLeaveType = typeof ListLeavesLeaveType[keyof typeof ListLeavesLeaveType];
+
+
+export const ListLeavesLeaveType = {
+  sick: 'sick',
+  casual: 'casual',
+  annual: 'annual',
+  other: 'other',
+} as const;
+
+export type ListLeavesBranchType = typeof ListLeavesBranchType[keyof typeof ListLeavesBranchType];
+
+
+export const ListLeavesBranchType = {
+  headoffice: 'headoffice',
+  warehouse: 'warehouse',
+  outlet: 'outlet',
 } as const;
 
 export type GetLedgerStatementParams = {

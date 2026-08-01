@@ -65,6 +65,8 @@ export * from './ledgerStatement';
 export * from './ledgerStatementTransactionsItem';
 export * from './listAttendanceParams';
 export * from './listItemPricesParams';
+export * from './listLeavesBranchType';
+export * from './listLeavesLeaveType';
 export * from './listLeavesParams';
 export * from './listLeavesStatus';
 export * from './listPayrollParams';

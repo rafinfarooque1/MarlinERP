@@ -1449,21 +1449,34 @@ export const CheckOutResponse = zod.object({
  */
 export const ListLeavesQueryParams = zod.object({
   "employeeId": zod.coerce.number().optional(),
-  "status": zod.enum(['pending', 'approved', 'rejected']).optional()
+  "status": zod.enum(['pending', 'approved', 'rejected', 'cancelled']).optional(),
+  "leaveType": zod.enum(['sick', 'casual', 'annual', 'other']).optional(),
+  "fromDate": zod.coerce.string().optional(),
+  "toDate": zod.coerce.string().optional(),
+  "branchType": zod.enum(['headoffice', 'warehouse', 'outlet']).optional(),
+  "branchId": zod.coerce.number().optional()
 })
 
 export const ListLeavesResponseItem = zod.object({
   "id": zod.number(),
   "employeeId": zod.number(),
   "employeeName": zod.string().optional(),
+  "branchType": zod.string().nullish(),
+  "branchId": zod.number().nullish(),
+  "branchName": zod.string().nullish(),
+  "roleName": zod.string().nullish(),
   "fromDate": zod.string(),
   "toDate": zod.string(),
+  "days": zod.number().optional(),
   "leaveType": zod.enum(['sick', 'casual', 'annual', 'other']),
   "reason": zod.string().nullish(),
-  "status": zod.enum(['pending', 'approved', 'rejected']),
+  "status": zod.enum(['pending', 'approved', 'rejected', 'cancelled']),
   "approvedBy": zod.number().nullish(),
   "approverName": zod.string().nullish(),
-  "approvalNote": zod.string().nullish()
+  "approvalNote": zod.string().nullish(),
+  "approvedAt": zod.string().nullish(),
+  "cancelledAt": zod.string().nullish(),
+  "createdAt": zod.string().nullish()
 })
 export const ListLeavesResponse = zod.array(ListLeavesResponseItem)
 
@@ -1483,14 +1496,22 @@ export const ApplyLeaveResponse = zod.object({
   "id": zod.number(),
   "employeeId": zod.number(),
   "employeeName": zod.string().optional(),
+  "branchType": zod.string().nullish(),
+  "branchId": zod.number().nullish(),
+  "branchName": zod.string().nullish(),
+  "roleName": zod.string().nullish(),
   "fromDate": zod.string(),
   "toDate": zod.string(),
+  "days": zod.number().optional(),
   "leaveType": zod.enum(['sick', 'casual', 'annual', 'other']),
   "reason": zod.string().nullish(),
-  "status": zod.enum(['pending', 'approved', 'rejected']),
+  "status": zod.enum(['pending', 'approved', 'rejected', 'cancelled']),
   "approvedBy": zod.number().nullish(),
   "approverName": zod.string().nullish(),
-  "approvalNote": zod.string().nullish()
+  "approvalNote": zod.string().nullish(),
+  "approvedAt": zod.string().nullish(),
+  "cancelledAt": zod.string().nullish(),
+  "createdAt": zod.string().nullish()
 })
 
 
@@ -1510,14 +1531,52 @@ export const ApproveLeaveResponse = zod.object({
   "id": zod.number(),
   "employeeId": zod.number(),
   "employeeName": zod.string().optional(),
+  "branchType": zod.string().nullish(),
+  "branchId": zod.number().nullish(),
+  "branchName": zod.string().nullish(),
+  "roleName": zod.string().nullish(),
   "fromDate": zod.string(),
   "toDate": zod.string(),
+  "days": zod.number().optional(),
   "leaveType": zod.enum(['sick', 'casual', 'annual', 'other']),
   "reason": zod.string().nullish(),
-  "status": zod.enum(['pending', 'approved', 'rejected']),
+  "status": zod.enum(['pending', 'approved', 'rejected', 'cancelled']),
   "approvedBy": zod.number().nullish(),
   "approverName": zod.string().nullish(),
-  "approvalNote": zod.string().nullish()
+  "approvalNote": zod.string().nullish(),
+  "approvedAt": zod.string().nullish(),
+  "cancelledAt": zod.string().nullish(),
+  "createdAt": zod.string().nullish()
+})
+
+
+/**
+ * @summary Cancel own pending leave request
+ */
+export const CancelLeaveParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const CancelLeaveResponse = zod.object({
+  "id": zod.number(),
+  "employeeId": zod.number(),
+  "employeeName": zod.string().optional(),
+  "branchType": zod.string().nullish(),
+  "branchId": zod.number().nullish(),
+  "branchName": zod.string().nullish(),
+  "roleName": zod.string().nullish(),
+  "fromDate": zod.string(),
+  "toDate": zod.string(),
+  "days": zod.number().optional(),
+  "leaveType": zod.enum(['sick', 'casual', 'annual', 'other']),
+  "reason": zod.string().nullish(),
+  "status": zod.enum(['pending', 'approved', 'rejected', 'cancelled']),
+  "approvedBy": zod.number().nullish(),
+  "approverName": zod.string().nullish(),
+  "approvalNote": zod.string().nullish(),
+  "approvedAt": zod.string().nullish(),
+  "cancelledAt": zod.string().nullish(),
+  "createdAt": zod.string().nullish()
 })
 
 

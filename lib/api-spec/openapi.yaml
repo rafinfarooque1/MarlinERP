@@ -1006,7 +1006,12 @@ paths:
       summary: List leave applications
       parameters:
         - { name: employeeId, in: query, schema: { type: integer } }
-        - { name: status, in: query, schema: { type: string, enum: [pending, approved, rejected] } }
+        - { name: status, in: query, schema: { type: string, enum: [pending, approved, rejected, cancelled] } }
+        - { name: leaveType, in: query, schema: { type: string, enum: [sick, casual, annual, other] } }
+        - { name: fromDate, in: query, schema: { type: string } }
+        - { name: toDate, in: query, schema: { type: string } }
+        - { name: branchType, in: query, schema: { type: string, enum: [headoffice, warehouse, outlet] } }
+        - { name: branchId, in: query, schema: { type: integer } }
       responses:
         "200":
           description: Leave applications
@@ -1050,6 +1055,21 @@ paths:
       responses:
         "200":
           description: Leave updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeaveApplication"
+
+  /hr/leaves/{id}/cancel:
+    post:
+      operationId: cancelLeave
+      tags: [leave]
+      summary: Cancel own pending leave request
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Leave cancelled
           content:
             application/json:
               schema:
@@ -2541,10 +2561,20 @@ components:
           type: integer
         employeeName:
           type: string
+        branchType:
+          type: ["string", "null"]
+        branchId:
+          type: ["integer", "null"]
+        branchName:
+          type: ["string", "null"]
+        roleName:
+          type: ["string", "null"]
         fromDate:
           type: string
         toDate:
           type: string
+        days:
+          type: integer
         leaveType:
           type: string
           enum: [sick, casual, annual, other]
@@ -2552,12 +2582,18 @@ components:
           type: ["string", "null"]
         status:
           type: string
-          enum: [pending, approved, rejected]
+          enum: [pending, approved, rejected, cancelled]
         approvedBy:
           type: ["integer", "null"]
         approverName:
           type: ["string", "null"]
         approvalNote:
+          type: ["string", "null"]
+        approvedAt:
+          type: ["string", "null"]
+        cancelledAt:
+          type: ["string", "null"]
+        createdAt:
           type: ["string", "null"]
 
     LeaveInput:

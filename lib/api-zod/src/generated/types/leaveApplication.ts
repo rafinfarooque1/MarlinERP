@@ -12,8 +12,17 @@ export interface LeaveApplication {
   id: number;
   employeeId: number;
   employeeName?: string;
+  /** @nullable */
+  branchType?: string | null;
+  /** @nullable */
+  branchId?: number | null;
+  /** @nullable */
+  branchName?: string | null;
+  /** @nullable */
+  roleName?: string | null;
   fromDate: string;
   toDate: string;
+  days?: number;
   leaveType: LeaveApplicationLeaveType;
   /** @nullable */
   reason?: string | null;
@@ -24,4 +33,10 @@ export interface LeaveApplication {
   approverName?: string | null;
   /** @nullable */
   approvalNote?: string | null;
+  /** @nullable */
+  approvedAt?: string | null;
+  /** @nullable */
+  cancelledAt?: string | null;
+  /** @nullable */
+  createdAt?: string | null;
 }

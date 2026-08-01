@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import {
   useListAttendance, useCheckIn, useCheckOut, getListAttendanceQueryKey,
   useListEmployees, useListWarehouses, useListOutlets,
-  useListLeaves, useApplyLeave, useApproveLeave, getListLeavesQueryKey,
+  useListLeaves, useApplyLeave, useCancelLeave, getListLeavesQueryKey,
   useGetMe, useCorrectAttendance, useAttendanceRange,
   useAttendanceMonth, useAttendanceConfig, type AttendancePunch,
 } from '@workspace/api-client-react';
@@ -16,7 +16,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
-import { Search, Clock, Download, LogIn, LogOut, MapPin, Loader2, ShieldOff, CalendarDays, Plus, Eye, CheckCircle, XCircle, Pencil } from 'lucide-react';
+import { Search, Clock, Download, LogIn, LogOut, MapPin, Loader2, ShieldOff, CalendarDays, Plus, Eye, XCircle, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -65,8 +65,9 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function leaveStatusColor(s: string) {
-  if (s === 'approved') return 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20';
-  if (s === 'rejected') return 'bg-red-500/10 text-red-500 border-red-500/20';
+  if (s === 'approved')  return 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20';
+  if (s === 'rejected')  return 'bg-red-500/10 text-red-500 border-red-500/20';
+  if (s === 'cancelled') return 'bg-muted text-muted-foreground border-border';
   return 'bg-amber-500/10 text-amber-500 border-amber-500/20';
 }
 
@@ -187,7 +188,7 @@ export default function Attendance() {
   const checkInMutation  = useCheckIn();
   const checkOutMutation = useCheckOut();
   const applyMutation    = useApplyLeave();
-  const approveMutation  = useApproveLeave();
+  const cancelMutation   = useCancelLeave();
   const correctMutation  = useCorrectAttendance();
 
   // Employee view: own leave history
@@ -250,12 +251,14 @@ export default function Attendance() {
     );
   };
 
-  const handleApproveLeave = (id: number, approved: boolean) => {
-    approveMutation.mutate(
-      { id, data: { approved, remarks: approved ? 'Approved' : 'Rejected' } as any },
+  // Only a PENDING request of your own can be withdrawn — approvals happen on
+  // the HR → Leave page, cancellation belongs to the requester alone.
+  const handleCancelLeave = (id: number) => {
+    cancelMutation.mutate(
+      { id },
       {
         onSuccess: () => {
-          toast.success(approved ? 'Leave approved' : 'Leave rejected');
+          toast.success('Leave request cancelled');
           queryClient.invalidateQueries({ queryKey: getListLeavesQueryKey() });
           setViewLeave(null);
         },
@@ -468,25 +471,36 @@ export default function Attendance() {
         {viewLeave && (
           <div className="mt-6 space-y-4">
             {[
-              ['From', new Date(viewLeave.fromDate).toLocaleDateString('en-IN')],
-              ['To',   new Date(viewLeave.toDate).toLocaleDateString('en-IN')],
+              ['From', new Date(viewLeave.fromDate + (String(viewLeave.fromDate).length === 10 ? 'T00:00:00' : '')).toLocaleDateString('en-IN')],
+              ['To',   new Date(viewLeave.toDate + (String(viewLeave.toDate).length === 10 ? 'T00:00:00' : '')).toLocaleDateString('en-IN')],
+              ...(viewLeave.days ? [['Days', String(viewLeave.days)]] : []),
+              ['Applied On', viewLeave.createdAt ? new Date(viewLeave.createdAt).toLocaleDateString('en-IN') : '—'],
               ['Status', viewLeave.status || 'pending'],
               ['Reason', viewLeave.reason || '—'],
-              ['Approval Note', viewLeave.approvalNote || '—'],
+              ...(viewLeave.status === 'approved' || viewLeave.status === 'rejected' ? [
+                [viewLeave.status === 'approved' ? 'Approved By' : 'Rejected By', viewLeave.approverName || '—'],
+                [viewLeave.status === 'approved' ? 'Approved On' : 'Rejected On',
+                  viewLeave.approvedAt ? new Date(viewLeave.approvedAt).toLocaleDateString('en-IN') : '—'],
+              ] : []),
+              ...(viewLeave.status === 'rejected' ? [['Rejection Reason', viewLeave.approvalNote || '—']]
+                : viewLeave.approvalNote ? [['Approval Note', viewLeave.approvalNote]] : []),
+              ...(viewLeave.status === 'cancelled' ? [
+                ['Cancelled On', viewLeave.cancelledAt ? new Date(viewLeave.cancelledAt).toLocaleDateString('en-IN') : '—'],
+              ] : []),
             ].map(([k, v]) => (
               <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
                 <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                 <span className="font-medium">{v}</span>
               </div>
             ))}
-            {isAdmin && perm.canEdit && (viewLeave.status === 'pending' || !viewLeave.status) && (
-              <div className="flex gap-2 pt-2">
-                <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => handleApproveLeave(viewLeave.id, true)} disabled={approveMutation.isPending}>
-                  <CheckCircle className="w-4 h-4 mr-2" /> Approve
+            {viewLeave.status === 'pending' && viewLeave.employeeId === myId && (
+              <div className="pt-2">
+                <Button variant="destructive" className="w-full" onClick={() => handleCancelLeave(viewLeave.id)} disabled={cancelMutation.isPending}>
+                  <XCircle className="w-4 h-4 mr-2" /> {cancelMutation.isPending ? 'Cancelling…' : 'Cancel Request'}
                 </Button>
-                <Button variant="destructive" className="flex-1" onClick={() => handleApproveLeave(viewLeave.id, false)} disabled={approveMutation.isPending}>
-                  <XCircle className="w-4 h-4 mr-2" /> Reject
-                </Button>
+                <p className="text-xs text-muted-foreground mt-2">
+                  Withdraws this request before it is reviewed. Only pending requests can be cancelled.
+                </p>
               </div>
             )}
           </div>

@@ -1,5 +1,5 @@
 import { Router, type Response } from "express";
-import { requireModuleAction, requireModuleView } from "../middleware/permissions";
+import { requireModuleAction, requireModuleView, hasModuleAction } from "../middleware/permissions";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import {
   db, pool, hierarchiesTable, employeesTable, payrollTable, attendanceTable,
@@ -9,7 +9,7 @@ import { PasswordService } from '../lib/password';
 import { DEFAULT_INITIAL_PASSWORD, ADMIN_RESET_PASSWORD } from '../lib/passwordPolicy';
 import { eq, and, gte, lte, sql } from "drizzle-orm";
 import { logActivity } from "../lib/audit";
-import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
+import { getUserDataScope, scopeBranchWhere, isLocationInScope } from "../lib/dataScope";
 import { parseDateRange } from "../lib/queryFilters";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
@@ -2212,23 +2212,126 @@ router.post("/hr/attendance/check-out", requireModuleAction("page:/hr/attendance
 });
 
 // ── Leave ─────────────────────────────────────────────────────────────────
+//
+// Lifecycle: pending → approved | rejected | cancelled.
+//
+// A PENDING request has zero effect on attendance or pay. Only APPROVAL stamps
+// the days as `leave` in the attendance table — which is the single source both
+// the daily salary accrual and payroll generation read — so unapproved leave can
+// never earn salary. Rejection and cancellation therefore have nothing to undo
+// in the normal flow. (`approved_at` / `cancelled_at` are startup-migration
+// columns invisible to drizzle, so every read and write here is raw SQL.)
+
+/** Enriched leave row: employee, branch, role, approver — one query, no N+1. */
+const LEAVE_SELECT = `
+  SELECT l.id, l.employee_id AS "employeeId", e.name AS "employeeName",
+         e.branch_type AS "branchType", e.branch_id AS "branchId",
+         CASE e.branch_type
+           WHEN 'headoffice' THEN 'Head Office'
+           WHEN 'warehouse'  THEN COALESCE(w.name, 'Warehouse #' || e.branch_id)
+           ELSE COALESCE(o.name, 'Outlet #' || e.branch_id)
+         END AS "branchName",
+         h.name AS "roleName",
+         l.from_date AS "fromDate", l.to_date AS "toDate",
+         l.leave_type AS "leaveType", l.reason, l.status,
+         l.approved_by AS "approvedBy", ap.name AS "approverName",
+         l.approval_note AS "approvalNote",
+         l.approved_at AS "approvedAt", l.cancelled_at AS "cancelledAt",
+         l.created_at AS "createdAt"
+    FROM leaves l
+    JOIN employees e ON e.id = l.employee_id
+    LEFT JOIN hierarchies h ON h.id = e.hierarchy_id
+    LEFT JOIN employees ap ON ap.id = l.approved_by
+    LEFT JOIN warehouses w ON e.branch_type = 'warehouse' AND w.id = e.branch_id
+    LEFT JOIN outlets   o ON e.branch_type = 'outlet'    AND o.id = e.branch_id`;
+
+function leaveRowToApi(r: any) {
+  const from = pgDateStr(r.fromDate), to = pgDateStr(r.toDate);
+  let days = 0;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    const [fy, fm, fd] = from.split("-").map(Number);
+    const [ty, tm, td] = to.split("-").map(Number);
+    days = Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86_400_000) + 1;
+    if (days < 0) days = 0;
+  }
+  return {
+    id: r.id, employeeId: r.employeeId, employeeName: r.employeeName ?? "",
+    branchType: r.branchType ?? null, branchId: r.branchId ?? null,
+    branchName: r.branchName ?? null, roleName: r.roleName ?? null,
+    fromDate: from, toDate: to, days,
+    leaveType: r.leaveType, reason: r.reason ?? null, status: r.status,
+    approvedBy: r.approvedBy ?? null, approverName: r.approverName ?? null,
+    approvalNote: r.approvalNote ?? null,
+    approvedAt: r.approvedAt ? new Date(r.approvedAt).toISOString() : null,
+    cancelledAt: r.cancelledAt ? new Date(r.cancelledAt).toISOString() : null,
+    createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,
+  };
+}
+
+async function fetchLeaveById(id: number): Promise<any | null> {
+  const { rows: [r] } = await pool.query(`${LEAVE_SELECT} WHERE l.id = $1`, [id]);
+  return r ? leaveRowToApi(r) : null;
+}
+
+/** Inclusive YYYY-MM-DD list for a leave range. */
+function leaveDateList(fromDate: string, toDate: string): string[] {
+  const [fy, fm, fd] = fromDate.split("-").map(Number);
+  const [ty, tm, td] = toDate.split("-").map(Number);
+  const cur = new Date(Date.UTC(fy, fm - 1, fd));
+  const end = new Date(Date.UTC(ty, tm - 1, td));
+  const dates: string[] = [];
+  while (cur <= end) {
+    dates.push(cur.toISOString().split("T")[0]);
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return dates;
+}
+
 router.get("/hr/leaves", requireModuleView("page:/hr/attendance"), async (req, res): Promise<void> => {
   const qp = ListLeavesQueryParams.safeParse(req.query);
-  let rows = await db.select().from(leavesTable).orderBy(leavesTable.id);
+  const where: string[] = [];
+  const params: unknown[] = [];
+
+  // Who sees what: Head Office sees everything. A non-HO caller who holds EDIT
+  // on this page is an approver and sees their own location's requests (their
+  // warehouse plus its outlets — the same scope every other HR read uses).
+  // Anyone else sees only their own history. The distinction is the page
+  // right, not the branch: a warehouse supervisor without Edit is an employee
+  // here, not a reviewer of their colleagues' requests.
+  const scopeEmp = (req as any).employee as
+    { id: number; branchType: string; branchId: number; hierarchyId: number } | undefined;
+  if (scopeEmp && scopeEmp.branchType !== "headoffice") {
+    const approver = await hasModuleAction(scopeEmp.hierarchyId, "page:/hr/attendance", "edit");
+    if (approver) {
+      const scope = await getUserDataScope(scopeEmp);
+      where.push(scopeBranchWhere(scope, params, "e"));
+    } else {
+      params.push(scopeEmp.id);
+      where.push(`l.employee_id = $${params.length}`);
+    }
+  }
+
   if (qp.success) {
-    if (qp.data.employeeId) rows = rows.filter((r) => r.employeeId === Number(qp.data.employeeId));
-    if (qp.data.status) rows = rows.filter((r) => r.status === qp.data.status);
+    const f = qp.data;
+    if (f.employeeId) { params.push(Number(f.employeeId)); where.push(`l.employee_id = $${params.length}`); }
+    if (f.status)     { params.push(f.status);             where.push(`l.status = $${params.length}`); }
+    if (f.leaveType)  { params.push(f.leaveType);          where.push(`l.leave_type = $${params.length}`); }
+    // The date window matches any request that OVERLAPS it, not only requests
+    // fully inside it — a leave spanning the month boundary belongs to both
+    // months' views. Partial/malformed dates are dropped, not passed to pg.
+    if (f.fromDate && /^\d{4}-\d{2}-\d{2}$/.test(f.fromDate)) { params.push(f.fromDate); where.push(`l.to_date >= $${params.length}`); }
+    if (f.toDate   && /^\d{4}-\d{2}-\d{2}$/.test(f.toDate))   { params.push(f.toDate);   where.push(`l.from_date <= $${params.length}`); }
+    if (f.branchType) { params.push(f.branchType);       where.push(`e.branch_type = $${params.length}`); }
+    if (f.branchId)   { params.push(Number(f.branchId)); where.push(`e.branch_id = $${params.length}`); }
   }
-  // Non-headoffice employees only see their own leave records
-  const scopeEmp = (req as any).employee as { id: number; branchType: string } | undefined;
-  if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
-    rows = rows.filter((r) => r.employeeId === scopeEmp.id);
-  }
-  const employees = await db.select().from(employeesTable);
-  const eMap = new Map(employees.map((e) => [e.id, e.name]));
+
+  const { rows } = await pool.query(
+    `${LEAVE_SELECT}${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY l.id DESC`,
+    params,
+  );
   const paging = parsePaging(req.query as Record<string, unknown>);
   setPagingHeaders(res, rows.length, paging);
-  res.json(applyPaging(rows, paging).map((r) => ({ ...r, employeeName: eMap.get(r.employeeId) ?? "", approverName: null })));
+  res.json(applyPaging(rows, paging).map(leaveRowToApi));
 });
 
 router.post("/hr/leaves", requireModuleAction("page:/hr/attendance", "add"), async (req, res): Promise<void> => {
@@ -2236,108 +2339,236 @@ router.post("/hr/leaves", requireModuleAction("page:/hr/attendance", "add"), asy
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
   // Security: non-headoffice employees may only apply leave for themselves
-  const scopeEmp = (req as any).employee as { id: number; branchType: string } | undefined;
+  const scopeEmp = (req as any).employee as { id: number; branchType: string; username?: string } | undefined;
   if (scopeEmp && scopeEmp.branchType !== 'headoffice' && parsed.data.employeeId !== scopeEmp.id) {
     res.status(403).json({ error: "You can only apply leave for yourself." });
     return;
   }
 
-  // Sync leave days into attendance table as status = 'leave'. Those days now
-  // earn a full paid day, so this is a salary write and takes the same lock, and
-  // a range reaching into a signed-off month is refused whole.
-  //
-  // The leave row is inserted on the SAME locked connection, inside the SAME
-  // transaction as the attendance rows. Writing the attendance first and the
-  // leave row afterwards on a separate connection would, if that second write
-  // failed, leave paid leave days committed with no leave application behind
-  // them — salary granted with no record of why.
-  const startParts = parsed.data.fromDate.split('-').map(Number);
-  const cur = new Date(Date.UTC(startParts[0], startParts[1] - 1, startParts[2]));
-  const endParts = parsed.data.toDate.split('-').map(Number);
-  const endD = new Date(Date.UTC(endParts[0], endParts[1] - 1, endParts[2]));
-  const leaveDates: string[] = [];
-  while (cur <= endD) {
-    leaveDates.push(cur.toISOString().split('T')[0]);
-    cur.setUTCDate(cur.getUTCDate() + 1);
-  }
-
-  let row: any;
-  try {
-    row = await withAttendanceWrite(parsed.data.employeeId, leaveDates, async (q) => {
-      for (const dateStr of leaveDates) {
-        await q.query(
-          `INSERT INTO attendance (employee_id, date, status)
-           VALUES ($1, $2, 'leave')
-           ON CONFLICT (employee_id, date) DO UPDATE SET status = 'leave'`,
-          [parsed.data.employeeId, dateStr],
-        );
-      }
-      const { rows: [r] } = await q.query(
-        `INSERT INTO leaves (employee_id, from_date, to_date, leave_type, reason, status)
-         VALUES ($1, $2, $3, $4, $5, 'pending')
-         RETURNING id, employee_id AS "employeeId", from_date AS "fromDate",
-                   to_date AS "toDate", leave_type AS "leaveType", reason, status,
-                   approved_by AS "approvedBy", approval_note AS "approvalNote",
-                   created_at AS "createdAt"`,
-        [parsed.data.employeeId, parsed.data.fromDate, parsed.data.toDate,
-         parsed.data.leaveType, parsed.data.reason ?? null],
-      );
-      return r;
-    });
-  } catch (e: any) {
-    sendAttendanceWriteError(res, e, "leave application");
+  const { fromDate, toDate, leaveType } = parsed.data;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+    res.status(400).json({ error: "Dates must be in YYYY-MM-DD format." });
     return;
   }
-  await reaccrue(parsed.data.employeeId, "leave applied");
+  if (toDate < fromDate) {
+    res.status(400).json({ error: "'To' date cannot be before 'From' date." });
+    return;
+  }
 
-  const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, row.employeeId)).limit(1);
-  res.status(201).json({ ...row, employeeName: emp?.name ?? "", approverName: null });
+  const { rows: [emp] } = await pool.query(
+    `SELECT id, name FROM employees WHERE id = $1`, [parsed.data.employeeId]);
+  if (!emp) { res.status(400).json({ error: "Employee not found" }); return; }
+
+  // A pending request deliberately touches NOTHING but the leaves table: no
+  // attendance stamp, no accrual lock, no salary effect. Attendance flips to
+  // `leave` only at approval — pay follows approval, never the application.
+  const { rows: [ins] } = await pool.query(
+    `INSERT INTO leaves (employee_id, from_date, to_date, leave_type, reason, status)
+     VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING id`,
+    [parsed.data.employeeId, fromDate, toDate, leaveType, parsed.data.reason ?? null],
+  );
+  logActivity({
+    action: "CREATE", module: "hr", entityType: "leave", entityId: ins.id,
+    description: `Leave request #${ins.id} applied for ${emp.name} (${fromDate} → ${toDate}, ${leaveType})`,
+    user: scopeEmp?.username ?? undefined,
+    metadata: { employeeId: parsed.data.employeeId, fromDate, toDate, leaveType, reason: parsed.data.reason ?? null },
+  }).catch(() => {});
+
+  res.status(201).json(await fetchLeaveById(ins.id));
 });
 
 router.post("/hr/leaves/:id/approve", requireModuleAction("page:/hr/attendance", "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid id" }); return; }
   const parsed = ApproveLeaveBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-  const [row] = await db.update(leavesTable)
-    .set({ status: parsed.data.status, approvalNote: parsed.data.note ?? null })
-    .where(eq(leavesTable.id, id)).returning();
-  if (!row) { res.status(404).json({ error: "Not found" }); return; }
+  const decision = parsed.data.status;
+  const note = (parsed.data.note ?? "").trim();
+  if (decision === "rejected" && !note) {
+    res.status(400).json({ error: "A reason is required when rejecting a leave request." });
+    return;
+  }
 
-  // Applying for leave stamps those days as `leave` immediately, which now earns
-  // a full paid day. Rejecting the request therefore has to take the stamp back
-  // off, or a refused leave is paid exactly like an approved one. Only days the
-  // sync itself created are reverted — a day the employee actually checked in on
-  // is their attendance record, not the leave's, and is left alone.
-  if (parsed.data.status === "rejected") {
-    try {
-      // Every month the range touches, not just its endpoints — a leave running
-      // Jan→Mar would otherwise skip February's lock check entirely.
-      const revertDates: string[] = [];
-      const rc = new Date(`${String(row.fromDate).slice(0, 10)}T00:00:00Z`);
-      const re = new Date(`${String(row.toDate).slice(0, 10)}T00:00:00Z`);
-      while (rc <= re) {
-        revertDates.push(rc.toISOString().slice(0, 10));
-        rc.setUTCDate(rc.getUTCDate() + 1);
-      }
-      await withAttendanceWrite(
-        row.employeeId,
-        revertDates,
-        (q) => q.query(
-          `UPDATE attendance SET status = 'absent'
-            WHERE employee_id = $1 AND date >= $2 AND date <= $3
-              AND status = 'leave' AND check_in IS NULL`,
-          [row.employeeId, row.fromDate, row.toDate],
-        ),
-      );
-    } catch (e: any) {
-      sendAttendanceWriteError(res, e, "leave rejection attendance revert");
+  const { rows: [leave] } = await pool.query(
+    `SELECT l.id, l.employee_id AS "employeeId", l.from_date AS "fromDate",
+            l.to_date AS "toDate", l.status,
+            e.name AS "employeeName", e.branch_type AS "branchType", e.branch_id AS "branchId"
+       FROM leaves l JOIN employees e ON e.id = l.employee_id
+      WHERE l.id = $1`, [id]);
+  if (!leave) { res.status(404).json({ error: "Not found" }); return; }
+
+  const approver = (req as any).employee as
+    { id: number; username: string; branchType: string; branchId: number; hierarchyId: number } | undefined;
+  if (!approver) { res.status(401).json({ error: "Authentication required" }); return; }
+
+  // Location scope first (404, never 403 — existence is itself information):
+  // a warehouse-scoped approver decides only their own location's requests.
+  if (approver.branchType !== "headoffice") {
+    const scope = await getUserDataScope(approver);
+    if (!isLocationInScope(scope, leave.branchType, leave.branchId)) {
+      res.status(404).json({ error: "Not found" });
       return;
     }
   }
-  await reaccrue(row.employeeId, `leave ${parsed.data.status}`);
 
-  const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, row.employeeId)).limit(1);
-  res.json({ ...row, employeeName: emp?.name ?? "", approverName: null });
+  // Nobody decides their own request — Head Office and level-1 roles included.
+  if (approver.id === leave.employeeId) {
+    res.status(403).json({ error: "You cannot approve or reject your own leave request." });
+    return;
+  }
+
+  if (leave.status !== "pending") {
+    res.status(409).json({ error: `Only pending requests can be decided — this one is already ${leave.status}.` });
+    return;
+  }
+
+  const fromStr = pgDateStr(leave.fromDate);
+  const toStr = pgDateStr(leave.toDate);
+  const leaveDates = leaveDateList(fromStr, toStr);
+
+  if (decision === "approved") {
+    // Approval is the moment leave becomes paid attendance, so it is a salary
+    // write: it takes the per-employee accrual lock, re-checks that no month in
+    // the range has been signed off, re-reads the request's status under the
+    // lock (a concurrent decision loses, not overwrites), and stamps the days.
+    // A day the employee actually checked in on keeps its worked record — the
+    // stamp skips it rather than overwriting hours with a leave label.
+    try {
+      await withAttendanceWrite(leave.employeeId, leaveDates, async (q) => {
+        const { rows: [upd] } = await q.query(
+          `UPDATE leaves
+              SET status = 'approved', approved_by = $2, approval_note = $3, approved_at = now()
+            WHERE id = $1 AND status = 'pending'
+            RETURNING id`,
+          [id, approver.id, note || null],
+        );
+        if (!upd) {
+          throw Object.assign(
+            new Error("This request was already decided — reload to see its current state."),
+            { conflict: true },
+          );
+        }
+        for (const dateStr of leaveDates) {
+          await q.query(
+            `INSERT INTO attendance (employee_id, date, status)
+             VALUES ($1, $2, 'leave')
+             ON CONFLICT (employee_id, date) DO UPDATE SET status = 'leave'
+             WHERE attendance.check_in IS NULL`,
+            [leave.employeeId, dateStr],
+          );
+        }
+      });
+    } catch (e: any) {
+      sendAttendanceWriteError(res, e, "leave approval");
+      return;
+    }
+  } else {
+    // Rejection: in the approval-gated flow a pending request never stamped
+    // attendance, so there is normally nothing to undo — deliberately NOT
+    // withAttendanceWrite, so a request touching an already signed-off month
+    // can still be rejected (refusing that would strand it as pending forever).
+    // The DELETE is a safety net for legacy stamps that predate approval
+    // gating: only days the old apply-time sync itself created — `leave` with
+    // no check-in, no punches, not covered by an approved leave, and not in a
+    // signed-off payroll month — are taken back.
+    try {
+      await withEmployeeAccrualLock(pool, leave.employeeId, async (q) => {
+        const { rows: [upd] } = await q.query(
+          `UPDATE leaves
+              SET status = 'rejected', approved_by = $2, approval_note = $3, approved_at = now()
+            WHERE id = $1 AND status = 'pending'
+            RETURNING id`,
+          [id, approver.id, note],
+        );
+        if (!upd) {
+          throw Object.assign(
+            new Error("This request was already decided — reload to see its current state."),
+            { conflict: true },
+          );
+        }
+        await q.query(
+          `DELETE FROM attendance a
+            WHERE a.employee_id = $1 AND a.date BETWEEN $2 AND $3
+              AND a.status = 'leave' AND a.check_in IS NULL
+              AND NOT EXISTS (SELECT 1 FROM attendance_punches p
+                               WHERE p.employee_id = a.employee_id AND p.date = a.date)
+              AND NOT EXISTS (SELECT 1 FROM leaves al
+                               WHERE al.status = 'approved' AND al.id <> $4
+                                 AND al.employee_id = a.employee_id
+                                 AND a.date BETWEEN al.from_date AND al.to_date)
+              AND NOT EXISTS (SELECT 1 FROM payroll pr
+                               WHERE pr.employee_id = a.employee_id
+                                 AND pr.year  = EXTRACT(YEAR  FROM a.date)::int
+                                 AND pr.month = EXTRACT(MONTH FROM a.date)::int
+                                 AND pr.status IN ('approved','paid'))`,
+          [leave.employeeId, fromStr, toStr, id],
+        );
+      });
+    } catch (e: any) {
+      sendAttendanceWriteError(res, e, "leave rejection");
+      return;
+    }
+  }
+
+  // Re-price the employee's open accruals now that attendance moved (approval)
+  // or a legacy stamp came off (rejection). Reads attendance under its own
+  // accrual lock, so it prices exactly what was committed above.
+  await reaccrue(leave.employeeId, `leave ${decision}`);
+
+  logActivity({
+    action: "UPDATE", module: "hr", entityType: "leave", entityId: id,
+    description: `Leave request #${id} ${decision} for ${leave.employeeName} (${fromStr} → ${toStr})`
+      + (decision === "rejected" ? ` — reason: ${note}` : ""),
+    user: approver.username,
+    metadata: { employeeId: leave.employeeId, decision, note: note || null, fromDate: fromStr, toDate: toStr },
+  }).catch(() => {});
+
+  res.json(await fetchLeaveById(id));
+});
+
+router.post("/hr/leaves/:id/cancel", requireModuleView("page:/hr/attendance"), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const caller = (req as any).employee as { id: number; username: string } | undefined;
+  if (!caller) { res.status(401).json({ error: "Authentication required" }); return; }
+
+  const { rows: [leave] } = await pool.query(
+    `SELECT l.id, l.employee_id AS "employeeId", l.status,
+            l.from_date AS "fromDate", l.to_date AS "toDate", e.name AS "employeeName"
+       FROM leaves l JOIN employees e ON e.id = l.employee_id
+      WHERE l.id = $1`, [id]);
+  if (!leave) { res.status(404).json({ error: "Not found" }); return; }
+
+  // Cancellation belongs to the requester alone — approvers withdraw someone
+  // else's request by rejecting it with a reason, which records who and why.
+  if (caller.id !== leave.employeeId) {
+    res.status(403).json({ error: "You can only cancel your own leave requests." });
+    return;
+  }
+  if (leave.status !== "pending") {
+    res.status(409).json({ error: `Only pending requests can be cancelled — this one is ${leave.status}.` });
+    return;
+  }
+
+  // A pending request never touched attendance, so cancelling is a pure status
+  // flip; the WHERE guards against a decision that landed since the read above.
+  const { rows: [upd] } = await pool.query(
+    `UPDATE leaves SET status = 'cancelled', cancelled_at = now()
+      WHERE id = $1 AND status = 'pending' RETURNING id`, [id]);
+  if (!upd) {
+    res.status(409).json({ error: "This request was just decided by an approver — reload to see its current state." });
+    return;
+  }
+
+  logActivity({
+    action: "UPDATE", module: "hr", entityType: "leave", entityId: id,
+    description: `Leave request #${id} cancelled by ${leave.employeeName} (${pgDateStr(leave.fromDate)} → ${pgDateStr(leave.toDate)})`,
+    user: caller.username,
+    metadata: { employeeId: leave.employeeId, fromDate: pgDateStr(leave.fromDate), toDate: pgDateStr(leave.toDate) },
+  }).catch(() => {});
+
+  res.json(await fetchLeaveById(id));
 });
 
 // ── Attendance correction ─────────────────────────────────────────────────

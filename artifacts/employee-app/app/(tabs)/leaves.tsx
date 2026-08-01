@@ -18,7 +18,7 @@ import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useColors } from '@/hooks/useColors';
 import { useAuth } from '@/contexts/AuthContext';
-import { useListLeaves, useApplyLeave } from '@workspace/api-client-react';
+import { useListLeaves, useApplyLeave, useCancelLeave } from '@workspace/api-client-react';
 import type { LeaveApplication } from '@workspace/api-client-react';
 
 const LEAVE_TYPES = [
@@ -33,9 +33,10 @@ type LeaveType = typeof LEAVE_TYPES[number]['value'];
 function StatusBadge({ status }: { status: string }) {
   const colors = useColors();
   const cfg: Record<string, { bg: string; text: string; label: string }> = {
-    approved: { bg: colors.success + '20', text: colors.success, label: 'Approved' },
-    pending:  { bg: colors.warning + '20', text: colors.warning, label: 'Pending' },
-    rejected: { bg: colors.destructive + '20', text: colors.destructive, label: 'Rejected' },
+    approved:  { bg: colors.success + '20', text: colors.success, label: 'Approved' },
+    pending:   { bg: colors.warning + '20', text: colors.warning, label: 'Pending' },
+    rejected:  { bg: colors.destructive + '20', text: colors.destructive, label: 'Rejected' },
+    cancelled: { bg: colors.mutedForeground + '20', text: colors.mutedForeground, label: 'Cancelled' },
   };
   const c = cfg[status] ?? cfg.pending;
   return (
@@ -53,6 +54,16 @@ function formatDate(d: string | undefined | null): string {
     const date = new Date(d + 'T00:00:00');
     return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
   } catch { return d; }
+}
+
+/** For ISO timestamps (approvedAt / cancelledAt) rather than plain dates. */
+function formatTimestamp(ts: string | undefined | null): string {
+  if (!ts) return '—';
+  try {
+    const date = new Date(ts);
+    if (isNaN(date.getTime())) return '—';
+    return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  } catch { return '—'; }
 }
 
 function daysBetween(from: string, to: string): number {
@@ -310,6 +321,7 @@ export default function LeavesScreen() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     { query: { enabled: !!token } as any },
   );
+  const { mutateAsync: cancelLeave, isPending: cancelling } = useCancelLeave();
 
   const myLeaves = (leaves ?? []).filter((l) => l.employeeId === employee?.id);
   const sorted = [...myLeaves].sort((a, b) => b.id - a.id);
@@ -318,6 +330,31 @@ export default function LeavesScreen() {
 
   const leaveTypeLabel: Record<string, string> = {
     sick: 'Sick Leave', casual: 'Casual Leave', annual: 'Annual Leave', other: 'Other',
+  };
+
+  const handleCancel = (item: LeaveApplication) => {
+    Alert.alert(
+      'Cancel leave request?',
+      `${leaveTypeLabel[item.leaveType] ?? item.leaveType} · ${formatDate(item.fromDate)}${item.fromDate !== item.toDate ? ` → ${formatDate(item.toDate)}` : ''}\n\nThis withdraws the request before it is reviewed.`,
+      [
+        { text: 'Keep request', style: 'cancel' },
+        {
+          text: 'Cancel request',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await cancelLeave({ id: item.id });
+              await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              refetch();
+            } catch (e: any) {
+              const msg = e?.payload?.error ?? e?.message ?? 'Could not cancel the request';
+              Alert.alert('Cancel failed', msg);
+              refetch();
+            }
+          },
+        },
+      ],
+    );
   };
 
   const renderItem = ({ item }: { item: LeaveApplication }) => (
@@ -336,11 +373,40 @@ export default function LeavesScreen() {
       {item.reason ? (
         <Text style={styles.cardReason}>{item.reason}</Text>
       ) : null}
+      {(item.status === 'approved' || item.status === 'rejected') && item.approverName ? (
+        <View style={styles.metaRow}>
+          <Feather name="user-check" size={12} color={colors.mutedForeground} />
+          <Text style={styles.metaText}>
+            {item.status === 'approved' ? 'Approved' : 'Rejected'} by {item.approverName}
+            {item.approvedAt ? ` · ${formatTimestamp(item.approvedAt)}` : ''}
+          </Text>
+        </View>
+      ) : null}
+      {item.status === 'cancelled' ? (
+        <View style={styles.metaRow}>
+          <Feather name="slash" size={12} color={colors.mutedForeground} />
+          <Text style={styles.metaText}>
+            Cancelled by you{item.cancelledAt ? ` · ${formatTimestamp(item.cancelledAt)}` : ''}
+          </Text>
+        </View>
+      ) : null}
       {item.approvalNote ? (
         <View style={styles.noteBox}>
           <Feather name="message-square" size={12} color={colors.mutedForeground} />
-          <Text style={styles.noteText}>{item.approvalNote}</Text>
+          <Text style={styles.noteText}>
+            {item.status === 'rejected' ? 'Reason: ' : ''}{item.approvalNote}
+          </Text>
         </View>
+      ) : null}
+      {item.status === 'pending' ? (
+        <Pressable
+          style={({ pressed }) => [styles.cancelBtn, (pressed || cancelling) && { opacity: 0.7 }]}
+          onPress={() => handleCancel(item)}
+          disabled={cancelling}
+        >
+          <Feather name="x-circle" size={14} color={colors.destructive} />
+          <Text style={styles.cancelBtnText}>Cancel request</Text>
+        </Pressable>
       ) : null}
     </View>
   );
@@ -452,6 +518,23 @@ function makeStyles(colors: ReturnType<typeof useColors>, insets: { top: number;
     noteBox: {
       flexDirection: 'row', alignItems: 'flex-start', gap: 6,
       backgroundColor: colors.muted, borderRadius: 8, padding: 10, marginTop: 10,
+    },
+    metaRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8,
+    },
+    metaText: {
+      fontSize: 12, color: colors.mutedForeground,
+      fontFamily: 'Outfit_400Regular', flex: 1,
+    },
+    cancelBtn: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+      marginTop: 12, paddingVertical: 9, borderRadius: 8,
+      borderWidth: 1, borderColor: colors.destructive + '40',
+      backgroundColor: colors.destructive + '0D',
+    },
+    cancelBtnText: {
+      fontSize: 13, color: colors.destructive,
+      fontWeight: '600' as const, fontFamily: 'Outfit_600SemiBold',
     },
     noteText: {
       fontSize: 12, color: colors.mutedForeground,

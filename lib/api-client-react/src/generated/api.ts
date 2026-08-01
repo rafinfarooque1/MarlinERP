@@ -4909,6 +4909,77 @@ export const useApproveLeave = <TError = ErrorType<unknown>,
       return useMutation(getApproveLeaveMutationOptions(options));
     }
 
+export const getCancelLeaveUrl = (id: number,) => {
+
+
+
+
+  return `/api/hr/leaves/${id}/cancel`
+}
+
+/**
+ * @summary Cancel own pending leave request
+ */
+export const cancelLeave = async (id: number, options?: RequestInit): Promise<LeaveApplication> => {
+
+  return customFetch<LeaveApplication>(getCancelLeaveUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getCancelLeaveMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelLeave>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof cancelLeave>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['cancelLeave'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof cancelLeave>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  cancelLeave(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CancelLeaveMutationResult = NonNullable<Awaited<ReturnType<typeof cancelLeave>>>
+
+    export type CancelLeaveMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Cancel own pending leave request
+ */
+export const useCancelLeave = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelLeave>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof cancelLeave>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getCancelLeaveMutationOptions(options));
+    }
+
 export const getListCustomersUrl = () => {
 
 

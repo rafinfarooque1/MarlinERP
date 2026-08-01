@@ -13,4 +13,5 @@ export const LeaveApplicationStatus = {
   pending: 'pending',
   approved: 'approved',
   rejected: 'rejected',
+  cancelled: 'cancelled',
 } as const;
