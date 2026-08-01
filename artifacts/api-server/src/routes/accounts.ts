@@ -18,6 +18,7 @@ import { buildBooks } from "../lib/books";
 import { buildDerivedPostings } from "./journal";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { getUserDataScope, scopeSalesWhere, scopeBranchWhere } from "../lib/dataScope";
+import { parseDateRange, pushDateRange, parseLocationFilter, pushLocationFilter } from "../lib/queryFilters";
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 import {
   callerLocation, ownLocationScope, scopeLedgerIds, scopeCashLedgerIds, scopeMoneyWhere,
@@ -813,6 +814,9 @@ router.post("/accounts/cash-bank", requireModuleAction("page:/accounts/cash-bank
 router.get("/expenses", requireModuleView(["page:/accounts/expenses", "page:/sales/expenses"]), async (req, res): Promise<void> => {
   const expEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
   const isHO = !expEmp || expEmp.branchType === 'headoffice';
+  const dr = parseDateRange(req.query as Record<string, unknown>);
+  if (!dr.ok) { res.status(400).json({ error: dr.error }); return; }
+  const locFilterReq = parseLocationFilter(req.query as Record<string, unknown>);
 
   type ExpenseRow = {
     id: number; source: 'direct' | 'location'; expenseDate: any;
@@ -832,11 +836,18 @@ router.get("/expenses", requireModuleView(["page:/accounts/expenses", "page:/sal
   //    invisible to Drizzle's select().
   {
     const params: any[] = [];
-    let locFilter = '';
+    const conds: string[] = [];
     if (!isHO && expEmp) {
       params.push(expEmp.branchType, Number(expEmp.branchId));
-      locFilter = `WHERE e.location_type = $1 AND e.location_id = $2`;
+      conds.push(`e.location_type = $1 AND e.location_id = $2`);
     }
+    // Optional client filters — ANDed onto the LBAC condition, narrowing only.
+    pushDateRange(conds, params, 'e.expense_date', dr.from, dr.to);
+    pushLocationFilter(
+      conds, params, locFilterReq,
+      // Unstamped expenses are Head Office spend with no location attribution.
+      "COALESCE(e.location_type, 'headoffice')", "COALESCE(e.location_id, 0)",
+    );
     const { rows } = await pool.query(`
       SELECT e.id, e.expense_date, e.description, e.ledger_account_id, e.payment_account_id,
              e.amount, e.created_at, e.expense_number, e.category, e.attachment_url,
@@ -848,7 +859,7 @@ router.get("/expenses", requireModuleView(["page:/accounts/expenses", "page:/sal
       LEFT JOIN cash_bank_accounts cb ON cb.id = e.payment_account_id
       LEFT JOIN warehouses w ON e.location_type = 'warehouse' AND w.id = e.location_id
       LEFT JOIN outlets    o ON e.location_type = 'outlet'    AND o.id = e.location_id
-      ${locFilter}
+      ${conds.length ? `WHERE ${conds.join(' AND ')}` : ''}
       ORDER BY e.id DESC
     `, params);
     directExpenses = rows.map((r: any) => ({
@@ -893,6 +904,30 @@ router.get("/expenses", requireModuleView(["page:/accounts/expenses", "page:/sal
       }
     }
 
+    // Optional client filters (narrowing only — the LBAC cash-ledger filter
+    // above still applies).
+    let extraFilter = '';
+    if (dr.from) { pmtParams.push(dr.from); extraFilter += ` AND p.payment_date >= $${pmtParams.length}::date`; }
+    if (dr.to)   { pmtParams.push(dr.to);   extraFilter += ` AND p.payment_date <= $${pmtParams.length}::date`; }
+    if (locFilterReq && (locFilterReq.locationType === 'warehouse' || locFilterReq.locationType === 'outlet')) {
+      // Stamped rows match on their stored identity; legacy unstamped rows
+      // resolve through the cash ledger they were paid from. Mirror locations
+      // (one place existing as both warehouse and outlet on a shared cash
+      // ledger) make the stamped check necessary — the join alone would match
+      // both identities.
+      const joinAlias = locFilterReq.locationType === 'warehouse' ? 'w' : 'o';
+      pmtParams.push(locFilterReq.locationType);
+      const pType = pmtParams.length;
+      pmtParams.push(locFilterReq.locationId);
+      const pId = pmtParams.length;
+      extraFilter += ` AND ((p.location_type = $${pType} AND p.location_id = $${pId})
+        OR (p.location_type IS NULL AND ${joinAlias}.id = $${pId}))`;
+    } else if (locFilterReq) {
+      // Head Office is never a location expense (see the w/o guard below).
+      res.json(directExpenses.sort((a, b) => String(b.expenseDate).localeCompare(String(a.expenseDate))));
+      return;
+    }
+
     const { rows: pmtRows } = await pool.query(`
       SELECT p.id, p.voucher_number, p.payment_date, p.paid_from_ledger_id,
              p.paid_to_ledger_id, p.amount, p.narration, p.created_at,
@@ -904,7 +939,7 @@ router.get("/expenses", requireModuleView(["page:/accounts/expenses", "page:/sal
       LEFT JOIN account_ledgers pt ON p.paid_to_ledger_id = pt.id
       LEFT JOIN warehouses w ON w.cash_ledger_id = p.paid_from_ledger_id
       LEFT JOIN outlets    o ON o.cash_ledger_id = p.paid_from_ledger_id
-      WHERE p.paid_to_ledger_id = ANY($1)${cashLedgerFilter}
+      WHERE p.paid_to_ledger_id = ANY($1)${cashLedgerFilter}${extraFilter}
         -- Must be spent out of a location's own cash box. Without this, an
         -- ordinary Head Office payment to an expense head is dressed up as a
         -- location expense with a blank location, and its voucher prints as

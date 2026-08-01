@@ -14,6 +14,7 @@ import {
   resolveActingLocation, locationLabel, type ProdLocation,
 } from "../lib/productionCosting";
 import { getUserDataScope, scopeLocationTypeWhere } from "../lib/dataScope";
+import { parseDateRange, pushDateRange, parseLocationFilter, pushLocationFilter } from "../lib/queryFilters";
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 
@@ -140,14 +141,25 @@ const ledgerBranchId = (loc: ProdLocation, materialType: string) =>
 router.get("/productions", requireModuleView("page:/production/production"), async (req, res): Promise<void> => {
   // LBAC: a location sees its own runs; Head Office sees every location's.
   const scope = await getUserDataScope((req as any).employee ?? { branchType: "headoffice", branchId: 0 });
+  const dr = parseDateRange(req.query as Record<string, unknown>);
+  if (!dr.ok) { res.status(400).json({ error: dr.error }); return; }
   const params: unknown[] = [];
   const where = scopeLocationTypeWhere(scope, params, "p");
   if (where === "FALSE") { res.json([]); return; }
 
+  // Optional client filters — ANDed onto the scope, so they only narrow it.
+  const conds: string[] = [where];
+  pushDateRange(conds, params, "p.production_date", dr.from, dr.to);
+  pushLocationFilter(
+    conds, params, parseLocationFilter(req.query as Record<string, unknown>),
+    // Legacy runs predate the location columns and belong to Head Office.
+    "COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)",
+  );
+
   // batch/costing/location columns are migration-added (not in the Drizzle
   // schema), so the raw query drives the list and carries the scoping.
   const extra = await pool.query(
-    `SELECT ${EXTRA_COLS} FROM productions p WHERE ${where} ORDER BY id`, params
+    `SELECT ${EXTRA_COLS} FROM productions p WHERE ${conds.join(" AND ")} ORDER BY id`, params
   );
   if (extra.rows.length === 0) { res.json([]); return; }
   const ids = extra.rows.map((e: any) => Number(e.id));

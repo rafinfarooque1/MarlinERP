@@ -11,6 +11,7 @@ import { writeStockLedger } from "../lib/stockLedger";
 import { deductMaterialAt, creditMaterialAt, isMaterialKind } from "../lib/materialStock";
 import { resolveActingLocation, locationLabel, type ProdLocation } from "../lib/productionCosting";
 import { getUserDataScope, scopeLocationTypeWhere } from "../lib/dataScope";
+import { parseDateRange, pushDateRange, parseLocationFilter, pushLocationFilter } from "../lib/queryFilters";
 import { isIsoDate } from "../lib/dateInput";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import { ensureFixedAssetLedger } from "../migrations/fixedAssets";
@@ -440,6 +441,14 @@ router.get("/purchases", requireModuleView(["page:/production/purchase", "page:/
     params.push(`%${q}%`);
     conds.push(`(p.invoice_number ILIKE $${params.length} OR v.name ILIKE $${params.length})`);
   }
+  const dr = parseDateRange(req.query as Record<string, unknown>);
+  if (!dr.ok) { res.status(400).json({ error: dr.error }); return; }
+  pushDateRange(conds, params, 'p.purchase_date', dr.from, dr.to);
+  pushLocationFilter(
+    conds, params, parseLocationFilter(req.query as Record<string, unknown>),
+    // Legacy bills predate the location columns and belong to Head Office.
+    "COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)",
+  );
   const scopeWhere = scopeLocationTypeWhere(scope, params, 'p');
   if (scopeWhere === 'FALSE') {
     res.json(paginated ? { total: 0, page: 1, limit: 25, rows: [] } : []);

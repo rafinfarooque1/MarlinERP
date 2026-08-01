@@ -54,6 +54,7 @@ import {
 } from '@/lib/moduleRegistry';
 import { canViewModule as checkCanView } from '@/lib/usePermission';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
+import { GlobalLocationSelector } from '@/components/layout/GlobalLocationSelector';
 
 const LOGO_KEY = 'marlin_company_logo';
 /** The retired Outlet module's sidebar link, matched by href so
@@ -555,6 +556,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                   <img src={logo} alt="Company logo" className="h-full object-contain max-w-[100px]" />
                 </div>
               )}
+
+              <GlobalLocationSelector />
+
 
               <Button
                 variant="ghost"

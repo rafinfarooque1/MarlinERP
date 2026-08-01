@@ -10,6 +10,7 @@ import { DEFAULT_INITIAL_PASSWORD, ADMIN_RESET_PASSWORD } from '../lib/passwordP
 import { eq, and, gte, lte, sql } from "drizzle-orm";
 import { logActivity } from "../lib/audit";
 import { getUserDataScope, scopeBranchWhere } from "../lib/dataScope";
+import { parseDateRange } from "../lib/queryFilters";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 import { resolveChartParentId } from "../lib/chartGroups";
@@ -1639,22 +1640,33 @@ router.post("/hr/advances", requireModuleAction("page:/hr/advances", "add"), asy
 router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (req, res): Promise<void> => {
   const scopeEmp = (req as any).employee as { id: number; branchType: string } | undefined;
 
-  // ── Month-range mode: ?year=YYYY&month=M returns all records for the month ──
+  // ── Range mode: ?year=YYYY&month=M (whole month) or ?from/?to (arbitrary
+  //    range, YYYY-MM-DD) return all records in the period ──
   const yearParam = req.query.year ? Number(req.query.year) : null;
   const monthParam = req.query.month ? Number(req.query.month) : null;
+  const dr = parseDateRange(req.query as Record<string, unknown>);
+  if (!dr.ok) { res.status(400).json({ error: dr.error }); return; }
 
+  let startDate = '';
+  let endDate = '';
   if (yearParam && monthParam && !isNaN(yearParam) && !isNaN(monthParam)) {
     const padM = String(monthParam).padStart(2, '0');
-    const startDate = `${yearParam}-${padM}-01`;
+    startDate = `${yearParam}-${padM}-01`;
     const lastDay = new Date(yearParam, monthParam, 0).getDate();
-    const endDate = `${yearParam}-${padM}-${String(lastDay).padStart(2, '0')}`;
+    endDate = `${yearParam}-${padM}-${String(lastDay).padStart(2, '0')}`;
+  } else if (dr.from || dr.to) {
+    startDate = dr.from;
+    endDate = dr.to;
+  }
 
+  if (startDate || endDate) {
     // Scope: non-headoffice employees only see their own records
-    const rows = await db.select().from(attendanceTable).where(
-      scopeEmp && scopeEmp.branchType !== 'headoffice'
-        ? and(gte(attendanceTable.date, startDate), lte(attendanceTable.date, endDate), eq(attendanceTable.employeeId, scopeEmp.id))
-        : and(gte(attendanceTable.date, startDate), lte(attendanceTable.date, endDate))
-    );
+    const rangeConds = [
+      startDate ? gte(attendanceTable.date, startDate) : undefined,
+      endDate ? lte(attendanceTable.date, endDate) : undefined,
+      scopeEmp && scopeEmp.branchType !== 'headoffice' ? eq(attendanceTable.employeeId, scopeEmp.id) : undefined,
+    ].filter((c): c is NonNullable<typeof c> => c !== undefined);
+    const rows = await db.select().from(attendanceTable).where(and(...rangeConds));
 
     const result = rows.map((r) => ({
       id: r.id,

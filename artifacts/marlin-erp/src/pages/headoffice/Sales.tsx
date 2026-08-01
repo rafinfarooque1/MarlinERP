@@ -21,7 +21,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { LocationFilter, parseLocationFilter } from '@/components/ui/LocationFilter';
+import { useDateRange, RangeBar } from '@/pages/reports/shared';
+import { useLocationContext } from '@/lib/locationContext';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '@/components/ui/command';
 import { Textarea } from '@/components/ui/textarea';
@@ -188,9 +189,21 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const { flags: featureFlags } = useFeatureFlags();
   const discountsEnabled = featureFlags.posDiscountsEnabled;
   const couponsEnabled = featureFlags.posCouponsEnabled;
-  // 'all' | 'warehouse:<id>' | 'outlet:<id>'
-  const [locationFilter, setLocationFilter] = useState<string>('all');
-  const { type: locFilterType, id: locFilterId } = parseLocationFilter(locationFilter);
+  // Location narrowing comes from the ONE shared header context — this page
+  // deliberately has no location picker of its own, so the header selection
+  // can never disagree with what the list shows. Locked employees
+  // (forceLocationType set) have forced params that take precedence.
+  const { locationState } = useLocationContext();
+  const locFilterType =
+    !forceLocationType &&
+    (locationState.locationType === 'warehouse' || locationState.locationType === 'outlet') &&
+    locationState.locationId
+      ? locationState.locationType
+      : null;
+  const locFilterId = locFilterType ? locationState.locationId! : 0;
+  // Transaction lists default to 'all' dates so existing users see the same rows
+  // until they narrow. Filtering happens server-side (from/to on /sales).
+  const range = useDateRange('all');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -202,6 +215,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     return () => clearTimeout(t);
   }, [search]);
 
+  // Reset to page 1 whenever the date range changes — the result set shifts.
+  useEffect(() => { setPage(1); }, [range.from, range.to]);
+
+  // Reset to page 1 when the header location selection changes — the result
+  // set shifts under the pager.
+  useEffect(() => { setPage(1); }, [locationState.locationType, locationState.locationId]);
+
   // Server-paginated list. A forced warehouse passes warehouseScope so the
   // server returns the warehouse plus its child outlets (replaces the old
   // client-side forceChildOutletIds filtering).
@@ -209,17 +229,17 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     page,
     limit: PAGE_SIZE,
     q: debouncedSearch || undefined,
+    from: range.from || undefined,
+    to: range.to || undefined,
     ...(forceLocationType === 'warehouse' && forceLocationId
       ? { warehouseScope: forceLocationId }
       : forceLocationType === 'outlet' && forceLocationId
         ? { locationType: 'outlet' as const, locationId: forceLocationId }
-        : locFilterType === 'headoffice'
-          ? { branchType: 'headoffice' as const, branchId: 1 }
-          : locFilterType === 'warehouse' && locFilterId
-            ? { warehouseScope: locFilterId }
-            : locFilterType === 'outlet' && locFilterId
-              ? { locationType: 'outlet' as const, locationId: locFilterId }
-              : {}),
+        : locFilterType === 'warehouse' && locFilterId
+          ? { warehouseScope: locFilterId }
+          : locFilterType === 'outlet' && locFilterId
+            ? { locationType: 'outlet' as const, locationId: locFilterId }
+            : {}),
   });
   const sales = salesPage?.rows ?? [];
   const totalSales = salesPage?.total ?? 0;
@@ -898,14 +918,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               <Search className="w-4 h-4 text-muted-foreground" />
               <Input placeholder="Search invoice or customer..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0" />
             </div>
-            {/* Location filter — hidden when a specific location is already forced (e.g. POS context) */}
-            {!forceLocationType && (
-              <LocationFilter
-                value={locationFilter}
-                onChange={v => { setLocationFilter(v); setPage(1); }}
-                className="w-48"
-              />
-            )}
+            {/* Location narrowing lives in the header's global selector — no
+                page-local picker, so the two can never disagree. */}
+            <RangeBar range={range} />
           </div>
           {/* Payment status filter pills */}
           <div className="px-4 py-2 border-b border-border flex flex-wrap gap-2">

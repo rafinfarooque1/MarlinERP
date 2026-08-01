@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useListExpenses, useCreateExpense, getListExpensesQueryKey, useListCashBankAccounts, useLocationExpensesSummary, useLocationExpenses, LocationExpenseSummary, useListWarehouses, useListOutlets, attachmentViewUrl, customFetch } from '@workspace/api-client-react';
+import { useFilteredExpenses, useCreateExpense, useListCashBankAccounts, useLocationExpensesSummary, useLocationExpenses, LocationExpenseSummary, useListWarehouses, useListOutlets, attachmentViewUrl, customFetch } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { Button } from '@/components/ui/button';
@@ -22,6 +22,8 @@ import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
+import { useDateRange, RangeBar } from '@/pages/reports/shared';
+import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 
 const schema = z.object({
   description: z.string().min(1, 'Description required'),
@@ -338,7 +340,13 @@ function ByLocationTab({ canPrint }: { canPrint: boolean }) {
 // ── Main Expenses page ────────────────────────────────────────────────────────
 export default function Expenses() {
   const perm = usePermission('page:/accounts/expenses');
-  const { data: expenses = [], isLoading } = useListExpenses();
+  const range = useDateRange('all');
+  const { locationState } = useLocationContext();
+  const { data: expenses = [], isLoading } = useFilteredExpenses({
+    from: range.from || undefined,
+    to: range.to || undefined,
+    ...locationFilterParams(locationState),
+  });
   const { data: cashBanks = [] } = useListCashBankAccounts();
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
@@ -379,7 +387,11 @@ export default function Expenses() {
     }, {
       onSuccess: () => {
         toast.success('Expense recorded');
-        queryClient.invalidateQueries({ queryKey: getListExpensesQueryKey() });
+        // Refresh both the generated exact key and every '/api/expenses'-keyed
+        // view (the filtered list is keyed under this prefix, not the exact key).
+        queryClient.invalidateQueries({
+          predicate: q => String(q.queryKey[0] ?? '').startsWith('/api/expenses'),
+        });
         setIsOpen(false);
         form.reset(blankForm);
       },
@@ -473,7 +485,7 @@ export default function Expenses() {
             )}
 
             <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-              <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
+              <div className="p-4 border-b border-border flex flex-wrap items-center gap-2 bg-muted/20">
                 <Search className="w-4 h-4 text-muted-foreground" />
                 <Input
                   placeholder="Search by voucher, description, category, account, location…"
@@ -481,6 +493,7 @@ export default function Expenses() {
                   onChange={e => setSearch(e.target.value)}
                   className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm"
                 />
+                <div className="ml-auto"><RangeBar range={range} /></div>
               </div>
               <Table>
                 <TableHeader>

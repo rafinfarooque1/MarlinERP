@@ -27,6 +27,8 @@ import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { activeProductsWithSelection } from '@/lib/productStatus';
 import { useActingLocations, decodeLocation, encodeLocation } from '@/lib/useActingLocation';
+import { useDateRange, RangeBar } from '@/pages/reports/shared';
+import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 import { Separator } from '@/components/ui/separator';
 // The same arithmetic the server posts with. Imported rather than re-typed so
 // the preview in this form and the figures written to the books cannot drift.
@@ -318,6 +320,9 @@ export default function Purchases() {
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 25;
+  const range = useDateRange('all');
+  const { locationState } = useLocationContext();
+  const locParams = locationFilterParams(locationState);
 
   // Debounce the search box — vendor/invoice search runs server-side
   useEffect(() => {
@@ -325,8 +330,15 @@ export default function Purchases() {
     return () => clearTimeout(t);
   }, [search]);
 
+  // A narrowed date range or location changes the whole result set — back to
+  // page 1 so the user isn't stranded on a page that no longer exists.
+  useEffect(() => {
+    setPage(1);
+  }, [range.from, range.to, locParams.locationType, locParams.locationId]);
+
   const { data: purchasePage, isLoading, isFetching } = usePaginatedPurchases({
     page, limit: PAGE_SIZE, q: debouncedSearch || undefined,
+    from: range.from || undefined, to: range.to || undefined, ...locParams,
   });
   const purchases = purchasePage?.rows ?? [];
   const totalPurchases = purchasePage?.total ?? 0;
@@ -558,9 +570,10 @@ export default function Purchases() {
         </div>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
+          <div className="p-4 border-b border-border flex flex-wrap items-center gap-2 bg-muted/20">
             <Search className="w-4 h-4 text-muted-foreground shrink-0" />
             <Input placeholder="Search vendor or invoice..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm" />
+            <div className="ml-auto"><RangeBar range={range} /></div>
           </div>
           <Table>
             <TableHeader>

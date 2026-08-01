@@ -5,6 +5,7 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import { customFetch } from './custom-fetch';
+import { appendDateLocationParams, type DateLocationParams } from './paginated-lists';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -34,6 +35,26 @@ export function useExpenseCategories() {
     queryFn: ({ signal }) =>
       customFetch<ExpenseCategory[]>('/api/expenses/categories', { signal }),
     staleTime: Infinity,
+  });
+}
+
+// ── Filtered expenses list ────────────────────────────────────────────────────
+
+/**
+ * The merged expenses list (direct + location expenses) with the global
+ * date + location filter applied server-side. Same row shape as the generated
+ * useListExpenses; keyed under '/api/expenses' so expense mutations that
+ * invalidate the base key refresh filtered views too.
+ */
+export function useFilteredExpenses(params?: DateLocationParams) {
+  const qs = new URLSearchParams();
+  appendDateLocationParams(qs, params);
+  const key = qs.toString();
+  return useQuery({
+    queryKey: ['/api/expenses', 'filtered', key] as const,
+    queryFn: ({ signal }) =>
+      customFetch<any[]>(`/api/expenses${key ? `?${key}` : ''}`, { signal }),
+    placeholderData: (prev) => prev,
   });
 }
 

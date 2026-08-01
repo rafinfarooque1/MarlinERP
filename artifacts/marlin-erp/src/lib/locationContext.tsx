@@ -6,6 +6,25 @@ export interface LocationState {
   locationName: string;
 }
 
+/** Canonical "no location filter" state used by the global selector. */
+export const ALL_LOCATIONS: LocationState = {
+  locationType: 'all',
+  locationId: null,
+  locationName: 'All Locations',
+};
+
+/**
+ * The query params a page should send for the current location context.
+ * `null`/`'all'` both mean "no location filter" — the backend then falls back
+ * to the caller's own LBAC scope, which is the widest they may ever see.
+ */
+export function locationFilterParams(s: LocationState): { locationType?: 'warehouse' | 'outlet'; locationId?: number } {
+  if ((s.locationType === 'warehouse' || s.locationType === 'outlet') && s.locationId) {
+    return { locationType: s.locationType, locationId: s.locationId };
+  }
+  return {};
+}
+
 const STORAGE_KEY = 'marlin_sales_location';
 
 function loadFromStorage(): LocationState {

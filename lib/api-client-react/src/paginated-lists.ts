@@ -91,6 +91,35 @@ export interface PaginatedListParams {
   q?: string;
 }
 
+/**
+ * The global date + location filter every transactional list accepts.
+ * Server-side the location filter only NARROWS the caller's LBAC scope —
+ * it can never widen it.
+ */
+export interface DateLocationParams {
+  /** Inclusive YYYY-MM-DD bounds; omit for unbounded. */
+  from?: string;
+  to?: string;
+  locationType?: 'warehouse' | 'outlet';
+  locationId?: number;
+}
+
+export interface PaginatedPurchasesParams extends PaginatedListParams, DateLocationParams {}
+
+/** Serialize the shared date+location params onto a query string. Partial
+ * dates (a date input mid-edit, including a year still being typed like
+ * '0002-…') are dropped rather than shipped — the server would 400 the whole
+ * list over a transient keystroke. */
+export function appendDateLocationParams(qs: URLSearchParams, params?: DateLocationParams): void {
+  const fullDate = (v?: string) => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v) && Number(v.slice(0, 4)) >= 1000;
+  if (fullDate(params?.from)) qs.set('from', params!.from!);
+  if (fullDate(params?.to)) qs.set('to', params!.to!);
+  if (params?.locationType && params?.locationId) {
+    qs.set('locationType', params.locationType);
+    qs.set('locationId', String(params.locationId));
+  }
+}
+
 export interface PaginatedStockParams extends PaginatedListParams {
   branchType?: 'warehouse' | 'outlet';
   branchId?: number;
@@ -123,11 +152,12 @@ export function usePaginatedSales(params?: PaginatedSalesParams) {
 }
 
 /** Server-paginated purchases list. */
-export function usePaginatedPurchases(params?: PaginatedListParams) {
+export function usePaginatedPurchases(params?: PaginatedPurchasesParams) {
   const qs = new URLSearchParams();
   qs.set('page', String(params?.page ?? 1));
   qs.set('limit', String(params?.limit ?? 25));
   if (params?.q) qs.set('q', params.q);
+  appendDateLocationParams(qs, params);
   const key = qs.toString();
   return useQuery({
     queryKey: ['/api/purchases', 'paginated', key] as const,

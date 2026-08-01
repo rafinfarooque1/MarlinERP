@@ -1,0 +1,347 @@
+Implement a complete Leave Approval workflow in the ERP.
+
+Currently employees can apply for leave, but there is no approval module for managers or Head Office.
+
+This must be a production-grade approval workflow.
+
+==================================================
+1. EMPLOYEE SIDE
+==================================================
+
+Keep the existing "Apply Leave" functionality.
+
+Employee can:
+
+• Apply Leave
+• View Leave History
+• View Status
+
+Statuses:
+
+Pending
+Approved
+Rejected
+Cancelled
+
+Employee cannot approve their own leave.
+
+==================================================
+2. HR / HEAD OFFICE LEAVE APPROVAL
+==================================================
+
+Create a new module:
+
+HR
+    → Leave Approvals
+
+(or)
+
+HR
+    → Attendance
+            → Leave Approvals
+
+Visible only to users having permission.
+
+This page should display:
+
+Employee Name
+
+Employee ID
+
+Warehouse
+
+Department
+
+Role
+
+Leave Type
+
+From Date
+
+To Date
+
+Total Days
+
+Reason
+
+Applied On
+
+Current Status
+
+Approver
+
+Approved Date
+
+Actions
+
+Approve
+
+Reject
+
+View
+
+==================================================
+3. FILTERS
+==================================================
+
+Provide filters
+
+Pending
+
+Approved
+
+Rejected
+
+Cancelled
+
+Date Range
+
+Warehouse
+
+Department
+
+Employee
+
+Leave Type
+
+==================================================
+4. APPROVAL WORKFLOW
+==================================================
+
+When employee applies leave
+
+Status = Pending
+
+No payroll changes.
+
+Approver clicks
+
+Approve
+
+Status becomes
+
+Approved
+
+Attendance automatically marks those dates as Leave.
+
+Payroll calculations use approved leave only.
+
+Reject
+
+Status becomes
+
+Rejected
+
+Attendance returns to normal.
+
+Cancelled
+
+Employee may cancel only Pending requests.
+
+==================================================
+5. PERMISSION CONTROL
+==================================================
+
+Integrate with Permission Module.
+
+Add new permissions:
+
+Leave Approval
+
+View Leave Requests
+
+Approve Leave
+
+Reject Leave
+
+Only users having these permissions can access Leave Approvals.
+
+Example
+
+Head Office HR
+
+✔ View
+
+✔ Approve
+
+✔ Reject
+
+Warehouse Manager
+
+Optional depending on permissions.
+
+Normal Employee
+
+No access.
+
+==================================================
+6. ROLE BASED APPROVAL
+==================================================
+
+Support approval hierarchy.
+
+Example
+
+Employee
+
+↓
+
+Supervisor
+
+↓
+
+Warehouse Manager
+
+↓
+
+Head Office HR
+
+↓
+
+Management
+
+Allow choosing approval authority through permissions.
+
+If company wants only Head Office approval
+
+Only Head Office sees requests.
+
+If warehouse managers are allowed
+
+Only requests from their warehouse appear.
+
+==================================================
+7. EMPLOYEE SCREEN
+==================================================
+
+Improve Leave History.
+
+Show
+
+Applied Date
+
+Leave Type
+
+From
+
+To
+
+Days
+
+Reason
+
+Status
+
+Approved By
+
+Approved Date
+
+Rejected Reason (if rejected)
+
+==================================================
+8. DASHBOARD
+==================================================
+
+HR Dashboard should show
+
+Pending Leave Requests
+
+Approved Today
+
+Rejected Today
+
+Employees on Leave Today
+
+Upcoming Leaves
+
+==================================================
+9. ATTENDANCE INTEGRATION
+==================================================
+
+Approved leave
+
+Automatically marks attendance as Leave.
+
+Pending leave
+
+Does NOT affect attendance.
+
+Rejected leave
+
+Ignored.
+
+Payroll must calculate only Approved Leave.
+
+==================================================
+10. NOTIFICATIONS
+==================================================
+
+When employee submits leave
+
+Notify approver.
+
+When approved
+
+Notify employee.
+
+When rejected
+
+Notify employee with rejection reason.
+
+==================================================
+11. AUDIT LOG
+==================================================
+
+Maintain audit history.
+
+Applied By
+
+Applied Date
+
+Approved By
+
+Approved Date
+
+Rejected By
+
+Rejected Date
+
+Reason
+
+==================================================
+12. SECURITY
+==================================================
+
+Backend must enforce permissions.
+
+Employees must never approve their own leave.
+
+No frontend-only validation.
+
+==================================================
+13. TESTING
+==================================================
+
+Verify:
+
+✓ Employee can apply leave.
+
+✓ Leave appears in Leave Approval module.
+
+✓ Approver can Approve.
+
+✓ Approver can Reject.
+
+✓ Employee sees updated status.
+
+✓ Attendance updates only after approval.
+
+✓ Payroll uses approved leave only.
+
+✓ Permissions work correctly.
+
+✓ Warehouse-level approvals work.
+
+✓ Head Office approvals work.
+
+This must integrate with the existing Attendance, Payroll, Employee, Permission, and Audit Log modules without breaking any existing functionality.

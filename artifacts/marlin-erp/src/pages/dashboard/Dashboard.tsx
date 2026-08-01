@@ -1,19 +1,16 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import {
   useGetDashboardBi,
-  useListWarehouses,
-  useListOutlets,
   type DashboardBiFilters,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
-import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
+import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 import {
   Card, CardContent, CardHeader, CardTitle, CardDescription,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   ShieldOff, TrendingUp, ShoppingCart, Factory, Boxes,
   Landmark, Trophy, Users, AlertTriangle, Clock, MapPin,
@@ -82,25 +79,23 @@ function Empty({ message }: { message: string }) {
 export default function Dashboard() {
   const dashPerm = usePermission('page:/');
   const range = useDateRange('month');
-  const [loc, setLoc] = useState('all'); // 'all' | 'warehouse:<id>' | 'outlet:<id>'
-  useClearOutletSelection(loc.startsWith('outlet:'), () => setLoc('all'));
-
-  const { data: warehouses = [] } = useListWarehouses();
-  const { data: outlets = [] } = useListOutlets();
-  const { outletsEnabled } = useOutletsEnabled();
+  // Location comes from the shared header GlobalLocationSelector — no local picker.
+  const { locationState } = useLocationContext();
 
   const filters = useMemo<DashboardBiFilters>(() => {
     const f: DashboardBiFilters = {};
     if (range.from) f.fromDate = range.from;
     if (range.to) f.toDate = range.to;
-    if (loc.startsWith('warehouse:')) { f.locationType = 'warehouse'; f.locationId = Number(loc.slice(10)); }
-    else if (loc.startsWith('outlet:')) { f.locationType = 'outlet'; f.locationId = Number(loc.slice(7)); }
+    const loc = locationFilterParams(locationState);
+    if (loc.locationType && loc.locationId) {
+      f.locationType = loc.locationType;
+      f.locationId = loc.locationId;
+    }
     return f;
-  }, [range.from, range.to, loc]);
+  }, [range.from, range.to, locationState]);
 
   const { data: bi, isLoading, isError } = useGetDashboardBi(filters);
 
-  const isHeadOffice = bi?.scope.isHeadOffice ?? true;
   const pLabel = periodLabel(range.from || undefined, range.to || undefined);
 
   // Permission gate
@@ -199,36 +194,9 @@ export default function Dashboard() {
           </Badge>
         </div>
 
-        {/* ── Controls: date range + location ────────────────────────────── */}
+        {/* ── Controls: date range (location comes from the header selector) ─ */}
         <div className="flex flex-wrap items-center gap-3">
           <RangeBar range={range} />
-          <Select value={loc} onValueChange={setLoc} disabled={!isHeadOffice}>
-            <SelectTrigger className="w-56 h-9 bg-card">
-              <SelectValue placeholder="All locations" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All locations</SelectItem>
-              {(warehouses as any[]).length > 0 && (
-                <div className="px-2 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Warehouses
-                </div>
-              )}
-              {(warehouses as any[]).map((w: any) => (
-                <SelectItem key={`w${w.id}`} value={`warehouse:${w.id}`}>{w.name}</SelectItem>
-              ))}
-              {outletsEnabled && (outlets as any[]).length > 0 && (
-                <div className="px-2 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Outlets
-                </div>
-              )}
-              {outletsEnabled && (outlets as any[]).map((o: any) => (
-                <SelectItem key={`o${o.id}`} value={`outlet:${o.id}`}>{o.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {!isHeadOffice && (
-            <span className="text-xs text-muted-foreground">Scoped to your location</span>
-          )}
         </div>
 
         {isError && (

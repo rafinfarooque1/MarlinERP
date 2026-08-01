@@ -3,8 +3,9 @@ import {
   useListAttendance, useCheckIn, useCheckOut, getListAttendanceQueryKey,
   useListEmployees, useListWarehouses, useListOutlets,
   useListLeaves, useApplyLeave, useApproveLeave, getListLeavesQueryKey,
-  useGetMe, useCorrectAttendance,
+  useGetMe, useCorrectAttendance, useAttendanceRange,
 } from '@workspace/api-client-react';
+import { useDateRange, RangeBar } from '@/pages/reports/shared';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -82,6 +83,11 @@ export default function Attendance() {
 
   const today = new Date().toISOString().split('T')[0];
   const [date, setDate] = useState(today);
+  // 'day' = the operational check-in/out register; 'range' = a read-only
+  // period view over the same records (corrections/check-ins stay in day mode,
+  // they act on ONE date).
+  const [viewMode, setViewMode] = useState<'day' | 'range'>('day');
+  const range = useDateRange('month');
   const [search, setSearch] = useState('');
   const [locLoading, setLocLoading] = useState<number | null>(null);
   const [branchTypeFilter, setBranchTypeFilter] = useState<string>('all');
@@ -94,6 +100,12 @@ export default function Attendance() {
   const [correctStatus, setCorrectStatus] = useState<string>('present');
 
   const { data: attendance = [], isLoading } = useListAttendance({ date });
+  // Range rows: the server scopes non-HO callers to their own records, so this
+  // is safe for both views. Disabled until a bounded range is chosen (the hook
+  // skips the fetch when both bounds are empty, e.g. the "All time" preset).
+  const { data: rangeRows = [], isLoading: rangeLoading } = useAttendanceRange(
+    viewMode === 'range' ? { from: range.from || undefined, to: range.to || undefined } : {},
+  );
   const { data: employees = [] } = useListEmployees();
   const { data: warehouses = [] } = useListWarehouses();
   const { data: outlets = [] } = useListOutlets();
@@ -208,6 +220,26 @@ export default function Attendance() {
     const matchBranchLoc = branchLocId === 'all' || String(branch?.branchId) === branchLocId;
     return matchSearch && matchBranchType && matchBranchLoc;
   });
+
+  // Range rows carry only employeeId — resolve names from the employee master.
+  const empNameMap = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const e of employees as any[]) m.set(e.id, e.name);
+    return m;
+  }, [employees]);
+
+  // Same search/branch filters, applied to the period view; newest day first.
+  const filteredRange = (rangeRows as any[])
+    .filter(a => {
+      const name = empNameMap.get(a.employeeId) ?? '';
+      const matchSearch = name.toLowerCase().includes(search.toLowerCase());
+      const branch = empBranchMap.get(a.employeeId);
+      const matchBranchType = branchTypeFilter === 'all' || branch?.branchType === branchTypeFilter;
+      const matchBranchLoc = branchLocId === 'all' || String(branch?.branchId) === branchLocId;
+      return matchSearch && matchBranchType && matchBranchLoc;
+    })
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)) || (empNameMap.get(a.employeeId) ?? '').localeCompare(empNameMap.get(b.employeeId) ?? ''));
+  const rangeUnbounded = !range.from && !range.to;
 
   // ── Access denied ───────────────────────────────────────────────────────────
   if (!perm.isLoading && !perm.canView) {
@@ -369,23 +401,41 @@ export default function Attendance() {
               </h1>
               <p className="text-muted-foreground mt-1">Daily check-in / check-out register with location</p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center">
               {perm.canDownload && (
               <Button variant="outline" size="sm" onClick={() =>
-                downloadCSV('attendance.csv', filtered.map((a: any) => ({
-                  Employee: a.employeeName, Date: a.date,
-                  CheckIn: a.checkIn ? new Date(a.checkIn).toLocaleTimeString('en-IN') : '—',
-                  CheckInLat: a.checkInLat ?? '—', CheckInLng: a.checkInLng ?? '—',
-                  CheckOut: a.checkOut ? new Date(a.checkOut).toLocaleTimeString('en-IN') : '—',
-                  CheckOutLat: a.checkOutLat ?? '—', CheckOutLng: a.checkOutLng ?? '—',
-                  Hours: a.hoursWorked ? Number(a.hoursWorked).toFixed(1) : '—',
-                })))}>
+                viewMode === 'day'
+                  ? downloadCSV('attendance.csv', filtered.map((a: any) => ({
+                      Employee: a.employeeName, Date: a.date,
+                      CheckIn: a.checkIn ? new Date(a.checkIn).toLocaleTimeString('en-IN') : '—',
+                      CheckInLat: a.checkInLat ?? '—', CheckInLng: a.checkInLng ?? '—',
+                      CheckOut: a.checkOut ? new Date(a.checkOut).toLocaleTimeString('en-IN') : '—',
+                      CheckOutLat: a.checkOutLat ?? '—', CheckOutLng: a.checkOutLng ?? '—',
+                      Hours: a.hoursWorked ? Number(a.hoursWorked).toFixed(1) : '—',
+                    })))
+                  : downloadCSV(`attendance_${range.from || 'start'}_${range.to || 'today'}.csv`, filteredRange.map((a: any) => ({
+                      Date: a.date, Employee: empNameMap.get(a.employeeId) ?? a.employeeId,
+                      CheckIn: a.checkIn ? new Date(a.checkIn).toLocaleTimeString('en-IN') : '—',
+                      CheckOut: a.checkOut ? new Date(a.checkOut).toLocaleTimeString('en-IN') : '—',
+                      Hours: a.hoursWorked ? Number(a.hoursWorked).toFixed(1) : '—',
+                      Status: a.status,
+                    })))}>
                 <Download className="w-4 h-4 mr-2" /> Export
               </Button>
               )}
-              <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-40 bg-card border-border" />
+              <div className="flex rounded-md border border-border overflow-hidden">
+                <Button variant={viewMode === 'day' ? 'secondary' : 'ghost'} size="sm" className="h-9 rounded-none text-xs px-3"
+                  onClick={() => setViewMode('day')}>Day</Button>
+                <Button variant={viewMode === 'range' ? 'secondary' : 'ghost'} size="sm" className="h-9 rounded-none text-xs px-3"
+                  onClick={() => setViewMode('range')}>Range</Button>
+              </div>
+              {viewMode === 'day' && (
+                <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-40 bg-card border-border" />
+              )}
             </div>
           </div>
+
+          {viewMode === 'range' && <RangeBar range={range} />}
 
           {/* Branch filter */}
           <div className="flex flex-wrap gap-2 items-center">
@@ -418,7 +468,62 @@ export default function Attendance() {
             )}
           </div>
 
-          {/* Table */}
+          {/* Range view — read-only period register (check-in/out and Fix act
+              on ONE date, so they live in the Day view only) */}
+          {viewMode === 'range' ? (
+          <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
+              <Search className="w-4 h-4 text-muted-foreground" />
+              <Input placeholder="Search employee..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-xs" />
+            </div>
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/10">
+                  <TableHead>Date</TableHead>
+                  <TableHead>Employee</TableHead>
+                  <TableHead>Check-In</TableHead>
+                  <TableHead>Check-Out</TableHead>
+                  <TableHead>Hours</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rangeUnbounded ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
+                      <CalendarDays className="w-10 h-10 mx-auto mb-3 opacity-20" />
+                      <p>Pick a bounded period — "All time" is not available for the attendance register</p>
+                    </TableCell>
+                  </TableRow>
+                ) : rangeLoading ? (
+                  [...Array(4)].map((_, i) => (
+                    <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                  ))
+                ) : filteredRange.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
+                      <Clock className="w-10 h-10 mx-auto mb-3 opacity-20" />
+                      <p>No attendance records in this period</p>
+                    </TableCell>
+                  </TableRow>
+                ) : filteredRange.map((a: any) => (
+                  <TableRow key={`${a.date}:${a.employeeId}`} className="hover:bg-muted/10">
+                    <TableCell className="text-sm font-mono">{a.date}</TableCell>
+                    <TableCell className="font-semibold">{empNameMap.get(a.employeeId) ?? `#${a.employeeId}`}</TableCell>
+                    <TableCell className="text-sm font-mono">
+                      {a.checkIn ? new Date(a.checkIn).toLocaleTimeString('en-IN') : <span className="text-muted-foreground/50">—</span>}
+                    </TableCell>
+                    <TableCell className="text-sm font-mono">
+                      {a.checkOut ? new Date(a.checkOut).toLocaleTimeString('en-IN') : <span className="text-muted-foreground/50">—</span>}
+                    </TableCell>
+                    <TableCell className="font-mono text-sm">{a.hoursWorked ? `${Number(a.hoursWorked).toFixed(1)}h` : '—'}</TableCell>
+                    <TableCell><StatusBadge status={a.status} /></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          ) : (
           <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
             <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
               <Search className="w-4 h-4 text-muted-foreground" />
@@ -493,6 +598,7 @@ export default function Attendance() {
               </TableBody>
             </Table>
           </div>
+          )}
         </div>
         {applyLeaveDialog}
         {leaveSheet}
@@ -517,17 +623,82 @@ export default function Attendance() {
             </h1>
             <p className="text-muted-foreground mt-1">Your daily attendance and leave records</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
             {perm.canAdd && (
             <Button onClick={() => { leaveForm.reset(); setApplyLeaveOpen(true); }}>
               <Plus className="w-4 h-4 mr-2" /> Apply Leave
             </Button>
             )}
-            <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-40 bg-card border-border" />
+            <div className="flex rounded-md border border-border overflow-hidden">
+              <Button variant={viewMode === 'day' ? 'secondary' : 'ghost'} size="sm" className="h-9 rounded-none text-xs px-3"
+                onClick={() => setViewMode('day')}>Day</Button>
+              <Button variant={viewMode === 'range' ? 'secondary' : 'ghost'} size="sm" className="h-9 rounded-none text-xs px-3"
+                onClick={() => setViewMode('range')}>Range</Button>
+            </div>
+            {viewMode === 'day' && (
+              <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-40 bg-card border-border" />
+            )}
           </div>
         </div>
 
-        {/* Today's attendance card */}
+        {viewMode === 'range' && <RangeBar range={range} />}
+
+        {/* Period view — the server already limits range rows to this employee */}
+        {viewMode === 'range' ? (
+        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-border bg-muted/20 flex items-center gap-2">
+            <CalendarDays className="w-4 h-4 text-muted-foreground" />
+            <span className="font-medium text-sm">My Attendance — selected period</span>
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/10">
+                <TableHead>Date</TableHead>
+                <TableHead>Check-In</TableHead>
+                <TableHead>Check-Out</TableHead>
+                <TableHead>Hours</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rangeUnbounded ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
+                    <CalendarDays className="w-8 h-8 mx-auto mb-2 opacity-20" />
+                    <p className="text-sm">Pick a bounded period to see your records</p>
+                  </TableCell>
+                </TableRow>
+              ) : rangeLoading ? (
+                [...Array(3)].map((_, i) => (
+                  <TableRow key={i}><TableCell colSpan={5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                ))
+              ) : (rangeRows as any[]).length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
+                    <Clock className="w-8 h-8 mx-auto mb-2 opacity-20" />
+                    <p className="text-sm">No records in this period</p>
+                  </TableCell>
+                </TableRow>
+              ) : (rangeRows as any[])
+                  .slice()
+                  .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+                  .map((a: any) => (
+                <TableRow key={`${a.date}:${a.employeeId}`} className="hover:bg-muted/10">
+                  <TableCell className="text-sm font-mono">{a.date}</TableCell>
+                  <TableCell className="text-sm font-mono">
+                    {a.checkIn ? new Date(a.checkIn).toLocaleTimeString('en-IN') : <span className="text-muted-foreground/50">—</span>}
+                  </TableCell>
+                  <TableCell className="text-sm font-mono">
+                    {a.checkOut ? new Date(a.checkOut).toLocaleTimeString('en-IN') : <span className="text-muted-foreground/50">—</span>}
+                  </TableCell>
+                  <TableCell className="font-mono text-sm">{a.hoursWorked ? `${Number(a.hoursWorked).toFixed(1)}h` : '—'}</TableCell>
+                  <TableCell><StatusBadge status={a.status} /></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+        ) : (
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border bg-muted/20 flex items-center gap-2">
             <Clock className="w-4 h-4 text-muted-foreground" />
@@ -590,6 +761,7 @@ export default function Attendance() {
             </TableBody>
           </Table>
         </div>
+        )}
 
         {/* Leave history */}
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">

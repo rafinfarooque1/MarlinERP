@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { CalendarDays, Download, FileText, Loader2, Store, Warehouse, Factory, Printer, Sheet, MapPin } from 'lucide-react';
 import { downloadPDFFromEndpoint, downloadFileFromEndpoint, printPDFFromEndpoint } from '@/lib/download';
+import { useGetCompanySettings } from '@workspace/api-client-react';
 import { toast } from 'sonner';
 
 // ── Formatters ────────────────────────────────────────────────────────────────
@@ -38,30 +39,59 @@ export function periodLabel(from?: string, to?: string): string {
 }
 
 // ── Date range state ──────────────────────────────────────────────────────────
-export type RangePreset = 'today' | 'week' | 'month' | 'fy' | 'all' | 'custom';
+export type RangePreset = 'today' | 'yesterday' | 'week' | 'month' | 'quarter' | 'fy' | 'all' | 'custom';
 
 const PRESETS: { value: RangePreset; label: string }[] = [
   { value: 'today', label: 'Today' },
+  { value: 'yesterday', label: 'Yesterday' },
   { value: 'week', label: 'Last 7 days' },
   { value: 'month', label: 'This month' },
+  { value: 'quarter', label: 'Quarter' },
   { value: 'fy', label: 'This FY' },
   { value: 'all', label: 'All time' },
   { value: 'custom', label: 'Custom' },
 ];
 
-const iso = (d: Date) => d.toISOString().split('T')[0];
+// Local calendar date, NOT toISOString(): the UTC conversion rolls the date
+// back a day for any user east of Greenwich until their local 05:30 (IST).
+const iso = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-function computeRange(preset: RangePreset, customFrom: string, customTo: string): { from: string; to: string } {
+function computeRange(
+  preset: RangePreset,
+  customFrom: string,
+  customTo: string,
+  fyStartMonth: number,
+): { from: string; to: string } {
   const today = new Date();
+  const fyStart0 = Math.min(Math.max(Math.round(fyStartMonth) || 4, 1), 12) - 1; // 0-based
   switch (preset) {
     case 'today': return { from: iso(today), to: iso(today) };
-    case 'week':  return { from: iso(new Date(Date.now() - 6 * 86400_000)), to: iso(today) };
-    case 'month': return { from: iso(new Date(today.getFullYear(), today.getMonth(), 1)), to: iso(today) };
-    case 'fy': {
-      const fyYear = today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
-      return { from: `${fyYear}-04-01`, to: iso(today) };
+    case 'yesterday': {
+      const y = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+      return { from: iso(y), to: iso(y) };
     }
-    case 'custom': return { from: customFrom, to: customTo };
+    case 'week':  return { from: iso(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6)), to: iso(today) };
+    case 'month': return { from: iso(new Date(today.getFullYear(), today.getMonth(), 1)), to: iso(today) };
+    case 'quarter': {
+      // Quarters are anchored to the financial year start (Apr–Jun, Jul–Sep, …
+      // for an April FY), not the calendar year.
+      const offset = (((today.getMonth() - fyStart0) % 12) + 12) % 12;
+      const qStart = new Date(today.getFullYear(), today.getMonth() - (offset % 3), 1);
+      return { from: iso(qStart), to: iso(today) };
+    }
+    case 'fy': {
+      const fyYear = today.getMonth() >= fyStart0 ? today.getFullYear() : today.getFullYear() - 1;
+      return { from: iso(new Date(fyYear, fyStart0, 1)), to: iso(today) };
+    }
+    case 'custom': {
+      // A date input mid-edit can briefly hold a partial value — including a
+      // year still being typed ('0002-…'), which is date-SHAPED but rejected
+      // by the server's calendar validation. Treat anything but a complete,
+      // plausible date as unbounded so a keystroke never 400s the list.
+      const full = (v: string) => (/^\d{4}-\d{2}-\d{2}$/.test(v) && Number(v.slice(0, 4)) >= 1000 ? v : '');
+      return { from: full(customFrom), to: full(customTo) };
+    }
     default: return { from: '', to: '' };
   }
 }
@@ -82,7 +112,11 @@ export function useDateRange(initial: RangePreset = 'month'): RangeState {
   const [preset, setPreset] = useState<RangePreset>(initial);
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
-  const { from, to } = computeRange(preset, customFrom, customTo);
+  // FY presets follow the company's configured FY start month (defaults to
+  // April). Cached by react-query, so this costs one fetch per session.
+  const { data: settings } = useGetCompanySettings();
+  const fyStartMonth = Number((settings as Record<string, unknown> | undefined)?.fyStartMonth) || 4;
+  const { from, to } = computeRange(preset, customFrom, customTo, fyStartMonth);
   return { preset, setPreset, customFrom, customTo, setFrom: setCustomFrom, setTo: setCustomTo, from, to };
 }
 

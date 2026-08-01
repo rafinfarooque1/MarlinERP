@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { SearchableItemSelect } from '@/components/ui/searchable-item-select';
 import {
-  useListProductions, useCreateProduction, useListItems, useListRawMaterials,
+  useFilteredProductions, useCreateProduction, useListItems, useListRawMaterials,
   useListMaterials, getListProductionsQueryKey,
   useUpdateProduction, useDeleteProduction,
   useGetBomTemplateByItem, useGetCompanySettings,
@@ -26,6 +26,8 @@ import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { activeProducts } from '@/lib/productStatus';
 import { useActingLocations, decodeLocation } from '@/lib/useActingLocation';
+import { useDateRange, RangeBar } from '@/pages/reports/shared';
+import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 
 const schema = z.object({
   itemId: z.coerce.number().min(1, 'Item required'),
@@ -84,7 +86,13 @@ const fmtQty = (n: number) => Number(n).toLocaleString('en-IN', { maximumFractio
 
 export default function ProductionList() {
   const perm = usePermission('page:/production/production');
-  const { data: productions = [], isLoading } = useListProductions();
+  const range = useDateRange('all');
+  const { locationState } = useLocationContext();
+  const { data: productions = [], isLoading } = useFilteredProductions({
+    from: range.from || undefined,
+    to: range.to || undefined,
+    ...locationFilterParams(locationState),
+  });
   const { data: items = [] } = useListItems();
   const { data: rawMaterials = [] } = useListRawMaterials();
   const { data: materials = [] } = useListMaterials();
@@ -312,9 +320,10 @@ export default function ProductionList() {
         </div>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
+          <div className="p-4 border-b border-border flex flex-wrap items-center gap-2 bg-muted/20">
             <Search className="w-4 h-4 text-muted-foreground" />
             <Input placeholder="Search by item..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-xs" />
+            <div className="ml-auto"><RangeBar range={range} /></div>
           </div>
           <Table>
             <TableHeader>

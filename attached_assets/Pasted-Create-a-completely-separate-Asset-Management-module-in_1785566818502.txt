@@ -1,0 +1,356 @@
+Create a completely separate "Asset Management" module in the ERP instead of showing Asset Purchase inside the Purchase Bills page.
+
+This should be a dedicated module with its own permissions, reports, accounting, and navigation.
+
+====================================================
+NEW MODULE
+====================================================
+
+Add a new main menu under Operations/Inventory (or a separate Asset module if suitable):
+
+Assets
+    ├── Asset Purchases
+    ├── Asset Register
+    ├── Asset Categories
+    ├── Asset Transfers
+    ├── Asset Disposal
+    ├── Depreciation (Future Ready)
+    └── Reports
+
+Remove the "Asset Purchases" section from the Purchase Bills page.
+
+Purchases should only contain inventory/raw material purchases.
+
+====================================================
+1. ASSET PURCHASE
+====================================================
+
+Create a dedicated Asset Purchase page.
+
+Fields:
+
+• Asset Name
+• Asset Category
+• Purchase Date
+• Purchase Invoice No.
+• Vendor
+• Warehouse / Location
+• Quantity
+• Unit Cost
+• GST %
+• GST Amount
+• Total Cost
+• Payment Mode
+• Payment Status
+• Warranty Start
+• Warranty End
+• Asset Serial Number
+• Asset Tag
+• Useful Life (Future)
+• Notes
+• Attachment (Invoice PDF/Image)
+
+====================================================
+2. ACCOUNTING
+====================================================
+
+Asset purchase must NOT increase inventory.
+
+Instead:
+
+Debit
+Fixed Asset Ledger
+
+Credit
+Cash / Bank / Supplier
+
+according to payment mode.
+
+No inventory stock movement should be created.
+
+No production stock should be affected.
+
+No stock valuation should change.
+
+====================================================
+3. ASSET REGISTER
+====================================================
+
+Create an Asset Register page.
+
+Columns:
+
+Asset Code
+
+Asset Name
+
+Category
+
+Purchase Date
+
+Warehouse
+
+Vendor
+
+Serial Number
+
+Quantity
+
+Purchase Cost
+
+Current Value (Future)
+
+Status
+
+Warranty Expiry
+
+Actions
+
+View
+
+Edit
+
+Transfer
+
+Dispose
+
+====================================================
+4. ASSET CATEGORIES
+====================================================
+
+Allow categories such as:
+
+Building
+
+Vehicle
+
+Furniture
+
+Computer
+
+Printer
+
+Machine
+
+Freezer
+
+Air Conditioner
+
+Generator
+
+UPS
+
+Office Equipment
+
+Other
+
+Users can add/edit categories.
+
+====================================================
+5. ASSET TRANSFER
+====================================================
+
+Allow transferring assets between warehouses.
+
+Track:
+
+From Warehouse
+
+To Warehouse
+
+Transfer Date
+
+Approved By
+
+Reason
+
+Maintain transfer history.
+
+Accounting should NOT change.
+
+====================================================
+6. ASSET DISPOSAL
+====================================================
+
+Allow:
+
+Sold
+
+Scrapped
+
+Written Off
+
+Transferred Outside
+
+Maintain disposal history.
+
+Future accounting support.
+
+====================================================
+7. REPORTS
+====================================================
+
+Provide reports:
+
+Asset Register
+
+Purchase Report
+
+Warehouse-wise Assets
+
+Category-wise Assets
+
+Vendor-wise Assets
+
+Warranty Expiry Report
+
+Transfer History
+
+Disposal History
+
+Export to Excel/PDF.
+
+====================================================
+8. DASHBOARD
+====================================================
+
+Add dashboard cards:
+
+Total Assets
+
+Asset Value
+
+Assets Purchased This Month
+
+Assets by Warehouse
+
+Warranty Expiring
+
+====================================================
+9. PERMISSIONS
+====================================================
+
+Create separate permissions for Asset module.
+
+Asset Management
+
+View
+
+Add
+
+Edit
+
+Delete
+
+Download
+
+Example:
+
+Admin
+
+✔ View
+
+✔ Add
+
+✔ Edit
+
+✔ Delete
+
+✔ Download
+
+Warehouse Manager
+
+✔ View
+
+✔ Add
+
+✔ Edit
+
+✖ Delete
+
+✔ Download
+
+Accountant
+
+✔ View
+
+✔ Download
+
+HR
+
+No Access
+
+Permissions must be enforced in both frontend and backend.
+
+====================================================
+10. LOCATION FILTER
+====================================================
+
+Asset module must support:
+
+Date Filter
+
+Warehouse Filter
+
+Category Filter
+
+Vendor Filter
+
+Status Filter
+
+====================================================
+11. AUDIT LOG
+====================================================
+
+Log:
+
+Asset Created
+
+Edited
+
+Transferred
+
+Disposed
+
+Deleted
+
+Include:
+
+User
+
+Date
+
+Old Value
+
+New Value
+
+====================================================
+12. FUTURE READY
+====================================================
+
+Keep database structure ready for:
+
+Depreciation
+
+AMC
+
+Maintenance
+
+Insurance
+
+Repair History
+
+Service Schedule
+
+====================================================
+13. IMPORTANT
+====================================================
+
+• Remove Asset Purchase from Purchase Bills page.
+• Asset purchases must be completely independent from inventory purchases.
+• Do not affect inventory stock.
+• Do not affect production stock.
+• Post accounting entries to Fixed Asset ledgers only.
+• Integrate with existing Warehouse, Vendor, Permission, Audit Log, and Accounts modules.
+• Follow the existing ERP UI/UX style and navigation.
+• Ensure exports, filters, search, permissions, and reports work exactly like other ERP modules.
