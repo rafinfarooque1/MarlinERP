@@ -8,6 +8,9 @@ import { invalidatePolicyCache } from "../lib/passwordPolicy";
 import { getActiveLockouts } from "../middleware/auth";
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
 import { normalizeUpiId } from "../lib/upi";
+import { createBackup } from "../lib/backup/create";
+import { objectStorageConfigured } from "../lib/backup/files";
+import { logActivity } from "../lib/audit";
 
 const router = Router();
 
@@ -609,6 +612,206 @@ router.post("/company/reset", requireModuleAction("page:/company/settings", "del
   }
 
   res.json({ ok: true, message: 'All company data has been reset successfully.' });
+});
+
+// ── One-time transactional data reset ─────────────────────────────────────
+// Clears ALL transactional documents (sales, purchases, expenses, vouchers,
+// payroll, rent, stock movements) while preserving every master and all
+// configuration. Unlike /company/reset above, masters (customers, vendors,
+// employees, items, warehouses, ledgers, permissions, users) are untouched.
+//
+// Safety model:
+//  - admin-only (delete right on company settings) + exact confirmation phrase
+//  - a full backup is taken BEFORE anything is deleted (aborts if it fails)
+//  - all deletes + counter/anchor resets run in ONE database transaction
+//  - dryRun: true executes everything then rolls back, returning the counts
+//
+// Accrual anchors: the salary and rent engines backfill missing days from
+// their anchor dates on an hourly sweep, so deleting accrual rows alone would
+// see them regenerated within the hour. The reset therefore advances
+// salary_accrual_config.attendance_from, employees.salary_accrual_resume_from
+// and warehouse_rent_agreements.start_date to the reset date so accrual
+// starts fresh from that day forward.
+const TXN_RESET_CONFIRM_PHRASE = "CLEAR ALL TRANSACTIONS";
+
+// Children before parents. Every table listed here is transactional; masters
+// are deliberately absent. attendance/leaves are included per owner decision
+// (payroll is cleared, so historical attendance would only feed stale re-runs).
+const TXN_RESET_TABLES = [
+  "invoice_share_links",
+  "sale_payments",
+  "sales_returns",
+  "purchase_returns",
+  "reconciliation_batch_items",
+  "reconciliation_batches",
+  "cash_deposits",
+  "receipts",
+  "payments",
+  "expenses",
+  "journal_voucher_lines",
+  "journal_vouchers",
+  "stock_reservations",
+  "stock_verifications",
+  "stock_transfers",
+  "productions",
+  "stock_ledger",
+  "stock_batches",
+  "stock_entries",
+  "sales",
+  "purchases",
+  "asset_purchases",
+  "payroll",
+  "employee_advances",
+  "salary_accruals",
+  "rent_accruals",
+  "rent_payments",
+  "rent_periods",
+  "attendance",
+  "leaves",
+] as const;
+
+router.post("/company/clear-transactions", requireModuleAction("page:/company/settings", "delete"), async (req, res): Promise<void> => {
+  const { confirm, dryRun } = (req.body ?? {}) as { confirm?: string; dryRun?: boolean };
+  if (confirm !== TXN_RESET_CONFIRM_PHRASE) {
+    res.status(400).json({
+      error: `Confirmation phrase required. Send { "confirm": "${TXN_RESET_CONFIRM_PHRASE}" } to proceed.`,
+    });
+    return;
+  }
+
+  // Reset date uses the same UTC-ymd convention as the accrual engines.
+  const now = new Date();
+  const resetDate = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(now.getUTCDate()).padStart(2, "0")}`;
+
+  // ── Backup first (real runs only). If this fails, nothing is deleted. ───
+  let backup: { id: number; filename: string } | null = null;
+  if (!dryRun) {
+    if (!objectStorageConfigured()) {
+      res.status(503).json({ error: "Backups require object storage, which is not configured. Aborting: no data was changed." });
+      return;
+    }
+    try {
+      const b = await createBackup({
+        scope: "complete",
+        trigger: "manual",
+        createdBy: req.employee?.username ?? "unknown",
+        ip: (req.ip ?? "unknown").replace("::ffff:", ""),
+      });
+      backup = { id: b.id, filename: b.filename };
+    } catch (err) {
+      res.status(500).json({
+        error: `Pre-reset backup failed — aborting, no data was changed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+      return;
+    }
+  }
+
+  const client = await pool.connect();
+  const deleted: Record<string, number> = {};
+  const resets: Record<string, number | string> = {};
+  try {
+    await client.query("BEGIN");
+
+    // ── Quiesce barrier ────────────────────────────────────────────────────
+    // 1. Take the SAME per-entity advisory locks the salary (class 8201) and
+    //    rent (class 8202) accrual sweeps take. A mid-flight sweep computes
+    //    its backfill from a pre-reset snapshot; without these locks it could
+    //    insert stale accrual rows AFTER this transaction commits. Holding
+    //    them means: an in-flight sweep finishes first (its rows get deleted
+    //    below), and no new sweep can start until commit — after which it
+    //    reads the advanced anchors and backfills nothing.
+    await client.query(
+      `SELECT pg_advisory_xact_lock(8201::int, id::int) FROM employees ORDER BY id`,
+    );
+    await client.query(
+      `SELECT pg_advisory_xact_lock(8202::int, id::int) FROM warehouses ORDER BY id`,
+    );
+    // 2. Exclusive-lock every table being cleared so concurrent document
+    //    writers (an in-flight sale/purchase/voucher) either commit before
+    //    the wipe (and are deleted with everything else) or block until it
+    //    commits (and then see empty tables + restarted counters).
+    await client.query(
+      `LOCK TABLE ${TXN_RESET_TABLES.join(", ")} IN ACCESS EXCLUSIVE MODE`,
+    );
+
+    for (const table of TXN_RESET_TABLES) {
+      const r = await client.query(`DELETE FROM ${table}`);
+      deleted[table] = r.rowCount ?? 0;
+    }
+
+    // Cached transactional aggregates on masters → zero. avg_cost is the
+    // purchase/production-derived weighted average (raw-migration column) and
+    // describes deleted history; the manually-set `cost` master field is kept.
+    resets["items.production_stock/avg_cost"] = (await client.query(`UPDATE items SET production_stock = 0, avg_cost = 0 WHERE production_stock <> 0 OR COALESCE(avg_cost, 0) <> 0`)).rowCount ?? 0;
+    resets["materials.current_stock/avg_cost"] = (await client.query(`UPDATE materials SET current_stock = 0, avg_cost = 0 WHERE current_stock <> 0 OR COALESCE(avg_cost, 0) <> 0`)).rowCount ?? 0;
+    resets["raw_materials.current_stock/avg_cost"] = (await client.query(`UPDATE raw_materials SET current_stock = 0, avg_cost = 0 WHERE current_stock <> 0 OR COALESCE(avg_cost, 0) <> 0`)).rowCount ?? 0;
+    resets["cash_bank_accounts.balance"] = (await client.query(`UPDATE cash_bank_accounts SET balance = 0 WHERE balance <> 0`)).rowCount ?? 0;
+    resets["customers.total_purchases"] = (await client.query(`UPDATE customers SET total_purchases = 0 WHERE COALESCE(total_purchases, 0) <> 0`)).rowCount ?? 0;
+
+    // Numbering restarts from 1 (owner decision). Safe only because the
+    // document tables are now empty; the boot-time GREATEST() guard on
+    // invoice_sequence stays a no-op with zero invoices.
+    await client.query(`UPDATE company_settings SET invoice_sequence = 0`);
+    resets["company_settings.invoice_sequence"] = "0";
+    resets["voucher_sequences (rows deleted)"] = (await client.query(`DELETE FROM voucher_sequences`)).rowCount ?? 0;
+    const seqExists = await client.query(`SELECT to_regclass('public.purchase_batch_seq') AS reg`);
+    if (seqExists.rows[0]?.reg) {
+      await client.query(`ALTER SEQUENCE purchase_batch_seq RESTART WITH 1`);
+      resets["purchase_batch_seq"] = "restarted at 1";
+    }
+
+    // Accrual anchors → reset date, so the hourly sweeps do not backfill
+    // the days just cleared. Only ever moved FORWARD.
+    resets["salary_accrual_config.attendance_from"] = (await client.query(
+      `UPDATE salary_accrual_config SET attendance_from = $1
+        WHERE attendance_from IS NULL OR attendance_from < $1`, [resetDate],
+    )).rowCount ?? 0;
+    resets["employees.salary_accrual_resume_from"] = (await client.query(
+      `UPDATE employees SET salary_accrual_resume_from = $1
+        WHERE salary_accrual_resume_from IS NULL OR salary_accrual_resume_from < $1`, [resetDate],
+    )).rowCount ?? 0;
+    resets["warehouse_rent_agreements.start_date"] = (await client.query(
+      `UPDATE warehouse_rent_agreements SET start_date = $1
+        WHERE start_date IS NOT NULL AND start_date < $1`, [resetDate],
+    )).rowCount ?? 0;
+
+    if (dryRun) {
+      await client.query("ROLLBACK");
+    } else {
+      await client.query("COMMIT");
+    }
+  } catch (err) {
+    try { await client.query("ROLLBACK"); } catch { /* connection may be gone */ }
+    res.status(500).json({
+      error: `Transactional reset failed and was rolled back — no data was changed: ${err instanceof Error ? err.message : String(err)}`,
+    });
+    return;
+  } finally {
+    client.release();
+  }
+
+  if (!dryRun) {
+    logActivity({
+      action: "DELETE",
+      module: "company",
+      entityType: "transactional_reset",
+      description: `Cleared all transactional data (reset date ${resetDate}); masters preserved, sequences restarted`,
+      user: req.employee?.username,
+      metadata: { resetDate, backupId: backup?.id ?? null, deleted, resets },
+    }).catch(() => { /* audit is best-effort */ });
+  }
+
+  res.json({
+    ok: true,
+    dryRun: !!dryRun,
+    resetDate,
+    backup,
+    deleted,
+    resets,
+    message: dryRun
+      ? "Dry run only — every change was rolled back. Counts show what a real run would delete."
+      : "All transactional data cleared. Masters, configuration and numbering settings preserved; sequences restart from 1.",
+  });
 });
 
 export default router;
