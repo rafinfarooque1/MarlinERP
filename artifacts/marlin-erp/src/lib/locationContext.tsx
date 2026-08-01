@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 
 export interface LocationState {
   locationType: 'warehouse' | 'outlet' | 'all' | null;
@@ -45,16 +46,25 @@ const LocationContext = createContext<LocationContextType | null>(null);
 
 export function LocationProvider({ children }: { children: ReactNode }) {
   const [locationState, setLocationState] = useState<LocationState>(loadFromStorage);
+  const queryClient = useQueryClient();
 
   const setLocation = (state: LocationState) => {
+    const changed =
+      state.locationType !== locationState.locationType ||
+      state.locationId !== locationState.locationId;
     setLocationState(state);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    // The location headers ride OUTSIDE query keys, so every cached answer is
+    // for the previous location — refetch the whole ERP view.
+    if (changed) queryClient.invalidateQueries();
   };
 
   const clearLocation = () => {
     const empty: LocationState = { locationType: null, locationId: null, locationName: '' };
+    const changed = locationState.locationType !== null || locationState.locationId !== null;
     setLocationState(empty);
     localStorage.removeItem(STORAGE_KEY);
+    if (changed) queryClient.invalidateQueries();
   };
 
   return (

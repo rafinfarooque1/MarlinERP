@@ -21,6 +21,7 @@ import {
   outstandingAsOfExpr, creditAdjustmentsAsOfExpr, amountReceivedAsOfExpr,
 } from "../lib/salePaymentPosition";
 import { deductMaterialAt, isMaterialKind } from "../lib/materialStock";
+import { getLocationFilter } from "../lib/requestLocation";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 import { isIsoDate } from "../lib/dateInput";
 
@@ -459,6 +460,16 @@ router.get("/sales-returns", requireModuleView("page:/returns"), async (req: Req
     const scopeCond = scopeLocationTypeWhere(scope, params, "sr");
     let whereParts = [`${scopeCond}`];
     if (req.query.saleId) { params.push(Number(req.query.saleId)); whereParts.push(`sr.sale_id = $${params.length}`); }
+    // Global location context — a return belongs to the location it was taken at.
+    const viewLoc = getLocationFilter(req);
+    if (viewLoc) {
+      params.push(viewLoc.locationType);
+      whereParts.push(`sr.location_type = $${params.length}`);
+      if (viewLoc.locationType !== 'headoffice') {
+        params.push(viewLoc.locationId);
+        whereParts.push(`sr.location_id = $${params.length}`);
+      }
+    }
     const where = `WHERE ${whereParts.join(" AND ")}`;
     const { rows } = await pool.query(
       `SELECT sr.*, s.invoice_number, c.name AS customer_name,
@@ -773,8 +784,19 @@ router.get("/purchase-returns", requireModuleView("page:/returns"), async (req: 
       res.json([]); return;
     }
     const params: any[] = [];
-    let where = "";
-    if (req.query.purchaseId) { params.push(Number(req.query.purchaseId)); where = ` WHERE pr.purchase_id = $${params.length}`; }
+    const prConds: string[] = [];
+    if (req.query.purchaseId) { params.push(Number(req.query.purchaseId)); prConds.push(`pr.purchase_id = $${params.length}`); }
+    // Global location context — follow the purchase document's location.
+    const viewLoc = getLocationFilter(req);
+    if (viewLoc) {
+      params.push(viewLoc.locationType);
+      prConds.push(`COALESCE(p.location_type, 'headoffice') = $${params.length}`);
+      if (viewLoc.locationType !== 'headoffice') {
+        params.push(viewLoc.locationId);
+        prConds.push(`COALESCE(p.location_id, 0) = $${params.length}`);
+      }
+    }
+    const where = prConds.length ? ` WHERE ${prConds.join(" AND ")}` : "";
     const { rows } = await pool.query(
       `SELECT pr.*, p.invoice_number, v.name AS vendor_name,
               jv.voucher_number AS debit_note_number
@@ -860,6 +882,22 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
       saleDateCond = `s.sale_date::date <= ${ph}::date`;
     }
     const rcvScopeCond = scopeSalesWhere(rcvScope, rcvParams);
+    // Global location context — narrows the invoice pool to one location's
+    // sales. Ledger anchoring is disabled for a location view: the ledger
+    // index is company-wide, so the document view is the honest basis there.
+    const rcvViewLoc = getLocationFilter(req);
+    let rcvLocCond = "TRUE";
+    if (rcvViewLoc) {
+      if (rcvViewLoc.locationType === 'headoffice') {
+        rcvParams.push('headoffice');
+        rcvLocCond = `COALESCE(s.location_type, 'outlet') = $${rcvParams.length}`;
+      } else {
+        rcvParams.push(rcvViewLoc.locationType);
+        const tp = rcvParams.length;
+        rcvParams.push(rcvViewLoc.locationId);
+        rcvLocCond = `(COALESCE(s.location_type, 'outlet') = $${tp} AND COALESCE(s.location_id, s.outlet_id) = $${rcvParams.length})`;
+      }
+    }
     const { rows: invoices } = await pool.query(
       `SELECT s.id, s.invoice_number, s.sale_date, s.customer_id,
               s.total_amount::numeric AS total, ${paidSql} AS paid,
@@ -872,6 +910,7 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
          AND s.branch_transfer_id IS NULL
          AND ${saleDateCond}
          AND ${rcvScopeCond}
+         AND ${rcvLocCond}
        ORDER BY s.sale_date ASC, s.id ASC`,
       rcvParams
     );
@@ -902,7 +941,7 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
     // to a branch. A location-scoped caller therefore keeps the document view
     // and is told so via `basis`, rather than being shown a company-wide figure
     // under a branch heading.
-    const rcvLedgerAnchored = rcvScope.isHeadOffice;
+    const rcvLedgerAnchored = rcvScope.isHeadOffice && !rcvViewLoc;
     const ledgerByCustomer = rcvLedgerAnchored
       ? (await (await import("../lib/ledgerBalances")).currentBalanceIndex(dated ? { toDate: asOf } : {})).partyBalances("customer")
       : new Map<number, { balance: number }>();
@@ -1065,12 +1104,25 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
       `SELECT to_regclass('public.asset_purchases') IS NOT NULL AS ok`
     );
     const billDateCond = payDated ? `AND purchase_date::date <= $1::date` : "";
+    // Global location context. Settlement is per VENDOR (FIFO over the ledger
+    // pool), so filtering the bills before the walk would mis-settle: the
+    // company's full payment pool against a location's subset of bills. The
+    // walk therefore always runs company-wide; a located view then shows only
+    // that location's bills with the balances the true walk left on them.
+    const payViewLoc = getLocationFilter(req);
+    const billAtViewLoc = (locType: string, locId: number): boolean => {
+      if (!payViewLoc) return true;
+      if (payViewLoc.locationType === 'headoffice') return locType === 'headoffice';
+      return locType === payViewLoc.locationType && locId === payViewLoc.locationId;
+    };
     const assetBillsSql = assetTbl?.ok
       ? `UNION ALL
          SELECT 'asset_purchase'::text AS source, ap.id,
                 COALESCE(jv.voucher_number, 'Asset — ' || a.name) AS invoice_number,
                 ap.purchase_date, ap.vendor_id,
-                (ap.quantity * ap.acquisition_cost)::numeric AS total, v.name, v.phone
+                (ap.quantity * ap.acquisition_cost)::numeric AS total, v.name, v.phone,
+                COALESCE(ap.location_type, 'headoffice') AS loc_type,
+                COALESCE(ap.location_id, 1)::int AS loc_id
            FROM asset_purchases ap
            JOIN vendors v ON v.id = ap.vendor_id
            JOIN assets a ON a.id = ap.asset_id
@@ -1081,7 +1133,9 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
     const { rows: bills } = await pool.query(
       `SELECT * FROM (
          SELECT 'purchase'::text AS source, p.id, p.invoice_number, p.purchase_date, p.vendor_id,
-                p.total_amount::numeric AS total, v.name, v.phone
+                p.total_amount::numeric AS total, v.name, v.phone,
+                COALESCE(p.location_type, 'headoffice') AS loc_type,
+                COALESCE(p.location_id, 0)::int AS loc_id
            FROM purchases p
            JOIN vendors v ON v.id = p.vendor_id
          ${assetBillsSql}
@@ -1167,6 +1221,8 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
         balance: 0,
         daysOld: Math.max(0, daysBetween(String(b.purchase_date), asOf)),
         bucket: "b0_30" as BucketKey,
+        locType: String(b.loc_type),
+        locId: Number(b.loc_id),
       });
     }
 
@@ -1175,7 +1231,9 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
     // from the ledger as well as from the bills is what stops those vendors
     // from being invisible on a report that claims to show everything owed.
     // One query for all of them, not one per vendor — see the receivables report.
-    {
+    // A located view is a bill-level report: a ledger balance with no bill has
+    // no location, so those vendors only appear on the company-wide view.
+    if (!payViewLoc) {
       const seedIds = [...ledgerByVendor]
         .filter(([id, bal]) => !byVendor.has(id) && Math.abs(bal.balance) >= 0.005)
         .map(([id]) => id);
@@ -1204,9 +1262,12 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
       // A ledger balance larger than the bills on file is a real payable with no
       // document behind it. It cannot be aged (there is no invoice date), so it
       // is reported on its own line rather than quietly dropped or back-dated.
+      // It also has no location, so a located view leaves it out entirely.
       if (credit < 0) {
-        v.unbilledBalance = r2(-credit);
-        totalUnbilled = r2(totalUnbilled + v.unbilledBalance);
+        if (!payViewLoc) {
+          v.unbilledBalance = r2(-credit);
+          totalUnbilled = r2(totalUnbilled + v.unbilledBalance);
+        }
         credit = 0;
       }
       for (const bill of v.bills) {
@@ -1216,11 +1277,24 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
         credit = r2(credit - alloc);
         const bk: BucketKey = bucketOf(bill.daysOld);
         bill.bucket = bk;
-        if (bill.balance > 0.004) {
+        // In a located view, every bill still participates in the FIFO walk
+        // (settlement is per vendor, company-wide), but only the selected
+        // location's bills are counted and shown.
+        if (bill.balance > 0.004 && billAtViewLoc(bill.locType, bill.locId)) {
           v[bk] = r2(v[bk] + bill.balance);
           totals[bk] = r2(totals[bk] + bill.balance);
           totalDueAll = r2(totalDueAll + bill.balance);
         }
+      }
+      if (payViewLoc) {
+        v.bills = v.bills.filter((b: any) => billAtViewLoc(b.locType, b.locId));
+        v.totalBilled = r2(v.bills.reduce((s: number, b: any) => s + b.total, 0));
+        // A located figure: what is still owed on THIS location's bills. The
+        // vendor-level ledger balance and net advances are company-wide and
+        // would leak other locations' money into the slice.
+        v.netDue = r2(v.bills.reduce((s: number, b: any) => s + b.balance, 0));
+        v.unallocatedCredit = 0;
+        return v;
       }
       // netDue is the vendor's ledger balance, full stop. The buckets above show
       // how much of it can be attributed to dated bills; unbilledBalance carries
@@ -1229,7 +1303,9 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
       v.netDue = v.ledgerBalance;
       v.unallocatedCredit = credit;
       return v;
-    }).filter(v => Math.abs(v.netDue) > 0.004 || v.unallocatedCredit > 0.004)
+    }).filter(v => payViewLoc
+        ? v.netDue > 0.004
+        : (Math.abs(v.netDue) > 0.004 || v.unallocatedCredit > 0.004))
       .sort((a, b) => b.netDue - a.netDue);
 
     res.json({
@@ -1239,9 +1315,13 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
         // Aged bill balances only — this is what the buckets add up to.
         totalDue: totalDueAll,
         unbilled: totalUnbilled,
-        // The control figure: agrees with Sundry Creditors on the Balance Sheet.
+        // Company-wide: the control figure, agrees with Sundry Creditors on the
+        // Balance Sheet. Located view: what is owed on that location's bills.
         netDue: r2(vendors.reduce((s, v) => s + v.netDue, 0)),
       },
+      // 'ledger' answers "what do we owe this vendor" from the books;
+      // 'bills' is the located document view (ledger balances have no location).
+      basis: payViewLoc ? "bills" : "ledger",
       vendors,
     });
   } catch (err) {
@@ -1260,6 +1340,20 @@ router.get("/outstanding/collections", requireModuleView("page:/outstanding"), a
     const colScope = colEmp ? await getUserDataScope(colEmp) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
     const colParams: any[] = [];
     const colScopeCond = scopeSalesWhere(colScope, colParams);
+    // Global location context — chase only the selected location's debtors.
+    const colViewLoc = getLocationFilter(req);
+    let colLocCond = "TRUE";
+    if (colViewLoc) {
+      if (colViewLoc.locationType === 'headoffice') {
+        colParams.push('headoffice');
+        colLocCond = `COALESCE(s.location_type, 'outlet') = $${colParams.length}`;
+      } else {
+        colParams.push(colViewLoc.locationType);
+        const tp = colParams.length;
+        colParams.push(colViewLoc.locationId);
+        colLocCond = `(COALESCE(s.location_type, 'outlet') = $${tp} AND COALESCE(s.location_id, s.outlet_id) = $${colParams.length})`;
+      }
+    }
     const { rows } = await pool.query(
       `SELECT s.id, s.invoice_number, s.sale_date, s.payment_status, s.payment_mode, s.customer_id,
               s.location_type, s.location_id,
@@ -1272,6 +1366,7 @@ router.get("/outstanding/collections", requireModuleView("page:/outstanding"), a
        WHERE ${outstandingExpr("s")} > 0.009
          AND s.branch_transfer_id IS NULL
          AND ${colScopeCond}
+         AND ${colLocCond}
        ORDER BY s.sale_date ASC, s.id ASC`,
       colParams
     );

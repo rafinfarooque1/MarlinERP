@@ -15,6 +15,7 @@ import {
   type TaxType, type GstTotals, type TransferInvoiceLine,
 } from "../lib/gstTransfer";
 import { getUserDataScope, isLocationInScope, scopeBranchWhere, scopeTransferWhere } from "../lib/dataScope";
+import { getLocationFilter } from "../lib/requestLocation";
 import { deductMaterialAt, creditMaterialAt } from "../lib/materialStock";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { productBatchIdentity, blockedByInactiveProducts, INACTIVE_PRODUCT_CODE, isProductKind } from "../lib/productIdentity";
@@ -111,6 +112,19 @@ router.get("/stock", requireModuleView(["page:/", "page:/production/item-master"
   if (qp.success && qp.data.branchId) {
     params.push(Number(qp.data.branchId));
     conds.push(`u.branch_id = $${params.length}`);
+  }
+  // Global location context (headers) — only when the page didn't ask for a
+  // specific branch itself. HO matches on type alone, as everywhere else.
+  if (!(qp.success && (qp.data.branchType || qp.data.branchId))) {
+    const viewLoc = getLocationFilter(req);
+    if (viewLoc) {
+      params.push(viewLoc.locationType);
+      conds.push(`u.branch_type = $${params.length}`);
+      if (viewLoc.locationType !== 'headoffice') {
+        params.push(viewLoc.locationId);
+        conds.push(`u.branch_id = $${params.length}`);
+      }
+    }
   }
   if (q) {
     params.push(`%${q}%`);
@@ -264,6 +278,16 @@ router.get("/stock/ledger", requireModuleView(["page:/headoffice/stock-ledger", 
   if (materialType) { params.push(materialType);  conds.push(`ranked.material_type = ${p()}`); }
   if (txnType)      { params.push(txnType);       conds.push(`ranked.txn_type = ${p()}`); }
 
+  // Global location context — narrows the movement history to one branch.
+  // View request only; HO matches on type alone.
+  const viewLoc = getLocationFilter(req);
+  if (viewLoc) {
+    params.push(viewLoc.locationType); conds.push(`ranked.branch_type = ${p()}`);
+    if (viewLoc.locationType !== 'headoffice') {
+      params.push(viewLoc.locationId); conds.push(`ranked.branch_id = ${p()}`);
+    }
+  }
+
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 
   // Running balance computed over ALL history for each item/branch via window function.
@@ -363,6 +387,22 @@ router.get("/stock/transfers", requireModuleView("page:/transfers"), async (req,
   if (from) { params.push(from); conds.push(`transfer_date::date >= $${params.length}::date`); }
   if (to)   { params.push(to);   conds.push(`transfer_date::date <= $${params.length}::date`); }
   if (status) { params.push(status); conds.push(`status = $${params.length}`); }
+
+  // Global location context — a transfer belongs to the selected location's
+  // view when that location is EITHER endpoint (dispatches and receipts both
+  // matter to a branch). HO matches on type alone.
+  const viewLoc = getLocationFilter(req);
+  if (viewLoc) {
+    if (viewLoc.locationType === 'headoffice') {
+      params.push('headoffice');
+      conds.push(`(from_type = $${params.length} OR to_type = $${params.length})`);
+    } else {
+      params.push(viewLoc.locationType);
+      params.push(viewLoc.locationId);
+      const t = params.length - 1, i = params.length;
+      conds.push(`((from_type = $${t} AND from_id = $${i}) OR (to_type = $${t} AND to_id = $${i}))`);
+    }
+  }
 
   // Non-HO employees only see transfers involving their warehouse OR one of
   // that warehouse's mapped outlets. The old branchId equality leaked none of

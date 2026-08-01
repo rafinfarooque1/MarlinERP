@@ -14,7 +14,8 @@ import {
   resolveActingLocation, locationLabel, type ProdLocation,
 } from "../lib/productionCosting";
 import { getUserDataScope, scopeLocationTypeWhere } from "../lib/dataScope";
-import { parseDateRange, pushDateRange, parseLocationFilter, pushLocationFilter } from "../lib/queryFilters";
+import { parseDateRange, pushDateRange, pushLocationFilter } from "../lib/queryFilters";
+import { getLocationFilter } from "../lib/requestLocation";
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 
@@ -151,7 +152,7 @@ router.get("/productions", requireModuleView("page:/production/production"), asy
   const conds: string[] = [where];
   pushDateRange(conds, params, "p.production_date", dr.from, dr.to);
   pushLocationFilter(
-    conds, params, parseLocationFilter(req.query as Record<string, unknown>),
+    conds, params, getLocationFilter(req),
     // Legacy runs predate the location columns and belong to Head Office.
     "COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)",
   );

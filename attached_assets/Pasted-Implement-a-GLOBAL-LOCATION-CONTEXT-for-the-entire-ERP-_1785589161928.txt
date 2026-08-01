@@ -1,0 +1,392 @@
+Implement a GLOBAL LOCATION CONTEXT for the entire ERP.
+
+This is an ERP-wide architectural enhancement. Do not implement page-specific filters. Implement one centralized Location Context that every module, API, SQL query, report, and dashboard consumes.
+
+=========================================================
+OBJECTIVE
+=========================================================
+
+Add a permanent Location Selector at the bottom-left corner of the ERP sidebar.
+
+Example:
+
+📍 Current Location
+
+▼ All Locations
+
+or
+
+▼ Ragiguda Warehouse
+
+or
+
+▼ QA Warehouse
+
+or
+
+▼ Head Office
+
+The selected location becomes the active working location for the entire ERP.
+
+=========================================================
+DEFAULT BEHAVIOUR
+=========================================================
+
+Default after login:
+
+All Locations
+
+If the user changes to another location:
+
+Example:
+
+QA Warehouse
+
+remember the selection.
+
+After refresh or logout/login, the selected location should remain until changed.
+
+Store the preference in the backend (preferred) or user settings, with local storage only as UI cache.
+
+=========================================================
+GLOBAL BEHAVIOUR
+=========================================================
+
+Changing the location should immediately refresh the entire ERP.
+
+Every module must automatically use the selected location.
+
+No page should implement its own location logic.
+
+Create one reusable Global Location Context used by frontend and backend.
+
+=========================================================
+MODULES THAT MUST FOLLOW LOCATION
+=========================================================
+
+Dashboard
+
+• Sales
+• Purchases
+• Expenses
+• Inventory Value
+• Cash
+• Bank
+• Receivables
+• Payables
+• Profit
+• Payment Mix
+• Sales Trend
+• Top Items
+• Top Customers
+• Top Vendors
+• Production Summary
+
+Sales
+
+• POS
+• Quotations
+• Sales Invoices
+• Sales Returns
+• Receivables
+
+Purchases
+
+• Purchase Bills
+• Purchase Returns
+• Vendor Statements
+
+Inventory
+
+• Live Stock
+• Stock Ledger
+• Stock Movement
+• Stock Verification
+• Stock Transfer
+• Batch Reports
+• Expiry Reports
+• Inventory Reports
+
+Production
+
+• Production Batches
+• BOM
+• Production Reports
+
+Accounts
+
+• Chart of Accounts
+• Ledger Statement
+• Trial Balance
+• Balance Sheet
+• Profit & Loss
+• Cash Book
+• Bank Book
+• Day Book
+• Journal
+• Contra
+• Receipt
+• Payment
+• Credit Note
+• Debit Note
+• Voucher Reports
+
+HR
+
+• Employees
+• Attendance
+• Payroll
+• Salary Reports
+• Leave Reports
+• Employee Advances
+
+Assets
+
+• Asset Register
+• Asset Purchases
+• Asset Transfers
+• Asset Reports
+
+GST
+
+• GST Summary
+• GST Returns
+• Purchase Register
+• Sales Register
+
+Reports
+
+Every report in the ERP must automatically respect the selected location.
+
+=========================================================
+MASTER DATA
+=========================================================
+
+These remain GLOBAL and should NOT be filtered:
+
+• Company Profile
+• Company Settings
+• Item Master
+• Customer Master
+• Vendor Master
+• Employee Master
+• Warehouse Master
+• Permissions
+• Hierarchy
+• Users
+• Tax Master
+• GST Master
+• HSN Master
+
+=========================================================
+TRANSACTION FILTERING
+=========================================================
+
+When "All Locations" is selected:
+
+Show consolidated ERP data.
+
+When a location is selected:
+
+Show ONLY transactions belonging to that location.
+
+Example:
+
+Selected:
+
+QA Warehouse
+
+Only show:
+
+QA Warehouse Sales
+
+QA Warehouse Purchases
+
+QA Warehouse Expenses
+
+QA Warehouse Inventory
+
+QA Warehouse Cash
+
+QA Warehouse Bank
+
+QA Warehouse Payroll
+
+QA Warehouse Rent
+
+QA Warehouse Receivables
+
+QA Warehouse Payables
+
+QA Warehouse Profit
+
+QA Warehouse Stock
+
+Nothing from any other warehouse should appear.
+
+=========================================================
+ACCOUNTING
+=========================================================
+
+Financial reports must respect the selected location.
+
+Chart of Accounts
+
+Trial Balance
+
+Balance Sheet
+
+Profit & Loss
+
+Ledger Statement
+
+Cash Book
+
+Bank Book
+
+Day Book
+
+Voucher Reports
+
+All should display only the selected location.
+
+If "All Locations" is selected, display consolidated values.
+
+=========================================================
+DATE FILTER COMPATIBILITY
+=========================================================
+
+Location filtering must work together with Date Filtering.
+
+Example:
+
+Date:
+01-Aug-2026 to 31-Aug-2026
+
+Location:
+QA Warehouse
+
+Only August transactions belonging to QA Warehouse should be shown.
+
+Never show transactions from another location.
+
+=========================================================
+PERMISSIONS
+=========================================================
+
+Users should only see locations they have access to.
+
+Examples:
+
+Head Office
+→ Can switch between all locations.
+
+Warehouse Manager
+→ Only their warehouse.
+
+Outlet User
+→ Only their outlet.
+
+If the user has only one location assigned:
+
+Hide the selector and automatically use that location.
+
+=========================================================
+BACKEND IMPLEMENTATION
+=========================================================
+
+Do NOT filter data in React.
+
+Filtering must happen in backend queries.
+
+Create one reusable location middleware/service.
+
+Every API should automatically receive the active location.
+
+Use:
+
+location_id
+
+and
+
+location_type
+
+where required.
+
+When "All Locations" is selected, do not apply location filtering.
+
+=========================================================
+UI
+=========================================================
+
+Add the selector permanently at the bottom-left corner of the sidebar.
+
+Display:
+
+📍 Current Location
+
+▼ All Locations
+
+or
+
+▼ QA Warehouse
+
+Changing the location should refresh the current page automatically without logging out.
+
+=========================================================
+VALIDATION
+=========================================================
+
+Verify:
+
+✓ Dashboard changes correctly.
+
+✓ Sales changes correctly.
+
+✓ Purchases change correctly.
+
+✓ Inventory changes correctly.
+
+✓ Production changes correctly.
+
+✓ Accounts change correctly.
+
+✓ Trial Balance changes correctly.
+
+✓ Profit & Loss changes correctly.
+
+✓ Balance Sheet changes correctly.
+
+✓ Ledger changes correctly.
+
+✓ GST Reports change correctly.
+
+✓ Payroll changes correctly.
+
+✓ Attendance changes correctly.
+
+✓ Assets change correctly.
+
+✓ Reports change correctly.
+
+✓ Date filters continue working correctly.
+
+✓ Permissions continue working correctly.
+
+✓ Performance remains optimal.
+
+=========================================================
+IMPORTANT
+=========================================================
+
+Implement this as a centralized ERP architecture enhancement.
+
+Do not create separate location filters for every page.
+
+Use one Global Location Context that every module, report, API, SQL query, and dashboard consumes.
+
+Maintain backward compatibility.
+
+Do not break accounting, stock, GST, payroll, or reporting logic.
+
+After implementation, perform a complete regression test to ensure every module respects both the selected Location and the selected Date Range.

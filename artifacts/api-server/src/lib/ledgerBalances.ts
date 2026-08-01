@@ -126,21 +126,34 @@ export interface LedgerBalanceIndex {
  */
 export async function buildLedgerBalanceIndex(
   postingsFn: PostingsFn,
-  opts: { toDate?: string | null; postings?: Array<{ ledgerId: number; debit: number; credit: number }> } = {},
+  opts: {
+    toDate?: string | null;
+    postings?: Array<{ ledgerId: number; debit: number; credit: number }>;
+    /**
+     * Location slices exclude opening balances: an opening balance is a
+     * company-level figure with no location attribution, so folding it into a
+     * per-location view would inflate every slice and break slice+bucket
+     * reconciliation. Default true (company-wide view).
+     */
+    includeOpeningBalances?: boolean;
+  } = {},
 ): Promise<LedgerBalanceIndex> {
   const toDate = opts.toDate || null;
+  const includeOb = opts.includeOpeningBalances !== false;
 
   const [{ rows: ledgerRows }, postings, { rows: obRows }] = await Promise.all([
     pool.query(`SELECT id, code, parent_id FROM account_ledgers`),
     opts.postings
       ? Promise.resolve(opts.postings)
       : postingsFn(toDate ? { toDate } : {}),
-    pool.query(
-      `SELECT ledger_id, balance::numeric AS balance, balance_type FROM opening_balances${
-        toDate ? ` WHERE as_of_date <= $1` : ""
-      }`,
-      toDate ? [toDate] : [],
-    ),
+    includeOb
+      ? pool.query(
+          `SELECT ledger_id, balance::numeric AS balance, balance_type FROM opening_balances${
+            toDate ? ` WHERE as_of_date <= $1` : ""
+          }`,
+          toDate ? [toDate] : [],
+        )
+      : Promise.resolve({ rows: [] as Array<Record<string, unknown>> }),
   ]);
 
   const agg = new Map<number, { debit: number; credit: number }>();

@@ -93,6 +93,9 @@ async function buildEmployeeResponse(emp: Record<string, any>) {
     personalAddress:  emp.personal_address ?? null,
     dateOfBirth:      emp.date_of_birth ?? null,
     bio:              emp.bio ?? null,
+    // Persisted global location selection (JSON string or null). The client
+    // treats it as a display preference — never as authority.
+    uiLocationPref:   emp.ui_location_pref ?? emp.uiLocationPref ?? null,
   };
 }
 
@@ -247,7 +250,7 @@ router.get('/auth/me', async (req, res): Promise<void> => {
               COALESCE(must_change_password, false) AS must_change_password,
               COALESCE(education, '[]'::jsonb) AS education,
               COALESCE(work_experience, '[]'::jsonb) AS work_experience,
-              emergency_contact, personal_address, date_of_birth, bio
+              emergency_contact, personal_address, date_of_birth, bio, ui_location_pref
        FROM employees WHERE id = $1 LIMIT 1`,
       [empId],
     );
@@ -259,6 +262,38 @@ router.get('/auth/me', async (req, res): Promise<void> => {
   } catch {
     res.status(401).json({ error: 'Invalid token' });
   }
+});
+
+// ── PUT /auth/location-pref — persist the global location selection ──────────
+// A DISPLAY preference only: it drives which location the UI shows on the next
+// login, never what the user is allowed to see (LBAC stays unconditional).
+// Stored as a JSON string so "picked All" is distinguishable from "never set".
+router.put('/auth/location-pref', async (req, res): Promise<void> => {
+  const empId = empIdFromRequest(req);
+  if (empId == null) { res.status(401).json({ error: 'Authentication required' }); return; }
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const locationType = body.locationType;
+  if (locationType !== 'all' && locationType !== 'warehouse' && locationType !== 'outlet') {
+    res.status(400).json({ error: "locationType must be 'all', 'warehouse' or 'outlet'" }); return;
+  }
+  let pref: { locationType: string; locationId?: number; locationName?: string };
+  if (locationType === 'all') {
+    pref = { locationType: 'all' };
+  } else {
+    const locationId = Number(body.locationId);
+    if (!Number.isInteger(locationId) || locationId <= 0) {
+      res.status(400).json({ error: 'locationId must be a positive integer' }); return;
+    }
+    const locationName =
+      typeof body.locationName === 'string' ? body.locationName.slice(0, 200) : undefined;
+    pref = { locationType, locationId, ...(locationName ? { locationName } : {}) };
+  }
+
+  await pool.query(`UPDATE employees SET ui_location_pref = $1 WHERE id = $2`, [
+    JSON.stringify(pref), empId,
+  ]);
+  res.json({ success: true, uiLocationPref: JSON.stringify(pref) });
 });
 
 // ── PATCH /auth/profile — employee updates their own profile ──────────────────
@@ -299,7 +334,7 @@ router.patch('/auth/profile', async (req, res): Promise<void> => {
                COALESCE(must_change_password, false) AS must_change_password,
                COALESCE(education, '[]'::jsonb) AS education,
                COALESCE(work_experience, '[]'::jsonb) AS work_experience,
-               emergency_contact, personal_address, date_of_birth, bio`,
+               emergency_contact, personal_address, date_of_birth, bio, ui_location_pref`,
     vals,
   );
   if (!rows[0]) { res.status(404).json({ error: 'Employee not found' }); return; }

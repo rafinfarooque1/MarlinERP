@@ -31,14 +31,17 @@ minus credits with no classification rules to get wrong, so a shared subtree
 helper is fine — but it must be *one* helper shared by every endpoint, or two
 dashboards will disagree with the Cash Book.
 
-# Derived postings have no location
+# Located posting slices (supersedes "postings have no location")
 
-A `Posting` carries an entry id, a date, a ledger and an amount. It has **no
-location**. Any KPI derived from the posting stream is therefore company-level
-and cannot honestly be shown to a single-branch login.
+Postings now carry location attribution, and the posting stream can be sliced
+per location (`filterPostingsByLocation` / the `location` option on
+`companyBalances` / `companyFinancials` / `buildBooks`). Money tiles for a
+located view read the LOCATED SLICE of the one derived stream — never a
+per-location re-aggregation of source tables, which drifts from the books.
 
-Do not solve this by aggregating the source tables (sales, expenses, payments)
-per location — that is a parallel source of truth that will drift from the
-books. Return `null` for location-scoped callers, flag the figure as
-company-wide, and let the UI render the gap. Showing a company total to a
-branch manager is both wrong and a disclosure leak.
+Rules that survive:
+- Opening balances have no location attribution: excluded from every located
+  slice, included only company-wide.
+- A branch login is FORCED to its own location's slice (never `null`, never
+  the company figure).
+- Still one source of truth: the same slice feeds dashboard, reports and P&L.

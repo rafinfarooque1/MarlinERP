@@ -1,13 +1,15 @@
 import { Router } from "express";
 import { db, pool, itemsTable, salesTable, stockEntriesTable, employeesTable, stockTransfersTable, attendanceTable, leavesTable, productionsTable, expensesTable } from "@workspace/db";
 import { count, sum, eq, and, sql, inArray } from "drizzle-orm";
-import { getUserDataScope, scopeSalesWhere } from "../lib/dataScope";
+import { getUserDataScope, scopeSalesWhere, scopeBranchWhere, type DataScope } from "../lib/dataScope";
+import { pushLocationFilter, type ParsedLocationFilter } from "../lib/queryFilters";
 import { stockValuation } from "../lib/valuation";
 import { requireModuleView, canViewStockValuation } from "../middleware/permissions";
 import { buildDerivedPostings } from "./journal";
 import { companyBalances, companyFinancials } from "../lib/dashboardFinancials";
 import { outstandingExpr, outstandingAsOfExpr } from "../lib/salePaymentPosition";
 import { isIsoDate } from "../lib/dateInput";
+import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
 
 const router = Router();
 
@@ -17,8 +19,44 @@ const router = Router();
  *  unrelated items and invent both value and alerts. */
 const ITEM_ROWS_ONLY = sql`stock_entries.material_type = 'item'`;
 
+/**
+ * LBAC + view scoping shared by the legacy dashboard endpoints.
+ *
+ * Mirrors scopeBranchWhere, but over arbitrary SQL expressions — several
+ * tables carry their location in COALESCE'd raw-migration columns rather
+ * than branch_type/branch_id.
+ */
+function scopeLocWhere(scope: DataScope, params: unknown[], typeExpr: string, idExpr: string): string {
+  if (scope.isHeadOffice) return "TRUE";
+  const conds: string[] = [];
+  if (scope.warehouseIds.length > 0) {
+    params.push(scope.warehouseIds);
+    conds.push(`(${typeExpr} = 'warehouse' AND ${idExpr} = ANY($${params.length}::int[]))`);
+  }
+  if (scope.outletIds.length > 0) {
+    params.push(scope.outletIds);
+    conds.push(`(${typeExpr} = 'outlet' AND ${idExpr} = ANY($${params.length}::int[]))`);
+  }
+  return conds.length > 0 ? `(${conds.join(" OR ")})` : "FALSE";
+}
+
+const HO_SCOPE: DataScope = { isHeadOffice: true, warehouseIds: [], outletIds: [] } as DataScope;
+
+/** Unconditional LBAC scope + the view-only location context, resolved once. */
+async function dashboardScope(req: any): Promise<{ scope: DataScope; viewLoc: ParsedLocationFilter | null }> {
+  const emp = req.employee as { branchType: string; branchId: number } | undefined;
+  const scope = emp ? await getUserDataScope(emp) : HO_SCOPE;
+  return { scope, viewLoc: getLocationFilter(req) };
+}
+
 router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): Promise<void> => {
   const today = new Date().toISOString().split("T")[0];
+
+  // Every figure below applies the caller's LBAC scope unconditionally, then
+  // ANDs the global location context (a view request) on top — the same
+  // two-gate rule as /dashboard/bi. A branch login sees its own slice; Head
+  // Office sees the selected location's slice, or the whole company.
+  const { scope, viewLoc } = await dashboardScope(req);
 
   // ── COA ledger-based bank & cash balances ─────────────────────────────
   // Cash and bank are read from the same derived posting stream that produces
@@ -32,48 +70,113 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
   // showed cash of -125.01 on a day the Cash Book and the Balance Sheet both
   // said 29,609.90. One source now feeds all of them — and the same helper
   // feeds /dashboard/bi, so the two dashboards cannot disagree either.
-  const { bankBalance, cashBalance } = await companyBalances(buildDerivedPostings);
+  //
+  // Located views read the located posting slice; a branch login is forced to
+  // its own location's slice even with no selector set.
+  const postingLoc = getPostingLocationFilter(req)
+    ?? (!scope.isHeadOffice
+      ? ({ type: (req as any).employee.branchType, id: (req as any).employee.branchId } as any)
+      : null);
+  const { bankBalance, cashBalance } = await companyBalances(buildDerivedPostings, { location: postingLoc });
 
   // ── Other metrics ─────────────────────────────────────────────────────
+  const salesConds = ["s.branch_transfer_id IS NULL", "s.cancelled_at IS NULL"];
+  const salesParams: unknown[] = [];
+  pushLocationFilter(salesConds, salesParams, viewLoc, "COALESCE(s.location_type, 'outlet')", "COALESCE(s.location_id, s.outlet_id)");
+  if (!scope.isHeadOffice) salesConds.push(scopeSalesWhere(scope, salesParams));
+
+  const empConds = ["e.is_active = TRUE"];
+  const empParams: unknown[] = [];
+  pushLocationFilter(empConds, empParams, viewLoc, "e.branch_type", "e.branch_id");
+  if (!scope.isHeadOffice) empConds.push(scopeBranchWhere(scope, empParams, "e"));
+
+  // Transfers touch two locations; a transfer is "at" a location when either
+  // end is that location.
+  const trConds = [`t.status IN ('pending', 'in_transit')`];
+  const trParams: unknown[] = [];
+  if (viewLoc) {
+    if (viewLoc.locationType === "headoffice") {
+      trConds.push(`(t.from_type = 'headoffice' OR t.to_type = 'headoffice')`);
+    } else {
+      trParams.push(viewLoc.locationType, viewLoc.locationId);
+      trConds.push(`((t.from_type = $${trParams.length - 1} AND t.from_id = $${trParams.length}) OR (t.to_type = $${trParams.length - 1} AND t.to_id = $${trParams.length}))`);
+    }
+  }
+  if (!scope.isHeadOffice) {
+    const ends: string[] = [];
+    if (scope.warehouseIds.length > 0) {
+      trParams.push(scope.warehouseIds);
+      ends.push(`(t.from_type = 'warehouse' AND t.from_id = ANY($${trParams.length}::int[])) OR (t.to_type = 'warehouse' AND t.to_id = ANY($${trParams.length}::int[]))`);
+    }
+    if (scope.outletIds.length > 0) {
+      trParams.push(scope.outletIds);
+      ends.push(`(t.from_type = 'outlet' AND t.from_id = ANY($${trParams.length}::int[])) OR (t.to_type = 'outlet' AND t.to_id = ANY($${trParams.length}::int[]))`);
+    }
+    trConds.push(ends.length > 0 ? `(${ends.join(" OR ")})` : "FALSE");
+  }
+
+  const stockConds = ["se.material_type = 'item'", "se.quantity::numeric < COALESCE(i.reorder_level, 10)::numeric"];
+  const stockParams: unknown[] = [];
+  pushLocationFilter(stockConds, stockParams, viewLoc, "se.branch_type", "se.branch_id");
+  if (!scope.isHeadOffice) stockConds.push(scopeBranchWhere(scope, stockParams, "se"));
+
+  const expConds = ["TRUE"];
+  const expParams: unknown[] = [];
+  pushLocationFilter(expConds, expParams, viewLoc, "COALESCE(ex.location_type, 'headoffice')", "COALESCE(ex.location_id, 0)");
+  if (!scope.isHeadOffice) expConds.push(scopeLocWhere(scope, expParams, "COALESCE(ex.location_type, 'headoffice')", "COALESCE(ex.location_id, 0)"));
+
+  // Legacy production runs predate the location columns and belong to Head
+  // Office — same COALESCE rule as the production list endpoints.
+  const prodConds = ["TRUE"];
+  const prodParams: unknown[] = [];
+  pushLocationFilter(prodConds, prodParams, viewLoc, "COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)");
+  if (!scope.isHeadOffice) prodConds.push(scopeLocWhere(scope, prodParams, "COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)"));
+
   const [
     [itemsCount],
-    [salesSum],
+    salesSumQ,
     stockValue,
-    [activeEmps],
-    [pendingTransfers],
-    [todayAtt],
-    [pendingLeaves],
-    [lowStock],
-    [expenseSum],
+    activeEmpsQ,
+    pendingTransfersQ,
+    todayAttQ,
+    pendingLeavesQ,
+    lowStockQ,
+    expenseSumQ,
     batchRows,
   ] = await Promise.all([
+    // Catalog size is master data — global by design.
     db.select({ count: count() }).from(itemsTable),
     // Turnover means money customers owe us. Branch-transfer invoices are
     // statutory paperwork for moving our own stock between our own locations,
     // and cancelled bills never happened; counting either one reported revenue
     // the company never earned, and made this tile disagree with the Sales
     // Register and the GST return for the same period.
-    db.select({ total: sum(salesTable.totalAmount) }).from(salesTable)
-      .where(sql`branch_transfer_id IS NULL AND cancelled_at IS NULL`),
+    pool.query(`SELECT COALESCE(SUM(s.total_amount::numeric), 0)::float AS total FROM sales s WHERE ${salesConds.join(" AND ")}`, salesParams),
     // Stock value comes from the one shared valuation function, so the tile, the
-    // Stock Valuation report and the P&L closing stock cannot disagree. It used
-    // to multiply quantity by `stock_entries.cost_price` — a cost frozen at the
-    // row's creation — and to count finished goods only, ignoring every raw and
-    // packing material in the building.
-    stockValuation(pool, { includeInTransit: true }),
-    db.select({ count: count() }).from(employeesTable).where(eq(employeesTable.isActive, true)),
+    // Stock Valuation report and the P&L closing stock cannot disagree.
+    stockValuation(pool, {
+      includeInTransit: true,
+      ...(scope.isHeadOffice ? {} : { dataScope: scope }),
+      ...(viewLoc ? { branchType: viewLoc.locationType, ...(viewLoc.locationType === "headoffice" ? {} : { branchId: viewLoc.locationId }) } : {}),
+    }),
+    pool.query(`SELECT COUNT(*)::int AS count FROM employees e WHERE ${empConds.join(" AND ")}`, empParams),
     // Transfers awaiting action: legacy rows use "pending"; the dispatch →
     // approve lifecycle creates them as "in_transit".
-    db.select({ count: count() }).from(stockTransfersTable).where(inArray(stockTransfersTable.status, ["pending", "in_transit"])),
-    db.select({ count: count() }).from(attendanceTable).where(eq(attendanceTable.date, today)),
-    db.select({ count: count() }).from(leavesTable).where(eq(leavesTable.status, "pending")),
-    db.select({ count: count() }).from(stockEntriesTable)
-      .leftJoin(itemsTable, eq(stockEntriesTable.itemId, itemsTable.id))
-      .where(and(ITEM_ROWS_ONLY, sql`${stockEntriesTable.quantity}::numeric < COALESCE(items.reorder_level, 10)::numeric`)),
-    db.select({ total: sum(expensesTable.amount) }).from(expensesTable),
-    db.execute(sql`SELECT COUNT(*)::int AS batch_count, COALESCE(SUM(produced_quantity::numeric), 0)::float AS total_qty FROM productions`),
+    pool.query(`SELECT COUNT(*)::int AS count FROM stock_transfers t WHERE ${trConds.join(" AND ")}`, trParams),
+    pool.query(`SELECT COUNT(*)::int AS count FROM attendance a JOIN employees e ON e.id = a.employee_id WHERE a.date = $${empParams.length + 1} AND ${empConds.join(" AND ")}`, [...empParams, today]),
+    pool.query(`SELECT COUNT(*)::int AS count FROM leaves l JOIN employees e ON e.id = l.employee_id WHERE l.status = 'pending' AND ${empConds.join(" AND ")}`, empParams),
+    pool.query(`SELECT COUNT(*)::int AS count FROM stock_entries se LEFT JOIN items i ON i.id = se.item_id WHERE ${stockConds.join(" AND ")}`, stockParams),
+    pool.query(`SELECT COALESCE(SUM(ex.amount::numeric), 0)::float AS total FROM expenses ex WHERE ${expConds.join(" AND ")}`, expParams),
+    pool.query(`SELECT COUNT(*)::int AS batch_count, COALESCE(SUM(p.produced_quantity::numeric), 0)::float AS total_qty FROM productions p WHERE ${prodConds.join(" AND ")}`, prodParams),
   ]);
 
+  const salesSum = { total: Number(salesSumQ.rows[0]?.total ?? 0) };
+  const activeEmps = { count: Number(activeEmpsQ.rows[0]?.count ?? 0) };
+  const pendingTransfers = { count: Number(pendingTransfersQ.rows[0]?.count ?? 0) };
+  const todayAtt = { count: Number(todayAttQ.rows[0]?.count ?? 0) };
+  const pendingLeaves = { count: Number(pendingLeavesQ.rows[0]?.count ?? 0) };
+  const lowStock = { count: Number(lowStockQ.rows[0]?.count ?? 0) };
+  const expenseSum = { total: Number(expenseSumQ.rows[0]?.total ?? 0) };
   const batchRow = (batchRows.rows[0] ?? {}) as any;
 
   // Hiding the Value column on the Stock screen is pointless if the same
@@ -103,22 +206,24 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
 });
 
 router.get("/dashboard/stock-alerts", requireModuleView("page:/"), async (req, res): Promise<void> => {
-  const alerts = await db
-    .select({
-      id: stockEntriesTable.id,
-      itemId: stockEntriesTable.itemId,
-      itemName: itemsTable.name,
-      branchType: stockEntriesTable.branchType,
-      branchId: stockEntriesTable.branchId,
-      quantity: stockEntriesTable.quantity,
-      reorderLevel: sql<string>`COALESCE(items.reorder_level, 10)`,
-    })
-    .from(stockEntriesTable)
-    .leftJoin(itemsTable, eq(stockEntriesTable.itemId, itemsTable.id))
-    .where(and(ITEM_ROWS_ONLY, sql`${stockEntriesTable.quantity}::numeric < COALESCE(items.reorder_level, 10)::numeric`))
-    .limit(20);
+  // Same two-gate scoping as /dashboard/summary: LBAC always, view context on top.
+  const { scope, viewLoc } = await dashboardScope(req);
+  const conds = ["se.material_type = 'item'", "se.quantity::numeric < COALESCE(i.reorder_level, 10)::numeric"];
+  const params: unknown[] = [];
+  pushLocationFilter(conds, params, viewLoc, "se.branch_type", "se.branch_id");
+  if (!scope.isHeadOffice) conds.push(scopeBranchWhere(scope, params, "se"));
+  const { rows: alerts } = await pool.query(
+    `SELECT se.id, se.item_id AS "itemId", i.name AS "itemName",
+            se.branch_type AS "branchType", se.branch_id AS "branchId",
+            se.quantity, COALESCE(i.reorder_level, 10) AS "reorderLevel"
+       FROM stock_entries se
+       LEFT JOIN items i ON i.id = se.item_id
+      WHERE ${conds.join(" AND ")}
+      LIMIT 20`,
+    params,
+  );
 
-  res.json(alerts.map((a) => ({
+  res.json(alerts.map((a: any) => ({
     itemId: a.itemId,
     itemName: a.itemName ?? "",
     branchName: `${a.branchType} #${a.branchId}`,
@@ -129,6 +234,16 @@ router.get("/dashboard/stock-alerts", requireModuleView("page:/"), async (req, r
 });
 
 router.get("/dashboard/recent-activity", requireModuleView("page:/"), async (req, res): Promise<void> => {
+  // The activity log carries no location column, so its rows cannot be
+  // narrowed to a branch. It is therefore a Head-Office-only feed: a branch
+  // login gets an empty list rather than a company-wide one. (For HO users the
+  // location selector is a view convenience over data they may already see, so
+  // the un-narrowable feed stays visible rather than going blank.)
+  const { scope } = await dashboardScope(req);
+  if (!scope.isHeadOffice) {
+    res.json([]);
+    return;
+  }
   const { activityLogTable } = await import("@workspace/db");
   const { desc } = await import("drizzle-orm");
   const activities = await db.select().from(activityLogTable).orderBy(desc(activityLogTable.createdAt)).limit(15);
@@ -176,6 +291,8 @@ function salesWhere(query: Record<string, unknown>): { conds: string[]; params: 
   if ((lt === 'warehouse' || lt === 'outlet') && Number.isFinite(lid) && lid > 0) {
     params.push(lt);  conds.push(`COALESCE(s.location_type, 'outlet') = $${params.length}`);
     params.push(lid); conds.push(`COALESCE(s.location_id, s.outlet_id) = $${params.length}`);
+  } else if (lt === 'headoffice') {
+    params.push('headoffice'); conds.push(`COALESCE(s.location_type, 'outlet') = $${params.length}`);
   }
   const ws = Number(query.warehouseScope);
   if (Number.isFinite(ws) && ws > 0) {
@@ -188,7 +305,7 @@ function salesWhere(query: Record<string, unknown>): { conds: string[]; params: 
 }
 
 router.get("/dashboard/sales-trend", requireModuleView("page:/"), async (req, res): Promise<void> => {
-  const f = salesWhere(req.query as Record<string, unknown>);
+  const f = salesWhere({ ...(req.query as Record<string, unknown>), ...(getLocationFilter(req) ?? {}) });
   if (f.error) { res.status(400).json({ error: f.error }); return; }
   const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
   if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
@@ -209,7 +326,7 @@ router.get("/dashboard/sales-trend", requireModuleView("page:/"), async (req, re
 });
 
 router.get("/dashboard/top-items", requireModuleView("page:/"), async (req, res): Promise<void> => {
-  const f = salesWhere(req.query as Record<string, unknown>);
+  const f = salesWhere({ ...(req.query as Record<string, unknown>), ...(getLocationFilter(req) ?? {}) });
   if (f.error) { res.status(400).json({ error: f.error }); return; }
   const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
   if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
@@ -237,7 +354,7 @@ router.get("/dashboard/top-items", requireModuleView("page:/"), async (req, res)
 // Per-location sales breakdown for the dashboard (Phase 7). Includes
 // warehouse-located sales correctly (bug #37).
 router.get("/dashboard/sales-by-location", requireModuleView("page:/"), async (req, res): Promise<void> => {
-  const f = salesWhere(req.query as Record<string, unknown>);
+  const f = salesWhere({ ...(req.query as Record<string, unknown>), ...(getLocationFilter(req) ?? {}) });
   if (f.error) { res.status(400).json({ error: f.error }); return; }
   const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
   if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
@@ -291,8 +408,15 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     res.status(400).json({ error: "fromDate/toDate must be YYYY-MM-DD" });
     return;
   }
-  const reqLocType = typeof q.locationType === "string" ? q.locationType : "";
-  const reqLocId = Number(q.locationId);
+  // Explicit query params win; otherwise the global location context headers
+  // (x-location-type / x-location-id) supply the active working location.
+  const headerLoc = getLocationFilter(req);
+  let reqLocType = typeof q.locationType === "string" ? q.locationType : "";
+  let reqLocId = Number(q.locationId);
+  if (!reqLocType && headerLoc) {
+    reqLocType = headerLoc.locationType;
+    reqLocId = headerLoc.locationId;
+  }
   if (reqLocType && !["warehouse", "outlet", "headoffice"].includes(reqLocType)) {
     res.status(400).json({ error: "locationType must be warehouse, outlet or headoffice" });
     return;
@@ -377,17 +501,25 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
 
   const sc = salesConds();
 
-  // ── Company-level accounting figures (Expenses, Bank Balance) ────────────
-  // A derived posting carries a ledger, a date and an amount — it has no
-  // location, so these cannot honestly be reduced to one branch. Rather than
-  // build a second, location-aware expense aggregate (a parallel source of
-  // truth that would drift from the P&L), they are computed only for a caller
-  // whose scope is the whole company. A location-restricted employee gets
-  // nulls and the UI renders them as unavailable, which is also what the
-  // location-scoping rules require: no company-wide money figure leaks to a
-  // single-branch login.
-  const accountingP = scope.isHeadOffice
-    ? companyFinancials(buildDerivedPostings, { fromDate: fromDate || null, toDate: toDate || null })
+  // ── Accounting figures (Expenses, Cash/Bank, Receivables/Payables) ───────
+  // Derived postings carry the source document's location, so these tiles can
+  // honestly show one location's slice of the SAME stream that produces the
+  // P&L and Balance Sheet (never a re-sum of source tables — that drifts).
+  // Consolidated view: company-wide figures incl. opening balances. Location
+  // view (picked by HO, or forced for a branch login): that location's slice,
+  // opening balances excluded (they carry no location attribution). A branch
+  // login therefore sees its own slice — location-scoped data, not a
+  // company-wide leak.
+  const postingLoc =
+    effLocType && effLocType !== "headoffice" && effLocId != null
+      ? ({ type: effLocType as "warehouse" | "outlet", id: effLocId } as const)
+      : null;
+  const accountingP = scope.isHeadOffice || postingLoc
+    ? companyFinancials(buildDerivedPostings, {
+        fromDate: fromDate || null,
+        toDate: toDate || null,
+        location: postingLoc,
+      })
     : Promise.resolve(null);
 
   // ── Run everything in parallel ────────────────────────────────────────────
@@ -626,7 +758,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       // it. Summing invoice dues could not see either.
       total: accounting ? accounting.accountsReceivable : null,
       basis: accounting ? "ledger" : null,
-      companyWide: true,
+      companyWide: !postingLoc,
       // Invoice-level exposure for the selected period and location. Ageing needs
       // invoice dates, so `overdue` can only ever come from the documents.
       invoiceExposure: money(receivablesRows.rows[0]?.total),
@@ -640,7 +772,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       // card completely unchanged.
       total: accounting ? accounting.accountsPayable : null,
       basis: accounting ? "ledger" : null,
-      companyWide: true,
+      companyWide: !postingLoc,
       // Salary owed to employees. Kept as its own figure rather than folded into
       // `total`, which is the Sundry Creditors control account and must keep
       // agreeing with the Balance Sheet line of that name. `allPayables` is the
@@ -669,7 +801,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       // Cash in hand from the posting stream, so a contra, a journal or a till
       // sale moves it. Mirrors the bank tile below.
       balance: accounting ? accounting.cashBalance : null,
-      companyWide: true,
+      companyWide: !postingLoc,
     },
     // Direct + indirect expenses for the period, from the same derived
     // postings as the P&L. Purchases are excluded because the Purchases tile
@@ -684,13 +816,13 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       salary: accounting ? accounting.expenses.salary : null,
       rent: accounting ? accounting.expenses.rent : null,
       other: accounting ? accounting.expenses.other : null,
-      companyWide: true,
+      companyWide: !postingLoc,
     },
     // Bank only — physical cash stays in the separate `cash` figures, matching
     // this ERP's existing STD-BANK / STD-CASH split.
     bank: {
       balance: accounting ? accounting.bankBalance : null,
-      companyWide: true,
+      companyWide: !postingLoc,
     },
     topItems: topItemsRows.rows.map((r: any) => ({
       itemId: Number(r.item_id), name: r.name, qty: qty(r.qty), revenue: money(r.revenue),
@@ -703,17 +835,24 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
 
 router.get("/dashboard/production-trend", requireModuleView("page:/"), async (req, res): Promise<void> => {
   const days = Math.min(Math.max(parseInt(req.query.days as string) || 30, 1), 365);
-  const rows = await db.execute(sql`
+  // Same two-gate scoping as /dashboard/summary; legacy runs with no location
+  // columns belong to Head Office.
+  const { scope, viewLoc } = await dashboardScope(req);
+  const params: unknown[] = [days];
+  const conds = [`p.production_date >= CURRENT_DATE - ($1::int * INTERVAL '1 day')`];
+  pushLocationFilter(conds, params, viewLoc, "COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)");
+  if (!scope.isHeadOffice) conds.push(scopeLocWhere(scope, params, "COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)"));
+  const { rows } = await pool.query(`
     SELECT
-      production_date::text                          AS date,
-      COALESCE(SUM(produced_quantity), 0)::float     AS quantity,
-      COUNT(*)::int                                  AS batches
-    FROM productions
-    WHERE production_date >= CURRENT_DATE - (${days}::int * INTERVAL '1 day')
-    GROUP BY production_date
-    ORDER BY production_date
-  `);
-  res.json(rows.rows);
+      p.production_date::text                          AS date,
+      COALESCE(SUM(p.produced_quantity), 0)::float     AS quantity,
+      COUNT(*)::int                                    AS batches
+    FROM productions p
+    WHERE ${conds.join(" AND ")}
+    GROUP BY p.production_date
+    ORDER BY p.production_date
+  `, params);
+  res.json(rows);
 });
 
 export default router;

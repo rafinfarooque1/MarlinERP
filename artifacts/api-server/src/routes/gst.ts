@@ -11,6 +11,7 @@ import {
 import { purchaseSettlementIndex, settlementModeSummary } from "../lib/vendorBillSettlement";
 import { loadPaymentPositions } from "../lib/salePaymentPosition";
 import { paymentModeLabel } from "../lib/paymentModes";
+import { getLocationFilter } from "../lib/requestLocation";
 
 const router: IRouter = Router();
 
@@ -43,8 +44,21 @@ async function parseGstScope(req: any): Promise<GstScope | null> {
   const gstin = typeof req.query.gstin === "string" && req.query.gstin.trim() ? req.query.gstin.trim() : undefined;
   const whRaw = Number(req.query.warehouseId);
   const warehouseId = Number.isInteger(whRaw) && whRaw > 0 ? whRaw : undefined;
-  if (!gstin && !warehouseId) return null;
-  return resolveGstScope({ gstin, warehouseId });
+  if (gstin || warehouseId) return resolveGstScope({ gstin, warehouseId });
+  // Global location context. GST filings are per GSTIN, so the selected
+  // location maps to the GSTIN scope that files for it: a warehouse maps to
+  // its own scope, an outlet to its parent warehouse's, and Head Office /
+  // All to the company-wide view. Explicit gstin/warehouseId params win.
+  const viewLoc = getLocationFilter(req);
+  if (viewLoc?.locationType === "warehouse") {
+    return resolveGstScope({ warehouseId: viewLoc.locationId });
+  }
+  if (viewLoc?.locationType === "outlet") {
+    const { rows } = await pool.query(`SELECT warehouse_id FROM outlets WHERE id = $1`, [viewLoc.locationId]);
+    const wid = Number(rows[0]?.warehouse_id);
+    if (Number.isFinite(wid) && wid > 0) return resolveGstScope({ warehouseId: wid });
+  }
+  return null;
 }
 
 /**

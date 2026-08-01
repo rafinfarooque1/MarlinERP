@@ -18,13 +18,16 @@
  *    as an expense" will drift like that again, so the expense number is read
  *    from `buildBooks` — the same function behind the Profit & Loss statement.
  *
- * Scope note: a derived posting carries a ledger, a date and an amount — it has
- * no location. These figures are company-level by construction, and callers
- * must not present them as one branch's numbers.
+ * Scope note: derived postings carry the source document's location
+ * (locationType/locationId; null = the company-level bucket). By default these
+ * figures are company-wide; pass `location` to read one location's slice of
+ * the SAME stream. Slices exclude opening balances (company-level by nature),
+ * so location slices + the company bucket reconcile to the consolidated view.
  */
 import { pool } from "@workspace/db";
 
 import { buildBooks } from "./books";
+import { filterPostingsByLocation, type PostingLocationFilter } from "./postingLocation";
 
 export interface CompanyFinancials {
   /**
@@ -132,12 +135,22 @@ export interface ControlBalances {
  */
 async function balancesFrom(
   postings: Posting[],
-  opts: { toDate?: string | null } = {},
+  opts: { toDate?: string | null; location?: PostingLocationFilter | null } = {},
 ): Promise<ControlBalances> {
   const { buildLedgerBalanceIndex } = await import("./ledgerBalances");
+  const location = opts.location ?? null;
+  const sliced = location
+    ? (filterPostingsByLocation(postings as never[], location) as unknown as Posting[])
+    : postings;
   const idx = await buildLedgerBalanceIndex(
-    (async () => postings) as unknown as PostingsFn,
-    { toDate: opts.toDate ?? null, postings },
+    (async () => sliced) as unknown as PostingsFn,
+    {
+      toDate: opts.toDate ?? null,
+      postings: sliced,
+      // Opening balances have no location attribution — only the company-wide
+      // view (and the explicit 'company' bucket) may fold them in.
+      includeOpeningBalances: !location || location.type === "company",
+    },
   );
   return {
     bankBalance: idx.bankBalance(),
@@ -154,10 +167,13 @@ async function balancesFrom(
 /** Control balances only — for callers that do not need the expense figure. */
 export async function companyBalances(
   buildDerivedPostings: PostingsFn,
-  opts: { toDate?: string | null } = {},
+  opts: { toDate?: string | null; location?: PostingLocationFilter | null } = {},
 ): Promise<ControlBalances> {
   const toDate = opts.toDate || null;
-  return balancesFrom(await buildDerivedPostings(toDate ? { toDate } : {}), { toDate });
+  return balancesFrom(await buildDerivedPostings(toDate ? { toDate } : {}), {
+    toDate,
+    location: opts.location ?? null,
+  });
 }
 
 /**
@@ -170,21 +186,29 @@ export async function companyBalances(
  */
 export async function companyFinancials(
   buildDerivedPostings: PostingsFn,
-  opts: { fromDate?: string | null; toDate?: string | null } = {},
+  opts: {
+    fromDate?: string | null;
+    toDate?: string | null;
+    location?: PostingLocationFilter | null;
+  } = {},
 ): Promise<CompanyFinancials> {
   const fromDate = opts.fromDate || null;
   const toDate = opts.toDate || null;
+  const location = opts.location ?? null;
 
   // Derived once and handed to buildBooks, which would otherwise re-derive the
   // whole stream. The postings are already capped at `toDate`, which is the
-  // only argument buildBooks would have passed.
+  // only argument buildBooks would have passed. buildBooks applies the location
+  // slice itself (and handles opening-balance inclusion by the same rule as
+  // balancesFrom), so it gets the UNfiltered stream plus the filter.
   const postings = await buildDerivedPostings(toDate ? { toDate } : {});
 
   const [controls, books] = await Promise.all([
-    balancesFrom(postings, { toDate }),
+    balancesFrom(postings, { toDate, location }),
     buildBooks(async () => postings, {
       ...(fromDate ? { fromDate } : {}),
       ...(toDate ? { toDate } : {}),
+      ...(location ? { location } : {}),
     }),
   ]);
 

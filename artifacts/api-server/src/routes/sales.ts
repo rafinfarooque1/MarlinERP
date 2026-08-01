@@ -16,6 +16,7 @@ import {
   COUPONS_DISABLED_MESSAGE, COUPONS_DISABLED_CODE,
 } from "../lib/featureFlags";
 import { getUserDataScope, isLocationInScope, scopeSalesWhere } from "../lib/dataScope";
+import { getLocationFilter } from "../lib/requestLocation";
 import { blockedByInactiveProducts, INACTIVE_PRODUCT_CODE } from "../lib/productIdentity";
 import { CREATE_SALE_PAYMENT_MODES, isAllowedNewSaleMode, isSettledAtSale, clearsThroughBank, resolveEditedSaleMode } from "../lib/paymentModes";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
@@ -359,11 +360,12 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
   if (from) { params.push(from); conds.push(`s.sale_date >= $${params.length}::date`); }
   if (to)   { params.push(to);   conds.push(`s.sale_date <= $${params.length}::date`); }
 
-  const lt = req.query.locationType;
-  const lid = Number(req.query.locationId);
-  if ((lt === 'warehouse' || lt === 'outlet') && Number.isFinite(lid) && lid > 0) {
-    params.push(lt);  conds.push(`COALESCE(s.location_type, 'outlet') = $${params.length}`);
-    params.push(lid); conds.push(`COALESCE(s.location_id, s.outlet_id) = $${params.length}`);
+  const viewLoc = getLocationFilter(req);
+  if (viewLoc && (viewLoc.locationType === 'warehouse' || viewLoc.locationType === 'outlet')) {
+    params.push(viewLoc.locationType); conds.push(`COALESCE(s.location_type, 'outlet') = $${params.length}`);
+    params.push(viewLoc.locationId);   conds.push(`COALESCE(s.location_id, s.outlet_id) = $${params.length}`);
+  } else if (viewLoc && viewLoc.locationType === 'headoffice') {
+    params.push('headoffice'); conds.push(`COALESCE(s.location_type, 'outlet') = $${params.length}`);
   } else if (req.query.outletId) {
     // Legacy exact filter (kept for existing callers)
     params.push(Number(req.query.outletId)); conds.push(`s.outlet_id = $${params.length}`);

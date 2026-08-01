@@ -70,6 +70,27 @@ export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): voi
   _unauthorizedHandler = handler;
 }
 
+export type LocationContextGetter = () =>
+  | { locationType?: string | null; locationId?: number | string | null }
+  | null
+  | undefined;
+
+let _locationContextGetter: LocationContextGetter | null = null;
+
+/**
+ * Register a getter that supplies the user's selected working location (the
+ * app's global location context). When it returns a location, every request
+ * carries `x-location-type` / `x-location-id` headers so ANY endpoint can
+ * narrow to the active location without per-page plumbing.
+ *
+ * The server treats these as a view request layered on top of its own access
+ * control — they can only narrow what the caller may already see, and write
+ * paths ignore them entirely. Pass `null` to clear.
+ */
+export function setLocationContextGetter(getter: LocationContextGetter | null): void {
+  _locationContextGetter = getter;
+}
+
 function isRequest(input: RequestInfo | URL): input is Request {
   return typeof Request !== "undefined" && input instanceof Request;
 }
@@ -382,6 +403,26 @@ export async function customFetch<T = unknown>(
     if (token) {
       headers.set("authorization", `Bearer ${token}`);
     }
+  }
+
+  // Attach the global location context (selected working location) unless the
+  // caller set the header explicitly. Reads only: the context is a VIEW filter,
+  // and no write path may ever receive it — a mutation's effective location
+  // comes from its body/session, never from what the user is looking at.
+  // Best-effort: a failing getter must never break the request itself.
+  if (
+    _locationContextGetter &&
+    (method === "GET" || method === "HEAD") &&
+    !headers.has("x-location-type")
+  ) {
+    try {
+      const loc = _locationContextGetter();
+      if (loc && typeof loc.locationType === "string" && loc.locationType) {
+        headers.set("x-location-type", loc.locationType);
+        const id = Number(loc.locationId);
+        if (Number.isFinite(id) && id > 0) headers.set("x-location-id", String(id));
+      }
+    } catch { /* location context is best-effort */ }
   }
 
   const requestInfo = { method, url: resolveUrl(input) };

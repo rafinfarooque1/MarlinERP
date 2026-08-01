@@ -8,6 +8,7 @@ import {
 import { PasswordService } from '../lib/password';
 import { DEFAULT_INITIAL_PASSWORD, ADMIN_RESET_PASSWORD } from '../lib/passwordPolicy';
 import { eq, and, gte, lte, sql } from "drizzle-orm";
+import { getLocationFilter } from "../lib/requestLocation";
 import { logActivity } from "../lib/audit";
 import { getUserDataScope, scopeBranchWhere, isLocationInScope } from "../lib/dataScope";
 import { parseDateRange } from "../lib/queryFilters";
@@ -1306,6 +1307,14 @@ router.get("/hr/payroll", requireModuleView("page:/hr/payroll"), async (req, res
   if (qp.success && qp.data.month) whereParts.push(`pr.month = ${p(Number(qp.data.month))}`);
   if (empIdFilter !== null) whereParts.push(`pr.employee_id = ${p(empIdFilter)}`);
 
+  // Global location context — HR rows follow the EMPLOYEE's branch. The
+  // employee master itself stays global; only transactional lists narrow.
+  const viewLoc = getLocationFilter(req);
+  if (viewLoc) {
+    whereParts.push(`e.branch_type = ${p(viewLoc.locationType)}`);
+    if (viewLoc.locationType !== 'headoffice') whereParts.push(`e.branch_id = ${p(viewLoc.locationId)}`);
+  }
+
   const paging = parsePaging(req.query as Record<string, unknown>);
   const { rows } = await pool.query(
     `SELECT pr.*, e.name AS employee_name, e.branch_type, e.branch_id
@@ -1563,6 +1572,17 @@ router.get("/hr/salary-accruals", requireModuleView("page:/hr/payroll"), async (
     filters += ` AND a.month = $${params.length}`;
   }
 
+  // Global location context — accruals follow the employee's branch.
+  const accrualViewLoc = getLocationFilter(req);
+  if (accrualViewLoc) {
+    params.push(accrualViewLoc.locationType);
+    filters += ` AND e.branch_type = $${params.length}`;
+    if (accrualViewLoc.locationType !== 'headoffice') {
+      params.push(accrualViewLoc.locationId);
+      filters += ` AND e.branch_id = $${params.length}`;
+    }
+  }
+
   const { rows } = await pool.query(
     `SELECT a.employee_id, e.name AS employee_name, a.year, a.month,
             COUNT(*)::int AS days,
@@ -1801,12 +1821,23 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("page:/hr/payroll", "edit
 // ── Employee Advances ──────────────────────────────────────────────────────
 router.get("/hr/advances", requireModuleView("page:/hr/advances"), async (req, res): Promise<void> => {
   const scopeEmp = (req as any).employee as { id: number; branchType: string } | undefined;
-  let empFilter = '';
+  const advConds: string[] = [];
   const params: unknown[] = [];
   if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
-    empFilter = `WHERE ea.employee_id = $1`;
     params.push(scopeEmp.id);
+    advConds.push(`ea.employee_id = $${params.length}`);
   }
+  // Global location context — advances follow the employee's branch.
+  const advViewLoc = getLocationFilter(req);
+  if (advViewLoc) {
+    params.push(advViewLoc.locationType);
+    advConds.push(`e.branch_type = $${params.length}`);
+    if (advViewLoc.locationType !== 'headoffice') {
+      params.push(advViewLoc.locationId);
+      advConds.push(`e.branch_id = $${params.length}`);
+    }
+  }
+  const empFilter = advConds.length ? `WHERE ${advConds.join(' AND ')}` : '';
   const paging = parsePaging(req.query as Record<string, unknown>);
   const { rows } = await pool.query(
     `SELECT ea.*, e.name AS employee_name
@@ -1898,12 +1929,20 @@ router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (re
     endDate = dr.to;
   }
 
+  // Global location context — attendance follows the employee's branch.
+  const attViewLoc = getLocationFilter(req);
+
   if (startDate || endDate) {
     // Scope: non-headoffice employees only see their own records
     const rangeConds = [
       startDate ? gte(attendanceTable.date, startDate) : undefined,
       endDate ? lte(attendanceTable.date, endDate) : undefined,
       scopeEmp && scopeEmp.branchType !== 'headoffice' ? eq(attendanceTable.employeeId, scopeEmp.id) : undefined,
+      attViewLoc
+        ? (attViewLoc.locationType === 'headoffice'
+            ? sql`${attendanceTable.employeeId} IN (SELECT id FROM employees WHERE branch_type = 'headoffice')`
+            : sql`${attendanceTable.employeeId} IN (SELECT id FROM employees WHERE branch_type = ${attViewLoc.locationType} AND branch_id = ${attViewLoc.locationId})`)
+        : undefined,
     ].filter((c): c is NonNullable<typeof c> => c !== undefined);
     const rows = await db.select().from(attendanceTable).where(and(...rangeConds));
 
@@ -1957,6 +1996,13 @@ router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (re
   // Non-headoffice employees only see their own attendance row
   if (scopeEmp && scopeEmp.branchType !== 'headoffice') {
     allEmployees = allEmployees.filter((e) => e.id === scopeEmp.id);
+  }
+
+  // Global location context narrows the register to one branch's employees.
+  if (attViewLoc) {
+    allEmployees = allEmployees.filter((e) =>
+      e.branchType === attViewLoc.locationType &&
+      (attViewLoc.locationType === 'headoffice' || Number(e.branchId) === attViewLoc.locationId));
   }
 
   // Existing attendance rows for that date
@@ -2323,6 +2369,20 @@ router.get("/hr/leaves", requireModuleView("page:/hr/attendance"), async (req, r
     if (f.toDate   && /^\d{4}-\d{2}-\d{2}$/.test(f.toDate))   { params.push(f.toDate);   where.push(`l.from_date <= $${params.length}`); }
     if (f.branchType) { params.push(f.branchType);       where.push(`e.branch_type = $${params.length}`); }
     if (f.branchId)   { params.push(Number(f.branchId)); where.push(`e.branch_id = $${params.length}`); }
+  }
+
+  // Global location context — only when the page didn't pass its own branch
+  // filter. Leaves follow the employee's branch like every other HR read.
+  if (!(qp.success && (qp.data.branchType || qp.data.branchId))) {
+    const leaveViewLoc = getLocationFilter(req);
+    if (leaveViewLoc) {
+      params.push(leaveViewLoc.locationType);
+      where.push(`e.branch_type = $${params.length}`);
+      if (leaveViewLoc.locationType !== 'headoffice') {
+        params.push(leaveViewLoc.locationId);
+        where.push(`e.branch_id = $${params.length}`);
+      }
+    }
   }
 
   const { rows } = await pool.query(

@@ -471,39 +471,6 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
           {/* Nav items — unified, permission-filtered for all users */}
           <div className={`flex-1 overflow-y-auto py-4 space-y-1 ${collapsed ? 'px-[14px]' : 'px-3'}`}>
-            {/* Active location indicator — shown whenever a location context is set */}
-            {locationState.locationId && !collapsed && (
-              <div className="mb-3 px-2 py-2 bg-muted/30 rounded-lg">
-                <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">
-                  {locationState.locationType === 'all' ? 'Viewing' : 'Selling from'}
-                </p>
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    {locationState.locationType === 'warehouse'
-                      ? <Warehouse className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                      : locationState.locationType === 'outlet'
-                      ? <Store className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                      : <Layers className="w-3.5 h-3.5 text-primary shrink-0" />}
-                    <span className="text-sm font-semibold truncate">{locationState.locationName}</span>
-                  </div>
-                  {canChangeLocation && (
-                    <Link href="/sales" className="text-[10px] text-primary hover:underline shrink-0">change</Link>
-                  )}
-                </div>
-              </div>
-            )}
-            {/* Collapsed location dot — visible when sidebar is narrow */}
-            {locationState.locationId && collapsed && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Link href="/sales" className="flex items-center justify-center w-10 h-10 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
-                    <MapPin className="w-5 h-5" />
-                  </Link>
-                </TooltipTrigger>
-                <TooltipContent side="right">{locationState.locationName || 'Change location'}</TooltipContent>
-              </Tooltip>
-            )}
-
             {/* Unified nav groups */}
             {navWithOutletVisibility.map((item) => {
               const isActive = item.href
@@ -521,6 +488,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 />
               );
             })}
+          </div>
+
+          {/* Global location context — pinned to the sidebar's bottom-left */}
+          <div className={`border-t border-border shrink-0 ${collapsed ? 'py-3 px-1' : 'p-3'}`}>
+            <GlobalLocationSelector collapsed={collapsed} />
           </div>
         </aside>
 
@@ -556,9 +528,6 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                   <img src={logo} alt="Company logo" className="h-full object-contain max-w-[100px]" />
                 </div>
               )}
-
-              <GlobalLocationSelector />
-
 
               <Button
                 variant="ghost"

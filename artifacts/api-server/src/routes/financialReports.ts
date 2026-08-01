@@ -19,9 +19,10 @@ import { buildDerivedPostings, type Posting } from "./journal";
 import { loadChart, previousDay } from "../lib/books";
 import { isIsoDate } from "../lib/dateInput";
 import {
-  parsePostingLocationFilter, postingMatchesLocation, companyLevelSummary,
+  postingMatchesLocation, companyLevelSummary,
   type PostingLocationFilter,
 } from "../lib/postingLocation";
+import { getPostingLocationFilter } from "../lib/requestLocation";
 
 const router = Router();
 const REPORTS_KEY = "page:/reports/sales";
@@ -81,7 +82,7 @@ function locationEcho(loc: PostingLocationFilter | null, companyLevel: { entries
 router.get("/reports/fin/ledgers", requireModuleView(REPORTS_KEY), async (req, res): Promise<void> => {
   if (!headOfficeOnly(req)) { res.json({ rows: [], totals: null }); return; }
   const { from, to } = range(req);
-  const loc = parsePostingLocationFilter(req.query as any);
+  const loc = getPostingLocationFilter(req);
   const { before, inRange, companyLevel } = await splitPostings(from, to, loc);
 
   type Agg = { opening: number; debit: number; credit: number };
@@ -142,7 +143,7 @@ router.get("/reports/fin/ledger-statement", requireModuleView(REPORTS_KEY), asyn
   // Selecting a group consolidates its whole subtree, the way the Cash Book does.
   const ids = chart.subtree(ledgerId);
 
-  const loc = parsePostingLocationFilter(req.query as any);
+  const loc = getPostingLocationFilter(req);
   const { before, inRange, companyLevel } = await splitPostings(from, to, loc);
   const opening = r2(before.filter((p) => ids.has(p.ledgerId)).reduce((s, p) => s + p.debit - p.credit, 0));
 
@@ -192,7 +193,7 @@ router.get("/reports/fin/ledger-options", requireModuleView(REPORTS_KEY), async 
 router.get("/reports/fin/trial-balance", requireModuleView(REPORTS_KEY), async (req, res): Promise<void> => {
   if (!headOfficeOnly(req)) { res.json({ rows: [], totalDebit: 0, totalCredit: 0, balanced: true }); return; }
   const { from, to } = range(req);
-  const loc = parsePostingLocationFilter(req.query as any);
+  const loc = getPostingLocationFilter(req);
   const { inRange, companyLevel } = await splitPostings(from, to, loc);
 
   const agg = new Map<number, { dr: number; cr: number }>();
@@ -241,7 +242,7 @@ async function bookReport(req: any, rootCode: string) {
     ? chart.subtree(requested)
     : rootIds;
 
-  const loc = parsePostingLocationFilter(req.query as any);
+  const loc = getPostingLocationFilter(req);
   const { before, inRange, companyLevel } = await splitPostings(from, to, loc);
   const opening = r2(before.filter((p) => scopeIds.has(p.ledgerId)).reduce((s, p) => s + p.debit - p.credit, 0));
 
@@ -593,7 +594,7 @@ router.get("/reports/fin/salary", requireModuleView(REPORTS_KEY), async (req, re
 router.get("/reports/fin/day-book", requireModuleView(REPORTS_KEY), async (req, res): Promise<void> => {
   if (!headOfficeOnly(req)) { res.json({ entries: [], totals: null }); return; }
   const { from, to } = range(req);
-  const loc = parsePostingLocationFilter(req.query as any);
+  const loc = getPostingLocationFilter(req);
   const { inRange, companyLevel } = await splitPostings(from, to, loc);
   const chart = await loadChart();
 

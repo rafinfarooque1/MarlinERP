@@ -632,6 +632,7 @@ export {
   filterPostingsByLocation, companyLevelSummary,
   type PostingLocationFilter,
 };
+import { getPostingLocationFilter } from "../lib/requestLocation";
 
 export async function buildDerivedPostings(opts: { toDate?: string } = {}): Promise<Posting[]> {
   const { toDate } = opts;
@@ -1051,7 +1052,7 @@ router.get("/accounts/day-book", requireModuleView("page:/accounts/day-book"), a
   }
   const q = String((req.query as any).date ?? "");
   const date = isDate(q) ? q : new Date().toISOString().slice(0, 10);
-  const locFilter = parsePostingLocationFilter(req.query as any);
+  const locFilter = getPostingLocationFilter(req);
 
   const dayPostings = (await buildDerivedPostings({ toDate: date }))
     .filter((p) => String(p.date).slice(0, 10) === date);
@@ -1168,7 +1169,7 @@ router.get("/accounts/cash-bank-book", requireModuleView(["page:/accounts/cash-b
 
   // Selecting a group (e.g. the Cash root) consolidates its whole subtree
   const subtree = await ledgerSubtreeIds(ledgerId);
-  const locFilter = parsePostingLocationFilter(req.query as any);
+  const locFilter = getPostingLocationFilter(req);
 
   const subtreePostings = (await buildDerivedPostings({ toDate: isDate(toDate) ? toDate : undefined }))
     .filter(p => subtree.has(p.ledgerId));
@@ -1212,7 +1213,7 @@ router.get("/accounts/trial-balance", requireModuleView("page:/accounts/trial-ba
   // LBAC: the trial balance is a Head Office accounting view
   if ((req as any).employee?.branchType !== 'headoffice') { res.json([]); return; }
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
-  const locFilter = parsePostingLocationFilter(req.query as any);
+  const locFilter = getPostingLocationFilter(req);
 
   let postings = await buildDerivedPostings({ toDate: isDate(toDate) ? toDate : undefined });
   if (isDate(fromDate)) postings = postings.filter(p => p.date >= fromDate);

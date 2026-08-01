@@ -5,6 +5,7 @@ import { logActivity } from "../lib/audit";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import { isIsoDate } from "../lib/dateInput";
 import { LEGACY_BANK_MODES } from "../lib/paymentModes";
+import { getLocationFilter } from "../lib/requestLocation";
 
 const router = Router();
 
@@ -42,7 +43,21 @@ function applyLocationScope(
   // `outletId` is the older param name for the same filter, and always an outlet.
   const type = filter.locationType ?? (filter.outletId ? "outlet" : undefined);
   const id = filter.locationId ?? filter.outletId;
-  if (!type || !id) return;
+  if (!type || !id) {
+    // Global location context (headers) — applies only when the page passed
+    // no explicit filter of its own. HO matches on type alone.
+    const viewLoc = getLocationFilter(req);
+    if (viewLoc) {
+      params.push(viewLoc.locationType); const t = params.length;
+      if (viewLoc.locationType === "headoffice") {
+        conds.push(`s.location_type = $${t}`);
+      } else {
+        params.push(viewLoc.locationId); const i = params.length;
+        conds.push(`(s.location_type = $${t} AND s.location_id = $${i})`);
+      }
+    }
+    return;
+  }
   params.push(type); const t = params.length;
   params.push(Number(id)); const i = params.length;
   conds.push(`(s.location_type = $${t} AND s.location_id = $${i})`);

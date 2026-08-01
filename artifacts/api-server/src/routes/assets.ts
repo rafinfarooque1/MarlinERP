@@ -31,7 +31,8 @@ import { resolveActingLocation, locationLabel } from "../lib/productionCosting";
 import {
   getUserDataScope, isLocationInScope, scopeTransferWhere, type DataScope,
 } from "../lib/dataScope";
-import { parseDateRange, pushDateRange, parseLocationFilter, pushLocationFilter } from "../lib/queryFilters";
+import { parseDateRange, pushDateRange, pushLocationFilter } from "../lib/queryFilters";
+import { getLocationFilter } from "../lib/requestLocation";
 import { isIsoDate } from "../lib/dateInput";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import { ensureFixedAssetLedger } from "../migrations/fixedAssets";
@@ -273,7 +274,7 @@ router.get("/assets/purchases", requireModuleView(ANY_ASSET_VIEW), async (req, r
   const dr = parseDateRange(req.query as Record<string, unknown>);
   if (!dr.ok) { res.status(400).json({ error: dr.error }); return; }
   pushDateRange(conds, params, "ap.purchase_date", dr.from, dr.to);
-  pushLocationFilter(conds, params, parseLocationFilter(req.query as Record<string, unknown>), typeExpr, idExpr);
+  pushLocationFilter(conds, params, getLocationFilter(req), typeExpr, idExpr);
 
   const categoryId = Number(req.query.categoryId);
   if (Number.isInteger(categoryId) && categoryId > 0) { params.push(categoryId); conds.push(`ap.category_id = $${params.length}`); }

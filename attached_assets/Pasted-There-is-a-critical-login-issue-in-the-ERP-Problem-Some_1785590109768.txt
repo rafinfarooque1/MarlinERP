@@ -1,0 +1,190 @@
+There is a critical login issue in the ERP.
+
+Problem:
+Sometimes even when the correct Username and Password are entered, the ERP does not log in. The same credentials may work after several attempts or after restarting the server.
+
+This is a production-critical bug.
+
+Do NOT apply temporary fixes.
+
+Investigate the root cause first, then implement the correct fix.
+
+=========================================================
+INVESTIGATION
+=========================================================
+
+Trace the complete login flow.
+
+User enters credentials
+↓
+
+Frontend Validation
+
+↓
+
+Login API
+
+↓
+
+Authentication Service
+
+↓
+
+Password Verification
+
+↓
+
+User Status Check
+
+↓
+
+Permission Check
+
+↓
+
+JWT/Session Generation
+
+↓
+
+Cookie/Bearer Token
+
+↓
+
+Frontend Authentication State
+
+↓
+
+Dashboard Redirect
+
+Identify exactly where the login fails.
+
+=========================================================
+CHECK THE FOLLOWING
+=========================================================
+
+1. Verify login API request and response.
+
+2. Verify username lookup.
+
+3. Verify password hash verification.
+
+4. Verify bcrypt comparison.
+
+5. Verify inactive/disabled user logic.
+
+6. Verify JWT generation.
+
+7. Verify JWT validation.
+
+8. Verify session/cookie creation.
+
+9. Verify token storage on frontend.
+
+10. Verify authentication middleware.
+
+11. Verify permission middleware.
+
+12. Verify location/hierarchy checks after login.
+
+13. Verify redirect logic.
+
+14. Verify browser storage.
+
+15. Verify logout logic.
+
+16. Verify rate limiting.
+
+17. Verify login_attempts table.
+
+18. Verify database connection pool.
+
+19. Verify server startup logs.
+
+20. Verify frontend console errors.
+
+21. Verify backend logs.
+
+=========================================================
+CHECK EDGE CASES
+=========================================================
+
+• Correct username + correct password
+• Wrong password
+• Inactive employee
+• Disabled user
+• Deleted employee
+• Multiple login attempts
+• Refresh after login
+• Logout then login again
+• Login from another browser
+• Login after server restart
+• Login after token expiry
+
+=========================================================
+DATABASE
+=========================================================
+
+Verify:
+
+• employees table
+• users table (if applicable)
+• login_attempts
+• permissions
+• hierarchies
+• warehouse assignments
+
+Ensure no duplicate usernames exist.
+
+=========================================================
+AUTHENTICATION
+=========================================================
+
+Verify:
+
+• Password hashing algorithm
+• Token expiry
+• Token signing secret
+• Cookie settings
+• CORS
+• Authorization header
+• Frontend token persistence
+
+=========================================================
+PERMISSIONS
+=========================================================
+
+Ensure permission loading never blocks successful login.
+
+A valid user should always log in successfully.
+
+Permission errors should occur only after login, not during authentication.
+
+=========================================================
+EXPECTED RESULT
+=========================================================
+
+A valid username and password must always log in on the first attempt.
+
+No intermittent failures.
+
+No need to restart the server.
+
+No manual database edits.
+
+No cache clearing.
+
+=========================================================
+FINAL REPORT
+=========================================================
+
+Provide:
+
+1. Root cause.
+2. Files affected.
+3. APIs checked.
+4. Database tables checked.
+5. Fix implemented.
+6. Why the issue occurred.
+7. Regression testing performed.
+
+Verify login with multiple users and ensure it works consistently before marking the task complete.

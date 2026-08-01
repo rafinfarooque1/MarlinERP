@@ -11,7 +11,8 @@ import { writeStockLedger } from "../lib/stockLedger";
 import { deductMaterialAt, creditMaterialAt, isMaterialKind } from "../lib/materialStock";
 import { resolveActingLocation, locationLabel, type ProdLocation } from "../lib/productionCosting";
 import { getUserDataScope, scopeLocationTypeWhere } from "../lib/dataScope";
-import { parseDateRange, pushDateRange, parseLocationFilter, pushLocationFilter } from "../lib/queryFilters";
+import { parseDateRange, pushDateRange, pushLocationFilter } from "../lib/queryFilters";
+import { getLocationFilter } from "../lib/requestLocation";
 import { isIsoDate } from "../lib/dateInput";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import { PURCHASE_BATCH_SEQUENCE } from "../migrations/purchaseBills";
@@ -444,7 +445,7 @@ router.get("/purchases", requireModuleView(["page:/production/purchase", "page:/
   if (!dr.ok) { res.status(400).json({ error: dr.error }); return; }
   pushDateRange(conds, params, 'p.purchase_date', dr.from, dr.to);
   pushLocationFilter(
-    conds, params, parseLocationFilter(req.query as Record<string, unknown>),
+    conds, params, getLocationFilter(req),
     // Legacy bills predate the location columns and belong to Head Office.
     "COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)",
   );

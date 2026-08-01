@@ -29,6 +29,7 @@ import { DATE_COLUMNS } from "./lib/dateColumns";
 async function runMigrations() {
   // Existing migrations
   await pool.query(`
+    ALTER TABLE employees ADD COLUMN IF NOT EXISTS ui_location_pref text;
     ALTER TABLE item_prices ADD COLUMN IF NOT EXISTS valid_from text;
     ALTER TABLE item_prices ADD COLUMN IF NOT EXISTS valid_to text;
     ALTER TABLE item_prices ADD COLUMN IF NOT EXISTS location_type text NOT NULL DEFAULT 'outlet';

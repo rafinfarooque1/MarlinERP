@@ -18,7 +18,8 @@ import { buildBooks } from "../lib/books";
 import { buildDerivedPostings } from "./journal";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { getUserDataScope, scopeSalesWhere, scopeBranchWhere } from "../lib/dataScope";
-import { parseDateRange, pushDateRange, parseLocationFilter, pushLocationFilter } from "../lib/queryFilters";
+import { parseDateRange, pushDateRange, pushLocationFilter } from "../lib/queryFilters";
+import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 import {
   callerLocation, ownLocationScope, scopeLedgerIds, scopeCashLedgerIds, scopeMoneyWhere,
@@ -427,7 +428,18 @@ router.get("/accounts/payments", requireModuleView("page:/accounts/vouchers"), a
   const scope = ownLocationScope((req as any).employee);
   const ledgerIds = await scopeLedgerIds(scope);
   const params: unknown[] = [];
-  const where = scopeMoneyWhere(scope, ledgerIds, params, 'p', ['paid_from_ledger_id', 'paid_to_ledger_id']);
+  let where = scopeMoneyWhere(scope, ledgerIds, params, 'p', ['paid_from_ledger_id', 'paid_to_ledger_id']);
+  // Global location context — vouchers are stamped with their owner location
+  // (legacy null = Head Office). View narrowing on top of the LBAC scope.
+  const payViewLoc = getLocationFilter(req);
+  if (payViewLoc) {
+    params.push(payViewLoc.locationType);
+    where += ` AND COALESCE(p.location_type, 'headoffice') = $${params.length}`;
+    if (payViewLoc.locationType !== 'headoffice') {
+      params.push(payViewLoc.locationId);
+      where += ` AND COALESCE(p.location_id, 0) = $${params.length}`;
+    }
+  }
   const result = await pool.query(`
     SELECT p.*, 
       pf.name AS paid_from_name,
@@ -512,7 +524,17 @@ router.get("/accounts/receipts", requireModuleView("page:/accounts/vouchers"), a
   const scope = ownLocationScope((req as any).employee);
   const ledgerIds = await scopeLedgerIds(scope);
   const params: unknown[] = [];
-  const where = scopeMoneyWhere(scope, ledgerIds, params, 'r', ['received_in_ledger_id', 'received_from_ledger_id']);
+  let where = scopeMoneyWhere(scope, ledgerIds, params, 'r', ['received_in_ledger_id', 'received_from_ledger_id']);
+  // Global location context — same ownership stamp rule as payments.
+  const rcptViewLoc = getLocationFilter(req);
+  if (rcptViewLoc) {
+    params.push(rcptViewLoc.locationType);
+    where += ` AND COALESCE(r.location_type, 'headoffice') = $${params.length}`;
+    if (rcptViewLoc.locationType !== 'headoffice') {
+      params.push(rcptViewLoc.locationId);
+      where += ` AND COALESCE(r.location_id, 0) = $${params.length}`;
+    }
+  }
   const result = await pool.query(`
     SELECT r.*,
       rf.name AS received_from_name,
@@ -603,7 +625,7 @@ router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledge
   // Presentation narrowing only — LBAC above/below still decides what the
   // caller may see at all. NOTE: read from req.query, not qp.data — the zod
   // schema predates the location params and strips unknown keys.
-  const locFilter = parsePostingLocationFilter(req.query as Record<string, unknown>);
+  const locFilter = getPostingLocationFilter(req);
 
   const [account] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, accountId)).limit(1);
   if (!account) { res.status(404).json({ error: "Account not found" }); return; }
@@ -865,7 +887,7 @@ router.get("/expenses", requireModuleView(["page:/accounts/expenses", "page:/sal
   const isHO = !expEmp || expEmp.branchType === 'headoffice';
   const dr = parseDateRange(req.query as Record<string, unknown>);
   if (!dr.ok) { res.status(400).json({ error: dr.error }); return; }
-  const locFilterReq = parseLocationFilter(req.query as Record<string, unknown>);
+  const locFilterReq = getLocationFilter(req);
 
   type ExpenseRow = {
     id: number; source: 'direct' | 'location'; expenseDate: any;
@@ -1689,7 +1711,7 @@ router.get("/accounts/financial-statements", requireModuleView(["page:/accounts/
   // LBAC: P&L and Balance Sheet are Head Office accounting
   if ((req as any).employee?.branchType !== 'headoffice') { res.json({ pl: null, bs: null }); return; }
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
-  const location = parsePostingLocationFilter(req.query as any);
+  const location = getPostingLocationFilter(req);
 
   const books = await buildBooks(buildDerivedPostings, { fromDate, toDate, location });
 
@@ -1728,7 +1750,7 @@ router.get("/accounts/ledger/:id/statement", requireModuleView("page:/accounts/l
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid ledger id" }); return; }
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
   // Presentation narrowing only; LBAC below still applies first.
-  const locFilter = parsePostingLocationFilter(req.query as Record<string, unknown>);
+  const locFilter = getPostingLocationFilter(req);
 
   const { rows: [ledger] } = await pool.query(
     `SELECT id, name, type, code FROM account_ledgers WHERE id = $1`, [id]
