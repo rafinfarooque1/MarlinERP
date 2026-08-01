@@ -748,18 +748,13 @@ router.get("/hr/hierarchies", async (req, res): Promise<void> => {
   res.json(applyPaging(all, paging));
 });
 
-// Shared field validation for role writes. Hierarchy level is organisational
-// seniority ONLY — permissions stay with the RBAC rows keyed by hierarchy_id,
-// with ONE exception: middleware/permissions.ts grants level-1 users full
-// access as a hardcoded override. That coupling is why level transitions
-// involving 1 are refused below rather than silently allowed.
-function validateHierarchyFields(data: { name?: string; level?: number }): string | null {
-  if (data.name !== undefined && data.name.trim() === "") return "Role name is required";
-  if (data.level !== undefined && (!Number.isInteger(data.level) || data.level < 1)) {
-    return "Hierarchy level must be a whole number of 1 or more (1 = highest)";
-  }
-  return null;
-}
+// Roles form a reporting chain: every role names the role it reports to, and
+// exactly one root (the top-level administrative role) reports to nobody.
+// `level` is DERIVED from the chain — root = 1, child = parent + 1 — and is
+// never client-writable. It survives in the table because the permission
+// middleware grants level-1 roles full access as a hardcoded override, which
+// is also why every guard below protects the root so carefully: reparenting
+// into or out of the root position would mint or revoke a super-admin role.
 
 /** Case-insensitive duplicate-name check; `excludeId` skips the row being edited. */
 async function duplicateRoleName(name: string, excludeId?: number): Promise<boolean> {
@@ -770,22 +765,47 @@ async function duplicateRoleName(name: string, excludeId?: number): Promise<bool
   return rows.length > 0;
 }
 
+/** True when `ancestorId` appears anywhere on the chain from `startId` upward (inclusive). */
+async function reportingChainContains(
+  startId: number,
+  ancestorId: number,
+  q: { query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }> } = pool,
+): Promise<boolean> {
+  const { rows } = await q.query(
+    `WITH RECURSIVE up AS (
+       SELECT id, reports_to_id, 0 AS depth FROM hierarchies WHERE id = $1
+       UNION ALL
+       SELECT h.id, h.reports_to_id, up.depth + 1
+         FROM hierarchies h JOIN up ON h.id = up.reports_to_id
+        WHERE up.depth < 100
+     )
+     SELECT 1 FROM up WHERE id = $2 LIMIT 1`,
+    [startId, ancestorId],
+  );
+  return rows.length > 0;
+}
+
 router.post("/hr/hierarchies", requireModuleAction("page:/hr/hierarchy", "add"), async (req, res): Promise<void> => {
   const parsed = CreateHierarchyBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-  const invalid = validateHierarchyFields(parsed.data);
-  if (invalid) { res.status(400).json({ error: invalid }); return; }
-  // Same RBAC exception as the PATCH guard below: level 1 = unrestricted
-  // access, so CREATING a level-1 role is minting a super-admin role — refused
-  // through this route regardless of who asks.
-  if (parsed.data.level === 1) {
-    res.status(403).json({ error: "Level 1 is reserved for the top-level administrative role and cannot be assigned to a new role." });
-    return;
+  const name = parsed.data.name.trim();
+  if (!name) { res.status(400).json({ error: "Role name is required" }); return; }
+
+  // Every new role must report to an existing one, so a second root — which
+  // the middleware would treat as a second super-admin role — cannot be
+  // created through this route regardless of who asks.
+  const [parent] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, parsed.data.reportsToId));
+  if (!parent) { res.status(400).json({ error: "The role this one reports to does not exist" }); return; }
+
+  if (await duplicateRoleName(name)) {
+    res.status(409).json({ error: `A role named "${name}" already exists` }); return;
   }
-  if (await duplicateRoleName(parsed.data.name)) {
-    res.status(409).json({ error: `A role named "${parsed.data.name.trim()}" already exists` }); return;
-  }
-  const [row] = await db.insert(hierarchiesTable).values({ ...parsed.data, name: parsed.data.name.trim() }).returning();
+  const [row] = await db.insert(hierarchiesTable).values({
+    name,
+    description: parsed.data.description,
+    reportsToId: parent.id,
+    level: parent.level + 1,
+  }).returning();
   res.status(201).json(row);
 });
 
@@ -794,24 +814,30 @@ router.patch("/hr/hierarchies/:id", requireModuleAction("page:/hr/hierarchy", "e
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid role id" }); return; }
   const parsed = UpdateHierarchyBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-  const invalid = validateHierarchyFields(parsed.data);
-  if (invalid) { res.status(400).json({ error: invalid }); return; }
+  if (parsed.data.name !== undefined && parsed.data.name.trim() === "") {
+    res.status(400).json({ error: "Role name is required" }); return;
+  }
 
   const [existing] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, id));
   if (!existing) { res.status(404).json({ error: "Not found" }); return; }
 
-  // Level 1 is not just seniority: the permission middleware grants level-1
-  // roles unrestricted access to everything. Letting an edit move a role into
-  // (or out of) level 1 would let anyone with hierarchy-edit rights mint —
-  // or revoke — a super-admin role in one request. Every other level change
-  // (L3 → L2 etc.) is pure reporting seniority and changes no permissions.
-  if (parsed.data.level !== undefined && parsed.data.level !== existing.level) {
+  const reparenting = parsed.data.reportsToId !== undefined && parsed.data.reportsToId !== existing.reportsToId;
+  let newParent: typeof existing | undefined;
+  if (reparenting) {
+    // The root reports to nobody — moving it under another role would strip
+    // the administrative override from everyone assigned to it.
     if (existing.level === 1) {
-      res.status(403).json({ error: "This is the top-level administrative role. Its level cannot be changed; its name and description can." });
+      res.status(403).json({ error: "This is the top-level administrative role. It cannot report to another role; its name and description can be changed." });
       return;
     }
-    if (parsed.data.level === 1) {
-      res.status(403).json({ error: "Level 1 is reserved for the top-level administrative role and cannot be assigned through an edit." });
+    const parentId = parsed.data.reportsToId!;
+    if (parentId === id) { res.status(400).json({ error: "A role cannot report to itself" }); return; }
+    [newParent] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, parentId));
+    if (!newParent) { res.status(400).json({ error: "The role this one reports to does not exist" }); return; }
+    // No cycles: the new manager must not itself (transitively) report to the
+    // role being edited.
+    if (await reportingChainContains(parentId, id)) {
+      res.status(409).json({ error: `"${newParent.name}" is below "${existing.name}" in the reporting chain — that would create a loop` });
       return;
     }
   }
@@ -822,11 +848,76 @@ router.patch("/hr/hierarchies/:id", requireModuleAction("page:/hr/hierarchy", "e
 
   // In-place UPDATE of the same row: employees.hierarchy_id and the permission
   // rows both key off this id, so assignments and RBAC follow automatically.
-  const updates = { ...parsed.data, ...(parsed.data.name !== undefined ? { name: parsed.data.name.trim() } : {}) };
-  const [row] = await db.update(hierarchiesTable).set(updates).where(eq(hierarchiesTable.id, id)).returning();
-  if (!row) { res.status(404).json({ error: "Not found" }); return; }
+  // A reparent re-derives the level of this role AND everything below it in
+  // the same transaction, so the chain and the levels can never disagree.
+  const updates: Record<string, unknown> = {};
+  if (parsed.data.name !== undefined) updates.name = parsed.data.name.trim();
+  if (parsed.data.description !== undefined) updates.description = parsed.data.description;
+  if (reparenting) updates.reportsToId = newParent!.id;
 
-  const fields: Array<"name" | "level" | "description"> = ["name", "level", "description"];
+  const client = await pool.connect();
+  let row: typeof existing;
+  try {
+    await client.query("BEGIN");
+    if (reparenting) {
+      // One structure edit at a time. The cycle check above ran outside this
+      // transaction (a fast, friendly refusal) — but two concurrent reparents
+      // (A→B and B→A) could each pass that check and commit a loop the
+      // level-1 override would then walk forever. The advisory lock
+      // serialises structure edits, and the check is REPEATED here against
+      // the now-stable tree before anything is written.
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext('hierarchies_structure'))`);
+      const { rows: freshParent } = await client.query(
+        `SELECT id, name, level FROM hierarchies WHERE id = $1`, [newParent!.id],
+      );
+      if (!freshParent.length) {
+        await client.query("ROLLBACK");
+        res.status(400).json({ error: "The role this one reports to does not exist" });
+        return;
+      }
+      if (await reportingChainContains(newParent!.id, id, client)) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: `"${freshParent[0].name}" is below "${existing.name}" in the reporting chain — that would create a loop` });
+        return;
+      }
+      updates.level = freshParent[0].level + 1;
+    }
+    const sets: string[] = [];
+    const params: unknown[] = [id];
+    for (const [col, key] of [["name", "name"], ["description", "description"], ["reports_to_id", "reportsToId"], ["level", "level"]] as const) {
+      if (key in updates) { params.push(updates[key]); sets.push(`${col} = $${params.length}`); }
+    }
+    if (sets.length === 0) { await client.query("ROLLBACK"); res.json(existing); return; }
+    const { rows: [updated] } = await client.query(
+      `UPDATE hierarchies SET ${sets.join(", ")} WHERE id = $1
+       RETURNING id, name, level, reports_to_id AS "reportsToId", description, created_at AS "createdAt"`,
+      params,
+    );
+    if (reparenting) {
+      // Depth-bounded as defense in depth — the lock + check above keep the
+      // tree acyclic, so the bound only matters for hand-edited data.
+      await client.query(
+        `WITH RECURSIVE sub AS (
+           SELECT id, level, 0 AS depth FROM hierarchies WHERE id = $1
+           UNION ALL
+           SELECT h.id, sub.level + 1, sub.depth + 1
+             FROM hierarchies h JOIN sub ON h.reports_to_id = sub.id
+            WHERE sub.depth < 100
+         )
+         UPDATE hierarchies h SET level = sub.level FROM sub WHERE h.id = sub.id AND h.level <> sub.level`,
+        [id],
+      );
+    }
+    await client.query("COMMIT");
+    row = updated;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+
+  const fields: Array<"name" | "description" | "reportsToId"> = ["name", "description", "reportsToId"];
   const changedFields = fields.filter(f => f in updates && (updates as any)[f] !== (existing as any)[f]);
   logActivity({
     action: "UPDATE", module: "hr", entityType: "hierarchy", entityId: id,
@@ -834,8 +925,8 @@ router.patch("/hr/hierarchies/:id", requireModuleAction("page:/hr/hierarchy", "e
     user: (req as any).employee?.username ?? undefined,
     metadata: {
       changedFields,
-      before: { name: existing.name, level: existing.level, description: existing.description },
-      after: { name: row.name, level: row.level, description: row.description },
+      before: { name: existing.name, reportsToId: existing.reportsToId, description: existing.description },
+      after: { name: row.name, reportsToId: row.reportsToId, description: row.description },
     },
   }).catch(() => {});
 
@@ -852,6 +943,18 @@ router.delete("/hr/hierarchies/:id", requireModuleAction("page:/hr/hierarchy", "
   if (!existing) { res.status(404).json({ error: "Not found" }); return; }
   if (existing.level === 1) {
     res.status(403).json({ error: "The top-level administrative role cannot be deleted." });
+    return;
+  }
+  // Friendly refusals before the FK would fail anyway: a role that others
+  // report to, or that employees hold, must be re-pointed first.
+  const { rows: [child] } = await pool.query(`SELECT name FROM hierarchies WHERE reports_to_id = $1 LIMIT 1`, [id]);
+  if (child) {
+    res.status(409).json({ error: `Other roles report to "${existing.name}" (e.g. "${child.name}"). Change their Reports To first.` });
+    return;
+  }
+  const { rows: [emp] } = await pool.query(`SELECT COUNT(*)::int AS n FROM employees WHERE hierarchy_id = $1`, [id]);
+  if (Number(emp?.n ?? 0) > 0) {
+    res.status(409).json({ error: `${emp.n} employee(s) hold the role "${existing.name}". Move them to another role first.` });
     return;
   }
   await db.delete(hierarchiesTable).where(eq(hierarchiesTable.id, id));

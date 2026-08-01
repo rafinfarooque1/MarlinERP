@@ -189,7 +189,7 @@ export default function BackupRestore() {
   const isHeadOffice = me?.branchType === 'headoffice';
   // The strictest combination in the app — see the route comments. Restore is the
   // one action that can destroy every record at once.
-  const canRestore = perm.canApprove && isHeadOffice;
+  const canRestore = perm.canEdit && isHeadOffice;
 
   const refreshAll = () => {
     qc.invalidateQueries({ queryKey: getBackupDashboardQueryKey() });

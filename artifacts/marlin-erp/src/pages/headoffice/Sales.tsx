@@ -1005,7 +1005,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(sale)} title="View"><Eye className="w-4 h-4" /></Button>
                       {perm.canEdit && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500" onClick={() => openEdit(sale)} title="Edit sale"><Pencil className="w-4 h-4" /></Button>}
                       {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => void handleDownloadPDF(sale)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>}
-                      {perm.canShare && (
+                      {perm.canDownload && (
                         <Button
                           variant="ghost" size="icon"
                           className="h-8 w-8 text-[#25D366] hover:text-[#128C7E] hover:bg-[#25D366]/10"
@@ -1610,12 +1610,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     <FileDown className="w-3.5 h-3.5" /> PDF
                   </Button>
                 )}
-                {perm.canPrint && viewItem && (
+                {perm.canDownload && viewItem && (
                   <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void handlePrintPDF(viewItem)} title="Print invoice">
                     <Printer className="w-3.5 h-3.5" /> Print
                   </Button>
                 )}
-                {perm.canShare && viewItem && (
+                {perm.canDownload && viewItem && (
                   <Button
                     variant="outline" size="sm"
                     className="gap-1.5 border-[#25D366] text-[#25D366] hover:bg-[#25D366]/10 hover:text-[#128C7E]"
@@ -2000,11 +2000,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     invoice shows the link's live state rather than just a Send. */}
                 <InvoiceShareLinkPanel
                   saleId={viewItem.id}
-                  canShare={perm.canShare}
+                  canShare={perm.canDownload}
                   customerPhone={(viewItem as any).customerPhone}
                   onShareWhatsApp={() => handleWhatsApp(viewItem)}
                 />
-                {(perm.canDownload || perm.canPrint) && (
+                {perm.canDownload && (
                   <div className="grid grid-cols-3 gap-2">
                     {perm.canDownload && (
                       <Button variant="outline" onClick={() => void handlePreviewPDF(viewItem)}>
@@ -2016,7 +2016,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         <FileDown className="w-4 h-4 mr-2" /> Download
                       </Button>
                     )}
-                    {perm.canPrint && (
+                    {perm.canDownload && (
                       <Button variant="outline" onClick={() => void handlePrintPDF(viewItem)}>
                         <Printer className="w-4 h-4 mr-2" /> Print
                       </Button>

@@ -410,8 +410,8 @@ export function exportReportPdf(opts: ReportDoc): Promise<void> {
   return downloadPDFFromEndpoint('/api/pdf/report', { ...payload, intent: 'download' }, `${slug(opts)}.pdf`);
 }
 
-/** Same document, sent to the printer instead of the disk. Requires Print, not
- *  Download — the server checks the intent it is given. */
+/** Same document, sent to the printer instead of the disk. Covered by the same
+ *  Download right — it gates every output channel, printing included. */
 export function printReportPdf(opts: ReportDoc): Promise<void> {
   const { filename: _f, ...payload } = opts;
   return printPDFFromEndpoint('/api/pdf/report', { ...payload, intent: 'print' });
@@ -425,20 +425,20 @@ export function exportReportXlsx(opts: ReportDoc): Promise<void> {
 }
 
 // ── Export buttons ────────────────────────────────────────────────────────────
-// `canDownload` / `canPrint` are the caller's capabilities — the parent page owns
-// its own permission key and passes the resolved flags here, so this shared
-// toolbar never hardcodes a module name.
+// `canDownload` is the caller's capability — the parent page owns its own
+// permission key and passes the resolved flag here, so this shared toolbar
+// never hardcodes a module name. One flag gates every button: Download covers
+// all output channels (CSV, Excel, PDF and Print) under the five-action model.
 //
 // `doc` is the preferred API: give the toolbar the report document once and it
 // renders CSV, Excel, PDF and Print off it. The older onPDF/onCSV callbacks are
 // still honoured for callers that build their payload differently.
-export function ExportButtons({ onCSV, onPDF, doc, disabled, canDownload = true, canPrint = false }: {
+export function ExportButtons({ onCSV, onPDF, doc, disabled, canDownload = true }: {
   onCSV?: () => void;
   onPDF?: () => Promise<void> | void;
   doc?: () => ReportDoc;
   disabled?: boolean;
   canDownload?: boolean;
-  canPrint?: boolean;
 }) {
   const [busy, setBusy] = useState<'pdf' | 'xlsx' | 'print' | null>(null);
 
@@ -456,7 +456,7 @@ export function ExportButtons({ onCSV, onPDF, doc, disabled, canDownload = true,
   const handlePrint = () => { if (doc) run('print', printReportPdf(doc())); };
 
   const showPdf = Boolean(onPDF || doc);
-  if (!canDownload && !(canPrint && doc)) return null;
+  if (!canDownload) return null;
   return (
     <div className="flex items-center gap-2 ml-auto">
       {canDownload && onCSV && (
@@ -474,7 +474,7 @@ export function ExportButtons({ onCSV, onPDF, doc, disabled, canDownload = true,
           {busy === 'pdf' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileText className="w-4 h-4 mr-2" />} PDF
         </Button>
       )}
-      {canPrint && doc && (
+      {doc && (
         <Button variant="outline" size="sm" onClick={handlePrint} disabled={disabled || busy !== null}>
           {busy === 'print' ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Printer className="w-4 h-4 mr-2" />} Print
         </Button>

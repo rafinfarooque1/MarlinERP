@@ -2354,16 +2354,18 @@ components:
           type: string
         level:
           type: integer
+        reportsToId:
+          type: ["integer", "null"]
         description:
           type: ["string", "null"]
 
     HierarchyInput:
       type: object
-      required: [name, level]
+      required: [name, reportsToId]
       properties:
         name:
           type: string
-        level:
+        reportsToId:
           type: integer
         description:
           type: string
@@ -2373,7 +2375,7 @@ components:
       properties:
         name:
           type: string
-        level:
+        reportsToId:
           type: integer
         description:
           type: string
@@ -3026,12 +3028,6 @@ components:
           type: boolean
         canDownload:
           type: boolean
-        canPrint:
-          type: boolean
-        canApprove:
-          type: boolean
-        canShare:
-          type: boolean
 
     PermissionInput:
       type: object
@@ -3050,10 +3046,4 @@ components:
         canDelete:
           type: boolean
         canDownload:
-          type: boolean
-        canPrint:
-          type: boolean
-        canApprove:
-          type: boolean
-        canShare:
           type: boolean

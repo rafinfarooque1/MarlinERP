@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireModuleAction, requireModuleView, hasModuleAction, hasAnyModuleAction, type ModuleAction } from "../middleware/permissions";
+import { requireModuleAction, requireModuleView, hasModuleAction } from "../middleware/permissions";
 import { db, salesTable, outletsTable, customersTable, stockEntriesTable, itemsTable, itemPricesTable, companySettingsTable } from "@workspace/db";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import { CreateSaleBody, GetSaleParams, SetItemPriceBody, ListItemPricesQueryParams } from "@workspace/api-zod";
@@ -1683,15 +1683,11 @@ router.get("/sales/summary", requireModuleView(["page:/sales/pos", "page:/"]), a
 // invoices are frequently not the ones that write them.
 //
 // Sending an invoice to a customer is NOT one of these intents. That goes through
-// the share-link flow, which needs the `share` right and produces a link the
-// office can revoke, replace and see the usage of.
-const SHARE_INTENT_ACTIONS: Record<string, ModuleAction[]> = {
-  download: ["download"],
-  print: ["print"],
-  // Reading it on screen is satisfied by either right — both pages offer those
-  // buttons to both kinds of user.
-  preview: ["download", "print"],
-};
+// the share-link flow (also gated on `download` under the five-action model),
+// which produces a link the office can revoke, replace and see the usage of.
+//
+// Download is the single right for every output channel — saving, printing and
+// on-screen preview alike — so the old per-intent action table is gone.
 
 // Minutes, not days. A month-long token was in practice an unrevocable public
 // share link that anyone who could download an invoice could forward, which is
@@ -1707,14 +1703,12 @@ router.post("/sales/:id/share-token", async (req, res): Promise<void> => {
   const id = parseInt(raw, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid sale id" }); return; }
 
-  // An unknown or absent intent falls back to the widest requirement (either
-  // right), so an older client keeps working without being handed a new one.
-  const intent = String((req.body as any)?.intent ?? "preview");
-  const required = SHARE_INTENT_ACTIONS[intent] ?? SHARE_INTENT_ACTIONS.preview;
-  const mayShare = await hasAnyModuleAction(req.employee?.hierarchyId, SHARE_PAGES, required);
+  // Clients may still send an `intent` field naming the button that was
+  // pressed; every intent now requires the same single `download` right.
+  const mayShare = await hasModuleAction(req.employee?.hierarchyId, SHARE_PAGES, "download");
   if (!mayShare) {
     res.status(403).json({
-      error: `You don't have permission to ${required.join(" or ")} invoices`,
+      error: "You don't have permission to download or print invoices",
     });
     return;
   }
@@ -1741,7 +1735,7 @@ router.get("/sales/:id/invoice.pdf", async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid sale id" }); return; }
-  const mayView = await hasAnyModuleAction(req.employee?.hierarchyId, SHARE_PAGES, SHARE_INTENT_ACTIONS.preview);
+  const mayView = await hasModuleAction(req.employee?.hierarchyId, SHARE_PAGES, "download");
   if (!mayView) { res.status(403).json({ error: "You don't have permission to view invoices" }); return; }
   const pdfScope = await getUserDataScope((req as any).employee);
   const pdfParams: unknown[] = [id];

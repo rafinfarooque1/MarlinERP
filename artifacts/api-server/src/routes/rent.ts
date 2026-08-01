@@ -421,7 +421,9 @@ router.get("/rent/periods", requireModuleView(PERM), async (req, res): Promise<v
  * expense was already recognised day by day, so gating recognition behind an
  * approval would understate the P&L for every unapproved month.
  */
-router.post("/rent/periods/:warehouseId/:year/:month/approve", requireModuleAction(PERM, "approve"), async (req, res): Promise<void> => {
+// Approval is sign-off authority over the record — `edit` under the
+// five-action model, same as payroll/leave/transfer approvals.
+router.post("/rent/periods/:warehouseId/:year/:month/approve", requireModuleAction(PERM, "edit"), async (req, res): Promise<void> => {
   const warehouseId = parseInt(req.params.warehouseId, 10);
   const year = parseInt(req.params.year, 10);
   const month = parseInt(req.params.month, 10);

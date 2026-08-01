@@ -418,15 +418,26 @@ router.post("/company/permissions", requireModuleAction("page:/company/permissio
   const parsed = SetPermissionBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
+  // Five-action model: the client sends view/add/edit/delete/download only.
+  // The legacy print/approve/share columns are mirrored from download/edit on
+  // every write so any stray reader of those columns can never disagree with
+  // the live model. They are never read by the guards.
+  const values = {
+    ...parsed.data,
+    canPrint:   parsed.data.canDownload ?? false,
+    canShare:   parsed.data.canDownload ?? false,
+    canApprove: parsed.data.canEdit ?? false,
+  };
+
   // Upsert must match on hierarchy AND module — matching hierarchy alone
   // would make every module save overwrite the same single row. Done as a
   // single ON CONFLICT statement so two admins saving the same page at once
   // cannot both miss an existing row and insert a duplicate.
   const [row] = await db.insert(permissionsTable)
-    .values(parsed.data)
+    .values(values)
     .onConflictDoUpdate({
       target: [permissionsTable.hierarchyId, permissionsTable.module],
-      set: parsed.data,
+      set: values,
     })
     .returning();
 
@@ -443,8 +454,9 @@ router.post("/company/permissions", requireModuleAction("page:/company/permissio
 //
 // This endpoint NEVER modifies permissions. It is an observability tool only.
 router.get("/company/permissions/rbac-audit", requireModuleView("page:/company/permissions"), async (_req, res): Promise<void> => {
-  // A row is considered "legacy all-true" when ALL six primary permission flags
-  // are true — that is the exact value written by both seeding migrations.
+  // A row is considered "legacy all-true" when ALL five permission flags are
+  // true — that is the value the seeding migrations left behind (they wrote
+  // every flag true; the retired print/approve/share flags are now mirrors).
   // Rows that an admin has partially revoked (e.g. can_view=true, can_delete=false)
   // are NOT flagged — they show deliberate configuration, not an untouched seed.
   const { rows: legacyRows } = await pool.query<any>(`
@@ -459,9 +471,6 @@ router.get("/company/permissions/rbac-audit", requireModuleView("page:/company/p
       p.can_edit,
       p.can_delete,
       p.can_download,
-      p.can_print,
-      p.can_approve,
-      p.can_share,
       p.updated_at
     FROM permissions p
     JOIN hierarchies h ON h.id = p.hierarchy_id
@@ -470,7 +479,6 @@ router.get("/company/permissions/rbac-audit", requireModuleView("page:/company/p
       AND p.can_edit    = true
       AND p.can_delete  = true
       AND p.can_download = true
-      AND p.can_print   = true
     ORDER BY h.level ASC, h.name ASC, p.module ASC
   `);
 
@@ -478,7 +486,7 @@ router.get("/company/permissions/rbac-audit", requireModuleView("page:/company/p
   const { rows: [totals] } = await pool.query<any>(`
     SELECT
       COUNT(*) FILTER (
-        WHERE can_view AND can_add AND can_edit AND can_delete AND can_download AND can_print
+        WHERE can_view AND can_add AND can_edit AND can_delete AND can_download
       )::int AS all_true_count,
       COUNT(*)::int AS total_count
     FROM permissions

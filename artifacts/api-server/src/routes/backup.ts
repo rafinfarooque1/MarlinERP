@@ -483,7 +483,7 @@ router.post("/backup/:id/verify", requireModuleAction(PERM, "add"), async (req: 
 router.post(
   "/backup/upload",
   requireHeadOffice("restore a backup"),
-  requireModuleAction(PERM, "approve"),
+  requireModuleAction(PERM, "edit"),
   async (req: Request, res: Response) => {
     if (!objectStorageConfigured()) {
       res.status(503).json({ error: "Object storage is not configured for this app." });
@@ -625,7 +625,7 @@ router.post(
 router.post(
   "/backup/:id/restore",
   requireHeadOffice("restore a backup"),
-  requireModuleAction(PERM, "approve"),
+  requireModuleAction(PERM, "edit"),
   async (req: Request, res: Response) => {
     const id = Number(req.params.id);
     const password = String((req.body as any)?.password ?? "");

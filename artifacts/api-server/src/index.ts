@@ -2453,6 +2453,106 @@ await pool.query(`
   }
 }
 
+// ── Five-action permission model (ONE TIME) ──────────────────────────────────
+// Print, Approve and Share stopped being separate user-facing rights: Download
+// now covers every output channel (export, PDF save, print, WhatsApp/email
+// share) and Edit covers approval (sign-off is write authority). This fold can
+// only PRESERVE or (from the folded rights' perspective) narrow — can_download
+// and can_edit only ever gain from the columns folded INTO them, so nobody who
+// could print/share/approve loses that ability, and nobody who could do none
+// of them gains anything.
+//
+// The legacy columns stay in the table but become mirrors of download/edit —
+// written in the same statement here and on every POST /company/permissions —
+// so any stray reader of can_print/can_approve/can_share can never disagree
+// with the live model. The guards never read them again.
+{
+  const { rows: done } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'permission_five_action_fold_v1'`,
+  );
+  if (done.length === 0) {
+    // Every SET expression reads the row's OLD values (SQL semantics), so the
+    // mirrors and the fold see the same pre-migration state.
+    const folded = await pool.query(`
+      UPDATE permissions
+         SET can_download = can_download OR can_print OR can_share,
+             can_edit     = can_edit OR can_approve,
+             can_print    = can_download OR can_print OR can_share,
+             can_share    = can_download OR can_print OR can_share,
+             can_approve  = can_edit OR can_approve
+    `);
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('permission_five_action_fold_v1')`);
+    console.log(`[migration] permission_five_action_fold_v1 — folded print/share→download, approve→edit across ${folded.rowCount} permission row(s)`);
+  }
+}
+
+// ── Role reporting lines ─────────────────────────────────────────────────────
+// hierarchies.reports_to_id names the role each role reports to. NULL exactly
+// for the single root (level-1) role. Level is now DERIVED from this chain
+// (root = 1, child = parent + 1); it stays in the table because the RBAC
+// middleware's level-1 full-access override and the seeding migrations above
+// key on it, but it is no longer client-writable.
+await pool.query(`ALTER TABLE hierarchies ADD COLUMN IF NOT EXISTS reports_to_id INTEGER REFERENCES hierarchies(id)`);
+{
+  const { rows: done } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'hierarchy_reports_to_v1'`,
+  );
+  if (done.length === 0) {
+    // The model requires EXACTLY ONE root. The canonical root is the oldest
+    // level-1 role; if the table somehow holds no level-1 role at all, the
+    // backfill is skipped WITHOUT marking done (retried next boot) rather than
+    // guessing which role deserves the full-access override.
+    const { rows: roots } = await pool.query(
+      `SELECT id FROM hierarchies WHERE level = 1 ORDER BY id ASC`,
+    );
+    if (roots.length === 0) {
+      console.error("[migration] hierarchy_reports_to_v1 SKIPPED: no level-1 role exists to serve as the root — fix the hierarchies table; will retry next boot");
+    } else {
+      const rootId = roots[0].id;
+      if (roots.length > 1) {
+        // Extra level-1 rows each carried the unrestricted-access override.
+        // Folding them under the canonical root NARROWS them to ordinary
+        // roles (level re-derived to 2 below) — deliberate: the single-root
+        // invariant is the security model, and preserve-or-narrow allows it.
+        console.warn(`[migration] hierarchy_reports_to_v1: ${roots.length - 1} extra level-1 role(s) folded under the canonical root (id=${rootId}) and demoted from full access`);
+        await pool.query(
+          `UPDATE hierarchies SET reports_to_id = $1 WHERE level = 1 AND id <> $1 AND reports_to_id IS NULL`,
+          [rootId],
+        );
+      }
+      // Backfill: every remaining role reports to the nearest role above it —
+      // the greatest level still smaller than its own (ties → the oldest such
+      // role). Roles with nothing above them fall back to the canonical root,
+      // so NOTHING except the root is left parentless.
+      await pool.query(`
+        UPDATE hierarchies h
+           SET reports_to_id = COALESCE(
+             (SELECT p.id FROM hierarchies p
+               WHERE p.level < h.level AND p.id <> h.id
+               ORDER BY p.level DESC, p.id ASC LIMIT 1),
+             $1
+           )
+         WHERE h.id <> $1 AND h.reports_to_id IS NULL
+      `, [rootId]);
+      // Re-derive levels from the chain, seeded from the canonical root only.
+      // reports_to_id was all-NULL until this migration and parents always
+      // have strictly smaller (old) levels, so cycles cannot exist here; the
+      // depth bound is defense in depth against hand-edited data.
+      await pool.query(`
+        WITH RECURSIVE chain AS (
+          SELECT id, 1 AS lvl FROM hierarchies WHERE id = $1
+          UNION ALL
+          SELECT h.id, c.lvl + 1 FROM hierarchies h JOIN chain c ON h.reports_to_id = c.id
+          WHERE c.lvl < 100
+        )
+        UPDATE hierarchies h SET level = c.lvl FROM chain c WHERE h.id = c.id AND h.level <> c.lvl
+      `, [rootId]);
+      await pool.query(`INSERT INTO migration_log (name) VALUES ('hierarchy_reports_to_v1')`);
+      console.log("[migration] hierarchy_reports_to_v1 — backfilled reporting lines and re-derived role levels");
+    }
+  }
+}
+
 // ── Negative stock prevention ─────────────────────────────────────────────────
 // Add a check constraint so the database itself refuses to persist a negative
 // quantity. The tolerance of -0.001 absorbs floating-point arithmetic errors

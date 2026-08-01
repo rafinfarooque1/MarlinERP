@@ -77,26 +77,34 @@ export function requireModuleView(modules: string | string[]): RequestHandler<an
   };
 }
 
-export type ModuleAction = "add" | "edit" | "delete" | "download" | "print" | "approve" | "share";
+/**
+ * The five-action model: View (requireModuleView) plus these four.
+ *
+ * There used to be seven write actions — print, approve and share were their
+ * own rights. They were folded away deliberately:
+ *   • download now covers EVERY output channel — CSV/Excel export, PDF save,
+ *     printing, and WhatsApp/email share links. One right answers "may this
+ *     role take a document out of the system?".
+ *   • approve folded into edit — sign-off is write authority over the record.
+ * The legacy can_print/can_approve/can_share columns still exist but are
+ * mirrored from can_download/can_edit on every write (see
+ * POST /company/permissions and the permission_five_action_fold_v1 migration).
+ * Never read them in new code.
+ */
+export type ModuleAction = "add" | "edit" | "delete" | "download";
 
 const ACTION_COLUMN: Record<ModuleAction, string> = {
   add: "can_add",
   edit: "can_edit",
   delete: "can_delete",
   download: "can_download",
-  print: "can_print",
-  approve: "can_approve",
-  share: "can_share",
 };
 
 const ACTION_VERB: Record<ModuleAction, string> = {
   add: "create records in",
   edit: "edit records in",
   delete: "delete records in",
-  download: "download",
-  print: "print",
-  approve: "approve records in",
-  share: "share documents from",
+  download: "export or print documents from",
 };
 
 /**
@@ -187,27 +195,6 @@ export async function hasModuleAction(
   if (Number(rows[0]?.level ?? 99) === 1) return true;
   const flags: Record<string, boolean | null> = rows[0]?.flags ?? {};
   return list.some((m) => flags[m] === true);
-}
-
-/**
- * "Does this role hold ANY of these actions on ANY of these pages?"
- *
- * Documents are why this exists. One endpoint mints the invoice PDF for
- * preview, download, print and WhatsApp alike, and the right that justifies the
- * call depends on which button was pressed — download for a saved file, print
- * for the print dialog, either one for a plain look at it. Expressing that as a
- * single action would either lock print-only roles out of printing or hand
- * download-only roles a print path the UI never offered them.
- */
-export async function hasAnyModuleAction(
-  hierarchyId: number | undefined,
-  modules: string | string[],
-  actions: ModuleAction[],
-): Promise<boolean> {
-  for (const action of actions) {
-    if (await hasModuleAction(hierarchyId, modules, action)) return true;
-  }
-  return false;
 }
 
 /**

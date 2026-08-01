@@ -1153,6 +1153,7 @@ export const ListHierarchiesResponseItem = zod.object({
   "id": zod.number(),
   "name": zod.string(),
   "level": zod.number(),
+  "reportsToId": zod.number().nullish(),
   "description": zod.string().nullish()
 })
 export const ListHierarchiesResponse = zod.array(ListHierarchiesResponseItem)
@@ -1163,7 +1164,7 @@ export const ListHierarchiesResponse = zod.array(ListHierarchiesResponseItem)
  */
 export const CreateHierarchyBody = zod.object({
   "name": zod.string(),
-  "level": zod.number(),
+  "reportsToId": zod.number(),
   "description": zod.string().optional()
 })
 
@@ -1171,6 +1172,7 @@ export const CreateHierarchyResponse = zod.object({
   "id": zod.number(),
   "name": zod.string(),
   "level": zod.number(),
+  "reportsToId": zod.number().nullish(),
   "description": zod.string().nullish()
 })
 
@@ -1181,7 +1183,7 @@ export const UpdateHierarchyParams = zod.object({
 
 export const UpdateHierarchyBody = zod.object({
   "name": zod.string().optional(),
-  "level": zod.number().optional(),
+  "reportsToId": zod.number().optional(),
   "description": zod.string().optional()
 })
 
@@ -1189,6 +1191,7 @@ export const UpdateHierarchyResponse = zod.object({
   "id": zod.number(),
   "name": zod.string(),
   "level": zod.number(),
+  "reportsToId": zod.number().nullish(),
   "description": zod.string().nullish()
 })
 
@@ -2022,10 +2025,7 @@ export const ListPermissionsResponseItem = zod.object({
   "canAdd": zod.boolean().optional(),
   "canEdit": zod.boolean().optional(),
   "canDelete": zod.boolean().optional(),
-  "canDownload": zod.boolean().optional(),
-  "canPrint": zod.boolean().optional(),
-  "canApprove": zod.boolean().optional(),
-  "canShare": zod.boolean().optional()
+  "canDownload": zod.boolean().optional()
 })
 export const ListPermissionsResponse = zod.array(ListPermissionsResponseItem)
 
@@ -2040,10 +2040,7 @@ export const SetPermissionBody = zod.object({
   "canAdd": zod.boolean().optional(),
   "canEdit": zod.boolean().optional(),
   "canDelete": zod.boolean().optional(),
-  "canDownload": zod.boolean().optional(),
-  "canPrint": zod.boolean().optional(),
-  "canApprove": zod.boolean().optional(),
-  "canShare": zod.boolean().optional()
+  "canDownload": zod.boolean().optional()
 })
 
 export const SetPermissionResponse = zod.object({
@@ -2055,10 +2052,7 @@ export const SetPermissionResponse = zod.object({
   "canAdd": zod.boolean().optional(),
   "canEdit": zod.boolean().optional(),
   "canDelete": zod.boolean().optional(),
-  "canDownload": zod.boolean().optional(),
-  "canPrint": zod.boolean().optional(),
-  "canApprove": zod.boolean().optional(),
-  "canShare": zod.boolean().optional()
+  "canDownload": zod.boolean().optional()
 })
 
 

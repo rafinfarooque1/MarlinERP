@@ -672,18 +672,20 @@ export interface Hierarchy {
   name: string;
   level: number;
   /** @nullable */
+  reportsToId?: number | null;
+  /** @nullable */
   description?: string | null;
 }
 
 export interface HierarchyInput {
   name: string;
-  level: number;
+  reportsToId: number;
   description?: string;
 }
 
 export interface HierarchyUpdate {
   name?: string;
-  level?: number;
+  reportsToId?: number;
   description?: string;
 }
 
@@ -1185,9 +1187,6 @@ export interface Permission {
   canEdit?: boolean;
   canDelete?: boolean;
   canDownload?: boolean;
-  canPrint?: boolean;
-  canApprove?: boolean;
-  canShare?: boolean;
 }
 
 export interface PermissionInput {
@@ -1198,9 +1197,6 @@ export interface PermissionInput {
   canEdit?: boolean;
   canDelete?: boolean;
   canDownload?: boolean;
-  canPrint?: boolean;
-  canApprove?: boolean;
-  canShare?: boolean;
 }
 
 export type ListStockParams = {

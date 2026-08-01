@@ -361,7 +361,7 @@ function DisclosureControls({ expandAll, collapseAll, disabled }: { expandAll: (
 const COMPANY_WIDE = 'Company-wide';
 
 // ── Profit & Loss ─────────────────────────────────────────────────────────────
-function PnlReport({ range, loc, canDownload, canPrint }: { range: RangeState; loc: LocationFilterState; canDownload: boolean; canPrint: boolean }) {
+function PnlReport({ range, loc, canDownload }: { range: RangeState; loc: LocationFilterState; canDownload: boolean }) {
   const { options, loading: locLoading } = useLocationOptions();
   const { data, isLoading } = useFinancialStatements(range, loc);
   const pl = data?.profitAndLoss;
@@ -440,7 +440,7 @@ function PnlReport({ range, loc, canDownload, canPrint }: { range: RangeState; l
       <RangeBar range={range}>
         <LocationFilter state={loc} options={options} loading={locLoading} />
         <ExportButtons
-          canDownload={canDownload} canPrint={canPrint}
+          canDownload={canDownload}
           disabled={isLoading || !pl}
           doc={doc}
           onCSV={() => downloadCSV('profit-and-loss.csv', [
@@ -498,7 +498,7 @@ function PnlReport({ range, loc, canDownload, canPrint }: { range: RangeState; l
 }
 
 // ── Balance Sheet ─────────────────────────────────────────────────────────────
-function BalanceSheetReport({ range, loc, canDownload, canPrint }: { range: RangeState; loc: LocationFilterState; canDownload: boolean; canPrint: boolean }) {
+function BalanceSheetReport({ range, loc, canDownload }: { range: RangeState; loc: LocationFilterState; canDownload: boolean }) {
   const { options, loading: locLoading } = useLocationOptions();
   const { data, isLoading } = useFinancialStatements(range, loc);
   const bs = data?.balanceSheet;
@@ -556,7 +556,7 @@ function BalanceSheetReport({ range, loc, canDownload, canPrint }: { range: Rang
       <RangeBar range={range}>
         <LocationFilter state={loc} options={options} loading={locLoading} />
         <ExportButtons
-          canDownload={canDownload} canPrint={canPrint}
+          canDownload={canDownload}
           disabled={isLoading || !bs}
           doc={doc}
           onCSV={() => downloadCSV('balance-sheet.csv', [
@@ -602,7 +602,7 @@ function BalanceSheetReport({ range, loc, canDownload, canPrint }: { range: Rang
 interface TrialBalanceRow { ledgerId: number; name: string; code: string | null; type: string | null; groupName: string | null; debit: number; credit: number }
 interface TrialBalancePayload { rows: TrialBalanceRow[]; totalDebit: number; totalCredit: number; difference: number; balanced: boolean; companyLevel?: CompanyLevel | null }
 
-function TrialBalanceReport({ range, loc, canDownload, canPrint }: { range: RangeState; loc: LocationFilterState; canDownload: boolean; canPrint: boolean }) {
+function TrialBalanceReport({ range, loc, canDownload }: { range: RangeState; loc: LocationFilterState; canDownload: boolean }) {
   const { options, loading: locLoading } = useLocationOptions();
   const { data, isLoading } = useReport<TrialBalancePayload>('/api/reports/fin/trial-balance', qs(range, { locationType: loc.type, locationId: loc.id }));
   const rows = data?.rows ?? [];
@@ -631,7 +631,7 @@ function TrialBalanceReport({ range, loc, canDownload, canPrint }: { range: Rang
       <RangeBar range={range}>
         <LocationFilter state={loc} options={options} loading={locLoading} />
         <ExportButtons
-          canDownload={canDownload} canPrint={canPrint} disabled={isLoading} doc={doc}
+          canDownload={canDownload} disabled={isLoading} doc={doc}
           onCSV={() => downloadCSV('trial-balance.csv', rows.map((r) => ({
             Group: r.groupName ?? '', Ledger: r.name, Code: r.code ?? '',
             'Debit (₹)': r.debit.toFixed(2), 'Credit (₹)': r.credit.toFixed(2),
@@ -677,7 +677,7 @@ function TrialBalanceReport({ range, loc, canDownload, canPrint }: { range: Rang
 interface DayBookEntry { id: string; date: string; source: string; voucherNumber: string | null; narration: string | null; particulars: string; debit: number; credit: number; amount: number }
 interface DayBookPayload { entries: DayBookEntry[]; totals: { count: number; amount: number; debit: number; credit: number; balanced: boolean } | null; companyLevel?: CompanyLevel | null }
 
-function DayBookReport({ range, loc, canDownload, canPrint }: { range: RangeState; loc: LocationFilterState; canDownload: boolean; canPrint: boolean }) {
+function DayBookReport({ range, loc, canDownload }: { range: RangeState; loc: LocationFilterState; canDownload: boolean }) {
   const { options, loading: locLoading } = useLocationOptions();
   const { data, isLoading } = useReport<DayBookPayload>('/api/reports/fin/day-book', qs(range, { locationType: loc.type, locationId: loc.id }));
   const rows = data?.entries ?? [];
@@ -699,7 +699,7 @@ function DayBookReport({ range, loc, canDownload, canPrint }: { range: RangeStat
       <RangeBar range={range}>
         <LocationFilter state={loc} options={options} loading={locLoading} />
         <ExportButtons
-          canDownload={canDownload} canPrint={canPrint} disabled={isLoading} doc={doc}
+          canDownload={canDownload} disabled={isLoading} doc={doc}
           onCSV={() => downloadCSV('day-book.csv', rows.map((e) => ({
             Date: e.date, Voucher: e.voucherNumber ?? '', Type: e.source,
             Particulars: e.particulars, Narration: e.narration ?? '',
@@ -741,7 +741,7 @@ function DayBookReport({ range, loc, canDownload, canPrint }: { range: RangeStat
 interface LedgerRow { ledgerId: number; name: string; code: string | null; groupName: string | null; rootCode: string | null; opening: number; debit: number; credit: number; closing: number }
 interface LedgersPayload { rows: LedgerRow[]; totals: { opening: number; debit: number; credit: number; closing: number } | null; companyLevel?: CompanyLevel | null }
 
-function LedgersReport({ range, loc, canDownload, canPrint }: { range: RangeState; loc: LocationFilterState; canDownload: boolean; canPrint: boolean }) {
+function LedgersReport({ range, loc, canDownload }: { range: RangeState; loc: LocationFilterState; canDownload: boolean }) {
   const { options, loading: locLoading } = useLocationOptions();
   const { data, isLoading } = useReport<LedgersPayload>('/api/reports/fin/ledgers', qs(range, { locationType: loc.type, locationId: loc.id }));
   const rows = data?.rows ?? [];
@@ -768,7 +768,7 @@ function LedgersReport({ range, loc, canDownload, canPrint }: { range: RangeStat
       <RangeBar range={range}>
         <LocationFilter state={loc} options={options} loading={locLoading} />
         <ExportButtons
-          canDownload={canDownload} canPrint={canPrint} disabled={isLoading} doc={doc}
+          canDownload={canDownload} disabled={isLoading} doc={doc}
           onCSV={() => downloadCSV('ledger-balances.csv', rows.map((r) => ({
             Group: r.groupName ?? '', Ledger: r.name, Code: r.code ?? '',
             'Opening (₹)': r.opening.toFixed(2), 'Debit (₹)': r.debit.toFixed(2),
@@ -807,7 +807,7 @@ interface BookPayload {
   companyLevel?: CompanyLevel | null;
 }
 
-function BookReport({ kind, range, loc, canDownload, canPrint }: { kind: 'cash' | 'bank'; range: RangeState; loc: LocationFilterState; canDownload: boolean; canPrint: boolean }) {
+function BookReport({ kind, range, loc, canDownload }: { kind: 'cash' | 'bank'; range: RangeState; loc: LocationFilterState; canDownload: boolean }) {
   const [ledgerId, setLedgerId] = useState(0);
   const { options, loading: locLoading } = useLocationOptions();
   const { data, isLoading } = useReport<BookPayload>(`/api/reports/fin/${kind}`, qs(range, { ledgerId, locationType: loc.type, locationId: loc.id }));
@@ -853,7 +853,7 @@ function BookReport({ kind, range, loc, canDownload, canPrint }: { kind: 'cash' 
           {(data?.accounts ?? []).map((a) => <option key={a.ledgerId} value={a.ledgerId}>{a.name}</option>)}
         </select>
         <ExportButtons
-          canDownload={canDownload} canPrint={canPrint} disabled={isLoading} doc={doc}
+          canDownload={canDownload} disabled={isLoading} doc={doc}
           onCSV={() => downloadCSV(`${kind}-book.csv`, rows.map((e) => ({
             Date: e.date, Voucher: e.voucherNumber ?? '', Account: e.account, Particulars: e.description,
             'Receipt (₹)': e.receipt.toFixed(2), 'Payment (₹)': e.payment.toFixed(2), 'Balance (₹)': e.balance.toFixed(2),
@@ -914,7 +914,7 @@ interface GstPayload {
   byMonth: { month: string; output: number; input: number; net: number }[];
 }
 
-function GstReport({ range, canDownload, canPrint }: { range: RangeState; canDownload: boolean; canPrint: boolean }) {
+function GstReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
   const { data, isLoading } = useReport<GstPayload>('/api/reports/fin/gst', qs(range));
   const payable = data?.netPayable ?? 0;
 
@@ -955,7 +955,7 @@ function GstReport({ range, canDownload, canPrint }: { range: RangeState; canDow
       <RangeBar range={range}>
         <LocationFilter state={{ key: '', setKey: () => {}, type: '', id: 0, label: COMPANY_WIDE }} options={[]} disabledReason={COMPANY_WIDE} />
         <ExportButtons
-          canDownload={canDownload} canPrint={canPrint} disabled={isLoading} doc={doc}
+          canDownload={canDownload} disabled={isLoading} doc={doc}
           onCSV={() => downloadCSV('gst-summary.csv', (data?.byMonth ?? []).map((m) => ({
             Month: m.month, 'Output tax (₹)': m.output.toFixed(2), 'Input credit (₹)': m.input.toFixed(2), 'Net (₹)': m.net.toFixed(2),
           })))}
@@ -1021,7 +1021,7 @@ interface ExpenseRow {
 interface Rollup { name: string; count: number; amount: number }
 interface ExpensePayload { rows: ExpenseRow[]; byCategory: Rollup[]; byLedger: Rollup[]; byLocation: Rollup[]; total: number; count: number }
 
-function ExpenseReport({ range, loc, canDownload, canPrint }: { range: RangeState; loc: LocationFilterState; canDownload: boolean; canPrint: boolean }) {
+function ExpenseReport({ range, loc, canDownload }: { range: RangeState; loc: LocationFilterState; canDownload: boolean }) {
   const { options, loading } = useLocationOptions();
   const { data, isLoading } = useReport<ExpensePayload>('/api/reports/fin/expenses', qs(range, { locationType: loc.type, locationId: loc.id }));
   const rows = data?.rows ?? [];
@@ -1056,7 +1056,7 @@ function ExpenseReport({ range, loc, canDownload, canPrint }: { range: RangeStat
       <RangeBar range={range}>
         <LocationFilter state={loc} options={options} loading={loading} />
         <ExportButtons
-          canDownload={canDownload} canPrint={canPrint} disabled={isLoading} doc={doc}
+          canDownload={canDownload} disabled={isLoading} doc={doc}
           onCSV={() => downloadCSV('expense-report.csv', rows.map((r) => ({
             Date: r.date, Voucher: r.expenseNumber ?? '', Category: r.category, Account: r.ledgerName,
             'Paid from': r.paidFrom, Location: r.locationName, Particulars: r.description,
@@ -1132,7 +1132,7 @@ interface SalaryPayload {
   byStatus: { status: string; count: number; netPay: number }[];
 }
 
-function SalaryReport({ range, canDownload, canPrint }: { range: RangeState; canDownload: boolean; canPrint: boolean }) {
+function SalaryReport({ range, canDownload }: { range: RangeState; canDownload: boolean }) {
   const { data, isLoading } = useReport<SalaryPayload>('/api/reports/fin/salary', qs(range));
   const rows = data?.rows ?? [];
   const t = data?.totals;
@@ -1171,7 +1171,7 @@ function SalaryReport({ range, canDownload, canPrint }: { range: RangeState; can
       <RangeBar range={range}>
         <LocationFilter state={{ key: '', setKey: () => {}, type: '', id: 0, label: COMPANY_WIDE }} options={[]} disabledReason="All locations" />
         <ExportButtons
-          canDownload={canDownload} canPrint={canPrint} disabled={isLoading} doc={doc}
+          canDownload={canDownload} disabled={isLoading} doc={doc}
           onCSV={() => downloadCSV('salary-report.csv', rows.map((r) => ({
             Employee: r.employeeName, Role: r.role ?? '', Location: r.location, Period: r.period, Status: r.status,
             'Working days': r.workingDays, 'Present days': r.presentDays, 'LOP days': r.lopDays,
@@ -1253,11 +1253,11 @@ function BooksLinks() {
 
 // ── Section root ──────────────────────────────────────────────────────────────
 export default function FinancialSection() {
-  const { canDownload, canPrint } = usePermission('page:/reports/sales');
+  const { canDownload } = usePermission('page:/reports/sales');
   const range = useDateRange('fy');
   const loc = useLocationFilter();
   const [report, setReport] = useState<FinReport>('pnl');
-  const cap = { canDownload, canPrint };
+  const cap = { canDownload };
   return (
     <div className="space-y-4">
       <ReportPicker

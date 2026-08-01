@@ -80,7 +80,7 @@ const statusBadge = (s: string) => {
   return <Badge className={`text-[10px] capitalize ${map[s] ?? 'bg-muted/20 text-muted-foreground'}`}>{titleCase(s)}</Badge>;
 };
 
-function BranchTransferReport({ canDownload, canPrint }: { canDownload: boolean; canPrint: boolean }) {
+function BranchTransferReport({ canDownload }: { canDownload: boolean }) {
   const range = useDateRange('month');
   const { options, loading: locLoading } = useTransferLocationOptions();
   const { data: items = [] } = useListItems();
@@ -183,7 +183,7 @@ function BranchTransferReport({ canDownload, canPrint }: { canDownload: boolean;
           </SelectContent>
         </Select>
         <ExportButtons
-          canDownload={canDownload} canPrint={canPrint}
+          canDownload={canDownload}
           disabled={isLoading || rows.length === 0}
           doc={doc}
           onCSV={() => downloadCSV('branch-transfers.csv', rows.map((r) => ({
@@ -270,10 +270,10 @@ function BranchTransferReport({ canDownload, canPrint }: { canDownload: boolean;
 
 // ── Section root ──────────────────────────────────────────────────────────────
 export default function TransfersSection() {
-  const { canDownload, canPrint } = usePermission('page:/reports/sales');
+  const { canDownload } = usePermission('page:/reports/sales');
   return (
     <div className="space-y-4">
-      <BranchTransferReport canDownload={canDownload} canPrint={canPrint} />
+      <BranchTransferReport canDownload={canDownload} />
     </div>
   );
 }

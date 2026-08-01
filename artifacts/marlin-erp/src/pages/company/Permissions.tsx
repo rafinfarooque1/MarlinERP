@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
   ShieldCheck, ShieldOff, Save, Loader2, ChevronUp, Search,
-  Eye, Plus, Pencil, Trash2, Download, Printer, BadgeCheck, Share2,
+  Eye, Plus, Pencil, Trash2, Download,
   Check, Minus,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -24,33 +24,28 @@ import type { Hierarchy, Permission } from '@workspace/api-client-react';
 // the two can never drift.
 const PAGE_ROWS = getPagePermRows();
 
-type ActionKey = 'view' | 'add' | 'edit' | 'del' | 'download' | 'print' | 'approve' | 'share';
+type ActionKey = 'view' | 'add' | 'edit' | 'del' | 'download';
 type PagePerm = Record<ActionKey, boolean>;
 type PermMap = Record<number, Record<string, PagePerm>>;
 
+// The five-action model. Download covers every output channel — CSV/Excel
+// export, PDF save, printing, and WhatsApp/email share links. Edit covers
+// approval: sign-off is write authority over the record. The old Print,
+// Approve and Share columns folded into these and no longer exist.
 const ACTIONS: { key: ActionKey; label: string; icon: React.ElementType }[] = [
   { key: 'view',     label: 'View',     icon: Eye },
   { key: 'add',      label: 'Add',      icon: Plus },
   { key: 'edit',     label: 'Edit',     icon: Pencil },
   { key: 'del',      label: 'Delete',   icon: Trash2 },
   { key: 'download', label: 'Download', icon: Download },
-  { key: 'print',    label: 'Print',    icon: Printer },
-  // Approval is sign-off authority, not editing: approving a month's rent commits
-  // it to the books. A role that may correct a draft is not automatically a role
-  // that may commit it, so this is granted separately.
-  { key: 'approve',  label: 'Approve',  icon: BadgeCheck },
-  // Sharing sends a document out of the company: an invoice share link opens with
-  // no login, for anyone who receives it. That is a different risk from printing
-  // or downloading a copy in the office, so it is granted on its own.
-  { key: 'share',    label: 'Share',    icon: Share2 },
 ];
 
-// Page name · the per-row All control · the eight action columns.
-const GRID = 'grid grid-cols-[1fr_2.5rem_repeat(8,3rem)] gap-x-1';
+// Page name · the per-row All control · the five action columns.
+const GRID = 'grid grid-cols-[1fr_2.5rem_repeat(5,3rem)] gap-x-1';
 
-const NONE: PagePerm = { view: false, add: false, edit: false, del: false, download: false, print: false, approve: false, share: false };
+const NONE: PagePerm = { view: false, add: false, edit: false, del: false, download: false };
 const allActions = (value: boolean): PagePerm =>
-  ({ view: value, add: value, edit: value, del: value, download: value, print: value, approve: value, share: value });
+  ({ view: value, add: value, edit: value, del: value, download: value });
 
 /**
  * Build the editable map from DB rows.
@@ -71,9 +66,6 @@ function buildPermMap(hierarchies: Hierarchy[], dbPerms: Permission[]): PermMap 
             edit:     row.canEdit     ?? false,
             del:      row.canDelete   ?? false,
             download: row.canDownload ?? false,
-            print:    row.canPrint    ?? false,
-            approve:  row.canApprove  ?? false,
-            share:    row.canShare    ?? false,
           }
         : { ...NONE };
     }
@@ -185,8 +177,7 @@ export default function Permissions() {
             hierarchyId: effectiveId,
             module: key,
             canView: p.view, canAdd: p.add, canEdit: p.edit, canDelete: p.del,
-            canDownload: p.download, canPrint: p.print, canApprove: p.approve,
-            canShare: p.share,
+            canDownload: p.download,
           });
         }),
       );
@@ -269,7 +260,6 @@ export default function Permissions() {
                 >
                   {(h.level ?? 99) === 1 && <ChevronUp className="w-3 h-3" />}
                   {h.name}
-                  <span className="opacity-60 text-xs">L{h.level}</span>
                 </button>
               ))}
             </div>
@@ -331,8 +321,6 @@ export default function Permissions() {
                     className="uppercase text-muted-foreground flex flex-col items-center gap-0.5 disabled:cursor-default enabled:hover:text-foreground"
                   >
                     <a.icon className="w-3.5 h-3.5" />
-                    {/* Eight columns in the width that used to hold seven: the labels
-                        have to stay inside their own cell or they read as one word. */}
                     <span className="hidden sm:inline text-[9px] leading-none tracking-tight">{a.label}</span>
                   </button>
                 ))}
@@ -407,10 +395,10 @@ export default function Permissions() {
             <p className="text-xs text-muted-foreground pb-4">
               View controls whether the page appears in the sidebar and loads.
               Add, Edit and Delete are enforced by the server on every write, so
-              unchecking them blocks the action even through direct API calls.
-              Download covers CSV and PDF exports; Print covers printing the same
-              documents — a role can be allowed to print an invoice without being
-              able to take a copy of the file away.
+              unchecking them blocks the action even through direct API calls —
+              Edit also covers approvals and other sign-offs. Download covers
+              every way a document leaves the system: CSV and Excel exports,
+              PDF downloads, printing, and WhatsApp or email share links.
             </p>
           </>
         )}

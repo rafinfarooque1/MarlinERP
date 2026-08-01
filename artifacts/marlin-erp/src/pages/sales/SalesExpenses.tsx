@@ -478,7 +478,7 @@ export default function SalesExpenses() {
                         <TableCell className="text-right font-mono font-bold text-red-500 text-sm">
                           {fmt(Number(e.amount))}
                         </TableCell>
-                        {perm.canPrint && (
+                        {perm.canDownload && (
                         <TableCell className="w-10">
                           <Button
                             variant="ghost" size="icon"
@@ -569,7 +569,7 @@ export default function SalesExpenses() {
                     <TableCell className="text-right font-mono font-bold text-red-500">
                       {fmt(Number(e.amount))}
                     </TableCell>
-                    {perm.canPrint && (
+                    {perm.canDownload && (
                     <TableCell className="w-10">
                       <Button
                         variant="ghost" size="icon"

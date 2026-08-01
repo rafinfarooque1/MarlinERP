@@ -5,7 +5,13 @@ import { z } from "zod/v4";
 export const hierarchiesTable = pgTable("hierarchies", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
+  // Derived from the reporting chain: root = 1, every other role = parent + 1.
+  // Kept because the RBAC middleware's "level 1 = full access" override and
+  // several seeding migrations key on it. Never client-writable.
   level: integer("level").notNull(),
+  // Reporting line. NULL exactly for the single root (level-1) role. Column is
+  // created by a startup migration in api-server/src/index.ts.
+  reportsToId: integer("reports_to_id"),
   description: text("description"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

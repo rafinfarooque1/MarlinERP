@@ -54,7 +54,7 @@ async function printVoucher(source: 'direct' | 'location', id: number, label?: s
 }
 
 // ── By-Location drilldown panel ───────────────────────────────────────────────
-function LocationDrilldown({ loc, onBack, canPrint }: { loc: LocationExpenseSummary; onBack: () => void; canPrint: boolean }) {
+function LocationDrilldown({ loc, onBack, canDownload }: { loc: LocationExpenseSummary; onBack: () => void; canDownload: boolean }) {
   const { data, isLoading } = useLocationExpenses(loc.locationType, loc.locationId);
   const expenses = data?.expenses ?? [];
   const [viewItem, setViewItem] = useState<any>(null);
@@ -147,7 +147,7 @@ function LocationDrilldown({ loc, onBack, canPrint }: { loc: LocationExpenseSumm
                   ₹{e.amount.toLocaleString('en-IN')}
                 </TableCell>
                 <TableCell className="text-right whitespace-nowrap">
-                  {canPrint && (
+                  {canDownload && (
                   <Button
                     variant="ghost" size="icon" className="h-8 w-8 hover:text-primary"
                     title="Print payment voucher"
@@ -207,7 +207,7 @@ function LocationDrilldown({ loc, onBack, canPrint }: { loc: LocationExpenseSumm
                 )}
               </div>
 
-              {canPrint && (
+              {canDownload && (
               <Button
                 variant="outline" className="w-full"
                 onClick={() => printVoucher('location', viewItem.id, viewItem.voucherNumber)}
@@ -224,12 +224,12 @@ function LocationDrilldown({ loc, onBack, canPrint }: { loc: LocationExpenseSumm
 }
 
 // ── By-Location summary tab ───────────────────────────────────────────────────
-function ByLocationTab({ canPrint }: { canPrint: boolean }) {
+function ByLocationTab({ canDownload }: { canDownload: boolean }) {
   const { data: summary = [], isLoading } = useLocationExpensesSummary();
   const [drilldown, setDrilldown] = useState<LocationExpenseSummary | null>(null);
 
   if (drilldown) {
-    return <LocationDrilldown loc={drilldown} onBack={() => setDrilldown(null)} canPrint={canPrint} />;
+    return <LocationDrilldown loc={drilldown} onBack={() => setDrilldown(null)} canDownload={canDownload} />;
   }
 
   const grandTotal = (summary as LocationExpenseSummary[]).reduce((s, l) => s + l.total, 0);
@@ -568,7 +568,7 @@ export default function Expenses() {
                         ₹{Number(e.amount).toLocaleString('en-IN')}
                       </TableCell>
                       <TableCell className="text-right whitespace-nowrap">
-                        {perm.canPrint && (
+                        {perm.canDownload && (
                         <Button
                           variant="ghost" size="icon" className="h-8 w-8 hover:text-primary"
                           title="Print payment voucher"
@@ -590,7 +590,7 @@ export default function Expenses() {
 
           {/* ── By Location tab ── */}
           <TabsContent value="by-location" className="mt-4">
-            <ByLocationTab canPrint={perm.canPrint} />
+            <ByLocationTab canDownload={perm.canDownload} />
           </TabsContent>
         </Tabs>
       </div>
@@ -731,7 +731,7 @@ export default function Expenses() {
                 )}
               </div>
 
-              {perm.canPrint && (
+              {perm.canDownload && (
               <Button
                 variant="outline" className="w-full"
                 onClick={() => printVoucher(

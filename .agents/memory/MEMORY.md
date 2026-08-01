@@ -79,4 +79,5 @@
 - [GSTIN scope vs transfer resolver](gstin-scope-vs-transfer.md) — two resolvers ON PURPOSE: filing scope falls back to company GSTIN, transfer classification must not; per-bill vendor settlement = FIFO, boundable per vendor.
 - [Multi-punch attendance](attendance-punches.md) — days with punch rows are paid on TOTAL closed-session hours (never the span); every dayFactor feeder needs PUNCHED_HOURS_JOIN; day boundary = company tz, not UTC.
 - [Fixture-month tests vs clock rollover](fixture-month-clock-rollover.md) — hardcoded-month money suites break when today rolls past: extend ledger read windows, net out current-month accrual bleed; getCurrentPosition needs a hard deadline.
+- [Five-action permissions & role tree](five-action-permissions.md) — legacy print/approve/share cols are write-mirrors, never read; single-root role tree with derived levels; structure edits serialize on one advisory lock.
 - [Global filter plumbing](global-filter-plumbing.md) — shared from/to+location params narrow LBAC only; HO matches on TYPE alone (id placeholder differs per table); locked users' persisted context must be force-synced; drop partial dates client-side.

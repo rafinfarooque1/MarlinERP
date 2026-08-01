@@ -1,16 +1,17 @@
 import { useGetMe, useListPermissions, useListHierarchies } from '@workspace/api-client-react';
 
+/**
+ * The five-action model. Download covers EVERY output channel — CSV/Excel
+ * export, PDF save, printing, and WhatsApp/email share links. Edit covers
+ * approval (sign-off is write authority). The old canPrint/canApprove/canShare
+ * flags are gone — gate those controls on canDownload/canEdit.
+ */
 export interface PermissionSet {
   canView: boolean;
   canAdd: boolean;
   canEdit: boolean;
   canDelete: boolean;
   canDownload: boolean;
-  canPrint: boolean;
-  /** Sign-off authority — distinct from canEdit; see the DB column comment. */
-  canApprove: boolean;
-  /** Authority to publish a document outside the company (invoice share links). */
-  canShare: boolean;
   isLoading: boolean;
 }
 
@@ -23,9 +24,6 @@ export interface PermissionRow {
   canEdit?: boolean | null;
   canDelete?: boolean | null;
   canDownload?: boolean | null;
-  canPrint?: boolean | null;
-  canApprove?: boolean | null;
-  canShare?: boolean | null;
 }
 
 const FULL_ACCESS: PermissionSet = {
@@ -34,9 +32,6 @@ const FULL_ACCESS: PermissionSet = {
   canEdit: true,
   canDelete: true,
   canDownload: true,
-  canPrint: true,
-  canApprove: true,
-  canShare: true,
   isLoading: false,
 };
 
@@ -47,9 +42,6 @@ const DEFAULT_DENY: PermissionSet = {
   canEdit: false,
   canDelete: false,
   canDownload: false,
-  canPrint: false,
-  canApprove: false,
-  canShare: false,
   isLoading: false,
 };
 
@@ -98,9 +90,6 @@ export function resolvePermissions(
     canEdit: any(r => r.canEdit),
     canDelete: any(r => r.canDelete),
     canDownload: any(r => r.canDownload),
-    canPrint: any(r => r.canPrint),
-    canApprove: any(r => r.canApprove),
-    canShare: any(r => r.canShare),
     isLoading: false,
   };
 }

@@ -8,6 +8,6 @@
 
 export interface HierarchyUpdate {
   name?: string;
-  level?: number;
+  reportsToId?: number;
   description?: string;
 }

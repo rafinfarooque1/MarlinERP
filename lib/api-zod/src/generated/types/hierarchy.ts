@@ -11,5 +11,7 @@ export interface Hierarchy {
   name: string;
   level: number;
   /** @nullable */
+  reportsToId?: number | null;
+  /** @nullable */
   description?: string | null;
 }

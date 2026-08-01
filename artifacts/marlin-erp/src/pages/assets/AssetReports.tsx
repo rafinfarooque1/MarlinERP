@@ -401,7 +401,6 @@ export default function AssetReports() {
             doc={buildDoc}
             disabled={loading}
             canDownload={perm.canDownload}
-            canPrint={perm.canDownload}
           />
         </div>
 

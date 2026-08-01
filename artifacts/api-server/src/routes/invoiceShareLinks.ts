@@ -222,7 +222,7 @@ const parseId = (raw: unknown): number => {
 /** Current state of a sale's link. Read-only: never mints. */
 router.get(
   "/sales/:id/share-link",
-  requireModuleAction(SHARE_PAGES, "share"),
+  requireModuleAction(SHARE_PAGES, "download"),
   async (req, res): Promise<void> => {
     const id = parseId(req.params.id);
     if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid sale id" }); return; }
@@ -247,7 +247,7 @@ router.get(
  */
 router.post(
   "/sales/:id/share-link",
-  requireModuleAction(SHARE_PAGES, "share"),
+  requireModuleAction(SHARE_PAGES, "download"),
   async (req, res): Promise<void> => {
     const id = parseId(req.params.id);
     if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid sale id" }); return; }
@@ -304,7 +304,7 @@ router.post(
 /** Revoke whatever is active and mint a fresh link. */
 router.post(
   "/sales/:id/share-link/regenerate",
-  requireModuleAction(SHARE_PAGES, "share"),
+  requireModuleAction(SHARE_PAGES, "download"),
   async (req, res): Promise<void> => {
     const id = parseId(req.params.id);
     if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid sale id" }); return; }
@@ -337,7 +337,7 @@ router.post(
 /** Kill the active link. The URL stops working immediately. */
 router.post(
   "/sales/:id/share-link/revoke",
-  requireModuleAction(SHARE_PAGES, "share"),
+  requireModuleAction(SHARE_PAGES, "download"),
   async (req, res): Promise<void> => {
     const id = parseId(req.params.id);
     if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid sale id" }); return; }

@@ -80,21 +80,10 @@ function validateReportBody(req: any, res: any, format: "PDF" | "Excel"): Report
   return body as ReportPdfInput;
 }
 
-/**
- * Reports are rendered once and used two ways: saved to disk, or sent to a
- * printer. Those are separate rights on the Permissions page, so the guard has
- * to follow the button the user actually pressed rather than demand `download`
- * from everyone. `intent` names the button; an unrecognised value falls back to
- * download, which is the stricter reading of an ambiguous request.
- */
-function reportIntentGuard(req: any): "download" | "print" {
-  return (req.body?.intent === "print" || req.query?.intent === "print") ? "print" : "download";
-}
-
-router.post("/pdf/report", async (req, res, next) => {
-  const action = reportIntentGuard(req);
-  requireModuleAction("page:/reports/sales", action)(req, res, next);
-}, async (req, res) => {
+// Download covers every output channel — saving the PDF and sending it to a
+// printer alike — so the guard no longer cares which button was pressed.
+// Clients may still send an `intent` field; it is ignored.
+router.post("/pdf/report", requireModuleAction("page:/reports/sales", "download"), async (req, res) => {
   try {
     const body = validateReportBody(req, res, "PDF");
     if (!body) return;
@@ -182,11 +171,9 @@ router.post("/xlsx/report", requireModuleAction("page:/reports/sales", "download
 // selects which of the two expense surfaces the id belongs to — a Head Office
 // expense paid from a company cash/bank account, or a location expense paid out
 // of a warehouse's own cash.
-// Gated on PRINT, not download: both expense pages offer this as "Print payment
-// voucher" and nothing else calls it. Guarding it on download would block the
-// print-only clerk this permission exists for, and hand the file to a role that
-// was never shown the button.
-router.post("/pdf/expense-voucher", requireModuleAction(["page:/accounts/expenses", "page:/sales/expenses"], "print"), async (req, res) => {
+// Gated on download — the single right that covers every output channel,
+// printing included, under the five-action model.
+router.post("/pdf/expense-voucher", requireModuleAction(["page:/accounts/expenses", "page:/sales/expenses"], "download"), async (req, res) => {
   try {
     const source = String(req.body?.source ?? "");
     const id = Number(req.body?.id);

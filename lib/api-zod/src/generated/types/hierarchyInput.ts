@@ -8,6 +8,6 @@
 
 export interface HierarchyInput {
   name: string;
-  level: number;
+  reportsToId: number;
   description?: string;
 }

@@ -225,23 +225,35 @@ console.log('\n[M/N-edit] Edits may keep, but not grow, historical amounts while
 
 // ───────────────────────────────────────────────────────────────────────────
 console.log('\n[O] Hierarchy role edit updates the SAME record in place');
-let roleId = 0, role2Id = 0;
+let roleId = 0, role2Id = 0, rootId = 0;
 {
-  let res = await post('/hr/hierarchies', { name: `${TAG} Warehouse Lead`, level: 5, description: 'test role' });
-  assert('Role created', res.status === 201 && res.data?.id, JSON.stringify(res.data).slice(0, 150));
+  const { rows: [root] } = await sql(`SELECT id FROM hierarchies WHERE level = 1 ORDER BY id LIMIT 1`);
+  rootId = root.id;
+
+  let res = await post('/hr/hierarchies', { name: `${TAG} Warehouse Lead`, reportsToId: rootId, description: 'test role' });
+  assert('Role created reporting to the root', res.status === 201 && res.data?.id, JSON.stringify(res.data).slice(0, 150));
+  assert('Level derived from the chain (root + 1)', res.data?.level === 2, `level=${res.data?.level}`);
   roleId = res.data?.id;
   if (roleId) createdRoleIds.push(roleId);
 
-  res = await patch(`/hr/hierarchies/${roleId}`, { level: 4 });
-  assert('Level edit L5 → L4 accepted', res.status === 200, JSON.stringify(res.data).slice(0, 150));
-  assert('Same role id returned (updated, not recreated)', res.data?.id === roleId);
-  const { rows } = await sql(`SELECT id, name, level FROM hierarchies WHERE id = $1`, [roleId]);
-  assert('Row still exists under the same primary key with the new level', rows.length === 1 && rows[0].level === 4);
-  const { rows: dupes } = await sql(`SELECT COUNT(*)::int AS n FROM hierarchies WHERE name = $1`, [`${TAG} Warehouse Lead`]);
+  // A child under the new role, then reparent the child directly to the root:
+  // the SAME row must be updated in place and its level re-derived.
+  res = await post('/hr/hierarchies', { name: `${TAG} Second Role`, reportsToId: roleId });
+  assert('Child role created under the new role', res.status === 201 && res.data?.level === 3, JSON.stringify(res.data).slice(0, 150));
+  role2Id = res.data?.id;
+  if (role2Id) createdRoleIds.push(role2Id);
+
+  res = await patch(`/hr/hierarchies/${role2Id}`, { reportsToId: rootId });
+  assert('Reparent accepted', res.status === 200, JSON.stringify(res.data).slice(0, 150));
+  assert('Same role id returned (updated, not recreated)', res.data?.id === role2Id);
+  const { rows } = await sql(`SELECT id, level, reports_to_id FROM hierarchies WHERE id = $1`, [role2Id]);
+  assert('Row still exists under the same primary key with re-derived level',
+    rows.length === 1 && rows[0].reports_to_id === rootId && rows[0].level === 2, JSON.stringify(rows[0] ?? {}));
+  const { rows: dupes } = await sql(`SELECT COUNT(*)::int AS n FROM hierarchies WHERE name = $1`, [`${TAG} Second Role`]);
   assert('No duplicate role was created by the edit', dupes[0].n === 1);
-  const { rows: permRows } = await sql(`SELECT COUNT(*)::int AS n FROM permissions WHERE hierarchy_id = $1`, [roleId]);
+  const { rows: permRows } = await sql(`SELECT COUNT(*)::int AS n FROM permissions WHERE hierarchy_id = $1`, [role2Id]);
   const before = permRows[0].n;
-  const { rows: permRows2 } = await sql(`SELECT COUNT(*)::int AS n FROM permissions WHERE hierarchy_id = $1`, [roleId]);
+  const { rows: permRows2 } = await sql(`SELECT COUNT(*)::int AS n FROM permissions WHERE hierarchy_id = $1`, [role2Id]);
   assert('Permission rows keyed by hierarchy_id untouched by the edit', permRows2[0].n === before);
 }
 
@@ -267,41 +279,51 @@ console.log('\n[P] Audit log records before/after values');
   assert('Audit entry names the changed fields', Array.isArray(meta.changedFields) && meta.changedFields.includes('description'));
 }
 
-console.log('\n[Q] Validation: duplicates, bad levels, protected level 1');
+console.log('\n[Q] Validation: duplicates, reporting-chain guards, protected root role');
 {
-  let res = await post('/hr/hierarchies', { name: `${TAG} Second Role`, level: 6 });
-  role2Id = res.data?.id;
-  if (role2Id) createdRoleIds.push(role2Id);
-  res = await patch(`/hr/hierarchies/${role2Id}`, { name: `${TAG} Warehouse Lead` });
+  let res = await patch(`/hr/hierarchies/${role2Id}`, { name: `${TAG} Warehouse Lead` });
   assert('Renaming onto an existing role name → 409 with clear error', res.status === 409 && /already exists/.test(res.data?.error ?? ''), JSON.stringify(res.data).slice(0, 150));
   res = await patch(`/hr/hierarchies/${role2Id}`, { name: `  ${TAG} WAREHOUSE lead ` });
   assert('Case/whitespace-insensitive duplicate also refused', res.status === 409);
-  res = await patch(`/hr/hierarchies/${role2Id}`, { level: 0 });
-  assert('Level 0 refused', res.status === 400);
-  res = await patch(`/hr/hierarchies/${role2Id}`, { level: 2.5 });
-  assert('Fractional level refused', res.status === 400);
   res = await patch(`/hr/hierarchies/${role2Id}`, { name: '   ' });
   assert('Blank name refused', res.status === 400);
-  res = await post('/hr/hierarchies', { name: `${TAG} Warehouse Lead`, level: 7 });
+  res = await post('/hr/hierarchies', { name: `${TAG} Warehouse Lead`, reportsToId: rootId });
   assert('Creating a duplicate role name → 409', res.status === 409);
+  res = await post('/hr/hierarchies', { name: `${TAG} Orphan Role` });
+  assert('Creating a role WITHOUT reportsToId refused (no second root)', res.status === 400, JSON.stringify(res.data).slice(0, 150));
+  res = await post('/hr/hierarchies', { name: `${TAG} Orphan Role`, reportsToId: 999999 });
+  assert('Creating a role under a nonexistent manager refused', res.status === 400, JSON.stringify(res.data).slice(0, 150));
 
-  res = await patch(`/hr/hierarchies/${role2Id}`, { level: 1 });
-  assert('Promoting a role INTO level 1 (full-access override) refused', res.status === 403, JSON.stringify(res.data).slice(0, 150));
-  res = await post('/hr/hierarchies', { name: `${TAG} Sneaky Admin`, level: 1 });
-  assert('CREATING a new level-1 role refused (no super-admin minting)', res.status === 403, JSON.stringify(res.data).slice(0, 150));
+  // Chain guards: self-reporting and loops.
+  res = await patch(`/hr/hierarchies/${role2Id}`, { reportsToId: role2Id });
+  assert('A role cannot report to itself', res.status === 400, JSON.stringify(res.data).slice(0, 150));
+  // roleId currently reports to root; make role2 report to roleId, then try to
+  // point roleId at role2 — that would close a loop.
+  res = await patch(`/hr/hierarchies/${role2Id}`, { reportsToId: roleId });
+  assert('Reparent under a sibling accepted', res.status === 200 && res.data?.level === 3, JSON.stringify(res.data).slice(0, 150));
+  res = await patch(`/hr/hierarchies/${roleId}`, { reportsToId: role2Id });
+  assert('Reporting loop refused', res.status === 409 && /loop/i.test(res.data?.error ?? ''), JSON.stringify(res.data).slice(0, 150));
+
+  // Root protections: the level-1 role keeps the full-access override, so it
+  // can never be reparented, deleted, or duplicated via create.
   const { rows: [adminRole] } = await sql(`SELECT id, name, description FROM hierarchies WHERE level = 1 ORDER BY id LIMIT 1`);
   if (adminRole) {
-    res = await patch(`/hr/hierarchies/${adminRole.id}`, { level: 3 });
-    assert('Demoting the level-1 administrative role refused', res.status === 403, JSON.stringify(res.data).slice(0, 150));
+    res = await patch(`/hr/hierarchies/${adminRole.id}`, { reportsToId: roleId });
+    assert('Reparenting the root administrative role refused', res.status === 403, JSON.stringify(res.data).slice(0, 150));
     res = await patch(`/hr/hierarchies/${adminRole.id}`, { description: adminRole.description ?? '' });
-    assert('Editing safe descriptive fields of the level-1 role still allowed', res.status === 200, JSON.stringify(res.data).slice(0, 150));
+    assert('Editing safe descriptive fields of the root role still allowed', res.status === 200, JSON.stringify(res.data).slice(0, 150));
     res = await apiReq('DELETE', `/hr/hierarchies/${adminRole.id}`);
-    assert('DELETING the level-1 administrative role refused', res.status === 403, JSON.stringify(res.data).slice(0, 150));
+    assert('DELETING the root administrative role refused', res.status === 403, JSON.stringify(res.data).slice(0, 150));
     const { rows: still } = await sql(`SELECT id FROM hierarchies WHERE id = $1`, [adminRole.id]);
-    assert('Level-1 role still present after refused delete', still.length === 1);
+    assert('Root role still present after refused delete', still.length === 1);
   }
+
+  // Deletion order matters: a role that others report to is refused until the
+  // reports are moved.
+  res = await apiReq('DELETE', `/hr/hierarchies/${roleId}`);
+  assert('Deleting a role that others report to refused (409)', res.status === 409 && /report/i.test(res.data?.error ?? ''), JSON.stringify(res.data).slice(0, 150));
   res = await apiReq('DELETE', `/hr/hierarchies/${role2Id}`);
-  assert('Deleting an ordinary (non-level-1) role still works', res.status === 204, `status=${res.status}`);
+  assert('Deleting a leaf role works', res.status === 204, `status=${res.status}`);
   if (res.status === 204) createdRoleIds.splice(createdRoleIds.indexOf(role2Id), 1);
 }
 

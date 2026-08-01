@@ -7,49 +7,86 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Network, Download, Eye, Pencil, ShieldOff } from 'lucide-react';
+import { Plus, Search, Network, Download, Eye, Pencil, ShieldOff, Crown } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
+import type { Hierarchy as Role } from '@workspace/api-client-react';
 
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
-  level: z.coerce.number().min(1).max(10),
+  reportsToId: z.coerce.number().int().positive('Choose who this role reports to'),
   description: z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
+
+/** The chain from a role up to the root, e.g. "Supervisor → Warehouse Manager → Management". */
+function chainFor(role: Role, byId: Map<number, Role>): Role[] {
+  const chain: Role[] = [];
+  let cur: Role | undefined = role;
+  const seen = new Set<number>();
+  while (cur && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    chain.push(cur);
+    cur = cur.reportsToId != null ? byId.get(cur.reportsToId) : undefined;
+  }
+  return chain;
+}
+
+/** Every role at or below `id` in the reporting tree — these cannot become its manager. */
+function subtreeIds(id: number, roles: Role[]): Set<number> {
+  const ids = new Set<number>([id]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const r of roles) {
+      if (r.reportsToId != null && ids.has(r.reportsToId) && !ids.has(r.id)) { ids.add(r.id); grew = true; }
+    }
+  }
+  return ids;
+}
 
 export default function Hierarchy() {
   const perm = usePermission('page:/hr/hierarchy');
   const { data: hierarchies = [], isLoading } = useListHierarchies();
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
-  const [viewItem, setViewItem] = useState<any>(null);
+  const [viewItem, setViewItem] = useState<Role | null>(null);
   // Editing UPDATES the same role record in place — employees keep pointing at
   // the same hierarchy id, so assignments and permission rows follow the edit
   // automatically. null = the dialog is in "Add" mode.
-  const [editItem, setEditItem] = useState<any>(null);
+  const [editItem, setEditItem] = useState<Role | null>(null);
   const queryClient = useQueryClient();
   const createMutation = useCreateHierarchy();
   const updateMutation = useUpdateHierarchy();
 
-  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', level: 3, description: '' } });
+  const roles = hierarchies as Role[];
+  const byId = new Map(roles.map(r => [r.id, r]));
+  const root = roles.find(r => r.reportsToId == null && r.level === 1) ?? roles.find(r => r.level === 1);
+  const isRoot = (r: Role | null | undefined) => !!r && r.id === root?.id;
 
-  const openEdit = (h: any) => {
+  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', reportsToId: undefined as unknown as number, description: '' } });
+
+  const openEdit = (h: Role) => {
     setEditItem(h);
-    form.reset({ name: h.name, level: h.level, description: h.description ?? '' });
+    form.reset({ name: h.name, reportsToId: h.reportsToId ?? (undefined as unknown as number), description: h.description ?? '' });
     setIsOpen(true);
   };
 
   const onSubmit = (data: FormValues) => {
     if (editItem) {
-      updateMutation.mutate({ id: editItem.id, data }, {
+      // The root reports to nobody — never send reportsToId for it.
+      const payload = isRoot(editItem)
+        ? { name: data.name, description: data.description }
+        : data;
+      updateMutation.mutate({ id: editItem.id, data: payload }, {
         onSuccess: () => { toast.success('Role updated'); queryClient.invalidateQueries({ queryKey: getListHierarchiesQueryKey() }); setIsOpen(false); setEditItem(null); form.reset(); },
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
       });
@@ -61,11 +98,16 @@ export default function Hierarchy() {
     });
   };
 
-  const sorted = [...hierarchies].sort((a, b) => a.level - b.level);
+  // Order by the chain: managers before their reports, alphabetical between
+  // siblings — the org structure without showing anyone a raw number.
+  const sorted = [...roles].sort((a, b) => (a.level - b.level) || a.name.localeCompare(b.name));
   const filtered = sorted.filter(h => h.name.toLowerCase().includes(search.toLowerCase()));
 
-  const levelLabel = (l: number) => l <= 2 ? 'Senior' : l <= 4 ? 'Mid' : 'Junior';
-  const levelColor = (l: number) => l <= 2 ? 'bg-primary/10 text-primary border-primary/20' : l <= 4 ? 'bg-amber-500/10 text-amber-500 border-amber-500/20' : 'bg-muted text-muted-foreground';
+  // In "Edit" mode a role may not report to itself or anything below it.
+  const invalidParents = editItem ? subtreeIds(editItem.id, roles) : new Set<number>();
+  const parentOptions = roles.filter(r => !invalidParents.has(r.id));
+
+  const reportsToName = (h: Role) => (h.reportsToId != null ? byId.get(h.reportsToId)?.name ?? '—' : null);
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -92,15 +134,15 @@ export default function Hierarchy() {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Network className="w-6 h-6 text-primary" /> Org Hierarchy</h1>
-            <p className="text-muted-foreground mt-1">Roles and designations structure</p>
+            <p className="text-muted-foreground mt-1">Roles and who they report to</p>
           </div>
           <div className="flex gap-2">
             {perm.canDownload && (
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('hierarchy.csv', filtered.map(h => ({ Name: h.name, Level: h.level, Description: h.description || '' })))}>
+            <Button variant="outline" size="sm" onClick={() => downloadCSV('hierarchy.csv', filtered.map(h => ({ Name: h.name, 'Reports To': reportsToName(h) ?? '', Description: h.description || '' })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
             )}
-            {perm.canAdd && <Button onClick={() => { setEditItem(null); form.reset({ name: '', level: 3, description: '' }); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Role</Button>}
+            {perm.canAdd && <Button onClick={() => { setEditItem(null); form.reset({ name: '', reportsToId: root?.id ?? (undefined as unknown as number), description: '' }); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Role</Button>}
           </div>
         </div>
 
@@ -113,24 +155,33 @@ export default function Hierarchy() {
             <TableHeader>
               <TableRow className="bg-muted/10">
                 <TableHead>Role / Designation</TableHead>
-                <TableHead>Level</TableHead>
-                <TableHead>Grade</TableHead>
+                <TableHead>Reports To</TableHead>
                 <TableHead>Description</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={4}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={5} className="text-center py-16 text-muted-foreground">
+                <TableRow><TableCell colSpan={4} className="text-center py-16 text-muted-foreground">
                   <Network className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No roles defined</p>
                 </TableCell></TableRow>
               ) : filtered.map(h => (
                 <TableRow key={h.id} className="hover:bg-muted/10">
-                  <TableCell className="font-semibold">{h.name}</TableCell>
-                  <TableCell><Badge variant="outline" className="font-mono">L{h.level}</Badge></TableCell>
-                  <TableCell><Badge variant="outline" className={levelColor(h.level)}>{levelLabel(h.level)}</Badge></TableCell>
+                  <TableCell className="font-semibold">
+                    <span className="flex items-center gap-2">
+                      {h.name}
+                      {isRoot(h) && (
+                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 gap-1">
+                          <Crown className="w-3 h-3" /> Top level
+                        </Badge>
+                      )}
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-sm">
+                    {reportsToName(h) ?? <span className="text-muted-foreground">—</span>}
+                  </TableCell>
                   <TableCell className="text-sm text-muted-foreground max-w-[200px] truncate">{h.description || '—'}</TableCell>
                   <TableCell className="text-right">
                     <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(h)}><Eye className="w-4 h-4" /></Button>
@@ -151,24 +202,42 @@ export default function Hierarchy() {
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
               <FormField control={form.control} name="name" render={({ field }) => (
-                <FormItem><FormLabel>Role Name <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="e.g. Production Manager" {...field} /></FormControl><FormMessage /></FormItem>
+                <FormItem><FormLabel>Role Name <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="e.g. Warehouse Manager" {...field} /></FormControl><FormMessage /></FormItem>
               )} />
-              <FormField control={form.control} name="level" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Hierarchy Level (1 = highest)</FormLabel>
-                  <FormControl><Input type="number" min={1} max={10} disabled={editItem?.level === 1} {...field} /></FormControl>
-                  {/* Seniority only: the level orders the org chart and never
-                      grants or removes ERP permissions — those stay with the
-                      role's permission rows regardless of level. Level 1 is the
-                      administrative exception and is locked server-side. */}
-                  <p className="text-xs text-muted-foreground">
-                    {editItem?.level === 1
-                      ? 'Top-level administrative role — its level cannot be changed.'
-                      : 'Organisational seniority only. Changing the level does not change what this role can access — permissions are managed on the Permissions page.'}
-                  </p>
-                  <FormMessage />
-                </FormItem>
-              )} />
+              {isRoot(editItem) ? (
+                <p className="text-xs text-muted-foreground">
+                  Top-level administrative role — it reports to nobody and always has
+                  full access. Its name and description can be changed.
+                </p>
+              ) : (
+                <FormField control={form.control} name="reportsToId" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Reports To <span className="text-destructive">*</span></FormLabel>
+                    <Select
+                      value={field.value != null && !Number.isNaN(field.value) ? String(field.value) : undefined}
+                      onValueChange={v => field.onChange(Number(v))}
+                    >
+                      <FormControl>
+                        <SelectTrigger><SelectValue placeholder="Choose a role" /></SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {parentOptions.map(r => (
+                          <SelectItem key={r.id} value={String(r.id)}>{r.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {/* Seniority is the chain itself: permissions stay with the
+                        role's rows on the Permissions page regardless of where it
+                        sits. Only the top-level role is the exception, and it is
+                        locked server-side. */}
+                    <p className="text-xs text-muted-foreground">
+                      Where this role sits in the org chain. Changing it does not change
+                      what the role can access — permissions are managed on the Permissions page.
+                    </p>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+              )}
               <FormField control={form.control} name="description" render={({ field }) => (
                 <FormItem><FormLabel>Description</FormLabel><FormControl><Textarea placeholder="Role responsibilities..." rows={2} {...field} /></FormControl></FormItem>
               )} />
@@ -187,16 +256,28 @@ export default function Hierarchy() {
         <SheetContent>
           <SheetHeader>
             <SheetTitle className="flex items-center gap-2"><Network className="w-5 h-5 text-primary" />{viewItem?.name}</SheetTitle>
-            <SheetDescription>Level {viewItem?.level} — {viewItem && levelLabel(viewItem.level)}</SheetDescription>
+            <SheetDescription>
+              {viewItem && (isRoot(viewItem)
+                ? 'Top-level administrative role'
+                : `Reports to ${reportsToName(viewItem) ?? '—'}`)}
+            </SheetDescription>
           </SheetHeader>
           {viewItem && (
             <div className="mt-6 space-y-4">
-              {[['Level', `L${viewItem.level}`], ['Grade', levelLabel(viewItem.level)], ['Description', viewItem.description || '—']].map(([k, v]) => (
-                <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
-                  <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
-                  <span className="font-medium">{v}</span>
-                </div>
-              ))}
+              <div className="flex flex-col gap-1 border-b border-border pb-3">
+                <span className="text-xs text-muted-foreground uppercase tracking-wider">Reporting chain</span>
+                <span className="font-medium">
+                  {chainFor(viewItem, byId).map(r => r.name).join(' → ')}
+                </span>
+              </div>
+              <div className="flex flex-col gap-1 border-b border-border pb-3">
+                <span className="text-xs text-muted-foreground uppercase tracking-wider">Reports To</span>
+                <span className="font-medium">{reportsToName(viewItem) ?? 'Nobody — top of the chain'}</span>
+              </div>
+              <div className="flex flex-col gap-1 border-b border-border pb-3">
+                <span className="text-xs text-muted-foreground uppercase tracking-wider">Description</span>
+                <span className="font-medium">{viewItem.description || '—'}</span>
+              </div>
             </div>
           )}
         </SheetContent>

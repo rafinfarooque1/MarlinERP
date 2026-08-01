@@ -16,7 +16,4 @@ export interface Permission {
   canEdit?: boolean;
   canDelete?: boolean;
   canDownload?: boolean;
-  canPrint?: boolean;
-  canApprove?: boolean;
-  canShare?: boolean;
 }

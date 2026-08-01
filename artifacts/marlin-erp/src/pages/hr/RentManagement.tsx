@@ -543,7 +543,7 @@ export default function RentManagement() {
                     <TableCell className="text-xs text-muted-foreground">{dmy(p.dueDate)}</TableCell>
                     <TableCell>{statusBadge(p)}</TableCell>
                     <TableCell className="text-right space-x-1">
-                      {p.status === 'pending' && perm.canApprove && isHeadOffice && (
+                      {p.status === 'pending' && perm.canEdit && isHeadOffice && (
                         <Button
                           size="sm" variant="outline"
                           disabled={!p.accrualComplete || approvePeriod.isPending}
@@ -632,7 +632,7 @@ export default function RentManagement() {
                       <Download className="w-4 h-4 mr-2" /> Excel (CSV)
                     </Button>
                   )}
-                  {perm.canPrint && (
+                  {perm.canDownload && (
                     <Button variant="outline" size="sm" onClick={printReport}>
                       <Printer className="w-4 h-4 mr-2" /> Print / PDF
                     </Button>
