@@ -679,6 +679,11 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       total: accounting ? accounting.expenses.total : null,
       direct: accounting ? accounting.expenses.direct : null,
       indirect: accounting ? accounting.expenses.indirect : null,
+      // Salary/Rent subtree totals off the same P&L build as `total`;
+      // `other` = total − salary − rent, so the tile hint always reconciles.
+      salary: accounting ? accounting.expenses.salary : null,
+      rent: accounting ? accounting.expenses.rent : null,
+      other: accounting ? accounting.expenses.other : null,
       companyWide: true,
     },
     // Bank only — physical cash stays in the separate `cash` figures, matching

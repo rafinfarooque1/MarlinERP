@@ -136,6 +136,13 @@ export default function Dashboard() {
       label: 'Expenses',
       value: bi?.expenses?.total == null ? '—' : fmt(bi.expenses.total),
       tone: (bi?.expenses?.total ?? 0) > 0 ? 'neg' : 'default',
+      // Same three-way breakdown style as the Payables card. Salary and Rent
+      // are read off the same P&L build as the total and Other is the exact
+      // remainder, so the line always sums to the figure above it for every
+      // date range. Hidden (like the total) for single-location logins.
+      hint: bi?.expenses?.total != null && bi.expenses.salary != null
+        ? `Salary ${fmt(bi.expenses.salary)} · Rent ${fmt(bi.expenses.rent ?? 0)} · Other ${fmt(bi.expenses.other ?? 0)}`
+        : undefined,
     },
     {
       label: 'Bank Balance',

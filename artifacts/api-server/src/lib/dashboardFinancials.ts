@@ -27,8 +27,19 @@ import { pool } from "@workspace/db";
 import { buildBooks } from "./books";
 
 export interface CompanyFinancials {
-  /** Period figures (respect `fromDate`), straight off the P&L. */
-  expenses: { direct: number; indirect: number; total: number };
+  /**
+   * Period figures (respect `fromDate`), straight off the P&L.
+   *
+   * `salary` and `rent` are the STD-SALARY-EXP and STD-GRP-RENT-EXP subtree
+   * totals read from the SAME buildBooks output that produces `total` — never
+   * re-summed from postings here (the capitalisation overlay would make a
+   * second implementation drift from the P&L). `other` is defined as
+   * `total − salary − rent`, so total = salary + rent + other by construction.
+   */
+  expenses: {
+    direct: number; indirect: number; total: number;
+    salary: number; rent: number; other: number;
+  };
   /** Cumulative to `toDate` — a balance is a position, not a period flow. */
   bankBalance: number;
   cashBalance: number;
@@ -180,8 +191,32 @@ export async function companyFinancials(
   const direct = books.profitAndLoss.expenses.directExpenses.total;
   const indirect = books.profitAndLoss.expenses.indirectExpenses.total;
 
+  // Subtree total for a code inside an already-built statement group. A node's
+  // `balance` is its own postings plus all descendants, so the first match is
+  // the whole subtree. Searched in both expense groups so a re-parented salary
+  // or rent container keeps reporting instead of silently reading 0.
+  type Node = { code: string | null; balance: number; children: Node[] };
+  const findBalance = (nodes: Node[], code: string): number | null => {
+    for (const n of nodes) {
+      if (n.code === code) return n.balance;
+      const hit = findBalance(n.children, code);
+      if (hit !== null) return hit;
+    }
+    return null;
+  };
+  const groups = [
+    ...books.profitAndLoss.expenses.indirectExpenses.children,
+    ...books.profitAndLoss.expenses.directExpenses.children,
+  ] as Node[];
+  const salary = r2(findBalance(groups, "STD-SALARY-EXP") ?? 0);
+  const rent = r2(findBalance(groups, "STD-GRP-RENT-EXP") ?? 0);
+  const total = r2(direct + indirect);
+
   return {
-    expenses: { direct: r2(direct), indirect: r2(indirect), total: r2(direct + indirect) },
+    expenses: {
+      direct: r2(direct), indirect: r2(indirect), total,
+      salary, rent, other: r2(total - salary - rent),
+    },
     ...controls,
   };
 }

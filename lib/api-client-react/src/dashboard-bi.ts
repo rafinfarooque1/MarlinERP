@@ -83,7 +83,12 @@ export interface DashboardBi {
    * `null` when the caller is scoped to a single location — derived postings
    * carry no location, so there is no honest per-branch figure to show.
    */
-  expenses: { total: number | null; direct: number | null; indirect: number | null; companyWide: boolean };
+  expenses: {
+    total: number | null; direct: number | null; indirect: number | null;
+    /** Salary/Rent expense subtree totals for the period; `other` = total − salary − rent. */
+    salary: number | null; rent: number | null; other: number | null;
+    companyWide: boolean;
+  };
   /** Aggregate bank ledger balance (excludes physical cash). `null` as above. */
   bank: { balance: number | null; companyWide: boolean };
   topItems: BiTopItem[];
