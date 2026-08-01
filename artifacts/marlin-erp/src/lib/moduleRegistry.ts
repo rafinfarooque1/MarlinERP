@@ -22,6 +22,8 @@
 
 import type { LucideIcon } from 'lucide-react';
 import {
+  ArrowDownLeft,
+  ArrowUpRight,
   LayoutDashboard,
   ShoppingCart,
   Package,
@@ -303,6 +305,22 @@ export const MODULE_REGISTRY: ModuleDef[] = [
       { name: 'Cash Balance', href: '/accounts/cash-in-outlet' },
     ],
     icon: Banknote,
+  },
+  {
+    // Full-page money-in voucher for daily operations staff. Same engine and
+    // register as Accounts › Vouchers — this is a separate SURFACE with its
+    // own permission key, not a separate book.
+    key: 'Receipt Voucher', permGroup: 'Operations',
+    navGroup: 'Operations',
+    navEntries: [{ name: 'Receipt Voucher', href: '/operations/receipt-voucher' }],
+    icon: ArrowDownLeft,
+  },
+  {
+    // Full-page money-out voucher, mirror of Receipt Voucher.
+    key: 'Payment Voucher', permGroup: 'Operations',
+    navGroup: 'Operations',
+    navEntries: [{ name: 'Payment Voucher', href: '/operations/payment-voucher' }],
+    icon: ArrowUpRight,
   },
 
   // ── Production ─────────────────────────────────────────────────────────────

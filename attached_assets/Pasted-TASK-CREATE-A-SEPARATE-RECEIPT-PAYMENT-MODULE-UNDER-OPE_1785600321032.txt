@@ -1,0 +1,560 @@
+TASK: CREATE A SEPARATE RECEIPT & PAYMENT MODULE UNDER OPERATIONS
+
+Do NOT merge Receipt and Payment into the generic Vouchers page.
+
+Create them as two independent ERP modules under the Operations menu.
+
+==================================================
+MENU STRUCTURE
+==================================================
+
+Operations
+│
+├── Sales
+├── Purchase
+├── Stock Transfer
+├── Expenses
+├── Receipt Voucher
+├── Payment Voucher
+└── Existing modules...
+
+Receipt Voucher and Payment Voucher must appear as separate menu items.
+
+Do not hide them under Journal Vouchers.
+
+Do not merge them into Vouchers.
+
+==================================================
+1. RECEIPT VOUCHER PAGE
+==================================================
+
+Create a dedicated page:
+
+Operations → Receipt Voucher
+
+Purpose:
+
+Record all money received.
+
+Examples:
+
+• Customer Receipt
+• Vendor Refund
+• Employee Refund
+• Advance Received
+• Loan Received
+• Capital Introduced
+• Other Receipt
+
+Fields
+
+Voucher No (Auto)
+
+Date
+
+Receipt Into
+
+Head Office Cash
+
+Warehouse Cash
+
+Outlet Cash
+
+Bank Account
+
+Received From
+
+Customer
+
+Vendor
+
+Employee
+
+Ledger
+
+Amount
+
+Payment Mode
+
+Cash
+
+UPI
+
+Bank
+
+Cheque
+
+Card
+
+NEFT
+
+RTGS
+
+Reference Number
+
+Narration
+
+Attachment (reuse existing upload system if available)
+
+Buttons
+
+Save
+
+Save & Print
+
+Print
+
+PDF
+
+Reset
+
+==================================================
+2. PAYMENT VOUCHER PAGE
+==================================================
+
+Create another dedicated page:
+
+Operations → Payment Voucher
+
+Purpose:
+
+Record money paid.
+
+Examples
+
+Vendor Payment
+
+Salary Payment
+
+Employee Advance
+
+Rent Payment
+
+Expense Payment
+
+Customer Refund
+
+Loan Repayment
+
+Capital Withdrawal
+
+Other Payment
+
+Fields
+
+Voucher No
+
+Date
+
+Paid From
+
+Head Office Cash
+
+Warehouse Cash
+
+Outlet Cash
+
+Bank Account
+
+Paid To
+
+Customer
+
+Vendor
+
+Employee
+
+Ledger
+
+Amount
+
+Payment Mode
+
+Cash
+
+UPI
+
+Bank
+
+Cheque
+
+Card
+
+NEFT
+
+RTGS
+
+Reference Number
+
+Narration
+
+Attachment
+
+Buttons
+
+Save
+
+Save & Print
+
+Print
+
+PDF
+
+Reset
+
+==================================================
+3. WAREHOUSE / OUTLET CASH
+==================================================
+
+Warehouse cash and Outlet cash must behave as independent cash accounts.
+
+Examples
+
+Warehouse A Cash
+
+Warehouse B Cash
+
+Outlet A Cash
+
+Outlet B Cash
+
+Head Office Cash
+
+Selecting any of them should post directly into that cash ledger.
+
+==================================================
+4. ACCOUNTING
+==================================================
+
+Receipt
+
+Dr Selected Cash/Bank
+
+Cr Selected Ledger
+
+Payment
+
+Dr Selected Ledger
+
+Cr Selected Cash/Bank
+
+Use the ERP's existing accounting engine.
+
+Do not create duplicate postings.
+
+==================================================
+5. CUSTOMER
+==================================================
+
+Customer Receipt
+
+Outstanding reduces automatically.
+
+Customer Statement updates.
+
+Dashboard Receivable updates.
+
+==================================================
+6. VENDOR
+==================================================
+
+Vendor Payment
+
+Outstanding reduces automatically.
+
+Vendor Statement updates.
+
+Dashboard Payables update.
+
+==================================================
+7. EMPLOYEE
+==================================================
+
+Employee Salary
+
+Dr Salary Payable
+
+Cr Selected Cash/Bank
+
+Employee Advance
+
+Dr Employee Advance
+
+Cr Selected Cash/Bank
+
+Recovery
+
+Dr Cash/Bank
+
+Cr Employee Advance
+
+==================================================
+8. GENERAL LEDGER
+==================================================
+
+Allow receipts/payments for
+
+Assets
+
+Liabilities
+
+Capital
+
+Expenses
+
+Income
+
+Loans
+
+Other Ledgers
+
+==================================================
+9. LOCATION
+==================================================
+
+Every Receipt/Payment must store
+
+Warehouse
+
+Outlet
+
+Location
+
+Cash Account
+
+so reports remain branch-wise.
+
+==================================================
+10. VOUCHER NUMBER
+==================================================
+
+Receipt
+
+RV/2026-27/0001
+
+Payment
+
+PV/2026-27/0001
+
+Continue existing numbering.
+
+==================================================
+11. PRINT FORMAT
+==================================================
+
+Receipt Voucher print.
+
+Payment Voucher print.
+
+Professional ERP format.
+
+Company Logo
+
+Warehouse Name
+
+Voucher Details
+
+Amount
+
+Narration
+
+Reference
+
+Authorized Signatory
+
+==================================================
+12. REPORTS
+==================================================
+
+Automatically update
+
+Cash Book
+
+Bank Book
+
+Day Book
+
+Ledger
+
+Customer Ledger
+
+Vendor Ledger
+
+Employee Ledger
+
+Trial Balance
+
+Balance Sheet
+
+Receipt Register
+
+Payment Register
+
+==================================================
+13. SEARCH
+==================================================
+
+Search by
+
+Voucher No
+
+Date
+
+Customer
+
+Vendor
+
+Employee
+
+Ledger
+
+Reference
+
+Narration
+
+==================================================
+14. FILTERS
+==================================================
+
+Date
+
+Warehouse
+
+Outlet
+
+Cash Account
+
+Bank
+
+Payment Mode
+
+Created By
+
+==================================================
+15. EDIT
+==================================================
+
+Only manually created Receipt/Payment vouchers may be edited.
+
+System-generated vouchers remain locked.
+
+Backend must enforce this.
+
+==================================================
+16. DELETE
+==================================================
+
+Only manual vouchers may be deleted.
+
+Reverse accounting safely.
+
+==================================================
+17. RBAC
+==================================================
+
+Separate permissions.
+
+View Receipt Voucher
+
+Create Receipt Voucher
+
+Edit Receipt Voucher
+
+Delete Receipt Voucher
+
+View Payment Voucher
+
+Create Payment Voucher
+
+Edit Payment Voucher
+
+Delete Payment Voucher
+
+Print
+
+Export
+
+==================================================
+18. UI
+==================================================
+
+Use the existing ERP design system.
+
+Do NOT create a popup.
+
+Do NOT create a small dialog.
+
+Receipt Voucher and Payment Voucher must each be full ERP pages like Sales, Purchase, Expenses, and Stock Transfer.
+
+==================================================
+19. IMPORTANT
+==================================================
+
+Do NOT duplicate the accounting engine.
+
+Do NOT duplicate journal posting logic.
+
+Do NOT duplicate ledger posting.
+
+Reuse existing services.
+
+If Receipt and Payment logic already exists, simply expose it through these dedicated modules instead of recreating it.
+
+==================================================
+20. TESTING
+==================================================
+
+Verify
+
+Customer receipt
+
+Vendor payment
+
+Salary payment
+
+Advance
+
+Rent
+
+Warehouse Cash
+
+Outlet Cash
+
+Head Office Cash
+
+Cash Book
+
+Bank Book
+
+Reports
+
+Trial Balance
+
+Balance Sheet
+
+Print
+
+PDF
+
+Permissions
+
+No duplicate postings
+
+==================================================
+FINAL REPORT
+==================================================
+
+Provide
+
+1. Menu location
+2. Routes created
+3. APIs reused
+4. Accounting integration
+5. Report integration
+6. Print format
+7. Permission changes
+8. Tests performed
+
+Do NOT stop after planning.
+
+Implement the separate Receipt Voucher and Payment Voucher modules under Operations using the existing accounting engine.

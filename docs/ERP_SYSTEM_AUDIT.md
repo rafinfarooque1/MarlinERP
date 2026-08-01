@@ -50,7 +50,7 @@
 ## 2. Module List (complete)
 
 **Standalone:** Dashboard · My Profile
-**Operations:** Point of Sale (`/sales/pos`) · Stock (branch) · Stock Transfer · Expenses · Cash Balance · Customers
+**Operations:** Point of Sale (`/sales/pos`) · Stock (branch) · Stock Transfer · Expenses · Cash Balance · Customers · Receipt Voucher (`/operations/receipt-voucher`) · Payment Voucher (`/operations/payment-voucher`) — full-page surfaces over the SAME receipts/payments engine as Accounts › Vouchers (same REC-/PAT- numbering, postings, provenance locks); own page keys; kind-bound PDF print via `POST /pdf/money-voucher`
 **Stock:** Production batches · Stock (HO) · Stock Ledger · Inventory Reports · Stock Verification
 **Production:** Purchases · Vendors · Item Master · Units · BOM templates · Production Reports
 **Inventory (HO):** Warehouses · Outlets · Item Prices

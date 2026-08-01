@@ -48,6 +48,8 @@ import GstSummary from './pages/accounts/GstSummary';
 import GstReturns from './pages/accounts/GstReturns';
 import Payment from './pages/accounts/Payment';
 import ReceiptPage from './pages/accounts/Receipt';
+import ReceiptVoucher from './pages/operations/ReceiptVoucher';
+import PaymentVoucher from './pages/operations/PaymentVoucher';
 import Journal from './pages/accounts/Journal';
 import Contra from './pages/accounts/Contra';
 import Notes from './pages/accounts/Notes';
@@ -424,6 +426,14 @@ function Router() {
       <Route path="/sales/quotations">
         <PermGuard href="/sales/quotations" pageName="Quotations"><Quotations /></PermGuard>
       </Route>
+      <Route path="/operations/receipt-voucher">
+        <PermGuard href="/operations/receipt-voucher" pageName="Receipt Voucher"><ReceiptVoucher /></PermGuard>
+      </Route>
+
+      <Route path="/operations/payment-voucher">
+        <PermGuard href="/operations/payment-voucher" pageName="Payment Voucher"><PaymentVoucher /></PermGuard>
+      </Route>
+
       <Route path="/sales/expenses">
         <PermGuard href="/sales/expenses" pageName="Expenses"><SalesExpenses /></PermGuard>
       </Route>

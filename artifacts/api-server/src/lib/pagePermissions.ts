@@ -15,6 +15,8 @@ export const PAGE_PERM_KEYS: readonly string[] = [
   "page:/transfers",                   // Operations › Stock Transfer
   "page:/sales/expenses",              // Operations › Expenses
   "page:/accounts/cash-in-outlet",     // Operations › Cash Balance
+  "page:/operations/receipt-voucher",  // Operations › Receipt Voucher
+  "page:/operations/payment-voucher",  // Operations › Payment Voucher
   "page:/headoffice/stock",            // Operations › Stock
   "page:/customers",                   // Operations › Customers
   "page:/production/production",       // Production › Batches
@@ -75,6 +77,8 @@ export const LEGACY_MODULE_TO_PAGES: Readonly<Record<string, readonly string[]>>
   "HO Transfers": ["page:/transfers"],
   "Location Expenses": ["page:/sales/expenses"],
   "Cash Balance": ["page:/accounts/cash-in-outlet"],
+  "Receipt Voucher": ["page:/operations/receipt-voucher"],
+  "Payment Voucher": ["page:/operations/payment-voucher"],
   "Units": ["page:/production/units"],
   "Items": ["page:/production/item-master"],
   "Production": ["page:/production/production", "page:/production/reports"],

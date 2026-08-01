@@ -12,6 +12,8 @@ import { generatePayslipPdf } from "../services/payslipPdf";
 import { generateReportPdf, type ReportPdfInput } from "../services/reportPdf";
 import { generateReportXlsx } from "../services/reportXlsx";
 import { generateExpenseVoucherPdf } from "../services/expenseVoucherPdf";
+import { generateMoneyVoucherPdf } from "../services/moneyVoucherPdf";
+import { ownLocationScope, scopeLedgerIds, scopeMoneyWhere } from "../lib/moneyScope";
 import { pool } from "@workspace/db";
 
 /** Company header, read server-side so a document cannot be printed under a
@@ -277,6 +279,97 @@ router.post("/pdf/expense-voucher", requireModuleAction(["page:/accounts/expense
     res.end(buffer);
   } catch (err) {
     console.error("[pdfGen] expense voucher error:", err);
+    res.status(500).json({ error: "PDF generation failed" });
+  }
+});
+
+// ── Receipt / Payment voucher ─────────────────────────────────────────────────
+// Assembled from the stored row only — a voucher is an accounting document, so
+// it must state what the books hold and nothing else. Visibility follows the
+// exact same LBAC rule as the register lists (ledger-leg scope), so a branch
+// user can print precisely the vouchers they can see, and a voucher outside
+// their scope is a 404, not a hint that it exists.
+router.post("/pdf/money-voucher", (req, res, next) => {
+  // The download right is checked against the SPECIFIC voucher kind: a role
+  // holding only the Receipt Voucher page must not print payments through this
+  // shared route (Accounts › Vouchers remains an any-kind override).
+  const kind = String(req.body?.kind ?? "");
+  if (kind !== "receipt" && kind !== "payment") {
+    res.status(400).json({ error: "kind must be 'receipt' or 'payment'" }); return;
+  }
+  const kindKey = kind === "receipt"
+    ? "page:/operations/receipt-voucher" : "page:/operations/payment-voucher";
+  requireModuleAction(["page:/accounts/vouchers", kindKey], "download")(req, res, next);
+}, async (req, res) => {
+  try {
+    // Validated by the guard middleware above.
+    const kind = String(req.body?.kind) as "receipt" | "payment";
+    const id = Number(req.body?.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "id is required" }); return;
+    }
+
+    const scope = ownLocationScope((req as any).employee);
+    const ledgerIds = await scopeLedgerIds(scope);
+    const params: unknown[] = [];
+
+    let row: any;
+    if (kind === "payment") {
+      let where = scopeMoneyWhere(scope, ledgerIds, params, "p", ["paid_from_ledger_id", "paid_to_ledger_id"]);
+      params.push(id);
+      const { rows: [r] } = await pool.query<any>(`
+        SELECT p.voucher_number, p.payment_date AS voucher_date, p.amount, p.narration,
+               p.payment_mode, p.reference_number, p.attachment_url, p.created_by, p.created_at,
+               pf.name AS cash_bank_name, pt.name AS party_name,
+               COALESCE(w.name, o.name) AS location_name
+          FROM payments p
+          LEFT JOIN account_ledgers pf ON pf.id = p.paid_from_ledger_id
+          LEFT JOIN account_ledgers pt ON pt.id = p.paid_to_ledger_id
+          LEFT JOIN warehouses w ON p.location_type = 'warehouse' AND w.id = p.location_id
+          LEFT JOIN outlets    o ON p.location_type = 'outlet'    AND o.id = p.location_id
+         WHERE (${where}) AND p.id = $${params.length}`, params);
+      row = r;
+    } else {
+      let where = scopeMoneyWhere(scope, ledgerIds, params, "p", ["received_in_ledger_id", "received_from_ledger_id"]);
+      params.push(id);
+      const { rows: [r] } = await pool.query<any>(`
+        SELECT p.voucher_number, p.receipt_date AS voucher_date, p.amount, p.narration,
+               p.payment_mode, p.reference_number, p.attachment_url, p.created_by, p.created_at,
+               ri.name AS cash_bank_name, rf.name AS party_name,
+               COALESCE(w.name, o.name) AS location_name
+          FROM receipts p
+          LEFT JOIN account_ledgers ri ON ri.id = p.received_in_ledger_id
+          LEFT JOIN account_ledgers rf ON rf.id = p.received_from_ledger_id
+          LEFT JOIN warehouses w ON p.location_type = 'warehouse' AND w.id = p.location_id
+          LEFT JOIN outlets    o ON p.location_type = 'outlet'    AND o.id = p.location_id
+         WHERE (${where}) AND p.id = $${params.length}`, params);
+      row = r;
+    }
+    if (!row) { res.status(404).json({ error: "Voucher not found" }); return; }
+
+    const buffer = generateMoneyVoucherPdf({
+      kind,
+      cs: await companyHeader(),
+      voucherNumber: row.voucher_number ?? "—",
+      voucherDate: row.voucher_date,
+      amount: Number(row.amount),
+      partyName: row.party_name ?? "",
+      cashBankName: row.cash_bank_name ?? "",
+      paymentMode: row.payment_mode ?? null,
+      referenceNumber: row.reference_number ?? null,
+      narration: row.narration ?? null,
+      locationName: row.location_name ?? "Head Office",
+      recordedBy: row.created_by ?? null,
+      recordedAt: row.created_at ?? null,
+      attachmentUrl: row.attachment_url ?? null,
+    });
+    const safe = String(row.voucher_number ?? id).replace(/[^A-Za-z0-9_-]+/g, "-");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="Voucher-${safe}.pdf"`);
+    res.setHeader("Content-Length", buffer.length);
+    res.end(buffer);
+  } catch (err) {
+    console.error("[pdfGen] money voucher error:", err);
     res.status(500).json({ error: "PDF generation failed" });
   }
 });

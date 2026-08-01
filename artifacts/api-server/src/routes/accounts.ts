@@ -115,7 +115,7 @@ router.get("/accounts/chart", requireModuleView(["page:/accounts/chart", "page:/
 
 // Also expose flat list for dropdowns
 // Fills account dropdowns on Journal, Contra/Notes, Vouchers and Ledger.
-router.get("/accounts/chart/flat", requireModuleView(["page:/accounts/vouchers", "page:/accounts/ledger"]), async (_req, res): Promise<void> => {
+router.get("/accounts/chart/flat", requireModuleView(["page:/accounts/vouchers", "page:/accounts/ledger", "page:/operations/receipt-voucher", "page:/operations/payment-voucher"]), async (_req, res): Promise<void> => {
   // Deactivated ledgers are withheld: this list exists to be selected from, and
   // a deactivated ledger must not attract new postings.
   const result = await pool.query(`SELECT * FROM account_ledgers WHERE COALESCE(is_active, true) ORDER BY id`);
@@ -136,7 +136,7 @@ router.get("/accounts/chart/flat", requireModuleView(["page:/accounts/vouchers",
 
 // Cash/Bank ledgers only — for Received In / Paid From dropdowns
 // Serves Cash & Bank and Expenses pages.
-router.get("/accounts/cash-bank-ledgers", requireModuleView(["page:/accounts/cash-bank", "page:/accounts/expenses", "page:/accounts/vouchers", "page:/vendors", "page:/sales/expenses", "page:/hr/payroll", "page:/hr/advances"]), async (req, res): Promise<void> => {
+router.get("/accounts/cash-bank-ledgers", requireModuleView(["page:/accounts/cash-bank", "page:/accounts/expenses", "page:/accounts/vouchers", "page:/vendors", "page:/sales/expenses", "page:/hr/payroll", "page:/hr/advances", "page:/operations/receipt-voucher", "page:/operations/payment-voucher"]), async (req, res): Promise<void> => {
   const { rows } = await pool.query(`SELECT * FROM account_ledgers ORDER BY id`);
   const bankRoot = rows.find((r: any) => r.code === 'STD-BANK');
   const cashRoot = rows.find((r: any) => r.code === 'STD-CASH');
@@ -424,7 +424,7 @@ router.delete("/accounts/chart/:id", requireModuleAction("page:/accounts/chart",
 // LBAC: each location keeps its own payment book — a branch sees the vouchers
 // that belong to it (stamped location, or a leg on one of its own ledgers) and
 // Head Office sees everything. See lib/moneyScope.ts for the ownership rule.
-router.get("/accounts/payments", requireModuleView("page:/accounts/vouchers"), async (req, res): Promise<void> => {
+router.get("/accounts/payments", requireModuleView(["page:/accounts/vouchers", "page:/operations/payment-voucher"]), async (req, res): Promise<void> => {
   const scope = ownLocationScope((req as any).employee);
   const ledgerIds = await scopeLedgerIds(scope);
   const params: unknown[] = [];
@@ -564,7 +564,7 @@ async function loadManualReceipt(client: { query: Function }, id: number, scopeW
   return { row };
 }
 
-router.post("/accounts/payments", requireModuleAction("page:/accounts/vouchers", "add"), async (req, res): Promise<void> => {
+router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers", "page:/operations/payment-voucher"], "add"), async (req, res): Promise<void> => {
   const { paymentDate, paidFromLedgerId, paidToLedgerId, amount, narration, paymentMode, referenceNumber, attachmentUrl } = req.body as {
     paymentDate: string; paidFromLedgerId: number; paidToLedgerId: number; amount: number; narration?: string;
     paymentMode?: string; referenceNumber?: string; attachmentUrl?: string;
@@ -621,7 +621,7 @@ router.post("/accounts/payments", requireModuleAction("page:/accounts/vouchers",
 // sales-return refunds) are refused server-side. The legs are re-validated on
 // the EFFECTIVE values (body ?? current row) so a partial PATCH cannot route
 // around the branch cash-box rules.
-router.patch("/accounts/payments/:id", requireModuleAction("page:/accounts/vouchers", "edit"), async (req, res): Promise<void> => {
+router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouchers", "page:/operations/payment-voucher"], "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid payment id" }); return; }
   const b = req.body as Record<string, unknown>;
@@ -701,7 +701,7 @@ router.patch("/accounts/payments/:id", requireModuleAction("page:/accounts/vouch
   }
 });
 
-router.delete("/accounts/payments/:id", requireModuleAction("page:/accounts/vouchers", "delete"), async (req, res): Promise<void> => {
+router.delete("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouchers", "page:/operations/payment-voucher"], "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid payment id" }); return; }
   // Scope the DELETE itself: a branch user must not be able to remove another
@@ -726,7 +726,7 @@ router.delete("/accounts/payments/:id", requireModuleAction("page:/accounts/vouc
 
 // ── Receipts ──────────────────────────────────────────────────────────────
 // LBAC: same ownership rule as payments — a branch sees its own receipts only.
-router.get("/accounts/receipts", requireModuleView("page:/accounts/vouchers"), async (req, res): Promise<void> => {
+router.get("/accounts/receipts", requireModuleView(["page:/accounts/vouchers", "page:/operations/receipt-voucher"]), async (req, res): Promise<void> => {
   const scope = ownLocationScope((req as any).employee);
   const ledgerIds = await scopeLedgerIds(scope);
   const params: unknown[] = [];
@@ -780,7 +780,7 @@ router.get("/accounts/receipts", requireModuleView("page:/accounts/vouchers"), a
   }));
 });
 
-router.post("/accounts/receipts", requireModuleAction("page:/accounts/vouchers", "add"), async (req, res): Promise<void> => {
+router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers", "page:/operations/receipt-voucher"], "add"), async (req, res): Promise<void> => {
   const { receiptDate, receivedFromLedgerId, receivedInLedgerId, amount, narration, paymentMode, referenceNumber, attachmentUrl } = req.body as {
     receiptDate: string; receivedFromLedgerId: number; receivedInLedgerId: number; amount: number; narration?: string;
     paymentMode?: string; referenceNumber?: string; attachmentUrl?: string;
@@ -834,7 +834,7 @@ router.post("/accounts/receipts", requireModuleAction("page:/accounts/vouchers",
 
 // Edit a MANUAL receipt voucher — same effective-value re-validation and
 // system-row refusal as payments.
-router.patch("/accounts/receipts/:id", requireModuleAction("page:/accounts/vouchers", "edit"), async (req, res): Promise<void> => {
+router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouchers", "page:/operations/receipt-voucher"], "edit"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid receipt id" }); return; }
   const b = req.body as Record<string, unknown>;
@@ -914,7 +914,7 @@ router.patch("/accounts/receipts/:id", requireModuleAction("page:/accounts/vouch
   }
 });
 
-router.delete("/accounts/receipts/:id", requireModuleAction("page:/accounts/vouchers", "delete"), async (req, res): Promise<void> => {
+router.delete("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouchers", "page:/operations/receipt-voucher"], "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid receipt id" }); return; }
   const scope = ownLocationScope((req as any).employee);

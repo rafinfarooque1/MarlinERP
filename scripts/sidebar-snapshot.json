@@ -30,6 +30,14 @@
           "href": "/accounts/cash-in-outlet"
         },
         {
+          "name": "Receipt Voucher",
+          "href": "/operations/receipt-voucher"
+        },
+        {
+          "name": "Payment Voucher",
+          "href": "/operations/payment-voucher"
+        },
+        {
           "name": "Stock",
           "href": "/headoffice/stock"
         },

@@ -2790,6 +2790,37 @@ await pool.query(`
   }
 }
 
+// ── Operations Receipt/Payment voucher pages (ONE TIME) ─────────────────────
+// Two new sidebar pages under Operations reuse the existing receipt/payment
+// engine. Default-deny would silently hide them from every pre-existing role,
+// so GRANT to roles that already existed (same direction as assets_page_perms
+// above) and let an admin take rights away on the Permissions page.
+{
+  const { rows: seeded } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'operations_voucher_pages_perms_v1'`,
+  );
+  if (seeded.length === 0) {
+    const VOUCHER_PAGE_KEYS = [
+      "page:/operations/receipt-voucher", "page:/operations/payment-voucher",
+    ];
+    const { rows: hRows } = await pool.query(
+      `SELECT id FROM hierarchies WHERE level != 1`,
+    );
+    for (const h of hRows) {
+      for (const mod of VOUCHER_PAGE_KEYS) {
+        await pool.query(
+          `INSERT INTO permissions (hierarchy_id, module, can_view, can_add, can_edit, can_delete, can_download, can_print)
+           VALUES ($1, $2, true, true, true, true, true, true)
+           ON CONFLICT (hierarchy_id, module) DO NOTHING`,
+          [h.id, mod],
+        );
+      }
+    }
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('operations_voucher_pages_perms_v1') ON CONFLICT (name) DO NOTHING`);
+    console.log(`[migration] operations_voucher_pages_perms_v1 — granted Receipt/Payment Voucher pages to ${hRows.length} pre-existing roles`);
+  }
+}
+
 // ── Five-action permission model (ONE TIME) ──────────────────────────────────
 // Print, Approve and Share stopped being separate user-facing rights: Download
 // now covers every output channel (export, PDF save, print, WhatsApp/email
