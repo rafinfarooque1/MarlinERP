@@ -18,3 +18,10 @@ id = "ckqeaA_BvcXlJOsjxyEGI"
 uri = "file://INTEGRATION_AUDIT.md"
 type = "text"
 title = "Marlin ERP — End-to-End Integration Audit"
+
+[[outputs]]
+id = "oAASb1OtLrgFWnbNexakE"
+uri = "file://docs/ERP_SYSTEM_AUDIT.md"
+type = "text"
+title = "Marlin ERP — Complete System Audit"
+description = "Full 19-phase discovery & audit: architecture, all modules, 62-table DB catalog, inventory/accounting/GST/HR flows, permissions & location model, API analysis, bugs found, health & production-readiness scores, risks, and next steps."

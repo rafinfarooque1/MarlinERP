@@ -1,0 +1,554 @@
+Perform a COMPLETE ERP DISCOVERY AND SYSTEM AUDIT before making any further changes.
+
+Do NOT modify any code or data during this task.
+
+The purpose is to fully understand how the ERP works from end to end, identify every module, workflow, dependency, database relationship, accounting flow, inventory flow, permission flow, and reporting flow.
+
+This is an investigation and documentation task only.
+
+====================================================
+PHASE 1 – ERP ARCHITECTURE
+====================================================
+
+Understand the complete ERP architecture.
+
+Document:
+
+• Frontend framework
+• Backend framework
+• Database structure
+• Authentication flow
+• API architecture
+• Services
+• Middleware
+• Shared utilities
+• File storage
+• PDF generation
+• Notification system
+• Permission system
+• Audit logging
+
+Draw the module relationships.
+
+====================================================
+PHASE 2 – MODULE DISCOVERY
+====================================================
+
+Identify every ERP module.
+
+Examples:
+
+Dashboard
+Operations
+Sales
+Quotations
+Purchases
+Inventory
+Production
+Stock Transfer
+Cash Balance
+Customers
+Vendors
+Accounts
+Chart of Accounts
+Ledger Statement
+Cash & Bank
+Vouchers
+Trial Balance
+Profit & Loss
+Balance Sheet
+GST Summary
+GST Returns
+Reconciliation
+Reports
+HR
+Employees
+Attendance
+Payroll
+Rent Management
+Hierarchy
+Assets
+Warehouse
+Company
+Settings
+Permissions
+Audit Log
+Backup & Restore
+Login History
+
+Document every module.
+
+====================================================
+PHASE 3 – DATABASE ANALYSIS
+====================================================
+
+List every database table.
+
+For each table provide:
+
+Purpose
+
+Relationships
+
+Primary Keys
+
+Foreign Keys
+
+Indexes
+
+Constraints
+
+Triggers
+
+Sequences
+
+Whether it is:
+
+Master Data
+
+Transactional Data
+
+Configuration
+
+Audit
+
+Temporary
+
+====================================================
+PHASE 4 – MASTER DATA FLOW
+====================================================
+
+Understand how master data works.
+
+Item Master
+
+Warehouse
+
+Customer
+
+Vendor
+
+Employee
+
+Chart of Accounts
+
+GST
+
+HSN
+
+Units
+
+Bank Accounts
+
+Company Profile
+
+Permissions
+
+Hierarchy
+
+Document which modules use each master.
+
+====================================================
+PHASE 5 – INVENTORY FLOW
+====================================================
+
+Trace inventory completely.
+
+Item Creation
+
+Opening Stock
+
+Purchase
+
+Production
+
+Stock Transfer
+
+Sales
+
+Sales Return
+
+Purchase Return
+
+Stock Verification
+
+Adjustments
+
+Reservations
+
+Batch Tracking
+
+Expiry
+
+FIFO
+
+Valuation
+
+Document every stock movement.
+
+====================================================
+PHASE 6 – ACCOUNTING FLOW
+====================================================
+
+Trace accounting entries.
+
+Sales
+
+Purchase
+
+Receipt
+
+Payment
+
+Contra
+
+Journal
+
+Salary
+
+Rent
+
+Expenses
+
+Asset Purchase
+
+Depreciation
+
+GST
+
+Automatic Journal Entries
+
+Document every ledger posting.
+
+====================================================
+PHASE 7 – REPORTING FLOW
+====================================================
+
+Understand every report.
+
+Dashboard
+
+Trial Balance
+
+Balance Sheet
+
+Profit & Loss
+
+Ledger
+
+Cash Book
+
+Bank Book
+
+GST Reports
+
+Stock Reports
+
+Payroll Reports
+
+Attendance Reports
+
+Verify how data is calculated.
+
+====================================================
+PHASE 8 – DASHBOARD FLOW
+====================================================
+
+Document how Dashboard KPIs are generated.
+
+Sales
+
+Purchases
+
+Inventory
+
+Receivables
+
+Payables
+
+Expenses
+
+Cash
+
+Bank
+
+Top Items
+
+Payment Mix
+
+Sales Trend
+
+Inventory Value
+
+Verify every KPI source.
+
+====================================================
+PHASE 9 – PERMISSION SYSTEM
+====================================================
+
+Understand permission architecture.
+
+View
+
+Add
+
+Edit
+
+Delete
+
+Download
+
+Approval
+
+Hierarchy
+
+Location Restrictions
+
+Role Permissions
+
+Employee Permissions
+
+====================================================
+PHASE 10 – LOCATION FLOW
+====================================================
+
+Understand location-specific processing.
+
+Warehouse
+
+Branch
+
+GST
+
+Inventory
+
+Accounts
+
+Sales
+
+Purchase
+
+Production
+
+Reports
+
+Dashboard
+
+====================================================
+PHASE 11 – GST FLOW
+====================================================
+
+Understand GST calculations.
+
+CGST
+
+SGST
+
+IGST
+
+GST Summary
+
+GST Returns
+
+HSN
+
+Place of Supply
+
+B2B
+
+B2C
+
+====================================================
+PHASE 12 – HR FLOW
+====================================================
+
+Understand:
+
+Attendance
+
+Leave
+
+Payroll
+
+Advances
+
+Rent
+
+Hierarchy
+
+Approval
+
+====================================================
+PHASE 13 – DOCUMENT FLOW
+====================================================
+
+Document complete flow.
+
+Quotation
+
+Sales Invoice
+
+Receipt
+
+Purchase Bill
+
+Voucher
+
+Expense
+
+Asset Purchase
+
+Transfer
+
+Production
+
+====================================================
+PHASE 14 – API ANALYSIS
+====================================================
+
+List every API.
+
+Document:
+
+Request
+
+Response
+
+Authentication
+
+Permissions
+
+Dependencies
+
+====================================================
+PHASE 15 – CODE QUALITY
+====================================================
+
+Identify:
+
+Duplicate logic
+
+Dead code
+
+Unused APIs
+
+Duplicate calculations
+
+Performance bottlenecks
+
+N+1 queries
+
+Repeated SQL
+
+====================================================
+PHASE 16 – BUSINESS RULES
+====================================================
+
+Understand every business rule.
+
+Inventory
+
+Accounting
+
+GST
+
+Payroll
+
+Attendance
+
+Permissions
+
+Location
+
+====================================================
+PHASE 17 – TESTING
+====================================================
+
+Test every module.
+
+Create
+
+Edit
+
+Delete
+
+View
+
+Export
+
+Print
+
+Approval
+
+Reports
+
+Location filters
+
+Date filters
+
+Permissions
+
+====================================================
+PHASE 18 – KNOWN BUGS
+====================================================
+
+Find existing bugs.
+
+Do not fix them.
+
+Categorize:
+
+Critical
+
+High
+
+Medium
+
+Low
+
+====================================================
+PHASE 19 – IMPROVEMENT LIST
+====================================================
+
+Suggest improvements.
+
+UI
+
+Performance
+
+Security
+
+Database
+
+Accounting
+
+Inventory
+
+Workflow
+
+====================================================
+FINAL REPORT
+====================================================
+
+Provide:
+
+1. ERP Architecture Diagram
+2. Complete Module List
+3. Database Table List
+4. API List
+5. Workflow Diagram
+6. Inventory Flow
+7. Accounting Flow
+8. Reporting Flow
+9. Permission Flow
+10. Dashboard Flow
+11. Master Data Flow
+12. Business Rules
+13. Bugs Found
+14. Improvement Suggestions
+15. Overall ERP Health Score (0–100)
+16. Production Readiness Score (0–100)
+17. Risk Assessment
+18. Recommended next steps.
+
+Do not modify code or database. This task is for understanding and documenting the ERP completely before future development.

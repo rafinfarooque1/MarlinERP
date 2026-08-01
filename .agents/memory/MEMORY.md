@@ -85,4 +85,5 @@
 - [Destructive boot cleanups](destructive-boot-cleanups.md) — one-time DELETE blocks guarded only by data-shape probes re-fire when columns are re-added empty; guard on migration_log instead.
 - [Orphan party ledgers & dropdown sources](orphan-party-ledgers.md) — voucher/receipt/payment pickers read the chart of accounts, not masters; hand-deleted parties leave VEND-/CUST- ledgers; boot sweep heals.
 - [Company reset & ghost rows](company-reset-ghosts.md) — reset endpoints must share ONE table list; RESTART IDENTITY re-attaches surviving rows to new ids; batch coverage may undershoot entries, never exceed.
+- [System audit doc](../../docs/ERP_SYSTEM_AUDIT.md) — Aug 2026 full audit lives in-repo: architecture, 62-table catalog, all flows, scores, risks; keep it current when modules change.
 - [Five-action permissions & role tree](five-action-permissions.md) — legacy print/approve/share cols are write-mirrors, never read; single-root role tree with derived levels; structure edits serialize on one advisory lock.
