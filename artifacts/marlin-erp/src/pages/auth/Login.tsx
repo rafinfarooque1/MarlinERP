@@ -9,7 +9,9 @@ import { Lock, User, Loader2, Eye, EyeOff, ArrowRight } from 'lucide-react';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { useToast } from '@/hooks/use-toast';
+// Toasts go through sonner — App.tsx mounts ONLY the sonner <Toaster>, so the
+// legacy hooks/use-toast hook renders nowhere on this page (or anywhere else).
+import { toast } from 'sonner';
 import { useTheme } from '@/lib/theme';
 import { useSession } from '@/lib/sessionContext';
 
@@ -31,7 +33,6 @@ function FrostCircle({ className }: { className: string }) {
 
 export default function Login() {
   const [, setLocation] = useLocation();
-  const { toast } = useToast();
   const loginMutation = useLogin();
   const queryClient = useQueryClient();
   const { setTheme } = useTheme();
@@ -50,7 +51,9 @@ export default function Login() {
   });
 
   const onSubmit = (data: LoginFormValues) => {
-    loginMutation.mutate({ data }, {
+    // Trim here too (the server also trims): a pasted "admin " must behave
+    // exactly like "admin", not fail with a puzzling generic error.
+    loginMutation.mutate({ data: { ...data, username: data.username.trim() } }, {
       onSuccess: (response) => {
         setTheme('light');
         queryClient.clear();
@@ -64,10 +67,10 @@ export default function Login() {
         }
       },
       onError: (error: any) => {
-        toast({
-          title: 'Login failed',
+        // A lockout (429) is a different situation from wrong credentials and
+        // must read as one — the server's message carries the remaining time.
+        toast.error(error?.status === 429 ? 'Account temporarily locked' : 'Login failed', {
           description: error?.data?.error || error.message || 'Invalid credentials. Please try again.',
-          variant: 'destructive',
         });
       },
     });

@@ -18,7 +18,7 @@ import { eq } from 'drizzle-orm';
 import { LoginBody } from '@workspace/api-zod';
 import { PasswordService } from '../lib/password';
 import { validatePassword } from '../lib/passwordPolicy';
-import { isLoginLocked, recordLoginFailure, clearLoginAttempts } from '../middleware/auth';
+import { checkLoginLock, recordLoginFailure, clearLoginFailures } from '../middleware/auth';
 import { signToken, verifyToken } from '../lib/token';
 import { logActivity } from '../lib/audit';
 
@@ -107,29 +107,48 @@ router.post('/auth/login', async (req, res): Promise<void> => {
     return;
   }
 
-  const { username, password } = parsed.data;
+  // Accidental whitespace (mobile keyboards, copy-paste) must never turn into
+  // a silent "invalid credentials": trim before anything looks at the value.
+  const username = parsed.data.username.trim();
+  const { password } = parsed.data;
   const ip = (req.ip ?? 'unknown').replace('::ffff:', '');
 
   const userAgent = req.headers['user-agent'] ?? '';
 
-  // Rate-limit check before any DB query
-  if (isLoginLocked(username)) {
+  // Lockout check before any credential work. The state is durable
+  // (login_lockouts table): it survives restarts and is shared by every
+  // instance. A genuine lock is reported AS a lock with the remaining time —
+  // never disguised as wrong credentials.
+  const lock = await checkLoginLock(username);
+  if (lock.locked) {
+    const minutes = Math.max(1, Math.ceil((lock.retryAfterSeconds ?? 60) / 60));
     logActivity({
       action: 'UPDATE', module: 'auth', entityType: 'login',
       description: `LOGIN_FAILED: temporarily locked — username '${username}'`,
-      user: username, metadata: { ip, reason: 'rate_limited' },
+      user: username, metadata: { ip, reason: 'rate_limited', lockedUntil: lock.lockedUntil?.toISOString() },
     }).catch(() => {});
     recordLoginHistory({ username, success: false, ip, userAgent, reason: 'rate_limited' });
-    res.status(429).json({ error: 'Too many failed attempts. Please try again in 15 minutes.' });
+    res.set('Retry-After', String(lock.retryAfterSeconds ?? 60));
+    res.status(429).json({
+      error: `Too many failed attempts. Please try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+      lockedUntil: lock.lockedUntil?.toISOString(),
+      retryAfterSeconds: lock.retryAfterSeconds,
+    });
     return;
   }
 
-  // Fetch employee (must_change_password may not be in Drizzle schema, use pool)
+  // Fetch employee (must_change_password may not be in Drizzle schema, use pool).
+  // Lookup normalizes BOTH sides with LOWER(TRIM(...)) — the same expression
+  // as the unique index and the lockout key — so "Admin" typed by an auto-
+  // capitalizing phone keyboard reaches the same account as "admin", and a
+  // stored username that somehow carries whitespace can still sign in.
+  // (The input $1 is already trimmed above.)
   const { rows } = await pool.query(
     `SELECT id, name, username, password_hash, email, phone, hierarchy_id,
             branch_type, branch_id, salary, join_date, photo_url, is_active,
             COALESCE(must_change_password, false) AS must_change_password
-     FROM employees WHERE username = $1 LIMIT 1`,
+     FROM employees WHERE LOWER(TRIM(username)) = LOWER($1)
+     ORDER BY (username = $1) DESC, id ASC LIMIT 1`,
     [username],
   );
   const emp = rows[0];
@@ -137,7 +156,7 @@ router.post('/auth/login', async (req, res): Promise<void> => {
   // Validate — identical error for "not found" and "wrong password" (no enumeration)
   const credentialsInvalid = !emp || !(await PasswordService.verify(password, emp.password_hash));
   if (credentialsInvalid) {
-    const nowLocked = recordLoginFailure(username);
+    const { locked: nowLocked } = await recordLoginFailure(username);
     logActivity({
       action: 'UPDATE', module: 'auth', entityType: 'login',
       description: `LOGIN_FAILED for username '${username}'`,
@@ -158,7 +177,7 @@ router.post('/auth/login', async (req, res): Promise<void> => {
   }
 
   // Success — clear failed attempts, issue token, log
-  clearLoginAttempts(username);
+  await clearLoginFailures(username);
   logActivity({
     action: 'UPDATE', module: 'auth', entityType: 'login',
     description: `LOGIN_SUCCESS for '${username}'`,

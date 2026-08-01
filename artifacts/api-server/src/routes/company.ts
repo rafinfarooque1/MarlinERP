@@ -378,7 +378,7 @@ router.get("/company/login-history", requireModuleView(["page:/company/login-his
       reason: r.reason,
       createdAt: r.created_at,
     })),
-    lockedAccounts: getActiveLockouts(),
+    lockedAccounts: await getActiveLockouts(),
   });
 });
 
@@ -558,6 +558,10 @@ router.post("/company/reset", requireModuleAction("page:/company/settings", "del
     'opening_balances',
     'activity_log',
     'login_attempts',
+    // Brute-force lockout state must reset with the accounts it guards: a
+    // pre-reset lock on 'admin' would otherwise survive the reseed and block
+    // the freshly created administrator for up to 15 minutes.
+    'login_lockouts',
     // NOTE: migration_log is intentionally NOT truncated here. Schema-level
     // migrations (per_link_permissions_v1, permission_seed_existing_v1, etc.)
     // must not re-run after a data reset — re-running the permission seeder

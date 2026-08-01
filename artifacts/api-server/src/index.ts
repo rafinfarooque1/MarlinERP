@@ -1220,12 +1220,85 @@ async function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_login_attempts_created ON login_attempts(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_login_attempts_username ON login_attempts(username);
 
+    -- Durable brute-force lockout state (replaces the old in-memory Map, which
+    -- was wiped by every restart and disagreed between instances). Keyed by
+    -- the normalized username: LOWER(TRIM(username)). One atomic upsert per
+    -- failed attempt keeps the counter correct under concurrency.
+    -- NOTE: this CREATE stays in the pure-IF-NOT-EXISTS block on purpose —
+    -- login depends on the table, so its creation must not share a transaction
+    -- with any statement that can fail on data (see username_normalization_v1
+    -- just below, which runs separately for exactly that reason).
+    CREATE TABLE IF NOT EXISTS login_lockouts (
+      username text PRIMARY KEY,
+      failure_count integer NOT NULL DEFAULT 0,
+      window_started_at timestamptz NOT NULL DEFAULT now(),
+      locked_until timestamptz,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS password_min_length integer NOT NULL DEFAULT 8;
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS password_require_uppercase boolean NOT NULL DEFAULT false;
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS password_require_number boolean NOT NULL DEFAULT false;
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS password_require_special boolean NOT NULL DEFAULT false;
     ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS general_settings jsonb;
   `);
+
+  // Username identity normalization + uniqueness invariant. Login treats
+  // usernames as LOWER(TRIM(...)) everywhere, so the DB must guarantee no two
+  // employees share that identity. This step runs in its OWN transaction,
+  // after login_lockouts exists, because it touches data and can in principle
+  // fail — a failure here must never take the lockout table down with it
+  // (login stays available either way; the lookup prefers an exact match, so
+  // it remains deterministic even without the index).
+  //
+  // Collisions are reconciled deterministically, never guessed at: within each
+  // colliding identity group the OLDEST row keeps its name, every newer row is
+  // renamed to '<trimmed>_<id>' (unique by construction), and each rename is
+  // logged loudly so an admin can follow up. Nothing is deleted or merged.
+  // Guarded by migration_log; also re-runs if the index is missing (e.g. a
+  // restored dump), per the destructive-cleanup guard rule.
+  const usernameNormDone = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'username_normalization_v1'`,
+  );
+  const usernameNormIdx = await pool.query(
+    `SELECT 1 FROM pg_indexes WHERE indexname = 'employees_username_norm_unique'`,
+  );
+  if (usernameNormDone.rowCount === 0 || usernameNormIdx.rowCount === 0) {
+    const unClient = await pool.connect();
+    try {
+      await unClient.query('BEGIN');
+      const { rows: renamed } = await unClient.query<{ id: number; username: string }>(`
+        UPDATE employees e SET username = TRIM(e.username) || '_' || e.id
+        WHERE e.id <> (SELECT MIN(e2.id) FROM employees e2
+                       WHERE LOWER(TRIM(e2.username)) = LOWER(TRIM(e.username)))
+        RETURNING e.id, e.username
+      `);
+      if (renamed.length > 0) {
+        console.error(
+          `[migration] username_normalization_v1: ${renamed.length} username(s) collided on LOWER(TRIM()) and were renamed — tell the admin: ` +
+          renamed.map((r) => `#${r.id} -> '${r.username}'`).join(', '),
+        );
+      }
+      await unClient.query(`UPDATE employees SET username = TRIM(username) WHERE username <> TRIM(username)`);
+      await unClient.query(`DROP INDEX IF EXISTS employees_username_lower_unique`);
+      await unClient.query(
+        `CREATE UNIQUE INDEX IF NOT EXISTS employees_username_norm_unique ON employees (LOWER(TRIM(username)))`,
+      );
+      await unClient.query(
+        `INSERT INTO migration_log (name) VALUES ('username_normalization_v1') ON CONFLICT (name) DO NOTHING`,
+      );
+      await unClient.query('COMMIT');
+      console.log('[migration] username_normalization_v1 OK' + (renamed.length ? ` (${renamed.length} renamed)` : ''));
+    } catch (e) {
+      await unClient.query('ROLLBACK').catch(() => {});
+      console.error(
+        '[migration] username_normalization_v1 FAILED — login stays available (lockout table is created separately; lookup prefers exact matches), but the username uniqueness invariant is NOT yet enforced:',
+        e,
+      );
+    } finally {
+      unClient.release();
+    }
+  }
 
   // One-time migration: re-home all 'production' branch_type records to 'headoffice'.
   // Production is a department of Head Office, not a separate branch.

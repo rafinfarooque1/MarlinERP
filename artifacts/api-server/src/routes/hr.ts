@@ -1,5 +1,6 @@
 import { Router, type Response } from "express";
 import { requireModuleAction, requireModuleView, hasModuleAction } from "../middleware/permissions";
+import { clearLoginFailures } from "../middleware/auth";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import {
   db, pool, hierarchiesTable, employeesTable, payrollTable, attendanceTable,
@@ -1028,8 +1029,21 @@ router.post("/hr/employees", requireModuleAction("page:/hr/employees", "add"), a
   if ((parsed.data as any).branchType === 'outlet' && await outletWritesBlocked(pool)) {
     res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
   }
+  // Login lookup is case-insensitive (and a unique index on LOWER(username)
+  // enforces it at the DB level), so a case-variant duplicate must be a clean
+  // 400 here — not a raw constraint error at insert time.
+  const newUsername = parsed.data.username.trim();
+  if (!newUsername) { res.status(400).json({ error: 'Username is required' }); return; }
+  const { rows: [dupe] } = await pool.query(
+    `SELECT id FROM employees WHERE LOWER(TRIM(username)) = LOWER($1) LIMIT 1`, [newUsername],
+  );
+  if (dupe) {
+    res.status(400).json({ error: 'Username is already taken (usernames are case-insensitive)' });
+    return;
+  }
   const [row] = await db.insert(employeesTable).values({
     ...parsed.data,
+    username: newUsername,
     salary: String(parsed.data.salary),
     passwordHash: await PasswordService.hash(DEFAULT_INITIAL_PASSWORD),
     mustChangePassword: true,
@@ -2771,6 +2785,11 @@ router.post("/hr/employees/:id/reset-password", requireModuleAction("page:/hr/em
     `UPDATE employees SET password_hash = $1, must_change_password = false WHERE id = $2`,
     [newHash, id],
   );
+
+  // "Sign-in restored" must mean exactly that: an admin reset also clears any
+  // active brute-force lockout, otherwise the employee stays 429-locked for up
+  // to 15 minutes with a password the admin just handed them.
+  await clearLoginFailures(emp.username);
 
   logActivity({
     action: "UPDATE", module: "hr", entityType: "employee", entityId: id,
