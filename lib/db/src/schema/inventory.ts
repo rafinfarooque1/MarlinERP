@@ -36,7 +36,11 @@ export const itemsTable = pgTable("items", {
 
 export const stockEntriesTable = pgTable("stock_entries", {
   id: serial("id").primaryKey(),
-  itemId: integer("item_id").notNull().references(() => itemsTable.id),
+  // NO FK on purpose: this table is polymorphic — rows hold items AND raw
+  // materials with OVERLAPPING ids, discriminated by the raw-migration
+  // column material_type (invisible to drizzle). An items FK here would
+  // reject or corrupt material rows; drizzle push must never add one.
+  itemId: integer("item_id").notNull(),
   branchType: text("branch_type").notNull(), // headoffice, warehouse, outlet
   branchId: integer("branch_id").notNull(),
   quantity: numeric("quantity", { precision: 10, scale: 3 }).notNull().default("0"),
@@ -61,7 +65,9 @@ export const itemPricesTable = pgTable("item_prices", {
 // (the residual is "untracked" legacy quantity) but are never negative.
 export const stockBatchesTable = pgTable("stock_batches", {
   id: serial("id").primaryKey(),
-  itemId: integer("item_id").notNull().references(() => itemsTable.id),
+  // NO FK on purpose: polymorphic like stock_entries above (items AND
+  // materials, overlapping ids, material_type discriminator).
+  itemId: integer("item_id").notNull(),
   branchType: text("branch_type").notNull(), // headoffice, warehouse, outlet
   branchId: integer("branch_id").notNull(),
   batchNumber: text("batch_number").notNull(),

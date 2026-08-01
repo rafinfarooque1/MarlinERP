@@ -22,7 +22,11 @@ import { employeesTable } from "./hr";
 export const invoiceShareLinksTable = pgTable("invoice_share_links", {
   id: serial("id").primaryKey(),
   /** Random, opaque public identifier — this is what appears in the URL. */
-  publicId: text("public_id").notNull().unique(),
+  // Uniqueness comes from the NAMED index below (matches the live DB).
+  // Do not add .unique() here: drizzle would name that constraint
+  // invoice_share_links_public_id_unique, see it as missing, and its push
+  // raises an interactive truncate prompt that kills post-merge setup.
+  publicId: text("public_id").notNull(),
   saleId: integer("sale_id").notNull().references(() => salesTable.id),
   /** The link's secret, 256 random bits as hex. Compared in constant time. */
   token: text("token").notNull(),

@@ -5,7 +5,10 @@ import { z } from "zod/v4";
 export const salesTable = pgTable("sales", {
   id: serial("id").primaryKey(),
   invoiceNumber: text("invoice_number").notNull(),
-  outletId: integer("outlet_id").notNull(),
+  // Nullable ON PURPOSE: warehouse sales carry NULL here and resolve their
+  // place via location_type + location_id. Re-adding .notNull() makes
+  // drizzle push emit SET NOT NULL, which fails on live data.
+  outletId: integer("outlet_id"),
   customerId: integer("customer_id"),
   saleDate: date("sale_date", { mode: "string" }).notNull(),
   lineItems: jsonb("line_items").notNull().default([]),
