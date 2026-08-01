@@ -1,0 +1,324 @@
+Perform a COMPLETE ERP integrity audit after the recent Company Reset.
+
+DO NOT modify any data until the investigation is complete.
+
+I started a brand-new company today after using Company Reset.
+
+Problem observed:
+
+- Stock Balance looks correct.
+- Live Stock sometimes shows incorrect quantities.
+- Item dropdowns show extra stock.
+- Purchase quantities do not match available stock.
+- Old stock appears to still exist somewhere.
+
+Example:
+Purchase Bill shows ALPHONSO SLICE = 13 kg.
+Live Stock shows ALPHONSO SLICE = 76 kg.
+
+This should never happen after a fresh company reset.
+
+==========================================
+PHASE 1
+Investigate Company Reset
+==========================================
+
+Verify exactly what Company Reset deletes.
+
+List every table.
+
+Mark each as:
+
+✓ Cleared
+✓ Preserved
+✓ Rebuilt
+✗ Not cleared
+
+Especially verify:
+
+stock_ledger
+stock_batches
+stock_movements
+stock_transactions
+stock_reservations
+stock_transfers
+inventory_summary
+inventory_snapshots
+opening_stock
+purchase_items
+purchase_bills
+sales_items
+sales
+production_batches
+production_consumption
+batch_inventory
+warehouse_stock
+warehouse_inventory
+stock_history
+stock_adjustments
+
+Nothing related to inventory should survive a reset except Item Masters and Warehouses.
+
+==========================================
+PHASE 2
+Inventory Integrity
+==========================================
+
+For EVERY item verify:
+
+Current Stock
+
+=
+
+Opening Stock
++ Purchases
++ Production
++ Transfers In
+- Sales
+- Transfers Out
+- Wastage
+- Adjustments
+
+If any mismatch exists
+
+Report:
+
+Item
+Warehouse
+Expected
+Actual
+Difference
+Reason
+
+==========================================
+PHASE 3
+Batch Integrity
+==========================================
+
+For every batch verify:
+
+Purchase Qty
+
+Current Qty
+
+Reserved Qty
+
+Sold Qty
+
+Transferred Qty
+
+Remaining Qty
+
+Look for
+
+Duplicate batches
+
+Orphan batches
+
+Negative batches
+
+Ghost batches
+
+Duplicate batch numbers
+
+==========================================
+PHASE 4
+Dropdown Audit
+==========================================
+
+Trace every stock dropdown.
+
+Identify exactly which API is used.
+
+Verify whether it reads from
+
+stock_batches
+
+stock_ledger
+
+inventory_summary
+
+warehouse_stock
+
+cached values
+
+computed values
+
+Dropdown quantity must ALWAYS equal Live Stock quantity.
+
+==========================================
+PHASE 5
+Live Stock Audit
+==========================================
+
+Verify Live Stock page.
+
+Trace every displayed quantity.
+
+Report SQL used.
+
+Verify calculations.
+
+==========================================
+PHASE 6
+Purchase Audit
+==========================================
+
+Verify Purchase Entry.
+
+Editing purchases
+
+Deleting purchases
+
+Reposting purchases
+
+Opening Stock purchases
+
+All update inventory exactly once.
+
+No duplicate stock movement.
+
+==========================================
+PHASE 7
+Transfer Audit
+==========================================
+
+Verify transfers.
+
+Stock leaves source once.
+
+Arrives destination once.
+
+No duplicate posting.
+
+==========================================
+PHASE 8
+Sales Audit
+==========================================
+
+Verify Sales.
+
+Every sale reduces stock exactly once.
+
+Editing sale
+
+Deleting sale
+
+Cancel sale
+
+Restore stock correctly.
+
+==========================================
+PHASE 9
+Production Audit
+==========================================
+
+Verify
+
+Raw Material Consumption
+
+Finished Goods
+
+Wastage
+
+Batch Creation
+
+No duplicate postings.
+
+==========================================
+PHASE 10
+Opening Stock Audit
+==========================================
+
+Investigate opening stock generation.
+
+The previous recovery report mentioned stale conflict keys.
+
+Verify:
+
+Opening Stock cannot be seeded twice.
+
+Opening Stock cannot recreate batches.
+
+Opening Stock cannot duplicate stock.
+
+==========================================
+PHASE 11
+Warehouse Audit
+==========================================
+
+For every warehouse verify:
+
+Current Stock
+
+Batch Count
+
+Inventory Value
+
+Reserved Stock
+
+Available Stock
+
+==========================================
+PHASE 12
+Company Reset Audit
+==========================================
+
+After Company Reset there must be:
+
+✓ Item Masters
+✓ Warehouses
+✓ Customers
+✓ Vendors
+✓ Employees
+✓ Company Settings
+✓ Permissions
+
+Everything transactional must be empty:
+
+Sales
+Purchases
+Stock Ledger
+Stock Batches
+Stock Reservations
+Transfers
+Production
+Payroll
+Attendance
+Vouchers
+Receipts
+Payments
+GST Transactions
+Expenses
+Rent
+Salary Accruals
+
+If any transactional record survives the reset, identify why.
+
+==========================================
+FINAL REPORT
+==========================================
+
+Provide:
+
+1. Tables checked
+
+2. APIs checked
+
+3. SQL checked
+
+4. Bugs found
+
+5. Root cause
+
+6. Files requiring fixes
+
+7. Database corrections required
+
+8. Code corrections required
+
+9. Whether inventory is mathematically consistent
+
+10. Whether Company Reset is safe for production
+
+Do NOT apply fixes until the complete investigation report is finished.

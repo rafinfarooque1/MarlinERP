@@ -1,0 +1,232 @@
+Add a new module under Operations called "Quotations".
+
+The Quotation module should work almost exactly like the Sales module, but it must NOT affect inventory or accounting until it is converted into a Sales Invoice.
+
+Requirements:
+
+1. New Menu
+- Operations
+    - Quotations
+
+2. Quotation List
+Include:
+- Quotation No.
+- Date
+- Customer
+- Warehouse / Selling Location
+- Status
+- Total
+- Valid Till
+- Salesperson
+- Actions:
+    - View
+    - Edit
+    - Convert to Sale
+    - Print
+    - PDF
+    - WhatsApp
+    - Delete (if not converted)
+
+3. Quotation Creation
+
+The quotation form should be almost identical to the Sales Entry screen.
+
+Include:
+- Selling Location
+- Customer
+- Billing Address
+- Shipping Address
+- Date
+- Valid Till
+- Payment Terms
+- Customer GST
+- Place of Supply
+- Salesperson
+- Coupon
+- Discount
+- Taxable checkbox
+- Item Discount
+- Bill Discount
+- Item Table
+- Tax Summary
+- Grand Total
+- Notes
+- Terms & Conditions
+
+Everything should calculate exactly like Sales.
+
+4. Inventory Behaviour
+
+Creating or editing a quotation must NOT:
+
+- Reduce stock
+- Reserve stock
+- Create stock ledger entries
+- Create accounting entries
+- Affect receivables
+- Affect GST reports
+- Affect Dashboard
+- Affect Trial Balance
+- Affect Profit & Loss
+- Affect Balance Sheet
+
+Quotation is only an offer to the customer.
+
+5. Quotation Number
+
+Maintain a separate numbering sequence.
+
+Example:
+
+QTN/2026-27/0001
+QTN/2026-27/0002
+
+Do not mix with invoice numbering.
+
+6. Status
+
+Quotation statuses:
+
+- Draft
+- Sent
+- Accepted
+- Rejected
+- Expired
+- Converted
+
+7. Convert to Sale
+
+Provide a "Convert to Sale" button.
+
+When clicked:
+
+Open the Sales Entry screen with all quotation details automatically filled:
+
+- Customer
+- Warehouse
+- Items
+- Quantity
+- Price
+- Discounts
+- Taxes
+- Notes
+- Coupon
+- Taxable checkbox
+- Payment Terms
+
+Allow editing before saving.
+
+Only after clicking "Complete Sale" should the ERP:
+
+- Reduce stock
+- Create stock ledger entries
+- Create accounting entries
+- Generate GST
+- Update Dashboard
+- Update Reports
+- Generate Invoice Number
+
+After successful conversion:
+
+Quotation Status = Converted
+
+Store the Sales Invoice number against the quotation.
+
+8. Traceability
+
+Sales Invoice should display:
+
+Converted From:
+QTN/2026-27/0005
+
+Quotation should display:
+
+Converted To:
+INV/2026-27/0012
+
+9. Printing
+
+Quotation PDF should look exactly like the Sales Invoice template.
+
+Differences:
+
+- Heading = QUOTATION
+- No Payment Status
+- No Amount Received
+- No Balance Due
+- No QR Code
+- Optional watermark: "Quotation"
+- Footer:
+"This quotation is valid until <Valid Till Date>."
+
+10. Permissions
+
+Add Quotation permissions:
+
+- View
+- Add
+- Edit
+- Delete
+- Download
+
+Permission system must work exactly like Sales permissions.
+
+11. Reports
+
+Create a Quotation Report with filters:
+
+- Date
+- Customer
+- Warehouse
+- Status
+- Salesperson
+
+12. Dashboard
+
+Dashboard should NOT include quotation values.
+
+Only completed Sales Invoices should affect:
+
+- Sales
+- Receivables
+- GST
+- Profit
+- Inventory
+- Reports
+
+13. Search
+
+Global Search should find quotations by:
+
+- Quotation No.
+- Customer
+- Mobile
+- GST
+- Item
+
+14. Notifications
+
+When a quotation expires:
+
+Show notification in the notification bell.
+
+15. Validation
+
+Before converting:
+
+- Ensure customer exists.
+- Ensure warehouse exists.
+- Warn if current stock is insufficient (warning only, do not block unless stock policy requires it).
+
+16. Testing
+
+Verify:
+
+- Quotation creation does not affect stock.
+- Quotation edit does not affect accounts.
+- Quotation delete leaves no accounting entries.
+- Conversion creates exactly one Sales Invoice.
+- Stock is deducted only after Sales Invoice is saved.
+- Dashboard updates only after conversion.
+- Reports remain accurate.
+- No duplicate invoices are created.
