@@ -8,21 +8,27 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, ArrowUpLeft, Download, Trash2, Search, Calendar, AlertTriangle } from 'lucide-react';
+import { Plus, ArrowUpLeft, Download, Trash2, Search, Calendar, AlertTriangle, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 import { Form, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Textarea } from '@/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { isSystemLedger } from '@/lib/systemLedgers';
+import { VOUCHER_MODE_OPTIONS, voucherModeLabel } from '@/lib/voucherModes';
 
 const schema = z.object({
   paymentDate: z.string().min(1, 'Date required'),
   paidFromLedgerId: z.coerce.number().min(1, 'Select account'),
   paidToLedgerId: z.coerce.number().min(1, 'Select account'),
   amount: z.coerce.number().min(0.01, 'Amount > 0'),
+  // Metadata only — the accounting legs come from the ledgers above. '' means
+  // "not specified" and the server stores it as null.
+  paymentMode: z.string().optional(),
+  referenceNumber: z.string().max(100).optional(),
   narration: z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
@@ -47,7 +53,7 @@ export default function Payment() {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { paymentDate: new Date().toISOString().split('T')[0], paidFromLedgerId: 0, paidToLedgerId: 0, amount: 0, narration: '' },
+    defaultValues: { paymentDate: new Date().toISOString().split('T')[0], paidFromLedgerId: 0, paidToLedgerId: 0, amount: 0, paymentMode: '', referenceNumber: '', narration: '' },
   });
 
   const onSubmit = (data: FormValues) => {
@@ -99,14 +105,15 @@ export default function Payment() {
             {perm.canDownload && (
               <Button variant="outline" size="sm" onClick={() => downloadCSV('payments.csv', filtered.map((p: any) => ({
                 Voucher: p.voucherNumber, Date: p.paymentDate, 'Paid From': p.paidFromName,
-                'Paid To': p.paidToName, Amount: p.amount, Narration: p.narration || '',
+                'Paid To': p.paidToName, Amount: p.amount, Mode: voucherModeLabel(p.paymentMode),
+                Reference: p.referenceNumber || '', Narration: p.narration || '',
               })))}>
                 <Download className="w-4 h-4 mr-2" /> Export
               </Button>
             )}
             {perm.canAdd && (
               <Button onClick={() => {
-                form.reset({ paymentDate: new Date().toISOString().split('T')[0], paidFromLedgerId: 0, paidToLedgerId: 0, amount: 0, narration: '' });
+                form.reset({ paymentDate: new Date().toISOString().split('T')[0], paidFromLedgerId: 0, paidToLedgerId: 0, amount: 0, paymentMode: '', referenceNumber: '', narration: '' });
                 setIsOpen(true);
               }}>
                 <Plus className="w-4 h-4 mr-2" /> New Payment
@@ -134,6 +141,7 @@ export default function Payment() {
                 <TableHead>Date</TableHead>
                 <TableHead>Paid From</TableHead>
                 <TableHead>Paid To</TableHead>
+                <TableHead>Mode / Ref</TableHead>
                 <TableHead>Narration</TableHead>
                 <TableHead className="text-right">Amount</TableHead>
                 <TableHead />
@@ -141,9 +149,9 @@ export default function Payment() {
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
+                <TableRow><TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
                   <ArrowUpLeft className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No payment vouchers yet</p>
                 </TableCell></TableRow>
               ) : filtered.map((p: any) => (
@@ -154,10 +162,20 @@ export default function Payment() {
                   </TableCell>
                   <TableCell><Badge variant="outline" className="text-xs">{p.paidFromName}</Badge></TableCell>
                   <TableCell className="font-medium text-sm">{p.paidToName}</TableCell>
+                  <TableCell className="text-sm">
+                    {p.paymentMode ? <Badge variant="secondary" className="text-xs">{voucherModeLabel(p.paymentMode)}</Badge> : <span className="text-muted-foreground">—</span>}
+                    {p.referenceNumber && <div className="text-[11px] text-muted-foreground font-mono mt-0.5 max-w-[120px] truncate" title={p.referenceNumber}>{p.referenceNumber}</div>}
+                  </TableCell>
                   <TableCell className="text-muted-foreground text-sm max-w-[200px] truncate">{p.narration || '—'}</TableCell>
                   <TableCell className="text-right font-mono font-bold text-red-500">₹{Number(p.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</TableCell>
                   <TableCell className="text-right">
-                    {perm.canDelete && (
+                    {p.origin === 'system' ? (
+                      // System-generated (e.g. location expenses, refunds) — owned by
+                      // its module; the server refuses edits/deletes, so no button.
+                      <span title="System voucher — manage from its own module" className="inline-flex justify-center w-8">
+                        <Lock className="w-3.5 h-3.5 text-muted-foreground/60" />
+                      </span>
+                    ) : perm.canDelete && (
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => setDeleteTarget(p)}>
                         <Trash2 className="w-4 h-4" />
                       </Button>
@@ -220,6 +238,29 @@ export default function Payment() {
                   <FormMessage />
                 </FormItem>
               )} />
+
+              {/* Mode + Reference — descriptive metadata only */}
+              <div className="grid grid-cols-2 gap-3">
+                <FormField control={form.control} name="paymentMode" render={({ field }) => (
+                  <FormItem><FormLabel>Mode</FormLabel>
+                    <Select value={field.value || ''} onValueChange={field.onChange}>
+                      <SelectTrigger><SelectValue placeholder="Optional" /></SelectTrigger>
+                      <SelectContent>
+                        {VOUCHER_MODE_OPTIONS.map(o => (
+                          <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                <FormField control={form.control} name="referenceNumber" render={({ field }) => (
+                  <FormItem><FormLabel>Reference #</FormLabel>
+                    <Input placeholder="Cheque / UTR / Txn no." {...field} />
+                    <FormMessage />
+                  </FormItem>
+                )} />
+              </div>
 
               {/* Narration */}
               <FormField control={form.control} name="narration" render={({ field }) => (

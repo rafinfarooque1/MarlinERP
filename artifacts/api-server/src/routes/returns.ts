@@ -361,8 +361,8 @@ router.post("/sales-returns", requireModuleAction(["page:/returns", "page:/sales
       }
       const payNumber = await nextVoucherNumber(client, "payment", returnDate);
       const { rows: [pay] } = await client.query(
-        `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+        `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id, source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'refund') RETURNING id`,
         [payNumber, returnDate, cashLedgerId, salesLedger, totalAmount,
          `Cash refund ${returnNumber} against ${invoiceRef}${locationName ? ` at ${locationName}` : ""}`,
          locationType, locationId]

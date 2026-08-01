@@ -473,8 +473,8 @@ router.post("/reconciliation/batches", requireModuleAction("page:/accounts/recon
     // Dr Bank (net) — receipt: received_from=clearing, received_in=bank
     const recVoucher = await nextVoucherNumber(client, 'receipt', settlementDate);
     await client.query(
-      `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+      `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, source)
+       VALUES ($1, $2, $3, $4, $5, $6, 'settlement')`,
       [recVoucher, settlementDate, clearingLedger.id, destinationBankLedgerId, netAmount,
         `Bank settlement ${batchReference} — ${payments.length} payments`]
     );
@@ -483,8 +483,8 @@ router.post("/reconciliation/batches", requireModuleAction("page:/accounts/recon
     if (parsedCharges > 0 && chargesLedger) {
       const payVoucher = await nextVoucherNumber(client, 'payment', settlementDate);
       await client.query(
-        `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
+        `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, source)
+         VALUES ($1, $2, $3, $4, $5, $6, 'settlement')`,
         [payVoucher, settlementDate, clearingLedger.id, chargesLedger.id, parsedCharges,
           `Processor charges for ${batchReference}`]
       );

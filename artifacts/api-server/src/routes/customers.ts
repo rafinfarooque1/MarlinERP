@@ -564,8 +564,8 @@ router.post("/vendors/:id/payment", requireModuleAction(["page:/vendors", "page:
   const voucherNumber = await nextVoucherNumber(pool, 'payment', date);
 
   const { rows: [row] } = await pool.query<any>(
-    `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+    `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, source)
+     VALUES ($1, $2, $3, $4, $5, $6, 'vendor') RETURNING *`,
     [voucherNumber, date, cashBankLedgerId, vendorLedger.id, amount, narration ?? `Payment to vendor #${vendorId}`],
   );
 

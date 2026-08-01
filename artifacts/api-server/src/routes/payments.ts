@@ -233,8 +233,8 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
 
       const voucherNum = await nextVoucherNumber(client, "receipt", pDate);
       const { rows: [receipt] } = await client.query(
-        `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+        `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id, source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'sale') RETURNING id`,
         [voucherNum, pDate, salesLedger.id, cashLedger.id, parsedAmount,
           `Cash payment for invoice ${(await client.query(`SELECT invoice_number FROM sales WHERE id=$1`,[saleId])).rows[0]?.invoice_number ?? saleId}`,
           locType, locId]
@@ -266,8 +266,8 @@ router.post("/sales/:id/payments", requireModuleAction(["page:/sales/pos", "page
       const voucherNum = await nextVoucherNumber(client, "receipt", pDate);
       const { rows: [invRow] } = await client.query(`SELECT invoice_number FROM sales WHERE id=$1`, [saleId]);
       const { rows: [receipt] } = await client.query(
-        `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+        `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id, source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'sale') RETURNING id`,
         [voucherNum, pDate, salesLedger.id, clearingLedger.id, parsedAmount,
           `${paymentModeLabel(method)} payment for invoice ${invRow?.invoice_number ?? saleId}${referenceNumber ? ` — Ref: ${referenceNumber}` : ""}`,
           locType, locId]

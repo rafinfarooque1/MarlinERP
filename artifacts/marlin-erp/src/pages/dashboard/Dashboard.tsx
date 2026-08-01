@@ -126,6 +126,14 @@ export default function Dashboard() {
   const locMax = Math.max(0, ...(s?.byLocation.map(l => l.total) ?? [0]));
   const topItemMax = Math.max(0, ...(bi?.topItems.map(i => i.revenue) ?? [0]));
 
+  // Today's money movement — same posting stream as the balance tiles, always
+  // anchored to today regardless of the selected date range. The generated
+  // response type predates the field, hence the cast.
+  const tm = (bi as any)?.todayMoney as {
+    cashIn: number; cashOut: number; bankIn: number; bankOut: number;
+    totalIn: number; totalOut: number;
+  } | null | undefined;
+
   const summaryCards: { label: string; value: React.ReactNode; tone?: CardTone; hint?: React.ReactNode }[] = [
     { label: 'Sales', value: fmt(s?.total ?? 0), tone: 'accent' },
     // Expenses and Bank Balance come from the accounting postings, which carry
@@ -180,6 +188,21 @@ export default function Dashboard() {
       label: 'Cash Balance',
       value: bi?.cash?.balance == null ? '—' : fmt(bi.cash.balance),
       tone: bi?.cash?.balance == null ? 'default' : bi.cash.balance >= 0 ? 'pos' : 'neg',
+    },
+    // Money in / out TODAY across all tills and bank accounts — read off the
+    // same books as the balances, so a till sale, a voucher or a journal all
+    // move it. '—' exactly when the balance tiles read '—'.
+    {
+      label: 'Money In Today',
+      value: tm == null ? '—' : fmt(tm.totalIn),
+      tone: (tm?.totalIn ?? 0) > 0 ? 'pos' : 'default',
+      hint: tm ? `Cash ${fmt(tm.cashIn)} · Bank ${fmt(tm.bankIn)}` : undefined,
+    },
+    {
+      label: 'Money Out Today',
+      value: tm == null ? '—' : fmt(tm.totalOut),
+      tone: (tm?.totalOut ?? 0) > 0 ? 'neg' : 'default',
+      hint: tm ? `Cash ${fmt(tm.cashOut)} · Bank ${fmt(tm.bankOut)}` : undefined,
     },
   ];
 

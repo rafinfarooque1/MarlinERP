@@ -239,3 +239,18 @@ export const useAddAdvance = () =>
         body: JSON.stringify(body),
       }),
   });
+
+/**
+ * Recover an outstanding advance in cash (whole amount) instead of a payroll
+ * deduction. `receiveLedgerId` picks the till/bank the money comes back into;
+ * omitted = the caller's own till (branch) or company cash (Head Office).
+ */
+export const useRecoverAdvance = () =>
+  useMutation<EmployeeAdvance, Error, { id: number; receiveLedgerId?: number }>({
+    mutationFn: ({ id, receiveLedgerId }) =>
+      customFetch<EmployeeAdvance>(`/api/hr/advances/${id}/recover`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(receiveLedgerId ? { receiveLedgerId } : {}),
+      }),
+  });

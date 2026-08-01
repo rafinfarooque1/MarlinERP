@@ -6,7 +6,7 @@ import { pushLocationFilter, type ParsedLocationFilter } from "../lib/queryFilte
 import { stockValuation } from "../lib/valuation";
 import { requireModuleView, canViewStockValuation } from "../middleware/permissions";
 import { buildDerivedPostings } from "./journal";
-import { companyBalances, companyFinancials } from "../lib/dashboardFinancials";
+import { companyBalances, companyFinancials, dayMoneyFlows, ledgerSubtreeLookup } from "../lib/dashboardFinancials";
 import { outstandingExpr, outstandingAsOfExpr } from "../lib/salePaymentPosition";
 import { isIsoDate } from "../lib/dateInput";
 import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
@@ -77,7 +77,17 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
     ?? (!scope.isHeadOffice
       ? ({ type: (req as any).employee.branchType, id: (req as any).employee.branchId } as any)
       : null);
-  const { bankBalance, cashBalance } = await companyBalances(buildDerivedPostings, { location: postingLoc });
+  // The stream is built ONCE and feeds both the balance tiles and today's
+  // money-movement tiles, so "cash in hand" and "cash in today" cannot
+  // disagree about what today's postings were.
+  const allPostings = await buildDerivedPostings({});
+  const { bankBalance, cashBalance } = await companyBalances(
+    (async () => allPostings) as unknown as typeof buildDerivedPostings,
+    { location: postingLoc },
+  );
+  const todayMoney = dayMoneyFlows(allPostings as never[], {
+    date: today, location: postingLoc, subtree: await ledgerSubtreeLookup(),
+  });
 
   // ── Other metrics ─────────────────────────────────────────────────────
   const salesConds = ["s.branch_transfer_id IS NULL", "s.cancelled_at IS NULL"];
@@ -198,6 +208,7 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
     pendingLeaves:        pendingLeaves.count,
     lowStockCount:        lowStock.count,
     totalExpense:         Number(expenseSum.total ?? 0),
+    todayMoney,
     totalBatchesCreated:  Number(batchRow.batch_count ?? 0),
     totalBatchQuantity:   Number(batchRow.total_qty ?? 0),
     bankBalance,
@@ -514,12 +525,32 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     effLocType && effLocType !== "headoffice" && effLocId != null
       ? ({ type: effLocType as "warehouse" | "outlet", id: effLocId } as const)
       : null;
+  // One posting build per distinct cap. companyFinancials wants the stream
+  // capped at the selected range's end, while "today's money" is anchored to
+  // TODAY regardless of the range — viewing last month must not zero the
+  // today tiles. When the range includes today the two share a single build.
+  const postingsCache = new Map<string, ReturnType<typeof buildDerivedPostings>>();
+  const cachedPostings: typeof buildDerivedPostings = (opts) => {
+    const key = (opts as { toDate?: string | null } | undefined)?.toDate ?? "";
+    let p = postingsCache.get(key);
+    if (!p) { p = buildDerivedPostings(opts); postingsCache.set(key, p); }
+    return p;
+  };
   const accountingP = scope.isHeadOffice || postingLoc
-    ? companyFinancials(buildDerivedPostings, {
+    ? companyFinancials(cachedPostings, {
         fromDate: fromDate || null,
         toDate: toDate || null,
         location: postingLoc,
       })
+    : Promise.resolve(null);
+  // Today's cash/bank movement off the SAME stream as the balance tiles, so
+  // "cash in hand" and "cash in today" cannot disagree about today's postings.
+  const todayStr = new Date().toISOString().split("T")[0];
+  const todayMoneyP = scope.isHeadOffice || postingLoc
+    ? (async () => dayMoneyFlows(
+        (await cachedPostings(toDate && toDate >= todayStr ? { toDate } : {})) as never[],
+        { date: todayStr, location: postingLoc, subtree: await ledgerSubtreeLookup() },
+      ))()
     : Promise.resolve(null);
 
   // ── Run everything in parallel ────────────────────────────────────────────
@@ -710,7 +741,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   const salesCount = Number(salesTotals.rows[0]?.count ?? 0);
   const outputQty = qty(productionAgg.rows[0]?.output_qty);
   const wastageQty = qty(productionAgg.rows[0]?.wastage_qty);
-  const accounting = await accountingP;
+  const [accounting, todayMoney] = await Promise.all([accountingP, todayMoneyP]);
   // Same rule as the Stock screen: no valuation right, no valuation figure.
   const showValuation = await canViewStockValuation((req as any).employee?.hierarchyId);
 
@@ -824,6 +855,10 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       balance: accounting ? accounting.bankBalance : null,
       companyWide: !postingLoc,
     },
+    // Today's money movement — debits (in) and credits (out) over the cash and
+    // bank ledger subtrees, always anchored to TODAY regardless of the selected
+    // date range. Null exactly when the balance tiles are null.
+    todayMoney,
     topItems: topItemsRows.rows.map((r: any) => ({
       itemId: Number(r.item_id), name: r.name, qty: qty(r.qty), revenue: money(r.revenue),
     })),

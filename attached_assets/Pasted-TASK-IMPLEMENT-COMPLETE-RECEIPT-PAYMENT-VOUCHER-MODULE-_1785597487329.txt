@@ -1,0 +1,755 @@
+TASK: IMPLEMENT COMPLETE RECEIPT & PAYMENT VOUCHER MODULE
+
+This is an IMPLEMENTATION task, not a planning task.
+
+First inspect the existing Marlin Frozen Fruits ERP architecture, accounting engine, voucher module, ledger posting logic, cash/bank module, customer/vendor outstanding logic, payroll accounting, employee advances, RBAC, audit logs, reports, and existing APIs.
+
+Then implement the following requirements.
+
+==================================================
+IMPORTANT SAFETY RULES
+==================================================
+
+1. Do NOT reset, reseed, recreate, or replace the production database.
+2. Do NOT delete or modify historical sales, purchases, vouchers, payroll, attendance, stock, customers, vendors, warehouses, ledgers, or accounting entries.
+3. Use database migrations if schema changes are required.
+4. Reuse the existing accounting engine.
+5. Reuse the existing voucher infrastructure.
+6. Reuse existing ledger posting logic.
+7. Reuse existing RBAC.
+8. Reuse existing Audit Log.
+9. Reuse existing reporting modules.
+10. Do NOT create a second accounting system.
+11. Do NOT duplicate journal posting logic.
+12. All new vouchers must integrate with the current accounting system.
+
+==================================================
+1. RECEIPT VOUCHER
+==================================================
+
+Create a complete Receipt Voucher module.
+
+Purpose:
+
+Money received into:
+
+• Head Office Cash
+• Warehouse Cash
+• Outlet Cash
+• Bank Accounts
+
+Received from:
+
+• Customer
+• Vendor
+• Employee
+• Any Ledger
+
+Examples:
+
+Customer payment
+Vendor refund
+Employee refund
+Misc income
+Advance received
+Other receipts
+
+Fields:
+
+Voucher Number (Auto)
+
+Date
+
+Receipt Into Account
+
+Received From
+
+Amount
+
+Payment Mode
+
+Cash
+UPI
+Bank
+Card
+Cheque
+NEFT
+RTGS
+
+Reference Number
+
+Narration
+
+Attachments (if existing document upload system already exists)
+
+==================================================
+2. PAYMENT VOUCHER
+==================================================
+
+Create a complete Payment Voucher module.
+
+Purpose:
+
+Money paid from:
+
+Head Office Cash
+
+Warehouse Cash
+
+Outlet Cash
+
+Bank Accounts
+
+Paid To
+
+Vendor
+
+Employee
+
+Ledger
+
+Customer (refund)
+
+Examples
+
+Vendor payment
+
+Salary payment
+
+Employee advance
+
+Rent payment
+
+Expense payment
+
+Asset purchase payment
+
+Customer refund
+
+Misc payment
+
+Fields
+
+Voucher Number
+
+Date
+
+Paid From Account
+
+Paid To
+
+Amount
+
+Payment Mode
+
+Cash
+
+UPI
+
+Bank
+
+Card
+
+Cheque
+
+NEFT
+
+RTGS
+
+Reference
+
+Narration
+
+Attachment
+
+==================================================
+3. ACCOUNTING POSTING
+==================================================
+
+Receipt Example
+
+Customer pays ₹5,000 cash.
+
+Dr Warehouse Cash ₹5,000
+
+Cr Customer ₹5,000
+
+--------------------------------
+
+Vendor Refund
+
+Dr Bank ₹10,000
+
+Cr Vendor ₹10,000
+
+--------------------------------
+
+Payment Example
+
+Vendor paid ₹20,000
+
+Dr Vendor ₹20,000
+
+Cr Warehouse Cash ₹20,000
+
+==================================================
+4. SOURCE ACCOUNT
+==================================================
+
+Allow selecting
+
+Head Office Cash
+
+Warehouse Cash
+
+Outlet Cash
+
+Every Bank Account
+
+Only accounts the logged-in user has permission to access.
+
+Warehouse users must not access Head Office cash unless permission allows.
+
+==================================================
+5. CUSTOMER RECEIPTS
+==================================================
+
+Customer outstanding must reduce automatically.
+
+Example
+
+Outstanding ₹25,000
+
+Receive ₹10,000
+
+Outstanding becomes ₹15,000
+
+==================================================
+6. VENDOR PAYMENT
+==================================================
+
+Vendor payable reduces automatically.
+
+==================================================
+7. EMPLOYEE SALARY PAYMENT
+==================================================
+
+Salary payment must settle Salary Payable.
+
+Accounting
+
+Dr Salary Payable
+
+Cr Selected Cash/Bank
+
+Never debit Salary Expense again.
+
+Salary Expense was already booked during payroll.
+
+==================================================
+8. EMPLOYEE ADVANCE
+==================================================
+
+Advance
+
+Dr Employee Advance
+
+Cr Cash/Bank
+
+Recovery
+
+Dr Cash/Bank
+
+Cr Employee Advance
+
+==================================================
+9. RENT PAYMENT
+==================================================
+
+If Rent Payable exists
+
+Dr Rent Payable
+
+Cr Cash/Bank
+
+Otherwise
+
+Use the ERP's existing accounting policy.
+
+Do not introduce duplicate rent accounting.
+
+==================================================
+10. GENERAL LEDGER PAYMENTS
+==================================================
+
+Allow payment to
+
+Direct Expense
+
+Indirect Expense
+
+Assets
+
+Liabilities
+
+Income Adjustments
+
+Other Ledgers
+
+==================================================
+11. RECEIPT TYPES
+==================================================
+
+Support
+
+Customer Receipt
+
+Vendor Refund
+
+Employee Refund
+
+Income Receipt
+
+Advance Receipt
+
+Misc Receipt
+
+==================================================
+12. PAYMENT TYPES
+==================================================
+
+Support
+
+Vendor Payment
+
+Salary
+
+Advance
+
+Rent
+
+Expense
+
+Asset Purchase
+
+Customer Refund
+
+Misc Payment
+
+==================================================
+13. VOUCHER NUMBERING
+==================================================
+
+Use ERP numbering.
+
+Examples
+
+RV/2026-27/0001
+
+PV/2026-27/0001
+
+Do NOT change
+
+Journal numbering
+
+Sales numbering
+
+Purchase numbering
+
+==================================================
+14. MANUAL VS SYSTEM VOUCHERS
+==================================================
+
+System-generated vouchers remain LOCKED.
+
+Examples
+
+Sales
+
+Purchase
+
+Payroll
+
+Stock
+
+GST
+
+Depreciation
+
+Opening entries
+
+Auto journals
+
+Only manually created Receipt and Payment vouchers may be edited.
+
+Only manually created Receipt and Payment vouchers may be deleted.
+
+Backend must enforce this.
+
+Not just frontend.
+
+==================================================
+15. EDIT
+==================================================
+
+Manual vouchers only.
+
+Allow editing
+
+Date
+
+Ledger
+
+Cash/Bank Account
+
+Amount
+
+Narration
+
+Reference
+
+Payment Mode
+
+Use transaction.
+
+Update the existing voucher.
+
+Do not create duplicates.
+
+==================================================
+16. DELETE
+==================================================
+
+Manual vouchers only.
+
+Deleting must
+
+Reverse accounting safely
+
+Remove ledger impact
+
+Update reports
+
+Rollback transaction if failure occurs.
+
+==================================================
+17. CASH BOOK
+==================================================
+
+Every Receipt/Payment updates
+
+Cash Book
+
+Warehouse Cash Book
+
+Outlet Cash Book
+
+Head Office Cash Book
+
+==================================================
+18. BANK BOOK
+==================================================
+
+Update Bank Book automatically.
+
+==================================================
+19. DAY BOOK
+==================================================
+
+Receipt and Payment vouchers appear automatically.
+
+==================================================
+20. LEDGER STATEMENT
+==================================================
+
+Update automatically.
+
+==================================================
+21. TRIAL BALANCE
+==================================================
+
+Update automatically.
+
+==================================================
+22. BALANCE SHEET
+==================================================
+
+Update automatically.
+
+==================================================
+23. P&L
+==================================================
+
+Only if accounting requires.
+
+Do not duplicate expenses.
+
+==================================================
+24. CUSTOMER LEDGER
+==================================================
+
+Receipt reflects immediately.
+
+Outstanding updates.
+
+==================================================
+25. VENDOR LEDGER
+==================================================
+
+Payment reflects immediately.
+
+Outstanding updates.
+
+==================================================
+26. EMPLOYEE LEDGER
+==================================================
+
+Salary payments
+
+Advance payments
+
+Recoveries
+
+Must update automatically.
+
+==================================================
+27. AUDIT LOG
+==================================================
+
+Log
+
+Create
+
+Edit
+
+Delete
+
+Old Value
+
+New Value
+
+User
+
+Timestamp
+
+IP
+
+==================================================
+28. PERMISSIONS
+==================================================
+
+Separate permissions
+
+View Receipt
+
+Create Receipt
+
+Edit Receipt
+
+Delete Receipt
+
+View Payment
+
+Create Payment
+
+Edit Payment
+
+Delete Payment
+
+==================================================
+29. VALIDATION
+==================================================
+
+No negative amount
+
+No zero amount
+
+Ledger mandatory
+
+Cash/Bank mandatory
+
+Debit must equal Credit
+
+Prevent duplicate posting
+
+Prevent double settlement
+
+==================================================
+30. SEARCH & FILTERS
+==================================================
+
+Voucher Number
+
+Date
+
+Type
+
+Ledger
+
+Warehouse
+
+Outlet
+
+Bank
+
+Cash
+
+Created By
+
+==================================================
+31. REPORTS
+==================================================
+
+Receipt/Payment vouchers must automatically appear in
+
+Cash Book
+
+Bank Book
+
+Day Book
+
+Ledger Statement
+
+Trial Balance
+
+Balance Sheet
+
+Customer Statement
+
+Vendor Statement
+
+Employee Statement
+
+Voucher Register
+
+==================================================
+32. DASHBOARD
+==================================================
+
+Show
+
+Today's Receipts
+
+Today's Payments
+
+Cash In
+
+Cash Out
+
+Bank In
+
+Bank Out
+
+==================================================
+33. UI
+==================================================
+
+Follow existing ERP design.
+
+Buttons
+
+New Receipt
+
+New Payment
+
+Edit
+
+Delete
+
+Print
+
+PDF
+
+Export
+
+Search
+
+Filters
+
+==================================================
+34. TESTING
+==================================================
+
+Verify
+
+Customer receipt
+
+Vendor payment
+
+Salary payment
+
+Advance payment
+
+Rent payment
+
+Warehouse cash
+
+Outlet cash
+
+Head Office cash
+
+Bank account
+
+Ledger statement
+
+Cash Book
+
+Bank Book
+
+Day Book
+
+Trial Balance
+
+Balance Sheet
+
+Outstanding customer
+
+Outstanding vendor
+
+Employee ledger
+
+Edit manual voucher
+
+Delete manual voucher
+
+Reject edit of system voucher
+
+Reject delete of system voucher
+
+No duplicate vouchers
+
+No duplicate accounting entries
+
+==================================================
+35. IMPLEMENTATION RULE
+==================================================
+
+Reuse the existing accounting engine, voucher infrastructure, RBAC, audit log, and reporting modules.
+
+Do NOT create a parallel accounting system.
+
+Do NOT duplicate ledger posting logic.
+
+Receipt and Payment vouchers must integrate seamlessly with the existing ERP and all financial reports.
+
+==================================================
+36. FINAL REPORT
+==================================================
+
+After implementation provide:
+
+1. Files changed
+2. Database changes
+3. APIs added
+4. Voucher integration summary
+5. Accounting integration summary
+6. Security verification
+7. Audit log verification
+8. Tests performed
+9. Any bugs found but intentionally not modified
+
+IMPORTANT:
+
+Do NOT stop after giving a plan.
+
+Inspect the existing implementation and then COMPLETE the implementation.

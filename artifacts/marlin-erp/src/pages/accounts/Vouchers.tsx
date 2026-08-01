@@ -1,11 +1,12 @@
 import { useState, useMemo, Fragment } from 'react';
 import {
-  useListPayments, useCreatePayment, useDeletePayment,
-  useListReceipts, useCreateReceipt, useDeleteReceipt,
+  useListPayments, useCreatePayment, useDeletePayment, useUpdatePayment,
+  useListReceipts, useCreateReceipt, useDeleteReceipt, useUpdateReceipt,
   useListJournalVouchers, useCreateJournalVoucher, useDeleteJournalVoucher, useUpdateJournalVoucher,
   useListAccountsFlat, useCashBankLedgersFlat,
   useListCustomers, useListVendors,
 } from '@workspace/api-client-react';
+import { VOUCHER_MODE_OPTIONS, voucherModeLabel } from '@/lib/voucherModes';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -611,6 +612,145 @@ function EditVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: () => v
   );
 }
 
+// ── Edit Payment / Receipt dialog ───────────────────────────────────────────
+/**
+ * Manual money vouchers only — like EditVoucherDialog, this is only reachable
+ * for rows the SERVER marked `editable`, and the API re-checks the system
+ * locks on save, so a sale-settlement receipt or an expense payment stays
+ * protected even if the button were forced. The voucher number never changes.
+ */
+function EditMoneyVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: () => void }) {
+  const qc = useQueryClient();
+  const v = row.raw ?? {};
+  const isPayment = row.type === 'payment';
+
+  const { data: allAccounts = [] } = useListAccountsFlat();
+  const { data: cashBank = [] }    = useCashBankLedgersFlat();
+  const allLedgers  = (allAccounts as any[]).filter(a => !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code));
+  const cashLedgers = (cashBank as any[]).filter(a => !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code));
+
+  const updatePayment = useUpdatePayment();
+  const updateReceipt = useUpdateReceipt();
+
+  const [date, setDate]   = useState<string>(String((isPayment ? v.paymentDate : v.receiptDate) ?? '').slice(0, 10));
+  const [fromId, setFromId] = useState<number>(isPayment ? (v.paidFromLedgerId ?? 0) : (v.receivedFromLedgerId ?? 0));
+  const [toId, setToId]     = useState<number>(isPayment ? (v.paidToLedgerId ?? 0) : (v.receivedInLedgerId ?? 0));
+  const [amount, setAmount] = useState<string>(String(Number(v.amount ?? 0) || ''));
+  const [mode, setMode]     = useState<string>(v.paymentMode ?? '');
+  const [refNo, setRefNo]   = useState<string>(v.referenceNumber ?? '');
+  const [narration, setNarr] = useState<string>(v.narration ?? '');
+
+  const onErr = (e: any) => toast.error(e?.data?.error || e.message || 'Could not save the changes');
+  const onOk  = () => { toast.success(`${row.voucherNumber} updated`); qc.invalidateQueries(); onClose(); };
+
+  const submit = () => {
+    if (!date) { toast.error('Date required'); return; }
+    if (!fromId || !toId) { toast.error('Select both accounts'); return; }
+    if (fromId === toId) { toast.error('The two accounts must be different'); return; }
+    if (!(Number(amount) > 0)) { toast.error('Enter an amount'); return; }
+
+    // paymentMode: '' clears the stored mode (server maps '' → null).
+    if (isPayment) {
+      updatePayment.mutate({
+        id: row.id, paymentDate: date, paidFromLedgerId: fromId, paidToLedgerId: toId,
+        amount: Number(amount), paymentMode: (mode || null) as any,
+        referenceNumber: refNo || null, narration,
+      } as any, { onSuccess: onOk, onError: onErr });
+    } else {
+      updateReceipt.mutate({
+        id: row.id, receiptDate: date, receivedFromLedgerId: fromId, receivedInLedgerId: toId,
+        amount: Number(amount), paymentMode: (mode || null) as any,
+        referenceNumber: refNo || null, narration,
+      } as any, { onSuccess: onOk, onError: onErr });
+    }
+  };
+
+  const meta = TYPE_META[row.type];
+  const Icon = meta.icon;
+  const isPending = updatePayment.isPending || updateReceipt.isPending;
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Pencil className="h-5 w-5 text-primary" /> Edit {meta.label} Voucher
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold ${meta.bg}`}>
+          <Icon className="h-3.5 w-3.5" />
+          {meta.label}
+          <span className="font-mono ml-auto">{row.voucherNumber}</span>
+        </div>
+        <p className="text-xs text-muted-foreground -mt-1">
+          The voucher number stays as it is — this updates the existing entry, and the books follow the change.
+        </p>
+
+        <Separator />
+
+        <div className="space-y-1">
+          <Label>Date</Label>
+          <Input type="date" value={date} onChange={e => setDate(e.target.value)} />
+        </div>
+
+        <div className="space-y-1">
+          <Label>{isPayment ? 'Paid From (Cash / Bank)' : 'Received From'}</Label>
+          <AccountCombobox
+            options={isPayment ? cashLedgers : allLedgers}
+            value={fromId} onChange={setFromId}
+            placeholder={isPayment ? 'Select cash/bank account' : 'Select ledger'}
+          />
+        </div>
+        <div className="space-y-1">
+          <Label>{isPayment ? 'Paid To' : 'Received In (Cash / Bank)'}</Label>
+          <AccountCombobox
+            options={isPayment ? allLedgers : cashLedgers}
+            value={toId} onChange={setToId}
+            placeholder={isPayment ? 'Select ledger' : 'Select cash/bank account'}
+          />
+        </div>
+
+        <div className="space-y-1">
+          <Label>Amount (₹)</Label>
+          <Input type="number" min={0} step="0.01" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <Label>Mode</Label>
+            <Select value={mode || 'none'} onValueChange={val => setMode(val === 'none' ? '' : val)}>
+              <SelectTrigger><SelectValue placeholder="Optional" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">— None —</SelectItem>
+                {VOUCHER_MODE_OPTIONS.map(o => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label>Reference #</Label>
+            <Input value={refNo} onChange={e => setRefNo(e.target.value)} placeholder="Cheque / UTR / Txn no." />
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <Label>Narration (optional)</Label>
+          <Textarea value={narration} onChange={e => setNarr(e.target.value)} rows={2} placeholder="Add a note…" />
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={submit} disabled={isPending}>
+            {isPending ? 'Saving…' : 'Save Changes'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────
 export default function Vouchers() {
   const perm       = usePermission('page:/accounts/vouchers');
@@ -628,6 +768,8 @@ export default function Vouchers() {
   const { data: cs } = useGetCompanySettings();
 
   const [search, setSearch]       = useState('');
+  const [fromDate, setFromDate]   = useState('');
+  const [toDate, setToDate]       = useState('');
   const [typeFilter, setTypeFilter] = useState<VoucherType | 'all'>('all');
   const [expanded, setExpanded]   = useState<string | null>(null);
   const [deleteRow, setDeleteRow] = useState<UnifiedRow | null>(null);
@@ -681,6 +823,9 @@ export default function Vouchers() {
 
   const filtered = useMemo(() => {
     let list = typeFilter === 'all' ? all : all.filter(r => r.type === typeFilter);
+    // Row dates are YYYY-MM-DD, so plain string comparison is date comparison.
+    if (fromDate) list = list.filter(r => (r.date ?? '') >= fromDate);
+    if (toDate)   list = list.filter(r => (r.date ?? '') <= toDate);
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter(r =>
@@ -690,7 +835,7 @@ export default function Vouchers() {
       );
     }
     return list;
-  }, [all, typeFilter, search]);
+  }, [all, typeFilter, search, fromDate, toDate]);
 
   const total = useMemo(() => filtered.reduce((s, r) => s + r.amount, 0), [filtered]);
 
@@ -704,6 +849,7 @@ export default function Vouchers() {
     downloadCSV('vouchers.csv', filtered.map(r => ({
       Voucher: r.voucherNumber, Type: TYPE_META[r.type].label,
       Date: r.date, Description: r.description,
+      Mode: voucherModeLabel(r.raw?.paymentMode), Reference: r.raw?.referenceNumber || '',
       Narration: r.narration || '', Amount: r.amount,
     })));
     toast.success('Exported');
@@ -787,8 +933,8 @@ export default function Vouchers() {
 
         {/* Table */}
         <div className="bg-card border rounded-xl shadow-sm overflow-hidden">
-          {/* Search bar */}
-          <div className="p-3 border-b flex items-center gap-2 bg-muted/20">
+          {/* Search + date range */}
+          <div className="p-3 border-b flex flex-wrap items-center gap-2 bg-muted/20">
             <Search className="w-4 h-4 text-muted-foreground shrink-0" />
             <Input
               placeholder="Search voucher #, account, or narration…"
@@ -796,6 +942,16 @@ export default function Vouchers() {
               onChange={e => setSearch(e.target.value)}
               className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm"
             />
+            <div className="flex items-center gap-1.5 ml-auto">
+              <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="h-8 w-[140px] text-xs" aria-label="From date" />
+              <span className="text-xs text-muted-foreground">to</span>
+              <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="h-8 w-[140px] text-xs" aria-label="To date" />
+              {(fromDate || toDate) && (
+                <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => { setFromDate(''); setToDate(''); }}>
+                  Clear
+                </Button>
+              )}
+            </div>
           </div>
 
           <Table>
@@ -871,9 +1027,10 @@ export default function Vouchers() {
                           </Button>
                           )}
                           {/* Edit — manually created vouchers only. `editable`
-                              is the server's own verdict, so the button can
-                              never appear on an entry the API would refuse. */}
-                          {canEdit && isJV && (
+                              is the server's own verdict for every type
+                              (payments and receipts included), so the button
+                              can never appear on an entry the API would refuse. */}
+                          {canEdit && (
                             row.raw?.editable ? (
                               <Button
                                 variant="ghost" size="icon"
@@ -981,7 +1138,9 @@ export default function Vouchers() {
       )}
 
       {newOpen && <NewVoucherDialog defaultType={newType} onClose={() => setNewOpen(false)} />}
-      {editRow && <EditVoucherDialog row={editRow} onClose={() => setEditRow(null)} />}
+      {editRow && (editRow.type === 'payment' || editRow.type === 'receipt'
+        ? <EditMoneyVoucherDialog row={editRow} onClose={() => setEditRow(null)} />
+        : <EditVoucherDialog row={editRow} onClose={() => setEditRow(null)} />)}
       {deleteRow && <DeleteConfirm row={deleteRow} onClose={() => setDeleteRow(null)} />}
     </AppLayout>
   );

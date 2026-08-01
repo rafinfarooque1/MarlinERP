@@ -1249,7 +1249,69 @@ async function runMigrations() {
     -- vouchers. Read by buildDerivedPostings for located report slices.
     ALTER TABLE journal_vouchers ADD COLUMN IF NOT EXISTS location_type text;
     ALTER TABLE journal_vouchers ADD COLUMN IF NOT EXISTS location_id integer;
+
+    -- Receipt/Payment voucher metadata: instrument mode (cash/upi/bank/card/
+    -- cheque/neft/rtgs — display + filters only, the POSTING is driven by the
+    -- chosen ledgers), an instrument reference (cheque no / UTR), attachment
+    -- and the creating user. payments already had payment_mode+attachment_url
+    -- from the location-expense work.
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS reference_number text;
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS created_by text;
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS payment_mode text;
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS reference_number text;
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS attachment_url text;
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS created_by text;
+
+    -- Durable provenance for money vouchers. Every producer stamps its rows
+    -- ('manual', 'expense', 'refund', 'sale', 'deposit', 'settlement',
+    -- 'vendor'); the vouchers page only lets 'manual' (and vendor payments,
+    -- which own no other record) be edited or deleted. Stored, never inferred:
+    -- inferring ownership from voucher numbers or narrations misses producers.
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS source text;
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS source text;
   `);
+
+  // One-time provenance backfill for rows created before the source column
+  // existed. Guarded by migration_log, NOT by "source IS NULL": a NULL after
+  // this point means an unstamped producer, and re-labelling such rows as
+  // 'manual' would unlock system vouchers. System rows are identified by their
+  // durable links first, then by the two legacy narration patterns that have
+  // no link; everything left is manual by elimination (the manual routes were
+  // the only remaining writers).
+  {
+    const { rows: srcDone } = await pool.query(
+      `SELECT 1 FROM migration_log WHERE name = 'money_voucher_source_backfill_v1'`,
+    );
+    if (srcDone.length === 0) {
+      const c = await pool.connect();
+      try {
+        await c.query("BEGIN");
+        await c.query(`UPDATE payments SET source='expense' WHERE source IS NULL AND is_location_expense = TRUE`);
+        await c.query(`UPDATE payments p SET source='refund' WHERE p.source IS NULL AND EXISTS (SELECT 1 FROM sales_returns sr WHERE sr.refund_payment_id = p.id)`);
+        await c.query(`UPDATE payments p SET source='deposit' WHERE p.source IS NULL AND EXISTS (SELECT 1 FROM cash_deposits cd WHERE cd.transit_payment_id = p.id)`);
+        await c.query(`UPDATE payments SET source='deposit' WHERE source IS NULL AND narration = 'Bank charges on cash deposit'`);
+        await c.query(`UPDATE payments SET source='settlement' WHERE source IS NULL AND narration LIKE 'Processor charges for %'`);
+        await c.query(`UPDATE payments p SET source='vendor' WHERE p.source IS NULL AND EXISTS (SELECT 1 FROM account_ledgers al WHERE al.id = p.paid_to_ledger_id AND al.code LIKE 'VEND-%')`);
+        await c.query(`UPDATE payments SET source='manual' WHERE source IS NULL`);
+
+        await c.query(`UPDATE receipts r SET source='sale' WHERE r.source IS NULL AND (
+                         EXISTS (SELECT 1 FROM sale_payments sp WHERE sp.clearing_receipt_id = r.id)
+                         OR EXISTS (SELECT 1 FROM sales s WHERE s.invoice_number = r.voucher_number))`);
+        await c.query(`UPDATE receipts r SET source='deposit' WHERE r.source IS NULL AND EXISTS (SELECT 1 FROM cash_deposits cd WHERE cd.bank_receipt_id = r.id)`);
+        await c.query(`UPDATE receipts SET source='settlement' WHERE source IS NULL AND narration LIKE 'Bank settlement %'`);
+        await c.query(`UPDATE receipts SET source='manual' WHERE source IS NULL`);
+
+        await c.query(`INSERT INTO migration_log (name) VALUES ('money_voucher_source_backfill_v1') ON CONFLICT (name) DO NOTHING`);
+        await c.query("COMMIT");
+        console.log("[migrate] money voucher source backfill complete");
+      } catch (e) {
+        await c.query("ROLLBACK").catch(() => {});
+        throw e;
+      } finally {
+        c.release();
+      }
+    }
+  }
 
   // Username identity normalization + uniqueness invariant. Login treats
   // usernames as LOWER(TRIM(...)) everywhere, so the DB must guarantee no two

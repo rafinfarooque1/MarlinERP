@@ -164,6 +164,41 @@ async function balancesFrom(
   };
 }
 
+/**
+ * One day's money movement across the cash and bank subtrees, read from the
+ * SAME derived posting stream as the balance tiles — so "cash in today" is by
+ * construction the amount the Cash Book gained today. Debits into a cash/bank
+ * ledger are money in; credits are money out. A cash→bank deposit counts on
+ * both sides, exactly as a cash book shows it.
+ */
+export function dayMoneyFlows(
+  postings: Posting[],
+  opts: { date: string; location?: PostingLocationFilter | null; subtree: (code: string) => number[] },
+): { cashIn: number; cashOut: number; bankIn: number; bankOut: number; totalIn: number; totalOut: number } {
+  const location = opts.location ?? null;
+  const sliced = location
+    ? (filterPostingsByLocation(postings as never[], location) as unknown as Posting[])
+    : postings;
+  const cashIds = new Set(opts.subtree("STD-CASH"));
+  const bankIds = new Set(opts.subtree("STD-BANK"));
+  let cashIn = 0, cashOut = 0, bankIn = 0, bankOut = 0;
+  for (const p of sliced) {
+    // pg date columns come back as JS Dates (UTC midnight); derived rows may
+    // already be strings. Normalise both to YYYY-MM-DD before comparing.
+    const d = (p.date as unknown) instanceof Date
+      ? (p.date as unknown as Date).toISOString().slice(0, 10)
+      : String(p.date).slice(0, 10);
+    if (d !== opts.date) continue;
+    if (cashIds.has(p.ledgerId)) { cashIn += p.debit; cashOut += p.credit; }
+    else if (bankIds.has(p.ledgerId)) { bankIn += p.debit; bankOut += p.credit; }
+  }
+  return {
+    cashIn: r2(cashIn), cashOut: r2(cashOut),
+    bankIn: r2(bankIn), bankOut: r2(bankOut),
+    totalIn: r2(cashIn + bankIn), totalOut: r2(cashOut + bankOut),
+  };
+}
+
 /** Control balances only — for callers that do not need the expense figure. */
 export async function companyBalances(
   buildDerivedPostings: PostingsFn,

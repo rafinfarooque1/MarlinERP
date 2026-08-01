@@ -299,8 +299,8 @@ router.post("/cash-in-outlet/deposits", requireModuleAction("page:/accounts/cash
     // 4. Post payment: paid_from=cash, paid_to=STD-CIT
     const payVoucher = await nextVoucherNumber(client, 'payment', depositDate);
     const { rows: [payment] } = await client.query(
-      `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+      `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id, source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'deposit') RETURNING id`,
       [payVoucher, depositDate, cashLedger.id, citLedger.id, parsedAmount,
         `Cash deposit to bank — ${depositReference ?? "no ref"}`,
         isWarehouse ? 'warehouse' : 'outlet', locationId]
@@ -425,8 +425,8 @@ router.post("/cash-in-outlet/deposits/:id/reconcile", requireModuleAction(["page
     // 4. Post receipt: received_from=CIT, received_in=bank, net
     const recVoucher = await nextVoucherNumber(client, 'receipt', settlementDate);
     const { rows: [receipt] } = await client.query(
-      `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, source)
+       VALUES ($1, $2, $3, $4, $5, $6, 'deposit') RETURNING id`,
       [recVoucher, settlementDate, citLedger.id, destinationBankLedgerId, netAmount,
         `Cash deposit confirmed — ${bankReference ?? "no ref"}`]
     );
@@ -441,8 +441,8 @@ router.post("/cash-in-outlet/deposits/:id/reconcile", requireModuleAction(["page
       }
       const payVoucher = await nextVoucherNumber(client, 'payment', settlementDate);
       await client.query(
-        `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
+        `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, source)
+         VALUES ($1, $2, $3, $4, $5, $6, 'deposit')`,
         [payVoucher, settlementDate, citLedger.id, chargesLedger.id, parsedCharges,
           `Bank charges on cash deposit`]
       );

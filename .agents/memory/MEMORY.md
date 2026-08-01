@@ -92,3 +92,6 @@
 - [Five-action permissions & role tree](five-action-permissions.md) — legacy print/approve/share cols are write-mirrors, never read; single-root role tree with derived levels; structure edits serialize on one advisory lock.
 - [Payroll pay ledger & JV location stamps](payroll-pay-ledger.md) — salary/advances pay from any scoped till; mode derived from ledger tree; journal_vouchers has raw location columns; branch default must never fall back to HO cash.
 - [Quotations module](quotations-module.md) — parallel doc store, zero books impact by construction; one-sale-per-quote via 2 partial uniques + FOR UPDATE; explicit JSX generics break the vite build; pdftotext for PDF checks.
+- [Money voucher provenance](money-voucher-provenance.md) — payments/receipts store `source`; every producer must stamp it; edit rights derive from it and NULL fails closed; never re-sweep NULL→manual.
+- [Advance recovery vs payroll](advance-recovery.md) — one settlement path per advance; generate/recover/approve all serialize on the advance row lock; is_deducted TRUE + NULL payroll id = cash recovery.
+- [Dashboard todayMoney](dashboard-kpi-sources.md) — Dashboard UI reads /dashboard/bi (NOT /summary); todayMoney is anchored to TODAY regardless of the selected date range, via a per-toDate postings cache.

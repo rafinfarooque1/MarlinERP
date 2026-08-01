@@ -806,14 +806,22 @@ async function postSalaryApproval(opts: {
     }
 
     // Close the advances this run recovered. They were claimed at generation
-    // time, so only the ones still attached to this payroll are marked.
+    // time, and approval requires every claim to STILL be attached to this run
+    // and unsettled — if one was released or settled some other way since the
+    // draft was written, the draft's deduction figure is stale, and posting it
+    // would settle an advance twice. Refuse and ask for a regenerate instead.
     const claimedIds: number[] = Array.isArray(pr.advance_ids) ? pr.advance_ids.map(Number) : [];
     if (claimedIds.length) {
-      await client.query(
+      const closed = await client.query(
         `UPDATE employee_advances SET is_deducted = TRUE, deducted_payroll_id = $1
-          WHERE id = ANY($2::int[]) AND is_deducted = FALSE`,
+          WHERE id = ANY($2::int[]) AND is_deducted = FALSE AND deducted_payroll_id = $1`,
         [pr.id, claimedIds],
       );
+      if (closed.rowCount !== claimedIds.length) {
+        throw new Error(
+          `The advances attached to this payroll changed after the draft was generated (one may have been recovered in cash). Regenerate payroll for this month, check the figures, then approve.`,
+        );
+      }
     }
 
     const { rows: [updated] } = await client.query(
@@ -1518,19 +1526,32 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
     // the recovery. Without the claim, two open drafts would each deduct the
     // same advance, and re-running generate for a later month would recover an
     // advance that an earlier month had already taken back.
-    if (existing) {
-      await pool.query(
-        `UPDATE employee_advances SET deducted_payroll_id = NULL
-          WHERE deducted_payroll_id = $1 AND is_deducted = FALSE`,
-        [existing.id],
+    //
+    // Release → select → payroll write → claim runs as ONE transaction with the
+    // advance rows locked (FOR UPDATE): the cash-recovery endpoint locks the
+    // same rows before settling, so an advance can never be both deducted here
+    // and recovered in cash — whichever commits first, the other sees it. The
+    // rowCount assert on the claim is belt-and-braces for that guarantee.
+    const advClient = await pool.connect();
+    let row: any;
+    let claimedIds: number[] = [];
+    let advanceDeduction = 0;
+    try {
+      await advClient.query("BEGIN");
+      if (existing) {
+        await advClient.query(
+          `UPDATE employee_advances SET deducted_payroll_id = NULL
+            WHERE deducted_payroll_id = $1 AND is_deducted = FALSE`,
+          [existing.id],
+        );
+      }
+      const { rows: advances } = await advClient.query(
+        `SELECT id, amount FROM employee_advances
+          WHERE employee_id = $1 AND is_deducted = FALSE AND deducted_payroll_id IS NULL
+          ORDER BY date ASC, id ASC
+          FOR UPDATE`,
+        [emp.id],
       );
-    }
-    const { rows: advances } = await pool.query(
-      `SELECT id, amount FROM employee_advances
-        WHERE employee_id = $1 AND is_deducted = FALSE AND deducted_payroll_id IS NULL
-        ORDER BY date ASC, id ASC`,
-      [emp.id],
-    );
 
     const baseSalary = Number(emp.salary);
     const computed = computePayroll({ baseSalary, workingDays, presentDays: effectivePresentDays, allowances, deductions, rates });
@@ -1540,8 +1561,6 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
     // posted to the advance ledger out of step with the advances actually
     // closed. Take advances in date order while they still fit in net pay;
     // anything that does not fit stays outstanding for a later run.
-    const claimedIds: number[] = [];
-    let advanceDeduction = 0;
     let recoverable = computed.netPay;
     for (const a of advances) {
       const amt = Number(a.amount);
@@ -1577,9 +1596,8 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
       JSON.stringify(snapshot), JSON.stringify(claimedIds), periodLabel,
     ];
 
-    let row: any;
     if (existing) {
-      const { rows: [updated] } = await pool.query(
+      const { rows: [updated] } = await advClient.query(
         `UPDATE payroll SET
            employee_id=$1, month=$2, year=$3, base_salary=$4, working_days=$5, present_days=$6,
            lop_days=$7, lop_deduction=$8, gross_pay=$9, allowances_total=$10, allowances_breakdown=$11,
@@ -1592,7 +1610,7 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
       );
       row = updated;
     } else {
-      const { rows: [inserted] } = await pool.query(
+      const { rows: [inserted] } = await advClient.query(
         `INSERT INTO payroll
            (employee_id, month, year, base_salary, working_days, present_days,
             lop_days, lop_deduction, gross_pay, allowances_total, allowances_breakdown,
@@ -1608,11 +1626,23 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
     }
 
     if (row && claimedIds.length) {
-      await pool.query(
+      const claim = await advClient.query(
         `UPDATE employee_advances SET deducted_payroll_id = $1
           WHERE id = ANY($2::int[]) AND is_deducted = FALSE AND deducted_payroll_id IS NULL`,
         [row.id, claimedIds],
       );
+      if (claim.rowCount !== claimedIds.length) {
+        // Should be impossible with the rows locked above; refuse rather than
+        // write a draft whose deduction disagrees with the claims.
+        throw new Error(`Advance claim conflict for ${emp.name} — an advance changed while payroll was being generated. Run generate again.`);
+      }
+    }
+      await advClient.query("COMMIT");
+    } catch (e) {
+      await advClient.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      advClient.release();
     }
 
     results.push({
@@ -2033,6 +2063,86 @@ router.post("/hr/advances", requireModuleAction("page:/hr/advances", "add"), asy
     isDeducted: row.is_deducted, deductedPayrollId: row.deducted_payroll_id,
     createdAt: row.created_at,
   });
+});
+
+// Recover an outstanding advance in CASH (the employee hands the money back)
+// instead of waiting for the payroll deduction. Whole-advance only — payroll's
+// deduction model also takes advances whole, so partial recovery would leave a
+// remainder no other flow can see. Books: Dr chosen till / Cr Advance ledger.
+// The row is claimed atomically (is_deducted flips under the row lock), so a
+// racing payroll generation and a cash recovery can never both settle it.
+router.post("/hr/advances/:id/recover", requireModuleAction("page:/hr/advances", "edit"), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid advance id" }); return; }
+  const today = new Date().toISOString().split("T")[0];
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [adv] } = await client.query(
+      `SELECT * FROM employee_advances WHERE id = $1 FOR UPDATE`, [id],
+    );
+    if (!adv) { await client.query("ROLLBACK"); res.status(404).json({ error: "Advance not found" }); return; }
+    if (adv.is_deducted) { await client.query("ROLLBACK"); res.status(400).json({ error: "This advance is already settled." }); return; }
+    if (adv.deducted_payroll_id !== null) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "This advance is reserved by a payroll run. Remove it from that run first." });
+      return;
+    }
+    const [emp] = await db.select().from(employeesTable).where(eq(employeesTable.id, Number(adv.employee_id))).limit(1);
+
+    // Which till or bank account the money comes back INTO — same rules as
+    // paying out (branch users: own till only).
+    const resolvedIn = await resolvePayLedger((req as any).employee, req.body?.receiveLedgerId, 'STD-CASH');
+    if ('error' in resolvedIn) { await client.query("ROLLBACK"); res.status(400).json({ error: resolvedIn.error }); return; }
+
+    const { rows: [advLedger] } = await client.query(
+      `SELECT id FROM account_ledgers WHERE code = $1 LIMIT 1`, [`ADV-EMP-${adv.employee_id}`],
+    );
+    if (!advLedger) {
+      await client.query("ROLLBACK");
+      res.status(500).json({ error: "Advance ledger is missing for this employee — cannot post the recovery." });
+      return;
+    }
+
+    const amt = Number(adv.amount).toFixed(2);
+    const vn = await nextVoucherNumber(client, "journal", today);
+    const { rows: [jv] } = await client.query(
+      `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, total_amount, created_by,
+                                    origin, source_module, location_type, location_id)
+       VALUES ('journal', $1, $2, $3, $4, $5, 'system', 'payroll', $6, $7) RETURNING id`,
+      [vn, today, `Advance recovery from ${emp?.name ?? `Employee #${adv.employee_id}`}`, amt,
+       (req as any).employee?.username ?? "system", resolvedIn.locationType, resolvedIn.locationId],
+    );
+    // Dr Cash/Bank (money back in) / Cr Advance-to-Employee
+    await client.query(
+      `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit)
+       VALUES ($1, $2, $3, 0), ($1, $4, 0, $3)`,
+      [jv.id, resolvedIn.id, amt, advLedger.id],
+    );
+    // deducted_payroll_id stays NULL: settled-with-no-payroll = cash recovery.
+    const { rows: [updated] } = await client.query(
+      `UPDATE employee_advances SET is_deducted = TRUE WHERE id = $1 RETURNING *`, [id],
+    );
+    await client.query("COMMIT");
+
+    logActivity({ action: "UPDATE", module: "payroll", entityType: "employee_advance", entityId: id,
+      description: `Advance of ₹${Number(adv.amount).toLocaleString("en-IN")} recovered in cash from ${emp?.name ?? `Employee #${adv.employee_id}`}`,
+      metadata: { voucherNumber: vn, receivedInto: resolvedIn.id },
+    }).catch(() => {});
+
+    res.json({
+      id: updated.id, employeeId: updated.employee_id, employeeName: emp?.name ?? "",
+      amount: Number(updated.amount), date: updated.date, note: updated.note,
+      isDeducted: updated.is_deducted, deductedPayrollId: updated.deducted_payroll_id,
+      createdAt: updated.created_at,
+    });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 });
 
 // ── Attendance ────────────────────────────────────────────────────────────

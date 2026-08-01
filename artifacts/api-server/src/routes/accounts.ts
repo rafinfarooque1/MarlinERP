@@ -443,38 +443,146 @@ router.get("/accounts/payments", requireModuleView("page:/accounts/vouchers"), a
   const result = await pool.query(`
     SELECT p.*, 
       pf.name AS paid_from_name,
-      pt.name AS paid_to_name
+      pt.name AS paid_to_name,
+      (sr.id IS NOT NULL) AS is_refund
     FROM payments p
     LEFT JOIN account_ledgers pf ON p.paid_from_ledger_id = pf.id
     LEFT JOIN account_ledgers pt ON p.paid_to_ledger_id = pt.id
+    LEFT JOIN sales_returns sr ON sr.refund_payment_id = p.id
     WHERE ${where}
     ORDER BY p.id DESC
   `, params);
-  res.json(result.rows.map(r => ({
-    id: r.id,
-    voucherNumber: r.voucher_number,
-    paymentDate: r.payment_date,
-    paidFromLedgerId: r.paid_from_ledger_id,
-    paidFromName: r.paid_from_name,
-    paidToLedgerId: r.paid_to_ledger_id,
-    paidToName: r.paid_to_name,
-    amount: Number(r.amount),
-    narration: r.narration,
-    locationType: r.location_type ?? 'headoffice',
-    locationId: r.location_id ?? 0,
-    createdAt: r.created_at,
-  })));
+  res.json(result.rows.map(r => {
+    // Rows owned by another module are system vouchers: visible here for a
+    // complete register, but locked. Verdict = stored source (fail closed on
+    // NULL) plus the legacy link checks, matching loadManualPayment exactly.
+    const isSystem = Boolean(r.is_location_expense) || Boolean(r.is_refund)
+      || !(r.source && PAYMENT_EDITABLE_SOURCES.has(r.source));
+    return {
+      id: r.id,
+      voucherNumber: r.voucher_number,
+      paymentDate: r.payment_date,
+      paidFromLedgerId: r.paid_from_ledger_id,
+      paidFromName: r.paid_from_name,
+      paidToLedgerId: r.paid_to_ledger_id,
+      paidToName: r.paid_to_name,
+      amount: Number(r.amount),
+      narration: r.narration,
+      paymentMode: r.payment_mode ?? null,
+      referenceNumber: r.reference_number ?? null,
+      attachmentUrl: r.attachment_url ?? null,
+      createdBy: r.created_by ?? null,
+      origin: isSystem ? 'system' : 'manual',
+      editable: !isSystem,
+      locationType: r.location_type ?? 'headoffice',
+      locationId: r.location_id ?? 0,
+      createdAt: r.created_at,
+    };
+  }));
 });
 
+/**
+ * Instrument modes a MANUAL receipt/payment voucher may record. Display and
+ * filter metadata only — the accounting posting is driven entirely by which
+ * ledgers the voucher names, so a "cheque" mode never changes the books.
+ * (Sales settlement modes are a different, credit-controlled list.)
+ */
+const MANUAL_VOUCHER_MODES = new Set(["cash", "upi", "bank", "card", "cheque", "neft", "rtgs"]);
+
+/** Shared create/edit field validation for manual money vouchers. */
+function validateVoucherFields(body: any): { amount?: number; error?: string } {
+  if (body.amount !== undefined) {
+    const amt = Number(body.amount);
+    if (!Number.isFinite(amt) || amt <= 0) return { error: "Amount must be greater than zero." };
+    if (Math.abs(amt * 100 - Math.round(amt * 100)) > 1e-6) return { error: "Amount cannot have more than 2 decimal places." };
+    return { amount: Math.round(amt * 100) / 100 };
+  }
+  return {};
+}
+function validateVoucherMode(mode: unknown): string | null | undefined {
+  if (mode === undefined) return undefined;      // not supplied — keep current
+  if (mode === null || mode === "") return null; // explicit clear
+  return MANUAL_VOUCHER_MODES.has(String(mode)) ? String(mode) : undefined;
+}
+
+/**
+ * A payments-table row is only a MANUAL voucher when no other module owns it.
+ * Ownership is STORED (payments.source / receipts.source, stamped by every
+ * producer and backfilled once at migration), never inferred from voucher
+ * numbers or narrations — inference misses producers. Vendor payments are the
+ * one non-manual source that stays editable: they own no other record (vendor
+ * dues are derived from the ledger at read time), so editing them here is the
+ * same books correction a manual voucher edit is.
+ *
+ * Fail closed: a NULL source after the backfill means some producer forgot to
+ * stamp its rows — such rows are locked, not editable. The legacy join checks
+ * stay as belt-and-braces for rows a bad backfill might ever mislabel.
+ * Backend-enforced: the UI hiding a button is not a guard.
+ */
+const PAYMENT_EDITABLE_SOURCES = new Set(["manual", "vendor"]);
+const SYSTEM_SOURCE_LOCK_MESSAGES: Record<string, string> = {
+  expense: "This entry is a location expense — manage it from the Expenses page.",
+  refund: "This is a system voucher raised by a sales return and is locked.",
+  sale: "This is a system voucher raised by a sale and is locked.",
+  deposit: "This is a system voucher raised by a cash deposit and is locked.",
+  settlement: "This is a system voucher raised by a bank settlement and is locked.",
+};
+const UNKNOWN_SOURCE_LOCK = "This voucher was created by another module and is locked.";
+
+async function loadManualPayment(client: { query: Function }, id: number, scopeWhere: string, params: unknown[], forUpdate = false) {
+  const { rows: [row] } = await client.query(
+    `SELECT p.*, (sr.id IS NOT NULL) AS is_refund
+     FROM payments p
+     LEFT JOIN sales_returns sr ON sr.refund_payment_id = p.id
+     WHERE p.id = $1 AND ${scopeWhere}${forUpdate ? " FOR UPDATE OF p" : ""}`, params,
+  );
+  if (!row) return { error: 404 as const };
+  if (row.is_location_expense) return { error: SYSTEM_SOURCE_LOCK_MESSAGES.expense };
+  if (row.is_refund) return { error: SYSTEM_SOURCE_LOCK_MESSAGES.refund };
+  const src = row.source ?? null;
+  if (src === null || !PAYMENT_EDITABLE_SOURCES.has(src)) {
+    return { error: SYSTEM_SOURCE_LOCK_MESSAGES[src as string] ?? UNKNOWN_SOURCE_LOCK };
+  }
+  return { row };
+}
+
+/** Same rule for receipts; only 'manual' rows are editable. */
+async function loadManualReceipt(client: { query: Function }, id: number, scopeWhere: string, params: unknown[], forUpdate = false) {
+  const { rows: [row] } = await client.query(
+    `SELECT r.*,
+            EXISTS(SELECT 1 FROM sale_payments sp WHERE sp.clearing_receipt_id = r.id) AS is_clearing,
+            EXISTS(SELECT 1 FROM sales s WHERE s.invoice_number = r.voucher_number) AS is_sale_receipt
+     FROM receipts r
+     WHERE r.id = $1 AND ${scopeWhere}${forUpdate ? " FOR UPDATE OF r" : ""}`, params,
+  );
+  if (!row) return { error: 404 as const };
+  if (row.is_clearing || row.is_sale_receipt) return { error: SYSTEM_SOURCE_LOCK_MESSAGES.sale };
+  const src = row.source ?? null;
+  if (src !== "manual") {
+    return { error: SYSTEM_SOURCE_LOCK_MESSAGES[src as string] ?? UNKNOWN_SOURCE_LOCK };
+  }
+  return { row };
+}
+
 router.post("/accounts/payments", requireModuleAction("page:/accounts/vouchers", "add"), async (req, res): Promise<void> => {
-  const { paymentDate, paidFromLedgerId, paidToLedgerId, amount, narration } = req.body as {
+  const { paymentDate, paidFromLedgerId, paidToLedgerId, amount, narration, paymentMode, referenceNumber, attachmentUrl } = req.body as {
     paymentDate: string; paidFromLedgerId: number; paidToLedgerId: number; amount: number; narration?: string;
+    paymentMode?: string; referenceNumber?: string; attachmentUrl?: string;
   };
   if (!paymentDate || !paidFromLedgerId || !paidToLedgerId || !amount) {
     res.status(400).json({ error: "paymentDate, paidFromLedgerId, paidToLedgerId and amount are required" }); return;
   }
   if (!isIsoDate(paymentDate)) {
     res.status(400).json({ error: "paymentDate must be a real calendar date in YYYY-MM-DD form" }); return;
+  }
+  const av = validateVoucherFields({ amount });
+  if (av.error) { res.status(400).json({ error: av.error }); return; }
+  if (Number(paidFromLedgerId) === Number(paidToLedgerId)) {
+    res.status(400).json({ error: "Paid From and Paid To cannot be the same account." }); return;
+  }
+  const mode = validateVoucherMode(paymentMode);
+  if (paymentMode !== undefined && mode === undefined) {
+    res.status(400).json({ error: "Payment mode must be one of cash, upi, bank, card, cheque, neft, rtgs." }); return;
   }
   // A branch user may only pay out of its own cash box, and never into another
   // location's or Head Office's cash/bank accounts.
@@ -485,21 +593,112 @@ router.post("/accounts/payments", requireModuleAction("page:/accounts/vouchers",
   const { locationType, locationId } = callerLocation((req as any).employee);
   const voucherNumber = await nextVoucherNumber(pool, 'payment', paymentDate);
   const result = await pool.query(
-    `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-    [voucherNumber, paymentDate, paidFromLedgerId, paidToLedgerId, amount, narration ?? null, locationType, locationId]
+    `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id,
+                           payment_mode, reference_number, attachment_url, created_by, source)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'manual') RETURNING *`,
+    [voucherNumber, paymentDate, paidFromLedgerId, paidToLedgerId, av.amount, narration ?? null, locationType, locationId,
+     mode ?? null, referenceNumber?.trim() || null, attachmentUrl?.trim() || null, (req as any).employee?.username ?? null]
   );
   const r = result.rows[0];
   const [pf] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, Number(paidFromLedgerId))).limit(1);
   const [pt] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, Number(paidToLedgerId))).limit(1);
+  logActivity({ action: "CREATE", module: "accounts", entityType: "payment_voucher", entityId: r.id,
+    description: `Payment voucher ${r.voucher_number} — ₹${Number(r.amount).toLocaleString("en-IN")} from ${pf?.name ?? paidFromLedgerId} to ${pt?.name ?? paidToLedgerId}`,
+    metadata: { voucherNumber: r.voucher_number, date: r.payment_date, amount: Number(r.amount), paidFrom: pf?.name, paidTo: pt?.name, mode: r.payment_mode, reference: r.reference_number },
+  }).catch(() => {});
   res.status(201).json({
     id: r.id, voucherNumber: r.voucher_number, paymentDate: r.payment_date,
     paidFromLedgerId: r.paid_from_ledger_id, paidFromName: pf?.name ?? '',
     paidToLedgerId: r.paid_to_ledger_id, paidToName: pt?.name ?? '',
     amount: Number(r.amount), narration: r.narration,
+    paymentMode: r.payment_mode, referenceNumber: r.reference_number, attachmentUrl: r.attachment_url, createdBy: r.created_by,
     locationType: r.location_type ?? 'headoffice', locationId: r.location_id ?? 0,
     createdAt: r.created_at,
   });
+});
+
+// Edit a MANUAL payment voucher. System-owned rows (location expenses,
+// sales-return refunds) are refused server-side. The legs are re-validated on
+// the EFFECTIVE values (body ?? current row) so a partial PATCH cannot route
+// around the branch cash-box rules.
+router.patch("/accounts/payments/:id", requireModuleAction("page:/accounts/vouchers", "edit"), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid payment id" }); return; }
+  const b = req.body as Record<string, unknown>;
+  if (b.paymentDate !== undefined && !isIsoDate(String(b.paymentDate))) {
+    res.status(400).json({ error: "paymentDate must be a real calendar date in YYYY-MM-DD form" }); return;
+  }
+  const av = validateVoucherFields(b);
+  if (av.error) { res.status(400).json({ error: av.error }); return; }
+  const mode = validateVoucherMode(b.paymentMode);
+  if (b.paymentMode !== undefined && mode === undefined) {
+    res.status(400).json({ error: "Payment mode must be one of cash, upi, bank, card, cheque, neft, rtgs." }); return;
+  }
+  const scope = ownLocationScope((req as any).employee);
+  const ledgerIds = await scopeLedgerIds(scope);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const params: unknown[] = [id];
+    const where = scopeMoneyWhere(scope, ledgerIds, params, 'p', ['paid_from_ledger_id', 'paid_to_ledger_id']);
+    const loaded = await loadManualPayment(client, id, where, params, true);
+    if ('error' in loaded) {
+      await client.query("ROLLBACK");
+      if (loaded.error === 404) res.status(404).json({ error: "Payment not found" });
+      else res.status(403).json({ error: loaded.error });
+      return;
+    }
+    const row = loaded.row;
+    const newFrom = b.paidFromLedgerId !== undefined ? Number(b.paidFromLedgerId) : Number(row.paid_from_ledger_id);
+    const newTo = b.paidToLedgerId !== undefined ? Number(b.paidToLedgerId) : Number(row.paid_to_ledger_id);
+    if (!Number.isInteger(newFrom) || !Number.isInteger(newTo) || newFrom <= 0 || newTo <= 0) {
+      await client.query("ROLLBACK"); res.status(400).json({ error: "Invalid account selection." }); return;
+    }
+    if (newFrom === newTo) { await client.query("ROLLBACK"); res.status(400).json({ error: "Paid From and Paid To cannot be the same account." }); return; }
+    const legCheck = await checkVoucherLegs(scope, newFrom, newTo, 'Paid from');
+    if (!legCheck.ok) { await client.query("ROLLBACK"); res.status(403).json({ error: legCheck.error }); return; }
+
+    const upd = await client.query(
+      `UPDATE payments SET
+         payment_date = $2, paid_from_ledger_id = $3, paid_to_ledger_id = $4, amount = $5,
+         narration = $6, payment_mode = $7, reference_number = $8, attachment_url = $9
+       WHERE id = $1 RETURNING *`,
+      [id,
+       b.paymentDate !== undefined ? String(b.paymentDate) : row.payment_date,
+       newFrom, newTo,
+       av.amount !== undefined ? av.amount : row.amount,
+       b.narration !== undefined ? (String(b.narration).trim() || null) : row.narration,
+       b.paymentMode !== undefined ? mode : row.payment_mode,
+       b.referenceNumber !== undefined ? (String(b.referenceNumber).trim() || null) : row.reference_number,
+       b.attachmentUrl !== undefined ? (String(b.attachmentUrl).trim() || null) : row.attachment_url,
+      ],
+    );
+    await client.query("COMMIT");
+    const r = upd.rows[0];
+    const [pf] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, newFrom)).limit(1);
+    const [pt] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, newTo)).limit(1);
+    logActivity({ action: "UPDATE", module: "accounts", entityType: "payment_voucher", entityId: id,
+      description: `Payment voucher ${r.voucher_number} edited`,
+      metadata: {
+        old: { date: row.payment_date, from: row.paid_from_ledger_id, to: row.paid_to_ledger_id, amount: Number(row.amount), narration: row.narration, mode: row.payment_mode, reference: row.reference_number },
+        new: { date: r.payment_date, from: r.paid_from_ledger_id, to: r.paid_to_ledger_id, amount: Number(r.amount), narration: r.narration, mode: r.payment_mode, reference: r.reference_number },
+      },
+    }).catch(() => {});
+    res.json({
+      id: r.id, voucherNumber: r.voucher_number, paymentDate: r.payment_date,
+      paidFromLedgerId: r.paid_from_ledger_id, paidFromName: pf?.name ?? '',
+      paidToLedgerId: r.paid_to_ledger_id, paidToName: pt?.name ?? '',
+      amount: Number(r.amount), narration: r.narration,
+      paymentMode: r.payment_mode, referenceNumber: r.reference_number, attachmentUrl: r.attachment_url, createdBy: r.created_by,
+      locationType: r.location_type ?? 'headoffice', locationId: r.location_id ?? 0,
+      createdAt: r.created_at,
+    });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 });
 
 router.delete("/accounts/payments/:id", requireModuleAction("page:/accounts/vouchers", "delete"), async (req, res): Promise<void> => {
@@ -511,10 +710,17 @@ router.delete("/accounts/payments/:id", requireModuleAction("page:/accounts/vouc
   const ledgerIds = await scopeLedgerIds(scope);
   const params: unknown[] = [id];
   const where = scopeMoneyWhere(scope, ledgerIds, params, 'p', ['paid_from_ledger_id', 'paid_to_ledger_id']);
-  const { rowCount } = await pool.query(
-    `DELETE FROM payments p WHERE p.id = $1 AND ${where}`, params
-  );
-  if (!rowCount) { res.status(404).json({ error: "Payment not found" }); return; }
+  const loaded = await loadManualPayment(pool, id, where, params);
+  if ('error' in loaded) {
+    if (loaded.error === 404) res.status(404).json({ error: "Payment not found" });
+    else res.status(403).json({ error: loaded.error });
+    return;
+  }
+  await pool.query(`DELETE FROM payments WHERE id = $1`, [id]);
+  logActivity({ action: "DELETE", module: "accounts", entityType: "payment_voucher", entityId: id,
+    description: `Payment voucher ${loaded.row.voucher_number} deleted — ₹${Number(loaded.row.amount).toLocaleString("en-IN")}`,
+    metadata: { old: { voucherNumber: loaded.row.voucher_number, date: loaded.row.payment_date, from: loaded.row.paid_from_ledger_id, to: loaded.row.paid_to_ledger_id, amount: Number(loaded.row.amount), narration: loaded.row.narration, mode: loaded.row.payment_mode, reference: loaded.row.reference_number } },
+  }).catch(() => {});
   res.status(204).send();
 });
 
@@ -538,38 +744,61 @@ router.get("/accounts/receipts", requireModuleView("page:/accounts/vouchers"), a
   const result = await pool.query(`
     SELECT r.*,
       rf.name AS received_from_name,
-      ri.name AS received_in_name
+      ri.name AS received_in_name,
+      EXISTS(SELECT 1 FROM sale_payments sp WHERE sp.clearing_receipt_id = r.id) AS is_clearing,
+      EXISTS(SELECT 1 FROM sales s WHERE s.invoice_number = r.voucher_number) AS is_sale_receipt
     FROM receipts r
     LEFT JOIN account_ledgers rf ON r.received_from_ledger_id = rf.id
     LEFT JOIN account_ledgers ri ON r.received_in_ledger_id = ri.id
     WHERE ${where}
     ORDER BY r.id DESC
   `, params);
-  res.json(result.rows.map(r => ({
-    id: r.id,
-    voucherNumber: r.voucher_number,
-    receiptDate: r.receipt_date,
-    receivedFromLedgerId: r.received_from_ledger_id,
-    receivedFromName: r.received_from_name,
-    receivedInLedgerId: r.received_in_ledger_id,
-    receivedInName: r.received_in_name,
-    amount: Number(r.amount),
-    narration: r.narration,
-    locationType: r.location_type ?? 'headoffice',
-    locationId: r.location_id ?? 0,
-    createdAt: r.created_at,
-  })));
+  res.json(result.rows.map(r => {
+    // Sale-linked rows belong to the sales flow; any non-manual (or unstamped)
+    // source is likewise locked — same verdict as loadManualReceipt.
+    const isSystem = Boolean(r.is_clearing) || Boolean(r.is_sale_receipt) || r.source !== 'manual';
+    return {
+      id: r.id,
+      voucherNumber: r.voucher_number,
+      receiptDate: r.receipt_date,
+      receivedFromLedgerId: r.received_from_ledger_id,
+      receivedFromName: r.received_from_name,
+      receivedInLedgerId: r.received_in_ledger_id,
+      receivedInName: r.received_in_name,
+      amount: Number(r.amount),
+      narration: r.narration,
+      paymentMode: r.payment_mode ?? null,
+      referenceNumber: r.reference_number ?? null,
+      attachmentUrl: r.attachment_url ?? null,
+      createdBy: r.created_by ?? null,
+      origin: isSystem ? 'system' : 'manual',
+      editable: !isSystem,
+      locationType: r.location_type ?? 'headoffice',
+      locationId: r.location_id ?? 0,
+      createdAt: r.created_at,
+    };
+  }));
 });
 
 router.post("/accounts/receipts", requireModuleAction("page:/accounts/vouchers", "add"), async (req, res): Promise<void> => {
-  const { receiptDate, receivedFromLedgerId, receivedInLedgerId, amount, narration } = req.body as {
+  const { receiptDate, receivedFromLedgerId, receivedInLedgerId, amount, narration, paymentMode, referenceNumber, attachmentUrl } = req.body as {
     receiptDate: string; receivedFromLedgerId: number; receivedInLedgerId: number; amount: number; narration?: string;
+    paymentMode?: string; referenceNumber?: string; attachmentUrl?: string;
   };
   if (!receiptDate || !receivedFromLedgerId || !receivedInLedgerId || !amount) {
     res.status(400).json({ error: "receiptDate, receivedFromLedgerId, receivedInLedgerId and amount are required" }); return;
   }
   if (!isIsoDate(receiptDate)) {
     res.status(400).json({ error: "receiptDate must be a real calendar date in YYYY-MM-DD form" }); return;
+  }
+  const av = validateVoucherFields({ amount });
+  if (av.error) { res.status(400).json({ error: av.error }); return; }
+  if (Number(receivedFromLedgerId) === Number(receivedInLedgerId)) {
+    res.status(400).json({ error: "Received From and Received In cannot be the same account." }); return;
+  }
+  const mode = validateVoucherMode(paymentMode);
+  if (paymentMode !== undefined && mode === undefined) {
+    res.status(400).json({ error: "Payment mode must be one of cash, upi, bank, card, cheque, neft, rtgs." }); return;
   }
   // A branch user may only collect into its own cash box.
   const scope = ownLocationScope((req as any).employee);
@@ -579,21 +808,110 @@ router.post("/accounts/receipts", requireModuleAction("page:/accounts/vouchers",
   const { locationType, locationId } = callerLocation((req as any).employee);
   const voucherNumber = await nextVoucherNumber(pool, 'receipt', receiptDate);
   const result = await pool.query(
-    `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-    [voucherNumber, receiptDate, receivedFromLedgerId, receivedInLedgerId, amount, narration ?? null, locationType, locationId]
+    `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id,
+                           payment_mode, reference_number, attachment_url, created_by, source)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'manual') RETURNING *`,
+    [voucherNumber, receiptDate, receivedFromLedgerId, receivedInLedgerId, av.amount, narration ?? null, locationType, locationId,
+     mode ?? null, referenceNumber?.trim() || null, attachmentUrl?.trim() || null, (req as any).employee?.username ?? null]
   );
   const r = result.rows[0];
   const [rf] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, Number(receivedFromLedgerId))).limit(1);
   const [ri] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, Number(receivedInLedgerId))).limit(1);
+  logActivity({ action: "CREATE", module: "accounts", entityType: "receipt_voucher", entityId: r.id,
+    description: `Receipt voucher ${r.voucher_number} — ₹${Number(r.amount).toLocaleString("en-IN")} from ${rf?.name ?? receivedFromLedgerId} into ${ri?.name ?? receivedInLedgerId}`,
+    metadata: { voucherNumber: r.voucher_number, date: r.receipt_date, amount: Number(r.amount), receivedFrom: rf?.name, receivedIn: ri?.name, mode: r.payment_mode, reference: r.reference_number },
+  }).catch(() => {});
   res.status(201).json({
     id: r.id, voucherNumber: r.voucher_number, receiptDate: r.receipt_date,
     receivedFromLedgerId: r.received_from_ledger_id, receivedFromName: rf?.name ?? '',
     receivedInLedgerId: r.received_in_ledger_id, receivedInName: ri?.name ?? '',
     amount: Number(r.amount), narration: r.narration,
+    paymentMode: r.payment_mode, referenceNumber: r.reference_number, attachmentUrl: r.attachment_url, createdBy: r.created_by,
     locationType: r.location_type ?? 'headoffice', locationId: r.location_id ?? 0,
     createdAt: r.created_at,
   });
+});
+
+// Edit a MANUAL receipt voucher — same effective-value re-validation and
+// system-row refusal as payments.
+router.patch("/accounts/receipts/:id", requireModuleAction("page:/accounts/vouchers", "edit"), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid receipt id" }); return; }
+  const b = req.body as Record<string, unknown>;
+  if (b.receiptDate !== undefined && !isIsoDate(String(b.receiptDate))) {
+    res.status(400).json({ error: "receiptDate must be a real calendar date in YYYY-MM-DD form" }); return;
+  }
+  const av = validateVoucherFields(b);
+  if (av.error) { res.status(400).json({ error: av.error }); return; }
+  const mode = validateVoucherMode(b.paymentMode);
+  if (b.paymentMode !== undefined && mode === undefined) {
+    res.status(400).json({ error: "Payment mode must be one of cash, upi, bank, card, cheque, neft, rtgs." }); return;
+  }
+  const scope = ownLocationScope((req as any).employee);
+  const ledgerIds = await scopeLedgerIds(scope);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const params: unknown[] = [id];
+    const where = scopeMoneyWhere(scope, ledgerIds, params, 'r', ['received_in_ledger_id', 'received_from_ledger_id']);
+    const loaded = await loadManualReceipt(client, id, where, params, true);
+    if ('error' in loaded) {
+      await client.query("ROLLBACK");
+      if (loaded.error === 404) res.status(404).json({ error: "Receipt not found" });
+      else res.status(403).json({ error: loaded.error });
+      return;
+    }
+    const row = loaded.row;
+    const newFrom = b.receivedFromLedgerId !== undefined ? Number(b.receivedFromLedgerId) : Number(row.received_from_ledger_id);
+    const newIn = b.receivedInLedgerId !== undefined ? Number(b.receivedInLedgerId) : Number(row.received_in_ledger_id);
+    if (!Number.isInteger(newFrom) || !Number.isInteger(newIn) || newFrom <= 0 || newIn <= 0) {
+      await client.query("ROLLBACK"); res.status(400).json({ error: "Invalid account selection." }); return;
+    }
+    if (newFrom === newIn) { await client.query("ROLLBACK"); res.status(400).json({ error: "Received From and Received In cannot be the same account." }); return; }
+    const legCheck = await checkVoucherLegs(scope, newIn, newFrom, 'Received in');
+    if (!legCheck.ok) { await client.query("ROLLBACK"); res.status(403).json({ error: legCheck.error }); return; }
+
+    const upd = await client.query(
+      `UPDATE receipts SET
+         receipt_date = $2, received_from_ledger_id = $3, received_in_ledger_id = $4, amount = $5,
+         narration = $6, payment_mode = $7, reference_number = $8, attachment_url = $9
+       WHERE id = $1 RETURNING *`,
+      [id,
+       b.receiptDate !== undefined ? String(b.receiptDate) : row.receipt_date,
+       newFrom, newIn,
+       av.amount !== undefined ? av.amount : row.amount,
+       b.narration !== undefined ? (String(b.narration).trim() || null) : row.narration,
+       b.paymentMode !== undefined ? mode : row.payment_mode,
+       b.referenceNumber !== undefined ? (String(b.referenceNumber).trim() || null) : row.reference_number,
+       b.attachmentUrl !== undefined ? (String(b.attachmentUrl).trim() || null) : row.attachment_url,
+      ],
+    );
+    await client.query("COMMIT");
+    const r = upd.rows[0];
+    const [rf] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, newFrom)).limit(1);
+    const [ri] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, newIn)).limit(1);
+    logActivity({ action: "UPDATE", module: "accounts", entityType: "receipt_voucher", entityId: id,
+      description: `Receipt voucher ${r.voucher_number} edited`,
+      metadata: {
+        old: { date: row.receipt_date, from: row.received_from_ledger_id, into: row.received_in_ledger_id, amount: Number(row.amount), narration: row.narration, mode: row.payment_mode, reference: row.reference_number },
+        new: { date: r.receipt_date, from: r.received_from_ledger_id, into: r.received_in_ledger_id, amount: Number(r.amount), narration: r.narration, mode: r.payment_mode, reference: r.reference_number },
+      },
+    }).catch(() => {});
+    res.json({
+      id: r.id, voucherNumber: r.voucher_number, receiptDate: r.receipt_date,
+      receivedFromLedgerId: r.received_from_ledger_id, receivedFromName: rf?.name ?? '',
+      receivedInLedgerId: r.received_in_ledger_id, receivedInName: ri?.name ?? '',
+      amount: Number(r.amount), narration: r.narration,
+      paymentMode: r.payment_mode, referenceNumber: r.reference_number, attachmentUrl: r.attachment_url, createdBy: r.created_by,
+      locationType: r.location_type ?? 'headoffice', locationId: r.location_id ?? 0,
+      createdAt: r.created_at,
+    });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 });
 
 router.delete("/accounts/receipts/:id", requireModuleAction("page:/accounts/vouchers", "delete"), async (req, res): Promise<void> => {
@@ -603,10 +921,17 @@ router.delete("/accounts/receipts/:id", requireModuleAction("page:/accounts/vouc
   const ledgerIds = await scopeLedgerIds(scope);
   const params: unknown[] = [id];
   const where = scopeMoneyWhere(scope, ledgerIds, params, 'r', ['received_in_ledger_id', 'received_from_ledger_id']);
-  const { rowCount } = await pool.query(
-    `DELETE FROM receipts r WHERE r.id = $1 AND ${where}`, params
-  );
-  if (!rowCount) { res.status(404).json({ error: "Receipt not found" }); return; }
+  const loaded = await loadManualReceipt(pool, id, where, params);
+  if ('error' in loaded) {
+    if (loaded.error === 404) res.status(404).json({ error: "Receipt not found" });
+    else res.status(403).json({ error: loaded.error });
+    return;
+  }
+  await pool.query(`DELETE FROM receipts WHERE id = $1`, [id]);
+  logActivity({ action: "DELETE", module: "accounts", entityType: "receipt_voucher", entityId: id,
+    description: `Receipt voucher ${loaded.row.voucher_number} deleted — ₹${Number(loaded.row.amount).toLocaleString("en-IN")}`,
+    metadata: { old: { voucherNumber: loaded.row.voucher_number, date: loaded.row.receipt_date, from: loaded.row.received_from_ledger_id, into: loaded.row.received_in_ledger_id, amount: Number(loaded.row.amount), narration: loaded.row.narration, mode: loaded.row.payment_mode, reference: loaded.row.reference_number } },
+  }).catch(() => {});
   res.status(204).send();
 });
 
@@ -1642,8 +1967,8 @@ router.post("/accounts/location-expenses", requireModuleAction("page:/sales/expe
   const narration = reference ? `${description} [Ref: ${reference}]` : description;
   const voucherNumber = await nextVoucherNumber(pool, 'payment', expenseDate);
   const { rows: [r] } = await pool.query(
-    `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id, expense_category, attachment_url, is_location_expense, payment_mode, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, true, $11, $12) RETURNING *`,
+    `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id, expense_category, attachment_url, is_location_expense, payment_mode, notes, source)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, true, $11, $12, 'expense') RETURNING *`,
     [voucherNumber, expenseDate, fundingLedgerId, Number(expenseLedgerId), parsedAmount, narration,
      String(locationType), Number(locationId), extras.category, extras.attachmentUrl, paymentMode, notes]
   );

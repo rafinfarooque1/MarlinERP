@@ -8,6 +8,9 @@ export const getAccountsFlatQueryKey = () => ['/api/accounts/chart/flat'] as con
 export const getCashBankLedgersQueryKey = () => ['/api/accounts/cash-bank-ledgers'] as const;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+/** Instrument modes a manual voucher may record (metadata only). */
+export type VoucherPaymentMode = 'cash' | 'upi' | 'bank' | 'card' | 'cheque' | 'neft' | 'rtgs';
+
 export interface Payment {
   id: number;
   voucherNumber?: string;
@@ -18,6 +21,13 @@ export interface Payment {
   paidToName?: string;
   amount: number;
   narration?: string;
+  paymentMode?: VoucherPaymentMode | null;
+  referenceNumber?: string | null;
+  attachmentUrl?: string | null;
+  createdBy?: string | null;
+  /** 'system' rows are owned by another module (expenses, sale refunds) and locked. */
+  origin?: 'manual' | 'system';
+  editable?: boolean;
 }
 
 export interface Receipt {
@@ -30,6 +40,13 @@ export interface Receipt {
   receivedInName?: string;
   amount: number;
   narration?: string;
+  paymentMode?: VoucherPaymentMode | null;
+  referenceNumber?: string | null;
+  attachmentUrl?: string | null;
+  createdBy?: string | null;
+  /** 'system' rows are raised by sales and locked. */
+  origin?: 'manual' | 'system';
+  editable?: boolean;
 }
 
 export interface BankDetails {
@@ -72,6 +89,19 @@ export function useCreatePayment() {
   });
 }
 
+export function useUpdatePayment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...data }: { id: number } & Partial<Omit<Payment, 'id' | 'voucherNumber'>>) =>
+      customFetch<Payment>(`/api/accounts/payments/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: getPaymentsQueryKey() }),
+  });
+}
+
 export function useDeletePayment() {
   const qc = useQueryClient();
   return useMutation({
@@ -94,6 +124,19 @@ export function useCreateReceipt() {
     mutationFn: (data: Omit<Receipt, 'id' | 'voucherNumber'>) =>
       customFetch<Receipt>('/api/accounts/receipts', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: getReceiptsQueryKey() }),
+  });
+}
+
+export function useUpdateReceipt() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...data }: { id: number } & Partial<Omit<Receipt, 'id' | 'voucherNumber'>>) =>
+      customFetch<Receipt>(`/api/accounts/receipts/${id}`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
       }),

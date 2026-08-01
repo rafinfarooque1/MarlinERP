@@ -941,8 +941,8 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
       else if (paymentModeIn === 'credit' && custLedgerId) debitLedgerId = custLedgerId;
       if (debitLedgerId) {
         await txClient.query(
-          `INSERT INTO receipts (receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, voucher_number, location_type, location_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          `INSERT INTO receipts (receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, voucher_number, location_type, location_id, source)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'sale')`,
           [parsed.data.saleDate, salesLedgerId, debitLedgerId, totalAmount,
            `Sale: ${invoiceNumber}${locationName ? ` at ${locationName}` : ''}`, invoiceNumber,
            locationType, locationId]
@@ -1460,8 +1460,8 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
       else if (newPaymentMode === 'credit' && editCustLedgerId) debitLedgerId = editCustLedgerId;
       if (debitLedgerId) {
         await editTx.query(
-          `INSERT INTO receipts (receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, voucher_number, location_type, location_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          `INSERT INTO receipts (receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, voucher_number, location_type, location_id, source)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'sale')`,
           [parsed.data.saleDate, editSalesLedgerId, debitLedgerId, totalAmount,
            `Sale: ${existingRaw.invoice_number}${locationName ? ` at ${locationName}` : ''}`,
            existingRaw.invoice_number, newLocationType, newLocationId]
