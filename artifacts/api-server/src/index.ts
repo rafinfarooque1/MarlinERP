@@ -25,6 +25,7 @@ import { nextVoucherNumber } from "./lib/voucherNumber";
 import { PAGE_PERM_KEYS, LEGACY_MODULE_TO_PAGES } from "./lib/pagePermissions";
 import { ensureChartStructure } from "./lib/chartGroups";
 import { DATE_COLUMNS } from "./lib/dateColumns";
+import { addQuotations } from "./migrations/quotations";
 
 async function runMigrations() {
   // Existing migrations
@@ -2664,7 +2665,7 @@ await pool.query(`
   // which made this one-time seed re-run — and crash on the duplicate log insert —
   // on any database where the assets entry was absent.
   const { rows: seeded } = await pool.query(
-    `SELECT 1 FROM migration_log WHERE name = 'permission_seed_existing_v1'`,
+    `SELECT 1 FROM migration_log WHERE name = 'assets_page_perms_v1'`,
   );
   if (seeded.length === 0) {
     const { rows: hRows } = await pool.query(
@@ -3083,6 +3084,12 @@ await addAssetModule(pool);
 // Manual Purchase Bill: stored rate mode, the batch-number allocator and the
 // duplicate-invoice guard. Independent of the ledger seeding above.
 await addPurchaseBillFields(pool);
+
+// Quotations — customer offers that touch nothing: their own table, their own
+// QTN numbering sequence, share links, and the one-sale-per-quotation bridge
+// stamped by the sale-creation transaction. Includes one-time permission
+// seeding for the new page under default-deny.
+await addQuotations(pool);
 
 // Voucher provenance — records which journal vouchers a person actually typed,
 // so only those can be edited by hand. Additive and re-runnable: it only ever

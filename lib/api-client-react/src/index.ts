@@ -29,6 +29,7 @@ export * from "./assets";
 export * from "./rent";
 export * from "./backup";
 export * from "./invoice-share-links";
+export * from "./quotations";
 export * from "./attendance-correction";
 export * from "./attendance-punches";
 export * from "./employee-password";

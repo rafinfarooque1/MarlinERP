@@ -640,6 +640,16 @@ export interface Sale {
   /** @nullable */
   couponCode?: string | null;
   createdAt: string;
+  /**
+     * Set when this sale was converted from a quotation.
+     * @nullable
+     */
+  quotationId?: number | null;
+  /**
+     * The quotation this sale was converted from (QTN/…).
+     * @nullable
+     */
+  quotationNumber?: string | null;
 }
 
 export interface SaleInput {
@@ -651,6 +661,8 @@ export interface SaleInput {
   couponCode?: string;
   /** Pre-tax invoice-level discount, allocated across lines. */
   billDiscount?: number;
+  /** When present, completing this sale converts the quotation: inside the sale transaction the quotation row is locked, a second conversion is refused, and the two documents are stamped with each other's numbers. Exactly one sale can ever result from a quotation. */
+  quotationId?: number;
 }
 
 export type SalesSummaryByOutletItem = {
@@ -665,6 +677,104 @@ export interface SalesSummary {
   totalTax?: number;
   totalInvoices?: number;
   byOutlet?: SalesSummaryByOutletItem[];
+}
+
+export interface Quotation {
+  id: number;
+  quotationNumber: string;
+  locationType: string;
+  locationId: number;
+  locationName?: string;
+  /** @nullable */
+  customerId?: number | null;
+  /** @nullable */
+  customerName?: string | null;
+  /** @nullable */
+  customerPhone?: string | null;
+  /** @nullable */
+  customerGstin?: string | null;
+  quoteDate: string;
+  /** @nullable */
+  validTill?: string | null;
+  /** draft | sent | accepted | rejected | expired | converted */
+  status: string;
+  lineItems: SaleLineItem[];
+  subtotal?: number;
+  taxTotal?: number;
+  /** Post-tax coupon deduction, same semantics as on a sale. */
+  discountTotal?: number;
+  /** Pre-tax bill-level discount, allocated across lines. */
+  billDiscount?: number;
+  totalAmount: number;
+  /** @nullable */
+  couponCode?: string | null;
+  /** @nullable */
+  billingAddress?: string | null;
+  /** @nullable */
+  shippingAddress?: string | null;
+  /** @nullable */
+  paymentTerms?: string | null;
+  /** @nullable */
+  placeOfSupply?: string | null;
+  /** @nullable */
+  salesperson?: string | null;
+  /** @nullable */
+  notes?: string | null;
+  /** @nullable */
+  termsConditions?: string | null;
+  /** @nullable */
+  convertedSaleId?: number | null;
+  /** @nullable */
+  convertedInvoiceNumber?: string | null;
+  createdAt?: string;
+  /** @nullable */
+  updatedAt?: string | null;
+}
+
+export type QuotationInputLocationType = typeof QuotationInputLocationType[keyof typeof QuotationInputLocationType];
+
+
+export const QuotationInputLocationType = {
+  warehouse: 'warehouse',
+  outlet: 'outlet',
+} as const;
+
+export interface QuotationInput {
+  locationType: QuotationInputLocationType;
+  locationId: number;
+  customerId?: number;
+  quoteDate: string;
+  validTill?: string;
+  /** draft or sent at creation; defaults to draft. */
+  status?: string;
+  lineItems: SaleLineItem[];
+  couponCode?: string;
+  /** Pre-tax bill-level discount, allocated across lines. */
+  billDiscount?: number;
+  /** Post-tax coupon deduction off the grand total. */
+  discountTotal?: number;
+  billingAddress?: string;
+  shippingAddress?: string;
+  paymentTerms?: string;
+  placeOfSupply?: string;
+  salesperson?: string;
+  notes?: string;
+  termsConditions?: string;
+}
+
+export type QuotationStatusInputStatus = typeof QuotationStatusInputStatus[keyof typeof QuotationStatusInputStatus];
+
+
+export const QuotationStatusInputStatus = {
+  draft: 'draft',
+  sent: 'sent',
+  accepted: 'accepted',
+  rejected: 'rejected',
+  expired: 'expired',
+} as const;
+
+export interface QuotationStatusInput {
+  status: QuotationStatusInputStatus;
 }
 
 export interface Hierarchy {
@@ -1235,6 +1345,21 @@ outletId?: number;
 
 export type ListSalesParams = {
 outletId?: number;
+};
+
+export type ListQuotationsParams = {
+q?: string;
+from?: string;
+to?: string;
+status?: string;
+locationType?: string;
+locationId?: number;
+customerId?: number;
+salesperson?: string;
+};
+
+export type DeleteQuotation200 = {
+  success?: boolean;
 };
 
 export type ListPayrollParams = {

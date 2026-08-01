@@ -24,11 +24,12 @@ const GROUP_MODULES: Record<string, string[]> = {
   customers: ["page:/customers"],
   vendors: ["page:/vendors"],
   sales: ["page:/sales/pos", "page:/outstanding", "page:/returns"],
+  quotations: ["page:/sales/quotations"],
 };
 
 router.get("/search", async (req, res): Promise<void> => {
   const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
-  const empty = { items: [], customers: [], vendors: [], sales: [] };
+  const empty = { items: [], customers: [], vendors: [], sales: [], quotations: [] };
   if (q.length < 2) { res.json(empty); return; }
 
   const employee = (req as any).employee as { branchType: string; branchId: number; hierarchyId: number } | undefined;
@@ -56,7 +57,10 @@ router.get("/search", async (req, res): Promise<void> => {
   const salesParams: any[] = [like];
   const salesScope = scopeSalesWhere(scope, salesParams);
 
-  const [items, customers, vendors, sales] = await Promise.all([
+  const quotParams: any[] = [like];
+  const quotScope = scopeLocationTypeWhere(scope, quotParams, "q");
+
+  const [items, customers, vendors, sales, quotations] = await Promise.all([
     canView("items")
       ? pool.query(`SELECT id, name, unit FROM items WHERE name ILIKE $1 ORDER BY name LIMIT 8`, [like])
       : Promise.resolve({ rows: [] as any[] }),
@@ -86,6 +90,24 @@ router.get("/search", async (req, res): Promise<void> => {
           salesParams,
         )
       : Promise.resolve({ rows: [] as any[] }),
+    // Quotations match on number, customer name/phone/GST, and item names
+    // inside the stored line_items JSONB — no join to a lines table exists.
+    canView("quotations")
+      ? pool.query(
+          `SELECT q.id, q.quotation_number, q.total_amount, q.status,
+                  to_char(q.quote_date, 'YYYY-MM-DD') AS quote_date,
+                  c.name AS customer_name
+           FROM quotations q LEFT JOIN customers c ON c.id = q.customer_id
+           WHERE (q.quotation_number ILIKE $1 OR c.name ILIKE $1 OR c.phone ILIKE $1
+                  OR c.gst_number ILIKE $1
+                  OR EXISTS (
+                       SELECT 1 FROM jsonb_array_elements(q.line_items) li
+                        WHERE li->>'itemName' ILIKE $1))
+             AND ${quotScope}
+           ORDER BY q.id DESC LIMIT 8`,
+          quotParams,
+        )
+      : Promise.resolve({ rows: [] as any[] }),
   ]);
 
   res.json({
@@ -96,6 +118,11 @@ router.get("/search", async (req, res): Promise<void> => {
       id: r.id,
       title: r.invoice_number,
       subtitle: `${r.customer_name ?? "Walk-in"} · ₹${Number(r.total_amount).toLocaleString("en-IN")} · ${r.sale_date}`,
+    })),
+    quotations: quotations.rows.map((r: any) => ({
+      id: r.id,
+      title: r.quotation_number,
+      subtitle: `${r.customer_name ?? "Walk-in"} · ₹${Number(r.total_amount).toLocaleString("en-IN")} · ${r.quote_date} · ${String(r.status).toUpperCase()}`,
     })),
   });
 });

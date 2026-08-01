@@ -14,10 +14,29 @@
         if (evt.error) return; // real errors: let the overlay handle them
         var msg = String(evt.message || '');
         if (/ResizeObserver loop/i.test(msg)) {
+          // preventDefault too: without it the browser still reports the event
+          // as an uncaught exception (console + devtools protocol), which the
+          // platform's log monitor flags as an app "crash" even though the
+          // overlay never shows and nothing is actually wrong.
+          evt.preventDefault();
           evt.stopImmediatePropagation();
           return;
         }
         console.warn('[error-event without Error object]', msg, evt.filename || '', evt.lineno || '');
+      });
+      // Same story for promise rejections: the overlay renders a blank
+      // "(unknown runtime error)" when the rejection reason is not an Error
+      // (DOMException, string, undefined...). Log enough detail to identify
+      // the source; suppression decisions stay elsewhere.
+      window.addEventListener('unhandledrejection', function (evt) {
+        var r = evt.reason;
+        if (r instanceof Error) return; // real errors carry their own stack
+        var kind = r === null ? 'null' : typeof r;
+        var ctor = r && r.constructor && r.constructor.name || '';
+        var msg = (r && (r.message || r.name)) || '';
+        var asText = '';
+        try { asText = JSON.stringify(r); } catch (_) { asText = String(r); }
+        console.warn('[unhandledrejection without Error object]', kind, ctor, msg, asText, (r && r.stack) || '');
       });
     </script>
     <meta charset="UTF-8" />

@@ -10,10 +10,11 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
 import {
   FileBarChart2, ShoppingCart, Receipt, Boxes, Factory, Users, Landmark, TrendingUp, Lock,
-  ArrowLeftRight,
+  ArrowLeftRight, FileText,
 } from 'lucide-react';
 
 import SalesSection from './sections/SalesReports';
+import { QuotationsSection } from './sections/QuotationReports';
 import PurchasesSection from './sections/PurchasesReports';
 import InventorySection from './sections/InventoryReports';
 import TransfersSection from './sections/TransfersReports';
@@ -22,10 +23,11 @@ import PartiesSection from './sections/PartiesReports';
 import FinancialSection from './sections/FinancialReports';
 import ProfitabilitySection from './sections/ProfitabilityReports';
 
-type Category = 'sales' | 'purchases' | 'inventory' | 'transfers' | 'production' | 'parties' | 'financial' | 'profitability';
+type Category = 'sales' | 'quotations' | 'purchases' | 'inventory' | 'transfers' | 'production' | 'parties' | 'financial' | 'profitability';
 
 const CATEGORIES: { value: Category; label: string; icon: typeof ShoppingCart }[] = [
   { value: 'sales', label: 'Sales', icon: ShoppingCart },
+  { value: 'quotations', label: 'Quotations', icon: FileText },
   { value: 'purchases', label: 'Purchases', icon: Receipt },
   { value: 'inventory', label: 'Inventory', icon: Boxes },
   { value: 'transfers', label: 'Branch Transfers', icon: ArrowLeftRight },
@@ -48,6 +50,7 @@ export default function ReportsCenter() {
 
   const visible: Record<Category, boolean> = {
     sales: perm.canView,
+    quotations: perm.canView,
     purchases: perm.canView,
     inventory: perm.canView,
     transfers: perm.canView,
@@ -105,6 +108,7 @@ export default function ReportsCenter() {
             </div>
 
             {active === 'sales' && <SalesSection />}
+            {active === 'quotations' && <QuotationsSection />}
             {active === 'purchases' && <PurchasesSection />}
             {active === 'inventory' && <InventorySection />}
             {active === 'transfers' && <TransfersSection />}

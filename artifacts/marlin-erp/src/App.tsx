@@ -23,6 +23,7 @@ import InventoryReports from './pages/headoffice/InventoryReports';
 import StockVerification from './pages/headoffice/StockVerification';
 import ItemPrices from './pages/headoffice/ItemPrices';
 import Sales from './pages/headoffice/Sales';
+import Quotations from './pages/headoffice/Quotations';
 import StockLedger from './pages/headoffice/StockLedger';
 
 import Hierarchy from './pages/hr/Hierarchy';
@@ -419,6 +420,9 @@ function Router() {
 
       <Route path="/sales/pos">
         <PermGuard href="/sales/pos" pageName="Point of Sale"><SalesPOS /></PermGuard>
+      </Route>
+      <Route path="/sales/quotations">
+        <PermGuard href="/sales/quotations" pageName="Quotations"><Quotations /></PermGuard>
       </Route>
       <Route path="/sales/expenses">
         <PermGuard href="/sales/expenses" pageName="Expenses"><SalesExpenses /></PermGuard>

@@ -28,4 +28,14 @@ export interface Sale {
   /** @nullable */
   couponCode?: string | null;
   createdAt: string;
+  /**
+     * Set when this sale was converted from a quotation.
+     * @nullable
+     */
+  quotationId?: number | null;
+  /**
+     * The quotation this sale was converted from (QTN/…).
+     * @nullable
+     */
+  quotationNumber?: string | null;
 }

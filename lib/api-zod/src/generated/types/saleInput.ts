@@ -16,4 +16,6 @@ export interface SaleInput {
   couponCode?: string;
   /** Pre-tax invoice-level discount, allocated across lines. */
   billDiscount?: number;
+  /** When present, completing this sale converts the quotation: inside the sale transaction the quotation row is locked, a second conversion is refused, and the two documents are stamped with each other's numbers. Exactly one sale can ever result from a quotation. */
+  quotationId?: number;
 }

@@ -331,6 +331,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // editItem holds the sale being edited; null means "create" mode
   const [editItem, setEditItem] = useState<any>(null);
 
+  // Convert-from-quotation: set when the Quotations page opened this form
+  // prefilled. The id rides on the create payload so the server can stamp
+  // both documents inside the sale transaction — exactly one sale per quote.
+  const [convertFrom, setConvertFrom] = useState<{
+    id: number; quotationNumber: string; couponCode: string; discountTotal: number;
+  } | null>(null);
+
   const openEdit = (sale: any) => {
     setEditItem(sale);
     form.reset({
@@ -437,6 +444,54 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: effectiveDefaultValues });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
+
+  // ── Convert-to-Sale handoff from the Quotations page ─────────────────────
+  // The quotation travels via sessionStorage (survives the navigation, never
+  // the URL) with a ?fromQuotation marker. Read once on mount, prefill the
+  // create form and open it — fully editable, exactly like a hand-typed sale.
+  useEffect(() => {
+    let raw: string | null = null;
+    try {
+      raw = sessionStorage.getItem('marlin_convert_quotation');
+      if (raw) sessionStorage.removeItem('marlin_convert_quotation');
+    } catch { /* storage unavailable */ }
+    if (!raw) return;
+    try {
+      const q = JSON.parse(raw);
+      if (!q?.id || q.convertedSaleId) return;
+      setConvertFrom({
+        id: Number(q.id),
+        quotationNumber: String(q.quotationNumber ?? `#${q.id}`),
+        couponCode: String(q.couponCode ?? '').trim().toUpperCase(),
+        discountTotal: Math.max(0, Number(q.discountTotal ?? 0)),
+      });
+      setEditItem(null);
+      form.reset({
+        ...effectiveDefaultValues,
+        locationType: (q.locationType ?? 'outlet') as 'outlet' | 'warehouse',
+        locationId: Number(q.locationId ?? 0),
+        customerId: q.customerId ?? undefined,
+        saleDate: new Date().toISOString().split('T')[0],
+        paymentMode: 'cash',
+        couponCode: q.couponCode ?? '',
+        billDiscount: Number(q.billDiscount ?? 0),
+        lineItems: (Array.isArray(q.lineItems) && q.lineItems.length > 0 ? q.lineItems : []).map((li: any) => ({
+          itemId: Number(li.itemId),
+          quantity: Number(li.quantity),
+          unitPrice: Number(li.unitPrice),
+          unitDiscount: li.unitDiscount != null
+            ? Number(li.unitDiscount)
+            : Number(li.quantity) > 0
+              ? Math.max(0, Number(li.discount ?? 0) - Number(li.billDiscountShare ?? 0)) / Number(li.quantity)
+              : 0,
+          taxable: li.priceMode === 'exclusive',
+          taxableTouched: true,
+        })),
+      });
+      setIsOpen(true);
+    } catch { /* malformed handoff — open nothing */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const watchLocationType = form.watch('locationType');
   const watchLocationId = form.watch('locationId');
   const watchCustomerId = form.watch('customerId');
@@ -581,11 +636,18 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // coupon may have expired or changed since the sale was created, and
   // re-deriving would silently rewrite the agreed invoice total.
   const preservedBillDiscount = useMemo(() => {
-    if (!editItem) return null;
-    const orig = String((editItem as any).couponCode ?? '').trim().toUpperCase();
-    if (orig !== watchCouponCode) return null; // coupon changed → re-derive live
-    return Math.max(0, Number((editItem as any).discountTotal ?? 0));
-  }, [editItem, watchCouponCode]);
+    if (editItem) {
+      const orig = String((editItem as any).couponCode ?? '').trim().toUpperCase();
+      if (orig !== watchCouponCode) return null; // coupon changed → re-derive live
+      return Math.max(0, Number((editItem as any).discountTotal ?? 0));
+    }
+    // Converting a quotation: honour the discount AGREED on the quote while its
+    // coupon code is unchanged, even if that coupon has since expired.
+    if (convertFrom && convertFrom.couponCode === watchCouponCode && convertFrom.discountTotal > 0) {
+      return convertFrom.discountTotal;
+    }
+    return null;
+  }, [editItem, convertFrom, watchCouponCode]);
 
   // Compute aggregated GST totals for the cart (inclusive GST — MRP already includes tax)
   const computeCartTotals = () => {
@@ -684,6 +746,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       lineItems: enrichedItems,
       customerId: data.customerId || undefined,
       discountTotal: discountAmount,
+      // Conversion marker — the server locks the quotation, refuses a second
+      // conversion, and stamps the invoice number back onto the quotation.
+      ...(convertFrom && !editItem ? { quotationId: convertFrom.id } : {}),
     } as any;
 
     if (editItem) {
@@ -703,13 +768,34 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     } else {
       // Create mode — POST new sale
       createMutation.mutate({ data: payload }, {
-        onSuccess: () => {
-          toast.success('Sale recorded successfully');
+        onSuccess: (created: any) => {
+          toast.success(convertFrom
+            ? `Quotation ${convertFrom.quotationNumber} converted — invoice ${created?.invoiceNumber ?? ''} recorded`
+            : 'Sale recorded successfully');
           invalidateSalesData();
+          if (convertFrom) {
+            queryClient.invalidateQueries({
+              predicate: q => String(q.queryKey[0] ?? '').startsWith('/api/quotations'),
+            });
+            setConvertFrom(null);
+          }
           setIsOpen(false);
           form.reset(effectiveDefaultValues);
         },
         onError: (e: any) => {
+          if (e?.status === 409 && e?.data?.code === 'QUOTATION_ALREADY_CONVERTED') {
+            toast.error(
+              `${convertFrom?.quotationNumber ?? 'This quotation'} was already converted to ${e?.data?.convertedInvoiceNumber ?? 'a sale'} — a quotation can only become one invoice.`,
+              { duration: 8000 },
+            );
+            queryClient.invalidateQueries({
+              predicate: q => String(q.queryKey[0] ?? '').startsWith('/api/quotations'),
+            });
+            setConvertFrom(null);
+            setIsOpen(false);
+            form.reset(effectiveDefaultValues);
+            return;
+          }
           const info = e?.data;
           if (e?.status === 409 && info?.code === 'CREDIT_LIMIT_EXCEEDED') {
             if (perm.canEdit) {
@@ -1046,9 +1132,19 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       </div>
 
       {/* Sale Dialog */}
-      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditItem(null); form.reset(effectiveDefaultValues); } }}>
+      <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditItem(null); setConvertFrom(null); form.reset(effectiveDefaultValues); } }}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>{editItem ? `Edit Sale — ${editItem.invoiceNumber}` : 'Record Sale'}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editItem
+            ? `Edit Sale — ${editItem.invoiceNumber}`
+            : convertFrom
+              ? `Convert ${convertFrom.quotationNumber} to Sale`
+              : 'Record Sale'}</DialogTitle></DialogHeader>
+          {convertFrom && !editItem && (
+            <div className="rounded-lg border border-violet-500/30 bg-violet-500/5 px-3 py-2 text-sm text-violet-600">
+              Prefilled from quotation <span className="font-mono font-semibold">{convertFrom.quotationNumber}</span> — everything
+              is editable. Stock is deducted and books are posted only when this sale is saved.
+            </div>
+          )}
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
               <div className="grid grid-cols-2 gap-4">
@@ -1603,6 +1699,11 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               <div>
                 <SheetTitle className="flex items-center gap-2"><Receipt className="w-5 h-5 text-primary" />{viewItem?.invoiceNumber}</SheetTitle>
                 <SheetDescription>{viewItem?.outletName} · {viewItem && new Date(viewItem.saleDate).toLocaleDateString('en-IN')}</SheetDescription>
+                {viewItem?.quotationNumber && (
+                  <p className="text-xs text-violet-600 font-medium mt-1">
+                    Converted From: <span className="font-mono">{viewItem.quotationNumber}</span>
+                  </p>
+                )}
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
                 {perm.canDownload && viewItem && (

@@ -772,6 +772,116 @@ paths:
               schema:
                 $ref: "#/components/schemas/SalesSummary"
 
+  # ── QUOTATIONS ────────────────────────────────────────────────────────────
+  # Offers only: creating, editing or deleting a quotation never touches stock,
+  # the stock ledger, receivables, the books, GST or the dashboard.
+  /quotations:
+    get:
+      operationId: listQuotations
+      tags: [quotations]
+      summary: List quotations
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string } }
+        - { name: to, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: locationType, in: query, schema: { type: string } }
+        - { name: locationId, in: query, schema: { type: integer } }
+        - { name: customerId, in: query, schema: { type: integer } }
+        - { name: salesperson, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Quotations list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Quotation"
+    post:
+      operationId: createQuotation
+      tags: [quotations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuotationInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Quotation"
+
+  /quotations/{id}:
+    get:
+      operationId: getQuotation
+      tags: [quotations]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Quotation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Quotation"
+    put:
+      operationId: updateQuotation
+      tags: [quotations]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuotationInput"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Quotation"
+    delete:
+      operationId: deleteQuotation
+      tags: [quotations]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+
+  /quotations/{id}/status:
+    post:
+      operationId: setQuotationStatus
+      tags: [quotations]
+      summary: Move a quotation between statuses (never to/from converted)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuotationStatusInput"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Quotation"
+
   # ── HR HIERARCHY ──────────────────────────────────────────────────────────
   /hr/hierarchies:
     get:
@@ -2321,6 +2431,12 @@ components:
           type: ["string", "null"]
         createdAt:
           type: string
+        quotationId:
+          type: ["integer", "null"]
+          description: Set when this sale was converted from a quotation.
+        quotationNumber:
+          type: ["string", "null"]
+          description: The quotation this sale was converted from (QTN/…).
 
     SaleInput:
       type: object
@@ -2343,6 +2459,13 @@ components:
         billDiscount:
           type: number
           description: Pre-tax invoice-level discount, allocated across lines.
+        quotationId:
+          type: integer
+          description: >
+            When present, completing this sale converts the quotation: inside
+            the sale transaction the quotation row is locked, a second
+            conversion is refused, and the two documents are stamped with each
+            other's numbers. Exactly one sale can ever result from a quotation.
 
     SalesSummary:
       type: object
@@ -2362,6 +2485,133 @@ components:
               outletName: { type: string }
               salesAmount: { type: number }
               invoiceCount: { type: integer }
+
+    # Quotations — sale-shaped offers. Totals are computed with EXACTLY the
+    # sales arithmetic (same helper on the server), but nothing here ever
+    # reaches stock, the ledger, GST or the dashboard.
+    Quotation:
+      type: object
+      required:
+        [id, quotationNumber, locationType, locationId, quoteDate, status, lineItems, totalAmount]
+      properties:
+        id:
+          type: integer
+        quotationNumber:
+          type: string
+        locationType:
+          type: string
+        locationId:
+          type: integer
+        locationName:
+          type: string
+        customerId:
+          type: ["integer", "null"]
+        customerName:
+          type: ["string", "null"]
+        customerPhone:
+          type: ["string", "null"]
+        customerGstin:
+          type: ["string", "null"]
+        quoteDate:
+          type: string
+        validTill:
+          type: ["string", "null"]
+        status:
+          type: string
+          description: draft | sent | accepted | rejected | expired | converted
+        lineItems:
+          type: array
+          items:
+            $ref: "#/components/schemas/SaleLineItem"
+        subtotal:
+          type: number
+        taxTotal:
+          type: number
+        discountTotal:
+          type: number
+          description: Post-tax coupon deduction, same semantics as on a sale.
+        billDiscount:
+          type: number
+          description: Pre-tax bill-level discount, allocated across lines.
+        totalAmount:
+          type: number
+        couponCode:
+          type: ["string", "null"]
+        billingAddress:
+          type: ["string", "null"]
+        shippingAddress:
+          type: ["string", "null"]
+        paymentTerms:
+          type: ["string", "null"]
+        placeOfSupply:
+          type: ["string", "null"]
+        salesperson:
+          type: ["string", "null"]
+        notes:
+          type: ["string", "null"]
+        termsConditions:
+          type: ["string", "null"]
+        convertedSaleId:
+          type: ["integer", "null"]
+        convertedInvoiceNumber:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+        updatedAt:
+          type: ["string", "null"]
+
+    QuotationInput:
+      type: object
+      required: [locationType, locationId, quoteDate, lineItems]
+      properties:
+        locationType:
+          type: string
+          enum: [warehouse, outlet]
+        locationId:
+          type: integer
+        customerId:
+          type: integer
+        quoteDate:
+          type: string
+        validTill:
+          type: string
+        status:
+          type: string
+          description: draft or sent at creation; defaults to draft.
+        lineItems:
+          type: array
+          items:
+            $ref: "#/components/schemas/SaleLineItem"
+        couponCode:
+          type: string
+        billDiscount:
+          type: number
+          description: Pre-tax bill-level discount, allocated across lines.
+        discountTotal:
+          type: number
+          description: Post-tax coupon deduction off the grand total.
+        billingAddress:
+          type: string
+        shippingAddress:
+          type: string
+        paymentTerms:
+          type: string
+        placeOfSupply:
+          type: string
+        salesperson:
+          type: string
+        notes:
+          type: string
+        termsConditions:
+          type: string
+
+    QuotationStatusInput:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [draft, sent, accepted, rejected, expired]
 
     # HR
     Hierarchy:

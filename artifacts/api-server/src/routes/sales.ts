@@ -53,7 +53,7 @@ const CREDIT_OVERRIDE_DENIED_MESSAGE =
 
 // ── Tax computation helpers ───────────────────────────────────────────────────
 
-function computeInvoiceNumber(prefix: string, fy: string, seq: number): string {
+export function computeInvoiceNumber(prefix: string, fy: string, seq: number): string {
   return `${prefix}/${fy}/${String(seq).padStart(4, '0')}`;
 }
 
@@ -130,14 +130,16 @@ function allocateBillDiscount(bases: number[], billDiscount: number): number[] {
   return floors.map(f => f / 100);
 }
 
-type BuiltLines =
+export type BuiltLines =
   | { ok: true; lineItems: any[]; billDiscount: number }
   | { ok: false; error: string };
 
 // Single canonical computation for BOTH create and edit — the invoice preview,
 // the stored lines, the accounting receipt and the GST reports must never see
-// different math for the same sale.
-function buildSaleLines(
+// different math for the same sale. Exported so the Quotations module quotes
+// with EXACTLY this arithmetic — a quote and the invoice it becomes must agree
+// paise-for-paise.
+export function buildSaleLines(
   rawLineItems: Array<{ itemId: number; quantity: number; unitPrice: number; discount?: number; unitDiscount?: number | null; priceMode?: string }>,
   itemTaxMap: Map<number, { taxRate: number; name: string; hsnCode: string | null; unit: string | null }>,
   isInterState: boolean,
@@ -469,6 +471,8 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
       outletUpiId: locationUpiId,
       customerName: r._customer_name ?? null,
       customerPhone: r._customer_phone ?? null,
+      quotationId: r.quotation_id ?? null,
+      quotationNumber: r.quotation_number ?? null,
     };
   });
 
@@ -605,6 +609,14 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   const discountTotal = Math.round(rawDiscountTotal * 100) / 100;
   const totalAmount = subtotal + taxTotal - discountTotal;
 
+  // ── Quotation conversion (optional) ───────────────────────────────────────
+  // A sale may complete a quotation. The link is validated and stamped INSIDE
+  // the sale transaction below — the row lock there is what makes "exactly one
+  // sale per quotation" hold under concurrent requests.
+  const rawQuotationId = Number((parsed.data as any).quotationId ?? rawBody.quotationId ?? 0);
+  const quotationId = Number.isInteger(rawQuotationId) && rawQuotationId > 0 ? rawQuotationId : null;
+  let quotationNumberForSale: string | null = null;
+
   // ── POS entry flags: refuse NEW discounts/coupons while switched off ──────
   // Settings-driven and server-enforced: hiding the inputs in the POS UI means
   // nothing if a crafted request can still carry the fields. Creation is
@@ -698,6 +710,43 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   let lineItemsWithBatches: any[] = [];
   try {
     await txClient.query('BEGIN');
+
+    // ── Quotation conversion: lock the quotation FIRST ───────────────────────
+    // FOR UPDATE serialises concurrent conversions of the same quotation; the
+    // second request waits here, then sees converted_sale_id set and is
+    // refused before any stock is touched or an invoice number consumed.
+    if (quotationId) {
+      const { rows: [qRow] } = await txClient.query<{
+        id: number; converted_sale_id: number | null; quotation_number: string;
+        location_type: string; location_id: number;
+      }>(
+        `SELECT id, converted_sale_id, quotation_number, location_type, location_id
+           FROM quotations WHERE id = $1 FOR UPDATE`,
+        [quotationId]
+      );
+      // LBAC: the caller must be allowed to see the QUOTATION's location, not
+      // just the sale's — otherwise a scoped user could guess an out-of-scope
+      // quotation id and permanently convert (consume) it. Checked inside the
+      // same transaction as the lock so the decision is made on the locked
+      // row. Out-of-scope reads as "not found" (never 403 — no existence
+      // oracle), matching the quotations router's own scoping. Cross-location
+      // conversion WITHIN the caller's scope stays allowed by design: the
+      // sale's location was already validated by the create-scope check above.
+      if (!qRow || !isLocationInScope(createScope, qRow.location_type as any, qRow.location_id)) {
+        await txClient.query('ROLLBACK');
+        res.status(400).json({ error: 'Quotation not found', code: 'QUOTATION_NOT_FOUND' });
+        return;
+      }
+      if (qRow.converted_sale_id) {
+        await txClient.query('ROLLBACK');
+        res.status(409).json({
+          error: `Quotation ${qRow.quotation_number} has already been converted to an invoice. A quotation can only ever produce one sale.`,
+          code: 'QUOTATION_ALREADY_CONVERTED',
+        });
+        return;
+      }
+      quotationNumberForSale = qRow.quotation_number;
+    }
 
     if (isCreditControlled) {
       // Serialize concurrent credit sales for this customer; the lock is
@@ -834,6 +883,25 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
        settledAtSale ? totalAmount : 0, settledAtSale ? 'paid' : 'unpaid']
     ));
 
+    // ── Stamp the quotation ↔ sale link, both directions, same transaction ──
+    // The quotation was locked FOR UPDATE at the top of this transaction, so
+    // no concurrent request can be stamping it at the same time.
+    if (quotationId && quotationNumberForSale) {
+      await txClient.query(
+        `UPDATE quotations
+            SET status = 'converted', converted_sale_id = $1,
+                converted_invoice_number = $2, updated_at = now()
+          WHERE id = $3`,
+        [row.id, invoiceNumber, quotationId]
+      );
+      await txClient.query(
+        `UPDATE sales SET quotation_id = $1, quotation_number = $2 WHERE id = $3`,
+        [quotationId, quotationNumberForSale, row.id]
+      );
+      row.quotation_id = quotationId;
+      row.quotation_number = quotationNumberForSale;
+    }
+
     // ── The rest of what a sale means, in the SAME transaction ──────────────
     // The movement trail, the customer's running total and the accounting
     // receipt used to run AFTER the commit — the ledger write fire-and-forget
@@ -919,6 +987,8 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     paymentMode: row.payment_mode,
     couponCode: row.coupon_code,
     createdAt: row.created_at,
+    quotationId: row.quotation_id ?? null,
+    quotationNumber: row.quotation_number ?? null,
     // A sale cannot have a credit note against it the moment it is created, so
     // the position is computed rather than read back — same definition though,
     // so the figure the POS shows matches the one the invoice will print.
@@ -1829,6 +1899,8 @@ router.get("/sales/:id", requireModuleView("page:/sales/pos"), async (req, res):
     outletName: locationName,
     outletUpiId: locationUpiId,
     customerName,
+    quotationId: row.quotation_id ?? null,
+    quotationNumber: row.quotation_number ?? null,
   });
 });
 

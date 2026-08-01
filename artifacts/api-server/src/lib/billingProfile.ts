@@ -416,11 +416,28 @@ export async function resolveInvoiceIssuer(pool: Pool, saleId: number): Promise<
   }>(`SELECT location_type, location_id, outlet_id FROM sales WHERE id = $1`, [saleId]);
 
   if (loc?.location_type === "warehouse" && loc.location_id) {
-    const issuer = await loadWarehouseIssuer(pool, loc.location_id);
-    return issuer ?? missingLocationIssuer("warehouse", loc.location_id);
+    return resolveLocationIssuer(pool, "warehouse", loc.location_id);
+  }
+  const outletId = (loc?.location_type === "outlet" && loc.location_id) ? loc.location_id : loc?.outlet_id;
+  return resolveLocationIssuer(pool, "outlet", outletId ?? null);
+}
+
+/**
+ * Issuer for a document that identifies its location directly rather than via
+ * a sales row — quotations, most notably. Same resolution rules as invoices:
+ * the ISSUING LOCATION is the seller, with company settings only as fallback.
+ */
+export async function resolveLocationIssuer(
+  pool: Pool,
+  locationType: "warehouse" | "outlet" | null,
+  locationId: number | null,
+): Promise<InvoiceIssuer> {
+  if (locationType === "warehouse" && locationId) {
+    const issuer = await loadWarehouseIssuer(pool, locationId);
+    return issuer ?? missingLocationIssuer("warehouse", locationId);
   }
 
-  const outletId = (loc?.location_type === "outlet" && loc.location_id) ? loc.location_id : loc?.outlet_id;
+  const outletId = locationType === "outlet" && locationId ? locationId : null;
   const company = await loadCompany(pool);
   if (!outletId) return fromCompany(company);
 

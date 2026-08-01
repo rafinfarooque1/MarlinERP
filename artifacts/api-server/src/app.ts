@@ -72,10 +72,16 @@ app.use("/api", (req, res, next) => {
   if (req.method === "GET" && req.path === "/healthz/schema") { next(); return; }
   if (req.path === "/auth/login" && req.method === "POST") { next(); return; }
   if (req.method === "GET" && req.path.startsWith("/public/invoices/")) { next(); return; }
+  // Quotation PDFs behind the same HMAC-token construction (distinct signing
+  // context, so an invoice token can never open a quotation or vice versa).
+  if (req.method === "GET" && req.path.startsWith("/public/quotations/")) { next(); return; }
   // Customer-facing invoice links. GET only, and every request is authorised
   // against the invoice_share_links row named by its own opaque URL — see
   // routes/invoiceShareLinks.ts.
   if (req.method === "GET" && req.path.startsWith("/share/invoice/")) { next(); return; }
+  // Customer-facing quotation links — same rules, own table (see
+  // routes/quotationShareLinks.ts).
+  if (req.method === "GET" && req.path.startsWith("/share/quotation/")) { next(); return; }
   requireAuth(req, res, next);
 });
 

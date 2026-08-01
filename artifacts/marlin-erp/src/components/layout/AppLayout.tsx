@@ -32,12 +32,13 @@ import {
   Banknote,
   Layers,
   FileBarChart2,
+  FileText,
 } from 'lucide-react';
 import { useLocationContext } from '@/lib/locationContext';
 import { useTheme } from '@/lib/theme';
 import { Button } from '@/components/ui/button';
 import { useQueryClient } from '@tanstack/react-query';
-import { useLogout, useGetMe, useChangePassword, useListPermissions, useListHierarchies, useQuickSearch } from '@workspace/api-client-react';
+import { useLogout, useGetMe, useChangePassword, useListPermissions, useListHierarchies, useQuickSearch, useExpiredQuotationNotifications } from '@workspace/api-client-react';
 import { Input } from '@/components/ui/input';
 import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -364,7 +365,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const searchCanViewItems    = isAdmin || checkCanView(pagePermKey('/production/item-master'), userHierarchyId, userLevel, allPerms as any[]);
   const searchCanViewCustomers = isAdmin || checkCanView(pagePermKey('/customers'),             userHierarchyId, userLevel, allPerms as any[]);
   const searchCanViewVendors   = isAdmin || checkCanView(pagePermKey('/vendors'),               userHierarchyId, userLevel, allPerms as any[]);
+  const searchCanViewQuotations = isAdmin || checkCanView(pagePermKey('/sales/quotations'),      userHierarchyId, userLevel, allPerms as any[]);
   // Sales invoices: /headoffice/sales has no registry key — treat as always accessible
+
+  // ── Notification bell: quotations that expired recently, for users who can see them ──
+  const { data: expiredQuotes = [] } = useExpiredQuotationNotifications({ enabled: searchCanViewQuotations });
 
   // Change-password dialog state
   const [pwOpen, setPwOpen] = useState(false);
@@ -539,10 +544,43 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
               </Button>
 
-              <Button variant="ghost" size="icon" className="relative text-muted-foreground hover:text-foreground">
-                <Bell className="w-5 h-5" />
-                <span className="absolute top-2 right-2 w-2 h-2 bg-primary rounded-full" />
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="relative text-muted-foreground hover:text-foreground" title="Notifications">
+                    <Bell className="w-5 h-5" />
+                    {expiredQuotes.length > 0 && (
+                      <span className="absolute top-1 right-1 min-w-[16px] h-4 px-1 rounded-full bg-amber-500 text-white text-[10px] font-bold flex items-center justify-center">
+                        {expiredQuotes.length}
+                      </span>
+                    )}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-80 font-sans">
+                  <DropdownMenuLabel>Notifications</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {expiredQuotes.length === 0 ? (
+                    <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+                      Nothing needs your attention.
+                    </div>
+                  ) : (
+                    expiredQuotes.map((n) => (
+                      <DropdownMenuItem
+                        key={n.id}
+                        className="flex items-start gap-2 py-2 cursor-pointer"
+                        onClick={() => setLocation('/sales/quotations')}
+                      >
+                        <FileText className="w-4 h-4 mt-0.5 text-amber-500 shrink-0" />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium truncate">Quotation {n.quotationNumber} expired</p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {n.customerName || 'Walk-in'} · ₹{Number(n.totalAmount).toLocaleString('en-IN')} · valid till {n.validTill ? new Date(n.validTill).toLocaleDateString('en-IN') : '—'}
+                          </p>
+                        </div>
+                      </DropdownMenuItem>
+                    ))
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -651,6 +689,17 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               {searchResults.sales.map(r => (
                 <CommandItem key={`sale-${r.id}`} value={`sale-${r.id}-${r.title}`} onSelect={() => gotoResult('/headoffice/sales')}>
                   <Receipt className="mr-2 h-4 w-4 text-muted-foreground" />
+                  <span>{r.title}</span>
+                  {r.subtitle && <span className="ml-2 text-xs text-muted-foreground">{r.subtitle}</span>}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+          {searchResults && (searchResults.quotations?.length ?? 0) > 0 && searchCanViewQuotations && (
+            <CommandGroup heading="Quotations">
+              {searchResults.quotations.map(r => (
+                <CommandItem key={`quote-${r.id}`} value={`quote-${r.id}-${r.title}`} onSelect={() => gotoResult('/sales/quotations')}>
+                  <FileText className="mr-2 h-4 w-4 text-muted-foreground" />
                   <span>{r.title}</span>
                   {r.subtitle && <span className="ml-2 text-xs text-muted-foreground">{r.subtitle}</span>}
                 </CommandItem>

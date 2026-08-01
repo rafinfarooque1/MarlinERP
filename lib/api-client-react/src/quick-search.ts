@@ -14,6 +14,7 @@ export interface QuickSearchResponse {
   customers: QuickSearchEntry[];
   vendors: QuickSearchEntry[];
   sales: QuickSearchEntry[];
+  quotations: QuickSearchEntry[];
 }
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────

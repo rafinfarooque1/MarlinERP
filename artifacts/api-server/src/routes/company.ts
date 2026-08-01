@@ -609,9 +609,9 @@ router.post("/company/reset", requireModuleAction("page:/company/settings", "del
     `);
   } catch { /* ignore if table doesn't exist */ }
 
-  // Reset invoice sequence on company_settings
+  // Reset invoice + quotation sequences on company_settings
   try {
-    await pool.query(`UPDATE company_settings SET invoice_sequence = 0`);
+    await pool.query(`UPDATE company_settings SET invoice_sequence = 0, quotation_sequence = 0`);
   } catch { /* ignore */ }
 
   // ── Reseed baseline auth so login works immediately after reset ───────────
@@ -660,41 +660,9 @@ const TXN_RESET_CONFIRM_PHRASE = "CLEAR ALL TRANSACTIONS";
 // Children before parents. Every table listed here is transactional; masters
 // are deliberately absent. attendance/leaves are included per owner decision
 // (payroll is cleared, so historical attendance would only feed stale re-runs).
-const TXN_RESET_TABLES = [
-  "invoice_share_links",
-  "sale_payments",
-  "sales_returns",
-  "purchase_returns",
-  "reconciliation_batch_items",
-  "reconciliation_batches",
-  "cash_deposits",
-  "receipts",
-  "payments",
-  "expenses",
-  "journal_voucher_lines",
-  "journal_vouchers",
-  "stock_reservations",
-  "stock_verifications",
-  "stock_transfers",
-  "productions",
-  "stock_ledger",
-  "stock_batches",
-  "stock_entries",
-  "sales",
-  "purchases",
-  "asset_purchases",
-  "payroll",
-  "employee_advances",
-  "salary_accruals",
-  "rent_accruals",
-  "rent_payments",
-  "rent_periods",
-  // Punch rows feed worked-hours; leaving them behind would silently re-feed
-  // stale hours into any attendance recreated after the reset.
-  "attendance_punches",
-  "attendance",
-  "leaves",
-] as const;
+// The list itself lives in lib/resetTables.ts so tests can import it without
+// pulling in this router's live DB pool.
+import { TXN_RESET_TABLES } from "../lib/resetTables";
 
 router.post("/company/clear-transactions", requireModuleAction("page:/company/settings", "delete"), async (req, res): Promise<void> => {
   const { confirm, dryRun } = (req.body ?? {}) as { confirm?: string; dryRun?: boolean };
@@ -777,8 +745,9 @@ router.post("/company/clear-transactions", requireModuleAction("page:/company/se
     // Numbering restarts from 1 (owner decision). Safe only because the
     // document tables are now empty; the boot-time GREATEST() guard on
     // invoice_sequence stays a no-op with zero invoices.
-    await client.query(`UPDATE company_settings SET invoice_sequence = 0`);
+    await client.query(`UPDATE company_settings SET invoice_sequence = 0, quotation_sequence = 0`);
     resets["company_settings.invoice_sequence"] = "0";
+    resets["company_settings.quotation_sequence"] = "0";
     resets["voucher_sequences (rows deleted)"] = (await client.query(`DELETE FROM voucher_sequences`)).rowCount ?? 0;
     const seqExists = await client.query(`SELECT to_regclass('public.purchase_batch_seq') AS reg`);
     if (seqExists.rows[0]?.reg) {

@@ -27,6 +27,13 @@ import type { PgPool } from "@workspace/db";
  *     (purchases/sales/expenses/receipts/payments) created before the cutoff.
  *     A database with pre-cutoff documents is NOT the reset database, and
  *     deleting by cutoff there would destroy real history — refuse loudly.
+ *  4. Deployment-specific pin: the earliest activity_log row must fall inside
+ *     the one-minute window of THE reset (06:09–06:12 UTC on 2026-08-01).
+ *     The reset truncated activity_log, so on the reset database the first
+ *     activity row is the reset itself. Any other production database — even
+ *     one that happens to have no pre-cutoff documents but holds real
+ *     pre-cutoff stock or accounts — has its first activity elsewhere and is
+ *     refused. Gate 3 alone is a shape probe; this pin is the identity check.
  */
 const GUARD = "prod_reset_ghost_cleanup_v1";
 
@@ -63,6 +70,23 @@ export async function cleanupPreResetGhosts(pool: PgPool): Promise<string> {
     // Not the reset database. Refuse without writing the marker so the check
     // re-runs (and keeps refusing) on every boot — loud beats silent here.
     return `${GUARD}: REFUSED — ${fp.pre_docs} business document(s) predate the cutoff, this is not the reset database; nothing deleted`;
+  }
+
+  // ── Gate 4: deployment-specific pin ───────────────────────────────────────
+  // The reset truncated activity_log, so on the one database this cleanup is
+  // for, the FIRST activity row is the reset itself (06:10:01 UTC). A database
+  // whose history starts anywhere else is not that database — refuse even if
+  // it passed the document-shape gate above (e.g. real pre-cutoff stock or
+  // accounts but no qualifying documents). No marker is written, so this
+  // refusal stays loud on every boot.
+  const { rows: [pin] } = await pool.query<{ first_activity: string | null }>(
+    `SELECT MIN(created_at)::text AS first_activity FROM activity_log`,
+  );
+  const firstActivity = pin?.first_activity ? new Date(pin.first_activity) : null;
+  const pinFrom = new Date("2026-08-01T06:09:00Z");
+  const pinTo = new Date("2026-08-01T06:12:00Z");
+  if (!firstActivity || firstActivity < pinFrom || firstActivity > pinTo) {
+    return `${GUARD}: REFUSED — first activity_log row (${pin?.first_activity ?? "none"}) is outside the pinned reset window ${pinFrom.toISOString()}–${pinTo.toISOString()}; this is not the reset database, nothing deleted`;
   }
 
   const client = await pool.connect();

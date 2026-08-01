@@ -191,6 +191,104 @@ export function composeInvoiceMessage({
   ].join('\n');
 }
 
+// ── Quotation message ─────────────────────────────────────────────────────────
+
+export interface QuotationShareDoc {
+  id: number;
+  quotationNumber?: string | null;
+  quoteDate: string;
+  validTill?: string | null;
+  customerName?: string | null;
+  locationName?: string | null;
+  lineItems?: InvoiceShareLine[] | null;
+  subtotal?: number | string | null;
+  taxTotal?: number | string | null;
+  /** Post-tax coupon deduction. */
+  discountTotal?: number | string | null;
+  /** Pre-tax bill-level discount, already netted into the line figures. */
+  billDiscount?: number | string | null;
+  couponCode?: string | null;
+  totalAmount: number | string;
+}
+
+/**
+ * The customer-facing quotation summary. Same shape as the invoice message but
+ * it is an OFFER: no payment mode, no amount received, no balance due — and it
+ * closes with the validity date instead of a payment request.
+ */
+export function composeQuotationMessage({
+  quotation, pdfUrl, companyName, resolveItemName, linkValidDays,
+}: {
+  quotation: QuotationShareDoc;
+  pdfUrl: string;
+  companyName: string;
+  resolveItemName?: (itemId: number) => string | undefined;
+  linkValidDays?: number;
+}): string {
+  const seller = quotation.locationName || companyName;
+  const lineItems = quotation.lineItems ?? [];
+
+  const lineItemDisc = (li: InvoiceShareLine): number => {
+    if (li.unitDiscount != null) {
+      return Math.round(Number(li.unitDiscount) * Number(li.quantity) * 100) / 100;
+    }
+    return Math.max(0, Number(li.discount ?? 0) - Number(li.billDiscountShare ?? 0));
+  };
+
+  const itemLines = lineItems.map((li, i) => {
+    const name = li.itemName || resolveItemName?.(li.itemId) || `Item #${li.itemId}`;
+    const qty = Number(li.quantity);
+    const rate = Number(li.unitPrice);
+    const disc = lineItemDisc(li);
+    const lineAmt = qty * rate - disc;
+    const discPart = disc > 0 ? ` - ${inr(disc)} disc` : '';
+    return `  ${i + 1}. ${name}\n     ${qty} × ${inr(rate)}${discPart} = *${inr(lineAmt)}*`;
+  });
+
+  const itemDiscAmt = lineItems.reduce((s, li) => s + lineItemDisc(li), 0);
+  const billDiscount = Number(quotation.billDiscount ?? 0);
+  const taxTotal = Number(quotation.taxTotal ?? 0);
+  const discTotal = Number(quotation.discountTotal ?? 0);
+
+  const totalsLines: string[] = [];
+  if (itemDiscAmt > 0) totalsLines.push(`  Item discounts: -${inr(itemDiscAmt)}`);
+  if (billDiscount > 0) totalsLines.push(`  Bill discount: -${inr(billDiscount)}`);
+  totalsLines.push(`  Subtotal: ${inr(quotation.subtotal ?? 0)}`);
+  if (taxTotal > 0) totalsLines.push(`  GST: ${inr(taxTotal)}`);
+  if (discTotal > 0) {
+    totalsLines.push(`  ${quotation.couponCode ? `Coupon (${quotation.couponCode})` : 'Discount'}: -${inr(discTotal)}`);
+  }
+  totalsLines.push(`  *Quoted Total: ${inr(quotation.totalAmount)}*`);
+
+  return [
+    `Dear ${quotation.customerName || 'Customer'},`,
+    ``,
+    `Please find our quotation from *${seller}*. 🙏`,
+    ``,
+    `*Quotation No:* ${quotation.quotationNumber ?? `#${quotation.id}`}`,
+    `*Date:* ${formatDate(quotation.quoteDate)}`,
+    ...(quotation.validTill ? [`*Valid Till:* ${formatDate(quotation.validTill)}`] : []),
+    ``,
+    `*Quotation Details:*`,
+    ...itemLines,
+    ``,
+    ...totalsLines,
+    ``,
+    `_This is a quotation, not a tax invoice — no payment is due yet._`,
+    ...(quotation.validTill
+      ? [`_This quotation is valid until ${formatDate(quotation.validTill)}._`]
+      : []),
+    ``,
+    `📄 View / download quotation PDF:`,
+    pdfUrl,
+    ...(linkValidDays
+      ? [``, `_This link is private to you and valid for ${linkValidDays} days._`]
+      : []),
+    ``,
+    `— ${seller}`,
+  ].join('\n');
+}
+
 // ── Delivery channels ─────────────────────────────────────────────────────────
 
 export interface InvoiceSharePayload {

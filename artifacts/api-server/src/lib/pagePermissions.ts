@@ -11,6 +11,7 @@
 export const PAGE_PERM_KEYS: readonly string[] = [
   "page:/",                            // General › Dashboard
   "page:/sales/pos",                   // Operations › Point of Sale
+  "page:/sales/quotations",            // Operations › Quotations
   "page:/transfers",                   // Operations › Stock Transfer
   "page:/sales/expenses",              // Operations › Expenses
   "page:/accounts/cash-in-outlet",     // Operations › Cash Balance
@@ -70,6 +71,7 @@ export const PAGE_PERM_KEYS: readonly string[] = [
  */
 export const LEGACY_MODULE_TO_PAGES: Readonly<Record<string, readonly string[]>> = {
   "Point of Sale": ["page:/sales/pos"],
+  "Quotations": ["page:/sales/quotations"],
   "HO Transfers": ["page:/transfers"],
   "Location Expenses": ["page:/sales/expenses"],
   "Cash Balance": ["page:/accounts/cash-in-outlet"],

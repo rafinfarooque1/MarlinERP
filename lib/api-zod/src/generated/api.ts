@@ -1041,7 +1041,9 @@ export const ListSalesResponseItem = zod.object({
   "totalAmount": zod.number(),
   "paymentMode": zod.string().optional(),
   "couponCode": zod.string().nullish(),
-  "createdAt": zod.string()
+  "createdAt": zod.string(),
+  "quotationId": zod.number().nullish().describe('Set when this sale was converted from a quotation.'),
+  "quotationNumber": zod.string().nullish().describe('The quotation this sale was converted from (QTN\/…).')
 })
 export const ListSalesResponse = zod.array(ListSalesResponseItem)
 
@@ -1065,7 +1067,8 @@ export const CreateSaleBody = zod.object({
 })),
   "paymentMode": zod.string(),
   "couponCode": zod.string().optional(),
-  "billDiscount": zod.number().optional().describe('Pre-tax invoice-level discount, allocated across lines.')
+  "billDiscount": zod.number().optional().describe('Pre-tax invoice-level discount, allocated across lines.'),
+  "quotationId": zod.number().optional().describe('When present, completing this sale converts the quotation: inside the sale transaction the quotation row is locked, a second conversion is refused, and the two documents are stamped with each other\'s numbers. Exactly one sale can ever result from a quotation.\n')
 })
 
 export const CreateSaleResponse = zod.object({
@@ -1093,7 +1096,9 @@ export const CreateSaleResponse = zod.object({
   "totalAmount": zod.number(),
   "paymentMode": zod.string().optional(),
   "couponCode": zod.string().nullish(),
-  "createdAt": zod.string()
+  "createdAt": zod.string(),
+  "quotationId": zod.number().nullish().describe('Set when this sale was converted from a quotation.'),
+  "quotationNumber": zod.string().nullish().describe('The quotation this sale was converted from (QTN\/…).')
 })
 
 
@@ -1126,7 +1131,9 @@ export const GetSaleResponse = zod.object({
   "totalAmount": zod.number(),
   "paymentMode": zod.string().optional(),
   "couponCode": zod.string().nullish(),
-  "createdAt": zod.string()
+  "createdAt": zod.string(),
+  "quotationId": zod.number().nullish().describe('Set when this sale was converted from a quotation.'),
+  "quotationNumber": zod.string().nullish().describe('The quotation this sale was converted from (QTN\/…).')
 })
 
 
@@ -1143,6 +1150,322 @@ export const GetSalesSummaryResponse = zod.object({
   "salesAmount": zod.number().optional(),
   "invoiceCount": zod.number().optional()
 })).optional()
+})
+
+
+/**
+ * @summary List quotations
+ */
+export const ListQuotationsQueryParams = zod.object({
+  "q": zod.coerce.string().optional(),
+  "from": zod.coerce.string().optional(),
+  "to": zod.coerce.string().optional(),
+  "status": zod.coerce.string().optional(),
+  "locationType": zod.coerce.string().optional(),
+  "locationId": zod.coerce.number().optional(),
+  "customerId": zod.coerce.number().optional(),
+  "salesperson": zod.coerce.string().optional()
+})
+
+export const ListQuotationsResponseItem = zod.object({
+  "id": zod.number(),
+  "quotationNumber": zod.string(),
+  "locationType": zod.string(),
+  "locationId": zod.number(),
+  "locationName": zod.string().optional(),
+  "customerId": zod.number().nullish(),
+  "customerName": zod.string().nullish(),
+  "customerPhone": zod.string().nullish(),
+  "customerGstin": zod.string().nullish(),
+  "quoteDate": zod.string(),
+  "validTill": zod.string().nullish(),
+  "status": zod.string().describe('draft | sent | accepted | rejected | expired | converted'),
+  "lineItems": zod.array(zod.object({
+  "itemId": zod.number(),
+  "quantity": zod.number(),
+  "unitPrice": zod.number().optional(),
+  "discount": zod.number().optional().describe('TOTAL pre-tax discount on the line in rupees. For historical lines this is the amount the cashier typed (deducted once from the line total). For lines written by the per-unit discount system it is the DERIVED sum unitDiscount×quantity + billDiscountShare, kept so every consumer that recomputes gross as qty×unitPrice−discount stays correct without knowing about the newer fields.\n'),
+  "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
+  "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
+  "taxAmount": zod.number().optional(),
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
+})),
+  "subtotal": zod.number().optional(),
+  "taxTotal": zod.number().optional(),
+  "discountTotal": zod.number().optional().describe('Post-tax coupon deduction, same semantics as on a sale.'),
+  "billDiscount": zod.number().optional().describe('Pre-tax bill-level discount, allocated across lines.'),
+  "totalAmount": zod.number(),
+  "couponCode": zod.string().nullish(),
+  "billingAddress": zod.string().nullish(),
+  "shippingAddress": zod.string().nullish(),
+  "paymentTerms": zod.string().nullish(),
+  "placeOfSupply": zod.string().nullish(),
+  "salesperson": zod.string().nullish(),
+  "notes": zod.string().nullish(),
+  "termsConditions": zod.string().nullish(),
+  "convertedSaleId": zod.number().nullish(),
+  "convertedInvoiceNumber": zod.string().nullish(),
+  "createdAt": zod.string().optional(),
+  "updatedAt": zod.string().nullish()
+})
+export const ListQuotationsResponse = zod.array(ListQuotationsResponseItem)
+
+
+export const CreateQuotationBody = zod.object({
+  "locationType": zod.enum(['warehouse', 'outlet']),
+  "locationId": zod.number(),
+  "customerId": zod.number().optional(),
+  "quoteDate": zod.string(),
+  "validTill": zod.string().optional(),
+  "status": zod.string().optional().describe('draft or sent at creation; defaults to draft.'),
+  "lineItems": zod.array(zod.object({
+  "itemId": zod.number(),
+  "quantity": zod.number(),
+  "unitPrice": zod.number().optional(),
+  "discount": zod.number().optional().describe('TOTAL pre-tax discount on the line in rupees. For historical lines this is the amount the cashier typed (deducted once from the line total). For lines written by the per-unit discount system it is the DERIVED sum unitDiscount×quantity + billDiscountShare, kept so every consumer that recomputes gross as qty×unitPrice−discount stays correct without knowing about the newer fields.\n'),
+  "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
+  "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
+  "taxAmount": zod.number().optional(),
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
+})),
+  "couponCode": zod.string().optional(),
+  "billDiscount": zod.number().optional().describe('Pre-tax bill-level discount, allocated across lines.'),
+  "discountTotal": zod.number().optional().describe('Post-tax coupon deduction off the grand total.'),
+  "billingAddress": zod.string().optional(),
+  "shippingAddress": zod.string().optional(),
+  "paymentTerms": zod.string().optional(),
+  "placeOfSupply": zod.string().optional(),
+  "salesperson": zod.string().optional(),
+  "notes": zod.string().optional(),
+  "termsConditions": zod.string().optional()
+})
+
+export const CreateQuotationResponse = zod.object({
+  "id": zod.number(),
+  "quotationNumber": zod.string(),
+  "locationType": zod.string(),
+  "locationId": zod.number(),
+  "locationName": zod.string().optional(),
+  "customerId": zod.number().nullish(),
+  "customerName": zod.string().nullish(),
+  "customerPhone": zod.string().nullish(),
+  "customerGstin": zod.string().nullish(),
+  "quoteDate": zod.string(),
+  "validTill": zod.string().nullish(),
+  "status": zod.string().describe('draft | sent | accepted | rejected | expired | converted'),
+  "lineItems": zod.array(zod.object({
+  "itemId": zod.number(),
+  "quantity": zod.number(),
+  "unitPrice": zod.number().optional(),
+  "discount": zod.number().optional().describe('TOTAL pre-tax discount on the line in rupees. For historical lines this is the amount the cashier typed (deducted once from the line total). For lines written by the per-unit discount system it is the DERIVED sum unitDiscount×quantity + billDiscountShare, kept so every consumer that recomputes gross as qty×unitPrice−discount stays correct without knowing about the newer fields.\n'),
+  "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
+  "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
+  "taxAmount": zod.number().optional(),
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
+})),
+  "subtotal": zod.number().optional(),
+  "taxTotal": zod.number().optional(),
+  "discountTotal": zod.number().optional().describe('Post-tax coupon deduction, same semantics as on a sale.'),
+  "billDiscount": zod.number().optional().describe('Pre-tax bill-level discount, allocated across lines.'),
+  "totalAmount": zod.number(),
+  "couponCode": zod.string().nullish(),
+  "billingAddress": zod.string().nullish(),
+  "shippingAddress": zod.string().nullish(),
+  "paymentTerms": zod.string().nullish(),
+  "placeOfSupply": zod.string().nullish(),
+  "salesperson": zod.string().nullish(),
+  "notes": zod.string().nullish(),
+  "termsConditions": zod.string().nullish(),
+  "convertedSaleId": zod.number().nullish(),
+  "convertedInvoiceNumber": zod.string().nullish(),
+  "createdAt": zod.string().optional(),
+  "updatedAt": zod.string().nullish()
+})
+
+
+export const GetQuotationParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetQuotationResponse = zod.object({
+  "id": zod.number(),
+  "quotationNumber": zod.string(),
+  "locationType": zod.string(),
+  "locationId": zod.number(),
+  "locationName": zod.string().optional(),
+  "customerId": zod.number().nullish(),
+  "customerName": zod.string().nullish(),
+  "customerPhone": zod.string().nullish(),
+  "customerGstin": zod.string().nullish(),
+  "quoteDate": zod.string(),
+  "validTill": zod.string().nullish(),
+  "status": zod.string().describe('draft | sent | accepted | rejected | expired | converted'),
+  "lineItems": zod.array(zod.object({
+  "itemId": zod.number(),
+  "quantity": zod.number(),
+  "unitPrice": zod.number().optional(),
+  "discount": zod.number().optional().describe('TOTAL pre-tax discount on the line in rupees. For historical lines this is the amount the cashier typed (deducted once from the line total). For lines written by the per-unit discount system it is the DERIVED sum unitDiscount×quantity + billDiscountShare, kept so every consumer that recomputes gross as qty×unitPrice−discount stays correct without knowing about the newer fields.\n'),
+  "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
+  "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
+  "taxAmount": zod.number().optional(),
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
+})),
+  "subtotal": zod.number().optional(),
+  "taxTotal": zod.number().optional(),
+  "discountTotal": zod.number().optional().describe('Post-tax coupon deduction, same semantics as on a sale.'),
+  "billDiscount": zod.number().optional().describe('Pre-tax bill-level discount, allocated across lines.'),
+  "totalAmount": zod.number(),
+  "couponCode": zod.string().nullish(),
+  "billingAddress": zod.string().nullish(),
+  "shippingAddress": zod.string().nullish(),
+  "paymentTerms": zod.string().nullish(),
+  "placeOfSupply": zod.string().nullish(),
+  "salesperson": zod.string().nullish(),
+  "notes": zod.string().nullish(),
+  "termsConditions": zod.string().nullish(),
+  "convertedSaleId": zod.number().nullish(),
+  "convertedInvoiceNumber": zod.string().nullish(),
+  "createdAt": zod.string().optional(),
+  "updatedAt": zod.string().nullish()
+})
+
+
+export const UpdateQuotationParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const UpdateQuotationBody = zod.object({
+  "locationType": zod.enum(['warehouse', 'outlet']),
+  "locationId": zod.number(),
+  "customerId": zod.number().optional(),
+  "quoteDate": zod.string(),
+  "validTill": zod.string().optional(),
+  "status": zod.string().optional().describe('draft or sent at creation; defaults to draft.'),
+  "lineItems": zod.array(zod.object({
+  "itemId": zod.number(),
+  "quantity": zod.number(),
+  "unitPrice": zod.number().optional(),
+  "discount": zod.number().optional().describe('TOTAL pre-tax discount on the line in rupees. For historical lines this is the amount the cashier typed (deducted once from the line total). For lines written by the per-unit discount system it is the DERIVED sum unitDiscount×quantity + billDiscountShare, kept so every consumer that recomputes gross as qty×unitPrice−discount stays correct without knowing about the newer fields.\n'),
+  "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
+  "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
+  "taxAmount": zod.number().optional(),
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
+})),
+  "couponCode": zod.string().optional(),
+  "billDiscount": zod.number().optional().describe('Pre-tax bill-level discount, allocated across lines.'),
+  "discountTotal": zod.number().optional().describe('Post-tax coupon deduction off the grand total.'),
+  "billingAddress": zod.string().optional(),
+  "shippingAddress": zod.string().optional(),
+  "paymentTerms": zod.string().optional(),
+  "placeOfSupply": zod.string().optional(),
+  "salesperson": zod.string().optional(),
+  "notes": zod.string().optional(),
+  "termsConditions": zod.string().optional()
+})
+
+export const UpdateQuotationResponse = zod.object({
+  "id": zod.number(),
+  "quotationNumber": zod.string(),
+  "locationType": zod.string(),
+  "locationId": zod.number(),
+  "locationName": zod.string().optional(),
+  "customerId": zod.number().nullish(),
+  "customerName": zod.string().nullish(),
+  "customerPhone": zod.string().nullish(),
+  "customerGstin": zod.string().nullish(),
+  "quoteDate": zod.string(),
+  "validTill": zod.string().nullish(),
+  "status": zod.string().describe('draft | sent | accepted | rejected | expired | converted'),
+  "lineItems": zod.array(zod.object({
+  "itemId": zod.number(),
+  "quantity": zod.number(),
+  "unitPrice": zod.number().optional(),
+  "discount": zod.number().optional().describe('TOTAL pre-tax discount on the line in rupees. For historical lines this is the amount the cashier typed (deducted once from the line total). For lines written by the per-unit discount system it is the DERIVED sum unitDiscount×quantity + billDiscountShare, kept so every consumer that recomputes gross as qty×unitPrice−discount stays correct without knowing about the newer fields.\n'),
+  "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
+  "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
+  "taxAmount": zod.number().optional(),
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
+})),
+  "subtotal": zod.number().optional(),
+  "taxTotal": zod.number().optional(),
+  "discountTotal": zod.number().optional().describe('Post-tax coupon deduction, same semantics as on a sale.'),
+  "billDiscount": zod.number().optional().describe('Pre-tax bill-level discount, allocated across lines.'),
+  "totalAmount": zod.number(),
+  "couponCode": zod.string().nullish(),
+  "billingAddress": zod.string().nullish(),
+  "shippingAddress": zod.string().nullish(),
+  "paymentTerms": zod.string().nullish(),
+  "placeOfSupply": zod.string().nullish(),
+  "salesperson": zod.string().nullish(),
+  "notes": zod.string().nullish(),
+  "termsConditions": zod.string().nullish(),
+  "convertedSaleId": zod.number().nullish(),
+  "convertedInvoiceNumber": zod.string().nullish(),
+  "createdAt": zod.string().optional(),
+  "updatedAt": zod.string().nullish()
+})
+
+
+export const DeleteQuotationParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteQuotationResponse = zod.object({
+  "success": zod.boolean().optional()
+})
+
+
+/**
+ * @summary Move a quotation between statuses (never to/from converted)
+ */
+export const SetQuotationStatusParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const SetQuotationStatusBody = zod.object({
+  "status": zod.enum(['draft', 'sent', 'accepted', 'rejected', 'expired'])
+})
+
+export const SetQuotationStatusResponse = zod.object({
+  "id": zod.number(),
+  "quotationNumber": zod.string(),
+  "locationType": zod.string(),
+  "locationId": zod.number(),
+  "locationName": zod.string().optional(),
+  "customerId": zod.number().nullish(),
+  "customerName": zod.string().nullish(),
+  "customerPhone": zod.string().nullish(),
+  "customerGstin": zod.string().nullish(),
+  "quoteDate": zod.string(),
+  "validTill": zod.string().nullish(),
+  "status": zod.string().describe('draft | sent | accepted | rejected | expired | converted'),
+  "lineItems": zod.array(zod.object({
+  "itemId": zod.number(),
+  "quantity": zod.number(),
+  "unitPrice": zod.number().optional(),
+  "discount": zod.number().optional().describe('TOTAL pre-tax discount on the line in rupees. For historical lines this is the amount the cashier typed (deducted once from the line total). For lines written by the per-unit discount system it is the DERIVED sum unitDiscount×quantity + billDiscountShare, kept so every consumer that recomputes gross as qty×unitPrice−discount stays correct without knowing about the newer fields.\n'),
+  "unitDiscount": zod.number().optional().describe('Discount per UNIT off the MRP, in rupees (0 ≤ unitDiscount ≤ unitPrice). Present only on lines created since the per-unit discount system; absent on historical lines, whose \'discount\' is a line-total amount and must not be reinterpreted.\n'),
+  "billDiscountShare": zod.number().optional().describe('This line\'s paise-exact share of the invoice-level bill discount, allocated proportionally to the line\'s post-item-discount value. Shares across the invoice sum exactly to the sale\'s billDiscount.\n'),
+  "taxAmount": zod.number().optional(),
+  "priceMode": zod.enum(['inclusive', 'exclusive']).optional().describe('How the entered unitPrice is interpreted for THIS line. \'inclusive\' (default, and the treatment of every historical line): unitPrice is the final GST-inclusive price and GST is extracted from it. \'exclusive\': unitPrice is the taxable base and GST is added on top. Mirrors the purchases priceMode convention, per line.\n')
+})),
+  "subtotal": zod.number().optional(),
+  "taxTotal": zod.number().optional(),
+  "discountTotal": zod.number().optional().describe('Post-tax coupon deduction, same semantics as on a sale.'),
+  "billDiscount": zod.number().optional().describe('Pre-tax bill-level discount, allocated across lines.'),
+  "totalAmount": zod.number(),
+  "couponCode": zod.string().nullish(),
+  "billingAddress": zod.string().nullish(),
+  "shippingAddress": zod.string().nullish(),
+  "paymentTerms": zod.string().nullish(),
+  "placeOfSupply": zod.string().nullish(),
+  "salesperson": zod.string().nullish(),
+  "notes": zod.string().nullish(),
+  "termsConditions": zod.string().nullish(),
+  "convertedSaleId": zod.number().nullish(),
+  "convertedInvoiceNumber": zod.string().nullish(),
+  "createdAt": zod.string().optional(),
+  "updatedAt": zod.string().nullish()
 })
 
 

@@ -36,6 +36,7 @@ import {
   Settings,
   Store,
   Landmark,
+  FileText,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -261,6 +262,14 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navGroup: 'Operations',
     navEntries: [{ name: 'Point of Sale', href: '/sales/pos' }],
     icon: ShoppingCart,
+  },
+  {
+    // Quotations: offer documents that never touch stock or books. Sits next
+    // to Point of Sale because the form and totals mirror Sales Entry.
+    key: 'Quotations', permGroup: 'Operations',
+    navGroup: 'Operations',
+    navEntries: [{ name: 'Quotations', href: '/sales/quotations' }],
+    icon: FileText,
   },
   {
     key: 'Location Stock', permGroup: 'Operations',

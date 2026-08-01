@@ -34,7 +34,7 @@ import {
 import { eq, inArray } from "drizzle-orm";
 import { FONT, SCRIPT_FONT, registerFonts, registerScriptFont } from "@workspace/pdf-kit";
 import { paymentModeLabel } from "../lib/paymentModes";
-import { resolveInvoiceIssuer, type InvoiceIssuer } from "../lib/billingProfile";
+import { resolveInvoiceIssuer, resolveLocationIssuer, type InvoiceIssuer } from "../lib/billingProfile";
 import {
   loadPaymentPosition, loadRecordedPayments, loadInvoicePaymentSettings, buildUpiRequest,
   type PaymentPosition, type RecordedPayment,
@@ -74,7 +74,29 @@ export interface InvoiceData {
     totalAmount: number;
     lineItems: InvoiceLineItem[];
     cancelledAt: string | null;
+    /** For sales converted from a quotation: the QTN/… it came from. */
+    quotationNumber?: string | null;
   };
+  /**
+   * Which document this is. The ONE renderer draws both: 'quotation' swaps the
+   * badge, drops every payment surface (status strip, amount payable, bank,
+   * QR, payment mode — omitted entirely, never zeroed), adds validity and a
+   * light watermark. Absent means 'invoice'.
+   */
+  docType?: "invoice" | "quotation";
+  /** Quotation-only fields; present exactly when docType === 'quotation'. */
+  quotation?: {
+    validTill: string | null;
+    convertedInvoiceNumber: string | null;
+    paymentTerms: string | null;
+    salesperson: string | null;
+    notes: string | null;
+    termsConditions: string | null;
+    /** Light diagonal "QUOTATION" watermark on every page. */
+    watermark: boolean;
+  };
+  /** Ship-to override (quotations); when absent both panels show billing. */
+  shippingAddress?: string | null;
   /**
    * Who is selling. Resolved from the sale's stored location, so reprinting an
    * old invoice from another branch still shows the branch that raised it.
@@ -97,8 +119,9 @@ export interface InvoiceData {
    * What is owed right now, from the one shared helper every other surface uses.
    * Recomputed on every render — the document is never stamped with an amount
    * that could go stale between a payment and the next download.
+   * Null for quotations: an offer owes nothing and asks for nothing.
    */
-  position: PaymentPosition;
+  position: PaymentPosition | null;
   /** How the invoice was paid, for the settled-invoice panel. */
   recordedPayments: RecordedPayment[];
   /**
@@ -118,8 +141,10 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
   // the authoritative issuing-location columns.
   const issuer = await resolveInvoiceIssuer(pool, saleId);
 
-  const { rows: [locRow] } = await pool.query<{ cancelled_at: Date | null }>(
-    `SELECT cancelled_at FROM sales WHERE id = $1`, [saleId],
+  // cancelled_at and quotation_number are raw-migration columns: drizzle's
+  // select() silently drops them, so they are read with raw SQL.
+  const { rows: [locRow] } = await pool.query<{ cancelled_at: Date | null; quotation_number: string | null }>(
+    `SELECT cancelled_at, quotation_number FROM sales WHERE id = $1`, [saleId],
   );
 
   const customerRow = sale.customerId
@@ -192,6 +217,7 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
       totalAmount: Number(sale.totalAmount),
       lineItems,
       cancelledAt: locRow?.cancelled_at ? new Date(locRow.cancelled_at).toISOString() : null,
+      quotationNumber: locRow?.quotation_number ?? null,
     },
     issuer,
     outletName: issuer.locationName,
@@ -212,11 +238,120 @@ export async function assembleInvoiceData(saleId: number): Promise<InvoiceData |
   };
 }
 
+/**
+ * Assemble the quotation variant of InvoiceData. Same shape, same renderer —
+ * but every payment concern is absent by construction: position is null,
+ * there are no recorded payments, no UPI request and no bank block.
+ *
+ * The quotations table is a raw-migration table, so everything here is raw SQL.
+ */
+export async function assembleQuotationData(quotationId: number): Promise<InvoiceData | null> {
+  const { rows: [q] } = await pool.query<any>(
+    `SELECT q.*,
+            to_char(q.quote_date, 'YYYY-MM-DD') AS quote_date_s,
+            to_char(q.valid_till, 'YYYY-MM-DD') AS valid_till_s
+       FROM quotations q WHERE q.id = $1`,
+    [quotationId],
+  );
+  if (!q) return null;
+
+  const issuer = await resolveLocationIssuer(
+    pool,
+    q.location_type === "warehouse" ? "warehouse" : "outlet",
+    Number(q.location_id),
+  );
+
+  const customerRow = q.customer_id
+    ? (await db.select().from(customersTable).where(eq(customersTable.id, Number(q.customer_id))).limit(1))[0] ?? null
+    : null;
+  const [cs] = await db.select().from(companySettingsTable).limit(1);
+
+  let logoDataUrl: string | null = null;
+  if (cs) {
+    const { rows: [pdfCols] } = await pool.query<{ logo_url: string | null }>(
+      `SELECT logo_url FROM company_settings WHERE id = $1`, [cs.id],
+    );
+    const logo = pdfCols?.logo_url ?? null;
+    logoDataUrl = logo && /^data:image\//i.test(logo) ? logo : null;
+  }
+
+  const lineItems: InvoiceLineItem[] = Array.isArray(q.line_items) ? (q.line_items as InvoiceLineItem[]) : [];
+  const missingIds = [...new Set(
+    lineItems.filter((li) => !li.itemName || !li.hsnCode || !li.unit).map((li) => li.itemId),
+  )];
+  if (missingIds.length > 0) {
+    const rows = await db
+      .select({ id: itemsTable.id, name: itemsTable.name, hsnCode: itemsTable.hsnCode, unit: itemsTable.unit })
+      .from(itemsTable).where(inArray(itemsTable.id, missingIds));
+    const infoMap = new Map(rows.map((r) => [r.id, r]));
+    for (const li of lineItems) {
+      const info = infoMap.get(li.itemId);
+      if (!li.itemName) li.itemName = info?.name ?? `Item #${li.itemId}`;
+      if (!li.hsnCode) li.hsnCode = info?.hsnCode ?? "";
+      if (!li.unit) li.unit = info?.unit ?? "";
+    }
+  }
+
+  const s = (v: unknown): string | null => {
+    const t = typeof v === "string" ? v.trim() : "";
+    return t.length > 0 ? t : null;
+  };
+
+  return {
+    docType: "quotation",
+    sale: {
+      id: Number(q.id),
+      invoiceNumber: q.quotation_number,           // the renderer's document number
+      saleDate: q.quote_date_s,
+      paymentMode: null,                            // a quotation has no payment concept
+      subtotal: Number(q.subtotal),
+      taxTotal: Number(q.tax_total),
+      discountTotal: Number(q.discount_total),
+      billDiscount: Number(q.bill_discount ?? 0),
+      totalAmount: Number(q.total_amount),
+      lineItems,
+      cancelledAt: null,
+    },
+    quotation: {
+      validTill: q.valid_till_s ?? null,
+      convertedInvoiceNumber: s(q.converted_invoice_number),
+      paymentTerms: s(q.payment_terms),
+      salesperson: s(q.salesperson),
+      notes: s(q.notes),
+      termsConditions: s(q.terms_conditions),
+      watermark: true,
+    },
+    shippingAddress: s(q.shipping_address),
+    issuer,
+    outletName: issuer.locationName,
+    outletUpiId: "",
+    customer: customerRow ? {
+      name: customerRow.name,
+      // The quotation's own billing address wins over the customer master's.
+      phone: customerRow.phone ?? "",
+      address: s(q.billing_address) ?? customerRow.address ?? "",
+      state: s(q.place_of_supply) ?? customerRow.state ?? "",
+      gstNumber: customerRow.gstNumber ?? "",
+    } : null,
+    cs: { ...(cs ?? {}) } as Record<string, unknown>,
+    logoDataUrl,
+    position: null,
+    recordedPayments: [],
+    upiRequest: null,
+    showBankDetails: false,
+  };
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 export function invoiceFileName(invoiceNumber: string | null, saleId: number): string {
   const base = (invoiceNumber || `INV-${saleId}`).replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return `Invoice-${base}.pdf`;
+}
+
+export function quotationFileName(quotationNumber: string | null, quotationId: number): string {
+  const base = (quotationNumber || `QTN-${quotationId}`).replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return `Quotation-${base}.pdf`;
 }
 
 function esc(s: unknown): string { return String(s ?? ""); }
@@ -287,6 +422,11 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   const {
     sale, issuer, customer, cs, logoDataUrl, position, recordedPayments, upiRequest, showBankDetails,
   } = data;
+  // Quotation variant: same layout, but every payment surface is OMITTED —
+  // the status strip, amount payable, bank details, QR and payment mode all
+  // presuppose a receivable, and a quotation has none.
+  const isQuotation = data.docType === "quotation";
+  const q = data.quotation;
   const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
   await registerFonts(doc);
   // The script face is decorative-only; the invoice must never fail over it.
@@ -523,22 +663,37 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     ly += 4.8;
   }
 
-  // Right: TAX INVOICE banner + invoice meta rows with icons
+  // Right: document banner + meta rows with icons. The badge names the
+  // document: a quotation must never present itself as a tax invoice.
   rfill(badgeX, y, BADGE_W, 9.5, NAVY, 1);
-  txt("TAX INVOICE", badgeX + BADGE_W / 2, y + 6.4, { bold: true, size: 12, color: WHITE, align: "center" });
+  txt(isQuotation ? "QUOTATION" : "TAX INVOICE", badgeX + BADGE_W / 2, y + 6.4, { bold: true, size: 12, color: WHITE, align: "center" });
+
+  const fmtIso = (iso: string): string =>
+    new Date(iso).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" });
 
   type MetaRow = [icon: (x: number, y: number, s: number) => void, label: string, value: string];
   const metaRows: MetaRow[] = [
-    [icoDoc, "Invoice No.", esc(sale.invoiceNumber || "-")],
-    [icoCal, "Invoice Date", fmtDate],
+    [icoDoc, isQuotation ? "Quotation No." : "Invoice No.", esc(sale.invoiceNumber || "-")],
+    [icoCal, isQuotation ? "Quotation Date" : "Invoice Date", fmtDate],
   ];
+  if (isQuotation && q?.validTill) {
+    metaRows.push([icoCal, "Valid Till", fmtIso(q.validTill)]);
+  }
   // Which branch raised it. Only worth a line when the location is named
   // something other than the trade name printed above.
   if (issuer.locationName && issuer.locationName !== issuer.tradeName) {
     metaRows.push([icoDoc, "Issued From", issuer.locationName]);
   }
   if (placeOfSupply) metaRows.push([icoPin, "Place of Supply", placeOfSupply]);
-  metaRows.push([icoCycle, "Reverse Charge", "No"]);
+  if (isQuotation) {
+    if (q?.salesperson) metaRows.push([(x, yy, s) => icoPerson(x, yy, s, NAVY), "Salesperson", q.salesperson]);
+    // Two-way trace: a converted quotation names the invoice it became.
+    if (q?.convertedInvoiceNumber) metaRows.push([icoCycle, "Converted To", q.convertedInvoiceNumber]);
+  } else {
+    // Two-way trace: a converted sale names the quotation it came from.
+    if (sale.quotationNumber) metaRows.push([icoCycle, "Converted From", sale.quotationNumber]);
+    metaRows.push([icoCycle, "Reverse Charge", "No"]);
+  }
 
   let my = y + 14.6;
   for (const [icon, label, value] of metaRows) {
@@ -566,29 +721,46 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
   if (customer?.gstNumber) custRows.push(["GSTIN", customer.gstNumber]);
   if (customer?.phone)     custRows.push(["Mobile No.", customer.phone]);
 
+  // Ship-to may differ (quotations carry their own shipping address); when it
+  // does, the second panel swaps only the Address row.
+  const shipRows: [string, string][] = data.shippingAddress
+    ? custRows.map(([k, v]) => (k === "Address" ? [k, data.shippingAddress!] : [k, v]) as [string, string])
+    : custRows;
+  if (data.shippingAddress && !custRows.some(([k]) => k === "Address")) {
+    shipRows.splice(1, 0, ["Address", data.shippingAddress]);
+  }
+
   const TAB_W = 36, TAB_H = 7;
   const BT_LH = 4.0;               // per text line
   const BT_PAD = 3.0;
   // Address may wrap; panel height follows the real line count.
   const valW = HW - 34;
-  let btLines = 0;
-  const btRows = custRows.map(([k, v]) => {
-    const lines = wrap(v, valW, 7.6);
-    btLines += Math.max(lines.length, 1);
-    return [k, lines] as [string, string[]];
-  });
-  const BT_H = TAB_H + BT_PAD + btLines * BT_LH + btRows.length * 1.2 + 1.6;
+  const wrapRows = (rows: [string, string][]): { rows: [string, string[]][]; lines: number } => {
+    let n = 0;
+    const out = rows.map(([k, v]) => {
+      const lines = wrap(v, valW, 7.6);
+      n += Math.max(lines.length, 1);
+      return [k, lines] as [string, string[]];
+    });
+    return { rows: out, lines: n };
+  };
+  const billed = wrapRows(custRows);
+  const shipped = wrapRows(shipRows);
+  // Both panels share one height — the taller content decides it.
+  const BT_H = TAB_H + BT_PAD
+    + Math.max(billed.lines, shipped.lines) * BT_LH
+    + Math.max(billed.rows.length, shipped.rows.length) * 1.2 + 1.6;
 
   for (const px of [M, L2]) {
+    const panelRows = px === M ? billed.rows : shipped.rows;
     bx(px, y + TAB_H / 2, HW, BT_H - TAB_H / 2, BORDER, 1.2);
     rfill(px, y, TAB_W, TAB_H, NAVY, 1);
     icoPerson(px + 2.6, y + 1.55, 3.9);
     txt(px === M ? "BILLED TO" : "SHIPPED TO", px + 8.4, y + 4.8, { bold: true, size: 7.8, color: WHITE });
     let ry = y + TAB_H + BT_PAD + 1.4;
-    for (const [k, lines] of btRows) {
+    for (const [k, lines] of panelRows) {
       txt(k, px + 4, ry, { size: 7.6, color: INK });
       txt(":", px + 26, ry, { size: 7.6, color: INK });
-      // Retail sale: goods go to the same party that is billed.
       lines.forEach((lv, i) => txt(lv, px + 29.5, ry + i * BT_LH, { size: 7.6, color: INK }));
       ry += Math.max(lines.length, 1) * BT_LH + 1.2;
     }
@@ -827,10 +999,12 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
 
   // ══════════════════════════════════════════════════════════════════════════
   // 5. PAYMENT POSITION — status strip, then either a request or a receipt
+  //    (invoices only — a quotation OMITS every payment surface entirely)
   // ══════════════════════════════════════════════════════════════════════════
   // The strip states where the invoice stands; the panel below either asks for
   // the balance or records that nothing is owed. Both read the same position
   // object, so the QR can never ask for an amount the invoice does not print.
+  if (!isQuotation && position) {
   const STATUS_LABEL: Record<string, string> = {
     unpaid: "UNPAID", partially_paid: "PARTIAL", paid: "PAID", cancelled: "CANCELLED",
   };
@@ -999,6 +1173,26 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     termLines.forEach((t, i) => txt(t, M + 4.5, y + 9.6 + i * 3.4, { size: 6.8, color: INK }));
     y += termsH + 3;
   }
+  } // end invoice-only payment sections
+
+  // ── Quotation text panels: its OWN payment terms, notes, and T&C ───────────
+  // Drawn where the invoice would talk about money. Each panel appears only
+  // when it has content.
+  if (isQuotation && q) {
+    const panels: [string, string][] = [];
+    if (q.paymentTerms) panels.push(["PAYMENT TERMS", q.paymentTerms]);
+    if (q.notes) panels.push(["NOTES", q.notes]);
+    if (q.termsConditions) panels.push(["TERMS & CONDITIONS", q.termsConditions]);
+    for (const [title, body] of panels) {
+      const bodyLines = wrap(body, CW - 9, 6.8).slice(0, 24);
+      const panelH = 9 + bodyLines.length * 3.4;
+      if (y + panelH > BOT) { doc.addPage(); y = M; }
+      bx(M, y, CW, panelH, BORDER, 1.2);
+      txt(title, M + 4.5, y + 5.2, { bold: true, size: 7.2, color: NAVY });
+      bodyLines.forEach((t, i) => txt(t, M + 4.5, y + 9.6 + i * 3.4, { size: 6.8, color: INK }));
+      y += panelH + 3;
+    }
+  }
 
   // ══════════════════════════════════════════════════════════════════════════
   // 6. SIGNATURE + FOOTER — anchored to the page floor, per the reference
@@ -1049,8 +1243,47 @@ export async function renderInvoicePdf(data: InvoiceData): Promise<{ buffer: Buf
     txt(t, PW / 2, noteY, { size: 6.6, color: INK, align: "center" });
     noteY += 3.4;
   }
-  txt("This is a computer-generated invoice.", PW / 2, noteY, { size: 6.6, color: MUT, align: "center" });
+  if (isQuotation) {
+    // The validity line is part of the document's meaning, not decoration:
+    // it is what makes the offer time-bound.
+    if (q?.validTill) {
+      const vt = new Date(q.validTill).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+      txt(`This quotation is valid until ${vt}.`, PW / 2, noteY, { bold: true, size: 7, color: NAVY, align: "center" });
+      noteY += 3.6;
+    }
+    txt("This is a computer-generated quotation, not a tax invoice.", PW / 2, noteY, { size: 6.6, color: MUT, align: "center" });
+  } else {
+    txt("This is a computer-generated invoice.", PW / 2, noteY, { size: 6.6, color: MUT, align: "center" });
+  }
+
+  // ── Quotation watermark — light diagonal text on every page ────────────────
+  // Drawn last so it sits over the content. Opacity via GState when the jsPDF
+  // build supports it; otherwise skipped rather than stamping opaque text
+  // across the goods table.
+  if (isQuotation && q?.watermark) {
+    try {
+      const anyDoc = doc as any;
+      if (typeof anyDoc.GState === "function" && typeof anyDoc.setGState === "function") {
+        const pages = doc.getNumberOfPages();
+        for (let p = 1; p <= pages; p++) {
+          doc.setPage(p);
+          anyDoc.saveGraphicsState?.();
+          anyDoc.setGState(new anyDoc.GState({ opacity: 0.07 }));
+          doc.setFont(FONT, "bold");
+          doc.setFontSize(88);
+          doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+          doc.text("QUOTATION", PW / 2, PH / 2, { align: "center", angle: 40 });
+          anyDoc.restoreGraphicsState?.();
+        }
+      }
+    } catch { /* watermark is optional — never fail the document over it */ }
+  }
 
   const buffer = Buffer.from(doc.output("arraybuffer"));
-  return { buffer, fileName: invoiceFileName(sale.invoiceNumber, sale.id) };
+  return {
+    buffer,
+    fileName: isQuotation
+      ? quotationFileName(sale.invoiceNumber, sale.id)
+      : invoiceFileName(sale.invoiceNumber, sale.id),
+  };
 }

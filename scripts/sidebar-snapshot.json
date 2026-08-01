@@ -14,6 +14,10 @@
           "href": "/sales/pos"
         },
         {
+          "name": "Quotations",
+          "href": "/sales/quotations"
+        },
+        {
           "name": "Stock Transfer",
           "href": "/transfers"
         },
