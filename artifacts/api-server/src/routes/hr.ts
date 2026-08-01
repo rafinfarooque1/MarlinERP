@@ -20,7 +20,7 @@ import {
   runSalaryAccrual, dailyAccrualRate, reaccrueForAttendanceChange,
   withEmployeeAccrualLock, DEFAULT_WORKING_DAYS, type Querier,
 } from "../lib/salaryAccrual";
-import { loadAttendanceThresholds, monthPresentDays } from "../lib/attendanceFactor";
+import { loadAttendanceThresholds, monthPresentDays, PUNCHED_HOURS_JOIN } from "../lib/attendanceFactor";
 import {
   CreateHierarchyBody, UpdateHierarchyBody, DeleteHierarchyParams,
   CreateEmployeeBody, UpdateEmployeeBody, GetEmployeeParams, DeleteEmployeeParams,
@@ -114,6 +114,135 @@ function attendanceRowToApi(r: any) {
     checkOutLat: r.check_out_lat,
     checkOutLng: r.check_out_lng,
   };
+}
+
+/** Shape a raw `attendance_punches` row for the API. */
+function punchToApi(p: any) {
+  return {
+    id: p.id,
+    punchIn: p.punch_in ? new Date(p.punch_in).toISOString() : null,
+    punchOut: p.punch_out ? new Date(p.punch_out).toISOString() : null,
+    inLat: p.in_lat != null ? Number(p.in_lat) : null,
+    inLng: p.in_lng != null ? Number(p.in_lng) : null,
+    outLat: p.out_lat != null ? Number(p.out_lat) : null,
+    outLng: p.out_lng != null ? Number(p.out_lng) : null,
+  };
+}
+
+/** YYYY-MM-DD from a pg date value (comes back as a JS Date, not a string). */
+function pgDateStr(d: any): string {
+  return typeof d === "string" ? d.slice(0, 10) : new Date(d).toISOString().split("T")[0];
+}
+
+/**
+ * Register display settings, from the same general_settings JSON that holds
+ * the pay thresholds. These shape what the register SHOWS (late, overtime) —
+ * they deliberately play no part in what a day is WORTH (see attendanceFactor).
+ */
+interface AttendanceWorkSettings {
+  dayStartTime: string;      // "HH:MM" — expected start of the working day
+  lateGraceMinutes: number;  // arriving within this many minutes is not late
+  standardWorkHours: number; // hours beyond this count as overtime
+  timeZone: string;          // IANA zone the day start is expressed in
+}
+
+async function loadAttendanceWorkSettings(): Promise<AttendanceWorkSettings> {
+  const { rows: [row] } = await pool.query(`SELECT general_settings FROM company_settings LIMIT 1`);
+  const gs = (row?.general_settings as Record<string, any>) ?? {};
+  return {
+    dayStartTime: /^\d{2}:\d{2}$/.test(String(gs.dayStartTime ?? "")) ? String(gs.dayStartTime) : "09:00",
+    lateGraceMinutes: Number.isFinite(Number(gs.lateGraceMinutes)) ? Number(gs.lateGraceMinutes) : 10,
+    standardWorkHours: Number(gs.standardWorkHours ?? gs.fullDayHours ?? 9),
+    timeZone: String(gs.timeZone ?? "Asia/Kolkata"),
+  };
+}
+
+/**
+ * Today's date in the company's operational timezone. A check-in at 00:30 IST
+ * is a session of THAT local day; the UTC calendar (which is still on the
+ * previous date until 05:30 IST) must never decide which day a punch — and
+ * therefore a day's pay — lands on.
+ */
+async function businessTodayStr(): Promise<string> {
+  const ws = await loadAttendanceWorkSettings();
+  return new Date().toLocaleDateString("en-CA", { timeZone: ws.timeZone });
+}
+
+/** Minutes past local midnight of a timestamp, in the given IANA zone. */
+function minutesInZone(ts: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone, hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(ts);
+  const h = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
+  const m = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+  return (h % 24) * 60 + m;
+}
+
+/**
+ * The derived register fields for one attendance row + its punches.
+ *
+ * workingHours: total closed-punch hours when punches exist; otherwise the
+ * first-in→last-out span — the same preference dayFactor applies, so the
+ * register never shows hours that disagree with what the day is being paid on.
+ */
+function derivePunchFields(
+  att: { checkIn: string | null; checkOut: string | null },
+  punches: any[],
+  ws: AttendanceWorkSettings,
+) {
+  const api = punches.map(punchToApi);
+  const closed = api.filter((p) => p.punchIn && p.punchOut);
+  const open = api.find((p) => p.punchIn && !p.punchOut) ?? null;
+
+  let workingHours: number | null = null;
+  if (closed.length > 0) {
+    workingHours = round2(closed.reduce(
+      (s, p) => s + (new Date(p.punchOut!).getTime() - new Date(p.punchIn!).getTime()) / 3_600_000, 0));
+  } else if (att.checkIn && att.checkOut) {
+    workingHours = round2((new Date(att.checkOut).getTime() - new Date(att.checkIn).getTime()) / 3_600_000);
+  }
+
+  const firstInIso = api.length > 0 ? api[0].punchIn : att.checkIn;
+  let lateMinutes: number | null = null;
+  if (firstInIso) {
+    const [sh, sm] = ws.dayStartTime.split(":").map(Number);
+    const diff = minutesInZone(new Date(firstInIso), ws.timeZone) - (sh * 60 + sm) - ws.lateGraceMinutes;
+    lateMinutes = diff > 0 ? diff : 0;
+  }
+
+  const overtimeHours = workingHours != null && !open
+    ? Math.max(0, round2(workingHours - ws.standardWorkHours)) : null;
+
+  return {
+    punches: api,
+    workingHours,
+    lateMinutes,
+    overtimeHours,
+    openPunchIn: open?.punchIn ?? null,
+  };
+}
+
+/** All punches for a date window, keyed `${employeeId}|${YYYY-MM-DD}`, in punch order. */
+async function loadPunchMap(
+  q: Querier, from: string, to: string, employeeId?: number,
+): Promise<Map<string, any[]>> {
+  const params: unknown[] = [from, to];
+  let cond = "";
+  if (employeeId) { params.push(employeeId); cond = " AND employee_id = $3"; }
+  const { rows } = await q.query(
+    `SELECT * FROM attendance_punches
+      WHERE date >= $1 AND date <= $2${cond}
+      ORDER BY punch_in ASC`,
+    params,
+  );
+  const map = new Map<string, any[]>();
+  for (const p of rows) {
+    const key = `${p.employee_id}|${pgDateStr(p.date)}`;
+    const list = map.get(key) ?? [];
+    list.push(p);
+    map.set(key, list);
+  }
+  return map;
 }
 
 /** Map a `{ conflict: true }` refusal to 409; anything else is a real failure. */
@@ -497,9 +626,11 @@ async function postSalaryApproval(opts: {
     const mStr = String(pr.month).padStart(2, "0");
     const lastDay = new Date(Number(pr.year), Number(pr.month), 0).getDate();
     const { rows: attRows } = await client.query(
-      `SELECT check_in AS "checkIn", check_out AS "checkOut", status
-         FROM attendance
-        WHERE employee_id = $1 AND date >= $2 AND date <= $3`,
+      `SELECT a.check_in AS "checkIn", a.check_out AS "checkOut", a.status,
+              ap.punched_hours AS "punchedHours"
+         FROM attendance a
+         ${PUNCHED_HOURS_JOIN("a")}
+        WHERE a.employee_id = $1 AND a.date >= $2 AND a.date <= $3`,
       [employeeId, `${pr.year}-${mStr}-01`, `${pr.year}-${mStr}-${String(lastDay).padStart(2, "0")}`],
     );
     const liveThresholds = await loadAttendanceThresholds(pool);
@@ -1117,10 +1248,15 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
   const startDate = `${year}-${monthStr}-01`;
   const endDate = `${year}-${monthStr}-${String(daysInMonth).padStart(2, "0")}`;
 
-  // Fetch attendance for the whole month (raw SQL to get checkIn/checkOut timestamps)
+  // Fetch attendance for the whole month (raw SQL to get checkIn/checkOut
+  // timestamps, plus total punched hours — multi-punch days are priced on the
+  // total, not the first-in→last-out span).
   const { rows: monthAttendance } = await pool.query(
-    `SELECT employee_id AS "employeeId", date, check_in AS "checkIn", check_out AS "checkOut", status
-     FROM attendance WHERE date >= $1 AND date <= $2`,
+    `SELECT a.employee_id AS "employeeId", a.date, a.check_in AS "checkIn", a.check_out AS "checkOut", a.status,
+            ap.punched_hours AS "punchedHours"
+     FROM attendance a
+     ${PUNCHED_HOURS_JOIN("a")}
+     WHERE a.date >= $1 AND a.date <= $2`,
     [startDate, endDate],
   );
 
@@ -1668,21 +1804,37 @@ router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (re
     ].filter((c): c is NonNullable<typeof c> => c !== undefined);
     const rows = await db.select().from(attendanceTable).where(and(...rangeConds));
 
-    const result = rows.map((r) => ({
-      id: r.id,
-      employeeId: r.employeeId,
-      date: typeof r.date === 'string' ? r.date : (r.date as any).toISOString().split('T')[0],
-      checkIn: r.checkIn?.toISOString() ?? null,
-      checkOut: r.checkOut?.toISOString() ?? null,
-      checkInLat: r.checkInLat ? Number(r.checkInLat) : null,
-      checkInLng: r.checkInLng ? Number(r.checkInLng) : null,
-      checkOutLat: r.checkOutLat ? Number(r.checkOutLat) : null,
-      checkOutLng: r.checkOutLng ? Number(r.checkOutLng) : null,
-      status: r.status ?? 'absent',
-      hoursWorked: r.checkIn && r.checkOut
-        ? round2((r.checkOut.getTime() - r.checkIn.getTime()) / 3_600_000)
-        : null,
-    }));
+    const ws = await loadAttendanceWorkSettings();
+    const punchMap = await loadPunchMap(
+      pool,
+      startDate || '0001-01-01', endDate || '9999-12-31',
+      scopeEmp && scopeEmp.branchType !== 'headoffice' ? scopeEmp.id : undefined,
+    );
+
+    const result = rows.map((r) => {
+      const date = typeof r.date === 'string' ? r.date : (r.date as any).toISOString().split('T')[0];
+      const checkIn = r.checkIn?.toISOString() ?? null;
+      const checkOut = r.checkOut?.toISOString() ?? null;
+      const derived = derivePunchFields(
+        { checkIn, checkOut }, punchMap.get(`${r.employeeId}|${date}`) ?? [], ws,
+      );
+      return {
+        id: r.id,
+        employeeId: r.employeeId,
+        date,
+        checkIn,
+        checkOut,
+        checkInLat: r.checkInLat ? Number(r.checkInLat) : null,
+        checkInLng: r.checkInLng ? Number(r.checkInLng) : null,
+        checkOutLat: r.checkOutLat ? Number(r.checkOutLat) : null,
+        checkOutLng: r.checkOutLng ? Number(r.checkOutLng) : null,
+        status: r.status ?? 'absent',
+        // hoursWorked keeps its historical meaning (multi-punch aware via
+        // derived.workingHours — the same figure the day is paid on).
+        hoursWorked: derived.workingHours,
+        ...derived,
+      };
+    });
 
     const paging = parsePaging(req.query as Record<string, unknown>);
     setPagingHeaders(res, result.length, paging);
@@ -1692,7 +1844,7 @@ router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (re
 
   // ── Single-date mode (legacy / manager view) ─────────────────────────────
   const qp = ListAttendanceQueryParams.safeParse(req.query);
-  const targetDate = (qp.success && qp.data.date) ? qp.data.date : new Date().toISOString().split("T")[0];
+  const targetDate = (qp.success && qp.data.date) ? qp.data.date : await businessTodayStr();
   const filterEmployeeId = qp.success && qp.data.employeeId ? Number(qp.data.employeeId) : null;
 
   // All active employees (or just one if filtered)
@@ -1709,25 +1861,38 @@ router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (re
     .where(eq(attendanceTable.date, targetDate));
   const attMap = new Map(rows.map((r) => [r.employeeId, r]));
 
+  const wsDay = await loadAttendanceWorkSettings();
+  const dayPunchMap = await loadPunchMap(pool, targetDate, targetDate);
+
+  const emptyDerived = {
+    punches: [] as any[], workingHours: null as number | null,
+    lateMinutes: null as number | null, overtimeHours: null as number | null,
+    openPunchIn: null as string | null,
+  };
+
   // Merge: every active employee gets a row (synthetic absent if no record)
   const result = allEmployees.map((emp) => {
     const r = attMap.get(emp.id);
     if (r) {
+      const checkIn = r.checkIn?.toISOString() ?? null;
+      const checkOut = r.checkOut?.toISOString() ?? null;
+      const derived = derivePunchFields(
+        { checkIn, checkOut }, dayPunchMap.get(`${emp.id}|${targetDate}`) ?? [], wsDay,
+      );
       return {
         id: r.id,
         employeeId: emp.id,
         employeeName: emp.name,
         date: r.date,
-        checkIn: r.checkIn?.toISOString() ?? null,
-        checkOut: r.checkOut?.toISOString() ?? null,
+        checkIn,
+        checkOut,
         checkInLat: r.checkInLat ? Number(r.checkInLat) : null,
         checkInLng: r.checkInLng ? Number(r.checkInLng) : null,
         checkOutLat: r.checkOutLat ? Number(r.checkOutLat) : null,
         checkOutLng: r.checkOutLng ? Number(r.checkOutLng) : null,
         status: r.status,
-        hoursWorked: r.checkIn && r.checkOut
-          ? round2((r.checkOut.getTime() - r.checkIn.getTime()) / 3_600_000)
-          : null,
+        hoursWorked: derived.workingHours,
+        ...derived,
       };
     }
     // No record yet — synthetic absent row
@@ -1744,6 +1909,7 @@ router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (re
       checkOutLng: null,
       status: "absent",
       hoursWorked: null,
+      ...emptyDerived,
     };
   });
 
@@ -1758,6 +1924,21 @@ router.get("/hr/attendance", requireModuleView("page:/hr/attendance"), async (re
   res.json(applyPaging(result, paging));
 });
 
+// What the register displays against: pay thresholds plus the display-only
+// day-start / grace / overtime settings. Read-only; the values are edited
+// through company settings' general_settings like the thresholds always were.
+router.get("/hr/attendance/config", requireModuleView("page:/hr/attendance"), async (_req, res): Promise<void> => {
+  const [thresholds, ws] = await Promise.all([
+    loadAttendanceThresholds(pool),
+    loadAttendanceWorkSettings(),
+  ]);
+  // `today` = the company's CURRENT operational date. Clients must key their
+  // "today" views on this (or on `timeZone`) — a device outside the company
+  // timezone that uses its own calendar asks for the wrong register day and
+  // can't see the open session the server is holding for it.
+  res.json({ ...thresholds, ...ws, today: new Date().toLocaleDateString("en-CA", { timeZone: ws.timeZone }) });
+});
+
 router.post("/hr/attendance/check-in", requireModuleAction("page:/hr/attendance", "add"), async (req, res): Promise<void> => {
   const parsed = CheckInBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
@@ -1767,21 +1948,68 @@ router.post("/hr/attendance/check-in", requireModuleAction("page:/hr/attendance"
     res.status(403).json({ error: "You can only check in for yourself." });
     return;
   }
-  const today = new Date().toISOString().split("T")[0];
+  const today = await businessTodayStr();
   // Checking in writes the same figure approval reads, so it queues on the same
   // per-employee lock — see withAttendanceWrite.
   let row: any;
+  let dayPunches: any[] = [];
   try {
     row = await withAttendanceWrite(parsed.data.employeeId, [today], async (q) => {
+      // One open session at a time. A second check-in while one is open is a
+      // mistake (a missed check-out), not a new session — refuse it so the
+      // hours can never silently overlap.
+      const { rows: [open] } = await q.query(
+        `SELECT 1 FROM attendance_punches
+          WHERE employee_id = $1 AND date = $2 AND punch_out IS NULL LIMIT 1`,
+        [parsed.data.employeeId, today],
+      );
+      if (open) {
+        throw Object.assign(new Error("Already checked in — check out before checking in again."), { conflict: true });
+      }
+
+      // A day recorded before punches existed has its hours only on the
+      // attendance row. Re-checking in reopens the day (check_out goes back to
+      // NULL below), so that earlier session must first be preserved as a
+      // closed punch or its hours would vanish from the total.
+      await q.query(
+        `INSERT INTO attendance_punches (employee_id, date, punch_in, punch_out, in_lat, in_lng, out_lat, out_lng)
+         SELECT a.employee_id, a.date, a.check_in, a.check_out,
+                a.check_in_lat, a.check_in_lng, a.check_out_lat, a.check_out_lng
+           FROM attendance a
+          WHERE a.employee_id = $1 AND a.date = $2
+            AND a.check_in IS NOT NULL AND a.check_out IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM attendance_punches p
+                             WHERE p.employee_id = $1 AND p.date = $2)`,
+        [parsed.data.employeeId, today],
+      );
+
+      await q.query(
+        `INSERT INTO attendance_punches (employee_id, date, punch_in, in_lat, in_lng)
+         VALUES ($1, $2, now(), $3, $4)`,
+        [parsed.data.employeeId, today, String(parsed.data.lat), String(parsed.data.lng)],
+      );
+
+      // The attendance row keeps first-in / last-out: the first check-in of the
+      // day owns check_in, and re-checking in reopens the day, so check_out is
+      // cleared until the next check-out writes the new last-out. An open day
+      // is provisionally whole (see dayFactor), exactly as before.
       const { rows: [r] } = await q.query(
         `INSERT INTO attendance (employee_id, date, status, check_in, check_in_lat, check_in_lng)
          VALUES ($1, $2, 'present', now(), $3, $4)
          ON CONFLICT (employee_id, date) DO UPDATE
-            SET check_in = now(), check_in_lat = EXCLUDED.check_in_lat,
-                check_in_lng = EXCLUDED.check_in_lng
+            SET check_in     = COALESCE(attendance.check_in, EXCLUDED.check_in),
+                check_in_lat = COALESCE(attendance.check_in_lat, EXCLUDED.check_in_lat),
+                check_in_lng = COALESCE(attendance.check_in_lng, EXCLUDED.check_in_lng),
+                check_out = NULL, check_out_lat = NULL, check_out_lng = NULL,
+                status = CASE WHEN attendance.status = 'leave' THEN attendance.status ELSE 'present' END
          RETURNING *`,
         [parsed.data.employeeId, today, String(parsed.data.lat), String(parsed.data.lng)],
       );
+      const { rows: ps } = await q.query(
+        `SELECT * FROM attendance_punches WHERE employee_id = $1 AND date = $2 ORDER BY punch_in ASC`,
+        [parsed.data.employeeId, today],
+      );
+      dayPunches = ps;
       return r;
     });
   } catch (e: any) {
@@ -1799,6 +2027,7 @@ router.post("/hr/attendance/check-in", requireModuleAction("page:/hr/attendance"
     checkInLat: row.checkInLat ? Number(row.checkInLat) : null,
     checkInLng: row.checkInLng ? Number(row.checkInLng) : null,
     checkOutLat: null, checkOutLng: null,
+    punches: dayPunches.map(punchToApi),
   });
 });
 
@@ -1811,10 +2040,38 @@ router.post("/hr/attendance/check-out", requireModuleAction("page:/hr/attendance
     res.status(403).json({ error: "You can only check out for yourself." });
     return;
   }
-  const today = new Date().toISOString().split("T")[0];
+  const today = await businessTodayStr();
   let row: any;
+  let dayPunchesOut: any[] = [];
   try {
     row = await withAttendanceWrite(parsed.data.employeeId, [today], async (q) => {
+      // Close the open session if there is one. A day recorded before punches
+      // existed has no punch rows at all — that legacy day keeps its old
+      // behaviour exactly (the attendance row's check_out is simply updated).
+      const { rows: [open] } = await q.query(
+        `SELECT id FROM attendance_punches
+          WHERE employee_id = $1 AND date = $2 AND punch_out IS NULL
+          ORDER BY punch_in DESC LIMIT 1`,
+        [parsed.data.employeeId, today],
+      );
+      if (open) {
+        await q.query(
+          `UPDATE attendance_punches SET punch_out = now(), out_lat = $2, out_lng = $3 WHERE id = $1`,
+          [open.id, String(parsed.data.lat), String(parsed.data.lng)],
+        );
+      } else {
+        const { rows: [hasPunches] } = await q.query(
+          `SELECT 1 FROM attendance_punches WHERE employee_id = $1 AND date = $2 LIMIT 1`,
+          [parsed.data.employeeId, today],
+        );
+        if (hasPunches) {
+          // Every session today is already closed — checking out again without
+          // checking in first would have nothing to price.
+          throw Object.assign(new Error(
+            "Already checked out — check in again to start a new session.",
+          ), { conflict: true });
+        }
+      }
       const { rows: [r] } = await q.query(
         `UPDATE attendance
             SET check_out = now(), check_out_lat = $3, check_out_lng = $4
@@ -1823,6 +2080,11 @@ router.post("/hr/attendance/check-out", requireModuleAction("page:/hr/attendance
         [parsed.data.employeeId, today, String(parsed.data.lat), String(parsed.data.lng)],
       );
       if (!r) throw Object.assign(new Error("No check-in found for today"), { notFound: true });
+      const { rows: ps } = await q.query(
+        `SELECT * FROM attendance_punches WHERE employee_id = $1 AND date = $2 ORDER BY punch_in ASC`,
+        [parsed.data.employeeId, today],
+      );
+      dayPunchesOut = ps;
       return r;
     });
   } catch (e: any) {
@@ -1842,6 +2104,7 @@ router.post("/hr/attendance/check-out", requireModuleAction("page:/hr/attendance
     checkInLng: row.checkInLng ? Number(row.checkInLng) : null,
     checkOutLat: row.checkOutLat ? Number(row.checkOutLat) : null,
     checkOutLng: row.checkOutLng ? Number(row.checkOutLng) : null,
+    punches: dayPunchesOut.map(punchToApi),
   });
 });
 
@@ -2037,6 +2300,26 @@ router.put("/hr/attendance", requireModuleAction("page:/hr/attendance", "edit"),
          RETURNING id, employee_id, date, status, check_in, check_out`,
         [employeeId, date, status, checkIn, checkOut, hasCheckIn, hasCheckOut],
       );
+      // A correction that sets the day's times explicitly is the new truth for
+      // its hours, so the punch detail must follow: multi-punch days are priced
+      // on total punched hours, and leaving old punches behind would silently
+      // outvote the times the manager just set. The corrected day becomes one
+      // session — or none, when the times were cleared. Status-only corrections
+      // leave punches alone (recorded hours keep winning over the label, which
+      // is this endpoint's long-standing contract).
+      if (hasCheckIn || hasCheckOut) {
+        await q.query(
+          `DELETE FROM attendance_punches WHERE employee_id = $1 AND date = $2`,
+          [employeeId, date],
+        );
+        if (r?.check_in && r?.check_out) {
+          await q.query(
+            `INSERT INTO attendance_punches (employee_id, date, punch_in, punch_out)
+             VALUES ($1, $2, $3, $4)`,
+            [employeeId, date, r.check_in, r.check_out],
+          );
+        }
+      }
       return r;
     });
   } catch (e: any) {

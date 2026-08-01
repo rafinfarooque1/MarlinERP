@@ -2492,6 +2492,29 @@ await pool.query(`
 
   ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS general_settings JSONB;
 `);
+
+// ── Multi-punch attendance ────────────────────────────────────────────────────
+// A punch pair is one continuous work session; a day can hold several. The
+// `attendance` row keeps its first-in/last-out and status exactly as before —
+// payroll and the daily salary accrual read it unchanged — while the punches
+// carry the detail. Days with punch rows are priced on TOTAL punched hours
+// (see attendanceFactor.punchedHours); days without any behave exactly as they
+// always have, which is what keeps pre-punch history byte-identical.
+await pool.query(`
+  CREATE TABLE IF NOT EXISTS attendance_punches (
+    id          SERIAL PRIMARY KEY,
+    employee_id INTEGER NOT NULL REFERENCES employees(id),
+    date        DATE NOT NULL,
+    punch_in    TIMESTAMPTZ NOT NULL,
+    punch_out   TIMESTAMPTZ,
+    in_lat      NUMERIC(10,7),
+    in_lng      NUMERIC(10,7),
+    out_lat     NUMERIC(10,7),
+    out_lng     NUMERIC(10,7),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_att_punches_emp_date ON attendance_punches (employee_id, date);
+`);
 // One-time: back-fill status for records created before this column existed
 {
   const { rows: [payStatusDone] } = await pool.query(

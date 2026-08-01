@@ -37,7 +37,33 @@ export interface AttendanceDay {
   status?: string | null;
   checkIn?: Date | string | null;
   checkOut?: Date | string | null;
+  /**
+   * Total hours across the day's CLOSED punch pairs, when the day has punch
+   * rows at all. A day can now hold several work sessions, and first-in →
+   * last-out overstates it (the span includes the breaks between sessions), so
+   * when this figure exists it replaces the span. Null/undefined — the day has
+   * no punch rows — falls back to the span, which is what keeps every
+   * pre-punch attendance row worth exactly what it always was.
+   */
+  punchedHours?: number | string | null;
 }
+
+/**
+ * SQL fragment: total closed-punch hours per (employee, date). Every reader of
+ * attendance that feeds `dayFactor` must LEFT JOIN this on its attendance
+ * alias, or payroll, the accrual and the register would disagree about what a
+ * multi-punch day is worth. Usage:
+ *   `... FROM attendance a ${PUNCHED_HOURS_JOIN("a")} ...`
+ * then select `ap.punched_hours AS "punchedHours"`.
+ */
+export const PUNCHED_HOURS_JOIN = (attAlias: string) => `
+  LEFT JOIN (
+    SELECT employee_id, date,
+           SUM(EXTRACT(EPOCH FROM (punch_out - punch_in)) / 3600.0) AS punched_hours
+      FROM attendance_punches
+     WHERE punch_out IS NOT NULL
+     GROUP BY employee_id, date
+  ) ap ON ap.employee_id = ${attAlias}.employee_id AND ap.date = ${attAlias}.date`;
 
 export async function loadAttendanceThresholds(pool: Pool): Promise<AttendanceThresholds> {
   const { rows: [row] } = await pool.query(
@@ -66,7 +92,11 @@ export function dayFactor(
   // Approved leave is paid, so it earns a full day without a check-in.
   if (a.status === "leave") return 1;
   if (a.checkIn && a.checkOut) {
-    const hrs = (new Date(a.checkOut).getTime() - new Date(a.checkIn).getTime()) / 3_600_000;
+    // Total punched hours when the day has punch rows (breaks excluded);
+    // first-in → last-out span otherwise. See AttendanceDay.punchedHours.
+    const hrs = a.punchedHours != null
+      ? Number(a.punchedHours)
+      : (new Date(a.checkOut).getTime() - new Date(a.checkIn).getTime()) / 3_600_000;
     if (hrs >= t.fullDayHours) return 1;
     if (hrs >= t.halfDayHours) return 0.5;
     return 0; // under the half-day threshold — loss of pay

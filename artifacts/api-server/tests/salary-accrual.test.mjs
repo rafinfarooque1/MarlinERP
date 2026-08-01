@@ -35,6 +35,11 @@ const q = async (text, params = []) => (await sql.query(text, params)).rows;
 
 const Y = 2026, M = 7;
 const D = (d) => `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+// Approval and payment vouchers are dated the day the test RUNS, not inside
+// the fixture month, so every ledger read must extend past today or the suite
+// starts failing the month after it was written (it did, on 1 Aug).
+const TODAY = new Date().toLocaleDateString("en-CA");
+const END = TODAY > D(31) ? TODAY : D(31);
 
 async function accrualTotal(empId) {
   const [r] = await q(
@@ -190,7 +195,7 @@ async function main() {
     `dashboard ₹${dashSalary} vs ledger ₹${ledgerSalaryPayable}; allPayables=₹${bi?.payables?.allPayables}, suppliers=₹${bi?.payables?.total}`);
 
   // ── M. P&L salary expense ───────────────────────────────────────────────
-  const fs = await api("GET", `/accounts/financial-statements?fromDate=${D(1)}&toDate=${D(31)}`);
+  const fs = await api("GET", `/accounts/financial-statements?fromDate=${D(1)}&toDate=${END}`);
   const pnlSalary = findLine(fs?.profitAndLoss, `Salary - ${emp.name}`);
   const empExpense = await expenseFor(EID);
   check("M", "P&L Salary Expense agrees with the posted salary expense",
@@ -198,7 +203,7 @@ async function main() {
     `P&L line ₹${pnlSalary} vs ledger ₹${empExpense}`);
 
   // ── N. Trial balance ────────────────────────────────────────────────────
-  const tb = await api("GET", `/accounts/trial-balance?toDate=${D(31)}`);
+  const tb = await api("GET", `/accounts/trial-balance?toDate=${END}`);
   const td = Number(tb?.totals?.debit ?? tb?.totalDebit ?? 0);
   const tc = Number(tb?.totals?.credit ?? tb?.totalCredit ?? 0);
   check("N", "Trial Balance still balances", near(td, tc, 0.5),
@@ -376,11 +381,15 @@ async function raceTest(hierarchyId) {
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
 
 async function payableFor(empId) {
+  const net = await ledgerNet(`SAL-PAY-${empId}`, -1);
+  // The daily engine also accrues for TODAY's month (untracked = full
+  // attendance), so a fixture that lives past its own month carries an extra
+  // day or two of payable that the July-shaped expectations never see. Net
+  // out everything outside the fixture month.
   const [r] = await q(
-    `SELECT COALESCE(SUM(credit) - SUM(debit), 0) AS bal FROM (
-       SELECT 0::numeric AS debit, 0::numeric AS credit WHERE FALSE
-     ) x`);
-  return await ledgerNet(`SAL-PAY-${empId}`, -1);
+    `SELECT COALESCE(SUM(amount),0) AS t FROM salary_accruals
+      WHERE employee_id=$1 AND NOT (year=$2 AND month=$3)`, [empId, Y, M]);
+  return Math.round((net - Number(r.t)) * 100) / 100;
 }
 async function expenseFor(empId) { return await ledgerNet(`SAL-EMP-${empId}`, 1); }
 
@@ -390,14 +399,14 @@ async function ledgerNet(code, sign) {
     .catch(() => null);
   if (r && typeof r.net === "number") return Math.round(r.net * sign * 100) / 100;
   // No probe endpoint — fall back to the trial balance, which is the same stream.
-  const tb = await api("GET", `/accounts/trial-balance?toDate=${D(31)}`);
+  const tb = await api("GET", `/accounts/trial-balance?toDate=${END}`);
   const rows = tb?.rows ?? tb?.ledgers ?? [];
   const hit = rows.find((x) => x.code === code);
   if (!hit) return 0;
   return Math.round((Number(hit.debit ?? 0) - Number(hit.credit ?? 0)) * sign * 100) / 100;
 }
 async function totalSalaryPayable() {
-  const tb = await api("GET", `/accounts/trial-balance?toDate=${D(31)}`);
+  const tb = await api("GET", `/accounts/trial-balance?toDate=${END}`);
   const rows = tb?.rows ?? tb?.ledgers ?? [];
   let net = 0;
   for (const r of rows) if (/^SAL-PAY-\d+$/.test(r.code ?? "")) net += Number(r.credit ?? 0) - Number(r.debit ?? 0);

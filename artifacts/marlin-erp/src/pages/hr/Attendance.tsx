@@ -1,9 +1,10 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   useListAttendance, useCheckIn, useCheckOut, getListAttendanceQueryKey,
   useListEmployees, useListWarehouses, useListOutlets,
   useListLeaves, useApplyLeave, useApproveLeave, getListLeavesQueryKey,
   useGetMe, useCorrectAttendance, useAttendanceRange,
+  useAttendanceMonth, useAttendanceConfig, type AttendancePunch,
 } from '@workspace/api-client-react';
 import { useDateRange, RangeBar } from '@/pages/reports/shared';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -31,9 +32,14 @@ import * as z from 'zod';
 function getLocation(): Promise<{ lat: number; lng: number } | null> {
   return new Promise((resolve) => {
     if (!navigator.geolocation) { resolve(null); return; }
+    // getCurrentPosition's own `timeout` only starts once permission is
+    // granted; a permission prompt left unanswered calls NEITHER callback, so
+    // without this hard deadline the check-in button stays stuck on its
+    // spinner forever.
+    const deadline = setTimeout(() => resolve(null), 10_000);
     navigator.geolocation.getCurrentPosition(
-      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-      () => resolve(null),
+      (pos) => { clearTimeout(deadline); resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }); },
+      () => { clearTimeout(deadline); resolve(null); },
       { timeout: 8000, maximumAge: 0 },
     );
   });
@@ -64,6 +70,62 @@ function leaveStatusColor(s: string) {
   return 'bg-amber-500/10 text-amber-500 border-amber-500/20';
 }
 
+const fmtTime = (ts: string | null | undefined) =>
+  ts ? new Date(ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '—';
+
+/** The day's punch sessions, one per line. Open session shows a live "now". */
+function SessionsCell({ punches }: { punches?: AttendancePunch[] }) {
+  if (!punches?.length) return <span className="text-muted-foreground/40 text-xs">—</span>;
+  return (
+    <div className="flex flex-col gap-0.5">
+      {punches.map((p) => (
+        <span key={p.id} className="text-xs font-mono whitespace-nowrap">
+          {fmtTime(p.punchIn)} → {p.punchOut ? fmtTime(p.punchOut) : <span className="text-emerald-600 font-semibold">now</span>}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** Live working duration while a session is open — closed hours + the running session. */
+function LiveDuration({ openPunchIn, closedHours }: { openPunchIn: string; closedHours: number }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((x) => x + 1), 30_000);
+    return () => clearInterval(t);
+  }, []);
+  const hrs = closedHours + Math.max(0, (Date.now() - new Date(openPunchIn).getTime()) / 3_600_000);
+  const h = Math.floor(hrs);
+  const m = Math.floor((hrs - h) * 60);
+  return (
+    <span className="font-mono text-sm text-emerald-600 font-semibold" title="Currently checked in">
+      {h}h {String(m).padStart(2, '0')}m
+      <span className="ml-1 inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse align-middle" />
+    </span>
+  );
+}
+
+/** Hours cell: live figure while checked in, otherwise the settled workingHours. */
+function HoursCell({ row }: { row: any }) {
+  if (row.openPunchIn) {
+    const closed = (row.punches ?? []).reduce((s: number, p: any) =>
+      p.punchOut ? s + (new Date(p.punchOut).getTime() - new Date(p.punchIn).getTime()) / 3_600_000 : s, 0);
+    return <LiveDuration openPunchIn={row.openPunchIn} closedHours={closed} />;
+  }
+  return <span className="font-mono text-sm">{row.hoursWorked != null ? `${Number(row.hoursWorked).toFixed(1)}h` : '—'}</span>;
+}
+
+function LateBadge({ minutes }: { minutes: number | null | undefined }) {
+  if (minutes == null) return <span className="text-muted-foreground/40 text-xs">—</span>;
+  if (minutes <= 0) return <span className="text-xs text-emerald-600">On time</span>;
+  const h = Math.floor(minutes / 60), m = minutes % 60;
+  return (
+    <span className="text-xs text-amber-600 font-medium">
+      {h > 0 ? `${h}h ${m}m` : `${m}m`} late
+    </span>
+  );
+}
+
 // ─── Leave form schema ────────────────────────────────────────────────────────
 
 const leaveSchema = z.object({
@@ -81,12 +143,20 @@ export default function Attendance() {
   const { data: user } = useGetMe();
   const isAdmin = (user as any)?.branchType === 'headoffice';
 
-  const today = new Date().toISOString().split('T')[0];
+  // "Today" is the COMPANY's operational day (IST by default), not the
+  // browser's calendar: it gates the In/Out buttons, and the server files
+  // punches under the company day, so any other clock disagrees with it
+  // around midnight.
+  const { data: attCfg } = useAttendanceConfig();
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: attCfg?.timeZone ?? 'Asia/Kolkata' });
   const [date, setDate] = useState(today);
   // 'day' = the operational check-in/out register; 'range' = a read-only
   // period view over the same records (corrections/check-ins stay in day mode,
-  // they act on ONE date).
-  const [viewMode, setViewMode] = useState<'day' | 'range'>('day');
+  // they act on ONE date); 'calendar' = a month-at-a-glance company view.
+  const [viewMode, setViewMode] = useState<'day' | 'range' | 'calendar'>('day');
+  const now = new Date();
+  const [calYear, setCalYear] = useState(now.getFullYear());
+  const [calMonth, setCalMonth] = useState(now.getMonth() + 1); // 1-based
   const range = useDateRange('month');
   const [search, setSearch] = useState('');
   const [locLoading, setLocLoading] = useState<number | null>(null);
@@ -105,6 +175,9 @@ export default function Attendance() {
   // skips the fetch when both bounds are empty, e.g. the "All time" preset).
   const { data: rangeRows = [], isLoading: rangeLoading } = useAttendanceRange(
     viewMode === 'range' ? { from: range.from || undefined, to: range.to || undefined } : {},
+  );
+  const { data: monthRows = [], isLoading: calLoading } = useAttendanceMonth(
+    calYear, calMonth, { enabled: viewMode === 'calendar' },
   );
   const { data: employees = [] } = useListEmployees();
   const { data: warehouses = [] } = useListWarehouses();
@@ -198,8 +271,11 @@ export default function Attendance() {
 
   const submitCorrection = () => {
     if (!correcting) return;
+    // Times are cleared explicitly so the chosen status alone decides what the
+    // day earns — the server's contract is that recorded hours (including punch
+    // sessions) outvote the status label unless they are cleared with it.
     correctMutation.mutate(
-      { employeeId: correcting.employeeId, date, status: correctStatus as any },
+      { employeeId: correcting.employeeId, date, status: correctStatus as any, checkIn: null, checkOut: null },
       {
         onSuccess: () => {
           toast.success(`Attendance corrected — salary for ${date} has been re-calculated`);
@@ -227,6 +303,38 @@ export default function Attendance() {
     for (const e of employees as any[]) m.set(e.id, e.name);
     return m;
   }, [employees]);
+
+  // Day-register summary cards, over the same filtered rows the table shows.
+  const daySummary = useMemo(() => {
+    const s = { present: 0, half_day: 0, leave: 0, absent: 0, late: 0, otHours: 0, checkedIn: 0 };
+    for (const a of filtered as any[]) {
+      if (a.status === 'present') s.present++;
+      else if (a.status === 'half_day') s.half_day++;
+      else if (a.status === 'leave') s.leave++;
+      else s.absent++;
+      if ((a.lateMinutes ?? 0) > 0) s.late++;
+      if (a.overtimeHours) s.otHours += Number(a.overtimeHours);
+      if (a.openPunchIn) s.checkedIn++;
+    }
+    return s;
+  }, [filtered]);
+
+  // Calendar: per-day status counts for the month; absent = active employees
+  // with no row that day (same synthesis rule as the day register).
+  const calDays = useMemo(() => {
+    const byDate = new Map<string, { present: number; half_day: number; leave: number; recorded: number }>();
+    for (const r of monthRows as any[]) {
+      const d = String(r.date).slice(0, 10);
+      const c = byDate.get(d) ?? { present: 0, half_day: 0, leave: 0, recorded: 0 };
+      c.recorded++;
+      if (r.status === 'present') c.present++;
+      else if (r.status === 'half_day') c.half_day++;
+      else if (r.status === 'leave') c.leave++;
+      byDate.set(d, c);
+    }
+    return byDate;
+  }, [monthRows]);
+  const activeEmployeeCount = (employees as any[]).filter((e) => e.isActive !== false).length;
 
   // Same search/branch filters, applied to the period view; newest day first.
   const filteredRange = (rangeRows as any[])
@@ -333,7 +441,8 @@ export default function Attendance() {
             </Select>
           </div>
           <p className="text-xs text-muted-foreground bg-muted/40 border border-border rounded-lg p-3">
-            Saving re-calculates this employee's salary for the month straight away.
+            Saving replaces the day's recorded check-in/out sessions with this status and
+            re-calculates this employee's salary for the month straight away.
             A month whose payroll is already approved or paid cannot be changed here —
             post a journal adjustment instead.
           </p>
@@ -407,11 +516,16 @@ export default function Attendance() {
                 viewMode === 'day'
                   ? downloadCSV('attendance.csv', filtered.map((a: any) => ({
                       Employee: a.employeeName, Date: a.date,
-                      CheckIn: a.checkIn ? new Date(a.checkIn).toLocaleTimeString('en-IN') : '—',
+                      Sessions: (a.punches ?? []).map((p: any) =>
+                        `${p.punchIn ? new Date(p.punchIn).toLocaleTimeString('en-IN') : ''}-${p.punchOut ? new Date(p.punchOut).toLocaleTimeString('en-IN') : 'open'}`).join(' | ') || '—',
+                      FirstIn: a.checkIn ? new Date(a.checkIn).toLocaleTimeString('en-IN') : '—',
                       CheckInLat: a.checkInLat ?? '—', CheckInLng: a.checkInLng ?? '—',
-                      CheckOut: a.checkOut ? new Date(a.checkOut).toLocaleTimeString('en-IN') : '—',
+                      LastOut: a.checkOut ? new Date(a.checkOut).toLocaleTimeString('en-IN') : '—',
                       CheckOutLat: a.checkOutLat ?? '—', CheckOutLng: a.checkOutLng ?? '—',
-                      Hours: a.hoursWorked ? Number(a.hoursWorked).toFixed(1) : '—',
+                      Hours: a.hoursWorked != null ? Number(a.hoursWorked).toFixed(2) : '—',
+                      LateMinutes: a.lateMinutes ?? '—',
+                      OvertimeHours: a.overtimeHours ?? '—',
+                      Status: a.status,
                     })))
                   : downloadCSV(`attendance_${range.from || 'start'}_${range.to || 'today'}.csv`, filteredRange.map((a: any) => ({
                       Date: a.date, Employee: empNameMap.get(a.employeeId) ?? a.employeeId,
@@ -426,6 +540,8 @@ export default function Attendance() {
               <div className="flex rounded-md border border-border overflow-hidden">
                 <Button variant={viewMode === 'day' ? 'secondary' : 'ghost'} size="sm" className="h-9 rounded-none text-xs px-3"
                   onClick={() => setViewMode('day')}>Day</Button>
+                <Button variant={viewMode === 'calendar' ? 'secondary' : 'ghost'} size="sm" className="h-9 rounded-none text-xs px-3"
+                  onClick={() => setViewMode('calendar')}>Calendar</Button>
                 <Button variant={viewMode === 'range' ? 'secondary' : 'ghost'} size="sm" className="h-9 rounded-none text-xs px-3"
                   onClick={() => setViewMode('range')}>Range</Button>
               </div>
@@ -436,6 +552,25 @@ export default function Attendance() {
           </div>
 
           {viewMode === 'range' && <RangeBar range={range} />}
+
+          {/* Day summary cards */}
+          {viewMode === 'day' && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              {[
+                { label: 'Present', value: daySummary.present, cls: 'text-emerald-600' },
+                { label: 'Half Day', value: daySummary.half_day, cls: 'text-amber-600' },
+                { label: 'On Leave', value: daySummary.leave, cls: 'text-blue-600' },
+                { label: 'Absent', value: daySummary.absent, cls: 'text-red-600' },
+                { label: 'Late Arrivals', value: daySummary.late, cls: 'text-amber-600' },
+                { label: 'Overtime', value: `${daySummary.otHours.toFixed(1)}h`, cls: 'text-primary' },
+              ].map((c) => (
+                <div key={c.label} className="bg-card border border-border rounded-xl px-4 py-3">
+                  <p className="text-xs text-muted-foreground">{c.label}</p>
+                  <p className={`text-xl font-bold mt-0.5 ${c.cls}`}>{c.value}</p>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Branch filter */}
           <div className="flex flex-wrap gap-2 items-center">
@@ -468,9 +603,75 @@ export default function Attendance() {
             )}
           </div>
 
+          {/* Calendar — month at a glance; click a day to open its register */}
+          {viewMode === 'calendar' && (
+            <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+              <div className="p-4 border-b border-border bg-muted/20 flex items-center justify-between">
+                <Button variant="ghost" size="sm" onClick={() => {
+                  if (calMonth === 1) { setCalMonth(12); setCalYear(y => y - 1); } else setCalMonth(m => m - 1);
+                }}>←</Button>
+                <span className="font-semibold">
+                  {new Date(calYear, calMonth - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
+                </span>
+                <Button variant="ghost" size="sm" onClick={() => {
+                  if (calMonth === 12) { setCalMonth(1); setCalYear(y => y + 1); } else setCalMonth(m => m + 1);
+                }}>→</Button>
+              </div>
+              {calLoading ? (
+                <div className="p-8 text-center text-muted-foreground text-sm">Loading…</div>
+              ) : (
+                <div className="p-3">
+                  <div className="grid grid-cols-7 mb-1">
+                    {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => (
+                      <div key={d} className="text-center text-xs text-muted-foreground font-medium py-1">{d}</div>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-7 gap-1">
+                    {(() => {
+                      const firstDow = new Date(calYear, calMonth - 1, 1).getDay();
+                      const daysInMonth = new Date(calYear, calMonth, 0).getDate();
+                      const cells: Array<number | null> = [
+                        ...Array(firstDow).fill(null),
+                        ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
+                      ];
+                      while (cells.length % 7 !== 0) cells.push(null);
+                      return cells.map((d, i) => {
+                        if (!d) return <div key={i} className="min-h-20" />;
+                        const ds = `${calYear}-${String(calMonth).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                        const c = calDays.get(ds);
+                        const absent = c ? Math.max(0, activeEmployeeCount - c.recorded) + (c.recorded - c.present - c.half_day - c.leave) : null;
+                        const isFuture = ds > today;
+                        return (
+                          <button key={i} type="button"
+                            onClick={() => { setDate(ds); setViewMode('day'); }}
+                            className={`min-h-20 rounded-lg border text-left p-1.5 transition-colors hover:border-primary/50 hover:bg-muted/30
+                              ${ds === today ? 'border-primary/60 bg-primary/5' : 'border-border/60'}
+                              ${ds === date ? 'ring-1 ring-primary' : ''}`}>
+                            <span className={`text-xs font-semibold ${ds === today ? 'text-primary' : ''}`}>{d}</span>
+                            {!isFuture && c && (
+                              <div className="mt-1 space-y-0.5">
+                                {c.present > 0 && <div className="text-[10px] leading-tight text-emerald-600 font-medium">{c.present} present</div>}
+                                {c.half_day > 0 && <div className="text-[10px] leading-tight text-amber-600 font-medium">{c.half_day} half</div>}
+                                {c.leave > 0 && <div className="text-[10px] leading-tight text-blue-600 font-medium">{c.leave} leave</div>}
+                                {absent != null && absent > 0 && <div className="text-[10px] leading-tight text-red-500/80">{absent} absent</div>}
+                              </div>
+                            )}
+                            {!isFuture && !c && (
+                              <div className="mt-1 text-[10px] leading-tight text-muted-foreground/50">no records</div>
+                            )}
+                          </button>
+                        );
+                      });
+                    })()}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Range view — read-only period register (check-in/out and Fix act
               on ONE date, so they live in the Day view only) */}
-          {viewMode === 'range' ? (
+          {viewMode === 'calendar' ? null : viewMode === 'range' ? (
           <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
             <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
               <Search className="w-4 h-4 text-muted-foreground" />
@@ -533,11 +734,13 @@ export default function Attendance() {
               <TableHeader>
                 <TableRow className="bg-muted/10">
                   <TableHead>Employee</TableHead>
-                  <TableHead>Check-In</TableHead>
-                  <TableHead>Check-In Location</TableHead>
-                  <TableHead>Check-Out</TableHead>
-                  <TableHead>Check-Out Location</TableHead>
+                  <TableHead>Sessions</TableHead>
+                  <TableHead>First In</TableHead>
+                  <TableHead>Last Out</TableHead>
+                  <TableHead>Location</TableHead>
                   <TableHead>Hours</TableHead>
+                  <TableHead>Late</TableHead>
+                  <TableHead>OT</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Action</TableHead>
                 </TableRow>
@@ -545,11 +748,11 @@ export default function Attendance() {
               <TableBody>
                 {isLoading ? (
                   [...Array(4)].map((_, i) => (
-                    <TableRow key={i}><TableCell colSpan={8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                    <TableRow key={i}><TableCell colSpan={10}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
                   ))
                 ) : filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
+                    <TableCell colSpan={10} className="text-center py-16 text-muted-foreground">
                       <Clock className="w-10 h-10 mx-auto mb-3 opacity-20" />
                       <p>No attendance records for {date}</p>
                     </TableCell>
@@ -557,28 +760,39 @@ export default function Attendance() {
                 ) : filtered.map((a: any) => (
                   <TableRow key={a.employeeId} className="hover:bg-muted/10">
                     <TableCell className="font-semibold">{a.employeeName}</TableCell>
+                    <TableCell><SessionsCell punches={a.punches} /></TableCell>
                     <TableCell className="text-sm font-mono">
-                      {a.checkIn ? new Date(a.checkIn).toLocaleTimeString('en-IN') : <span className="text-muted-foreground/50">—</span>}
+                      {a.checkIn ? fmtTime(a.checkIn) : <span className="text-muted-foreground/50">—</span>}
                     </TableCell>
-                    <TableCell><MapLink lat={a.checkInLat} lng={a.checkInLng} label="Map" /></TableCell>
                     <TableCell className="text-sm font-mono">
-                      {a.checkOut ? new Date(a.checkOut).toLocaleTimeString('en-IN') : <span className="text-muted-foreground/50">—</span>}
+                      {a.openPunchIn
+                        ? <span className="text-emerald-600 text-xs font-semibold">working…</span>
+                        : a.checkOut ? fmtTime(a.checkOut) : <span className="text-muted-foreground/50">—</span>}
                     </TableCell>
-                    <TableCell><MapLink lat={a.checkOutLat} lng={a.checkOutLng} label="Map" /></TableCell>
-                    <TableCell className="font-mono text-sm">{a.hoursWorked ? `${Number(a.hoursWorked).toFixed(1)}h` : '—'}</TableCell>
+                    <TableCell>
+                      <div className="flex gap-2">
+                        <MapLink lat={a.checkInLat} lng={a.checkInLng} label="In" />
+                        <MapLink lat={a.checkOutLat} lng={a.checkOutLng} label="Out" />
+                      </div>
+                    </TableCell>
+                    <TableCell><HoursCell row={a} /></TableCell>
+                    <TableCell><LateBadge minutes={a.checkIn ? a.lateMinutes : null} /></TableCell>
+                    <TableCell className="font-mono text-sm">
+                      {a.overtimeHours ? <span className="text-primary font-semibold">+{Number(a.overtimeHours).toFixed(1)}h</span> : <span className="text-muted-foreground/40 text-xs">—</span>}
+                    </TableCell>
                     <TableCell><StatusBadge status={a.status} /></TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
                         {perm.canAdd && (
                         <Button variant="outline" size="sm" className="h-7 text-xs gap-1"
-                          disabled={!!a.checkIn || locLoading === a.employeeId || a.status === 'leave'}
+                          disabled={!!a.openPunchIn || locLoading === a.employeeId || a.status === 'leave' || date !== today}
                           onClick={() => handleMark(a.employeeId, 'checkin')}>
                           {locLoading === a.employeeId ? <Loader2 className="w-3 h-3 animate-spin" /> : <LogIn className="w-3 h-3" />} In
                         </Button>
                         )}
                         {perm.canAdd && (
                         <Button variant="outline" size="sm" className="h-7 text-xs gap-1"
-                          disabled={!a.checkIn || !!a.checkOut || locLoading === a.employeeId}
+                          disabled={(!a.openPunchIn && !(a.checkIn && !a.checkOut)) || locLoading === a.employeeId || date !== today}
                           onClick={() => handleMark(a.employeeId, 'checkout')}>
                           {locLoading === a.employeeId ? <Loader2 className="w-3 h-3 animate-spin" /> : <LogOut className="w-3 h-3" />} Out
                         </Button>
@@ -707,49 +921,67 @@ export default function Attendance() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Check-In</TableHead>
-                <TableHead>Check-In Location</TableHead>
-                <TableHead>Check-Out</TableHead>
-                <TableHead>Check-Out Location</TableHead>
+                <TableHead>Sessions</TableHead>
+                <TableHead>First In</TableHead>
+                <TableHead>Last Out</TableHead>
+                <TableHead>Location</TableHead>
                 <TableHead>Hours</TableHead>
+                <TableHead>Late</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={7}><div className="h-10 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={8}><div className="h-10 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               ) : !myRow ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-10 text-muted-foreground">
+                  <TableCell colSpan={7} className="text-center py-6 text-muted-foreground">
                     <Clock className="w-8 h-8 mx-auto mb-2 opacity-20" />
                     <p className="text-sm">No record for this date</p>
+                  </TableCell>
+                  <TableCell className="text-right align-middle">
+                    {perm.canAdd && date === today && (
+                    <Button variant="outline" size="sm" className="h-7 text-xs gap-1"
+                      disabled={locLoading != null}
+                      onClick={() => myId && handleMark(myId, 'checkin')}>
+                      {locLoading != null ? <Loader2 className="w-3 h-3 animate-spin" /> : <LogIn className="w-3 h-3" />} Check In
+                    </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ) : (
                 <TableRow className="hover:bg-muted/10">
+                  <TableCell><SessionsCell punches={myRow.punches} /></TableCell>
                   <TableCell className="text-sm font-mono">
-                    {myRow.checkIn ? new Date(myRow.checkIn).toLocaleTimeString('en-IN') : <span className="text-muted-foreground/50">—</span>}
+                    {myRow.checkIn ? fmtTime(myRow.checkIn) : <span className="text-muted-foreground/50">—</span>}
                   </TableCell>
-                  <TableCell><MapLink lat={myRow.checkInLat} lng={myRow.checkInLng} label="Map" /></TableCell>
                   <TableCell className="text-sm font-mono">
-                    {myRow.checkOut ? new Date(myRow.checkOut).toLocaleTimeString('en-IN') : <span className="text-muted-foreground/50">—</span>}
+                    {myRow.openPunchIn
+                      ? <span className="text-emerald-600 text-xs font-semibold">working…</span>
+                      : myRow.checkOut ? fmtTime(myRow.checkOut) : <span className="text-muted-foreground/50">—</span>}
                   </TableCell>
-                  <TableCell><MapLink lat={myRow.checkOutLat} lng={myRow.checkOutLng} label="Map" /></TableCell>
-                  <TableCell className="font-mono text-sm">{myRow.hoursWorked ? `${Number(myRow.hoursWorked).toFixed(1)}h` : '—'}</TableCell>
+                  <TableCell>
+                    <div className="flex gap-2">
+                      <MapLink lat={myRow.checkInLat} lng={myRow.checkInLng} label="In" />
+                      <MapLink lat={myRow.checkOutLat} lng={myRow.checkOutLng} label="Out" />
+                    </div>
+                  </TableCell>
+                  <TableCell><HoursCell row={myRow} /></TableCell>
+                  <TableCell><LateBadge minutes={myRow.checkIn ? myRow.lateMinutes : null} /></TableCell>
                   <TableCell><StatusBadge status={myRow.status} /></TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       {perm.canAdd && (
                       <Button variant="outline" size="sm" className="h-7 text-xs gap-1"
-                        disabled={!!myRow.checkIn || locLoading === myRow.employeeId || myRow.status === 'leave'}
+                        disabled={!!myRow.openPunchIn || locLoading === myRow.employeeId || myRow.status === 'leave' || date !== today}
                         onClick={() => myId && handleMark(myId, 'checkin')}>
                         {locLoading === myRow.employeeId ? <Loader2 className="w-3 h-3 animate-spin" /> : <LogIn className="w-3 h-3" />} Check In
                       </Button>
                       )}
                       {perm.canAdd && (
                       <Button variant="outline" size="sm" className="h-7 text-xs gap-1"
-                        disabled={!myRow.checkIn || !!myRow.checkOut || locLoading === myRow.employeeId}
+                        disabled={(!myRow.openPunchIn && !(myRow.checkIn && !myRow.checkOut)) || locLoading === myRow.employeeId || date !== today}
                         onClick={() => myId && handleMark(myId, 'checkout')}>
                         {locLoading === myRow.employeeId ? <Loader2 className="w-3 h-3 animate-spin" /> : <LogOut className="w-3 h-3" />} Check Out
                       </Button>

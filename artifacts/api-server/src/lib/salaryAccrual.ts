@@ -1,7 +1,7 @@
 import { pool as _pool } from "@workspace/db";
 import { provisionSalaryLedgers } from "./payrollLedgers";
 import {
-  dayFactor, loadAttendanceThresholds,
+  dayFactor, loadAttendanceThresholds, PUNCHED_HOURS_JOIN,
   type AttendanceDay, type AttendanceThresholds,
 } from "./attendanceFactor";
 
@@ -345,9 +345,11 @@ async function accrueEmployee(
   // `monthHasAttendance`), and leave approved in advance puts rows on days the
   // sweep has not reached yet — both need to be visible.
   const { rows: attRows } = await q.query(
-    `SELECT date, status, check_in AS "checkIn", check_out AS "checkOut"
-       FROM attendance
-      WHERE employee_id = $1 AND date >= $2 AND date <= $3`,
+    `SELECT a.date, a.status, a.check_in AS "checkIn", a.check_out AS "checkOut",
+            ap.punched_hours AS "punchedHours"
+       FROM attendance a
+       ${PUNCHED_HOURS_JOIN("a")}
+      WHERE a.employee_id = $1 AND a.date >= $2 AND a.date <= $3`,
     [e.id, monthStart(e.startDate), monthEnd(opts.asOf)],
   );
   const attByDate = new Map<string, AttendanceDay>();
