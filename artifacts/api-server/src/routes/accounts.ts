@@ -26,6 +26,7 @@ import {
 } from "../lib/moneyScope";
 import { loadLedgerUsage, deleteBlockReason } from "../lib/chartGroups";
 import { parsePostingLocationFilter, companyLevelSummary, type PostingLocationFilter } from "../lib/postingLocation";
+import { resolveGstScope, salesScopeCond, purchaseScopeCond } from "../lib/gstinScope";
 
 /**
  * Location condition on a SOURCE DOCUMENT row, mirroring how the derived
@@ -1894,6 +1895,26 @@ router.get("/gst/summary", requireModuleView(["page:/accounts/gst", "page:/accou
   }
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
 
+  // Optional GSTIN / warehouse scoping. Resolved to document-id sets via raw
+  // SQL because the legacy location columns (outlet_id / branch_*) fall back
+  // differently per table; when no filter is active nothing here runs and the
+  // output stays byte-identical.
+  const gstinQ = typeof req.query.gstin === "string" && req.query.gstin.trim() ? req.query.gstin.trim() : undefined;
+  const whQ = Number(req.query.warehouseId);
+  const gstScope = (gstinQ || (Number.isInteger(whQ) && whQ > 0))
+    ? await resolveGstScope({ gstin: gstinQ, warehouseId: Number.isInteger(whQ) && whQ > 0 ? whQ : undefined })
+    : null;
+  let saleIdOk: Set<number> | null = null;
+  let purchaseIdOk: Set<number> | null = null;
+  if (gstScope) {
+    const scp: any[] = [];
+    const { rows: sIds } = await pool.query(`SELECT id FROM sales s WHERE TRUE${salesScopeCond("s", gstScope, scp)}`, scp);
+    saleIdOk = new Set(sIds.map((r: any) => Number(r.id)));
+    const pcp: any[] = [];
+    const { rows: pIds } = await pool.query(`SELECT id FROM purchases p WHERE TRUE${purchaseScopeCond("p", gstScope, pcp)}`, pcp);
+    purchaseIdOk = new Set(pIds.map((r: any) => Number(r.id)));
+  }
+
   // Cancelled documents are not tax documents. The dedicated GSTR-1 / GSTR-3B
   // endpoints have always excluded them; this summary did not, so the two
   // disagreed about the same period's liability.
@@ -1907,11 +1928,13 @@ router.get("/gst/summary", requireModuleView(["page:/accounts/gst", "page:/accou
     .where(sql`cancelled_at IS NULL`).orderBy(salesTable.saleDate);
   if (fromDate) allSales = allSales.filter(s => s.saleDate >= fromDate);
   if (toDate) allSales = allSales.filter(s => s.saleDate <= toDate);
+  if (saleIdOk) allSales = allSales.filter(s => saleIdOk.has(Number(s.id)));
 
   let allPurchases = await db.select().from(purchasesTable)
     .where(sql`cancelled_at IS NULL`).orderBy(purchasesTable.purchaseDate);
   if (fromDate) allPurchases = allPurchases.filter(p => p.purchaseDate >= fromDate);
   if (toDate) allPurchases = allPurchases.filter(p => p.purchaseDate <= toDate);
+  if (purchaseIdOk) allPurchases = allPurchases.filter(p => purchaseIdOk.has(Number(p.id)));
 
   // Document-level tax: prefer the stored total when present, else the
   // per-line head sum via lineTaxHeads (legacy purchases have tax_total = 0).

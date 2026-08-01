@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import {
-  useGetHsnSummary, useGetGstr1, useGetGstr3b, useGetGstReconciliation,
+  useGetHsnSummary, useGetGstr1, useGetGstr3b, useGetGstReconciliation, useGetGstFilters,
   type HsnSummaryRow, type Gstr3bResponse,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -12,6 +12,12 @@ import { Badge } from '@/components/ui/badge';
 import { FileSpreadsheet, Download, CheckCircle2, AlertTriangle, ShieldOff } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
+import { GstScopeFilter, gstScopeLabel, type GstScope } from '@/components/accounts/GstScopeFilter';
+import { PaymentStatusBadge } from '@/pages/accounts/GstSummary';
+import { ExportButtons, type ReportDoc } from '@/pages/reports/shared';
+
+const payStatusLabel = (s?: string) =>
+  s === 'na' ? '—' : s === 'paid' ? 'Paid' : s === 'partially_paid' ? 'Partial' : 'Unpaid';
 
 const fmt = (n: number) => `₹${Math.abs(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const monthLabel = (m: string) => {
@@ -105,11 +111,14 @@ export default function GstReturns() {
   const [toDate, setToDate] = useState(now.toISOString().split('T')[0]);
   const [month, setMonth] = useState(now.toISOString().slice(0, 7));
   const [tab, setTab] = useState('hsn');
+  const [scope, setScope] = useState<GstScope>({});
 
-  const hsn = useGetHsnSummary({ fromDate, toDate });
-  const g1 = useGetGstr1({ fromDate, toDate });
-  const g3b = useGetGstr3b(month);
+  const hsn = useGetHsnSummary({ fromDate, toDate, ...scope });
+  const g1 = useGetGstr1({ fromDate, toDate, ...scope });
+  const g3b = useGetGstr3b(month, scope);
   const recon = useGetGstReconciliation({ fromDate, toDate });
+  const filters = useGetGstFilters();
+  const scopeText = gstScopeLabel(scope, filters.data?.gstins ?? []);
 
   if (!perms.isLoading && !perms.canView) {
     return (
@@ -142,15 +151,17 @@ export default function GstReturns() {
     downloadCSV(`gstr1-${fromDate}-to-${toDate}.csv`, [
       ...b2b.map(r => ({
         Section: 'B2B', 'Invoice No': r.invoiceNumber, Date: r.saleDate, Customer: r.customerName,
-        GSTIN: r.gstin, 'Place of Supply': r.placeOfSupply, 'Rate %': r.taxRate,
+        GSTIN: r.gstin, 'Place of Supply': r.placeOfSupply, Warehouse: r.warehouseName ?? '',
+        'Rate %': r.taxRate,
         'Taxable Value': r.taxableValue, CGST: r.cgst, SGST: r.sgst, IGST: r.igst,
         'Total Tax': r.taxAmount, 'Invoice Value': r.invoiceValue,
+        'Payment Status': payStatusLabel(r.paymentStatus), 'Payment Mode': r.paymentModes ?? '',
       })),
       ...b2cs.map(r => ({
         Section: 'B2C (Small)', 'Invoice No': '', Date: '', Customer: '', GSTIN: '',
-        'Place of Supply': r.placeOfSupply, 'Rate %': r.taxRate,
+        'Place of Supply': r.placeOfSupply, Warehouse: '', 'Rate %': r.taxRate,
         'Taxable Value': r.taxableValue, CGST: r.cgst, SGST: r.sgst, IGST: r.igst,
-        'Total Tax': r.taxAmount, 'Invoice Value': '',
+        'Total Tax': r.taxAmount, 'Invoice Value': '', 'Payment Status': '', 'Payment Mode': '',
       })),
     ]);
   };
@@ -170,6 +181,88 @@ export default function GstReturns() {
       'Register Amount': r.registerAmount, Difference: r.difference,
     })));
   };
+
+  // ── PDF / Excel documents (exactly the on-screen filtered rows) ─────────────
+  const metaRows: [string, string][] = [['Scope', scopeText]];
+  const hsnCols = [
+    { label: 'Type' }, { label: 'HSN' }, { label: 'Rate' },
+    { label: 'Qty', align: 'right' as const }, { label: 'Unit' },
+    { label: 'Taxable', align: 'right' as const }, { label: 'CGST', align: 'right' as const },
+    { label: 'SGST', align: 'right' as const }, { label: 'IGST', align: 'right' as const },
+    { label: 'Total Tax', align: 'right' as const },
+  ];
+  const hsnRow = (r: HsnSummaryRow, type: string): (string | number)[] =>
+    [type, r.hsnCode, `${r.taxRate}%`, r.quantity, r.unit, r.taxableValue, r.cgst, r.sgst, r.igst, r.taxAmount];
+  const hsnDoc = (): ReportDoc => ({
+    title: 'HSN Summary', subtitle: `${fromDate} to ${toDate}`, metaRows, orientation: 'landscape',
+    filename: `hsn-summary-${fromDate}-to-${toDate}`,
+    sections: [
+      { heading: 'Outward Supplies (Sales)', columns: hsnCols, rows: (hsn.data?.outward ?? []).map(r => hsnRow(r, 'Outward')) },
+      { heading: 'Inward Supplies (Purchases)', columns: hsnCols, rows: (hsn.data?.inward ?? []).map(r => hsnRow(r, 'Inward')) },
+    ],
+  });
+  const gstr1Doc = (): ReportDoc => ({
+    title: 'GSTR-1 Working', subtitle: `${fromDate} to ${toDate}`, metaRows, orientation: 'landscape',
+    filename: `gstr1-${fromDate}-to-${toDate}`,
+    sections: [
+      {
+        heading: 'B2B Invoices',
+        columns: [
+          { label: 'Invoice' }, { label: 'Date' }, { label: 'Customer' }, { label: 'GSTIN' },
+          { label: 'Warehouse' }, { label: 'Rate' },
+          { label: 'Taxable', align: 'right' as const }, { label: 'Tax', align: 'right' as const },
+          { label: 'Invoice Value', align: 'right' as const },
+          { label: 'Payment Status' }, { label: 'Payment Mode' },
+        ],
+        rows: b2b.map(r => [
+          r.invoiceNumber, r.saleDate, r.customerName, r.gstin, r.warehouseName ?? '',
+          `${r.taxRate}%`, r.taxableValue, r.taxAmount, r.invoiceValue,
+          payStatusLabel(r.paymentStatus), r.paymentModes ?? '',
+        ]),
+      },
+      {
+        heading: 'B2C Small (aggregated)',
+        columns: [
+          { label: 'Place of Supply' }, { label: 'Rate' },
+          { label: 'Taxable', align: 'right' as const }, { label: 'CGST', align: 'right' as const },
+          { label: 'SGST', align: 'right' as const }, { label: 'IGST', align: 'right' as const },
+          { label: 'Total Tax', align: 'right' as const },
+        ],
+        rows: b2cs.map(r => [r.placeOfSupply || '—', `${r.taxRate}%`, r.taxableValue, r.cgst, r.sgst, r.igst, r.taxAmount]),
+      },
+    ],
+  });
+  const gstr3bDoc = (): ReportDoc => ({
+    title: 'GSTR-3B Working', subtitle: month, metaRows, filename: `gstr3b-${month}`,
+    sections: [{
+      columns: [
+        { label: 'Section' }, { label: 'Taxable Value', align: 'right' as const },
+        { label: 'CGST', align: 'right' as const }, { label: 'SGST', align: 'right' as const },
+        { label: 'IGST', align: 'right' as const }, { label: 'Total', align: 'right' as const },
+      ],
+      rows: d3b ? [
+        ['3.1(a) Outward taxable supplies', d3b.outwardSupplies.taxableValue, d3b.outwardSupplies.cgst, d3b.outwardSupplies.sgst, d3b.outwardSupplies.igst, d3b.outwardSupplies.totalTax],
+        ['3.1(c) Nil-rated / exempt supplies', d3b.nilRatedSupplies.taxableValue, 0, 0, 0, 0],
+        ['4(A) Eligible ITC', '', d3b.itc.cgst, d3b.itc.sgst, d3b.itc.igst, d3b.itc.totalItc],
+        ['6.1 Net tax payable (after ITC set-off)', '', d3b.netPayable.cgst, d3b.netPayable.sgst, d3b.netPayable.igst, d3b.netPayable.total],
+        ['ITC carried forward', '', d3b.itcCarriedForward.cgst, d3b.itcCarriedForward.sgst, d3b.itcCarriedForward.igst, d3b.itcCarriedForward.total],
+      ] : [],
+    }],
+  });
+  const reconDoc = (): ReportDoc => ({
+    title: 'GST Reconciliation', subtitle: `${fromDate} to ${toDate}`,
+    metaRows: [['Scope', 'Company-wide (ledgers are not GSTIN-scoped)']],
+    filename: `gst-reconciliation-${fromDate}-to-${toDate}`,
+    sections: [{
+      columns: [
+        { label: 'Head' }, { label: 'Ledger' },
+        { label: 'Ledger Amount', align: 'right' as const },
+        { label: 'Register Amount', align: 'right' as const },
+        { label: 'Difference', align: 'right' as const },
+      ],
+      rows: reconRows.map(r => [r.head, r.ledgerCode, r.ledgerAmount, r.registerAmount, r.difference]),
+    }],
+  });
 
   return (
     <AppLayout>
@@ -191,6 +284,12 @@ export default function GstReturns() {
             <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-36" />
           </div>
         )}
+        {tab !== 'recon' && <GstScopeFilter value={scope} onChange={setScope} />}
+        {tab === 'recon' && (
+          <p className="text-xs text-muted-foreground">
+            Reconciliation compares the GST ledgers with the registers company-wide — ledger postings are not GSTIN-scoped, so the GST number filter does not apply here.
+          </p>
+        )}
 
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
@@ -202,11 +301,9 @@ export default function GstReturns() {
 
           {/* ── HSN Summary ─────────────────────────────────────────────── */}
           <TabsContent value="hsn" className="space-y-4 mt-4">
-            {perms.canDownload && (
-              <div className="flex justify-end">
-                <Button variant="outline" size="sm" onClick={exportHsn}><Download className="w-4 h-4 mr-2" /> Export CSV</Button>
-              </div>
-            )}
+            <div className="flex justify-end">
+              <ExportButtons onCSV={exportHsn} doc={hsnDoc} canDownload={perms.canDownload} disabled={hsn.isLoading} />
+            </div>
             <HsnTable title="Outward Supplies (Sales)" rows={hsn.data?.outward ?? []} loading={hsn.isLoading} />
             <HsnTable title="Inward Supplies (Purchases)" rows={hsn.data?.inward ?? []} loading={hsn.isLoading} />
           </TabsContent>
@@ -220,9 +317,7 @@ export default function GstReturns() {
                 <Badge variant="secondary">{g1.data?.totals.b2cInvoices ?? 0} B2C</Badge>
                 <Badge variant="outline" className="font-mono">Tax: {fmt(g1.data?.totals.taxAmount ?? 0)}</Badge>
               </div>
-              {perms.canDownload && (
-                <Button variant="outline" size="sm" onClick={exportGstr1}><Download className="w-4 h-4 mr-2" /> Export CSV</Button>
-              )}
+              <ExportButtons onCSV={exportGstr1} doc={gstr1Doc} canDownload={perms.canDownload} disabled={g1.isLoading} />
             </div>
 
             <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
@@ -238,19 +333,22 @@ export default function GstReturns() {
                       <TableHead>Customer</TableHead>
                       <TableHead>GSTIN</TableHead>
                       <TableHead>POS</TableHead>
+                      <TableHead>Warehouse</TableHead>
                       <TableHead>Rate</TableHead>
                       <TableHead className="text-right">Taxable</TableHead>
                       <TableHead className="text-right">CGST</TableHead>
                       <TableHead className="text-right">SGST</TableHead>
                       <TableHead className="text-right">IGST</TableHead>
                       <TableHead className="text-right">Invoice Value</TableHead>
+                      <TableHead>Payment Status</TableHead>
+                      <TableHead>Payment Mode</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {g1.isLoading ? (
-                      <TableRow><TableCell colSpan={11}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                      <TableRow><TableCell colSpan={14}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
                     ) : b2b.length === 0 ? (
-                      <TableRow><TableCell colSpan={11} className="text-center py-8 text-muted-foreground text-sm">No B2B invoices in this period</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={14} className="text-center py-8 text-muted-foreground text-sm">No B2B invoices in this period</TableCell></TableRow>
                     ) : b2b.map((r, i) => (
                       <TableRow key={i} className="hover:bg-muted/10">
                         <TableCell className="font-mono text-xs">{r.invoiceNumber}</TableCell>
@@ -258,12 +356,15 @@ export default function GstReturns() {
                         <TableCell className="text-xs">{r.customerName}</TableCell>
                         <TableCell className="font-mono text-xs">{r.gstin}</TableCell>
                         <TableCell className="text-xs">{r.placeOfSupply || '—'}</TableCell>
+                        <TableCell className="text-xs">{r.warehouseName ?? '—'}</TableCell>
                         <TableCell><Badge variant="secondary">{r.taxRate}%</Badge></TableCell>
                         <TableCell className="text-right font-mono text-xs">{fmt(r.taxableValue)}</TableCell>
                         <TableCell className="text-right font-mono text-xs">{fmt(r.cgst)}</TableCell>
                         <TableCell className="text-right font-mono text-xs">{fmt(r.sgst)}</TableCell>
                         <TableCell className="text-right font-mono text-xs">{fmt(r.igst)}</TableCell>
                         <TableCell className="text-right font-mono text-xs font-bold">{fmt(r.invoiceValue)}</TableCell>
+                        <TableCell><PaymentStatusBadge status={r.paymentStatus ?? 'unpaid'} /></TableCell>
+                        <TableCell className="text-xs whitespace-nowrap">{r.paymentModes ?? '—'}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -315,9 +416,7 @@ export default function GstReturns() {
                 <span className="text-sm text-muted-foreground">Return month:</span>
                 <Input type="month" value={month} onChange={e => setMonth(e.target.value)} className="w-44" />
               </div>
-              {perms.canDownload && d3b && (
-                <Button variant="outline" size="sm" onClick={exportGstr3b}><Download className="w-4 h-4 mr-2" /> Export CSV</Button>
-              )}
+              {d3b && <ExportButtons onCSV={exportGstr3b} doc={gstr3bDoc} canDownload={perms.canDownload} disabled={g3b.isLoading} />}
             </div>
 
             {g3b.isLoading ? (
@@ -368,9 +467,7 @@ export default function GstReturns() {
                   </Badge>
                 )
               )}
-              {perms.canDownload && (
-                <Button variant="outline" size="sm" onClick={exportRecon}><Download className="w-4 h-4 mr-2" /> Export CSV</Button>
-              )}
+              <ExportButtons onCSV={exportRecon} doc={reconDoc} canDownload={perms.canDownload} disabled={recon.isLoading} />
             </div>
 
             <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">

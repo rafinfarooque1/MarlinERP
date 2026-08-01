@@ -4,6 +4,13 @@ import { buildDerivedPostings } from "./journal";
 import { lineTaxHeads } from "../lib/gst";
 import { requireModuleView } from "../middleware/permissions";
 import { isIsoDate } from "../lib/dateInput";
+import {
+  listGstinGroups, resolveGstScope, salesScopeCond, purchaseScopeCond,
+  locationNameIndex, type GstScope,
+} from "../lib/gstinScope";
+import { purchaseSettlementIndex, settlementModeSummary } from "../lib/vendorBillSettlement";
+import { loadPaymentPositions } from "../lib/salePaymentPosition";
+import { paymentModeLabel } from "../lib/paymentModes";
 
 const router: IRouter = Router();
 
@@ -31,6 +38,68 @@ function parseRange(req: any): { fromDate?: string; toDate?: string } {
   return { fromDate, toDate };
 }
 
+/** Optional GSTIN / warehouse filter → location scope (null = unfiltered). */
+async function parseGstScope(req: any): Promise<GstScope | null> {
+  const gstin = typeof req.query.gstin === "string" && req.query.gstin.trim() ? req.query.gstin.trim() : undefined;
+  const whRaw = Number(req.query.warehouseId);
+  const warehouseId = Number.isInteger(whRaw) && whRaw > 0 ? whRaw : undefined;
+  if (!gstin && !warehouseId) return null;
+  return resolveGstScope({ gstin, warehouseId });
+}
+
+/**
+ * Payment status + mode summary per sale, from the actual settlement records.
+ * Modes come from sale_payments in first-receipt order; a counter-settled
+ * legacy sale (amount_paid with no payment rows) reports the sale's own mode.
+ * The convention: unpaid ⇒ "Credit", partial ⇒ "<modes> + Credit".
+ */
+async function salePaymentSummaries(
+  sales: Array<{ id: number; payment_mode?: string | null; branch_transfer_id?: number | null }>,
+): Promise<Map<number, { paymentStatus: string; paymentModes: string }>> {
+  const out = new Map<number, { paymentStatus: string; paymentModes: string }>();
+  const ids = sales.map(s => Number(s.id));
+  if (!ids.length) return out;
+  const positions = await loadPaymentPositions(pool, ids);
+  const { rows: pays } = await pool.query(
+    `SELECT sale_id, method, MIN(payment_date) AS first_at, SUM(amount::numeric) AS amt
+       FROM sale_payments WHERE sale_id = ANY($1::int[])
+      GROUP BY sale_id, method
+      ORDER BY MIN(payment_date) ASC, method ASC`,
+    [ids],
+  );
+  const modesBySale = new Map<number, string[]>();
+  for (const p of pays) {
+    const sid = Number(p.sale_id);
+    const label = paymentModeLabel(p.method);
+    if (!label || label === "Credit") continue;
+    const list = modesBySale.get(sid) ?? [];
+    if (!list.includes(label)) list.push(label);
+    modesBySale.set(sid, list);
+  }
+  for (const s of sales) {
+    const id = Number(s.id);
+    // A branch-transfer invoice settles through inter-branch ledgers, not a
+    // customer receipt — a payment status would be a fiction.
+    if (s.branch_transfer_id != null) {
+      out.set(id, { paymentStatus: "na", paymentModes: "Branch Transfer" });
+      continue;
+    }
+    const pos = positions.get(id);
+    let modes = modesBySale.get(id) ?? [];
+    if (!modes.length && pos && pos.amountReceived > 0.004) {
+      const counter = paymentModeLabel(s.payment_mode);
+      if (counter && counter !== "Credit") modes = [counter];
+    }
+    const status = pos?.status ?? "unpaid";
+    let summary: string;
+    if (status === "paid") summary = modes.length ? modes.join(" + ") : "Paid";
+    else if (status === "partially_paid") summary = [...modes, "Credit"].join(" + ");
+    else summary = "Credit";
+    out.set(id, { paymentStatus: status, paymentModes: summary });
+  }
+  return out;
+}
+
 /** Map of "material:12" / "raw_material:3" / "item:7" → { hsn, unit, name } for
  *  purchase lines saved before HSN codes were captured per line. */
 async function materialHsnMap(): Promise<Map<string, { hsn: string; unit: string; name: string }>> {
@@ -50,10 +119,11 @@ router.get("/gst/hsn-summary", requireModuleView("page:/accounts/gst-returns"), 
     res.json({ outward: [], inward: [] }); return;
   }
   const { fromDate, toDate } = parseRange(req);
+  const scope = await parseGstScope(req);
 
   const sp: any[] = [];
   const { rows: sales } = await pool.query(
-    `SELECT line_items FROM sales WHERE cancelled_at IS NULL${rangeFilter("sale_date", fromDate, toDate, sp)}`, sp
+    `SELECT line_items FROM sales s WHERE cancelled_at IS NULL${rangeFilter("sale_date", fromDate, toDate, sp)}${scope ? salesScopeCond("s", scope, sp) : ""}`, sp
   );
   type HsnAgg = { hsnCode: string; taxRate: number; unit: string; quantity: number; taxableValue: number; cgst: number; sgst: number; igst: number; taxAmount: number };
   const outward = new Map<string, HsnAgg>();
@@ -77,7 +147,7 @@ router.get("/gst/hsn-summary", requireModuleView("page:/accounts/gst-returns"), 
 
   const pp: any[] = [];
   const { rows: purchases } = await pool.query(
-    `SELECT line_items FROM purchases WHERE cancelled_at IS NULL${rangeFilter("purchase_date", fromDate, toDate, pp)}`, pp
+    `SELECT line_items FROM purchases p WHERE cancelled_at IS NULL${rangeFilter("purchase_date", fromDate, toDate, pp)}${scope ? purchaseScopeCond("p", scope, pp) : ""}`, pp
   );
   const matMap = await materialHsnMap();
   const inward = new Map<string, HsnAgg>();
@@ -126,14 +196,19 @@ router.get("/gst/gstr1", requireModuleView("page:/accounts/gst-returns"), async 
     res.json({ b2b: [], b2cs: [], totals: {} }); return;
   }
   const { fromDate, toDate } = parseRange(req);
+  const scope = await parseGstScope(req);
 
   const sp: any[] = [];
   const { rows: sales } = await pool.query(
     `SELECT id, invoice_number, sale_date, total_amount, tax_total, customer_id, line_items,
-            branch_transfer_id, party_name, party_gstin, party_state
-     FROM sales WHERE cancelled_at IS NULL${rangeFilter("sale_date", fromDate, toDate, sp)}
+            branch_transfer_id, party_name, party_gstin, party_state, payment_mode,
+            COALESCE(location_type, 'outlet') AS loc_type,
+            COALESCE(location_id, outlet_id, 0) AS loc_id
+     FROM sales s WHERE cancelled_at IS NULL${rangeFilter("sale_date", fromDate, toDate, sp)}${scope ? salesScopeCond("s", scope, sp) : ""}
      ORDER BY sale_date, id`, sp
   );
+  const locNames = await locationNameIndex();
+  const paySummaries = await salePaymentSummaries(sales as any[]);
   const { rows: customers } = await pool.query(`SELECT id, name, gst_number, state FROM customers`);
   const custMap = new Map(customers.map((c: any) => [c.id, c]));
   const { rows: [company] } = await pool.query(`SELECT state, gst_number FROM company_settings LIMIT 1`);
@@ -170,12 +245,16 @@ router.get("/gst/gstr1", requireModuleView("page:/accounts/gst-returns"), async 
     const groups = rateGroups((s.line_items ?? []) as any[]);
     if (gstin) {
       b2bCount++;
+      const pay = paySummaries.get(Number(s.id));
       for (const g of groups) {
         b2b.push({
           invoiceNumber: s.invoice_number, saleDate: iso(s.sale_date),
           customerName: partyName, gstin, placeOfSupply: pos,
           invoiceValue: round2(Number(s.total_amount)), ...g,
           isBranchTransfer: s.branch_transfer_id != null,
+          warehouseName: locNames.name(s.loc_type, s.loc_id),
+          paymentStatus: pay?.paymentStatus ?? "unpaid",
+          paymentModes: pay?.paymentModes ?? "Credit",
         });
       }
     } else {
@@ -224,10 +303,11 @@ router.get("/gst/gstr3b", requireModuleView("page:/accounts/gst-returns"), async
   const [y, m] = month.split("-").map(Number);
   const fromDate = `${month}-01`;
   const toDate = `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
+  const scope = await parseGstScope(req);
 
   const sp: any[] = [];
   const { rows: sales } = await pool.query(
-    `SELECT line_items FROM sales WHERE cancelled_at IS NULL${rangeFilter("sale_date", fromDate, toDate, sp)}`, sp
+    `SELECT line_items FROM sales s WHERE cancelled_at IS NULL${rangeFilter("sale_date", fromDate, toDate, sp)}${scope ? salesScopeCond("s", scope, sp) : ""}`, sp
   );
   let outTaxable = 0, outCgst = 0, outSgst = 0, outIgst = 0, nilTaxable = 0;
   for (const s of sales) {
@@ -248,7 +328,7 @@ router.get("/gst/gstr3b", requireModuleView("page:/accounts/gst-returns"), async
 
   const pp: any[] = [];
   const { rows: purchases } = await pool.query(
-    `SELECT line_items FROM purchases WHERE cancelled_at IS NULL${rangeFilter("purchase_date", fromDate, toDate, pp)}`, pp
+    `SELECT line_items FROM purchases p WHERE cancelled_at IS NULL${rangeFilter("purchase_date", fromDate, toDate, pp)}${scope ? purchaseScopeCond("p", scope, pp) : ""}`, pp
   );
   let itcCgst = 0, itcSgst = 0, itcIgst = 0;
   for (const p of purchases) {
@@ -359,6 +439,119 @@ router.get("/gst/reconciliation", requireModuleView("page:/accounts/gst-returns"
     salesLumpResidual: round2(salesTaxTotal - splitTotal),
     matched: rows.every(r => Math.abs(r.difference) < 0.05),
     note: "Duty & Tax (direct) holds legacy GST lumps and rounding residuals from sales recorded without line-level tax detail.",
+  });
+});
+
+// ── Filter options (GSTIN groups → warehouses under each) ───────────────────
+
+router.get("/gst/filters", requireModuleView(["page:/accounts/gst", "page:/accounts/gst-returns"]), async (req, res): Promise<void> => {
+  if ((req as any).employee?.branchType !== 'headoffice') {
+    res.json({ gstins: [] }); return;
+  }
+  res.json({ gstins: await listGstinGroups() });
+});
+
+// ── Document register (invoice-wise, with payment settlement columns) ───────
+
+router.get("/gst/documents", requireModuleView(["page:/accounts/gst", "page:/accounts/gst-returns"]), async (req, res): Promise<void> => {
+  // LBAC: GST registers are Head Office accounting
+  if ((req as any).employee?.branchType !== 'headoffice') {
+    res.json({ outward: [], inward: [], totals: {} }); return;
+  }
+  const { fromDate, toDate } = parseRange(req);
+  const scope = await parseGstScope(req);
+  const locNames = await locationNameIndex();
+
+  const docHeads = (lines: any[], taxableKey: "lineSubtotal" | "taxableValue") => {
+    let taxable = 0, cgst = 0, sgst = 0, igst = 0, taxAmount = 0;
+    for (const li of lines) {
+      const h = lineTaxHeads(li);
+      taxable += Number(li[taxableKey] ?? 0);
+      cgst += h.cgst; sgst += h.sgst; igst += h.igst;
+      taxAmount += Number(li.taxAmount ?? 0);
+    }
+    return { taxableValue: round2(taxable), cgst: round2(cgst), sgst: round2(sgst), igst: round2(igst), taxAmount: round2(taxAmount) };
+  };
+
+  // Outward: sales (branch-transfer tax invoices stay — they carry real output GST)
+  const sp: any[] = [];
+  const { rows: sales } = await pool.query(
+    `SELECT id, invoice_number, sale_date, total_amount, customer_id, line_items,
+            branch_transfer_id, party_name, party_gstin, payment_mode,
+            COALESCE(location_type, 'outlet') AS loc_type,
+            COALESCE(location_id, outlet_id, 0) AS loc_id
+     FROM sales s WHERE cancelled_at IS NULL${rangeFilter("sale_date", fromDate, toDate, sp)}${scope ? salesScopeCond("s", scope, sp) : ""}
+     ORDER BY sale_date, id`, sp
+  );
+  const { rows: customers } = await pool.query(`SELECT id, name, gst_number FROM customers`);
+  const custMap = new Map(customers.map((c: any) => [c.id, c]));
+  const paySummaries = await salePaymentSummaries(sales as any[]);
+
+  const outward = sales.map((s: any) => {
+    const cust: any = s.customer_id ? custMap.get(s.customer_id) : undefined;
+    const pay = paySummaries.get(Number(s.id));
+    return {
+      docType: "sale",
+      documentNumber: s.invoice_number,
+      date: iso(s.sale_date),
+      partyName: String(s.party_name || cust?.name || "Walk-in"),
+      partyGstin: String(s.party_gstin || cust?.gst_number || "").trim(),
+      warehouseName: locNames.name(s.loc_type, s.loc_id),
+      isBranchTransfer: s.branch_transfer_id != null,
+      ...docHeads((s.line_items ?? []) as any[], "lineSubtotal"),
+      invoiceValue: round2(Number(s.total_amount)),
+      paymentStatus: pay?.paymentStatus ?? "unpaid",
+      paymentModes: pay?.paymentModes ?? "Credit",
+    };
+  });
+
+  // Inward: purchases, settlement derived from the vendor's ledger (FIFO)
+  const pp: any[] = [];
+  const { rows: purchases } = await pool.query(
+    `SELECT p.id, p.invoice_number, p.purchase_date, p.total_amount, p.vendor_id, p.line_items,
+            p.branch_transfer_id, p.party_name, p.party_gstin,
+            COALESCE(p.location_type, p.branch_type, 'headoffice') AS loc_type,
+            COALESCE(p.location_id, p.branch_id, 0) AS loc_id,
+            v.name AS vendor_name, v.gst_number AS vendor_gstin
+     FROM purchases p LEFT JOIN vendors v ON v.id = p.vendor_id
+     WHERE p.cancelled_at IS NULL${rangeFilter("p.purchase_date", fromDate, toDate, pp)}${scope ? purchaseScopeCond("p", scope, pp) : ""}
+     ORDER BY p.purchase_date, p.id`, pp
+  );
+  // Bounded to the vendors in the result set — the FIFO walk is per-vendor,
+  // so this changes nothing about their allocation, only skips everyone else.
+  const settlementVendors = [...new Set(
+    purchases.filter((p: any) => p.branch_transfer_id == null && p.vendor_id != null)
+      .map((p: any) => Number(p.vendor_id)),
+  )];
+  const settlement = settlementVendors.length
+    ? await purchaseSettlementIndex(settlementVendors)
+    : new Map();
+
+  const inward = purchases.map((p: any) => {
+    const st = settlement.get(Number(p.id));
+    const isBt = p.branch_transfer_id != null;
+    return {
+      docType: "purchase",
+      documentNumber: p.invoice_number ?? "",
+      date: iso(p.purchase_date),
+      partyName: String(p.party_name || p.vendor_name || ""),
+      partyGstin: String(p.party_gstin || p.vendor_gstin || "").trim(),
+      warehouseName: locNames.name(p.loc_type, p.loc_id),
+      isBranchTransfer: isBt,
+      ...docHeads((p.line_items ?? []) as any[], "taxableValue"),
+      invoiceValue: round2(Number(p.total_amount)),
+      paymentStatus: isBt ? "na" : (st?.status ?? "unpaid"),
+      paymentModes: isBt ? "Branch Transfer" : (st ? settlementModeSummary(st) : "Credit"),
+    };
+  });
+
+  const sum = (rows: any[], k: string) => round2(rows.reduce((s, r) => s + Number(r[k] ?? 0), 0));
+  res.json({
+    outward, inward,
+    totals: {
+      outward: { count: outward.length, taxableValue: sum(outward, "taxableValue"), taxAmount: sum(outward, "taxAmount"), invoiceValue: sum(outward, "invoiceValue") },
+      inward: { count: inward.length, taxableValue: sum(inward, "taxableValue"), taxAmount: sum(inward, "taxAmount"), invoiceValue: sum(inward, "invoiceValue") },
+    },
   });
 });
 
