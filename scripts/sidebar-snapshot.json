@@ -94,6 +94,35 @@
       ]
     },
     {
+      "name": "Assets",
+      "children": [
+        {
+          "name": "Asset Purchases",
+          "href": "/assets/purchases"
+        },
+        {
+          "name": "Asset Register",
+          "href": "/assets/register"
+        },
+        {
+          "name": "Asset Categories",
+          "href": "/assets/categories"
+        },
+        {
+          "name": "Asset Transfers",
+          "href": "/assets/transfers"
+        },
+        {
+          "name": "Asset Disposal",
+          "href": "/assets/disposal"
+        },
+        {
+          "name": "Asset Reports",
+          "href": "/assets/reports"
+        }
+      ]
+    },
+    {
       "name": "Sales",
       "children": [
         {

@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import {
   useGetDashboardBi,
+  useAssetSummary,
   type DashboardBiFilters,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -411,6 +412,8 @@ export default function Dashboard() {
             )}
           </SectionCard>
 
+          <AssetsSection />
+
           <SectionCard
             title="Top Customers"
             icon={<Users className="w-5 h-5 text-chart-2" />}
@@ -443,6 +446,65 @@ export default function Dashboard() {
   );
 }
 
+/**
+ * Fixed-asset summary — visible only to users with asset view rights. Renders
+ * nothing (not an empty shell) for everyone else: the summary endpoint would
+ * 403 for them anyway.
+ */
+function AssetsSection() {
+  const registerPerm = usePermission('page:/assets/register');
+  const purchasesPerm = usePermission('page:/assets/purchases');
+  const reportsPerm = usePermission('page:/assets/reports');
+  const canSee = registerPerm.canView || purchasesPerm.canView || reportsPerm.canView;
+  const { data: summary, isLoading } = useAssetSummary(canSee);
+
+  if (!canSee) return null;
+
+  const byLocMax = Math.max(0, ...(summary?.byLocation.map(l => l.value) ?? [0]));
+
+  return (
+    <SectionCard
+      title="Assets"
+      icon={<Landmark className="w-5 h-5 text-primary" />}
+      description="Fixed assets at cost — separate from inventory"
+    >
+      {isLoading || !summary ? (
+        <div className="space-y-3">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-10" />)}</div>
+      ) : (
+        <div className="space-y-2.5">
+          <StatRow icon={<Boxes className="w-4 h-4 text-muted-foreground" />} label="Total assets" value={num(summary.totalAssets)} />
+          <StatRow icon={<Landmark className="w-4 h-4 text-primary" />} label="Asset value" value={fmt(summary.assetValue)} />
+          <StatRow
+            icon={<ShoppingCart className="w-4 h-4 text-emerald-600" />}
+            label="Purchased this month"
+            value={<>{num(summary.purchasedThisMonth.count)} <span className="text-muted-foreground font-normal">· {fmt(summary.purchasedThisMonth.value)}</span></>}
+          />
+          <StatRow
+            icon={<Clock className="w-4 h-4 text-amber-600" />}
+            label={`Warranty ending ≤ ${summary.warrantyExpiringSoon.withinDays} days`}
+            value={num(summary.warrantyExpiringSoon.count)}
+            tone={summary.warrantyExpiringSoon.count > 0 ? 'warn' : undefined}
+          />
+          {summary.byLocation.length > 0 && (
+            <div className="pt-2 mt-2 border-t border-border space-y-2">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">By location</p>
+              {summary.byLocation.slice(0, 5).map(l => (
+                <BarRow
+                  key={`${l.locationType}:${l.locationId}`}
+                  label={l.name}
+                  value={l.value}
+                  max={byLocMax}
+                  color={WAREHOUSE_COLOR}
+                  valueLabel={`${l.count} · ${fmt(l.value)}`}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </SectionCard>
+  );
+}
 function StatRow({ icon, label, value, tone }: {
   icon: React.ReactNode; label: string; value: React.ReactNode; tone?: 'pos' | 'neg' | 'warn';
 }) {

@@ -28,6 +28,12 @@ export const PAGE_PERM_KEYS: readonly string[] = [
   "page:/headoffice/warehouses",       // Inventory › Warehouses
   "page:/headoffice/outlets",          // Inventory › Outlets
   "page:/headoffice/item-price",       // Inventory › Item Prices
+  "page:/assets/purchases",            // Assets › Asset Purchases
+  "page:/assets/register",             // Assets › Asset Register
+  "page:/assets/categories",           // Assets › Asset Categories
+  "page:/assets/transfers",            // Assets › Asset Transfers
+  "page:/assets/disposal",             // Assets › Asset Disposal
+  "page:/assets/reports",              // Assets › Asset Reports
   "page:/returns",                     // Sales › Returns
   "page:/outstanding",                 // Sales › Outstanding
   "page:/coupons",                     // Sales › Coupons
@@ -78,6 +84,12 @@ export const LEGACY_MODULE_TO_PAGES: Readonly<Record<string, readonly string[]>>
   "Warehouses": ["page:/headoffice/warehouses"],
   "Outlets": ["page:/headoffice/outlets"],
   "Item Prices": ["page:/headoffice/item-price"],
+  "Asset Purchases": ["page:/assets/purchases"],
+  "Asset Register": ["page:/assets/register"],
+  "Asset Categories": ["page:/assets/categories"],
+  "Asset Transfers": ["page:/assets/transfers"],
+  "Asset Disposal": ["page:/assets/disposal"],
+  "Asset Reports": ["page:/assets/reports"],
   "Sales": ["page:/returns", "page:/outstanding"],
   "Customers": ["page:/customers"],
   "Vendors": ["page:/vendors"],

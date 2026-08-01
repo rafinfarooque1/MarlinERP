@@ -25,6 +25,7 @@ export * from "./stock-ledger";
 export * from "./login-history";
 export * from "./paginated-lists";
 export * from "./expenses";
+export * from "./assets";
 export * from "./rent";
 export * from "./backup";
 export * from "./invoice-share-links";

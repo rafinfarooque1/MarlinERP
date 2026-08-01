@@ -295,7 +295,7 @@ router.delete("/customers/:id", requireModuleAction("page:/customers", "delete")
 
 // ── Vendors ────────────────────────────────────────────────────────────────
 // Serves Purchases, Notes (Vouchers), Vendors and Parties Reports pages.
-router.get("/vendors", requireModuleView(["page:/production/purchase", "page:/accounts/vouchers", "page:/vendors", "page:/reports/sales"]), async (req, res): Promise<void> => {
+router.get("/vendors", requireModuleView(["page:/production/purchase", "page:/accounts/vouchers", "page:/vendors", "page:/reports/sales", "page:/assets/purchases", "page:/assets/register", "page:/assets/reports"]), async (req, res): Promise<void> => {
   const emp = (req as any).employee as { branchType: string; branchId: number } | undefined;
   if (!emp) { res.status(401).json({ error: "Authentication required" }); return; }
   const { getUserDataScope, scopeLocationTypeWhere } = await import("../lib/dataScope");

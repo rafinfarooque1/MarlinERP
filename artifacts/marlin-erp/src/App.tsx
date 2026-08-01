@@ -56,6 +56,13 @@ import CashBankBook from './pages/accounts/CashBankBook';
 import TrialBalance from './pages/accounts/TrialBalance';
 import ItemMaster from './pages/production/ItemMaster';
 
+import AssetPurchases from './pages/assets/AssetPurchases';
+import AssetRegister from './pages/assets/AssetRegister';
+import AssetCategories from './pages/assets/AssetCategories';
+import AssetTransfers from './pages/assets/AssetTransfers';
+import AssetDisposal from './pages/assets/AssetDisposal';
+import AssetReports from './pages/assets/AssetReports';
+
 import CompanySettings from './pages/company/Settings';
 import Permissions from './pages/company/Permissions';
 import Profile from './pages/company/Profile';
@@ -338,6 +345,26 @@ function Router() {
 
       <Route path="/production/item-master">
         <PermGuard href="/production/item-master" pageName="Item Master"><ItemMaster /></PermGuard>
+      </Route>
+
+      {/* Assets — standalone Asset Management module */}
+      <Route path="/assets/purchases">
+        <PermGuard href="/assets/purchases" pageName="Asset Purchases"><AssetPurchases /></PermGuard>
+      </Route>
+      <Route path="/assets/register">
+        <PermGuard href="/assets/register" pageName="Asset Register"><AssetRegister /></PermGuard>
+      </Route>
+      <Route path="/assets/categories">
+        <PermGuard href="/assets/categories" pageName="Asset Categories"><AssetCategories /></PermGuard>
+      </Route>
+      <Route path="/assets/transfers">
+        <PermGuard href="/assets/transfers" pageName="Asset Transfers"><AssetTransfers /></PermGuard>
+      </Route>
+      <Route path="/assets/disposal">
+        <PermGuard href="/assets/disposal" pageName="Asset Disposal"><AssetDisposal /></PermGuard>
+      </Route>
+      <Route path="/assets/reports">
+        <PermGuard href="/assets/reports" pageName="Asset Reports"><AssetReports /></PermGuard>
       </Route>
 
       <Route path="/company/settings">

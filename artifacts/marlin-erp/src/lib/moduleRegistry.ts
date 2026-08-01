@@ -35,6 +35,7 @@ import {
   UsersRound,
   Settings,
   Store,
+  Landmark,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -98,6 +99,7 @@ export const NAV_GROUP_META: Record<string, NavGroupMeta> = {
   'Stock':      { icon: Package },
   'Production': { icon: Factory },
   'Inventory':  { icon: Building2 },
+  'Assets':     { icon: Landmark },
   'Sales': { icon: Calculator },
   'HR':         { icon: Users },
   'Accounts':   { icon: UsersRound },
@@ -106,14 +108,14 @@ export const NAV_GROUP_META: Record<string, NavGroupMeta> = {
 
 /** Sidebar section display order */
 export const NAV_GROUP_ORDER = [
-  'Operations', 'Stock', 'Production', 'Inventory', 'Sales', 'HR', 'Accounts', 'Company',
+  'Operations', 'Stock', 'Production', 'Inventory', 'Assets', 'Sales', 'HR', 'Accounts', 'Company',
 ] as const;
 
 // ── Permissions page metadata ─────────────────────────────────────────────────
 
 /** Display order of groups on the Permissions page */
 export const PERM_GROUP_ORDER: string[] = [
-  'Operations', 'Production', 'Inventory', 'Sales', 'HR', 'Accounts', 'Dashboard', 'Company',
+  'Operations', 'Production', 'Inventory', 'Assets', 'Sales', 'HR', 'Accounts', 'Dashboard', 'Company',
 ];
 
 // ── Per-link (page) permissions ───────────────────────────────────────────────
@@ -359,6 +361,41 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     key: 'Item Prices', permGroup: 'Inventory',
     navGroup: 'Inventory',
     navEntries: [{ name: 'Item Prices', href: '/headoffice/item-price' }],
+  },
+
+  // ── Assets ────────────────────────────────────────────────────────────────
+  // Standalone Asset Management module. Asset purchases are pure capital
+  // expenditure (Dr Fixed Assets / Cr Cash-Bank-Vendor) and never touch stock.
+  // One module per link so each page gets its own permission row.
+  {
+    key: 'Asset Purchases', permGroup: 'Assets',
+    navGroup: 'Assets',
+    navEntries: [{ name: 'Asset Purchases', href: '/assets/purchases' }],
+  },
+  {
+    key: 'Asset Register', permGroup: 'Assets',
+    navGroup: 'Assets',
+    navEntries: [{ name: 'Asset Register', href: '/assets/register' }],
+  },
+  {
+    key: 'Asset Categories', permGroup: 'Assets',
+    navGroup: 'Assets',
+    navEntries: [{ name: 'Asset Categories', href: '/assets/categories' }],
+  },
+  {
+    key: 'Asset Transfers', permGroup: 'Assets',
+    navGroup: 'Assets',
+    navEntries: [{ name: 'Asset Transfers', href: '/assets/transfers' }],
+  },
+  {
+    key: 'Asset Disposal', permGroup: 'Assets',
+    navGroup: 'Assets',
+    navEntries: [{ name: 'Asset Disposal', href: '/assets/disposal' }],
+  },
+  {
+    key: 'Asset Reports', permGroup: 'Assets',
+    navGroup: 'Assets',
+    navEntries: [{ name: 'Asset Reports', href: '/assets/reports' }],
   },
 
   // ── Sales ─────────────────────────────────────────────────────────────────

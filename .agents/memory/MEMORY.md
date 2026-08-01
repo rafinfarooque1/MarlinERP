@@ -75,4 +75,5 @@
 - [GST paise split](gst-paise-split.md) — CGST/SGST = half + exact remainder, never two independent rounds; server and client math must match; regression on an odd-paise case.
 - [Prod runtime binaries](prod-runtime-binaries.md) — deployed runtime lacks dev-workspace CLIs (zip/unzip → spawn ENOENT only in prod); use in-process libs; pg_dump IS present.
 - [Guard route coverage & flag failure mode](guard-route-coverage.md) — privilege-bearing values (e.g. hierarchy level 1 = full access) need guards on CREATE/DELETE too, not just edit; permissive-default flags must fail closed on read errors.
+- [Asset module design](asset-module.md) — purchase row IS the register entry (current location+status live on it); assets router must precede inventory's GET /assets/:id; GST capitalised, no ITC/depreciation postings.
 - [Global filter plumbing](global-filter-plumbing.md) — shared from/to+location params narrow LBAC only; HO matches on TYPE alone (id placeholder differs per table); locked users' persisted context must be force-synced; drop partial dates client-side.

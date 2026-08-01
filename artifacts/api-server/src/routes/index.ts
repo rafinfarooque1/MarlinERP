@@ -30,11 +30,15 @@ import searchRouter from "./search";
 import storageRouter from "./storage";
 import rentRouter from "./rent";
 import backupRouter from "./backup";
+import assetsRouter from "./assets";
 const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use(authRouter);
 router.use(dashboardRouter);
+// assetsRouter must precede inventoryRouter: inventory's GET /assets/:id would
+// otherwise swallow /assets/categories, /assets/purchases, /assets/summary, …
+router.use(assetsRouter);
 router.use(inventoryRouter);
 router.use(branchesRouter);
 router.use(purchasesRouter);

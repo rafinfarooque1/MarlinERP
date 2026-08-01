@@ -1,9 +1,10 @@
 /**
  * Object storage — presigned upload + object serving.
  *
- * Used for expense bills and receipts. The file never passes through this
- * server: the client asks for a presigned URL and PUTs the bytes straight to
- * GCS, and we only ever store the resulting object path on the expense row.
+ * Used for asset purchase invoices (and historical expense bills/receipts).
+ * The file never passes through this server: the client asks for a presigned
+ * URL and PUTs the bytes straight to GCS, and we only ever store the resulting
+ * object path on the owning row.
  *
  * Auth: this app authenticates with bearer tokens through the global
  * `requireAuth` guard mounted on /api, so there is no session and no
@@ -29,13 +30,44 @@ const ALLOWED_CONTENT_TYPES = new Set([
   "application/pdf",
 ]);
 
-// The expense forms were the only consumer of the upload flow, and expense
-// attachments have been retired. The presigned-upload endpoint is therefore
-// disabled so no unused upload path stays exposed. The object-serving route
-// below is intentionally kept: historical expense/payment rows still carry
-// attachment paths and must remain viewable.
-router.post("/storage/uploads/request-url", (_req: Request, res: Response) => {
-  res.status(410).json({ error: "Attachment uploads are no longer available." });
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB — a scanned invoice, not an archive
+
+/**
+ * POST /storage/uploads/request-url
+ *
+ * Presigned-upload flow, re-enabled for the Assets module (asset purchase
+ * invoices). Validates name/size/content type, then hands back a short-lived
+ * signed PUT URL plus the normalized /objects/... path the client stores on
+ * the purchase row. The uploader's employee id is baked into the path, which
+ * is what mayReadObject() uses to let them view it before it is attached.
+ */
+router.post("/storage/uploads/request-url", async (req: Request, res: Response) => {
+  const employee = (req as any).employee;
+  if (!employee) { res.status(401).json({ error: "Unauthorized" }); return; }
+
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  const size = Number(req.body?.size);
+  const contentType = typeof req.body?.contentType === "string"
+    ? req.body.contentType.toLowerCase().split(";")[0].trim() : "";
+
+  if (!name) { res.status(400).json({ error: "File name is required" }); return; }
+  if (!Number.isFinite(size) || size <= 0) { res.status(400).json({ error: "File size is required" }); return; }
+  if (size > MAX_UPLOAD_BYTES) {
+    res.status(400).json({ error: "File is too large — the limit is 10 MB" }); return;
+  }
+  if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
+    res.status(400).json({ error: "Only PDF or image files (JPEG, PNG, WebP, HEIC) can be attached" });
+    return;
+  }
+
+  try {
+    const uploadURL = await objectStorageService.getObjectEntityUploadURL(employee.id);
+    const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+    res.json({ uploadURL, objectPath, metadata: { name, size, contentType } });
+  } catch (error) {
+    req.log?.error({ err: error }, "Error creating upload URL");
+    res.status(500).json({ error: "Could not prepare the upload. Try again." });
+  }
 });
 
 /**
@@ -61,7 +93,11 @@ async function mayReadObject(employee: any, objectPath: string): Promise<boolean
   const { rows } = await pool.query(
     `SELECT location_type, location_id FROM expenses  WHERE attachment_url = $1
      UNION ALL
-     SELECT location_type, location_id FROM payments  WHERE attachment_url = $1`,
+     SELECT location_type, location_id FROM payments  WHERE attachment_url = $1
+     UNION ALL
+     SELECT COALESCE(current_location_type, location_type, 'headoffice') AS location_type,
+            COALESCE(current_location_id, location_id, 1) AS location_id
+       FROM asset_purchases WHERE attachment_path = $1`,
     [objectPath],
   );
   if (rows.length === 0) return false;

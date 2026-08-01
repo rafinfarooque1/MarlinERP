@@ -385,7 +385,9 @@ const fmtAsset = (r: any) => ({
   updatedAt: r.updated_at,
 });
 
-router.get("/assets", requireModuleView(["page:/production/item-master", "page:/production/purchase"]), async (req, res): Promise<void> => {
+// Asset masters are managed by the standalone Assets module now; the old
+// Item Master / Purchase page keys stay so historical readers keep working.
+router.get("/assets", requireModuleView(["page:/production/item-master", "page:/production/purchase", "page:/assets/purchases", "page:/assets/register", "page:/assets/reports"]), async (req, res): Promise<void> => {
   const filter = statusFilter(req, res);
   if (!filter) return;
   const result = await pool.query(
@@ -421,7 +423,7 @@ router.post("/assets", hoOnly, requireModuleAction("page:/production/item-master
   });
 });
 
-router.get("/assets/:id", requireModuleView(["page:/production/item-master", "page:/production/purchase"]), async (req, res): Promise<void> => {
+router.get("/assets/:id", requireModuleView(["page:/production/item-master", "page:/production/purchase", "page:/assets/purchases", "page:/assets/register", "page:/assets/reports"]), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   const result = await pool.query(`SELECT * FROM assets WHERE id = $1 LIMIT 1`, [id]);
   if (!result.rows[0]) { res.status(404).json({ error: "Not found" }); return; }

@@ -13,6 +13,7 @@ import { startSalaryAccrualScheduler } from "./lib/salaryAccrual";
 import { addBackupRestore } from "./migrations/backupRestore";
 import { addExpensePaymentModes } from "./migrations/expensePaymentModes";
 import { addFixedAssets } from "./migrations/fixedAssets";
+import { addAssetModule } from "./migrations/assetModule";
 import { addPurchaseBillFields } from "./migrations/purchaseBills";
 import { addVoucherProvenance } from "./migrations/voucherProvenance";
 import { startBackupScheduler } from "./lib/backup/scheduler";
@@ -2417,6 +2418,41 @@ await pool.query(`
   }
 }
 
+// ── Assets module permission seeding (ONE TIME) ─────────────────────────────
+// The Assets pages are NEW keys under default-deny: without seeding, every
+// pre-existing role — including admin-like roles above level 1 — would be
+// silently denied the whole module. Same fallback direction as
+// per_link_permissions_v1: GRANT to roles that already existed, and let an
+// admin take rights away on the Permissions page. Roles created after this
+// migration start with no rows and are denied until granted — that is the
+// point of default-deny. Level-1 admins bypass permission checks entirely.
+{
+  const { rows: seeded } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'assets_page_perms_v1'`,
+  );
+  if (seeded.length === 0) {
+    const ASSET_PAGE_KEYS = [
+      "page:/assets/purchases", "page:/assets/register", "page:/assets/categories",
+      "page:/assets/transfers", "page:/assets/disposal", "page:/assets/reports",
+    ];
+    const { rows: hRows } = await pool.query(
+      `SELECT id FROM hierarchies WHERE level != 1`,
+    );
+    for (const h of hRows) {
+      for (const mod of ASSET_PAGE_KEYS) {
+        await pool.query(
+          `INSERT INTO permissions (hierarchy_id, module, can_view, can_add, can_edit, can_delete, can_download, can_print)
+           VALUES ($1, $2, true, true, true, true, true, true)
+           ON CONFLICT (hierarchy_id, module) DO NOTHING`,
+          [h.id, mod],
+        );
+      }
+    }
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('assets_page_perms_v1')`);
+    console.log(`[migration] assets_page_perms_v1 — granted Assets pages to ${hRows.length} pre-existing roles`);
+  }
+}
+
 // ── Negative stock prevention ─────────────────────────────────────────────────
 // Add a check constraint so the database itself refuses to persist a negative
 // quantity. The tolerance of -0.001 absorbs floating-point arithmetic errors
@@ -2648,6 +2684,11 @@ await addExpensePaymentModes(pool);
 // above so the postable Fixed Asset ledger (STD-FIXED-ASSET) can be provisioned
 // under the SYS-FIXD group. Assets get their OWN tables and never touch stock.
 await addFixedAssets(pool);
+
+// Standalone Asset Management module: categories, register fields on
+// asset_purchases, transfer + disposal history. Must follow addFixedAssets —
+// it extends the tables that migration creates.
+await addAssetModule(pool);
 
 // Manual Purchase Bill: stored rate mode, the batch-number allocator and the
 // duplicate-invoice guard. Independent of the ledger seeding above.

@@ -147,7 +147,7 @@ async function hasLedgerEntries(ledgerIds: (number | null)[]): Promise<boolean> 
 // Cross-cutting location dropdown consumed by most pages (Dashboard, Inventory,
 // HR, Expenses, Reports, Transfers …). Kept deliberately wide to avoid blanking
 // out pages for users with any of these permissions.
-router.get("/warehouses", requireModuleView(["page:/", "page:/production/item-master", "page:/headoffice/stock-verification", "page:/headoffice/warehouses", "page:/headoffice/outlets", "page:/headoffice/item-price", "page:/headoffice/inventory-reports", "page:/headoffice/stock", "page:/hr/attendance", "page:/hr/payroll", "page:/hr/employees", "page:/accounts/expenses", "page:/reports/sales", "page:/transfers"]), async (_req, res): Promise<void> => {
+router.get("/warehouses", requireModuleView(["page:/", "page:/production/item-master", "page:/headoffice/stock-verification", "page:/headoffice/warehouses", "page:/headoffice/outlets", "page:/headoffice/item-price", "page:/headoffice/inventory-reports", "page:/headoffice/stock", "page:/hr/attendance", "page:/hr/payroll", "page:/hr/employees", "page:/accounts/expenses", "page:/reports/sales", "page:/transfers", "page:/assets/purchases", "page:/assets/register", "page:/assets/transfers", "page:/assets/reports"]), async (_req, res): Promise<void> => {
   const rows = await db.select().from(warehousesTable).orderBy(warehousesTable.id);
   const outletCounts = await db
     .select({ warehouseId: outletsTable.warehouseId, cnt: count() })
@@ -329,7 +329,7 @@ router.delete("/warehouses/:id", requireModuleAction("page:/headoffice/warehouse
 // ── Outlets ────────────────────────────────────────────────────────────────
 // Cross-cutting location dropdown consumed by most pages (as /warehouses, plus
 // POS and Sales Expenses). Kept deliberately wide to avoid blanking out pages.
-router.get("/outlets", requireModuleView(["page:/", "page:/production/item-master", "page:/headoffice/stock-verification", "page:/headoffice/warehouses", "page:/headoffice/outlets", "page:/headoffice/item-price", "page:/headoffice/inventory-reports", "page:/headoffice/stock", "page:/hr/attendance", "page:/hr/payroll", "page:/hr/employees", "page:/accounts/expenses", "page:/reports/sales", "page:/transfers", "page:/sales/pos", "page:/sales/expenses"]), async (_req, res): Promise<void> => {
+router.get("/outlets", requireModuleView(["page:/", "page:/production/item-master", "page:/headoffice/stock-verification", "page:/headoffice/warehouses", "page:/headoffice/outlets", "page:/headoffice/item-price", "page:/headoffice/inventory-reports", "page:/headoffice/stock", "page:/hr/attendance", "page:/hr/payroll", "page:/hr/employees", "page:/accounts/expenses", "page:/reports/sales", "page:/transfers", "page:/sales/pos", "page:/sales/expenses", "page:/assets/purchases", "page:/assets/register", "page:/assets/transfers", "page:/assets/reports"]), async (_req, res): Promise<void> => {
   const rows = await db.select().from(outletsTable).orderBy(outletsTable.id);
   const warehouses = await db.select().from(warehousesTable);
   const wMap = new Map(warehouses.map((w) => [w.id, w.name]));
