@@ -424,8 +424,10 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
     const locationId: number = r.location_id ?? r.outlet_id;
     const outlet = oMap.get(r.outlet_id);
     const warehouse = locationType === 'warehouse' ? wMap.get(locationId) : null;
-    const locationName = warehouse?.name ?? outlet?.name ?? "";
-    const locationUpiId = warehouse?.upiId ?? outlet?.upiId ?? "";
+    // A Head Office sale's outlet_id is only a legacy NOT NULL placeholder —
+    // resolving a name through it would mislabel the sale with a real outlet.
+    const locationName = locationType === 'headoffice' ? 'Head Office' : (warehouse?.name ?? outlet?.name ?? "");
+    const locationUpiId = locationType === 'headoffice' ? "" : (warehouse?.upiId ?? outlet?.upiId ?? "");
     const totalAmount = Number(r.total_amount);
     const amountPaid  = Number(r.amount_paid ?? 0);
     const position = positions.get(Number(r.id)) ?? computePaymentPosition({
@@ -507,10 +509,19 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   );
   if (inactiveMsg) { res.status(400).json({ error: inactiveMsg, code: INACTIVE_PRODUCT_CODE }); return; }
 
-  // ── Determine location (warehouse or outlet) ──────────────────────────────
+  // ── Determine location (Head Office, warehouse or outlet) ─────────────────
   const rawBody = req.body as any;
-  const locationType: 'outlet' | 'warehouse' = rawBody.locationType === 'warehouse' ? 'warehouse' : 'outlet';
-  const locationId: number = rawBody.locationId ? Number(rawBody.locationId) : parsed.data.outletId;
+  const locationType: 'outlet' | 'warehouse' | 'headoffice' =
+    rawBody.locationType === 'warehouse' ? 'warehouse'
+    : rawBody.locationType === 'headoffice' ? 'headoffice'
+    : 'outlet';
+  // Head Office is singular and its id is never taken from the body. Item
+  // stock at HO lives under branch ('headoffice', 1) — the same convention
+  // purchases and production use — so the sale row and its stock deduction
+  // share one id.
+  const locationId: number = locationType === 'headoffice'
+    ? 1
+    : (rawBody.locationId ? Number(rawBody.locationId) : parsed.data.outletId);
   // A sale with no resolvable location vanishes from every located view (TB
   // slices, day book, LBAC scopes) while still posting company-wide — refuse
   // it outright rather than relying on the masters lookup below to catch it.
@@ -532,7 +543,16 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   let locationName = '';
   let locationUpiId = '';
 
-  if (locationType === 'warehouse') {
+  if (locationType === 'headoffice') {
+    // Head Office rings up on the company's own books: the derived postings
+    // fall back to STD-CASH / STD-SALES when a sale has no branch ledger
+    // mapping, so no per-location ledgers are needed (creating separate "HO
+    // Cash/Bank" ledgers would fragment the existing Head Office postings).
+    cashLedgerId = null;
+    salesLedgerId = null;
+    locationName = 'Head Office';
+    locationUpiId = '';
+  } else if (locationType === 'warehouse') {
     const { rows: [wh] } = await pgPool.query<{
       name: string; upi_id: string | null; cash_ledger_id: number | null; sales_ledger_id: number | null
     }>(`SELECT name, upi_id, cash_ledger_id, sales_ledger_id FROM warehouses WHERE id = $1`, [locationId]);
@@ -1088,12 +1108,19 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
   // rewrote warehouse invoices into location-less rows that vanished from
   // every located view while still posting company-wide.
   const rawBody = req.body as any;
-  const newLocationType: 'outlet' | 'warehouse' =
+  const newLocationType: 'outlet' | 'warehouse' | 'headoffice' =
     rawBody.locationType === 'warehouse' ? 'warehouse'
     : rawBody.locationType === 'outlet' ? 'outlet'
-    : (existingRaw.location_type === 'warehouse' ? 'warehouse' : 'outlet');
-  const rawNewLocationId = rawBody.locationId ?? parsed.data.outletId
-    ?? existingRaw.location_id ?? existingRaw.outlet_id;
+    : rawBody.locationType === 'headoffice' ? 'headoffice'
+    : (existingRaw.location_type === 'warehouse' ? 'warehouse'
+       : existingRaw.location_type === 'headoffice' ? 'headoffice'
+       : 'outlet');
+  // Head Office is singular: id fixed at 1 (the branch HO item stock lives
+  // under), never taken from the body.
+  const rawNewLocationId = newLocationType === 'headoffice'
+    ? 1
+    : (rawBody.locationId ?? parsed.data.outletId
+       ?? existingRaw.location_id ?? existingRaw.outlet_id);
   const newLocationId: number = Number(rawNewLocationId);
   if (rawNewLocationId == null || rawNewLocationId === '' || !Number.isFinite(newLocationId)) {
     res.status(400).json({ error: "The sale's location could not be determined. Send locationType and locationId." });
@@ -1277,16 +1304,20 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
   // An edit has to restate the accounting receipt as well as the stock, so the
   // ledgers for the (possibly new) location are looked up here rather than
   // inside the transaction.
-  const { rows: [editLoc] } = await pgPool.query<{
-    name: string; upi_id: string | null; cash_ledger_id: number | null; sales_ledger_id: number | null;
-  }>(
-    newLocationType === 'warehouse'
-      ? `SELECT name, upi_id, cash_ledger_id, sales_ledger_id FROM warehouses WHERE id = $1`
-      : `SELECT name, upi_id, cash_ledger_id, sales_ledger_id FROM outlets WHERE id = $1`,
-    [newLocationId]
-  );
-  const locationName = editLoc?.name ?? '';
-  const locationUpiId = editLoc?.upi_id ?? '';
+  const { rows: [editLoc] } = newLocationType === 'headoffice'
+    ? { rows: [undefined as any] }
+    : await pgPool.query<{
+        name: string; upi_id: string | null; cash_ledger_id: number | null; sales_ledger_id: number | null;
+      }>(
+        newLocationType === 'warehouse'
+          ? `SELECT name, upi_id, cash_ledger_id, sales_ledger_id FROM warehouses WHERE id = $1`
+          : `SELECT name, upi_id, cash_ledger_id, sales_ledger_id FROM outlets WHERE id = $1`,
+        [newLocationId]
+      );
+  // Head Office has no per-location ledgers — the derived postings fall back
+  // to STD-CASH / STD-SALES, matching how HO sales are created.
+  const locationName = newLocationType === 'headoffice' ? 'Head Office' : (editLoc?.name ?? '');
+  const locationUpiId = newLocationType === 'headoffice' ? '' : (editLoc?.upi_id ?? '');
   const editSalesLedgerId = editLoc?.sales_ledger_id ?? null;
   const editCashLedgerId = editLoc?.cash_ledger_id ?? null;
 
@@ -1382,12 +1413,14 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
       if (avail.available + 0.001 < Number(li.quantity)) {
         await editTx.query('ROLLBACK');
         // Named only when refusing, so the happy path costs no extra query.
-        const { rows: [locRow] } = await pgPool.query<{ name: string }>(
-          newLocationType === 'warehouse'
-            ? `SELECT name FROM warehouses WHERE id = $1`
-            : `SELECT name FROM outlets WHERE id = $1`,
-          [newLocationId]
-        );
+        const { rows: [locRow] } = newLocationType === 'headoffice'
+          ? { rows: [{ name: 'Head Office' }] }
+          : await pgPool.query<{ name: string }>(
+              newLocationType === 'warehouse'
+                ? `SELECT name FROM warehouses WHERE id = $1`
+                : `SELECT name FROM outlets WHERE id = $1`,
+              [newLocationId]
+            );
         res.status(400).json({
           error: insufficientStockMessage({
             productName: li.itemName || `Item #${li.itemId}`,
@@ -1749,7 +1782,9 @@ router.get("/sales/summary", requireModuleView(["page:/sales/pos", "page:/"]), a
     byLocation.push({
       locationType,
       locationId,
-      locationName: (locationType === 'warehouse' ? wMap.get(locationId) : oMap.get(locationId)) ?? "",
+      locationName: locationType === 'headoffice'
+        ? 'Head Office'
+        : (locationType === 'warehouse' ? wMap.get(locationId) : oMap.get(locationId)) ?? "",
       salesAmount: Number(r.sales_amount),
       invoiceCount: Number(r.invoice_count),
     });
@@ -1868,7 +1903,9 @@ router.get("/sales/:id", requireModuleView("page:/sales/pos"), async (req, res):
   const locationId: number = row.location_id ?? row.outlet_id;
   let locationName = '';
   let locationUpiId = '';
-  if (locationType === 'warehouse') {
+  if (locationType === 'headoffice') {
+    locationName = 'Head Office';
+  } else if (locationType === 'warehouse') {
     const { rows: [wh] } = await pgPool.query<{ name: string; upi_id: string | null }>(
       `SELECT name, upi_id FROM warehouses WHERE id = $1`, [locationId]
     );

@@ -442,7 +442,13 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   let effLocType: string | null = null;
   let effLocId: number | null = null;
   if (scope.isHeadOffice) {
-    if ((reqLocType === "warehouse" || reqLocType === "outlet") && Number.isFinite(reqLocId) && reqLocId > 0) {
+    if (reqLocType === "headoffice") {
+      // Head Office is singular and its placeholder id varies by table
+      // (vouchers store 0, sales/stock store 1), so every predicate below
+      // must match it on TYPE ALONE — an id equality would drop valid rows.
+      effLocType = "headoffice";
+      effLocId = 0;
+    } else if ((reqLocType === "warehouse" || reqLocType === "outlet") && Number.isFinite(reqLocId) && reqLocId > 0) {
       effLocType = reqLocType;
       effLocId = reqLocId;
     }
@@ -474,7 +480,9 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     const params: unknown[] = [];
     if (fromDate) { params.push(fromDate); conds.push(`s.sale_date >= $${params.length}::date`); }
     if (toDate) { params.push(toDate); conds.push(`s.sale_date <= $${params.length}::date`); }
-    if (effLocType && effLocId != null) {
+    if (effLocType === "headoffice") {
+      conds.push(`COALESCE(s.location_type,'outlet') = 'headoffice'`);
+    } else if (effLocType && effLocId != null) {
       params.push(effLocType); conds.push(`COALESCE(s.location_type,'outlet') = $${params.length}`);
       params.push(effLocId); conds.push(`COALESCE(s.location_id, s.outlet_id) = $${params.length}`);
     } else if (!scope.isHeadOffice) {
@@ -492,7 +500,9 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
     const params: unknown[] = [];
     if (fromDate) { params.push(fromDate); conds.push(`${alias}.${opts.dateCol}${cast} >= $${params.length}::date`); }
     if (toDate) { params.push(toDate); conds.push(`${alias}.${opts.dateCol}${cast} <= $${params.length}::date`); }
-    if (effLocType && effLocId != null) {
+    if (effLocType === "headoffice") {
+      conds.push(`COALESCE(${alias}.location_type,'headoffice') = 'headoffice'`);
+    } else if (effLocType && effLocId != null) {
       params.push(effLocType); conds.push(`COALESCE(${alias}.location_type,'headoffice') = $${params.length}`);
       params.push(effLocId); conds.push(`COALESCE(${alias}.location_id,0) = $${params.length}`);
     } else if (!scope.isHeadOffice) {
@@ -522,7 +532,9 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   // login therefore sees its own slice — location-scoped data, not a
   // company-wide leak.
   const postingLoc =
-    effLocType && effLocType !== "headoffice" && effLocId != null
+    effLocType === "headoffice"
+      ? ({ type: "headoffice", id: null } as const)
+      : effLocType && effLocId != null
       ? ({ type: effLocType as "warehouse" | "outlet", id: effLocId } as const)
       : null;
   // One posting build per distinct cap. companyFinancials wants the stream
@@ -667,7 +679,9 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
         conds.push(`s.sale_date::date <= ${ph}::date`);
       }
       conds.push(`${outsSql} > 0.009`);
-      if (effLocType && effLocId != null) {
+      if (effLocType === "headoffice") {
+        conds.push(`COALESCE(s.location_type,'outlet') = 'headoffice'`);
+      } else if (effLocType && effLocId != null) {
         params.push(effLocType); conds.push(`COALESCE(s.location_type,'outlet') = $${params.length}`);
         params.push(effLocId); conds.push(`COALESCE(s.location_id, s.outlet_id) = $${params.length}`);
       } else if (!scope.isHeadOffice) {
@@ -695,13 +709,17 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       includeInTransit: true,
       dataScope: scope,
       branchType: effLocType ?? undefined,
-      branchId: effLocId ?? undefined,
+      // HO stock rows carry branch_id 1 while effLocId is the voucher-side 0
+      // placeholder — filter HO by type alone or its stock would vanish.
+      branchId: effLocType === "headoffice" ? undefined : effLocId ?? undefined,
     }),
     // low-stock count (finished items only)
     (() => {
       const conds = [`stock_entries.material_type = 'item'`, `stock_entries.quantity::numeric < COALESCE(items.reorder_level, 10)::numeric`];
       const params: unknown[] = [];
-      if (effLocType && effLocId != null) {
+      if (effLocType === "headoffice") {
+        conds.push(`stock_entries.branch_type = 'headoffice'`);
+      } else if (effLocType && effLocId != null) {
         params.push(effLocType); conds.push(`stock_entries.branch_type = $${params.length}`);
         params.push(effLocId); conds.push(`stock_entries.branch_id = $${params.length}`);
       } else if (!scope.isHeadOffice) {
@@ -724,7 +742,9 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       const conds = ["sb.quantity::numeric > 0", "sb.expiry_date IS NOT NULL",
         "sb.expiry_date::date >= CURRENT_DATE", "sb.expiry_date::date <= CURRENT_DATE + INTERVAL '30 day'"];
       const params: unknown[] = [];
-      if (effLocType && effLocId != null) {
+      if (effLocType === "headoffice") {
+        conds.push(`sb.branch_type = 'headoffice'`);
+      } else if (effLocType && effLocId != null) {
         params.push(effLocType); conds.push(`sb.branch_type = $${params.length}`);
         params.push(effLocId); conds.push(`sb.branch_id = $${params.length}`);
       } else if (!scope.isHeadOffice) {

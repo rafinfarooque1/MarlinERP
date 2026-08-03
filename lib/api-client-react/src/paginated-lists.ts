@@ -5,7 +5,7 @@ import type { Sale } from './generated/api.schemas';
 /** Sale row as returned by GET /sales — the generated `Sale` type plus the
  * raw-column fields the endpoint enriches (location, payment status, dues). */
 export type PaginatedSaleRow = Sale & {
-  locationType?: 'warehouse' | 'outlet';
+  locationType?: 'warehouse' | 'outlet' | 'headoffice';
   locationId?: number;
   paymentStatus?: string;
   amountPaid?: number;
@@ -30,7 +30,8 @@ export interface PaginatedSalesParams {
   q?: string;
   from?: string;
   to?: string;
-  locationType?: 'warehouse' | 'outlet';
+  /** 'headoffice' needs no locationId — the server matches on type alone. */
+  locationType?: 'warehouse' | 'outlet' | 'headoffice';
   locationId?: number;
   /** Warehouse id — includes the warehouse itself plus its child outlets. */
   warehouseScope?: number;
@@ -100,7 +101,8 @@ export interface DateLocationParams {
   /** Inclusive YYYY-MM-DD bounds; omit for unbounded. */
   from?: string;
   to?: string;
-  locationType?: 'warehouse' | 'outlet';
+  /** 'headoffice' needs no locationId — the server matches on type alone. */
+  locationType?: 'warehouse' | 'outlet' | 'headoffice';
   locationId?: number;
 }
 
@@ -114,7 +116,11 @@ export function appendDateLocationParams(qs: URLSearchParams, params?: DateLocat
   const fullDate = (v?: string) => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v) && Number(v.slice(0, 4)) >= 1000;
   if (fullDate(params?.from)) qs.set('from', params!.from!);
   if (fullDate(params?.to)) qs.set('to', params!.to!);
-  if (params?.locationType && params?.locationId) {
+  if (params?.locationType === 'headoffice') {
+    // Head Office is singular — its id is a per-table placeholder, so only
+    // the type is sent and the server matches on it alone.
+    qs.set('locationType', 'headoffice');
+  } else if (params?.locationType && params?.locationId) {
     qs.set('locationType', params.locationType);
     qs.set('locationId', String(params.locationId));
   }
@@ -136,7 +142,10 @@ export function usePaginatedSales(params?: PaginatedSalesParams) {
   if (params?.q) qs.set('q', params.q);
   if (params?.from) qs.set('from', params.from);
   if (params?.to) qs.set('to', params.to);
-  if (params?.locationType && params?.locationId) {
+  if (params?.locationType === 'headoffice') {
+    // Head Office is singular — the server matches on type alone.
+    qs.set('locationType', 'headoffice');
+  } else if (params?.locationType && params?.locationId) {
     qs.set('locationType', params.locationType);
     qs.set('locationId', String(params.locationId));
   }

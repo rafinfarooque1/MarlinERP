@@ -33,7 +33,7 @@ export default function SalesPOS() {
   return (
     <Sales
       permissionModule="page:/sales/pos"
-      forceLocationType={locationType as 'warehouse' | 'outlet'}
+      forceLocationType={locationType as 'warehouse' | 'outlet' | 'headoffice'}
       forceLocationId={locationId!}
       forceLocationName={locationName}
       forceChildOutletIds={isWarehouse && childOutletIds.length > 0 ? childOutletIds : undefined}

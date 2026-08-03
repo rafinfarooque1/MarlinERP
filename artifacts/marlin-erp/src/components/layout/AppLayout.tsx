@@ -426,7 +426,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="min-h-screen bg-background flex flex-col md:flex-row">
+      {/* h-screen (not min-h-screen) pins the sidebar: only the page content
+          pane scrolls, so the nav stays visible however long the page is. */}
+      <div className="h-screen overflow-hidden bg-background flex flex-col md:flex-row">
         {/* Mobile overlay */}
         {sidebarOpen && (
           <div

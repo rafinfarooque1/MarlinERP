@@ -2,7 +2,7 @@ import { createContext, useContext, useState, ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 export interface LocationState {
-  locationType: 'warehouse' | 'outlet' | 'all' | null;
+  locationType: 'warehouse' | 'outlet' | 'headoffice' | 'all' | null;
   locationId: number | null;
   locationName: string;
 }
@@ -19,10 +19,13 @@ export const ALL_LOCATIONS: LocationState = {
  * `null`/`'all'` both mean "no location filter" — the backend then falls back
  * to the caller's own LBAC scope, which is the widest they may ever see.
  */
-export function locationFilterParams(s: LocationState): { locationType?: 'warehouse' | 'outlet'; locationId?: number } {
+export function locationFilterParams(s: LocationState): { locationType?: 'warehouse' | 'outlet' | 'headoffice'; locationId?: number } {
   if ((s.locationType === 'warehouse' || s.locationType === 'outlet') && s.locationId) {
     return { locationType: s.locationType, locationId: s.locationId };
   }
+  // Head Office is singular — the backend matches on type alone (its id is a
+  // per-table placeholder), so no locationId is sent.
+  if (s.locationType === 'headoffice') return { locationType: 'headoffice' };
   return {};
 }
 

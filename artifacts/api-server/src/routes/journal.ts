@@ -6,7 +6,8 @@ import { logActivity } from "../lib/audit";
 import { lineTaxHeads } from "../lib/gst";
 import { clearsThroughBank } from "../lib/paymentModes";
 import { isIsoDate } from "../lib/dateInput";
-import { callerLocation } from "../lib/moneyScope";
+import { callerLocation, ownLocationScope, foreignPartyLedgerIds } from "../lib/moneyScope";
+import { outletWritesBlocked } from "../lib/featureFlags";
 
 const router = Router();
 
@@ -139,6 +140,9 @@ function serializeVoucher(v: any, lines: any[]) {
     totalAmount: Number(v.total_amount),
     createdBy: v.created_by,
     createdAt: v.created_at,
+    /** Where the voucher belongs; every derived posting inherits this stamp. */
+    locationType: v.location_type ?? null,
+    locationId: v.location_id != null ? Number(v.location_id) : null,
     // Provenance. `editable` is computed here so the UI never has to re-derive
     // the rule (and can never disagree with what the API will actually allow).
     origin: v.origin ?? null,
@@ -278,16 +282,165 @@ async function buildVoucherLines(
   return { ok: true, lines, partyLedgerId, totalAmount: round2(lines.reduce((s, l) => s + l.debit, 0)) };
 }
 
+// ── Voucher location ────────────────────────────────────────────────────────
+
+type VoucherLoc = { locationType: "headoffice" | "warehouse" | "outlet"; locationId: number };
+
+/**
+ * Parse and AUTHORIZE the location a manual voucher is stamped with.
+ *
+ * The body's location fields are a request, not authority: Head Office staff
+ * may record a voucher under any location, branch staff only under their own.
+ * When the body omits the fields the fallback wins — the caller's own location
+ * on create (backward compatible with older clients), the voucher's CURRENT
+ * stamp on edit, so an edit that doesn't mention location never silently moves
+ * the entry between location books.
+ */
+async function resolveVoucherLocation(
+  employee: { branchType?: string; branchId?: number } | undefined,
+  body: Record<string, any>,
+  fallback: VoucherLoc | null,
+): Promise<{ ok: true; loc: VoucherLoc } | { ok: false; status: number; error: string }> {
+  const rawType = body.locationType != null && body.locationType !== "" ? String(body.locationType) : "";
+  let loc: VoucherLoc;
+  if (!rawType) {
+    if (fallback) {
+      loc = fallback;
+    } else {
+      const cl = callerLocation(employee);
+      loc = { locationType: cl.locationType as VoucherLoc["locationType"], locationId: Number(cl.locationId) };
+    }
+  } else if (rawType === "headoffice") {
+    // Head Office is singular — its id is a fixed placeholder (money vouchers
+    // store 0 throughout), never taken from the body.
+    loc = { locationType: "headoffice", locationId: 0 };
+  } else if (rawType === "warehouse" || rawType === "outlet") {
+    const id = Number(body.locationId);
+    if (!Number.isInteger(id) || id <= 0) {
+      return { ok: false, status: 400, error: "Please select a location." };
+    }
+    const table = rawType === "warehouse" ? "warehouses" : "outlets";
+    const { rows } = await pool.query(`SELECT id FROM ${table} WHERE id = $1`, [id]);
+    if (!rows[0]) {
+      return { ok: false, status: 400, error: `${rawType === "warehouse" ? "Warehouse" : "Outlet"} not found` };
+    }
+    loc = { locationType: rawType, locationId: id };
+  } else {
+    return { ok: false, status: 400, error: "locationType must be headoffice, warehouse or outlet" };
+  }
+
+  const branchType = employee?.branchType;
+  if (branchType && branchType !== "headoffice") {
+    const own = callerLocation(employee);
+    if (own.locationType !== loc.locationType || Number(own.locationId) !== loc.locationId) {
+      return { ok: false, status: 403, error: "You can only record vouchers for your own location." };
+    }
+  }
+  return { ok: true, loc };
+}
+
+interface LedgerOwner { locationType: "warehouse" | "outlet"; locationId: number; name: string }
+
+/**
+ * Every location-owned ledger (cash / sales / warehouse purchase), with ALL of
+ * its owners. A mirror location — one place kept as both a warehouse and an
+ * outlet — shares a single cash ledger, so a ledger can have several owners
+ * and a voucher stamped to any one of them is valid.
+ */
+async function locationOwnedLedgerMap(): Promise<Map<number, LedgerOwner[]>> {
+  const map = new Map<number, LedgerOwner[]>();
+  const add = (ledgerId: unknown, owner: LedgerOwner) => {
+    const lid = Number(ledgerId);
+    if (!Number.isFinite(lid) || lid <= 0) return;
+    const arr = map.get(lid) ?? [];
+    arr.push(owner);
+    map.set(lid, arr);
+  };
+  const { rows } = await pool.query(`
+    SELECT 'warehouse' AS lt, id, name, cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses
+    UNION ALL
+    SELECT 'outlet' AS lt, id, name, cash_ledger_id, sales_ledger_id, NULL::integer AS purchase_ledger_id FROM outlets
+  `);
+  for (const r of rows) {
+    const owner: LedgerOwner = { locationType: r.lt, locationId: Number(r.id), name: r.name };
+    add(r.cash_ledger_id, owner);
+    add(r.sales_ledger_id, owner);
+    add(r.purchase_ledger_id, owner);
+  }
+  return map;
+}
+
+/**
+ * A manual voucher's lines must be consistent with the location that stamps
+ * the whole entry (both legs of every derived posting carry ONE stamp): a
+ * branch-owned cash/sales/purchase ledger may only appear on a voucher stamped
+ * to its owner, and Head Office's own cash/bank accounts only on a Head Office
+ * voucher. Otherwise a located cash book would show money moving through a
+ * till that its own location slice cannot see.
+ */
+async function checkLinesLocation(
+  lines: LineDraft[],
+  loc: VoucherLoc,
+  employee: { branchType?: string; branchId?: number } | undefined,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const owned = await locationOwnedLedgerMap();
+  // HO's own cash/bank = the STD-CASH/STD-BANK subtrees minus every branch till.
+  const hoCashBank = await ledgerIdsUnderCodes(["STD-CASH", "STD-BANK"]);
+  for (const id of owned.keys()) hoCashBank.delete(id);
+
+  const ids = [...new Set(lines.map((l) => l.ledgerId))];
+  const { rows: named } = await pool.query(
+    `SELECT id, name FROM account_ledgers WHERE id = ANY($1)`, [ids]
+  );
+  const nameOf = (id: number) => named.find((r: any) => Number(r.id) === id)?.name ?? `ledger #${id}`;
+
+  for (const l of lines) {
+    const owners = owned.get(l.ledgerId);
+    if (owners) {
+      const match = owners.some((o) => o.locationType === loc.locationType && o.locationId === loc.locationId);
+      if (!match) {
+        return {
+          ok: false, status: 400,
+          error: `"${nameOf(l.ledgerId)}" belongs to ${owners[0].name}. Record this voucher under that location, or pick an account of the selected location.`,
+        };
+      }
+    } else if (hoCashBank.has(l.ledgerId) && loc.locationType !== "headoffice") {
+      return {
+        ok: false, status: 400,
+        error: `"${nameOf(l.ledgerId)}" is a Head Office cash/bank account — it can only be used on a voucher recorded under Head Office.`,
+      };
+    }
+  }
+
+  // Branch creators additionally may not post against parties outside their
+  // own location's scope — the same rule payments and receipts enforce.
+  const branchType = employee?.branchType;
+  if (branchType && branchType !== "headoffice") {
+    const foreignParties = new Set(await foreignPartyLedgerIds(ownLocationScope(employee)));
+    const hit = lines.find((l) => foreignParties.has(l.ledgerId));
+    if (hit) {
+      return { ok: false, status: 403, error: `"${nameOf(hit.ledgerId)}" belongs to another location's customer or vendor.` };
+    }
+  }
+  return { ok: true };
+}
+
 // ── Journal / Contra / Credit Note / Debit Note vouchers ──────────────────
 
 // Serves Journal, Contra, Notes and Vouchers pages (all under Vouchers).
 router.get("/accounts/journal-vouchers", requireModuleView("page:/accounts/vouchers"), async (req, res): Promise<void> => {
-  // LBAC: journal vouchers are Head Office accounting — non-HO users see nothing
-  if ((req as any).employee?.branchType !== 'headoffice') { res.json([]); return; }
-
   const { type, fromDate, toDate } = req.query as { type?: string; fromDate?: string; toDate?: string };
   const conds: string[] = [];
   const params: any[] = [];
+
+  // LBAC: Head Office sees everything; a branch user sees only vouchers
+  // stamped with their own location (the stamp every posting leg inherits).
+  const employee = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
+  if (employee?.branchType && employee.branchType !== "headoffice") {
+    const own = callerLocation(employee);
+    params.push(own.locationType); conds.push(`v.location_type = $${params.length}`);
+    params.push(own.locationId);   conds.push(`v.location_id = $${params.length}`);
+  }
   if (type && JV_TYPES.has(type)) { params.push(type); conds.push(`v.voucher_type = $${params.length}`); }
   if (isDate(fromDate)) { params.push(fromDate); conds.push(`v.voucher_date >= $${params.length}`); }
   if (isDate(toDate))   { params.push(toDate);   conds.push(`v.voucher_date <= $${params.length}`); }
@@ -321,14 +474,55 @@ router.get("/accounts/journal-vouchers", requireModuleView("page:/accounts/vouch
   res.json(vouchers.map((v: any) => serializeVoucher(v, linesByVoucher.get(v.id) ?? [])));
 });
 
+/**
+ * The locations the caller may record a manual voucher under, each with the
+ * cash/bank ledger ids the voucher dialog should offer for it. Head Office's
+ * set is the STD-CASH/STD-BANK subtrees minus every branch-owned till; a
+ * branch's set is its own cash ledger(s). `ownedLedgers` maps every
+ * branch-owned ledger to its owner so the dialog can hide accounts belonging
+ * to a location other than the one selected — the same rule the server
+ * enforces on save.
+ */
+router.get("/accounts/voucher-locations", requireModuleView("page:/accounts/vouchers"), async (req, res): Promise<void> => {
+  const employee = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
+  const { rows: whs } = await pool.query(
+    `SELECT id, name, cash_ledger_id FROM warehouses ORDER BY name`
+  );
+  // Retired outlets are a total hide — they take no new activity, vouchers included.
+  const outs = (await outletWritesBlocked(pool))
+    ? []
+    : (await pool.query(`SELECT id, name, cash_ledger_id FROM outlets ORDER BY name`)).rows;
+
+  const ownedMap = await locationOwnedLedgerMap();
+  const hoCashBank = await ledgerIdsUnderCodes(["STD-CASH", "STD-BANK"]);
+  for (const id of ownedMap.keys()) hoCashBank.delete(id);
+
+  const all = [
+    { locationType: "headoffice", locationId: 0, name: "Head Office", cashBankLedgerIds: [...hoCashBank] },
+    ...whs.map((w: any) => ({
+      locationType: "warehouse", locationId: Number(w.id), name: w.name,
+      cashBankLedgerIds: w.cash_ledger_id ? [Number(w.cash_ledger_id)] : [],
+    })),
+    ...outs.map((o: any) => ({
+      locationType: "outlet", locationId: Number(o.id), name: o.name,
+      cashBankLedgerIds: o.cash_ledger_id ? [Number(o.cash_ledger_id)] : [],
+    })),
+  ];
+
+  const isHO = !employee?.branchType || employee.branchType === "headoffice";
+  const own = callerLocation(employee);
+  const locations = isHO
+    ? all
+    : all.filter((l) => l.locationType === own.locationType && l.locationId === Number(own.locationId));
+
+  const ownedLedgers = [...ownedMap.entries()].flatMap(([ledgerId, owners]) =>
+    owners.map((o) => ({ ledgerId, locationType: o.locationType, locationId: o.locationId }))
+  );
+
+  res.json({ locations, ownedLedgers, headOfficeCashBankLedgerIds: [...hoCashBank] });
+});
+
 router.post("/accounts/journal-vouchers", requireModuleAction("page:/accounts/vouchers", "add"), async (req, res): Promise<void> => {
-  // Same gate as the list route: journal vouchers are Head Office accounting.
-  // A non-HO user is not shown them at all, so they may not create one either —
-  // otherwise they'd write a voucher into books they cannot read back.
-  if ((req as any).employee?.branchType !== "headoffice") {
-    res.status(403).json({ error: "Journal vouchers are Head Office accounting. Sign in from Head Office to create them." });
-    return;
-  }
   const body = (req.body ?? {}) as Record<string, any>;
   const voucherType = String(body.voucherType ?? "journal");
   if (!JV_TYPES.has(voucherType)) {
@@ -344,12 +538,16 @@ router.post("/accounts/journal-vouchers", requireModuleAction("page:/accounts/vo
   if (!built.ok) { res.status(400).json({ error: built.error }); return; }
   const { lines, partyLedgerId, totalAmount } = built;
 
-  // Manual vouchers are stamped with the creator's location (session-derived,
-  // never the body). Voucher entry is Head Office accounting, so in practice
-  // this stamps 'headoffice'/0 — which is what keeps manual journals visible
-  // when the books are viewed under the Head Office location slice instead of
-  // silently falling into the unattributable company bucket.
-  const { locationType, locationId } = callerLocation((req as any).employee);
+  // The voucher's location: chosen in the dialog (Head Office / a warehouse /
+  // an outlet), authorized against the caller, defaulting to the caller's own
+  // location when an older client omits it. The stamp is what keeps the entry
+  // visible in that location's books instead of falling into the
+  // unattributable company bucket.
+  const locRes = await resolveVoucherLocation((req as any).employee, body, null);
+  if (!locRes.ok) { res.status(locRes.status).json({ error: locRes.error }); return; }
+  const { locationType, locationId } = locRes.loc;
+  const lineCheck = await checkLinesLocation(lines, locRes.loc, (req as any).employee);
+  if (!lineCheck.ok) { res.status(lineCheck.status).json({ error: lineCheck.error }); return; }
 
   const client = await pool.connect();
   try {
@@ -386,15 +584,19 @@ router.post("/accounts/journal-vouchers", requireModuleAction("page:/accounts/vo
 });
 
 router.get("/accounts/journal-vouchers/:id", requireModuleView("page:/accounts/vouchers"), async (req, res): Promise<void> => {
-  // Same gate as the list route: journal vouchers are Head Office accounting.
-  // 404 (not 403) — a branch user must not learn which voucher ids exist.
-  if ((req as any).employee?.branchType !== "headoffice") {
-    res.status(404).json({ error: "Voucher not found" });
-    return;
-  }
   const id = parseInt(req.params.id, 10);
   const voucher = await fetchVoucher(id);
   if (!voucher) { res.status(404).json({ error: "Voucher not found" }); return; }
+  // LBAC: a branch user may only read vouchers stamped with their own
+  // location. 404 (not 403) — they must not learn which voucher ids exist.
+  const employee = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
+  if (employee?.branchType && employee.branchType !== "headoffice") {
+    const own = callerLocation(employee);
+    if (voucher.locationType !== own.locationType || Number(voucher.locationId) !== Number(own.locationId)) {
+      res.status(404).json({ error: "Voucher not found" });
+      return;
+    }
+  }
   res.json(voucher);
 });
 
@@ -414,12 +616,6 @@ router.get("/accounts/journal-vouchers/:id", requireModuleView("page:/accounts/v
  * buildDerivedPostings() at query time.
  */
 router.patch("/accounts/journal-vouchers/:id", requireModuleAction("page:/accounts/vouchers", "edit"), async (req, res): Promise<void> => {
-  // Same gate as the list route: journal vouchers are Head Office accounting.
-  // A non-HO user is not shown them at all, so they may not edit one either.
-  if ((req as any).employee?.branchType !== "headoffice") {
-    res.status(403).json({ error: "Journal vouchers are maintained at Head Office" }); return;
-  }
-
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid voucher id" }); return; }
 
@@ -438,10 +634,21 @@ router.patch("/accounts/journal-vouchers/:id", requireModuleAction("page:/accoun
   // Unlocked pre-read so the common rejections come back with a clear message
   // without holding a row lock through validation.
   const { rows: [pre] } = await pool.query(
-    `SELECT id, voucher_type, voucher_number, origin, source_module, party_ledger_id
+    `SELECT id, voucher_type, voucher_number, origin, source_module, party_ledger_id,
+            location_type, location_id
        FROM journal_vouchers WHERE id = $1`, [id]
   );
   if (!pre) { res.status(404).json({ error: "Voucher not found" }); return; }
+  // LBAC: a branch user may only edit vouchers stamped with their own
+  // location. 404, matching the read path — foreign ids must stay invisible.
+  const employee = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
+  if (employee?.branchType && employee.branchType !== "headoffice") {
+    const own = callerLocation(employee);
+    if ((pre.location_type ?? null) !== own.locationType || Number(pre.location_id ?? -1) !== Number(own.locationId)) {
+      res.status(404).json({ error: "Voucher not found" });
+      return;
+    }
+  }
   if (!isEditableVoucher(pre)) { res.status(409).json({ error: lockedReason(pre) }); return; }
 
   // The type is fixed. Changing it would contradict the voucher number's own
@@ -490,6 +697,17 @@ router.patch("/accounts/journal-vouchers/:id", requireModuleAction("page:/accoun
   if (!built.ok) { res.status(400).json({ error: built.error }); return; }
   const { lines, partyLedgerId, totalAmount } = built;
 
+  // Location: omitted → the voucher keeps its current stamp (an edit that
+  // doesn't mention location never moves the entry between books); provided →
+  // re-authorized and re-validated exactly like a create.
+  const currentLoc: VoucherLoc | null = pre.location_type
+    ? { locationType: pre.location_type, locationId: Number(pre.location_id ?? 0) }
+    : null;
+  const locRes = await resolveVoucherLocation(employee, body, currentLoc);
+  if (!locRes.ok) { res.status(locRes.status).json({ error: locRes.error }); return; }
+  const lineCheck = await checkLinesLocation(lines, locRes.loc, employee);
+  if (!lineCheck.ok) { res.status(lineCheck.status).json({ error: lineCheck.error }); return; }
+
   const updatedBy = (req as any).employee?.username ?? "system";
 
   const client = await pool.connect();
@@ -521,9 +739,11 @@ router.patch("/accounts/journal-vouchers/:id", requireModuleAction("page:/accoun
     await client.query(
       `UPDATE journal_vouchers
           SET voucher_date = $2, narration = $3, reason = $4, party_ledger_id = $5,
-              total_amount = $6, updated_at = now(), updated_by = $7
+              total_amount = $6, updated_at = now(), updated_by = $7,
+              location_type = $8, location_id = $9
         WHERE id = $1`,
-      [id, voucherDate, narration, reason, partyLedgerId, totalAmount, updatedBy]
+      [id, voucherDate, narration, reason, partyLedgerId, totalAmount, updatedBy,
+       locRes.loc.locationType, locRes.loc.locationId]
     );
 
     // Replace the lines in place. Same voucher id, same number — so every
@@ -569,12 +789,6 @@ router.patch("/accounts/journal-vouchers/:id", requireModuleAction("page:/accoun
 });
 
 router.delete("/accounts/journal-vouchers/:id", requireModuleAction("page:/accounts/vouchers", "delete"), async (req, res): Promise<void> => {
-  // Same gate as the list route: journal vouchers are Head Office accounting.
-  // A non-HO user is not shown them at all, so they may not delete one either.
-  if ((req as any).employee?.branchType !== "headoffice") {
-    res.status(403).json({ error: "Journal vouchers are Head Office accounting. Sign in from Head Office to delete them." });
-    return;
-  }
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid voucher id" }); return; }
 
@@ -592,10 +806,22 @@ router.delete("/accounts/journal-vouchers/:id", requireModuleAction("page:/accou
     // deletable, because deletion is a capability this screen has always had and
     // silently withdrawing it for every historical voucher is its own hazard.
     const { rows: [v] } = await client.query(
-      `SELECT id, voucher_number, voucher_type, total_amount, origin, source_module
+      `SELECT id, voucher_number, voucher_type, total_amount, origin, source_module,
+              location_type, location_id
          FROM journal_vouchers WHERE id = $1 FOR UPDATE`, [id]
     );
     if (!v) { await client.query("ROLLBACK"); res.status(404).json({ error: "Voucher not found" }); return; }
+    // LBAC: a branch user may only delete vouchers stamped with their own
+    // location. 404, matching the read path.
+    const employee = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
+    if (employee?.branchType && employee.branchType !== "headoffice") {
+      const own = callerLocation(employee);
+      if ((v.location_type ?? null) !== own.locationType || Number(v.location_id ?? -1) !== Number(own.locationId)) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ error: "Voucher not found" });
+        return;
+      }
+    }
     if (v.origin === "system") {
       await client.query("ROLLBACK");
       res.status(409).json({ error: lockedReason(v, "delete") });

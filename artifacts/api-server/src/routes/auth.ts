@@ -293,12 +293,15 @@ router.put('/auth/location-pref', async (req, res): Promise<void> => {
 
   const body = (req.body ?? {}) as Record<string, unknown>;
   const locationType = body.locationType;
-  if (locationType !== 'all' && locationType !== 'warehouse' && locationType !== 'outlet') {
-    res.status(400).json({ error: "locationType must be 'all', 'warehouse' or 'outlet'" }); return;
+  if (locationType !== 'all' && locationType !== 'warehouse' && locationType !== 'outlet' && locationType !== 'headoffice') {
+    res.status(400).json({ error: "locationType must be 'all', 'headoffice', 'warehouse' or 'outlet'" }); return;
   }
   let pref: { locationType: string; locationId?: number; locationName?: string };
   if (locationType === 'all') {
     pref = { locationType: 'all' };
+  } else if (locationType === 'headoffice') {
+    // Singular — no id needed; the UI restores it by type.
+    pref = { locationType: 'headoffice', locationId: 1, locationName: 'Head Office' };
   } else {
     const locationId = Number(body.locationId);
     if (!Number.isInteger(locationId) || locationId <= 0) {

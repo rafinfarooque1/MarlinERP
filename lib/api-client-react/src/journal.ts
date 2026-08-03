@@ -77,6 +77,9 @@ export interface JournalVoucher {
   updatedBy?: string | null;
   /** Concurrency token; echo back as expectedRev when editing. */
   rev?: string | null;
+  /** Location the voucher (and every posting it derives) belongs to. */
+  locationType?: 'headoffice' | 'warehouse' | 'outlet' | null;
+  locationId?: number | null;
   lines: JournalVoucherLine[];
 }
 
@@ -95,6 +98,14 @@ export interface CreateJournalVoucherBody {
   /** notes only */
   partyId?: number;
   counterLedgerId?: number;
+  /**
+   * Where the voucher belongs. Mandatory in the UI; the server defaults an
+   * omitted location to the caller's own and rejects locations the caller may
+   * not write to (branch staff: own location only).
+   */
+  locationType?: 'headoffice' | 'warehouse' | 'outlet';
+  /** Ignored for headoffice (always 0 on the server). */
+  locationId?: number;
 }
 
 export interface DayBookEntry {
@@ -245,6 +256,32 @@ export function useDeleteJournalVoucher() {
     mutationFn: (id: number) =>
       customFetch<void>(`/api/accounts/journal-vouchers/${id}`, { method: 'DELETE' }),
     onSuccess: () => invalidateBooks(qc),
+  });
+}
+
+// ── Voucher locations ─────────────────────────────────────────────────────────
+export interface VoucherLocationOption {
+  locationType: 'headoffice' | 'warehouse' | 'outlet';
+  locationId: number;
+  name: string;
+  /** Cash/bank ledger ids the voucher dialog should offer for this location. */
+  cashBankLedgerIds: number[];
+}
+
+export interface VoucherLocationsResponse {
+  /** Locations the caller may record a voucher under (branch users: own only). */
+  locations: VoucherLocationOption[];
+  /** Every branch-owned ledger with its owner(s), for hiding foreign accounts. */
+  ownedLedgers: { ledgerId: number; locationType: 'warehouse' | 'outlet'; locationId: number }[];
+  /** HO's own cash/bank set (STD-CASH/STD-BANK subtrees minus branch tills). */
+  headOfficeCashBankLedgerIds: number[];
+}
+
+export function useVoucherLocations() {
+  return useQuery({
+    queryKey: ['/api/accounts/voucher-locations'],
+    queryFn: ({ signal }) =>
+      customFetch<VoucherLocationsResponse>('/api/accounts/voucher-locations', { signal }),
   });
 }
 

@@ -54,7 +54,7 @@ export default function LocationPicker() {
   const { nodes, orphanOutlets } = buildPickerHierarchy(visibleWarehouses, visibleOutlets);
   const totalCount = visibleWarehouses.length + visibleOutlets.length;
 
-  const handleSelect = (locationType: 'warehouse' | 'outlet', locationId: number, locationName: string) => {
+  const handleSelect = (locationType: 'warehouse' | 'outlet' | 'headoffice', locationId: number, locationName: string) => {
     setLocation({ locationType, locationId, locationName });
     navigate('/sales/pos');
   };
@@ -105,6 +105,23 @@ export default function LocationPicker() {
                   </p>
                 </div>
                 <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors shrink-0" />
+              </button>
+            )}
+
+            {/* ── Head Office — sells from HO stock, books to HO's own accounts ── */}
+            {!isWarehouseEmployee && (
+              <button
+                onClick={() => handleSelect('headoffice', 1, 'Head Office')}
+                className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl bg-card border border-border hover:border-amber-400/50 hover:bg-amber-500/5 transition-all text-left group"
+              >
+                <div className="w-9 h-9 rounded-lg bg-amber-500/10 flex items-center justify-center shrink-0">
+                  <MapPin className="w-4.5 h-4.5 text-amber-500" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm">Head Office</p>
+                  <p className="text-xs text-muted-foreground">Sell directly from Head Office stock</p>
+                </div>
+                <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-amber-500 transition-colors shrink-0" />
               </button>
             )}
 

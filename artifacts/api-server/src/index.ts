@@ -1281,6 +1281,19 @@ async function runMigrations() {
     ALTER TABLE receipts ADD COLUMN IF NOT EXISTS source text;
   `);
 
+  // Manual vouchers are location-aware: older user-created vouchers predate
+  // the Location field and were all recorded at Head Office in practice, so
+  // stamp them 'headoffice'/0 (the money-voucher HO convention). System rows
+  // keep NULL on purpose — their producers stamp a location only when a money
+  // leg belongs to a branch till, and rewriting them would relocate postings.
+  // Idempotent: the WHERE clause matches nothing on later boots.
+  await pool.query(`
+    UPDATE journal_vouchers
+       SET location_type = 'headoffice', location_id = 0
+     WHERE location_type IS NULL
+       AND origin IS DISTINCT FROM 'system'
+  `);
+
   // One-time provenance backfill for rows created before the source column
   // existed. Guarded by migration_log, NOT by "source IS NULL": a NULL after
   // this point means an unstamped producer, and re-labelling such rows as

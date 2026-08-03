@@ -28,6 +28,8 @@ function persistPref(state: LocationState): void {
   const body =
     state.locationType === 'warehouse' || state.locationType === 'outlet'
       ? { locationType: state.locationType, locationId: state.locationId, locationName: state.locationName }
+      : state.locationType === 'headoffice'
+      ? { locationType: 'headoffice' }
       : { locationType: 'all' };
   customFetch('/api/auth/location-pref', {
     method: 'PUT',
@@ -81,6 +83,8 @@ export function GlobalLocationSelector({ collapsed = false }: { collapsed?: bool
       const p = JSON.parse(raw);
       if (p.locationType === 'all') {
         setLocation(ALL_LOCATIONS);
+      } else if (p.locationType === 'headoffice') {
+        setLocation({ locationType: 'headoffice', locationId: 1, locationName: 'Head Office' });
       } else if ((p.locationType === 'warehouse' || p.locationType === 'outlet') && p.locationId) {
         setLocation({
           locationType: p.locationType,
@@ -99,6 +103,8 @@ export function GlobalLocationSelector({ collapsed = false }: { collapsed?: bool
       ? <Warehouse className="w-4 h-4 text-blue-500 shrink-0" />
       : locationState.locationType === 'outlet'
       ? <Store className="w-4 h-4 text-emerald-500 shrink-0" />
+      : locationState.locationType === 'headoffice'
+      ? <MapPin className="w-4 h-4 text-amber-500 shrink-0" />
       : <Layers className="w-4 h-4 text-primary shrink-0" />;
 
   const activeName = isLocked
@@ -146,12 +152,16 @@ export function GlobalLocationSelector({ collapsed = false }: { collapsed?: bool
   const value =
     locationState.locationType === 'warehouse' || locationState.locationType === 'outlet'
       ? `${locationState.locationType}:${locationState.locationId}`
+      : locationState.locationType === 'headoffice'
+      ? 'headoffice:1'
       : 'all';
 
   const handleChange = (v: string) => {
     let next: LocationState;
     if (v === 'all') {
       next = ALL_LOCATIONS;
+    } else if (v === 'headoffice:1') {
+      next = { locationType: 'headoffice', locationId: 1, locationName: 'Head Office' };
     } else {
       const [type, rawId] = v.split(':');
       const id = Number(rawId);
@@ -180,6 +190,7 @@ export function GlobalLocationSelector({ collapsed = false }: { collapsed?: bool
         </SelectTrigger>
         <SelectContent align="start" side="top">
           <SelectItem value="all">All Locations</SelectItem>
+          <SelectItem value="headoffice:1">Head Office</SelectItem>
           {(warehouses as any[]).length > 0 && (
             <SelectGroup>
               <SelectLabel className="flex items-center gap-1.5 text-xs">

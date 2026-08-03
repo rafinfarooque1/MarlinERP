@@ -1,0 +1,349 @@
+TASK: Make Manual Vouchers Location-Aware + Add Complete Head Office Support + Sticky Sidebar
+
+OBJECTIVE
+
+Upgrade the ERP so that Head Office, Warehouses, and Outlets are treated equally throughout the system.
+
+The following manual vouchers must become fully location-aware:
+
+• Journal Voucher
+• Contra Voucher
+• Credit Note
+• Debit Note
+
+The implementation must follow the same location architecture already used in Receipt Voucher and Payment Voucher.
+
+Do NOT break existing accounting logic. Trial Balance, Balance Sheet, Profit & Loss, Ledgers, Cash Book, Bank Book, Dashboard, Reports, Audit Logs and Day Book must continue to work correctly.
+
+====================================================
+1. ADD LOCATION FIELD TO MANUAL VOUCHERS
+====================================================
+
+Update the New Voucher dialog.
+
+Add a mandatory field above Date.
+
+Location *
+
+Dropdown:
+
+• Head Office
+• Warehouse
+• Outlet
+
+When a location is selected:
+
+• Load only that location's cash accounts.
+• Load only that location's bank accounts.
+• Store locationId and locationType in the voucher.
+• Every journal entry generated from the voucher must inherit the same location.
+• Every ledger posting must inherit the same location.
+
+The UI order should become:
+
+Voucher Type
+
+Location *
+
+Date
+
+Ledger Lines
+
+Narration
+
+Save Voucher
+
+Location is mandatory.
+
+If empty:
+
+"Please select a location."
+
+====================================================
+2. HEAD OFFICE MUST BECOME A FULL LOCATION
+====================================================
+
+Currently Warehouses and Outlets behave as operational locations.
+
+Head Office must behave exactly the same.
+
+Head Office must support:
+
+• Sales
+• POS
+• Sales Invoice
+• Purchase
+• Purchase Return
+• Sales Return
+• Receipt Voucher
+• Payment Voucher
+• Journal Voucher
+• Contra Voucher
+• Credit Note
+• Debit Note
+• Expenses
+• Cash Balance
+• Bank Accounts
+• Stock
+• Customers
+• Vendors
+• Employees
+• Reports
+• Dashboard
+
+Head Office must appear wherever Warehouse or Outlet appears.
+
+====================================================
+3. CREATE DEFAULT HEAD OFFICE CASH & BANK
+====================================================
+
+If not already present, create:
+
+Head Office Cash
+
+Head Office Bank
+
+These behave exactly like Warehouse Cash.
+
+When Head Office is selected:
+
+Only Head Office Cash and Head Office Bank should appear.
+
+Warehouse cash accounts must not appear.
+
+Outlet cash accounts must not appear.
+
+====================================================
+4. LOCATION-BASED POSTING
+====================================================
+
+Every manual voucher must save:
+
+locationId
+
+locationType
+
+These values must flow automatically into:
+
+• Voucher Header
+• Journal Entries
+• Ledger Entries
+• Cash Book
+• Bank Book
+• Day Book
+• Trial Balance
+• Balance Sheet
+• Profit & Loss
+• Dashboard
+• Audit Log
+• Reports
+
+No report should ignore manually entered vouchers because of missing location.
+
+====================================================
+5. LOCATION PERMISSIONS
+====================================================
+
+Warehouse Employee
+
+• Can only create vouchers for assigned warehouse.
+• Cannot select Head Office.
+• Cannot select another warehouse.
+• Cannot select outlet.
+
+Outlet Employee
+
+• Can only create vouchers for assigned outlet.
+• Cannot select warehouse.
+• Cannot select Head Office.
+
+Head Office Staff
+
+• Can create vouchers only for Head Office unless their role explicitly grants multi-location access.
+
+Management / Admin
+
+Can select:
+
+• Head Office
+• Any Warehouse
+• Any Outlet
+
+Validate permissions on the backend.
+
+Do NOT rely only on hiding UI.
+
+====================================================
+6. EXISTING VOUCHER NUMBERING
+====================================================
+
+Do NOT change voucher numbering.
+
+Continue existing format.
+
+Examples:
+
+JV/2026-27/0005
+
+CN/2026-27/0010
+
+DN/2026-27/0007
+
+CON/2026-27/0003
+
+Only add location metadata.
+
+====================================================
+7. MIGRATE OLD MANUAL VOUCHERS
+====================================================
+
+Existing manual vouchers that have no location should automatically receive:
+
+Head Office
+
+Do NOT change:
+
+Voucher Number
+
+Voucher Date
+
+Amounts
+
+Narration
+
+Ledger Lines
+
+Only populate the location fields.
+
+====================================================
+8. SIDEBAR MUST BE FIXED
+====================================================
+
+The sidebar should never scroll away.
+
+Make it sticky/fixed.
+
+Only the page content should scroll.
+
+Sidebar must always remain visible.
+
+The following should always stay visible:
+
+Dashboard
+
+Operations
+
+Inventory
+
+Production
+
+Sales
+
+HR
+
+Accounts
+
+Company
+
+====================================================
+9. CURRENT LOCATION SHOULD ALWAYS BE VISIBLE
+====================================================
+
+The Current Location selector at the bottom of the sidebar must remain permanently visible.
+
+It should not disappear while scrolling.
+
+Users must always know which location is active.
+
+====================================================
+10. VERIFY ACCOUNTING
+====================================================
+
+Confirm manual vouchers update correctly in:
+
+✓ Trial Balance
+
+✓ Balance Sheet
+
+✓ Profit & Loss
+
+✓ General Ledger
+
+✓ Ledger Statement
+
+✓ Cash Book
+
+✓ Bank Book
+
+✓ Dashboard
+
+✓ Reports
+
+✓ Audit Log
+
+✓ Day Book
+
+====================================================
+11. TEST CASES
+====================================================
+
+Verify:
+
+✓ Journal Voucher from Head Office Cash
+
+✓ Journal Voucher from Warehouse Cash
+
+✓ Journal Voucher from Outlet Cash
+
+✓ Contra between Warehouse Cash and Warehouse Bank
+
+✓ Credit Note
+
+✓ Debit Note
+
+✓ Ledger posting
+
+✓ Dashboard values
+
+✓ Trial Balance
+
+✓ Profit & Loss
+
+✓ Cash Book
+
+✓ Bank Book
+
+✓ Reports
+
+✓ Permission restrictions
+
+✓ Existing vouchers continue working
+
+====================================================
+12. CODE QUALITY
+====================================================
+
+Reuse the existing location-aware accounting engine already implemented for Receipt Voucher and Payment Voucher.
+
+Do NOT duplicate posting logic.
+
+Maintain transactional integrity.
+
+Preserve audit trail.
+
+No hardcoded locations.
+
+No breaking changes.
+
+Maintain complete accounting consistency.
+
+EXPECTED RESULT
+
+• Journal, Contra, Credit Note and Debit Note become fully location-aware.
+• Head Office becomes a complete operational location just like Warehouse and Outlet.
+• Head Office has its own Cash and Bank accounts.
+• All financial reports correctly reflect location-based postings.
+• Existing vouchers continue working without modification.
+• Sidebar remains fixed while scrolling.
+• Current Location selector is always visible.
+• ERP accounting integrity remains 100% consistent.

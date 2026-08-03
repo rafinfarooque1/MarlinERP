@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { SearchableItemSelect, type ItemOption } from '@/components/ui/searchable-item-select';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
-  usePaginatedSales, useCreateSale, useListCustomers, useCreateCustomer,
+  usePaginatedSales, useCreateSale, useListCustomers, useCreateCustomer, useGetMe,
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
   getListCustomersQueryKey, useListCoupons,
   customFetch,
@@ -125,7 +125,7 @@ const saleLineSchema = z.object({
   path: ['unitDiscount'],
 });
 const schema = z.object({
-  locationType: z.enum(['outlet', 'warehouse']).default('outlet'),
+  locationType: z.enum(['outlet', 'warehouse', 'headoffice']).default('outlet'),
   locationId: z.coerce.number().min(1, 'Location required'),
   customerId: z.coerce.number().optional(),
   saleDate: z.string().min(1, 'Date required'),
@@ -169,7 +169,7 @@ interface SalesProps {
    *  managers with POS permission don't see "Access Denied". */
   permissionModule?: string;
   /** When set, the POS form pre-selects this location and the list is filtered to it. */
-  forceLocationType?: 'warehouse' | 'outlet';
+  forceLocationType?: 'warehouse' | 'outlet' | 'headoffice';
   forceLocationId?: number;
   forceLocationName?: string;
   /** Additional outlet IDs to include in the list (used in warehouse mode to show child outlets). */
@@ -178,6 +178,10 @@ interface SalesProps {
 
 export default function Sales({ forceLocationType, forceLocationId, forceLocationName, permissionModule }: SalesProps = {}) {
   const perm = usePermission(permissionModule ?? 'page:/sales/pos');
+  // Head Office as a selling location is offered only to HO/admin users —
+  // branch staff sell from their own location (the server enforces this too).
+  const { data: me } = useGetMe();
+  const isHOUser = !(me as any)?.branchType || (me as any)?.branchType === 'headoffice';
   // Outlet enablement is a Company Settings toggle; go through the shared helper
   // so this page honours it too — an empty list while Outlet Management is off.
   const { data: outlets = [] } = useEnabledOutlets();
@@ -196,7 +200,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const { locationState } = useLocationContext();
   const locFilterType =
     !forceLocationType &&
-    (locationState.locationType === 'warehouse' || locationState.locationType === 'outlet') &&
+    (locationState.locationType === 'warehouse' || locationState.locationType === 'outlet' || locationState.locationType === 'headoffice') &&
     locationState.locationId
       ? locationState.locationType
       : null;
@@ -231,11 +235,15 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     q: debouncedSearch || undefined,
     from: range.from || undefined,
     to: range.to || undefined,
-    ...(forceLocationType === 'warehouse' && forceLocationId
+    ...(forceLocationType === 'headoffice'
+      ? { locationType: 'headoffice' as const }
+      : forceLocationType === 'warehouse' && forceLocationId
       ? { warehouseScope: forceLocationId }
       : forceLocationType === 'outlet' && forceLocationId
         ? { locationType: 'outlet' as const, locationId: forceLocationId }
-        : locFilterType === 'warehouse' && locFilterId
+        : locFilterType === 'headoffice'
+          ? { locationType: 'headoffice' as const }
+          : locFilterType === 'warehouse' && locFilterId
           ? { warehouseScope: locFilterId }
           : locFilterType === 'outlet' && locFilterId
             ? { locationType: 'outlet' as const, locationId: locFilterId }
@@ -341,7 +349,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const openEdit = (sale: any) => {
     setEditItem(sale);
     form.reset({
-      locationType: (sale.locationType ?? 'outlet') as 'outlet' | 'warehouse',
+      locationType: (sale.locationType ?? 'outlet') as 'outlet' | 'warehouse' | 'headoffice',
       locationId: sale.locationId ?? sale.outletId ?? 0,
       customerId: sale.customerId ?? undefined,
       saleDate: sale.saleDate,
@@ -438,7 +446,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // When the Sales segment forces a specific location, override the default form values
   const effectiveDefaultValues: FormValues = useMemo(() => ({
     ...defaultFormValues,
-    locationType: (forceLocationType ?? defaultFormValues.locationType) as 'outlet' | 'warehouse',
+    locationType: (forceLocationType ?? defaultFormValues.locationType) as 'outlet' | 'warehouse' | 'headoffice',
     locationId: forceLocationId ?? defaultFormValues.locationId,
   }), [forceLocationType, forceLocationId]);
 
@@ -468,7 +476,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       setEditItem(null);
       form.reset({
         ...effectiveDefaultValues,
-        locationType: (q.locationType ?? 'outlet') as 'outlet' | 'warehouse',
+        locationType: (q.locationType ?? 'outlet') as 'outlet' | 'warehouse' | 'headoffice',
         locationId: Number(q.locationId ?? 0),
         customerId: q.customerId ?? undefined,
         saleDate: new Date().toISOString().split('T')[0],
@@ -1154,13 +1162,16 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       onValueChange={v => {
                         const [type, idStr] = v.split(':');
                         field.onChange(Number(idStr));
-                        form.setValue('locationType', type as 'outlet' | 'warehouse');
+                        form.setValue('locationType', type as 'outlet' | 'warehouse' | 'headoffice');
                         form.setValue('lineItems', [{ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false }]);
                       }}
                       value={field.value && field.value > 0 ? `${form.watch('locationType')}:${field.value}` : ''}
                     >
                       <FormControl><SelectTrigger><SelectValue placeholder={outletsEnabled ? 'Select outlet or warehouse' : 'Select warehouse'} /></SelectTrigger></FormControl>
                       <SelectContent>
+                        {isHOUser && (
+                          <SelectItem value="headoffice:1">🏢 Head Office</SelectItem>
+                        )}
                         {(warehouses as any[]).length > 0 && (
                           <SelectGroup>
                             <SelectLabel>Warehouses</SelectLabel>
