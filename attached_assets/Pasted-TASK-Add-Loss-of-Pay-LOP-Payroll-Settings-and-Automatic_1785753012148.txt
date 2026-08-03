@@ -1,0 +1,290 @@
+TASK: Add Loss of Pay (LOP) Payroll Settings and Automatic Salary Calculation
+
+OBJECTIVE
+
+Enhance the Payroll Settings module by introducing configurable Loss of Pay (LOP) rules. The ERP should automatically calculate payable salary based on configured working days and allowed paid casual leave.
+
+====================================================
+1. ADD NEW PAYROLL SETTINGS
+====================================================
+
+Under:
+
+Company → Settings → Payroll
+
+Below the existing fields:
+
+• Salary Credit Day
+• Full-Day Work Hours
+• Half-Day Work Hours
+
+Add the following fields:
+
+1. Working Days Per Month *
+   Default: 30
+
+2. Paid Casual Leaves Per Month *
+   Default: 4
+
+3. Enable Loss of Pay (Toggle)
+   Default: ON
+
+The Payroll Settings section should become:
+
+Salary Credit Day
+
+Full-Day Work Hours
+
+Half-Day Work Hours
+
+Working Days Per Month
+
+Paid Casual Leaves Per Month
+
+Enable Loss of Pay
+
+====================================================
+2. LOP CALCULATION LOGIC
+====================================================
+
+Example:
+
+Working Days = 30
+
+Paid Casual Leave = 4
+
+Employee Salary = ₹30,000
+
+Employee Attendance:
+
+Present = 26
+
+Leave = 4
+
+Absent = 0
+
+Salary = Full ₹30,000
+
+Because leave is within the paid leave limit.
+
+----------------------------------------------------
+
+Example 2
+
+Working Days = 30
+
+Paid Leave Allowed = 4
+
+Employee Leave = 6
+
+LOP Days = 2
+
+Per Day Salary
+
+30000 / 30 = ₹1000
+
+LOP Deduction
+
+2 × 1000 = ₹2000
+
+Salary Payable
+
+₹28,000
+
+====================================================
+3. HALF DAY
+====================================================
+
+Half-day should count as:
+
+0.5 Leave
+
+Example
+
+Half Days = 4
+
+Total Leave = 2 Days
+
+This should be included while calculating paid leave.
+
+====================================================
+4. ATTENDANCE INTEGRATION
+====================================================
+
+Payroll must automatically calculate:
+
+Present Days
+
+Paid Leave
+
+LOP Days
+
+Half Days
+
+Salary Deduction
+
+Net Salary
+
+based on Attendance records.
+
+No manual calculation required.
+
+====================================================
+5. PAYROLL SCREEN
+====================================================
+
+When generating payroll, display:
+
+Working Days
+
+Present Days
+
+Paid Leave Used
+
+Allowed Paid Leave
+
+LOP Days
+
+LOP Deduction
+
+Net Salary
+
+Example:
+
+Working Days : 30
+
+Present : 24
+
+Paid Leave : 4 / 4
+
+LOP Days : 2
+
+LOP Deduction : ₹2,000
+
+Net Salary : ₹28,000
+
+====================================================
+6. EMPLOYEE PAYSLIP
+====================================================
+
+Display on Payslip:
+
+Working Days
+
+Present Days
+
+Paid Casual Leave
+
+Loss Of Pay Days
+
+LOP Deduction
+
+Gross Salary
+
+Net Salary
+
+====================================================
+7. SALARY LEDGER
+====================================================
+
+Only the Net Salary payable should be posted.
+
+Example
+
+Gross Salary
+
+₹30,000
+
+LOP Deduction
+
+₹2,000
+
+Salary Expense Ledger
+
+Dr ₹28,000
+
+Salary Payable
+
+Cr ₹28,000
+
+The deducted LOP amount should NOT be posted as Salary Expense.
+
+====================================================
+8. SETTINGS VALIDATION
+====================================================
+
+Working Days
+
+Minimum: 1
+
+Maximum: 31
+
+Paid Casual Leave
+
+Cannot exceed Working Days.
+
+====================================================
+9. EXISTING PAYROLL
+====================================================
+
+Old payroll records must remain unchanged.
+
+Only payroll generated after enabling this feature should use the new LOP calculation.
+
+====================================================
+10. FUTURE READY
+====================================================
+
+Design the settings so future leave policies can be added without database redesign.
+
+Future examples:
+
+• Sick Leave
+• Earned Leave
+• Maternity Leave
+• Paternity Leave
+• Comp Off
+• Optional Holidays
+
+====================================================
+11. TEST CASES
+====================================================
+
+Verify:
+
+✓ 30 Working Days + 4 Leave = Full Salary
+
+✓ 30 Working Days + 5 Leave = 1 Day LOP
+
+✓ Half-Day Calculation
+
+✓ Payroll Generation
+
+✓ Payslip
+
+✓ Salary Expense Ledger
+
+✓ Salary Payable Ledger
+
+✓ Trial Balance
+
+✓ Profit & Loss
+
+✓ Dashboard
+
+====================================================
+12. ACCOUNTING INTEGRITY
+====================================================
+
+LOP deductions must automatically reduce:
+
+• Salary Expense
+• Salary Payable
+
+without affecting any other ledgers.
+
+Trial Balance, Profit & Loss, Balance Sheet, Payroll Reports, Employee Ledger and Dashboard must remain fully reconciled.
+
+Expected Result:
+
+The ERP should automatically calculate salary based on configurable Working Days and Paid Casual Leave. Employees who stay within the allowed paid leave receive full salary. Any leave beyond the configured limit is treated as Loss of Pay (LOP), reducing both Salary Expense and Salary Payable automatically while maintaining complete accounting integrity.
