@@ -263,21 +263,46 @@ function PayslipSheet({
 
         <Separator className="my-4" />
 
-        {/* Attendance */}
-        <div className="grid grid-cols-3 gap-3 text-sm mb-4">
-          <div className="rounded-lg bg-muted/50 p-3 text-center">
-            <p className="text-xs text-muted-foreground">Working Days</p>
-            <p className="font-semibold text-base">{item.workingDays}</p>
+        {/* Attendance. Runs generated since the leave policy exists carry a
+            paid-casual-leave snapshot; stored present days are the days PAID
+            for (worked + paid leave), so Present shows worked days and the
+            leave tile shows used/allowed. Older runs have no snapshot (null,
+            not zero) and keep the original three tiles. */}
+        {item.paidLeaveAllowed != null ? (
+          <div className="grid grid-cols-4 gap-3 text-sm mb-4">
+            <div className="rounded-lg bg-muted/50 p-3 text-center">
+              <p className="text-xs text-muted-foreground">Working Days</p>
+              <p className="font-semibold text-base">{item.workingDays}</p>
+            </div>
+            <div className="rounded-lg bg-muted/50 p-3 text-center">
+              <p className="text-xs text-muted-foreground">Present</p>
+              <p className="font-semibold text-base">{(Number(item.presentDays ?? 0) - Number(item.paidLeaveUsed ?? 0)).toFixed(1)}</p>
+            </div>
+            <div className="rounded-lg bg-muted/50 p-3 text-center">
+              <p className="text-xs text-muted-foreground">Paid Leave</p>
+              <p className="font-semibold text-base text-emerald-700">{Number(item.paidLeaveUsed ?? 0).toFixed(1)}<span className="text-xs text-muted-foreground font-normal"> / {Number(item.paidLeaveAllowed).toFixed(1)}</span></p>
+            </div>
+            <div className="rounded-lg bg-muted/50 p-3 text-center">
+              <p className="text-xs text-muted-foreground">LOP Days</p>
+              <p className="font-semibold text-base text-red-600">{Number(item.lopDays ?? 0).toFixed(1)}</p>
+            </div>
           </div>
-          <div className="rounded-lg bg-muted/50 p-3 text-center">
-            <p className="text-xs text-muted-foreground">Present</p>
-            <p className="font-semibold text-base">{Number(item.presentDays ?? 0).toFixed(1)}</p>
+        ) : (
+          <div className="grid grid-cols-3 gap-3 text-sm mb-4">
+            <div className="rounded-lg bg-muted/50 p-3 text-center">
+              <p className="text-xs text-muted-foreground">Working Days</p>
+              <p className="font-semibold text-base">{item.workingDays}</p>
+            </div>
+            <div className="rounded-lg bg-muted/50 p-3 text-center">
+              <p className="text-xs text-muted-foreground">Present</p>
+              <p className="font-semibold text-base">{Number(item.presentDays ?? 0).toFixed(1)}</p>
+            </div>
+            <div className="rounded-lg bg-muted/50 p-3 text-center">
+              <p className="text-xs text-muted-foreground">LOP Days</p>
+              <p className="font-semibold text-base text-red-600">{Number(item.lopDays ?? 0).toFixed(1)}</p>
+            </div>
           </div>
-          <div className="rounded-lg bg-muted/50 p-3 text-center">
-            <p className="text-xs text-muted-foreground">LOP Days</p>
-            <p className="font-semibold text-base text-red-600">{Number(item.lopDays ?? 0).toFixed(1)}</p>
-          </div>
-        </div>
+        )}
 
         {/* Earnings */}
         <div className="space-y-1 mb-4">
@@ -613,6 +638,7 @@ export default function Payroll() {
     const rows = filtered.map(p => ({
       Employee: p.employeeName, Branch: p.branchName, Month: MONTHS[(p.month ?? 1) - 1],
       Year: p.year, 'Working Days': p.workingDays, 'Present Days': p.presentDays,
+      'Paid Leave Used': p.paidLeaveUsed ?? '', 'Paid Leave Allowed': p.paidLeaveAllowed ?? '',
       'LOP Days': p.lopDays, 'Basic Salary': p.baseSalary, 'Gross Pay': p.grossPay,
       Allowances: p.allowancesTotal, Deductions: p.deductions,
       'Advance Deduction': p.advanceDeduction ?? 0,

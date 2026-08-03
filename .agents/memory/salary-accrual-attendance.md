@@ -5,6 +5,11 @@ description: Rules that keep the daily salary accrual and the month-end payroll 
 
 Salary accrues **per attended day**, at payroll's rate — not per calendar day.
 
+Since Aug 2026 the day's worth comes from the company leave policy
+(`dayContribution` → {work, leave} and the paid-casual-leave allowance — see
+lop-leave-policy.md); the accrual walks the month cumulatively (cumWork/cumLeave)
+and charges each day the delta. The rounding rules below still hold verbatim.
+
 ## Reproduce payroll's arithmetic, don't re-derive it
 
 The month's earned basic must be computed with payroll's own expression, using the

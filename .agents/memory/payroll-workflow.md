@@ -25,9 +25,11 @@ Ledgers are per-employee, auto-provisioned by `findOrProvisionLedger()` in hr.ts
 ## Hours-based attendance scoring (payroll generate)
 - `fullDayHours` / `halfDayHours` read from `company_settings.general_settings` (defaults: 9 / 4.5)
 - Configurable via Settings page → Payroll section
-- `leave` days always count as 1 full day (no LOP)
+- Since Aug 2026, `leave` days are paid only through the company paid-casual-leave allowance; half days consume 0.5 of it — see lop-leave-policy.md for the full rule (dayContribution / monthLeaveSummary are the only pricing path)
+- Working-days basis is company-wide (`payrollWorkingDays`, default 30); `pay_components.working_days_per_month` is retired from pricing
 - Only checkIn without checkOut → counted as full day
 - No attendance records → assume full attendance
+- `payroll.paid_leave_used`/`paid_leave_allowed` snapshot the policy per run; NULL = pre-policy row, UIs omit the leave line
 
 ## Advance deduction
 - Pending advances fetched at generate time, summed → `advance_deduction` stored on payroll row

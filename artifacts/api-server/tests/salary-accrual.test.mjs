@@ -59,19 +59,23 @@ async function ledgerBalance(code) {
 async function main() {
   TOKEN = (await api("POST", "/auth/login", { username: "admin", password: "marlin1458" })).token;
 
+  // The pay basis is COMPANY policy since the Aug 2026 LOP change. Pin the
+  // values every expectation below assumes, restore at the end.
+  await pinPolicy({ payrollWorkingDays: 30, paidCasualLeavesPerMonth: 4, lopEnabled: true });
+
   const hiers = await api("GET", "/hr/hierarchies");
   const hierarchyId = hiers[0]?.id;
   const stamp = Date.now();
 
-  // Salary 26000 over a 26-working-day basis = a clean ₹1000/day.
+  // Salary 30000 over the 30-working-day company basis = a clean ₹1000/day.
   const emp = await api("POST", "/hr/employees", {
     name: `AccrualTest_${stamp}`, username: `acctest_${stamp}`,
     email: `acc${stamp}@test.local`, phone: "9000000000",
     hierarchyId, branchType: "headoffice", branchId: 1,
-    salary: 26000, joinDate: D(1),
+    salary: 30000, joinDate: D(1),
   });
   const EID = emp.id;
-  console.log(`\nfixture employee #${EID} — ₹26,000/month, joined ${D(1)}\n`);
+  console.log(`\nfixture employee #${EID} — ₹30,000/month, joined ${D(1)}\n`);
 
   const setAtt = (day, status) => api("PUT", "/hr/attendance", { employeeId: EID, date: D(day), status });
 
@@ -83,11 +87,14 @@ async function main() {
     `accrued ₹${t.total} over ${t.earning} earning day(s); expected ₹1000 / 1`);
 
   // ── B. Half day ─────────────────────────────────────────────────────────
+  // Under the leave policy a half day is half worked + half a casual leave;
+  // while the monthly allowance (4) lasts, the leave half is PAID, so the day
+  // still earns a full ₹1000. (Unpaid halves are the LOP suite's job.)
   await setAtt(2, "half_day");
   t = await accrualTotal(EID);
-  check("B", "Half day earns half a day's salary",
-    near(t.total, 1500),
-    `accrued ₹${t.total}; expected ₹1500 (1000 + 500)`);
+  check("B", "Half day tops up from the paid-leave allowance to a full day",
+    near(t.total, 2000),
+    `accrued ₹${t.total}; expected ₹2000 (1000 + 1000: half worked + half paid leave)`);
 
   // ── C. Absent / LOP ─────────────────────────────────────────────────────
   await setAtt(3, "absent");
@@ -96,27 +103,28 @@ async function main() {
     `SELECT amount, attendance_basis FROM salary_accruals WHERE employee_id=$1 AND accrual_date=$2`,
     [EID, D(3)]);
   check("C", "Absent day accrues nothing",
-    near(t.total, 1500) && near(absRow?.amount ?? -1, 0),
+    near(t.total, 2000) && near(absRow?.amount ?? -1, 0),
     `month total ₹${t.total} (unchanged); day row = ₹${absRow?.amount} basis '${absRow?.attendance_basis}'`);
 
-  // ── D. Full day → half day correction ───────────────────────────────────
+  // ── D. Full day → absent correction ─────────────────────────────────────
   const beforeD = await q(
     `SELECT COUNT(*) AS n FROM salary_accruals WHERE employee_id=$1 AND accrual_date=$2`, [EID, D(1)]);
-  await setAtt(1, "half_day");
+  await setAtt(1, "absent");
   t = await accrualTotal(EID);
   const afterD = await q(
     `SELECT COUNT(*) AS n, SUM(amount) AS amt FROM salary_accruals WHERE employee_id=$1 AND accrual_date=$2`,
     [EID, D(1)]);
-  check("D", "Full→half correction adjusts in place, never duplicates",
+  check("D", "Full→absent correction adjusts in place, never duplicates",
     near(t.total, 1000) && Number(afterD[0].n) === 1 && Number(beforeD[0].n) === 1,
     `month total ₹${t.total} (expected ₹1000); rows for ${D(1)}: ${beforeD[0].n} → ${afterD[0].n} (must stay 1), value ₹${afterD[0].amt}`);
+  await setAtt(1, "present"); // put the day back
 
   // ── E. Absent → present correction ──────────────────────────────────────
   await setAtt(3, "present");
   t = await accrualTotal(EID);
   check("E", "Absent→present correction recognises the extra earned salary",
-    near(t.total, 2000),
-    `month total ₹${t.total}; expected ₹2000 (500 + 500 + 1000)`);
+    near(t.total, 3000),
+    `month total ₹${t.total}; expected ₹3000 (1000 + 1000 + 1000)`);
 
   // ── F. Multiple days: accrual == payroll ────────────────────────────────
   await setAtt(6, "present");
@@ -230,6 +238,8 @@ async function main() {
   await roundingAndStalenessTests(hierarchyId);
   await raceTest(hierarchyId);
 
+  await restorePolicy();
+
   const failed = results.filter((r) => !r.pass);
   console.log(`\n${results.length - failed.length}/${results.length} passed`);
   if (failed.length) console.log("FAILED: " + failed.map((f) => f.id).join(", "));
@@ -239,9 +249,9 @@ async function main() {
 
 /**
  * Q and R need a salary that does NOT divide evenly by the working-days basis.
- * ₹26,000/26 is a clean ₹1,000 a day and hides every rounding question, so this
- * fixture uses ₹20,000/26 = ₹769.230769…, where rounding the rate before
- * multiplying and rounding after differ by two paise.
+ * ₹30,000/30 is a clean ₹1,000 a day and hides every rounding question, so this
+ * fixture uses ₹20,000/30 = ₹666.666…, where rounding the rate before
+ * multiplying and rounding after differ by paise.
  */
 async function roundingAndStalenessTests(hierarchyId) {
   const stamp = Date.now();
@@ -379,6 +389,16 @@ async function raceTest(hierarchyId) {
 }
 
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
+
+// ── Company leave-policy pin/restore ────────────────────────────────────────
+let savedGS = null;
+async function pinPolicy(patch) {
+  savedGS = (await api("GET", "/company/settings")).generalSettings ?? {};
+  await api("PATCH", "/company/settings", { generalSettings: { ...savedGS, ...patch } });
+}
+async function restorePolicy() {
+  if (savedGS) await api("PATCH", "/company/settings", { generalSettings: savedGS });
+}
 
 async function payableFor(empId) {
   const net = await ledgerNet(`SAL-PAY-${empId}`, -1);

@@ -60,6 +60,10 @@ export interface EnrichedPayrollRecord {
   paidAmount: number;
   paymentMode?: string | null;
   advanceDeduction: number;
+  // Leave-policy snapshot (Aug 2026 LOP change). Null on payroll rows
+  // generated before it — UIs must omit the leave line then, never show 0.
+  paidLeaveUsed?: number | null;
+  paidLeaveAllowed?: number | null;
 }
 
 export interface EmployeeAdvance {

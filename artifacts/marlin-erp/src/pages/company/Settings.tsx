@@ -57,6 +57,12 @@ const SETTING_GROUPS: SettingGroup[] = [
       { key: 'salaryDay', label: 'Salary Credit Day', type: 'number', defaultValue: 28 },
       { key: 'fullDayHours', label: 'Full-Day Work Hours', type: 'number', defaultValue: 9 },
       { key: 'halfDayHours', label: 'Half-Day Work Hours', type: 'number', defaultValue: 4.5 },
+      // Company-wide leave policy (Aug 2026): one day of salary = monthly
+      // salary ÷ working days; casual leave is paid up to the monthly
+      // allowance, beyond it each leave day is deducted as Loss of Pay.
+      { key: 'payrollWorkingDays', label: 'Working Days Per Month', type: 'number', defaultValue: 30 },
+      { key: 'paidCasualLeavesPerMonth', label: 'Paid Casual Leaves Per Month', type: 'number', defaultValue: 4 },
+      { key: 'lopEnabled', label: 'Enable Loss of Pay (LOP)', type: 'toggle', defaultValue: true },
     ],
   },
   {

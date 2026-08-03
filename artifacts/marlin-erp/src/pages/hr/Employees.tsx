@@ -22,7 +22,8 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Plus, Search, Users, Download, Eye, Settings2, Trash2, UserX, UserCheck, Edit2, AlertTriangle, KeyRound, Copy } from 'lucide-react';
 import { toast } from 'sonner';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
+import { customFetch } from '@workspace/api-client-react';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -75,21 +76,31 @@ function PayStructureEditor({ employee }: { employee: any }) {
   const { data: pc, isLoading } = useGetPayComponents(employee.id);
   const setMutation = useSetPayComponents();
 
-  const [workingDays, setWorkingDays] = useState<number | null>(null);
   const [allowances, setAllowances] = useState<PayComponent[] | null>(null);
   const [deductions, setDeductions] = useState<PayComponent[] | null>(null);
 
-  const effectiveWD = workingDays ?? pc?.workingDaysPerMonth ?? 26;
+  // Working days are COMPANY policy (Company → Settings → Payroll) since the
+  // Aug 2026 LOP change — every employee is priced on the same basis, so the
+  // per-employee field is gone and the preview reads the company setting.
+  const { data: companySettings } = useQuery<any>({
+    queryKey: ['company-settings-payroll-preview'],
+    queryFn: () => customFetch('/api/company/settings'),
+    staleTime: 60_000,
+  });
+  const effectiveWD = Number(companySettings?.generalSettings?.payrollWorkingDays ?? 30) || 30;
+
   const effectiveAllowances = allowances ?? pc?.allowances ?? [];
   const effectiveDeductions = deductions ?? pc?.deductions ?? [];
 
   if (pc && allowances === null) setAllowances(pc.allowances);
   if (pc && deductions === null) setDeductions(pc.deductions);
-  if (pc && workingDays === null) setWorkingDays(pc.workingDaysPerMonth);
 
   const handleSave = () => {
     setMutation.mutate(
-      { employeeId: employee.id, data: { workingDaysPerMonth: effectiveWD, allowances: effectiveAllowances, deductions: effectiveDeductions } },
+      // workingDaysPerMonth is a legacy column payroll no longer reads; the
+      // stored value is passed through untouched so saving allowances never
+      // looks like it changed a pay basis.
+      { employeeId: employee.id, data: { workingDaysPerMonth: pc?.workingDaysPerMonth ?? 30, allowances: effectiveAllowances, deductions: effectiveDeductions } },
       {
         onSuccess: () => { toast.success('Pay structure saved'); queryClient.invalidateQueries({ queryKey: getPayComponentsQueryKey(employee.id) }); },
         onError: (e: any) => toast.error(e?.message || 'Failed to save'),
@@ -159,9 +170,9 @@ function PayStructureEditor({ employee }: { employee: any }) {
 
   return (
     <div className="space-y-5 mt-2">
-      <div className="flex items-center gap-3">
-        <Label className="text-xs text-muted-foreground whitespace-nowrap">Working days/month</Label>
-        <Input type="number" min={1} max={31} value={effectiveWD} onChange={e => setWorkingDays(Number(e.target.value))} className="h-7 w-20 text-sm text-right" />
+      <div className="p-2.5 rounded-lg bg-muted/30 border border-border text-xs text-muted-foreground">
+        Salary is calculated on <span className="font-medium text-foreground">{effectiveWD} working days/month</span> — the
+        company-wide policy set under <span className="font-medium text-foreground">Company → Settings → Payroll</span>.
       </div>
       <Tabs defaultValue="allowances">
         <TabsList className="w-full">

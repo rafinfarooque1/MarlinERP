@@ -1,8 +1,8 @@
 import { pool as _pool } from "@workspace/db";
 import { provisionSalaryLedgers } from "./payrollLedgers";
 import {
-  dayFactor, loadAttendanceThresholds, PUNCHED_HOURS_JOIN,
-  type AttendanceDay, type AttendanceThresholds,
+  dayContribution, loadPayrollSettings, PUNCHED_HOURS_JOIN,
+  type AttendanceDay, type PayrollSettings,
 } from "./attendanceFactor";
 
 /** The shared pg pool, typed structurally so these helpers stay injectable. */
@@ -22,15 +22,18 @@ export interface Querier {
  *     attendance factor for that day  ×  monthly_salary / working_days
  *
  * as expense against the employee's own Salary Payable. A full day earns a full
- * day's pay, a half day earns half, an absent or loss-of-pay day earns nothing.
+ * day's pay, a half day earns half, an absent or loss-of-pay day earns nothing —
+ * and casual leave earns a full day while the month's paid-leave allowance
+ * lasts, then nothing (that is the company's loss-of-pay policy).
  *
  * Both halves of that formula are deliberately payroll's, not this module's:
  *
- *  - the factor comes from `dayFactor` in ./attendanceFactor, the single rule
- *    `POST /hr/payroll/generate` also uses;
- *  - the per-day rate divides by `working_days` (the employee's
- *    working-days-per-month basis, default 26), which is exactly the
- *    `baseSalary / workingDays` that `computePayroll` prices loss of pay at.
+ *  - the day's worked/leave split comes from `dayContribution` and the
+ *    allowance from the company `PayrollLeavePolicy` in ./attendanceFactor,
+ *    the single rule `POST /hr/payroll/generate` also uses;
+ *  - the per-day rate divides by the company-wide `workingDays` basis, which
+ *    is exactly the `baseSalary / workingDays` that `computePayroll` prices
+ *    loss of pay at.
  *
  * That is what makes the two agree. A fully-attended month accrues to precisely
  * the `effectiveBasic` payroll computes, so month-end approval has only
@@ -98,7 +101,13 @@ const monthEnd = (s: string) => {
   return `${y}-${String(m).padStart(2, "0")}-${String(daysInMonth(y, m)).padStart(2, "0")}`;
 };
 
-/** Default working-days-per-month basis, matching payroll's `pay_components` default. */
+/**
+ * LEGACY display fallback only. Pricing no longer reads `pay_components` — the
+ * working-days basis is the company-wide payroll policy (default 30, see
+ * `loadPayrollSettings`). This constant remains solely so accrual rows written
+ * before the column existed still display the basis they were actually priced
+ * on (26 at the time).
+ */
 export const DEFAULT_WORKING_DAYS = 26;
 
 /**
@@ -171,22 +180,7 @@ interface EmployeeRow {
   join_date: unknown;
   created_at: unknown;
   salary_accrual_resume_from: unknown;
-  working_days: number | null;
 }
-
-/**
- * The working-days basis payroll will price this employee's month at.
- *
- * Read from the same `pay_components` row `POST /hr/payroll/generate` reads,
- * with the same default, so the two cannot drift apart.
- */
-const WORKING_DAYS_SELECT = `COALESCE(pc.working_days_per_month, ${DEFAULT_WORKING_DAYS}) AS working_days`;
-const WORKING_DAYS_JOIN = `LEFT JOIN pay_components pc ON pc.employee_id = e.id`;
-
-const workingDaysOf = (row: { working_days?: number | null }) => {
-  const wd = Number(row.working_days ?? DEFAULT_WORKING_DAYS);
-  return wd > 0 ? wd : DEFAULT_WORKING_DAYS;
-};
 
 /**
  * The day attendance-driven pricing takes over from the old flat calendar rule.
@@ -243,10 +237,8 @@ export async function runSalaryAccrual(
   // accrue up to. Deactivation therefore stops future accrual and leaves every
   // day already accrued untouched.
   const { rows: employees } = await pool.query<EmployeeRow>(
-    `SELECT e.id, e.name, e.salary, e.join_date, e.created_at, e.salary_accrual_resume_from,
-            ${WORKING_DAYS_SELECT}
+    `SELECT e.id, e.name, e.salary, e.join_date, e.created_at, e.salary_accrual_resume_from
        FROM employees e
-       ${WORKING_DAYS_JOIN}
       WHERE e.is_active = TRUE AND e.salary > 0${only.replace(" AND id =", " AND e.id =")}
       ORDER BY e.id`,
     params,
@@ -254,7 +246,7 @@ export async function runSalaryAccrual(
 
   // One read for the whole sweep: both are company-wide and re-reading them per
   // employee would only add round-trips.
-  const thresholds = await loadAttendanceThresholds(pool);
+  const settings = await loadPayrollSettings(pool);
   const attendanceFrom = await loadAccrualCutover(pool);
 
   const result: SalaryAccrualResult = { daysAccrued: 0, employeesTouched: 0, totalAmount: 0 };
@@ -286,8 +278,8 @@ export async function runSalaryAccrual(
     const perEmployee = await withEmployeeAccrualLock(pool, e.id, (q) =>
       accrueEmployee(
         q,
-        { id: e.id, startDate, monthlySalary, workingDays: workingDaysOf(e) },
-        { asOf, thresholds, attendanceFrom },
+        { id: e.id, startDate, monthlySalary },
+        { asOf, settings, attendanceFrom },
       ),
     );
 
@@ -335,9 +327,11 @@ export interface AccrueOutcome {
  */
 async function accrueEmployee(
   q: Querier,
-  e: { id: number; startDate: string; monthlySalary: number; workingDays: number },
-  opts: { asOf: string; thresholds: AttendanceThresholds; attendanceFrom: string },
+  e: { id: number; startDate: string; monthlySalary: number },
+  opts: { asOf: string; settings: PayrollSettings; attendanceFrom: string },
 ): Promise<AccrueOutcome> {
+  const { policy, thresholds } = opts.settings;
+  const workingDays = policy.workingDays;
   const locked = await lockedMonths(q, e.id);
 
   // Attendance is loaded for whole MONTHS, not just the accrued span. Whether a
@@ -387,34 +381,43 @@ async function accrueEmployee(
   // days and only rounds the finished loss-of-pay figure, so rounding the rate
   // here first would price every partial month a paisa or two away from the
   // payroll number the same month is eventually approved against.
-  const perDayRate = e.workingDays > 0 ? e.monthlySalary / e.workingDays : 0;
+  const perDayRate = workingDays > 0 ? e.monthlySalary / workingDays : 0;
 
   let days = 0;
   let total = 0;
   let changed = 0;
   let previousTotal = 0;
 
-  // Per-month running state: the cumulative paid-day count and the rounded
-  // earned total it produced, both reset at each month boundary.
+  // Per-month running state: cumulative worked days, cumulative leave taken,
+  // the payable-day total those produced, and the rounded earned total — all
+  // reset at each month boundary. Tracking worked and leave separately is what
+  // lets the paid-leave allowance apply: min(cumLeave, allowance) is paid, the
+  // rest is loss of pay. Month totals are order-independent, so accruing day by
+  // day lands on exactly the payableDays `monthLeaveSummary` computes for the
+  // finished month.
   let curMonth = "";
-  let cumFactor = 0;
+  let cumWork = 0;
+  let cumLeave = 0;
+  let prevPayable = 0;
   let prevExpected = 0;
 
   for (let day = e.startDate; day <= opts.asOf; day = addDays(day, 1)) {
     const { y, m } = parse(day);
     const mk = monthKey(y, m);
-    if (mk !== curMonth) { curMonth = mk; cumFactor = 0; prevExpected = 0; }
+    if (mk !== curMonth) { curMonth = mk; cumWork = 0; cumLeave = 0; prevPayable = 0; prevExpected = 0; }
     if (locked.has(mk)) continue;
 
     // Before the cutover the old flat-calendar rows stand untouched. Their value
     // and their implied paid day still seed the month's running totals, so if the
     // boundary is ever moved into the middle of a month the days after it carry
     // on from where the old rows left off instead of restarting the cap and the
-    // rounding from zero.
+    // rounding from zero. Old factors were pure paid days, so they seed the
+    // worked side.
     if (day < opts.attendanceFrom) {
       const old = existing.get(day);
       if (old) {
-        cumFactor += old.factor;
+        cumWork += old.factor;
+        prevPayable = Math.min(workingDays, cumWork + Math.min(cumLeave, policy.paidCasualLeavesPerMonth));
         prevExpected = round2(prevExpected + old.amount);
         previousTotal = round2(previousTotal + old.amount);
         total = round2(total + old.amount);
@@ -426,34 +429,45 @@ async function accrueEmployee(
     const tracked = trackedMonths.has(mk);
     const att = attByDate.get(day);
     // An untracked month is full attendance, exactly as payroll treats it. Once
-    // any row exists for the month, a day without one is genuinely absent.
-    const factor = tracked ? dayFactor(att, opts.thresholds) : 1;
-    const basis = !tracked ? "untracked"
+    // any row exists for the month, a day without one is genuinely absent. With
+    // loss of pay disabled, every day is a full paid day by definition — the
+    // month must accrue to the full salary no matter what attendance says.
+    const c = !policy.lopEnabled || !tracked
+      ? { work: 1, leave: 0 }
+      : dayContribution(att, thresholds);
+    const basis = !policy.lopEnabled ? "no_lop"
+      : !tracked ? "untracked"
       : !att ? "absent"
       : att.status === "leave" ? "leave"
-      : factor === 1 ? "full_day"
-      : factor === 0.5 ? "half_day"
+      : c.work === 1 ? "full_day"
+      : c.work === 0.5 ? "half_day"
       : "lop";
 
     // Cumulative-difference pricing: a day is charged the *increase* in the
     // month's earned total, so no per-day rounding accumulates.
     //
     // The total is payroll's own expression, not an equivalent of it —
-    // `effectiveBasic = monthly − round2(lopDays × rate)` with the paid days so
-    // far standing in for presentDays. Computing it the other way round, as
+    // `effectiveBasic = monthly − round2(lopDays × rate)` with the payable days
+    // so far standing in for presentDays. Computing it the other way round, as
     // round2(paidDays × rate), looks identical and is not: at ₹20,000 over 26
     // days it lands on ₹19,230.75 where payroll says ₹19,230.77. Approval would
     // then true up a two-paisa difference that nothing in the books explains.
     //
-    // The cap falls out of the same expression: `max(0, workingDays − paidDays)`
-    // floors loss of pay at zero, so attendance beyond the working-days basis
-    // earns nothing extra and a 31-day month attended in full costs exactly one
-    // monthly salary.
-    cumFactor += factor;
-    const lopDays = Math.max(0, e.workingDays - cumFactor);
+    // Payable days are `worked + min(leave, allowance)`, capped at the
+    // working-days basis: casual leave is paid while the month's allowance
+    // lasts, then earns nothing, and attendance beyond the basis earns nothing
+    // extra — a 31-day month attended in full costs exactly one monthly salary.
+    cumWork += c.work;
+    cumLeave += c.leave;
+    const payable = Math.min(workingDays, cumWork + Math.min(cumLeave, policy.paidCasualLeavesPerMonth));
+    const lopDays = Math.max(0, workingDays - payable);
     const expected = round2(e.monthlySalary - round2(lopDays * perDayRate));
     const amount = round2(expected - prevExpected);
+    // The stored factor is the day's payable increment, so a month's factors
+    // still sum to its paid days — which is what the accrual report shows.
+    const factor = round2(payable - prevPayable);
     prevExpected = expected;
+    prevPayable = payable;
 
     const prev = existing.get(day);
     previousTotal = round2(previousTotal + (prev?.amount ?? 0));
@@ -463,7 +477,7 @@ async function accrueEmployee(
     const unchanged = prev
       && Math.abs(prev.amount - amount) < 0.005
       && Math.abs(prev.factor - factor) < 0.005
-      && prev.workingDays === e.workingDays
+      && prev.workingDays === workingDays
       && prev.basis === basis;
     if (unchanged) continue;
 
@@ -483,7 +497,7 @@ async function accrueEmployee(
               attendance_factor = EXCLUDED.attendance_factor,
               working_days      = EXCLUDED.working_days,
               attendance_basis  = EXCLUDED.attendance_basis`,
-      [e.id, day, y, m, amount, e.monthlySalary, daysInMonth(y, m), factor, e.workingDays, basis],
+      [e.id, day, y, m, amount, e.monthlySalary, daysInMonth(y, m), factor, workingDays, basis],
     );
     changed++;
   }
@@ -635,17 +649,12 @@ export async function recalcUnapprovedSalaryAccruals(
     // delete bought nothing and cost a window in which the month read as empty —
     // an approval landing there would true itself up against nothing, post an
     // oversized voucher and lock the month, stranding the deleted days for good.
-    const { rows: [pc] } = await q.query(
-      `SELECT COALESCE(working_days_per_month, ${DEFAULT_WORKING_DAYS}) AS working_days
-         FROM pay_components WHERE employee_id = $1 LIMIT 1`,
-      [employeeId],
-    );
-    const thresholds = await loadAttendanceThresholds(pool);
+    const settings = await loadPayrollSettings(pool);
     const attendanceFrom = await loadAccrualCutover(pool);
     const rebuilt = await accrueEmployee(
       q,
-      { id: employeeId, startDate, monthlySalary, workingDays: workingDaysOf(pc ?? {}) },
-      { asOf, thresholds, attendanceFrom },
+      { id: employeeId, startDate, monthlySalary },
+      { asOf, settings, attendanceFrom },
     );
 
     return {

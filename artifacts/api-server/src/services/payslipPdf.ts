@@ -44,6 +44,12 @@ export interface PayslipPdfInput {
   presentDays: number;
   lopDays: number;
   lopDeduction: number;
+  // ── Leave policy (Aug 2026) ──────────────────────────────────────────────
+  // Null/undefined on payroll rows generated before the LOP change: the
+  // payslip must then keep its original four attendance tiles rather than
+  // invent a "0 leave" figure the run never computed.
+  paidLeaveUsed?: number | null;
+  paidLeaveAllowed?: number | null;
   baseSalary: number;
   allowancesBreakdown: PayslipBreakdownItem[];
   deductionsBreakdown: PayslipBreakdownItem[];
@@ -66,6 +72,11 @@ export interface PayslipPdfInput {
 }
 
 const DASH = "-";
+/** Day counts print whole when whole, one decimal otherwise (4.5, not 4.50). */
+const fmtDays = (n: number) => {
+  const r = Math.round(n * 100) / 100;
+  return Number.isInteger(r) ? String(r) : String(r);
+};
 const has = (n: unknown) => Math.abs(Number(n) || 0) > 0.004;
 const val = (v: unknown) => {
   const s = v == null ? "" : String(v).trim();
@@ -168,12 +179,26 @@ export async function generatePayslipPdf(data: PayslipPdfInput): Promise<Buffer>
   p.fill(M, y, CW, 5.2, TEAL);
   p.txt("ATTENDANCE SUMMARY", M + 3, y + 3.7, { size: 6, bold: true, color: WHITE });
   p.box(M, y, CW, attH, BORDER, 0.25);
-  const att: Array<[string, string]> = [
-    ["Working Days", String(workingDays)],
-    ["Present Days", String(Number(data.presentDays ?? 0))],
-    ["Absent / LOP Days", String(lopDays)],
-    ["Paid Days", String(Math.max(0, Math.round((workingDays - lopDays) * 100) / 100))],
-  ];
+  // Rows generated since the leave policy exists carry the paid-casual-leave
+  // snapshot; stored present days are the days PAID for (worked + paid leave),
+  // so the worked figure shown is present minus the leave credited. Older rows
+  // have no snapshot and keep the original four tiles — absent is not zero.
+  const hasLeavePolicy = data.paidLeaveAllowed != null;
+  const paidLeaveUsed = Number(data.paidLeaveUsed ?? 0);
+  const att: Array<[string, string]> = hasLeavePolicy
+    ? [
+        ["Working Days", String(workingDays)],
+        ["Present Days", fmtDays(Number(data.presentDays ?? 0) - paidLeaveUsed)],
+        ["Paid Casual Leave", `${fmtDays(paidLeaveUsed)} / ${fmtDays(Number(data.paidLeaveAllowed))}`],
+        ["LOP Days", fmtDays(lopDays)],
+        ["Paid Days", fmtDays(Math.max(0, workingDays - lopDays))],
+      ]
+    : [
+        ["Working Days", String(workingDays)],
+        ["Present Days", String(Number(data.presentDays ?? 0))],
+        ["Absent / LOP Days", String(lopDays)],
+        ["Paid Days", String(Math.max(0, Math.round((workingDays - lopDays) * 100) / 100))],
+      ];
   const attW = CW / att.length;
   att.forEach(([label, value], i) => {
     const cx = M + attW * i;

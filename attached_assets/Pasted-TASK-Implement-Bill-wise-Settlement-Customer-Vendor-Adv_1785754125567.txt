@@ -1,0 +1,504 @@
+TASK: Implement Bill-wise Settlement, Customer/Vendor Advance Management, and Automatic Outstanding Adjustment
+
+OBJECTIVE
+
+Upgrade the Receipt Voucher and Payment Voucher modules to support standard ERP bill-wise accounting.
+
+Currently, creating a Receipt Voucher or Payment Voucher only posts accounting entries.
+
+It does NOT settle customer or vendor bills.
+
+Implement proper bill-wise adjustment similar to Tally, SAP, Zoho Books and ERPNext.
+
+====================================================
+1. CUSTOMER RECEIPT VOUCHER
+====================================================
+
+When Party Type = Customer
+
+After selecting the customer,
+
+show a new section:
+
+Outstanding Bills
+
+Display every unpaid and partially paid Sales Invoice.
+
+Columns:
+
+□ Select
+
+Invoice Number
+
+Invoice Date
+
+Invoice Amount
+
+Paid Amount
+
+Outstanding Amount
+
+Due Date
+
+Location
+
+====================================================
+2. BILL SELECTION
+====================================================
+
+User can select one or more invoices.
+
+Example
+
+Invoice A
+Outstanding ₹10,000
+
+Invoice B
+Outstanding ₹5,000
+
+Receipt Amount
+
+₹12,000
+
+Allocation
+
+Invoice A = ₹10,000
+
+Invoice B = ₹2,000
+
+Remaining Outstanding
+
+Invoice B = ₹3,000
+
+Invoice A = Fully Paid
+
+====================================================
+3. RECEIPT GREATER THAN OUTSTANDING
+====================================================
+
+Example
+
+Outstanding
+
+₹10,000
+
+Receipt
+
+₹12,000
+
+Automatically
+
+₹10,000
+
+settles invoice
+
+Remaining
+
+₹2,000
+
+should NOT disappear.
+
+Create
+
+Customer Advance
+
+₹2,000
+
+This advance should be visible on Customer Ledger.
+
+====================================================
+4. CUSTOMER ADVANCE
+====================================================
+
+Whenever a customer has advance,
+
+display
+
+Customer Advance
+
+₹XXXX
+
+When creating the next Sales Invoice,
+
+before payment,
+
+show
+
+Available Advance
+
+₹2,000
+
+Checkbox
+
+Use Customer Advance
+
+Default
+
+ON
+
+Example
+
+Invoice
+
+₹8,000
+
+Advance
+
+₹2,000
+
+Balance
+
+₹6,000
+
+Invoice becomes
+
+Outstanding ₹6,000
+
+Advance becomes
+
+₹0
+
+Generate proper accounting entries automatically.
+
+====================================================
+5. PARTIAL PAYMENT
+====================================================
+
+Example
+
+Invoice
+
+₹10,000
+
+Receipt
+
+₹3,000
+
+Invoice Status
+
+Partially Paid
+
+Outstanding
+
+₹7,000
+
+====================================================
+6. VENDOR PAYMENT
+====================================================
+
+Exactly the same behaviour.
+
+After selecting Vendor,
+
+display
+
+Outstanding Purchase Bills
+
+Columns
+
+Select
+
+Purchase Invoice
+
+Invoice Amount
+
+Paid
+
+Outstanding
+
+Due Date
+
+Location
+
+====================================================
+7. VENDOR ADVANCE
+====================================================
+
+If payment exceeds outstanding,
+
+create
+
+Vendor Advance
+
+Example
+
+Outstanding
+
+₹15,000
+
+Payment
+
+₹20,000
+
+Vendor Advance
+
+₹5,000
+
+Store separately.
+
+====================================================
+8. NEXT PURCHASE
+====================================================
+
+When creating Purchase Invoice,
+
+if Vendor Advance exists,
+
+display
+
+Available Vendor Advance
+
+Checkbox
+
+Use Vendor Advance
+
+Default ON
+
+Automatically reduce payable.
+
+====================================================
+9. ACCOUNTING ENTRIES
+====================================================
+
+Receipt
+
+Customer
+
+Dr Cash/Bank
+
+Cr Customer
+
+Settlement should mark invoice paid.
+
+Advance
+
+Dr Cash
+
+Cr Customer Advance
+
+Sales Invoice consuming advance
+
+Dr Customer Advance
+
+Cr Customer
+
+No manual journal required.
+
+====================================================
+10. PAYMENT ENTRIES
+====================================================
+
+Payment
+
+Dr Vendor
+
+Cr Cash
+
+Advance
+
+Dr Vendor Advance
+
+Cr Cash
+
+Purchase consuming advance
+
+Dr Vendor
+
+Cr Vendor Advance
+
+====================================================
+11. SALES SCREEN
+====================================================
+
+Current POS/Sales list should update automatically.
+
+Example
+
+Invoice
+
+₹4,200 Due
+
+Receipt Voucher
+
+₹4,200
+
+Immediately
+
+Status
+
+Paid
+
+Due
+
+₹0
+
+====================================================
+12. PURCHASE SCREEN
+====================================================
+
+Purchase Outstanding should update automatically.
+
+====================================================
+13. DASHBOARD
+====================================================
+
+Receivables
+
+Must reduce after receipt.
+
+Payables
+
+Must reduce after payment.
+
+Customer Ageing
+
+Vendor Ageing
+
+must update automatically.
+
+====================================================
+14. LEDGER
+====================================================
+
+Customer Ledger should show
+
+Sales
+
+Receipt
+
+Advance
+
+Advance Adjustment
+
+Outstanding
+
+Vendor Ledger should show
+
+Purchase
+
+Payment
+
+Advance
+
+Advance Adjustment
+
+Outstanding
+
+====================================================
+15. AUDIT LOG
+====================================================
+
+Store
+
+Voucher Number
+
+Bill Number
+
+Settlement Amount
+
+Advance Created
+
+Advance Utilized
+
+Date
+
+User
+
+====================================================
+16. REPORTS
+====================================================
+
+Update automatically
+
+Receivables
+
+Payables
+
+Ageing
+
+Customer Statement
+
+Vendor Statement
+
+Ledger
+
+Dashboard
+
+Trial Balance
+
+Balance Sheet
+
+Cash Book
+
+Bank Book
+
+Day Book
+
+====================================================
+17. LOCATION SUPPORT
+====================================================
+
+Settlement must only show invoices belonging to locations the user has permission to access.
+
+Warehouse users
+
+Only warehouse invoices.
+
+Outlet users
+
+Only outlet invoices.
+
+Management
+
+All locations.
+
+====================================================
+18. TEST CASES
+====================================================
+
+✓ Full Payment
+
+✓ Partial Payment
+
+✓ Multi Bill Settlement
+
+✓ Over Payment
+
+✓ Customer Advance
+
+✓ Vendor Advance
+
+✓ Auto Advance Utilization
+
+✓ Dashboard Updates
+
+✓ Ledger Updates
+
+✓ Trial Balance
+
+✓ Balance Sheet
+
+✓ Profit & Loss
+
+✓ Cash Book
+
+✓ Bank Book
+
+✓ Receivable Report
+
+✓ Payable Report
+
+====================================================
+EXPECTED RESULT
+
+Receipt Voucher and Payment Voucher should behave exactly like a standard ERP.
+
+Selecting a customer or vendor should display outstanding bills for settlement.
+
+Payments should automatically clear invoices.
+
+Excess receipts/payments should automatically create Customer/Vendor Advances.
+
+Future invoices should automatically offer to consume available advances.
+
+Outstanding balances, ledgers, dashboards and reports should always remain synchronized with complete accounting integrity.

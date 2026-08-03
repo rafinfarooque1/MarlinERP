@@ -59,11 +59,21 @@ async function accrualJuly(empId) {
 
 const created = { employees: [], hierarchies: [] };
 
+// ── Company leave-policy pin/restore ────────────────────────────────────────
+let savedGS = null;
+async function pinPolicy(patch) {
+  savedGS = (await api("GET", "/company/settings")).generalSettings ?? {};
+  await api("PATCH", "/company/settings", { generalSettings: { ...savedGS, ...patch } });
+}
+async function restorePolicy() {
+  if (savedGS) await api("PATCH", "/company/settings", { generalSettings: savedGS });
+}
+
 async function mkEmployee(name, hierarchyId, branchType, branchId) {
   const emp = await api("POST", "/hr/employees", {
     name, username: name.toLowerCase(),
     email: `${name.toLowerCase()}@test.local`, phone: "9111111111",
-    hierarchyId, branchType, branchId, salary: 26000, joinDate: D(1),
+    hierarchyId, branchType, branchId, salary: 30000, joinDate: D(1),
   });
   created.employees.push({ id: emp.id, name });
   return emp;
@@ -73,6 +83,11 @@ const loginAs = async (username) =>
 
 async function main() {
   TOKEN = (await api("POST", "/auth/login", { username: "admin", password: "marlin1458" })).token;
+
+  // Pay basis is COMPANY policy since the Aug 2026 LOP change. Pin what the
+  // ₹1,000/day expectations assume: 30-day basis, allowance covering the 3
+  // approved leave days, LOP on. Restored after cleanup.
+  await pinPolicy({ payrollWorkingDays: 30, paidCasualLeavesPerMonth: 4, lopEnabled: true });
   const me = await api("GET", "/auth/me");
   const adminId = me.id;
 
@@ -255,6 +270,7 @@ async function main() {
 
   // ── Cleanup ───────────────────────────────────────────────────────────────
   await cleanup();
+  await restorePolicy();
 
   const failed = results.filter((r) => !r.pass);
   console.log(`\n${results.length - failed.length}/${results.length} passed`);

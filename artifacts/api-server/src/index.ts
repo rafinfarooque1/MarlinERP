@@ -3027,6 +3027,11 @@ await pool.query(`
   ALTER TABLE payroll ADD COLUMN IF NOT EXISTS payment_mode       TEXT;
   ALTER TABLE payroll ADD COLUMN IF NOT EXISTS advance_deduction  NUMERIC(10,2) NOT NULL DEFAULT 0;
 
+  -- Leave-policy snapshot (Aug 2026 LOP change). NULL on rows generated before
+  -- it — readers must treat NULL as "policy did not exist", never as zero.
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS paid_leave_used    NUMERIC(5,2);
+  ALTER TABLE payroll ADD COLUMN IF NOT EXISTS paid_leave_allowed NUMERIC(5,2);
+
   CREATE TABLE IF NOT EXISTS employee_advances (
     id              SERIAL PRIMARY KEY,
     employee_id     INTEGER NOT NULL REFERENCES employees(id),

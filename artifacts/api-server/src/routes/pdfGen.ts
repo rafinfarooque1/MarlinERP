@@ -444,6 +444,10 @@ router.post("/pdf/payslip", requireModuleAction("page:/hr/payroll", "download"),
       presentDays:  Number(pr.present_days ?? 0),
       lopDays:      Number(pr.lop_days ?? 0),
       lopDeduction: Number(pr.lop_deduction ?? 0),
+      // NULL (pre-LOP-policy rows) must stay null — the payslip switches its
+      // attendance tiles on it, and 0 would claim leave was tracked and unused.
+      paidLeaveUsed:    pr.paid_leave_used    == null ? null : Number(pr.paid_leave_used),
+      paidLeaveAllowed: pr.paid_leave_allowed == null ? null : Number(pr.paid_leave_allowed),
       baseSalary:   Number(pr.base_salary ?? 0),
       allowancesBreakdown: Array.isArray(pr.allowances_breakdown) ? pr.allowances_breakdown : [],
       deductionsBreakdown: Array.isArray(pr.deductions_breakdown) ? pr.deductions_breakdown : [],

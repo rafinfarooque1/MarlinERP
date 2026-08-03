@@ -174,7 +174,31 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
     if (v !== null && (typeof v !== 'object' || Array.isArray(v))) {
       res.status(400).json({ error: 'generalSettings must be an object or null' }); return;
     }
-    generalSettingsUpdate = v ?? {};
+    // Payroll leave-policy keys are money-bearing: they set the per-day salary
+    // rate and the paid-leave allowance for every employee. The blob replaces
+    // the stored one wholesale, so the incoming object IS the effective value —
+    // validate it here, not just in the UI.
+    const gsu: Record<string, any> = v ?? {};
+    generalSettingsUpdate = gsu;
+    if (gsu.payrollWorkingDays !== undefined && gsu.payrollWorkingDays !== null) {
+      const wd = Number(gsu.payrollWorkingDays);
+      if (!Number.isInteger(wd) || wd < 1 || wd > 31) {
+        res.status(400).json({ error: 'Working Days Per Month must be a whole number between 1 and 31' }); return;
+      }
+    }
+    if (gsu.paidCasualLeavesPerMonth !== undefined && gsu.paidCasualLeavesPerMonth !== null) {
+      const pl = Number(gsu.paidCasualLeavesPerMonth);
+      const wdEff = Number(gsu.payrollWorkingDays ?? 30);
+      if (!Number.isFinite(pl) || pl < 0) {
+        res.status(400).json({ error: 'Paid Casual Leaves Per Month must be zero or more' }); return;
+      }
+      if (pl > wdEff) {
+        res.status(400).json({ error: 'Paid Casual Leaves Per Month cannot exceed Working Days Per Month' }); return;
+      }
+    }
+    if (gsu.lopEnabled !== undefined && gsu.lopEnabled !== null && typeof gsu.lopEnabled !== 'boolean') {
+      res.status(400).json({ error: 'Enable Loss of Pay must be on or off' }); return;
+    }
   }
 
   // Default production overhead % (raw column, numeric 0–100)

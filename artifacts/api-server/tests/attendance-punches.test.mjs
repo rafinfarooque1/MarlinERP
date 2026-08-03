@@ -47,6 +47,16 @@ const Y = 2026, M = 7;
 const D = (d) => `${Y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 const IST = (day, hhmm) => `${D(day)}T${hhmm}:00+05:30`;
 
+// ── Company leave-policy pin/restore ────────────────────────────────────────
+let savedGS = null;
+async function pinPolicy(patch) {
+  savedGS = (await api("GET", "/company/settings")).generalSettings ?? {};
+  await api("PATCH", "/company/settings", { generalSettings: { ...savedGS, ...patch } });
+}
+async function restorePolicy() {
+  if (savedGS) await api("PATCH", "/company/settings", { generalSettings: savedGS });
+}
+
 async function accrualFor(empId, day) {
   const [r] = await q(
     `SELECT amount FROM salary_accruals WHERE employee_id=$1 AND accrual_date=$2`, [empId, D(day)]);
@@ -87,6 +97,11 @@ const reprice = (empId, day) =>
 async function main() {
   TOKEN = (await api("POST", "/auth/login", { username: "admin", password: "marlin1458" })).token;
 
+  // This suite is about HOURS-based pricing, so pin the company policy with a
+  // ZERO paid-leave allowance — otherwise the leave policy tops half days up
+  // to full pay and every hours expectation below goes invisible.
+  await pinPolicy({ payrollWorkingDays: 30, paidCasualLeavesPerMonth: 0, lopEnabled: true });
+
   const cfg = await api("GET", "/hr/attendance/config");
   const FULL = Number(cfg.fullDayHours), HALF = Number(cfg.halfDayHours);
   console.log(`thresholds: full ≥ ${FULL}h, half ≥ ${HALF}h  (day starts ${cfg.dayStartTime}, grace ${cfg.lateGraceMinutes}m)\n`);
@@ -96,15 +111,15 @@ async function main() {
   const hierarchyId = hiers[0]?.id;
   const stamp = Date.now();
 
-  // ₹26,000 over the 26-working-day basis = a clean ₹1,000/day.
+  // ₹30,000 over the 30-working-day company basis = a clean ₹1,000/day.
   const emp = await api("POST", "/hr/employees", {
     name: `PunchTest_${stamp}`, username: `punch_${stamp}`,
     email: `punch${stamp}@test.local`, phone: "9000000003",
     hierarchyId, branchType: "headoffice", branchId: 1,
-    salary: 26000, joinDate: D(1),
+    salary: 30000, joinDate: D(1),
   });
   const EID = emp.id;
-  console.log(`fixture employee #${EID} — ₹26,000/month, joined ${D(1)}\n`);
+  console.log(`fixture employee #${EID} — ₹30,000/month, joined ${D(1)}\n`);
 
   // Session times chosen so full-day span vs punched total DISAGREE under the
   // configured thresholds: span = FULL + 0.5h, punched total = HALF + 1h.
@@ -235,6 +250,7 @@ async function main() {
 
   // ── Cleanup ────────────────────────────────────────────────────────────────
   await cleanup(EID, emp.name);
+  await restorePolicy();
   console.log(`cleaned up fixture employee #${EID}`);
 
   const failed = results.filter((r) => !r.pass);

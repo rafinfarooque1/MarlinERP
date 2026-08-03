@@ -22,7 +22,7 @@ import {
   runSalaryAccrual, dailyAccrualRate, reaccrueForAttendanceChange,
   withEmployeeAccrualLock, DEFAULT_WORKING_DAYS, type Querier,
 } from "../lib/salaryAccrual";
-import { loadAttendanceThresholds, monthPresentDays, PUNCHED_HOURS_JOIN } from "../lib/attendanceFactor";
+import { loadAttendanceThresholds, loadPayrollSettings, monthLeaveSummary, PUNCHED_HOURS_JOIN } from "../lib/attendanceFactor";
 import { ownLocationScope, scopeCashLedgerIds } from "../lib/moneyScope";
 import {
   CreateHierarchyBody, UpdateHierarchyBody, DeleteHierarchyParams,
@@ -562,6 +562,10 @@ function enrichPayroll(r: any, emp?: any) {
     lopDays:           Number(r.lopDays           ?? r.lop_days           ?? 0),
     workingDays:       Number(r.workingDays       ?? r.working_days       ?? 26),
     presentDays:       Number(r.presentDays       ?? r.present_days       ?? 26),
+    // Leave-policy snapshot (Aug 2026): null on rows generated before the LOP
+    // change — the UI and payslip must OMIT the leave line then, never show 0.
+    paidLeaveUsed:     r.paidLeaveUsed    ?? r.paid_leave_used    ?? null,
+    paidLeaveAllowed:  r.paidLeaveAllowed ?? r.paid_leave_allowed ?? null,
     // workflow
     status:            r.status ?? 'draft',
     approvedAt:        r.approvedAt   ?? r.approved_at   ?? null,
@@ -714,11 +718,8 @@ async function postSalaryApproval(opts: {
     // longer supports and quietly post the gap as salary cost. Recomputed here,
     // inside the lock, because the check is only worth anything if no sweep can
     // run between the check and the voucher.
-    const { rows: [pcRow] } = await client.query(
-      `SELECT working_days_per_month FROM pay_components WHERE employee_id = $1 LIMIT 1`,
-      [employeeId],
-    );
-    const wd = Number(pcRow?.working_days_per_month ?? 26);
+    const { thresholds: liveThresholds, policy: livePolicy } = await loadPayrollSettings(pool);
+    const wd = livePolicy.workingDays;
     const mStr = String(pr.month).padStart(2, "0");
     const lastDay = new Date(Number(pr.year), Number(pr.month), 0).getDate();
     const { rows: attRows } = await client.query(
@@ -729,13 +730,28 @@ async function postSalaryApproval(opts: {
         WHERE a.employee_id = $1 AND a.date >= $2 AND a.date <= $3`,
       [employeeId, `${pr.year}-${mStr}-01`, `${pr.year}-${mStr}-${String(lastDay).padStart(2, "0")}`],
     );
-    const liveThresholds = await loadAttendanceThresholds(pool);
-    const livePresentDays = monthPresentDays(attRows, wd, liveThresholds);
+    // Recomputed with the live company leave policy. Comparing payable days
+    // alone is not enough: an allowance or working-days change can leave the
+    // payable count untouched (no leave taken) while the per-day rate or the
+    // stored leave snapshot is now wrong — so every policy-bearing stored
+    // figure is checked, and any drift forces a regenerate.
+    const liveSummary = monthLeaveSummary(attRows, livePolicy, liveThresholds);
+    const livePresentDays = liveSummary.payableDays;
     const storedPresentDays = Number(pr.present_days ?? wd);
-    if (Math.abs(livePresentDays - storedPresentDays) > 0.005) {
+    const attendanceMoved = Math.abs(livePresentDays - storedPresentDays) > 0.005;
+    const drift = (stored: unknown, live: number) =>
+      stored == null || Math.abs(Number(stored) - live) > 0.005;
+    const policyMoved =
+      drift(pr.working_days, wd) ||
+      drift(pr.lop_days, liveSummary.lopDays) ||
+      drift(pr.paid_leave_used, liveSummary.paidLeaveUsed) ||
+      drift(pr.paid_leave_allowed, livePolicy.paidCasualLeavesPerMonth);
+    if (attendanceMoved || policyMoved) {
       throw Object.assign(new Error(
-        `Attendance for ${mStr}/${pr.year} changed after this payroll was generated ` +
-        `(${storedPresentDays} paid day(s) on the payroll, ${livePresentDays} in attendance now). ` +
+        (attendanceMoved
+          ? `Attendance for ${mStr}/${pr.year} changed after this payroll was generated ` +
+            `(${storedPresentDays} paid day(s) on the payroll, ${livePresentDays} in attendance now). `
+          : `The company payroll policy (working days / paid leave / LOP) changed after this payroll was generated. `) +
         `Regenerate the payroll so it matches, then approve it.`,
       ), { conflict: true });
     }
@@ -1255,13 +1271,9 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
       const basis = recalc.monthsRecalculated[0]
         ?? { year: now.getFullYear(), month: now.getMonth() + 1 };
       // The daily rate is per working-days basis now, not per calendar month, so
-      // the audit entry has to quote the same basis the engine priced with.
-      const { rows: [pcRow] } = await pool.query(
-        `SELECT COALESCE(working_days_per_month, ${DEFAULT_WORKING_DAYS}) AS working_days
-           FROM pay_components WHERE employee_id = $1 LIMIT 1`,
-        [id],
-      );
-      const revWorkingDays = Number(pcRow?.working_days ?? DEFAULT_WORKING_DAYS) || DEFAULT_WORKING_DAYS;
+      // the audit entry has to quote the same basis the engine priced with —
+      // the company-wide policy since the Aug 2026 LOP change.
+      const revWorkingDays = (await loadPayrollSettings(pool)).policy.workingDays;
       const asLabel = (m: { year: number; month: number }) => `${String(m.month).padStart(2, "0")}/${m.year}`;
       const months = recalc.monthsRecalculated.map(asLabel);
 
@@ -1457,10 +1469,10 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
   const { month, year, employeeId, forceRegenerate = false } = req.body;
   if (!month || !year) { res.status(400).json({ error: "month and year are required" }); return; }
 
-  // The same thresholds the daily accrual engine prices a day at, loaded from
-  // one place. Payroll and the books must not be able to disagree about what a
-  // given day of attendance was worth.
-  const thresholds = await loadAttendanceThresholds(pool);
+  // The same thresholds and company-wide leave policy the daily accrual engine
+  // prices a day at, loaded from one place. Payroll and the books must not be
+  // able to disagree about what a given day of attendance was worth.
+  const { thresholds, policy } = await loadPayrollSettings(pool);
 
   // Rates in force right now. Snapshotted onto every row this run writes, so
   // changing them later only affects runs generated after the change.
@@ -1510,16 +1522,22 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
     // back-filled by migration), so an absent row means an empty structure —
     // basic pay only, plus the statutory contributions.
     const [pc] = await db.select().from(payComponentsTable).where(eq(payComponentsTable.employeeId, emp.id)).limit(1);
-    const workingDays = pc?.workingDaysPerMonth ?? 26;
+    // Working days are COMPANY-WIDE policy (Company → Settings → Payroll), not
+    // per employee — the owner's rule since the Aug 2026 LOP change. The old
+    // per-employee `pay_components.working_days_per_month` is deliberately no
+    // longer read.
+    const workingDays = policy.workingDays;
     const allowances: AllowanceComp[] = (pc?.allowances as AllowanceComp[]) ?? [];
     const deductions = stripStatutoryDuplicates((pc?.deductions as DeductionComp[]) ?? [], rates);
 
-    // Hours-based present days, from the one shared rule. The daily accrual
-    // engine sums the very same per-day factors across the month, which is what
-    // makes the month-end true-up a rounding difference rather than a real
-    // correction.
+    // Month summary from the one shared rule: worked days + casual leave, with
+    // leave paid up to the company allowance and loss of pay beyond it. The
+    // daily accrual engine walks the very same policy across the month, which
+    // is what makes the month-end true-up a rounding difference rather than a
+    // real correction.
     const empAtt = monthAttendance.filter((a: any) => Number(a.employeeId) === emp.id);
-    const effectivePresentDays = monthPresentDays(empAtt, workingDays, thresholds);
+    const leaveSummary = monthLeaveSummary(empAtt, policy, thresholds);
+    const effectivePresentDays = leaveSummary.payableDays;
 
     // Advances awaiting recovery. A draft run *claims* the advances it nets off
     // (deducted_payroll_id) without marking them recovered; approval completes
@@ -1594,6 +1612,9 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
       String(computed.pfEmployee), String(computed.pfEmployer),
       String(computed.esiEmployee), String(computed.esiEmployer),
       JSON.stringify(snapshot), JSON.stringify(claimedIds), periodLabel,
+      // Leave-policy snapshot for the payslip: how much paid casual leave this
+      // run actually credited, and what the allowance was at generation time.
+      leaveSummary.paidLeaveUsed, policy.paidCasualLeavesPerMonth,
     ];
 
     if (existing) {
@@ -1604,8 +1625,9 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
            deductions=$12, deductions_breakdown=$13, net_pay=$14, total_amount=$14,
            status='draft', advance_deduction=$15,
            pf_employee=$16, pf_employer=$17, esi_employee=$18, esi_employer=$19,
-           statutory_snapshot=$20, advance_ids=$21, pay_period_label=$22
-         WHERE id=$23 RETURNING *`,
+           statutory_snapshot=$20, advance_ids=$21, pay_period_label=$22,
+           paid_leave_used=$23, paid_leave_allowed=$24
+         WHERE id=$25 RETURNING *`,
         [...writeCols, existing.id],
       );
       row = updated;
@@ -1616,9 +1638,10 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
             lop_days, lop_deduction, gross_pay, allowances_total, allowances_breakdown,
             deductions, deductions_breakdown, net_pay, total_amount, advance_deduction,
             pf_employee, pf_employer, esi_employee, esi_employer,
-            statutory_snapshot, advance_ids, pay_period_label, bonus, status)
+            statutory_snapshot, advance_ids, pay_period_label, paid_leave_used,
+            paid_leave_allowed, bonus, status)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,$15,
-                 $16,$17,$18,$19,$20,$21,$22,'0','draft')
+                 $16,$17,$18,$19,$20,$21,$22,$23,$24,'0','draft')
          RETURNING *`,
         writeCols,
       );
