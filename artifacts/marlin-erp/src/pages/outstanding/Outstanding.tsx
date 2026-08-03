@@ -290,6 +290,9 @@ export default function Outstanding() {
                             <div>
                               <p className="font-medium">{c.name}</p>
                               {c.phone && <p className="text-xs text-muted-foreground flex items-center gap-1"><Phone className="w-3 h-3" />{c.phone}</p>}
+                              {Number(c.advance) > 0 && (
+                                <p className="text-[11px] text-amber-600 dark:text-amber-500">Advance held: ₹{fmt(c.advance)}</p>
+                              )}
                             </div>
                           </div>
                         </td>
@@ -377,6 +380,9 @@ export default function Outstanding() {
                             <div>
                               <p className="font-medium">{v.name}</p>
                               {v.phone && <p className="text-xs text-muted-foreground flex items-center gap-1"><Phone className="w-3 h-3" />{v.phone}</p>}
+                              {Number(v.advance) > 0 && (
+                                <p className="text-[11px] text-amber-600 dark:text-amber-500">Advance with vendor: ₹{fmt(v.advance)}</p>
+                              )}
                             </div>
                           </div>
                         </td>

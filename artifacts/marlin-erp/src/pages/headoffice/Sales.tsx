@@ -8,6 +8,7 @@ import {
   customFetch,
   useGetSalePayments, useCreateSalePayment, useUpdateSale,
   ensureInvoiceShareLink, absoluteShareUrl,
+  usePartyAdvance, getPartyAdvanceQueryKey,
 } from '@workspace/api-client-react';
 import { usePermission } from '@/lib/usePermission';
 import { isActiveProduct } from '@/lib/productStatus';
@@ -328,7 +329,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     queryClient.invalidateQueries({
       predicate: q => {
         const k = String(q.queryKey[0] ?? '');
-        return k.startsWith('/api/sales') || k.startsWith('/api/dashboard') || k.startsWith('/api/stock');
+        return k.startsWith('/api/sales') || k.startsWith('/api/dashboard') || k.startsWith('/api/stock')
+          // A sale may have consumed the customer's advance / changed their dues.
+          || k.startsWith('/api/accounts/party-advance') || k.startsWith('/api/accounts/settlement-context');
       },
     });
 
@@ -504,6 +507,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const watchLocationId = form.watch('locationId');
   const watchCustomerId = form.watch('customerId');
   const watchPaymentMode = form.watch('paymentMode');
+
+  // Advance adjustment: does the selected customer have money parked with us?
+  // Only queried for registered customers; walk-ins have no advance ledger.
+  const { data: customerAdvance } = usePartyAdvance('customer', editItem ? null : (watchCustomerId || null));
+  const [applyAdvance, setApplyAdvance] = useState(true);
+  // Default ON whenever a customer with an advance is picked.
+  useEffect(() => { setApplyAdvance(true); }, [watchCustomerId]);
 
   // A new sale may only be Cash or Credit — Bank/UPI are collected later, never
   // set at sale time (the API rejects them on create). Editing an existing
@@ -757,6 +767,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       // Conversion marker — the server locks the quotation, refuses a second
       // conversion, and stamps the invoice number back onto the quotation.
       ...(convertFrom && !editItem ? { quotationId: convertFrom.id } : {}),
+      // Advance adjustment — opt-in; the server caps at what the books hold.
+      ...(!editItem && applyAdvance && (customerAdvance?.available ?? 0) > 0.004
+        ? { useAdvance: true } : {}),
     } as any;
 
     if (editItem) {
@@ -1266,6 +1279,18 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   </FormItem>
                 )} />
               </div>
+
+              {/* Advance adjustment — a customer with money parked beyond their
+                  bills can have it auto-applied to this invoice. Create only:
+                  edits never touch the advance. */}
+              {!editItem && (customerAdvance?.available ?? 0) > 0.004 && (
+                <label className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm cursor-pointer">
+                  <Checkbox checked={applyAdvance} onCheckedChange={v => setApplyAdvance(v === true)} />
+                  <span>
+                    Apply available advance of <span className="font-mono font-semibold">₹{Number(customerAdvance!.available).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span> to this sale
+                  </span>
+                </label>
+              )}
 
               {/* Coupon code — hidden while coupons are off in Settings; a
                   historical code on an edited sale stays visible read-only */}

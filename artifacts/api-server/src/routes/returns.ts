@@ -947,9 +947,25 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
     // and is told so via `basis`, rather than being shown a company-wide figure
     // under a branch heading.
     const rcvLedgerAnchored = rcvScope.isHeadOffice && !rcvViewLoc;
-    const ledgerByCustomer = rcvLedgerAnchored
-      ? (await (await import("../lib/ledgerBalances")).currentBalanceIndex(dated ? { toDate: asOf } : {})).partyBalances("customer")
+    const rcvBalIdx = rcvLedgerAnchored
+      ? await (await import("../lib/ledgerBalances")).currentBalanceIndex(dated ? { toDate: asOf } : {})
+      : null;
+    const ledgerByCustomer = rcvBalIdx
+      ? rcvBalIdx.partyBalances("customer")
       : new Map<number, { balance: number }>();
+    // Customer advances (CADV-*): money parked beyond bills, adjustable against
+    // the next invoice. Ledger-anchored views only — the advance ledgers carry
+    // no location, so a branch/located slice has no honest figure to show.
+    const advByCustomer = new Map<number, number>();
+    if (rcvBalIdx) {
+      const { rows: advLs } = await pool.query(`SELECT id, code FROM account_ledgers WHERE code LIKE 'CADV-%'`);
+      for (const l of advLs) {
+        const m = /^CADV-(\d+)$/.exec(String(l.code));
+        if (!m) continue;
+        const adv = r2(Math.max(0, -rcvBalIdx.net(Number(l.id))));
+        if (adv > 0.004) advByCustomer.set(Number(m[1]), adv);
+      }
+    }
 
     const byCustomer = new Map<number, any>();
     const totals: Record<BucketKey, number> = { b0_30: 0, b31_60: 0, b61_90: 0, b90p: 0 };
@@ -975,6 +991,7 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
           totalDue: 0,
           creditNotes: cnByCustomer.get(inv.customer_id) ?? 0,
           ledgerBalance: ledgerByCustomer.get(inv.customer_id)?.balance ?? 0,
+          advance: advByCustomer.get(inv.customer_id) ?? 0,
           uninvoicedBalance: 0,
           unallocatedCredit: 0,
           netDue: 0,
@@ -1011,6 +1028,12 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
       const seedIds = [...ledgerByCustomer]
         .filter(([id, bal]) => !byCustomer.has(id) && Math.abs(bal.balance) >= 0.005)
         .map(([id]) => id);
+      // A customer holding ONLY an advance (no open invoices) has a zero debtor
+      // ledger — seed from the advance map too, or the money we hold for them
+      // vanishes from the report.
+      for (const id of advByCustomer.keys()) {
+        if (!byCustomer.has(id) && !seedIds.includes(id)) seedIds.push(id);
+      }
       if (seedIds.length) {
         const { rows: seedRows } = await pool.query<any>(
           `SELECT id, name, phone, COALESCE(credit_limit, 0)::numeric AS credit_limit,
@@ -1023,7 +1046,9 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
             customerId, name: cr.name, phone: cr.phone ?? null,
             creditLimit: Number(cr.credit_limit), creditDays: Number(cr.credit_days),
             totalDue: 0, creditNotes: cnByCustomer.get(customerId) ?? 0,
-            ledgerBalance: r2(ledgerByCustomer.get(customerId)!.balance),
+            // Advance-only seeds have no debtor ledger entry at all — 0, not a crash.
+            ledgerBalance: r2(ledgerByCustomer.get(customerId)?.balance ?? 0),
+            advance: advByCustomer.get(customerId) ?? 0,
             uninvoicedBalance: 0, unallocatedCredit: 0, netDue: 0,
             b0_30: 0, b31_60: 0, b61_90: 0, b90p: 0, invoices: [],
           });
@@ -1056,7 +1081,10 @@ router.get("/outstanding/receivables", requireModuleView(["page:/outstanding", "
       };
       totalUninvoiced = r2(totalUninvoiced + row.uninvoicedBalance);
       return row;
-    }).filter(c => Math.abs(c.netDue) > 0.004 || c.totalDue > 0.004 || c.unallocatedCredit > 0.004)
+    }).filter(c => Math.abs(c.netDue) > 0.004 || c.totalDue > 0.004 || c.unallocatedCredit > 0.004
+        // Advance-only customers owe nothing, but the money we HOLD for them
+        // must stay visible somewhere — this is that somewhere.
+        || (c.advance ?? 0) > 0.004)
       .sort((a, b) => b.netDue - a.netDue);
 
     const totalCreditNotes = r2(customers.reduce((s, c) => s + c.creditNotes, 0));
@@ -1155,7 +1183,9 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
     // journal voucher against a vendor — the exact gap that let a payable
     // settled by journal keep ageing here at its full original value.
     const { rows: payRows } = await pool.query(
-      `SELECT l.code, COALESCE(SUM(p.amount::numeric), 0) AS amt
+      // Net of each voucher's advance slice — that part debited the vendor's
+      // advance asset, not the payable, so it is not money paid against bills.
+      `SELECT l.code, COALESCE(SUM(p.amount::numeric - COALESCE(p.advance_amount, 0)::numeric), 0) AS amt
        FROM payments p
        JOIN account_ledgers l ON l.id = p.paid_to_ledger_id
        WHERE l.code LIKE 'VEND-%'
@@ -1183,11 +1213,58 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
       if (Number.isFinite(id)) dnByVendor.set(id, r2((dnByVendor.get(id) ?? 0) + Number(r.amt)));
     }
 
+    // Explicit settlements are pinned to their bill and never enter the FIFO
+    // pool — the same explicit-first rule as lib/vendorBillSettlement.ts, so
+    // this report and the GST purchase register can never disagree on which
+    // bill a targeted payment settled. Both reduce the vendor ledger, so both
+    // are carved out of the derived pool before the oldest-first walk.
+    const { rows: explicitPayAllocRows } = await pool.query(
+      `SELECT a.purchase_id, pu.vendor_id, COALESCE(SUM(a.amount::numeric), 0) AS amt
+         FROM payment_bill_allocations a
+         JOIN payments p ON p.id = a.payment_id
+         JOIN purchases pu ON pu.id = a.purchase_id
+        ${payDated ? `WHERE p.payment_date::date <= $1::date` : ""}
+        GROUP BY a.purchase_id, pu.vendor_id`,
+      payDated ? [asOf] : []
+    );
+    const { rows: advAppAllocRows } = await pool.query(
+      `SELECT a.purchase_id, a.vendor_id, COALESCE(SUM(a.amount::numeric), 0) AS amt
+         FROM purchase_advance_applications a
+         JOIN purchases pu ON pu.id = a.purchase_id
+        ${payDated ? `WHERE pu.purchase_date::date <= $1::date` : ""}
+        GROUP BY a.purchase_id, a.vendor_id`,
+      payDated ? [asOf] : []
+    );
+    const explicitByBill = new Map<number, number>();
+    const explicitByVendorId = new Map<number, number>();
+    for (const rows of [explicitPayAllocRows, advAppAllocRows]) {
+      for (const r of rows) {
+        const pid = Number(r.purchase_id);
+        const vid = Number(r.vendor_id);
+        explicitByBill.set(pid, r2((explicitByBill.get(pid) ?? 0) + Number(r.amt)));
+        explicitByVendorId.set(vid, r2((explicitByVendorId.get(vid) ?? 0) + Number(r.amt)));
+      }
+    }
+
     // The authoritative payable per vendor — capped at asOf when dated, so the
     // FIFO pool below settles bills with only the money that had moved by then.
     const { currentBalanceIndex } = await import("../lib/ledgerBalances");
     const balIdx = await currentBalanceIndex(payDated ? { toDate: asOf } : {});
     const ledgerByVendor = balIdx.partyBalances("vendor");
+
+    // Vendor advances (VADV-*): money already handed over beyond bills,
+    // adjustable against the next purchase. Company-wide view only — the
+    // advance ledgers carry no location.
+    const advByVendor = new Map<number, number>();
+    if (!payViewLoc) {
+      const { rows: advLs } = await pool.query(`SELECT id, code FROM account_ledgers WHERE code LIKE 'VADV-%'`);
+      for (const l of advLs) {
+        const m = /^VADV-(\d+)$/.exec(String(l.code));
+        if (!m) continue;
+        const adv = r2(Math.max(0, balIdx.net(Number(l.id))));
+        if (adv > 0.004) advByVendor.set(Number(m[1]), adv);
+      }
+    }
 
     const newVendorRow = (vendorId: number, name: string, phone: string | null) => ({
       vendorId,
@@ -1197,6 +1274,7 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
       totalPaid: paidByVendor.get(vendorId) ?? 0,
       debitNotes: dnByVendor.get(vendorId) ?? 0,
       ledgerBalance: ledgerByVendor.get(vendorId)?.balance ?? 0,
+      advance: advByVendor.get(vendorId) ?? 0,
       netDue: 0,
       unallocatedCredit: 0,
       unbilledBalance: 0,
@@ -1242,6 +1320,12 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
       const seedIds = [...ledgerByVendor]
         .filter(([id, bal]) => !byVendor.has(id) && Math.abs(bal.balance) >= 0.005)
         .map(([id]) => id);
+      // A vendor holding ONLY an advance (all bills settled) has a zero payable
+      // ledger — seed from the advance map too, or the money we handed over
+      // vanishes from the one report that should show it.
+      for (const id of advByVendor.keys()) {
+        if (!byVendor.has(id) && !seedIds.includes(id)) seedIds.push(id);
+      }
       if (seedIds.length) {
         const { rows: seedRows } = await pool.query<any>(
           `SELECT id, name, phone FROM vendors WHERE id = ANY($1::int[])`, [seedIds],
@@ -1263,7 +1347,10 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
       // "billed minus what is still owed" means the residual bill balances add
       // up to the ledger balance by construction, so this report can never
       // disagree with the vendor's account or with the Balance Sheet.
-      let credit = r2(v.totalBilled - v.ledgerBalance);
+      // The explicitly-pinned money (bill allocations + advance applications)
+      // already reduced the ledger balance; carve it out so the FIFO walk only
+      // distributes the genuinely unpinned rest.
+      let credit = r2(v.totalBilled - v.ledgerBalance - (explicitByVendorId.get(v.vendorId) ?? 0));
       // A ledger balance larger than the bills on file is a real payable with no
       // document behind it. It cannot be aged (there is no invoice date), so it
       // is reported on its own line rather than quietly dropped or back-dated.
@@ -1276,9 +1363,13 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
         credit = 0;
       }
       for (const bill of v.bills) {
-        const alloc = r2(Math.min(credit, bill.total));
-        bill.allocated = alloc;
-        bill.balance = r2(bill.total - alloc);
+        // Explicit money settles its own bill first; FIFO fills the remainder.
+        const explicit = bill.purchaseId
+          ? Math.min(r2(explicitByBill.get(bill.purchaseId) ?? 0), bill.total)
+          : 0;
+        const alloc = r2(Math.min(credit, r2(bill.total - explicit)));
+        bill.allocated = r2(explicit + alloc);
+        bill.balance = r2(bill.total - bill.allocated);
         credit = r2(credit - alloc);
         const bk: BucketKey = bucketOf(bill.daysOld);
         bill.bucket = bk;
@@ -1310,7 +1401,9 @@ router.get("/outstanding/payables", requireModuleView(["page:/outstanding", "pag
       return v;
     }).filter(v => payViewLoc
         ? v.netDue > 0.004
-        : (Math.abs(v.netDue) > 0.004 || v.unallocatedCredit > 0.004))
+        // Advance-only vendors are owed nothing, but the money we handed them
+        // beyond bills must stay visible somewhere — this is that somewhere.
+        : (Math.abs(v.netDue) > 0.004 || v.unallocatedCredit > 0.004 || (v.advance ?? 0) > 0.004))
       .sort((a, b) => b.netDue - a.netDue);
 
     res.json({

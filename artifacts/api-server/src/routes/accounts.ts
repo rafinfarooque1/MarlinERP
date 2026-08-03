@@ -26,6 +26,9 @@ import {
   checkVoucherLegs, foreignLocationLedgerIds, foreignPartyLedgerIds, headOfficeCashBankLedgerIds,
 } from "../lib/moneyScope";
 import { loadLedgerUsage, deleteBlockReason } from "../lib/chartGroups";
+import { loadPaymentPosition, computePaymentPosition, outstandingExpr } from "../lib/salePaymentPosition";
+import { parsePartyLedgerCode, ensureAdvanceLedger, advanceAvailable, takeAdvanceLock, voucherAdvanceConsumed } from "../lib/advanceLedgers";
+import { purchaseSettlementIndex } from "../lib/vendorBillSettlement";
 import { parsePostingLocationFilter, companyLevelSummary, type PostingLocationFilter } from "../lib/postingLocation";
 import { resolveGstScope, salesScopeCond, purchaseScopeCond } from "../lib/gstinScope";
 
@@ -585,7 +588,66 @@ const SYSTEM_SOURCE_LOCK_MESSAGES: Record<string, string> = {
   sale: "This is a system voucher raised by a sale and is locked.",
   deposit: "This is a system voucher raised by a cash deposit and is locked.",
   settlement: "This is a system voucher raised by a bank settlement and is locked.",
+  allocation: "This voucher settles specific bills. It cannot be edited — delete it and record a fresh one.",
 };
+
+/** Round to 2dp — voucher money arithmetic. */
+const money2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * Is this ledger inside the STD-CASH subtree? Decides the `method` stamped on
+ * the sale_payments legs an allocation receipt writes — display metadata only
+ * (the POSTING debits the chosen ledger directly), but collection lists key
+ * their labels off it.
+ */
+async function isCashFamilyLedger(q: { query: Function }, ledgerId: number): Promise<boolean> {
+  const { rows } = await q.query(
+    `WITH RECURSIVE fam AS (
+       SELECT id FROM account_ledgers WHERE code = 'STD-CASH'
+       UNION ALL
+       SELECT l.id FROM account_ledgers l JOIN fam f ON l.parent_id = f.id
+     ) SELECT 1 AS hit FROM fam WHERE id = $1 LIMIT 1`,
+    [ledgerId],
+  );
+  return rows.length > 0;
+}
+
+/**
+ * Validate and normalise a voucher's bill-allocation list.
+ * Returns clean rows (2dp, unique ids) plus the derived advance slice
+ * (voucher amount − allocated), or an error message.
+ */
+function parseAllocations(
+  raw: unknown,
+  idKey: "saleId" | "purchaseId",
+  voucherAmount: number,
+  advanceAmountIn: unknown,
+): { rows: { id: number; amount: number }[]; advance: number } | { error: string } {
+  const list = Array.isArray(raw) ? raw : [];
+  const seen = new Set<number>();
+  const rows: { id: number; amount: number }[] = [];
+  for (const a of list) {
+    const id = Number((a as any)?.[idKey]);
+    const amt = Number((a as any)?.amount);
+    if (!Number.isInteger(id) || id <= 0) return { error: `Each allocation needs a valid ${idKey}.` };
+    if (!Number.isFinite(amt) || amt <= 0) return { error: "Each allocation amount must be a positive number." };
+    if (Math.abs(amt * 100 - Math.round(amt * 100)) > 1e-6) return { error: "Allocation amounts cannot go beyond paise (2 decimal places)." };
+    if (seen.has(id)) return { error: "The same bill appears twice in the allocations." };
+    seen.add(id);
+    rows.push({ id, amount: money2(amt) });
+  }
+  const allocated = money2(rows.reduce((s, r) => s + r.amount, 0));
+  const advance = money2(voucherAmount - allocated);
+  if (advance < -0.005) return { error: `Allocations (₹${allocated.toFixed(2)}) exceed the voucher amount (₹${voucherAmount.toFixed(2)}).` };
+  if (advanceAmountIn !== undefined && advanceAmountIn !== null) {
+    const sent = Number(advanceAmountIn);
+    if (!Number.isFinite(sent) || sent < 0) return { error: "advanceAmount must be a non-negative number." };
+    if (Math.abs(sent - Math.max(0, advance)) > 0.011) {
+      return { error: "The advance amount no longer matches the allocations — refresh and try again." };
+    }
+  }
+  return { rows, advance: Math.max(0, advance) };
+}
 const UNKNOWN_SOURCE_LOCK = "This voucher was created by another module and is locked.";
 
 async function loadManualPayment(client: { query: Function }, id: number, scopeWhere: string, params: unknown[], forUpdate = false) {
@@ -626,9 +688,11 @@ async function loadManualReceipt(client: { query: Function }, id: number, scopeW
 router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers", "page:/operations/payment-voucher"], "add"), async (req, res): Promise<void> => {
   // paymentMode/attachmentUrl are deliberately NOT read: the chosen account is
   // the instrument, and old clients still sending them are silently ignored.
-  const { paymentDate, paidFromLedgerId, paidToLedgerId, amount, narration, referenceNumber } = req.body as {
+  const { paymentDate, paidFromLedgerId, paidToLedgerId, amount, narration, referenceNumber, allocations, advanceAmount } = req.body as {
     paymentDate: string; paidFromLedgerId: number; paidToLedgerId: number; amount: number; narration?: string;
     referenceNumber?: string;
+    allocations?: { purchaseId: number; amount: number }[];
+    advanceAmount?: number;
   };
   if (!paymentDate || !paidFromLedgerId || !paidToLedgerId || !amount) {
     res.status(400).json({ error: "paymentDate, paidFromLedgerId, paidToLedgerId and amount are required" }); return;
@@ -648,6 +712,159 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
   if (!legCheck.ok) { res.status(403).json({ error: legCheck.error }); return; }
 
   const { locationType, locationId } = callerLocation((req as any).employee);
+
+  // ── Bill-wise settlement path (vendor bills) ──────────────────────────────
+  // Purchases have no amount_paid column, so vendor allocations live in
+  // payment_bill_allocations; the excess parks in the vendor's advance ledger
+  // (an asset — money already handed over, adjustable against future bills).
+  const wantsSettlement = (Array.isArray(allocations) && allocations.length > 0) || Number(advanceAmount ?? 0) > 0;
+  if (wantsSettlement) {
+    const parsedAllocs = parseAllocations(allocations, "purchaseId", av.amount!, advanceAmount);
+    if ("error" in parsedAllocs) { res.status(400).json({ error: parsedAllocs.error }); return; }
+    const { rows: allocRows, advance } = parsedAllocs;
+
+    const { rows: [toLedger] } = await pool.query(
+      `SELECT id, code, name FROM account_ledgers WHERE id = $1`, [Number(paidToLedgerId)],
+    );
+    const party = parsePartyLedgerCode(toLedger?.code);
+    if (!party || party.kind !== "vendor") {
+      res.status(400).json({ error: "Bill settlement needs a vendor account in Paid To. Pick the vendor's ledger, or remove the allocations." });
+      return;
+    }
+
+    // Soft cap first, computed the way every report computes vendor dues (the
+    // shared settlement index): explicit allocations, advance applications and
+    // the FIFO pool all reduce a bill's balance. The hard guard inside the
+    // transaction below is what holds under concurrency.
+    if (allocRows.length > 0) {
+      const idx = await purchaseSettlementIndex([party.partyId]);
+      for (const al of allocRows) {
+        const bill = idx.get(al.id);
+        if (bill && al.amount > bill.due + 0.005) {
+          res.status(400).json({ error: `₹${al.amount.toFixed(2)} against ${bill.invoiceNumber ?? `bill #${al.id}`} exceeds its balance due (₹${bill.due.toFixed(2)}).` });
+          return;
+        }
+      }
+    }
+
+    const caller = callerLocation((req as any).employee);
+    const createdBy = (req as any).employee?.username ?? null;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const { rows: dupes } = await client.query(
+        `SELECT id FROM payments
+          WHERE source = 'allocation' AND paid_to_ledger_id = $1 AND amount = $2
+            AND created_at > now() - interval '10 seconds'`,
+        [Number(paidToLedgerId), av.amount],
+      );
+      if (dupes.length > 0) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: "Duplicate settlement submission detected. Please wait a moment and try again." });
+        return;
+      }
+
+      const details: { bill: any; alloc: { id: number; amount: number } }[] = [];
+      for (const al of [...allocRows].sort((a, b) => a.id - b.id)) {
+        const { rows: [bill] } = await client.query(
+          `SELECT id, invoice_number, vendor_id, branch_transfer_id, location_type, location_id,
+                  total_amount::numeric AS total_amount
+             FROM purchases WHERE id = $1 FOR UPDATE`,
+          [al.id],
+        );
+        if (!bill) { await client.query("ROLLBACK"); res.status(404).json({ error: `Purchase bill not found (#${al.id}).` }); return; }
+        if (Number(bill.vendor_id) !== party.partyId) {
+          await client.query("ROLLBACK");
+          res.status(400).json({ error: `Bill ${bill.invoice_number ?? `#${al.id}`} belongs to a different vendor.` });
+          return;
+        }
+        if (bill.branch_transfer_id) {
+          await client.query("ROLLBACK");
+          res.status(400).json({ error: `Bill ${bill.invoice_number ?? `#${al.id}`} is a branch transfer document and is settled by the transfer flow.` });
+          return;
+        }
+        const bLocType = bill.location_type ?? "headoffice";
+        const bLocId = Number(bill.location_id ?? 0);
+        if (caller.locationType !== "headoffice" &&
+            (bLocType !== caller.locationType || bLocId !== caller.locationId)) {
+          await client.query("ROLLBACK");
+          res.status(403).json({ error: `Bill ${bill.invoice_number ?? `#${al.id}`} belongs to another location.` });
+          return;
+        }
+        // Hard cap on the locked row: everything EXPLICITLY allocated against
+        // this bill (payments + advance applications) can never exceed its
+        // total. The FIFO-settled slice of legacy bills is presentation-level
+        // and already enforced by the soft cap above.
+        const { rows: [ex] } = await client.query(
+          `SELECT COALESCE((SELECT SUM(amount)::numeric FROM payment_bill_allocations WHERE purchase_id = $1), 0)
+                + COALESCE((SELECT SUM(amount)::numeric FROM purchase_advance_applications WHERE purchase_id = $1), 0) AS allocated`,
+          [al.id],
+        );
+        const already = Number(ex?.allocated ?? 0);
+        if (already + al.amount > Number(bill.total_amount) + 0.005) {
+          await client.query("ROLLBACK");
+          res.status(400).json({ error: `₹${al.amount.toFixed(2)} against ${bill.invoice_number ?? `#${al.id}`} exceeds what is left on the bill (₹${money2(Number(bill.total_amount) - already).toFixed(2)}).` });
+          return;
+        }
+        details.push({ bill, alloc: al });
+      }
+
+      let advanceLedgerId: number | null = null;
+      if (advance > 0.004) {
+        const { rows: [vend] } = await client.query(`SELECT name FROM vendors WHERE id = $1`, [party.partyId]);
+        const vendName = vend?.name ?? toLedger?.name ?? `Vendor ${party.partyId}`;
+        advanceLedgerId = await ensureAdvanceLedger(client, "vendor", party.partyId, vendName);
+      }
+
+      const voucherNumber = await nextVoucherNumber(client, "payment", paymentDate);
+      const { rows: [r] } = await client.query(
+        `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id,
+                               reference_number, created_by, source, advance_amount, advance_ledger_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'allocation', $11, $12) RETURNING *`,
+        [voucherNumber, paymentDate, Number(paidFromLedgerId), Number(paidToLedgerId), av.amount,
+         narration ?? null, locationType, locationId, referenceNumber?.trim() || null, createdBy,
+         advance > 0.004 ? advance : 0, advanceLedgerId],
+      );
+      for (const d of details) {
+        await client.query(
+          `INSERT INTO payment_bill_allocations (payment_id, purchase_id, amount) VALUES ($1, $2, $3)`,
+          [r.id, d.bill.id, d.alloc.amount],
+        );
+      }
+      await client.query("COMMIT");
+
+      logActivity({
+        action: "CREATE", module: "accounts", entityType: "payment_voucher", entityId: r.id,
+        description: `Payment voucher ${voucherNumber} — ₹${Number(r.amount).toLocaleString("en-IN")} to ${toLedger?.name ?? paidToLedgerId}, settling ${details.length} bill(s)${advance > 0.004 ? ` with ₹${advance.toLocaleString("en-IN")} to advance` : ""}`,
+        metadata: {
+          voucherNumber, date: paymentDate, amount: Number(r.amount),
+          allocations: details.map(d => ({ purchaseId: d.bill.id, invoiceNumber: d.bill.invoice_number, amount: d.alloc.amount })),
+          advanceAmount: advance > 0.004 ? advance : 0,
+        },
+      }).catch(() => {});
+
+      const { rows: [pf] } = await pool.query(`SELECT name FROM account_ledgers WHERE id = $1`, [Number(paidFromLedgerId)]);
+      res.status(201).json({
+        id: r.id, voucherNumber: r.voucher_number, paymentDate: r.payment_date,
+        paidFromLedgerId: r.paid_from_ledger_id, paidFromName: pf?.name ?? "",
+        paidToLedgerId: r.paid_to_ledger_id, paidToName: toLedger?.name ?? "",
+        amount: Number(r.amount), narration: r.narration,
+        referenceNumber: r.reference_number, createdBy: r.created_by,
+        locationType: r.location_type ?? "headoffice", locationId: r.location_id ?? 0,
+        createdAt: r.created_at,
+        allocations: details.map(d => ({ purchaseId: d.bill.id, invoiceNumber: d.bill.invoice_number, amount: d.alloc.amount })),
+        advanceAmount: advance > 0.004 ? advance : 0,
+      });
+      return;
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
   const voucherNumber = await nextVoucherNumber(pool, 'payment', paymentDate);
   const result = await pool.query(
     `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id,
@@ -761,6 +978,71 @@ router.delete("/accounts/payments/:id", requireModuleAction(["page:/accounts/vou
   const ledgerIds = await scopeLedgerIds(scope);
   const params: unknown[] = [id];
   const where = scopeMoneyWhere(scope, ledgerIds, params, 'p', ['paid_from_ledger_id', 'paid_to_ledger_id']);
+
+  // Settlement vouchers: locked for edit, deletable with a full unwind of
+  // their bill allocations — refused when the advance slice has already been
+  // adjusted against a later purchase bill.
+  {
+    const probeParams: unknown[] = [id];
+    const probeWhere = scopeMoneyWhere(scope, ledgerIds, probeParams, 'p', ['paid_from_ledger_id', 'paid_to_ledger_id']);
+    const { rows: [probe] } = await pool.query(
+      `SELECT p.id, p.source FROM payments p WHERE p.id = $1 AND ${probeWhere}`, probeParams,
+    );
+    if (probe && probe.source === 'allocation') {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const { rows: [row] } = await client.query(`SELECT * FROM payments WHERE id = $1 FOR UPDATE`, [id]);
+        if (!row) { await client.query("ROLLBACK"); res.status(404).json({ error: "Payment not found" }); return; }
+        const advAmt = Number(row.advance_amount ?? 0);
+        if (advAmt > 0.004) {
+          const party = parsePartyLedgerCode(
+            (await client.query(`SELECT code FROM account_ledgers WHERE id = $1`, [row.paid_to_ledger_id])).rows[0]?.code,
+          );
+          if (party) {
+            await takeAdvanceLock(client, party.kind, party.partyId);
+            // Precise, reference-based guard first: if any purchase consumed
+            // THIS voucher's slice, deletion is refused even when another
+            // advance voucher happens to cover the balance — fungible-pool
+            // arithmetic must not rewrite which money settled which bill.
+            const consumed = await voucherAdvanceConsumed(client, "payment", id);
+            if (consumed > 0.004) {
+              await client.query("ROLLBACK");
+              res.status(409).json({ error: `₹${money2(consumed).toFixed(2)} of this voucher's advance has been adjusted against purchase bills. Delete those bills first.` });
+              return;
+            }
+            // Aggregate backstop: money parked here may also have been drained
+            // by paths that predate slice tracking (manual journals).
+            const pos = await advanceAvailable(party.kind, party.partyId);
+            if (pos.available + 0.005 < advAmt) {
+              await client.query("ROLLBACK");
+              res.status(409).json({ error: `₹${money2(advAmt - pos.available).toFixed(2)} of this voucher's advance has already been adjusted against bills. Remove those adjustments first.` });
+              return;
+            }
+          }
+        }
+        const { rows: allocs } = await client.query(
+          `SELECT purchase_id, amount FROM payment_bill_allocations WHERE payment_id = $1`, [id],
+        );
+        await client.query(`DELETE FROM payment_bill_allocations WHERE payment_id = $1`, [id]);
+        await client.query(`DELETE FROM payments WHERE id = $1`, [id]);
+        await client.query("COMMIT");
+        logActivity({
+          action: "DELETE", module: "accounts", entityType: "payment_voucher", entityId: id,
+          description: `Settlement payment ${row.voucher_number} deleted — ₹${Number(row.amount).toLocaleString("en-IN")}, ${allocs.length} bill allocation(s) unwound`,
+          metadata: { old: { voucherNumber: row.voucher_number, date: row.payment_date, amount: Number(row.amount), advanceAmount: advAmt, allocations: allocs.map((a: any) => ({ purchaseId: a.purchase_id, amount: Number(a.amount) })) } },
+        }).catch(() => {});
+        res.status(204).send();
+        return;
+      } catch (e) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw e;
+      } finally {
+        client.release();
+      }
+    }
+  }
+
   const loaded = await loadManualPayment(pool, id, where, params);
   if ('error' in loaded) {
     if (loaded.error === 404) res.status(404).json({ error: "Payment not found" });
@@ -832,9 +1114,11 @@ router.get("/accounts/receipts", requireModuleView(["page:/accounts/vouchers", "
 router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers", "page:/operations/receipt-voucher"], "add"), async (req, res): Promise<void> => {
   // paymentMode/attachmentUrl are deliberately NOT read: the chosen account is
   // the instrument, and old clients still sending them are silently ignored.
-  const { receiptDate, receivedFromLedgerId, receivedInLedgerId, amount, narration, referenceNumber } = req.body as {
+  const { receiptDate, receivedFromLedgerId, receivedInLedgerId, amount, narration, referenceNumber, allocations, advanceAmount } = req.body as {
     receiptDate: string; receivedFromLedgerId: number; receivedInLedgerId: number; amount: number; narration?: string;
     referenceNumber?: string;
+    allocations?: { saleId: number; amount: number }[];
+    advanceAmount?: number;
   };
   if (!receiptDate || !receivedFromLedgerId || !receivedInLedgerId || !amount) {
     res.status(400).json({ error: "receiptDate, receivedFromLedgerId, receivedInLedgerId and amount are required" }); return;
@@ -853,6 +1137,170 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
   if (!legCheck.ok) { res.status(403).json({ error: legCheck.error }); return; }
 
   const { locationType, locationId } = callerLocation((req as any).employee);
+
+  // ── Bill-wise settlement path ─────────────────────────────────────────────
+  // The voucher names the invoices it settles; any excess parks in the
+  // customer's advance ledger. The allocated slices are recorded as
+  // sale_payments rows linked via clearing_receipt_id — exactly how counter
+  // collections work — so every read surface (outstanding, statements, the
+  // derived postings) sees them without new plumbing.
+  const wantsSettlement = (Array.isArray(allocations) && allocations.length > 0) || Number(advanceAmount ?? 0) > 0;
+  if (wantsSettlement) {
+    const parsedAllocs = parseAllocations(allocations, "saleId", av.amount!, advanceAmount);
+    if ("error" in parsedAllocs) { res.status(400).json({ error: parsedAllocs.error }); return; }
+    const { rows: allocRows, advance } = parsedAllocs;
+
+    const { rows: [fromLedger] } = await pool.query(
+      `SELECT id, code, name FROM account_ledgers WHERE id = $1`, [Number(receivedFromLedgerId)],
+    );
+    const party = parsePartyLedgerCode(fromLedger?.code);
+    if (!party || party.kind !== "customer") {
+      res.status(400).json({ error: "Bill settlement needs a customer account in Received From. Pick the customer's ledger, or remove the allocations." });
+      return;
+    }
+    const caller = callerLocation((req as any).employee);
+    const createdBy = (req as any).employee?.username ?? null;
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Double-submit guard: the same settlement fired twice within seconds
+      // would allocate the same bills twice before the outstanding cap can
+      // catch up on partially-paid invoices.
+      const { rows: dupes } = await client.query(
+        `SELECT id FROM receipts
+          WHERE source = 'allocation' AND received_from_ledger_id = $1 AND amount = $2
+            AND created_at > now() - interval '10 seconds'`,
+        [Number(receivedFromLedgerId), av.amount],
+      );
+      if (dupes.length > 0) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: "Duplicate settlement submission detected. Please wait a moment and try again." });
+        return;
+      }
+
+      // Lock the allocated invoices in id order (stable order = no deadlocks
+      // against concurrent collections) and validate each against the EFFECTIVE
+      // balance on the locked row.
+      const details: { sale: any; alloc: { id: number; amount: number }; position: any }[] = [];
+      for (const al of [...allocRows].sort((a, b) => a.id - b.id)) {
+        const { rows: [sale] } = await client.query(
+          `SELECT id, invoice_number, customer_id, outlet_id, location_type, location_id,
+                  cancelled_at, branch_transfer_id,
+                  total_amount::numeric AS total_amount, amount_paid::numeric AS amount_paid
+             FROM sales WHERE id = $1 FOR UPDATE`,
+          [al.id],
+        );
+        if (!sale) { await client.query("ROLLBACK"); res.status(404).json({ error: `Invoice not found (sale #${al.id}).` }); return; }
+        if (Number(sale.customer_id) !== party.partyId) {
+          await client.query("ROLLBACK");
+          res.status(400).json({ error: `Invoice ${sale.invoice_number ?? `#${al.id}`} belongs to a different customer.` });
+          return;
+        }
+        if (sale.cancelled_at) {
+          await client.query("ROLLBACK");
+          res.status(409).json({ error: `Invoice ${sale.invoice_number ?? `#${al.id}`} has been cancelled — nothing can be settled against it.`, code: "SALE_CANCELLED" });
+          return;
+        }
+        if (sale.branch_transfer_id) {
+          await client.query("ROLLBACK");
+          res.status(400).json({ error: `Invoice ${sale.invoice_number ?? `#${al.id}`} is a branch transfer document and is settled by the transfer flow.` });
+          return;
+        }
+        // Narrow money scope, same rule as counter collections: a branch may
+        // only settle its own location's invoices. Head Office is unrestricted.
+        const sLocType = sale.location_type ?? "outlet";
+        const sLocId = Number(sale.location_id ?? sale.outlet_id);
+        if (caller.locationType !== "headoffice" &&
+            (sLocType !== caller.locationType || sLocId !== caller.locationId)) {
+          await client.query("ROLLBACK");
+          res.status(403).json({ error: `Invoice ${sale.invoice_number ?? `#${al.id}`} was raised at another location — its collections are recorded there.` });
+          return;
+        }
+        const position = await loadPaymentPosition(client, al.id);
+        if (!position) { await client.query("ROLLBACK"); res.status(404).json({ error: `Invoice not found (sale #${al.id}).` }); return; }
+        if (al.amount > position.outstanding + 0.005) {
+          await client.query("ROLLBACK");
+          res.status(400).json({ error: `₹${al.amount.toFixed(2)} against ${sale.invoice_number ?? `#${al.id}`} exceeds its balance due (₹${position.outstanding.toFixed(2)}).` });
+          return;
+        }
+        details.push({ sale, alloc: al, position });
+      }
+
+      // Excess → the customer's advance ledger (provisioned on first use).
+      let advanceLedgerId: number | null = null;
+      if (advance > 0.004) {
+        const { rows: [cust] } = await client.query(`SELECT name FROM customers WHERE id = $1`, [party.partyId]);
+        const custName = cust?.name ?? fromLedger?.name ?? `Customer ${party.partyId}`;
+        advanceLedgerId = await ensureAdvanceLedger(client, "customer", party.partyId, custName);
+      }
+
+      const method = (await isCashFamilyLedger(client, Number(receivedInLedgerId))) ? "cash" : "bank";
+      const voucherNumber = await nextVoucherNumber(client, "receipt", receiptDate);
+      const { rows: [r] } = await client.query(
+        `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id,
+                               reference_number, created_by, source, advance_amount, advance_ledger_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'allocation', $11, $12) RETURNING *`,
+        [voucherNumber, receiptDate, Number(receivedFromLedgerId), Number(receivedInLedgerId), av.amount,
+         narration ?? null, locationType, locationId, referenceNumber?.trim() || null, createdBy,
+         advance > 0.004 ? advance : 0, advanceLedgerId],
+      );
+
+      for (const d of details) {
+        // reconciliation_status stays NULL: the money landed in the chosen
+        // ledger directly, so there is nothing for the electronic
+        // reconciliation queue to settle.
+        await client.query(
+          `INSERT INTO sale_payments (sale_id, payment_date, method, amount, reference_number, notes, reconciliation_status, clearing_receipt_id, outlet_id, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9)`,
+          [d.sale.id, receiptDate, method, d.alloc.amount, referenceNumber?.trim() || null,
+           `Receipt voucher ${voucherNumber}`, r.id, d.sale.outlet_id, createdBy],
+        );
+        const newPaid = money2(Number(d.sale.amount_paid) + d.alloc.amount);
+        const newPos = computePaymentPosition({
+          totalAmount: Number(d.sale.total_amount), amountReceived: newPaid,
+          creditAdjustments: d.position.creditAdjustments, cancelledAt: null,
+        });
+        await client.query(
+          `UPDATE sales SET amount_paid = $1, payment_status = $2 WHERE id = $3`,
+          [newPaid, newPos.status, d.sale.id],
+        );
+      }
+
+      await client.query("COMMIT");
+
+      logActivity({
+        action: "CREATE", module: "accounts", entityType: "receipt_voucher", entityId: r.id,
+        description: `Receipt voucher ${voucherNumber} — ₹${Number(r.amount).toLocaleString("en-IN")} from ${fromLedger?.name ?? receivedFromLedgerId}, settling ${details.length} bill(s)${advance > 0.004 ? ` with ₹${advance.toLocaleString("en-IN")} to advance` : ""}`,
+        metadata: {
+          voucherNumber, date: receiptDate, amount: Number(r.amount),
+          allocations: details.map(d => ({ saleId: d.sale.id, invoiceNumber: d.sale.invoice_number, amount: d.alloc.amount })),
+          advanceAmount: advance > 0.004 ? advance : 0,
+        },
+      }).catch(() => {});
+
+      const { rows: [ri] } = await pool.query(`SELECT name FROM account_ledgers WHERE id = $1`, [Number(receivedInLedgerId)]);
+      res.status(201).json({
+        id: r.id, voucherNumber: r.voucher_number, receiptDate: r.receipt_date,
+        receivedFromLedgerId: r.received_from_ledger_id, receivedFromName: fromLedger?.name ?? "",
+        receivedInLedgerId: r.received_in_ledger_id, receivedInName: ri?.name ?? "",
+        amount: Number(r.amount), narration: r.narration,
+        referenceNumber: r.reference_number, createdBy: r.created_by,
+        locationType: r.location_type ?? "headoffice", locationId: r.location_id ?? 0,
+        createdAt: r.created_at,
+        allocations: details.map(d => ({ saleId: d.sale.id, invoiceNumber: d.sale.invoice_number, amount: d.alloc.amount })),
+        advanceAmount: advance > 0.004 ? advance : 0,
+      });
+      return;
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
   const voucherNumber = await nextVoucherNumber(pool, 'receipt', receiptDate);
   const result = await pool.query(
     `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id,
@@ -962,6 +1410,93 @@ router.delete("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vou
   const ledgerIds = await scopeLedgerIds(scope);
   const params: unknown[] = [id];
   const where = scopeMoneyWhere(scope, ledgerIds, params, 'r', ['received_in_ledger_id', 'received_from_ledger_id']);
+
+  // Settlement vouchers are locked for EDIT but deletable: deletion unwinds
+  // every bill allocation (sale_payments + amount_paid) in one transaction,
+  // and refuses when the advance slice has already been adjusted against a
+  // later invoice — deleting it then would drive the advance negative.
+  {
+    const probeParams: unknown[] = [id];
+    const probeWhere = scopeMoneyWhere(scope, ledgerIds, probeParams, 'r', ['received_in_ledger_id', 'received_from_ledger_id']);
+    const { rows: [probe] } = await pool.query(
+      `SELECT r.id, r.source FROM receipts r WHERE r.id = $1 AND ${probeWhere}`, probeParams,
+    );
+    if (probe && probe.source === 'allocation') {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const { rows: [row] } = await client.query(
+          `SELECT * FROM receipts WHERE id = $1 FOR UPDATE`, [id],
+        );
+        if (!row) { await client.query("ROLLBACK"); res.status(404).json({ error: "Receipt not found" }); return; }
+        const advAmt = Number(row.advance_amount ?? 0);
+        if (advAmt > 0.004) {
+          const party = parsePartyLedgerCode(
+            (await client.query(`SELECT code FROM account_ledgers WHERE id = $1`, [row.received_from_ledger_id])).rows[0]?.code,
+          );
+          if (party) {
+            // Serialize against concurrent advance consumers, then apply the
+            // precise, reference-based guard first: if any sale consumed THIS
+            // voucher's slice, deletion is refused even when another advance
+            // voucher happens to cover the balance — fungible-pool arithmetic
+            // must not rewrite which money settled which invoice.
+            await takeAdvanceLock(client, party.kind, party.partyId);
+            const consumed = await voucherAdvanceConsumed(client, "receipt", id);
+            if (consumed > 0.004) {
+              await client.query("ROLLBACK");
+              res.status(409).json({ error: `₹${money2(consumed).toFixed(2)} of this voucher's advance has been adjusted against invoices. Cancel those invoices first.` });
+              return;
+            }
+            // Aggregate backstop: covers drains that predate slice tracking
+            // (manual journals on the advance ledger).
+            const pos = await advanceAvailable(party.kind, party.partyId);
+            if (pos.available + 0.005 < advAmt) {
+              await client.query("ROLLBACK");
+              res.status(409).json({ error: `₹${money2(advAmt - pos.available).toFixed(2)} of this voucher's advance has already been adjusted against invoices. Remove those adjustments first.` });
+              return;
+            }
+          }
+        }
+        const { rows: legs } = await client.query(
+          `SELECT sp.id, sp.sale_id, sp.amount FROM sale_payments sp
+            WHERE sp.clearing_receipt_id = $1 ORDER BY sp.sale_id ASC`, [id],
+        );
+        for (const leg of legs) {
+          const { rows: [sale] } = await client.query(
+            `SELECT id, total_amount::numeric AS total_amount, amount_paid::numeric AS amount_paid
+               FROM sales WHERE id = $1 FOR UPDATE`, [leg.sale_id],
+          );
+          if (!sale) continue;
+          await client.query(`DELETE FROM sale_payments WHERE id = $1`, [leg.id]);
+          const newPaid = money2(Math.max(0, Number(sale.amount_paid) - Number(leg.amount)));
+          const pos = await loadPaymentPosition(client, leg.sale_id);
+          const newPos = computePaymentPosition({
+            totalAmount: Number(sale.total_amount), amountReceived: newPaid,
+            creditAdjustments: pos?.creditAdjustments ?? 0, cancelledAt: null,
+          });
+          await client.query(
+            `UPDATE sales SET amount_paid = $1, payment_status = $2 WHERE id = $3`,
+            [newPaid, newPos.status, leg.sale_id],
+          );
+        }
+        await client.query(`DELETE FROM receipts WHERE id = $1`, [id]);
+        await client.query("COMMIT");
+        logActivity({
+          action: "DELETE", module: "accounts", entityType: "receipt_voucher", entityId: id,
+          description: `Settlement receipt ${row.voucher_number} deleted — ₹${Number(row.amount).toLocaleString("en-IN")}, ${legs.length} bill allocation(s) unwound`,
+          metadata: { old: { voucherNumber: row.voucher_number, date: row.receipt_date, amount: Number(row.amount), advanceAmount: advAmt, allocations: legs.map((l: any) => ({ saleId: l.sale_id, amount: Number(l.amount) })) } },
+        }).catch(() => {});
+        res.status(204).send();
+        return;
+      } catch (e) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw e;
+      } finally {
+        client.release();
+      }
+    }
+  }
+
   const loaded = await loadManualReceipt(pool, id, where, params);
   if ('error' in loaded) {
     if (loaded.error === 404) res.status(404).json({ error: "Receipt not found" });
@@ -2495,6 +3030,139 @@ router.post("/accounts/opening-balances", requireModuleAction("page:/accounts/ch
   }).catch(() => {});
 
   res.status(201).json({ id: row.id, ledgerId, balance, balanceType, asOfDate, financialYear, notes });
+});
+
+// ── Bill-wise settlement context ──────────────────────────────────────────
+// Everything the receipt/payment voucher form needs when a party ledger is
+// picked: the party's open bills (oldest first, with balances computed the
+// same way the outstanding reports compute them) and their advance position.
+router.get("/accounts/settlement-context", requireModuleView(["page:/accounts/vouchers", "page:/operations/receipt-voucher", "page:/operations/payment-voucher"]), async (req, res): Promise<void> => {
+  const ledgerId = Number(req.query.ledgerId);
+  if (!Number.isInteger(ledgerId) || ledgerId <= 0) {
+    res.status(400).json({ error: "ledgerId is required" }); return;
+  }
+  const { rows: [ledger] } = await pool.query(
+    `SELECT id, code, name FROM account_ledgers WHERE id = $1`, [ledgerId],
+  );
+  if (!ledger) { res.status(404).json({ error: "Account not found" }); return; }
+  const party = parsePartyLedgerCode(ledger.code);
+  if (!party) {
+    // Not a party ledger — nothing to settle bill-wise. An empty context lets
+    // the form fall back to a plain voucher without special-casing.
+    res.json({ kind: null, partyId: null, bills: [], advance: { available: 0 } });
+    return;
+  }
+
+  // A branch caller settles only its own location's bills — the same scope
+  // rule the write path enforces, applied here so the form never offers a
+  // bill the submission would then refuse.
+  const caller = callerLocation((req as any).employee);
+  const branchScoped = caller.locationType !== "headoffice";
+
+  // Same party-ownership rule as checkVoucherLegs: a branch user may not read
+  // another branch's customer/vendor position (name, bills, advance). 404, not
+  // 403 — the account's existence is itself information.
+  if (branchScoped) {
+    const scope = ownLocationScope((req as any).employee);
+    const foreignParties = await foreignPartyLedgerIds(scope);
+    if (foreignParties.includes(ledgerId)) {
+      res.status(404).json({ error: "Account not found" }); return;
+    }
+  }
+
+  const advance = await advanceAvailable(party.kind, party.partyId);
+
+  if (party.kind === "customer") {
+    const params: unknown[] = [party.partyId];
+    let locCond = "TRUE";
+    if (branchScoped) {
+      params.push(caller.locationType, caller.locationId);
+      locCond = `(COALESCE(s.location_type, 'outlet') = $2 AND COALESCE(s.location_id, s.outlet_id) = $3)`;
+    }
+    const { rows } = await pool.query(
+      `SELECT s.id, s.invoice_number, s.sale_date, s.total_amount::numeric AS total,
+              ${outstandingExpr("s")} AS outstanding
+         FROM sales s
+        WHERE s.customer_id = $1
+          AND s.cancelled_at IS NULL
+          AND s.branch_transfer_id IS NULL
+          AND ${outstandingExpr("s")} > 0.009
+          AND ${locCond}
+        ORDER BY s.sale_date ASC, s.id ASC`,
+      params,
+    );
+    res.json({
+      kind: "customer", partyId: party.partyId, partyName: ledger.name,
+      bills: rows.map(r => ({
+        saleId: Number(r.id), invoiceNumber: r.invoice_number ?? null,
+        billDate: r.sale_date, total: Number(r.total), due: money2(Number(r.outstanding)),
+      })),
+      advance: { available: advance.available },
+    });
+    return;
+  }
+
+  // Vendor: dues come from the shared settlement index, so this list can never
+  // disagree with the payables ageing or the GST purchase register.
+  const idx = await purchaseSettlementIndex([party.partyId]);
+  const params: unknown[] = [party.partyId];
+  let locCond = "TRUE";
+  if (branchScoped) {
+    params.push(caller.locationType, caller.locationId);
+    locCond = `(COALESCE(p.location_type, 'headoffice') = $2 AND COALESCE(p.location_id, 0) = $3)`;
+  }
+  const { rows } = await pool.query(
+    `SELECT p.id, p.invoice_number, p.purchase_date, p.total_amount::numeric AS total
+       FROM purchases p
+      WHERE p.vendor_id = $1 AND p.branch_transfer_id IS NULL AND ${locCond}
+      ORDER BY p.purchase_date ASC, p.id ASC`,
+    params,
+  );
+  res.json({
+    kind: "vendor", partyId: party.partyId, partyName: ledger.name,
+    bills: rows
+      .map(r => {
+        const s = idx.get(Number(r.id));
+        return {
+          purchaseId: Number(r.id), invoiceNumber: r.invoice_number ?? null,
+          billDate: r.purchase_date, total: Number(r.total),
+          due: money2(s?.due ?? Number(r.total)),
+        };
+      })
+      .filter(b => b.due > 0.009),
+    advance: { available: advance.available },
+  });
+});
+
+// The sale / purchase forms ask one question: "does this party have an advance
+// to adjust, and how much?" Guarded by the union of the pages that can ask it.
+router.get("/accounts/party-advance", requireModuleView(["page:/sales/pos", "page:/production/purchase", "page:/accounts/vouchers", "page:/operations/receipt-voucher", "page:/operations/payment-voucher"]), async (req, res): Promise<void> => {
+  const kind = String(req.query.kind ?? "");
+  const partyId = Number(req.query.partyId);
+  if ((kind !== "customer" && kind !== "vendor") || !Number.isInteger(partyId) || partyId <= 0) {
+    res.status(400).json({ error: "kind (customer|vendor) and partyId are required" }); return;
+  }
+  // Branch callers may only read their own parties' positions — the ownership
+  // rule from moneyScope: warehouse/outlet-stamped masters belong to that
+  // location; HO-stamped and unstamped parties are company-wide. 404, not 403.
+  const paScope = ownLocationScope((req as any).employee);
+  if (!paScope.isHeadOffice) {
+    const { rows: [master] } = await pool.query(
+      kind === "customer"
+        ? `SELECT location_type, location_id FROM customers WHERE id = $1`
+        : `SELECT location_type, location_id FROM vendors WHERE id = $1`,
+      [partyId],
+    );
+    if (!master) { res.status(404).json({ error: "Not found" }); return; }
+    const lt = String(master.location_type ?? "");
+    const lid = Number(master.location_id);
+    const foreign =
+      (lt === "warehouse" && !paScope.warehouseIds.includes(lid)) ||
+      (lt === "outlet" && !paScope.outletIds.includes(lid));
+    if (foreign) { res.status(404).json({ error: "Not found" }); return; }
+  }
+  const pos = await advanceAvailable(kind, partyId);
+  res.json({ kind, partyId, available: pos.available });
 });
 
 router.delete("/accounts/opening-balances/:id", requireModuleAction("page:/accounts/chart", "delete"), async (req, res): Promise<void> => {

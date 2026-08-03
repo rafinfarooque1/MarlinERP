@@ -3,7 +3,7 @@ import { SearchableItemSelect } from '@/components/ui/searchable-item-select';
 import {
   usePaginatedPurchases, useCreatePurchase, useListVendors, useListMaterials, useListRawMaterials, useListItems,
   getListPurchasesQueryKey, useUpdatePurchase, useDeletePurchase, useGetCompanySettings,
-  useListWarehouses, useListOutlets,
+  useListWarehouses, useListOutlets, usePartyAdvance,
 } from '@workspace/api-client-react';
 import { downloadPurchaseInvoicePDF } from '@/lib/purchasePdf';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -22,6 +22,7 @@ import { Plus, Search, Trash2, ShoppingCart, Download, Eye, Calendar, FileDown, 
 import { toast } from 'sonner';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { usePermission } from '@/lib/usePermission';
 import { activeProductsWithSelection } from '@/lib/productStatus';
 import { useActingLocations, decodeLocation, encodeLocation } from '@/lib/useActingLocation';
@@ -129,7 +130,9 @@ export default function Purchases() {
     queryClient.invalidateQueries({
       predicate: q => {
         const k = String(q.queryKey[0] ?? '');
-        return k.startsWith('/api/dashboard') || k.startsWith('/api/stock');
+        return k.startsWith('/api/dashboard') || k.startsWith('/api/stock')
+          // A bill may have consumed the vendor's advance / changed their dues.
+          || k.startsWith('/api/accounts/party-advance') || k.startsWith('/api/accounts/settlement-context');
       },
     });
 
@@ -165,6 +168,13 @@ export default function Purchases() {
   };
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', location: 'headoffice:1', priceMode: 'exclusive', lineItems: [defaultLine], notes: '' } });
+
+  // Advance adjustment: does the selected vendor hold money we paid beyond
+  // their bills? Create only — edits never touch the advance.
+  const watchVendorId = form.watch('vendorId');
+  const { data: vendorAdvance } = usePartyAdvance('vendor', editingId !== null ? null : (Number(watchVendorId) || null));
+  const [applyAdvance, setApplyAdvance] = useState(true);
+  useEffect(() => { setApplyAdvance(true); }, [watchVendorId]);
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
   const watchLines = form.watch('lineItems');
   const priceMode = (form.watch('priceMode') ?? 'exclusive') as PriceMode;
@@ -252,7 +262,13 @@ export default function Purchases() {
     const { location, ...rest } = form0;
     // A user who cannot choose is always pinned to their own location, even if
     // the picker had not resolved `me` yet when the dialog opened.
-    const data = { ...rest, ...decodeLocation(locations.canChoose ? location : locations.defaultValue) };
+    const data = {
+      ...rest,
+      ...decodeLocation(locations.canChoose ? location : locations.defaultValue),
+      // Advance adjustment — opt-in; the server caps at what the books hold.
+      ...(editingId === null && applyAdvance && (vendorAdvance?.available ?? 0) > 0.004
+        ? { useAdvance: true } : {}),
+    };
     if (editingId !== null) {
       updateMutation.mutate({ id: editingId, data: data as any }, {
         onSuccess: (resp: any) => {
@@ -469,6 +485,16 @@ export default function Purchases() {
                 <FormField control={form.control} name="invoiceNumber" render={({ field }) => (
                   <FormItem><FormLabel>Invoice Ref #</FormLabel><FormControl><Input placeholder="Vendor's invoice no." {...field} /></FormControl></FormItem>
                 )} />
+                {/* Advance adjustment — a vendor holding money we paid beyond
+                    their bills can have it auto-applied to this bill. */}
+                {editingId === null && (vendorAdvance?.available ?? 0) > 0.004 && (
+                  <label className="col-span-2 lg:col-span-4 flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm cursor-pointer">
+                    <Checkbox checked={applyAdvance} onCheckedChange={v => setApplyAdvance(v === true)} />
+                    <span>
+                      Adjust available advance of <span className="font-mono font-semibold">₹{Number(vendorAdvance!.available).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span> against this bill
+                    </span>
+                  </label>
+                )}
                 {/* Receiving location. Changeable on edit too: the server
                     reverses stock at the old location and re-applies it (with
                     the payable and input GST) at the new one, in one

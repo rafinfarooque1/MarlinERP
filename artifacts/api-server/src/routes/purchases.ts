@@ -15,6 +15,7 @@ import { parseDateRange, pushDateRange, pushLocationFilter } from "../lib/queryF
 import { getLocationFilter } from "../lib/requestLocation";
 import { isIsoDate } from "../lib/dateInput";
 import { nextVoucherNumber } from "../lib/voucherNumber";
+import { advanceAvailable, takeAdvanceLock, attributeAdvanceConsumption, releaseAdvanceConsumption } from "../lib/advanceLedgers";
 import { PURCHASE_BATCH_SEQUENCE } from "../migrations/purchaseBills";
 import {
   calcPurchaseBill, asPriceMode, asTaxType,
@@ -568,12 +569,27 @@ router.post("/purchases", requireModuleAction("page:/production/purchase", "add"
     }
   }
 
+  // Opt-in adjustment of the vendor's advance balance against this bill. Read
+  // from the raw body — CreatePurchaseBody predates the flag and zod strips
+  // unknown keys. Only possible once the vendor HAS an advance ledger (it is
+  // provisioned by the first over-payment); no ledger = silent no-op.
+  const useAdvanceRequested = (req.body as any).useAdvance === true && !!parsed.data.vendorId;
+  const advanceCapIn = Number((req.body as any).advanceAmount);
+  let vendAdvLedgerExists = false;
+  if (useAdvanceRequested) {
+    const { rows: [al] } = await pool.query(
+      `SELECT id FROM account_ledgers WHERE code = $1`, [`VADV-${parsed.data.vendorId}`],
+    );
+    vendAdvLedgerExists = !!al;
+  }
+
   // Everything below moves stock, lots, weighted-average costs and the stock
   // ledger. A bill that half-applied would leave the books unreconcilable, so
   // the whole thing runs in ONE transaction on ONE client — including the
   // ledger write, which must not be fire-and-forget.
   const client = await pool.connect();
   let newId = 0;
+  let appliedAdvance = 0;
   try {
     await client.query("BEGIN");
 
@@ -610,6 +626,33 @@ router.post("/purchases", requireModuleAction("page:/production/purchase", "add"
        taxTotal, discountTotal, roundOff, loc.type, loc.id, priceMode],
     );
     newId = Number(ins.id);
+
+    // ── Vendor advance adjustment ───────────────────────────────────────────
+    // Serialize on the advance lock, then read availability from the books
+    // (ledger-authoritative). The application row drives the Dr VEND / Cr VADV
+    // contra in the derived postings, dated with this bill.
+    if (useAdvanceRequested && vendAdvLedgerExists) {
+      await takeAdvanceLock(client, "vendor", parsed.data.vendorId);
+      const advPos = await advanceAvailable("vendor", parsed.data.vendorId);
+      appliedAdvance = Math.min(advPos.available, totalAmount);
+      if (Number.isFinite(advanceCapIn) && advanceCapIn >= 0) {
+        appliedAdvance = Math.min(appliedAdvance, advanceCapIn);
+      }
+      appliedAdvance = Math.round(appliedAdvance * 100) / 100;
+      if (appliedAdvance > 0.004) {
+        await client.query(
+          `INSERT INTO purchase_advance_applications (purchase_id, vendor_id, amount, created_by)
+           VALUES ($1, $2, $3, $4)`,
+          [newId, parsed.data.vendorId, appliedAdvance, (req as any).employee?.username ?? null],
+        );
+        // Pin the consumption to the voucher(s) that parked the money — the
+        // reference the payment delete guard checks. Same txn, under the lock.
+        await attributeAdvanceConsumption(client, "vendor", parsed.data.vendorId,
+          { purchaseId: newId }, appliedAdvance);
+      } else {
+        appliedAdvance = 0;
+      }
+    }
 
   // Update stock for each line item.
   //
@@ -745,6 +788,7 @@ router.post("/purchases", requireModuleAction("page:/production/purchase", "add"
     ...row, vendorName: vendor?.name ?? "", totalAmount,
     subtotal, taxableTotal, taxTotal, discountTotal, roundOff, priceMode,
     locationType: loc.type, locationId: loc.id, locationName: locName,
+    advanceApplied: appliedAdvance,
     ...(warnings.length ? { warnings } : {}),
     lineItems: enrichLines(enriched, maps),
   });
@@ -788,6 +832,33 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     purchaseDate?: string; invoiceNumber?: string; notes?: string;
     vendorId?: number; lineItems?: any[];
   };
+
+  // Bill-wise settlement guards. A bill that a payment voucher explicitly
+  // settled, or that consumed a vendor advance, cannot have its money or its
+  // vendor rewritten from under those records — dates and notes stay editable.
+  if (lineItems !== undefined || vendorId !== undefined) {
+    const { rows: [settled] } = await pool.query(
+      `SELECT COALESCE((SELECT COUNT(*) FROM payment_bill_allocations WHERE purchase_id = $1), 0)::int AS allocs,
+              COALESCE((SELECT SUM(amount)::numeric FROM purchase_advance_applications WHERE purchase_id = $1), 0) AS adv_applied,
+              COALESCE((SELECT COUNT(*) FROM purchase_advance_applications WHERE purchase_id = $1), 0)::int AS adv_rows`,
+      [id],
+    );
+    if (Number(settled?.allocs ?? 0) > 0) {
+      res.status(409).json({
+        error: "A payment voucher has settled this bill. Delete that payment voucher first, then edit the bill.",
+        code: "BILL_HAS_ALLOCATIONS",
+      });
+      return;
+    }
+    if (vendorId !== undefined && Number(settled?.adv_rows ?? 0) > 0 && Number(vendorId) !== Number(current.vendorId)) {
+      res.status(409).json({
+        error: "This bill adjusted a vendor advance — it cannot be moved to a different vendor.",
+        code: "BILL_HAS_ADVANCE_APPLICATION",
+      });
+      return;
+    }
+    (req as any)._advApplied = Number(settled?.adv_applied ?? 0);
+  }
 
   // An edit always REVERSES the old lines at the location that recorded the
   // bill. Unless a new location is sent explicitly, the re-apply happens there
@@ -882,6 +953,18 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
 
     for (const li of enriched) {
       if (!isValidGstSlab(li.gstRate)) { res.status(400).json({ error: gstSlabErrorMessage(li.gstRate) }); return; }
+    }
+
+    // The advance already adjusted against this bill is spent money — the bill
+    // cannot shrink below it, or the books would show an advance consumed by
+    // value that no longer exists.
+    const advApplied = Number((req as any)._advApplied ?? 0);
+    if (advApplied > 0.004 && totalAmount < advApplied - 0.005) {
+      res.status(409).json({
+        error: `₹${advApplied.toFixed(2)} of vendor advance was adjusted against this bill — the new total (₹${totalAmount.toFixed(2)}) cannot go below that.`,
+        code: "BILL_BELOW_ADVANCE_APPLIED",
+      });
+      return;
     }
 
     const warnings: string[] = [];
@@ -1251,6 +1334,26 @@ router.delete("/purchases/:id", requireModuleAction("page:/production/purchase",
       await client.query("ROLLBACK");
       res.status(404).json({ error: "Not found" }); return;
     }
+
+    // A bill that a payment voucher explicitly settled cannot quietly vanish —
+    // the voucher's allocation would point at nothing and its money would fall
+    // back into the FIFO pool as if it had never been aimed.
+    const { rows: [allocRef] } = await client.query(
+      `SELECT COUNT(*)::int AS n FROM payment_bill_allocations WHERE purchase_id = $1`, [id]);
+    if (Number(allocRef?.n ?? 0) > 0) {
+      await client.query("ROLLBACK");
+      res.status(409).json({
+        error: "A payment voucher has settled this bill. Delete that payment voucher first, then delete the bill.",
+        code: "BILL_HAS_ALLOCATIONS",
+      });
+      return;
+    }
+    // Advance applications die with the bill — the derived contra joins
+    // purchases, so removing the rows restores the vendor's advance in full,
+    // and releasing the consumption unpins the funding voucher(s) so they
+    // become deletable again in this same atomic step.
+    await client.query(`DELETE FROM purchase_advance_applications WHERE purchase_id = $1`, [id]);
+    await releaseAdvanceConsumption(client, { purchaseId: id });
 
     // Reverse at the location that bought the goods, never a hardcoded HO.
     loc = { type: locked.location_type ?? 'headoffice', id: Number(locked.location_id ?? 1) };

@@ -1281,6 +1281,69 @@ async function runMigrations() {
     ALTER TABLE receipts ADD COLUMN IF NOT EXISTS source text;
   `);
 
+  // ── Bill-wise settlement & party advances ─────────────────────────────────
+  // A receipt/payment voucher may settle specific bills and park any excess in
+  // a party advance ledger (CADV-<customerId> / VADV-<vendorId>).
+  //  · advance_amount / advance_ledger_id — the excess slice of the voucher.
+  //    The customer-side bill allocations are sale_payments rows (linked via
+  //    clearing_receipt_id, exactly like counter collections), so no separate
+  //    allocation table is needed there.
+  //  · payment_bill_allocations — which purchase bills a payment settles
+  //    (purchases have no amount_paid column, so vendor allocations need a
+  //    table of their own).
+  //  · purchase_advance_applications — vendor advance consumed by a new
+  //    purchase bill (Dr VEND / Cr VADV in the derived postings).
+  await pool.query(`
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS advance_amount numeric(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS advance_ledger_id integer;
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS advance_amount numeric(12,2) NOT NULL DEFAULT 0;
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS advance_ledger_id integer;
+
+    CREATE TABLE IF NOT EXISTS payment_bill_allocations (
+      id serial PRIMARY KEY,
+      payment_id integer NOT NULL,
+      purchase_id integer NOT NULL,
+      amount numeric(12,2) NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_pba_payment ON payment_bill_allocations(payment_id);
+    CREATE INDEX IF NOT EXISTS idx_pba_purchase ON payment_bill_allocations(purchase_id);
+
+    CREATE TABLE IF NOT EXISTS purchase_advance_applications (
+      id serial PRIMARY KEY,
+      purchase_id integer NOT NULL,
+      vendor_id integer NOT NULL,
+      amount numeric(12,2) NOT NULL,
+      created_by text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_paa_purchase ON purchase_advance_applications(purchase_id);
+    CREATE INDEX IF NOT EXISTS idx_paa_vendor ON purchase_advance_applications(vendor_id);
+
+    -- Slice-level attribution of advance CONSUMPTION to the voucher that
+    -- parked the money (FIFO, oldest voucher first). Source ids are immutable
+    -- references: a parking voucher may only be deleted while no consumption
+    -- row points at it, so the guard is precise rather than an aggregate
+    -- balance check (which a second, unrelated advance could satisfy).
+    -- source ids are NULL when the slice was funded by something other than a
+    -- settlement voucher (a manual journal on the advance ledger).
+    CREATE TABLE IF NOT EXISTS advance_consumptions (
+      id serial PRIMARY KEY,
+      party_kind text NOT NULL,
+      party_id integer NOT NULL,
+      source_receipt_id integer,
+      source_payment_id integer,
+      consumer_sale_id integer,
+      consumer_purchase_id integer,
+      amount numeric(12,2) NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_advcons_src_receipt ON advance_consumptions(source_receipt_id);
+    CREATE INDEX IF NOT EXISTS idx_advcons_src_payment ON advance_consumptions(source_payment_id);
+    CREATE INDEX IF NOT EXISTS idx_advcons_sale ON advance_consumptions(consumer_sale_id);
+    CREATE INDEX IF NOT EXISTS idx_advcons_purchase ON advance_consumptions(consumer_purchase_id);
+  `);
+
   // Manual vouchers are location-aware: older user-created vouchers predate
   // the Location field and were all recorded at Head Office in practice, so
   // stamp them 'headoffice'/0 (the money-voucher HO convention). System rows

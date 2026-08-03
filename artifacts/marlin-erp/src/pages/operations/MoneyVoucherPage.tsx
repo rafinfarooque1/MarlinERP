@@ -38,6 +38,7 @@ import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { isSystemLedger } from '@/lib/systemLedgers';
+import { BillSettlementPanel, type SettlementSelection } from '@/components/settlement/BillSettlementPanel';
 
 // ── Per-kind wiring ───────────────────────────────────────────────────────────
 
@@ -156,6 +157,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
   // ── Form state ──────────────────────────────────────────────────────────────
   const [partyType, setPartyType] = useState<string>('customer');
   const [editing, setEditing] = useState<any>(null);
+  const [settlement, setSettlement] = useState<SettlementSelection | null>(null);
   const [lastSaved, setLastSaved] = useState<{ id: number; voucherNumber: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const printTabRef = useRef<Window | null>(null);
@@ -218,6 +220,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     const printTab = printTabRef.current;
     printTabRef.current = null;
     if (editing) {
+      // Edits never carry allocations: settlement vouchers are locked server-side.
       updateM.mutate({ id: editing.id, ...toBody(values) } as any, {
         onSuccess: (r: any) => {
           toast.success(`${C.title} ${editing.voucherNumber} updated`);
@@ -228,7 +231,16 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
         onError: (e: any) => { printTab?.close(); toast.error(e?.data?.error || e.message || 'Update failed'); },
       });
     } else {
-      createM.mutate(toBody(values) as any, {
+      // A party voucher carries its bill split; the excess parks as an advance.
+      const body: any = toBody(values);
+      const expectKind = isReceipt ? 'customer' : 'vendor';
+      if (settlement && settlement.kind === expectKind
+          && (settlement.allocations.length > 0 || settlement.advanceAmount > 0.004)) {
+        body.allocations = settlement.allocations.map(a =>
+          isReceipt ? { saleId: a.billId, amount: a.amount } : { purchaseId: a.billId, amount: a.amount });
+        body.advanceAmount = settlement.advanceAmount;
+      }
+      createM.mutate(body, {
         onSuccess: (r: any) => {
           toast.success(`${C.title} ${r?.voucherNumber ?? ''} saved`);
           if (r?.id) setLastSaved({ id: r.id, voucherNumber: r.voucherNumber ?? String(r.id) });
@@ -391,6 +403,17 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                     </FormItem>
                   )} />
                 </div>
+
+                {/* Bill-wise settlement — appears when a customer (receipt) or
+                    vendor (payment) ledger is picked. Create only: settlement
+                    vouchers are locked for edit server-side. */}
+                {!editing && (
+                  <BillSettlementPanel
+                    ledgerId={Number(form.watch('partyLedgerId')) || 0}
+                    amount={Number(form.watch('amount')) || 0}
+                    onSelection={setSettlement}
+                  />
+                )}
 
                 <FormField control={form.control} name="narration" render={({ field }) => (
                   <FormItem><FormLabel>Narration</FormLabel>

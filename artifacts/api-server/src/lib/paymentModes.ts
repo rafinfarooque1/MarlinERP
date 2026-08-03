@@ -100,6 +100,7 @@ export function paymentModeLabel(mode: string | null | undefined): string {
     case "card":
     case "bank_transfer": return "Bank";
     case "credit": return "Credit";
+    case "advance": return "Advance";
     case "other": return "Other";
     default: return mode ? mode.replace(/_/g, " ").toUpperCase() : "";
   }

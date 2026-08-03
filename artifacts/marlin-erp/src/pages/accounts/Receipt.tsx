@@ -18,6 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { isSystemLedger } from '@/lib/systemLedgers';
+import { BillSettlementPanel, type SettlementSelection } from '@/components/settlement/BillSettlementPanel';
 
 const schema = z.object({
   receiptDate: z.string().min(1, 'Date required'),
@@ -37,6 +38,7 @@ export default function ReceiptPage() {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [settlement, setSettlement] = useState<SettlementSelection | null>(null);
   const createMutation = useCreateReceipt();
   const deleteMutation = useDeleteReceipt();
 
@@ -52,8 +54,16 @@ export default function ReceiptPage() {
   });
 
   const onSubmit = (data: FormValues) => {
-    createMutation.mutate(data as any, {
-      onSuccess: () => { toast.success('Receipt recorded'); setIsOpen(false); form.reset(); },
+    // A customer receipt carries its bill split so the books settle those
+    // exact bills; any excess parks as the customer's advance.
+    const body: any = { ...data };
+    if (settlement && settlement.kind === 'customer'
+        && (settlement.allocations.length > 0 || settlement.advanceAmount > 0.004)) {
+      body.allocations = settlement.allocations.map(a => ({ saleId: a.billId, amount: a.amount }));
+      body.advanceAmount = settlement.advanceAmount;
+    }
+    createMutation.mutate(body, {
+      onSuccess: () => { toast.success('Receipt recorded'); setIsOpen(false); form.reset(); setSettlement(null); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
   };
@@ -234,6 +244,13 @@ export default function ReceiptPage() {
                   <FormMessage />
                 </FormItem>
               )} />
+
+              {/* Bill-wise settlement — appears when a customer ledger is picked */}
+              <BillSettlementPanel
+                ledgerId={Number(form.watch('receivedFromLedgerId')) || 0}
+                amount={Number(form.watch('amount')) || 0}
+                onSelection={setSettlement}
+              />
 
               {/* Reference — descriptive metadata only */}
               <FormField control={form.control} name="referenceNumber" render={({ field }) => (

@@ -105,6 +105,27 @@ export const CHART_CONTAINERS: ContainerSpec[] = [
     description: "Salary advances recoverable, one ledger per employee",
     childCodes: [/^ADV-EMP-\d+$/],
   },
+  {
+    // Money received from customers beyond their bills. NOT CUST-ADV-<id>:
+    // several queries parse party ids out of CUST-/VEND- codes with
+    // SUBSTRING(...)::int, which a shared prefix would break.
+    code: "STD-GRP-CUST-ADV",
+    name: "Customer Advances",
+    parentCode: "SYS-CURL",
+    type: "liability",
+    section: "balance_sheet",
+    description: "Advances received from customers, one ledger per customer",
+    childCodes: [/^CADV-\d+$/],
+  },
+  {
+    code: "STD-GRP-VEND-ADV",
+    name: "Vendor Advances",
+    parentCode: "SYS-CURA",
+    type: "asset",
+    section: "balance_sheet",
+    description: "Advances paid to vendors, one ledger per vendor",
+    childCodes: [/^VADV-\d+$/],
+  },
 ];
 
 const byCode = new Map(CHART_CONTAINERS.map((c) => [c.code, c]));

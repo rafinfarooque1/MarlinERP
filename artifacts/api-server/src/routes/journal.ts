@@ -960,6 +960,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   const { rows: pays } = await pool.query(
     `SELECT p.id, p.payment_date AS date, p.paid_from_ledger_id AS f, p.paid_to_ledger_id AS t,
             p.amount, p.voucher_number, p.narration,
+            p.advance_amount, p.advance_ledger_id,
             COALESCE(p.location_type, sr.location_type) AS location_type,
             COALESCE(p.location_id, sr.location_id) AS location_id
      FROM payments p
@@ -973,7 +974,18 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     // Money vouchers default to Head Office — the long-standing convention for
     // rows recorded before location stamping existed (id placeholder 0).
     const loc = locOf(r.location_type ?? "headoffice", r.location_id ?? 0);
-    push({ entryId: eid, date: r.date, ledgerId: r.t, debit: amt, credit: 0, source: "payment", voucherNumber: r.voucher_number, description: desc, ...loc });
+    // Excess over the vendor's bills is an advance TO the vendor: it debits
+    // the vendor-advance asset ledger, not the payable — otherwise the payable
+    // would swing into an unexplained debit balance.
+    const adv = Math.min(Math.max(Number(r.advance_amount ?? 0), 0), amt);
+    const advLedger = Number(r.advance_ledger_id ?? 0);
+    if (adv > 0.004 && advLedger) {
+      const toBills = round2(amt - adv);
+      if (toBills > 0.004) push({ entryId: eid, date: r.date, ledgerId: r.t, debit: toBills, credit: 0, source: "payment", voucherNumber: r.voucher_number, description: desc, ...loc });
+      push({ entryId: eid, date: r.date, ledgerId: advLedger, debit: adv, credit: 0, source: "payment", voucherNumber: r.voucher_number, description: `Advance paid — ${desc}`, ...loc });
+    } else {
+      push({ entryId: eid, date: r.date, ledgerId: r.t, debit: amt, credit: 0, source: "payment", voucherNumber: r.voucher_number, description: desc, ...loc });
+    }
     push({ entryId: eid, date: r.date, ledgerId: r.f, debit: 0, credit: amt, source: "payment", voucherNumber: r.voucher_number, description: desc, ...loc });
   }
 
@@ -986,7 +998,8 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   const rp: any[] = [];
   const { rows: recs } = await pool.query(
     `SELECT id, receipt_date AS date, received_from_ledger_id AS f, received_in_ledger_id AS t,
-            amount, voucher_number, narration, location_type, location_id
+            amount, voucher_number, narration, location_type, location_id,
+            advance_amount, advance_ledger_id
      FROM receipts
      WHERE id NOT IN (SELECT clearing_receipt_id FROM sale_payments WHERE clearing_receipt_id IS NOT NULL)
        AND (voucher_number IS NULL OR voucher_number NOT IN (SELECT invoice_number FROM sales WHERE invoice_number IS NOT NULL))
@@ -998,7 +1011,42 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     const eid = `receipt:${r.id}`;
     const loc = locOf(r.location_type ?? "headoffice", r.location_id ?? 0);
     push({ entryId: eid, date: r.date, ledgerId: r.t, debit: amt, credit: 0, source: "receipt", voucherNumber: r.voucher_number, description: desc, ...loc });
-    push({ entryId: eid, date: r.date, ledgerId: r.f, debit: 0, credit: amt, source: "receipt", voucherNumber: r.voucher_number, description: desc, ...loc });
+    // Excess over the customer's bills is an advance FROM the customer: it
+    // credits the customer-advance liability, not the debtor — a receipt
+    // larger than the debt must not leave the debtor with a credit balance.
+    const adv = Math.min(Math.max(Number(r.advance_amount ?? 0), 0), amt);
+    const advLedger = Number(r.advance_ledger_id ?? 0);
+    if (adv > 0.004 && advLedger) {
+      const toBills = round2(amt - adv);
+      if (toBills > 0.004) push({ entryId: eid, date: r.date, ledgerId: r.f, debit: 0, credit: toBills, source: "receipt", voucherNumber: r.voucher_number, description: desc, ...loc });
+      push({ entryId: eid, date: r.date, ledgerId: advLedger, debit: 0, credit: adv, source: "receipt", voucherNumber: r.voucher_number, description: `Advance received — ${desc}`, ...loc });
+    } else {
+      push({ entryId: eid, date: r.date, ledgerId: r.f, debit: 0, credit: amt, source: "receipt", voucherNumber: r.voucher_number, description: desc, ...loc });
+    }
+  }
+
+  // 2b. Advance slice of ALLOCATION receipts. A receipt that settles bills is
+  // excluded above (its bill money reaches the books through sale_payments in
+  // section 5), but its EXCESS never touches a sale — so that slice posts here:
+  // Dr received_in / Cr customer advance. Without this the money would land in
+  // the till through section 5's legs while the advance liability never arose.
+  const radvParams: any[] = [];
+  const { rows: allocAdvRecs } = await pool.query(
+    `SELECT id, receipt_date AS date, received_in_ledger_id AS t,
+            advance_amount, advance_ledger_id, voucher_number, narration,
+            location_type, location_id
+     FROM receipts
+     WHERE advance_amount > 0.004 AND advance_ledger_id IS NOT NULL
+       AND id IN (SELECT clearing_receipt_id FROM sale_payments WHERE clearing_receipt_id IS NOT NULL)
+       ${upTo("receipt_date", radvParams)}`, radvParams
+  );
+  for (const r of allocAdvRecs) {
+    const adv = Number(r.advance_amount);
+    const eid = `receiptadv:${r.id}`;
+    const desc = r.narration || "Advance received";
+    const loc = locOf(r.location_type ?? "headoffice", r.location_id ?? 0);
+    push({ entryId: eid, date: r.date, ledgerId: r.t, debit: adv, credit: 0, source: "receipt", voucherNumber: r.voucher_number, description: `Advance received — ${desc}`, ...loc });
+    push({ entryId: eid, date: r.date, ledgerId: Number(r.advance_ledger_id), debit: 0, credit: adv, source: "receipt", voucherNumber: r.voucher_number, description: `Advance received — ${desc}`, ...loc });
   }
 
   // 3. Journal voucher lines (journal, contra, credit/debit notes) — as stored.
@@ -1078,8 +1126,14 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   );
   const spp: any[] = [];
   const { rows: salePays } = await pool.query(
-    `SELECT sp.sale_id, sp.payment_date, sp.method, sp.amount
-     FROM sale_payments sp WHERE 1=1${upTo("sp.payment_date", spp)}`, spp
+    // Allocation receipts (bill-wise settlement vouchers) carry the ledger the
+    // money actually landed in — their sale_payments legs must debit THAT
+    // ledger, not the method-derived cash/clearing default.
+    `SELECT sp.sale_id, sp.payment_date, sp.method, sp.amount,
+            rc.received_in_ledger_id AS alloc_in
+     FROM sale_payments sp
+     LEFT JOIN receipts rc ON rc.id = sp.clearing_receipt_id AND rc.source = 'allocation'
+     WHERE 1=1${upTo("sp.payment_date", spp)}`, spp
   );
   const spBySale = new Map<number, any[]>();
   for (const r of salePays) {
@@ -1140,8 +1194,24 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     for (const p of spBySale.get(s.id) ?? []) {
       const amt = Number(p.amount);
       paidViaSp += amt;
-      const drLedger = p.method === "cash" ? cashLedger : elecClr;
-      push({ entryId: eid, date: p.payment_date, ledgerId: drLedger, debit: amt, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: `${p.method === "cash" ? "Cash" : "Electronic"} received — ${inv}`, ...sLoc });
+      // Three flavours of collection leg:
+      //  · 'advance' — consumption of a customer advance: Dr the advance
+      //    liability (the money arrived when the advance was received).
+      //  · allocation-receipt legs — Dr the ledger the voucher received into.
+      //  · counter collections — cash box or Electronic Clearing, as ever.
+      let drLedger: number;
+      let legDesc: string;
+      if (p.method === "advance") {
+        drLedger = (s.customer_id ? byCode.get(`CADV-${s.customer_id}`)?.id : 0) || debtors;
+        legDesc = `Advance adjusted — ${inv}`;
+      } else if (p.alloc_in) {
+        drLedger = Number(p.alloc_in);
+        legDesc = `Received — ${inv}`;
+      } else {
+        drLedger = p.method === "cash" ? cashLedger : elecClr;
+        legDesc = `${p.method === "cash" ? "Cash" : "Electronic"} received — ${inv}`;
+      }
+      push({ entryId: eid, date: p.payment_date, ledgerId: drLedger, debit: amt, credit: 0, source: "sale", voucherNumber: s.invoice_number, description: legDesc, ...sLoc });
     }
 
     const amountPaid = Number(s.amount_paid ?? 0);
@@ -1212,6 +1282,31 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
       push({ entryId: eid, date: p.purchase_date, ledgerId: purLedger, debit: amt, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}`, ...puLoc });
     }
     push({ entryId: eid, date: p.purchase_date, ledgerId: vendLedger, debit: 0, credit: amt, source: "purchase", voucherNumber: p.invoice_number, description: isBranchTransfer ? `Due to branch — ${bill}` : `Purchase ${bill}`, ...puLoc });
+  }
+
+  // 6b. Vendor advances consumed by purchase bills: Dr vendor payable /
+  // Cr vendor advance, dated with the bill. The purchase above credited the
+  // vendor with the FULL bill; this contra is what settles the advance-covered
+  // slice, so the payable only shows what is genuinely still owed. Rows join
+  // purchases so a deleted bill drops its application with it.
+  const paap: any[] = [];
+  const { rows: purchAdvApps } = await pool.query(
+    `SELECT a.id, a.amount, a.vendor_id, p.purchase_date, p.invoice_number,
+            p.location_type, p.location_id
+     FROM purchase_advance_applications a
+     JOIN purchases p ON p.id = a.purchase_id
+     WHERE 1=1${upTo("p.purchase_date", paap)}`, paap
+  );
+  for (const a of purchAdvApps) {
+    const amt = Number(a.amount);
+    const vend = byCode.get(`VEND-${a.vendor_id}`)?.id ?? creditors;
+    const vadv = byCode.get(`VADV-${a.vendor_id}`)?.id;
+    if (!vadv) continue; // ledger deleted by hand — skip rather than misclassify
+    const eid = `purchadv:${a.id}`;
+    const bill = a.invoice_number || `#${a.id}`;
+    const loc = locOf(a.location_type ?? "headoffice", a.location_id ?? 0);
+    push({ entryId: eid, date: a.purchase_date, ledgerId: vend, debit: amt, credit: 0, source: "purchase", voucherNumber: a.invoice_number, description: `Advance adjusted — ${bill}`, ...loc });
+    push({ entryId: eid, date: a.purchase_date, ledgerId: vadv, debit: 0, credit: amt, source: "purchase", voucherNumber: a.invoice_number, description: `Advance adjusted — ${bill}`, ...loc });
   }
 
   // 7. Warehouse rent: Dr Rent Expense / Cr Rent Payable, per accrued day.

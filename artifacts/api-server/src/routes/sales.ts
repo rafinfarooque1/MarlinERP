@@ -25,6 +25,7 @@ import {
   loadPaymentPosition, loadPaymentPositions, computePaymentPosition,
   loadInvoicePaymentSettings, buildUpiRequest,
 } from "../lib/salePaymentPosition";
+import { advanceAvailable, takeAdvanceLock, attributeAdvanceConsumption, releaseAdvanceConsumption } from "../lib/advanceLedgers";
 
 const router = Router();
 
@@ -688,6 +689,10 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   const settledAtSale = isSettledAtSale(paymentModeIn);
   const isCreditControlled = !!parsed.data.customerId && paymentModeIn === 'credit';
   const overrideRequested = rawBody.creditOverride === true;
+  // Opt-in adjustment of the customer's advance balance against this bill.
+  // Read from the raw body (like creditOverride): zod strips unknown keys.
+  const useAdvanceRequested = rawBody.useAdvance === true && !!parsed.data.customerId;
+  const advanceCapIn = Number((rawBody as any).advanceAmount);
 
   // Credit (pay later) sales must have a customer — otherwise there is no
   // account to owe the balance and the credit check would be bypassed.
@@ -730,11 +735,22 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     );
     custLedgerId = cl?.id ?? null;
   }
+  // Advance adjustment is only possible once the customer HAS an advance
+  // ledger (it is provisioned by the first over-payment). No ledger = nothing
+  // to adjust — the flag is silently a no-op rather than an error.
+  let custAdvLedgerId: number | null = null;
+  if (useAdvanceRequested) {
+    const { rows: [al] } = await pgPool.query<{ id: number }>(
+      `SELECT id FROM account_ledgers WHERE code = $1`, [`CADV-${parsed.data.customerId}`]
+    );
+    custAdvLedgerId = al?.id ?? null;
+  }
 
   const txClient = await pgPool.connect();
   let row: any;
   let invoiceNumber = '';
   let lineItemsWithBatches: any[] = [];
+  let appliedAdvance = 0;
   try {
     await txClient.query('BEGIN');
 
@@ -775,6 +791,21 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
       quotationNumberForSale = qRow.quotation_number;
     }
 
+    // ── Customer advance adjustment ─────────────────────────────────────────
+    // Serialize on the advance lock, then read availability from the books
+    // (ledger-authoritative). Concurrent consumers hold this lock until their
+    // COMMIT, so the committed state we read here is the settled truth.
+    if (useAdvanceRequested && custAdvLedgerId && parsed.data.customerId) {
+      await takeAdvanceLock(txClient, 'customer', parsed.data.customerId);
+      const advPos = await advanceAvailable('customer', parsed.data.customerId);
+      appliedAdvance = Math.min(advPos.available, totalAmount);
+      if (Number.isFinite(advanceCapIn) && advanceCapIn >= 0) {
+        appliedAdvance = Math.min(appliedAdvance, advanceCapIn);
+      }
+      appliedAdvance = Math.round(appliedAdvance * 100) / 100;
+      if (appliedAdvance <= 0.004) appliedAdvance = 0;
+    }
+
     if (isCreditControlled) {
       // Serialize concurrent credit sales for this customer; the lock is
       // released automatically at COMMIT/ROLLBACK.
@@ -801,7 +832,10 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
           [`CUST-${parsed.data.customerId}`]
         );
         const currentOutstanding = Math.max(0, Math.round((Number(ob?.due ?? 0) - Number(cnr?.amt ?? 0)) * 100) / 100);
-        const projectedOutstanding = Math.round((currentOutstanding + totalAmount) * 100) / 100;
+        // The advance being adjusted against this bill is money already in
+        // hand — it never becomes exposure, so the credit check sees only the
+        // slice the customer will actually owe.
+        const projectedOutstanding = Math.round((currentOutstanding + totalAmount - appliedAdvance) * 100) / 100;
         const exceeded = projectedOutstanding > creditLimit + 0.009;
         if (exceeded && !(overrideRequested && overrideAllowed)) {
           await txClient.query('ROLLBACK');
@@ -907,8 +941,30 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
        // are committed with the bill rather than patched in afterwards.
        JSON.stringify(lineItemsWithBatches), subtotal, taxTotal, discountTotal, billDiscount, totalAmount,
        paymentModeIn, parsed.data.couponCode ?? null,
-       settledAtSale ? totalAmount : 0, settledAtSale ? 'paid' : 'unpaid']
+       // Counter-settled modes are fully paid at once; a credit sale starts
+       // with whatever slice the customer's advance just covered.
+       settledAtSale ? totalAmount : appliedAdvance,
+       settledAtSale
+         ? 'paid'
+         : computePaymentPosition({ totalAmount, amountReceived: appliedAdvance, cancelledAt: null }).status]
     ));
+
+    // The adjusted advance is a collection like any other: a sale_payments row
+    // with method 'advance'. The derived postings debit CADV-<customer> for it,
+    // which is exactly the moment the parked liability turns into revenue cover.
+    if (appliedAdvance > 0) {
+      await txClient.query(
+        `INSERT INTO sale_payments (sale_id, payment_date, method, amount, notes, reconciliation_status, outlet_id, created_by)
+         VALUES ($1, $2, 'advance', $3, $4, NULL, $5, $6)`,
+        [row.id, parsed.data.saleDate, appliedAdvance, `Advance adjusted against ${invoiceNumber}`,
+         outletIdForInsert, (req as any).employee?.username ?? null]
+      );
+      // Pin this consumption to the voucher(s) that parked the money (FIFO,
+      // oldest first) — the reference the voucher delete guard checks. Same
+      // txn, still under the advance lock taken above.
+      await attributeAdvanceConsumption(txClient, 'customer', parsed.data.customerId!,
+        { saleId: Number(row.id) }, appliedAdvance);
+    }
 
     // ── Stamp the quotation ↔ sale link, both directions, same transaction ──
     // The quotation was locked FOR UPDATE at the top of this transaction, so
@@ -966,11 +1022,18 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
       let debitLedgerId = cashLedgerId;
       if (clearsThroughBank(paymentModeIn) && elecClrLedgerId) debitLedgerId = elecClrLedgerId;
       else if (paymentModeIn === 'credit' && custLedgerId) debitLedgerId = custLedgerId;
-      if (debitLedgerId) {
+      // For counter-settled modes the advance-covered slice never reached the
+      // till — the legacy trail row records only the money that did. (These
+      // rows are excluded from the derived postings either way; the books get
+      // the advance leg from the sale_payments row above.)
+      const trailAmount = settledAtSale
+        ? Math.round((totalAmount - appliedAdvance) * 100) / 100
+        : totalAmount;
+      if (debitLedgerId && trailAmount > 0.004) {
         await txClient.query(
           `INSERT INTO receipts (receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, voucher_number, location_type, location_id, source)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'sale')`,
-          [parsed.data.saleDate, salesLedgerId, debitLedgerId, totalAmount,
+          [parsed.data.saleDate, salesLedgerId, debitLedgerId, trailAmount,
            `Sale: ${invoiceNumber}${locationName ? ` at ${locationName}` : ''}`, invoiceNumber,
            locationType, locationId]
         );
@@ -1016,6 +1079,7 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     createdAt: row.created_at,
     quotationId: row.quotation_id ?? null,
     quotationNumber: row.quotation_number ?? null,
+    advanceApplied: appliedAdvance,
     // A sale cannot have a credit note against it the moment it is created, so
     // the position is computed rather than read back — same definition though,
     // so the figure the POS shows matches the one the invoice will print.
@@ -1635,8 +1699,12 @@ router.post("/sales/:id/cancel", requireModuleAction("page:/sales/pos", "delete"
     }
     // Money already banked, or goods already taken back, mean the bill has a
     // life of its own. Reversing it silently would strand those records.
+    // An adjusted ADVANCE is the one exception: no cash changed hands at this
+    // bill — the money is still the customer's, merely parked against it — so
+    // cancellation returns the slice to their advance instead of blocking.
     const { rows: [pay] } = await tx.query<{ n: string; amt: string }>(
-      `SELECT COUNT(*)::text AS n, COALESCE(SUM(amount::numeric), 0)::text AS amt FROM sale_payments WHERE sale_id = $1`, [id]
+      `SELECT COUNT(*)::text AS n, COALESCE(SUM(amount::numeric), 0)::text AS amt
+         FROM sale_payments WHERE sale_id = $1 AND method <> 'advance'`, [id]
     );
     if (Number(pay?.n ?? 0) > 0) {
       await tx.query('ROLLBACK');
@@ -1644,6 +1712,24 @@ router.post("/sales/:id/cancel", requireModuleAction("page:/sales/pos", "delete"
         error: `₹${Number(pay.amt).toFixed(2)} has already been collected against ${sale.invoice_number}. Refund or raise a credit note instead of cancelling.`,
         code: 'PAYMENTS_RECORDED',
       }); return;
+    }
+    const { rows: [advPay] } = await tx.query<{ n: string; amt: string }>(
+      `SELECT COUNT(*)::text AS n, COALESCE(SUM(amount::numeric), 0)::text AS amt
+         FROM sale_payments WHERE sale_id = $1 AND method = 'advance'`, [id]
+    );
+    const advToRestore = Number(advPay?.amt ?? 0);
+    if (advToRestore > 0 && sale.customer_id) {
+      // Same lock order as sale creation (advance lock before stock rows).
+      // Deleting the consumption rows frees the parked money and unpins the
+      // slice from the voucher(s) that funded it, in this same transaction —
+      // the derived postings drop the Dr-advance leg with the row itself.
+      await takeAdvanceLock(tx, 'customer', Number(sale.customer_id));
+      await tx.query(`DELETE FROM sale_payments WHERE sale_id = $1 AND method = 'advance'`, [id]);
+      await releaseAdvanceConsumption(tx, { saleId: id });
+      await tx.query(
+        `UPDATE sales SET amount_paid = GREATEST(0, amount_paid::numeric - $2) WHERE id = $1`,
+        [id, advToRestore],
+      );
     }
     const { rows: [ret] } = await tx.query<{ n: string }>(
       `SELECT COUNT(*)::text AS n FROM sales_returns WHERE sale_id = $1`, [id]

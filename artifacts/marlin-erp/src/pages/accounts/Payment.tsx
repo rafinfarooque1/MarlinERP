@@ -18,6 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { isSystemLedger } from '@/lib/systemLedgers';
+import { BillSettlementPanel, type SettlementSelection } from '@/components/settlement/BillSettlementPanel';
 
 const schema = z.object({
   paymentDate: z.string().min(1, 'Date required'),
@@ -37,6 +38,7 @@ export default function Payment() {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [settlement, setSettlement] = useState<SettlementSelection | null>(null);
   const createMutation = useCreatePayment();
   const deleteMutation = useDeletePayment();
 
@@ -53,8 +55,16 @@ export default function Payment() {
   });
 
   const onSubmit = (data: FormValues) => {
-    createMutation.mutate(data as any, {
-      onSuccess: () => { toast.success('Payment recorded'); setIsOpen(false); form.reset(); },
+    // A vendor payment carries its bill split so the books settle those exact
+    // bills; any excess parks as an advance with the vendor.
+    const body: any = { ...data };
+    if (settlement && settlement.kind === 'vendor'
+        && (settlement.allocations.length > 0 || settlement.advanceAmount > 0.004)) {
+      body.allocations = settlement.allocations.map(a => ({ purchaseId: a.billId, amount: a.amount }));
+      body.advanceAmount = settlement.advanceAmount;
+    }
+    createMutation.mutate(body, {
+      onSuccess: () => { toast.success('Payment recorded'); setIsOpen(false); form.reset(); setSettlement(null); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
   };
@@ -235,6 +245,13 @@ export default function Payment() {
                   <FormMessage />
                 </FormItem>
               )} />
+
+              {/* Bill-wise settlement — appears when a vendor ledger is picked */}
+              <BillSettlementPanel
+                ledgerId={Number(form.watch('paidToLedgerId')) || 0}
+                amount={Number(form.watch('amount')) || 0}
+                onSelection={setSettlement}
+              />
 
               {/* Reference — descriptive metadata only */}
               <FormField control={form.control} name="referenceNumber" render={({ field }) => (
