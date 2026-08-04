@@ -49,6 +49,7 @@ import {
 import { WhatsAppIcon } from '@/components/ui/WhatsAppIcon';
 import { InvoiceShareLinkPanel, NO_PHONE_MESSAGE } from '@/components/sales/InvoiceShareLinkPanel';
 import { cn } from '@/lib/utils';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { toast } from 'sonner';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
@@ -1061,7 +1062,28 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   };
 
   // Search runs server-side; the status pills filter the current page locally.
-  const filtered = sales.filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter);
+  // Merge the computed discount total into each row so sorting can key on it.
+  const filtered = useMemo(
+    () => sales
+      .filter(s => statusFilter === 'all' || ((s as any).paymentStatus ?? 'paid') === statusFilter)
+      .map(s => ({
+        ...s,
+        _discountTotal: Number((s as any).discountTotal ?? 0)
+          + (((s as any).lineItems as any[]) ?? []).reduce((acc: number, li: any) => acc + Number(li?.discount ?? 0), 0),
+      })),
+    [sales, statusFilter],
+  );
+
+  const { sorted, sort } = useTableSort(filtered, {
+    invoice: s => s.invoiceNumber,
+    date: s => (s as any).saleDate,
+    location: s => s.outletName,
+    customer: s => s.customerName || 'Walk-in',
+    status: s => (s as any).paymentStatus ?? 'paid',
+    tax: s => Number((s as any).taxTotal) || null,
+    discount: s => (s as any)._discountTotal || null,
+    total: s => Number((s as any).totalAmount) || null,
+  });
 
   const itemsMap = new Map(items.map(i => [i.id, i]));
 
@@ -1142,14 +1164,14 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           <Table className="hidden md:table">
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Invoice</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Location</TableHead>
-                <TableHead>Customer</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Tax</TableHead>
-                <TableHead className="text-right">Discount</TableHead>
-                <TableHead className="text-right">Total</TableHead>
+                <SortableHead k="invoice" sort={sort}>Invoice</SortableHead>
+                <SortableHead k="date" sort={sort}>Date</SortableHead>
+                <SortableHead k="location" sort={sort}>Location</SortableHead>
+                <SortableHead k="customer" sort={sort}>Customer</SortableHead>
+                <SortableHead k="status" sort={sort}>Status</SortableHead>
+                <SortableHead k="tax" sort={sort} className="text-right">Tax</SortableHead>
+                <SortableHead k="discount" sort={sort} className="text-right">Discount</SortableHead>
+                <SortableHead k="total" sort={sort} className="text-right">Total</SortableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
@@ -1160,7 +1182,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 <TableRow><TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
                   <Receipt className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No sales recorded yet</p>
                 </TableCell></TableRow>
-              ) : filtered.map(sale => (
+              ) : sorted.map(sale => (
                 <TableRow key={sale.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-primary font-bold">{sale.invoiceNumber}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
@@ -1231,7 +1253,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               </div>
             ) : (
               <div className="space-y-2 p-3">
-                {filtered.map(sale => {
+                {sorted.map(sale => {
                   const ps = (sale as any).paymentStatus ?? 'paid';
                   const statusBadge = ps === 'cancelled'
                     ? <Badge variant="outline" className="text-[10px] text-muted-foreground">Cancelled</Badge>

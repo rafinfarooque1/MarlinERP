@@ -53,6 +53,7 @@ import { WhatsAppIcon } from '@/components/ui/WhatsAppIcon';
 import { NO_PHONE_MESSAGE } from '@/components/sales/InvoiceShareLinkPanel';
 import { QuotationShareLinkPanel } from '@/components/sales/QuotationShareLinkPanel';
 import { cn } from '@/lib/utils';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { toast } from 'sonner';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
@@ -237,6 +238,16 @@ export default function Quotations() {
       : {}),
   });
   const quotes = quotesPage?.rows ?? [];
+  const { sorted, sort } = useTableSort(quotes, {
+    quotation: q => q.quotationNumber,
+    date: q => q.quoteDate,
+    customer: q => q.customerName || 'Walk-in',
+    location: q => q.locationName,
+    status: q => q.status,
+    total: q => Number(q.totalAmount) || null,
+    validTill: q => q.validTill,
+    salesperson: q => q.salesperson,
+  });
   const totalQuotes = quotesPage?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(totalQuotes / PAGE_SIZE));
   useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
@@ -761,14 +772,14 @@ export default function Quotations() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Quotation</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Customer</TableHead>
-                <TableHead>Location</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Total</TableHead>
-                <TableHead>Valid Till</TableHead>
-                <TableHead>Salesperson</TableHead>
+                <SortableHead k="quotation" sort={sort}>Quotation</SortableHead>
+                <SortableHead k="date" sort={sort}>Date</SortableHead>
+                <SortableHead k="customer" sort={sort}>Customer</SortableHead>
+                <SortableHead k="location" sort={sort}>Location</SortableHead>
+                <SortableHead k="status" sort={sort}>Status</SortableHead>
+                <SortableHead k="total" sort={sort} className="text-right">Total</SortableHead>
+                <SortableHead k="validTill" sort={sort}>Valid Till</SortableHead>
+                <SortableHead k="salesperson" sort={sort}>Salesperson</SortableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
@@ -779,7 +790,7 @@ export default function Quotations() {
                 <TableRow><TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
                   <FileText className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No quotations yet</p>
                 </TableCell></TableRow>
-              ) : quotes.map(q => (
+              ) : sorted.map(q => (
                 <TableRow key={q.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-primary font-bold">
                     {q.quotationNumber}

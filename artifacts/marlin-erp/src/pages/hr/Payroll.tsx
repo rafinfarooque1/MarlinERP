@@ -28,6 +28,7 @@ import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 import { useGetMe } from '@workspace/api-client-react';
 
@@ -470,7 +471,15 @@ function AdvancesSection({ isAdmin, employees }: { isAdmin: boolean; employees: 
   const [advOpen, setAdvOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
 
-  const shown = showAll ? advances as any[] : (advances as any[]).slice(0, 5);
+  const { sorted: sortedAdvances, sort } = useTableSort(advances as any[], {
+    employee: (a: any) => a.employeeName,
+    date: (a: any) => a.date,
+    amount: (a: any) => Number(a.amount),
+    note: (a: any) => a.note,
+    status: (a: any) => (a.isDeducted ? 'Deducted' : 'Pending'),
+  });
+
+  const shown = showAll ? sortedAdvances : sortedAdvances.slice(0, 5);
 
   return (
     <div className="mt-8">
@@ -494,11 +503,11 @@ function AdvancesSection({ isAdmin, employees }: { isAdmin: boolean; employees: 
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Employee</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Note</TableHead>
-                  <TableHead>Status</TableHead>
+                  <SortableHead k="employee" sort={sort}>Employee</SortableHead>
+                  <SortableHead k="date" sort={sort}>Date</SortableHead>
+                  <SortableHead k="amount" sort={sort}>Amount</SortableHead>
+                  <SortableHead k="note" sort={sort}>Note</SortableHead>
+                  <SortableHead k="status" sort={sort}>Status</SortableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -616,6 +625,23 @@ export default function Payroll() {
     }
     return list;
   }, [payroll, search, branchTypeFilter, employees]);
+
+  // Merge the daily-accrued figure (a lookup by employee) into each row so the
+  // sort accessor reads only from the row, not outside state.
+  const rowsForTable = useMemo(
+    () => filtered.map(p => ({ ...p, _accrued: accruedByEmployee.get(p.employeeId)?.accrued ?? null })),
+    [filtered, accruedByEmployee],
+  );
+  const { sorted, sort } = useTableSort(rowsForTable, {
+    employee: (p: any) => p.employeeName,
+    branch: (p: any) => p.branchName,
+    days: (p: any) => Number(p.presentDays ?? 0),
+    accrued: (p: any) => p._accrued,
+    gross: (p: any) => Number(p.grossPay ?? 0) + Number(p.extraAmount ?? 0),
+    deductions: (p: any) => Number(p.deductions ?? 0) + Number(p.advanceDeduction ?? 0),
+    net: (p: any) => Number(p.netPay ?? 0) + Number(p.extraAmount ?? 0),
+    status: (p: any) => p.status,
+  });
 
   const totals = useMemo(() => filtered.reduce((acc, p) => ({
     net: acc.net + (p.netPay ?? 0) + (p.extraAmount ?? 0),
@@ -735,14 +761,14 @@ export default function Payroll() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Employee</TableHead>
-              {isAdmin && <TableHead>Branch</TableHead>}
-              <TableHead className="text-center">Days</TableHead>
-              <TableHead className="text-right">Accrued Daily</TableHead>
-              <TableHead className="text-right">Gross Pay</TableHead>
-              <TableHead className="text-right">Deductions</TableHead>
-              {isAdmin && <TableHead className="text-right">Net Pay</TableHead>}
-              <TableHead>Status</TableHead>
+              <SortableHead k="employee" sort={sort}>Employee</SortableHead>
+              {isAdmin && <SortableHead k="branch" sort={sort}>Branch</SortableHead>}
+              <SortableHead k="days" sort={sort} className="text-center">Days</SortableHead>
+              <SortableHead k="accrued" sort={sort} className="text-right">Accrued Daily</SortableHead>
+              <SortableHead k="gross" sort={sort} className="text-right">Gross Pay</SortableHead>
+              <SortableHead k="deductions" sort={sort} className="text-right">Deductions</SortableHead>
+              {isAdmin && <SortableHead k="net" sort={sort} className="text-right">Net Pay</SortableHead>}
+              <SortableHead k="status" sort={sort}>Status</SortableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -755,7 +781,7 @@ export default function Payroll() {
                   No payroll records. {isAdmin && <button className="underline text-primary" onClick={() => handleGenerate()}>Generate now</button>}
                 </TableCell>
               </TableRow>
-            ) : filtered.map((p) => {
+            ) : sorted.map((p) => {
               const totalNet = (p.netPay ?? 0) + (p.extraAmount ?? 0);
               const totalDed = (p.deductions ?? 0) + (p.advanceDeduction ?? 0);
               const accrual = accruedByEmployee.get(p.employeeId);

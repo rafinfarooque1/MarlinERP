@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -17,6 +17,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -205,6 +206,18 @@ export default function SalesExpenses() {
 
   const showGrouped = isAll || isWarehouse;
   const grouped     = showGrouped ? groupExpenses(expenses) : [];
+
+  // Single-location listing sort. Grouped (all/warehouse) view is left as-is:
+  // it is a hierarchical location grouping (one table per location, ordered by
+  // spend), so sorting is scoped to the flat single-location table only.
+  const { sorted: sortedExpenses, sort } = useTableSort(expenses, {
+    date: r => r.expenseDate,
+    description: r => r.description,
+    category: r => r.category || 'Uncategorised',
+    account: r => r.expenseLedgerName,
+    voucher: r => r.voucherNumber,
+    amount: r => Number(r.amount),
+  });
 
   const cashLedgerName: string | null = isSpecific ? (expenseData?.cashLedgerName ?? null) : null;
 
@@ -528,12 +541,12 @@ export default function SalesExpenses() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/10">
-                  <TableHead>Date</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Expense Account</TableHead>
-                  <TableHead>Voucher</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
+                  <SortableHead k="date" sort={sort}>Date</SortableHead>
+                  <SortableHead k="description" sort={sort}>Description</SortableHead>
+                  <SortableHead k="category" sort={sort}>Category</SortableHead>
+                  <SortableHead k="account" sort={sort}>Expense Account</SortableHead>
+                  <SortableHead k="voucher" sort={sort}>Voucher</SortableHead>
+                  <SortableHead k="amount" sort={sort} className="text-right">Amount</SortableHead>
                   <TableHead className="w-10" />
                   {perm.canDelete && <TableHead className="w-10" />}
                 </TableRow>
@@ -552,7 +565,7 @@ export default function SalesExpenses() {
                       <p>No expenses recorded for {locationName}</p>
                     </TableCell>
                   </TableRow>
-                ) : expenses.map((e: any) => (
+                ) : sortedExpenses.map((e: any) => (
                   <TableRow key={e.id} className="hover:bg-muted/10">
                     <TableCell className="text-sm text-muted-foreground">
                       <div className="flex items-center gap-1">

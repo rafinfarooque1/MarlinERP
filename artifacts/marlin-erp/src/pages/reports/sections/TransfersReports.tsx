@@ -235,7 +235,7 @@ function BranchTransferReport({ canDownload }: { canDownload: boolean }) {
               <span className="font-medium">{r.itemName}</span>
             </span>
           ) },
-          { key: 'batchNumbers', label: 'Batch', render: (r) => r.batchNumbers.length
+          { key: 'batchNumbers', label: 'Batch', sortValue: (r) => r.batchNumbers.join(', '), render: (r) => r.batchNumbers.length
             ? <span className="font-mono text-xs">{r.batchNumbers.join(', ')}</span>
             : <span className="text-muted-foreground">—</span> },
           { key: 'quantity', label: 'Qty', align: 'right', render: (r) => (
@@ -255,7 +255,7 @@ function BranchTransferReport({ canDownload }: { canDownload: boolean }) {
           { key: 'handledBy', label: 'Handled By', render: (r) => r.handledBy ?? <span className="text-muted-foreground">—</span> },
           // No dispatcher is recorded on a transfer today — the column states
           // that plainly instead of showing the receiver's name in its place.
-          { key: 'dispatchedBy', label: 'Dispatched By', render: () => <span className="text-muted-foreground" title="Not recorded — transfers do not capture a dispatcher yet">—</span> },
+          { key: 'dispatchedBy', label: 'Dispatched By', sortable: false, render: () => <span className="text-muted-foreground" title="Not recorded — transfers do not capture a dispatcher yet">—</span> },
         ] satisfies Col<BranchTransferReportRow>[]}
         rows={rows} loading={isLoading}
         rowKey={(r, i) => `${r.transferId}:${r.materialType}:${r.itemId}:${i}`}

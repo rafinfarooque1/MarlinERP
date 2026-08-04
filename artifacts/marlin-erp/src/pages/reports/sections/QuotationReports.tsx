@@ -103,8 +103,8 @@ export function QuotationsSection() {
     },
     { key: 'validTill', label: 'Valid Till', render: r => fmtDate(r.validTill) },
     { key: 'salesperson', label: 'Salesperson', render: r => r.salesperson || '—' },
-    { key: 'taxTotal', label: 'GST (quoted)', align: 'right', render: r => fmt(Number(r.taxTotal)) },
-    { key: 'totalAmount', label: 'Quoted Total', align: 'right', render: r => <span className="font-mono font-semibold">{fmt(Number(r.totalAmount))}</span> },
+    { key: 'taxTotal', label: 'GST (quoted)', align: 'right', sortValue: r => Number(r.taxTotal), render: r => fmt(Number(r.taxTotal)) },
+    { key: 'totalAmount', label: 'Quoted Total', align: 'right', sortValue: r => Number(r.totalAmount), render: r => <span className="font-mono font-semibold">{fmt(Number(r.totalAmount))}</span> },
   ];
 
   const csvRows = () => rows.map(r => ({

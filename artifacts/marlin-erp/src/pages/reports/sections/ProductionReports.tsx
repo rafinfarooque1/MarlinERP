@@ -216,7 +216,7 @@ export default function ProductionSection() {
             { key: 'producedQty', label: 'Produced', align: 'right', render: (r) => num(r.producedQty) },
             { key: 'wastageQty', label: 'Wastage', align: 'right', render: (r) => <span className="text-red-500 font-bold">{num(r.wastageQty)}</span> },
             { key: 'wastageValue', label: 'Value', align: 'right', render: (r) => <span className="text-red-500">{fmt(r.wastageValue)}</span> },
-            { key: 'lines', label: 'Reasons', render: (r) => (
+            { key: 'lines', label: 'Reasons', sortable: false, render: (r) => (
               <span className="text-xs text-muted-foreground">{r.lines.map((l) => `${l.reason} (${num(l.quantity)})`).join('; ') || '—'}</span>
             ) },
           ] satisfies Col<(typeof wastage)[number]>[]}

@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { ShieldCheck, ShieldAlert, Search, ChevronLeft, ChevronRight, Lock, ShieldOff } from 'lucide-react';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 
 const REASON_LABELS: Record<string, string> = {
   invalid_credentials: 'Wrong password',
@@ -44,6 +45,15 @@ export default function LoginHistory() {
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const lockedAccounts = data?.lockedAccounts ?? [];
+
+  const { sorted, sort } = useTableSort(rows, {
+    time: r => r.createdAt,
+    user: r => r.employeeName || r.username,
+    status: r => r.success,
+    details: r => r.reason ? (REASON_LABELS[r.reason] ?? r.reason) : (r.success ? 'Signed in' : ''),
+    ip: r => r.ip,
+    device: r => r.userAgent,
+  });
 
   const applyUsername = () => {
     setPage(1);
@@ -129,12 +139,12 @@ export default function LoginHistory() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Time</TableHead>
-                <TableHead>User</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Details</TableHead>
-                <TableHead className="hidden md:table-cell">IP</TableHead>
-                <TableHead className="hidden lg:table-cell">Device</TableHead>
+                <SortableHead k="time" sort={sort}>Time</SortableHead>
+                <SortableHead k="user" sort={sort}>User</SortableHead>
+                <SortableHead k="status" sort={sort}>Status</SortableHead>
+                <SortableHead k="details" sort={sort}>Details</SortableHead>
+                <SortableHead k="ip" sort={sort} className="hidden md:table-cell">IP</SortableHead>
+                <SortableHead k="device" sort={sort} className="hidden lg:table-cell">Device</SortableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -142,7 +152,7 @@ export default function LoginHistory() {
                 <TableRow><TableCell colSpan={6} className="text-center py-10 text-muted-foreground">Loading…</TableCell></TableRow>
               ) : rows.length === 0 ? (
                 <TableRow><TableCell colSpan={6} className="text-center py-10 text-muted-foreground">No login attempts recorded yet.</TableCell></TableRow>
-              ) : rows.map(row => (
+              ) : sorted.map(row => (
                 <TableRow key={row.id}>
                   <TableCell className="whitespace-nowrap text-sm">{fmtTime(row.createdAt)}</TableCell>
                   <TableCell>

@@ -23,6 +23,7 @@ import { Plus, Archive, Download } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
 import { toast } from 'sonner';
 import { downloadCSV } from '@/lib/download';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { fmt, fmtDate } from '@/pages/reports/shared';
 import { AssetsAccessDenied, ASSET_STATUS_LABELS } from './shared';
 
@@ -52,6 +53,16 @@ export default function AssetDisposal() {
   const { data: disposals = [], isLoading } = useAssetDisposals(params);
   const { data: activeAssets = [] } = useAssetPurchases({ status: 'active' });
   const createDisposal = useCreateAssetDisposal();
+
+  const { sorted, sort } = useTableSort(disposals, {
+    date: d => d.disposalDate,
+    code: d => d.assetCode,
+    asset: d => d.assetName,
+    type: d => ASSET_STATUS_LABELS[d.disposalType] ?? d.disposalType,
+    cost: d => d.totalCost != null ? Number(d.totalCost) : null,
+    reason: d => d.reason,
+    recordedBy: d => d.createdBy,
+  });
 
   const [form, setForm] = useState({
     assetId: '', disposalType: 'sold' as AssetDisposalType, disposalDate: todayIso(), reason: '',
@@ -113,13 +124,13 @@ export default function AssetDisposal() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Date</TableHead>
-                <TableHead>Code</TableHead>
-                <TableHead>Asset</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead className="text-right">Asset Cost</TableHead>
-                <TableHead>Reason</TableHead>
-                <TableHead>Recorded By</TableHead>
+                <SortableHead k="date" sort={sort}>Date</SortableHead>
+                <SortableHead k="code" sort={sort}>Code</SortableHead>
+                <SortableHead k="asset" sort={sort}>Asset</SortableHead>
+                <SortableHead k="type" sort={sort}>Type</SortableHead>
+                <SortableHead k="cost" sort={sort} className="text-right">Asset Cost</SortableHead>
+                <SortableHead k="reason" sort={sort}>Reason</SortableHead>
+                <SortableHead k="recordedBy" sort={sort}>Recorded By</SortableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -129,7 +140,7 @@ export default function AssetDisposal() {
                 <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
                   <Archive className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No disposals recorded</p>
                 </TableCell></TableRow>
-              ) : disposals.map(d => (
+              ) : sorted.map(d => (
                 <TableRow key={d.id} className="hover:bg-muted/10">
                   <TableCell className="whitespace-nowrap text-sm">{fmtDate(d.disposalDate)}</TableCell>
                   <TableCell className="font-mono text-sm font-semibold whitespace-nowrap">{d.assetCode}</TableCell>

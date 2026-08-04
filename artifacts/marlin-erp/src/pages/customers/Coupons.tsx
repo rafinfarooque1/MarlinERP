@@ -17,6 +17,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 
 // Mirrors the coupons table: code, discount_type, discount_value, valid_days.
 // The server derives expiry_date from valid_days at creation time.
@@ -59,6 +60,14 @@ export default function Coupons() {
   const now = new Date();
   const isActive = (c: any) => c.isActive !== false && (!c.expiryDate || new Date(c.expiryDate) >= now);
   const filtered = coupons.filter(c => c.code.toLowerCase().includes(search.toLowerCase()));
+  const { sorted, sort } = useTableSort(filtered, {
+    code: c => (c as any).code,
+    discount: c => Number((c as any).discountValue),
+    validDays: c => Number((c as any).validDays) || null,
+    used: c => Number((c as any).usageCount ?? 0),
+    expires: c => (c as any).expiryDate,
+    status: c => (isActive(c) ? 'Active' : 'Expired'),
+  });
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -109,12 +118,12 @@ export default function Coupons() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Code</TableHead>
-                <TableHead>Discount</TableHead>
-                <TableHead>Valid For</TableHead>
-                <TableHead>Used</TableHead>
-                <TableHead>Expires On</TableHead>
-                <TableHead>Status</TableHead>
+                <SortableHead k="code" sort={sort}>Code</SortableHead>
+                <SortableHead k="discount" sort={sort}>Discount</SortableHead>
+                <SortableHead k="validDays" sort={sort}>Valid For</SortableHead>
+                <SortableHead k="used" sort={sort}>Used</SortableHead>
+                <SortableHead k="expires" sort={sort}>Expires On</SortableHead>
+                <SortableHead k="status" sort={sort}>Status</SortableHead>
                 <TableHead className="text-right">View</TableHead>
               </TableRow>
             </TableHeader>
@@ -125,7 +134,7 @@ export default function Coupons() {
                 <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
                   <Ticket className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No coupons created</p>
                 </TableCell></TableRow>
-              ) : filtered.map(c => (
+              ) : sorted.map(c => (
                 <TableRow key={c.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono font-bold text-primary tracking-wider">{c.code}</TableCell>
                   <TableCell className="font-bold text-emerald-500">

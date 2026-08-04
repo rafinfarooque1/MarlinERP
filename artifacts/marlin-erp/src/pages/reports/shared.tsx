@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { CalendarDays, Download, FileText, Loader2, Store, Warehouse, Factory, Printer, Sheet, MapPin } from 'lucide-react';
 import { downloadPDFFromEndpoint, downloadFileFromEndpoint, printPDFFromEndpoint } from '@/lib/download';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useGetCompanySettings } from '@workspace/api-client-react';
 import { toast } from 'sonner';
 
@@ -346,6 +347,10 @@ export interface Col<T> {
   label: string;
   align?: 'right' | 'center';
   render?: (row: T) => ReactNode;
+  /** Raw value used for column sorting. Defaults to `row[key]`. */
+  sortValue?: (row: T) => unknown;
+  /** Set false for non-data columns (actions, serial numbers). Default true. */
+  sortable?: boolean;
 }
 
 export function RTable<T>({ cols, rows, loading, empty = 'No records for the selected period', rowKey, footer }: {
@@ -358,13 +363,20 @@ export function RTable<T>({ cols, rows, loading, empty = 'No records for the sel
   footer?: ReactNode[];
 }) {
   const alignCls = (c: Col<T>) => (c.align === 'right' ? 'text-right' : c.align === 'center' ? 'text-center' : '');
+  const accessors = Object.fromEntries(
+    cols.filter(c => c.sortable !== false)
+      .map(c => [c.key, c.sortValue ?? ((r: T) => (r as Record<string, unknown>)[c.key])]),
+  ) as Record<string, (row: T) => unknown>;
+  const { sorted, sort } = useTableSort(rows, accessors);
   return (
     <div className="bg-card border border-border rounded-xl shadow-sm overflow-x-auto">
       <Table>
         <TableHeader>
           <TableRow className="bg-muted/10">
             {cols.map((c) => (
-              <TableHead key={c.key} className={`whitespace-nowrap ${alignCls(c)}`}>{c.label}</TableHead>
+              c.sortable === false
+                ? <TableHead key={c.key} className={`whitespace-nowrap ${alignCls(c)}`}>{c.label}</TableHead>
+                : <SortableHead key={c.key} k={c.key} sort={sort} className={`whitespace-nowrap ${alignCls(c)}`}>{c.label}</SortableHead>
             ))}
           </TableRow>
         </TableHeader>
@@ -380,7 +392,7 @@ export function RTable<T>({ cols, rows, loading, empty = 'No records for the sel
               <TableCell colSpan={cols.length} className="text-center py-14 text-muted-foreground">{empty}</TableCell>
             </TableRow>
           ) : (
-            rows.map((r, i) => (
+            sorted.map((r, i) => (
               <TableRow key={rowKey(r, i)} className="hover:bg-muted/10">
                 {cols.map((c) => (
                   <TableCell key={c.key} className={`text-sm whitespace-nowrap ${alignCls(c)} ${c.align === 'right' ? 'font-mono' : ''}`}>

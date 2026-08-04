@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import {
   useListJournalVouchers, useCreateJournalVoucher, useDeleteJournalVoucher,
   useListAccountsFlat, useListCustomers, useListVendors, type JournalVoucher,
@@ -18,6 +18,7 @@ import { Form, FormField, FormItem, FormLabel, FormMessage } from '@/components/
 import { Textarea } from '@/components/ui/textarea';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { entryScopeKeyDown, autoFocusFirst, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
@@ -90,12 +91,20 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
     });
   };
 
-  const filtered = (vouchers as JournalVoucher[]).filter(v =>
+  const filtered = useMemo(() => (vouchers as JournalVoucher[]).filter(v =>
     v.voucherNumber?.toLowerCase().includes(search.toLowerCase()) ||
     v.partyName?.toLowerCase().includes(search.toLowerCase()) ||
     v.reason?.toLowerCase().includes(search.toLowerCase())
-  );
+  ), [vouchers, search]);
   const total = filtered.reduce((s, v) => s + v.totalAmount, 0);
+
+  const { sorted, sort } = useTableSort(filtered, {
+    note: v => v.voucherNumber,
+    date: v => v.voucherDate,
+    party: v => v.partyName,
+    reason: v => v.reason || v.narration,
+    amount: v => Number(v.totalAmount),
+  });
 
   return (
     <div className="space-y-4">
@@ -137,11 +146,11 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/10">
-              <TableHead>Note #</TableHead>
-              <TableHead>Date</TableHead>
-              <TableHead>{isCN ? 'Customer' : 'Vendor'}</TableHead>
-              <TableHead>Reason</TableHead>
-              <TableHead className="text-right">Amount</TableHead>
+              <SortableHead k="note" sort={sort}>Note #</SortableHead>
+              <SortableHead k="date" sort={sort}>Date</SortableHead>
+              <SortableHead k="party" sort={sort}>{isCN ? 'Customer' : 'Vendor'}</SortableHead>
+              <SortableHead k="reason" sort={sort}>Reason</SortableHead>
+              <SortableHead k="amount" sort={sort} className="text-right">Amount</SortableHead>
               <TableHead />
             </TableRow>
           </TableHeader>
@@ -153,7 +162,7 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
                 {isCN ? <FileMinus2 className="w-10 h-10 mx-auto mb-3 opacity-20" /> : <FilePlus2 className="w-10 h-10 mx-auto mb-3 opacity-20" />}
                 <p>No {isCN ? 'credit' : 'debit'} notes yet</p>
               </TableCell></TableRow>
-            ) : filtered.map(v => (
+            ) : sorted.map(v => (
               <TableRow key={v.id} className="hover:bg-muted/10">
                 <TableCell className="font-mono text-primary font-bold text-sm">{v.voucherNumber}</TableCell>
                 <TableCell className="text-sm text-muted-foreground">

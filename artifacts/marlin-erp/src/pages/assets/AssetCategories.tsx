@@ -15,6 +15,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Plus, Search, Edit2, FolderTree } from 'lucide-react';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { toast } from 'sonner';
 import { AssetsAccessDenied } from './shared';
@@ -33,6 +34,11 @@ export default function AssetCategories() {
 
   const q = search.trim().toLowerCase();
   const filtered = (categories as AssetCategory[]).filter(c => q === '' || c.name.toLowerCase().includes(q));
+  const { sorted, sort } = useTableSort(filtered, {
+    category: c => c.name,
+    assets: c => Number(c.assetCount ?? 0),
+    status: c => c.status,
+  });
 
   const openAdd = () => { setEditTarget(null); setName(''); setStatus('active'); setIsOpen(true); };
   const openEdit = (c: AssetCategory) => { setEditTarget(c); setName(c.name); setStatus(c.status); setIsOpen(true); };
@@ -69,9 +75,9 @@ export default function AssetCategories() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Category</TableHead>
-                <TableHead className="text-right">Assets</TableHead>
-                <TableHead>Status</TableHead>
+                <SortableHead k="category" sort={sort}>Category</SortableHead>
+                <SortableHead k="assets" sort={sort} className="text-right">Assets</SortableHead>
+                <SortableHead k="status" sort={sort}>Status</SortableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
@@ -82,7 +88,7 @@ export default function AssetCategories() {
                 <TableRow><TableCell colSpan={4} className="text-center py-16 text-muted-foreground">
                   <FolderTree className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No categories found</p>
                 </TableCell></TableRow>
-              ) : filtered.map(c => (
+              ) : sorted.map(c => (
                 <TableRow key={c.id} className={`hover:bg-muted/10 ${c.status === 'active' ? '' : 'opacity-60'}`}>
                   <TableCell className="font-medium">{c.name}</TableCell>
                   <TableCell className="text-right font-mono">{Number(c.assetCount ?? 0)}</TableCell>

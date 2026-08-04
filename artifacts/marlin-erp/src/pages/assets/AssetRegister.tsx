@@ -25,6 +25,7 @@ import { Plus, Search, Edit2, Eye, ArrowRightLeft, Archive, ClipboardList, Downl
 import { usePermission } from '@/lib/usePermission';
 import { toast } from 'sonner';
 import { downloadCSV } from '@/lib/download';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { AttachmentField } from '@/components/AttachmentField';
 import { fmt, fmtDate } from '@/pages/reports/shared';
 import {
@@ -66,6 +67,20 @@ export default function AssetRegister() {
   const createTransfer = useCreateAssetTransfer();
   const createDisposal = useCreateAssetDisposal();
   const locationOptions = useAssetLocationOptions();
+
+  const { sorted, sort } = useTableSort(assets, {
+    code: a => a.assetCode,
+    asset: a => a.assetName,
+    category: a => a.categoryName,
+    purchased: a => a.purchaseDate,
+    location: a => a.currentLocationName,
+    vendor: a => a.vendorName,
+    serial: a => a.serialNumber,
+    qty: a => Number(a.quantity),
+    cost: a => Number(a.totalCost),
+    status: a => ASSET_STATUS_LABELS[a.status] ?? a.status,
+    warranty: a => a.warrantyEnd,
+  });
 
   const [viewTarget, setViewTarget] = useState<AssetPurchase | null>(null);
   const [editTarget, setEditTarget] = useState<AssetPurchase | null>(null);
@@ -220,17 +235,17 @@ export default function AssetRegister() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Code</TableHead>
-                <TableHead>Asset</TableHead>
-                <TableHead>Category</TableHead>
-                <TableHead>Purchased</TableHead>
-                <TableHead>Current Location</TableHead>
-                <TableHead>Vendor</TableHead>
-                <TableHead>Serial No.</TableHead>
-                <TableHead className="text-right">Qty</TableHead>
-                <TableHead className="text-right">Cost</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Warranty</TableHead>
+                <SortableHead k="code" sort={sort}>Code</SortableHead>
+                <SortableHead k="asset" sort={sort}>Asset</SortableHead>
+                <SortableHead k="category" sort={sort}>Category</SortableHead>
+                <SortableHead k="purchased" sort={sort}>Purchased</SortableHead>
+                <SortableHead k="location" sort={sort}>Current Location</SortableHead>
+                <SortableHead k="vendor" sort={sort}>Vendor</SortableHead>
+                <SortableHead k="serial" sort={sort}>Serial No.</SortableHead>
+                <SortableHead k="qty" sort={sort} className="text-right">Qty</SortableHead>
+                <SortableHead k="cost" sort={sort} className="text-right">Cost</SortableHead>
+                <SortableHead k="status" sort={sort}>Status</SortableHead>
+                <SortableHead k="warranty" sort={sort}>Warranty</SortableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
@@ -241,7 +256,7 @@ export default function AssetRegister() {
                 <TableRow><TableCell colSpan={12} className="text-center py-16 text-muted-foreground">
                   <ClipboardList className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No assets found</p>
                 </TableCell></TableRow>
-              ) : assets.map(a => {
+              ) : sorted.map(a => {
                 const warrantyExpired = a.warrantyEnd && a.warrantyEnd < todayIso();
                 return (
                 <TableRow key={a.id} className={`hover:bg-muted/10 ${a.status === 'active' ? '' : 'opacity-70'}`}>

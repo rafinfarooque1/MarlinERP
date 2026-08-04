@@ -7,6 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Search, BarChart3, Download, AlertTriangle, ChevronRight, ChevronDown, Layers, ShieldOff } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
@@ -109,6 +110,15 @@ export default function Stock() {
   }, [batches]);
 
   const filtered = stock as any[];
+  const { sorted, sort } = useTableSort(filtered, {
+    itemName: (s: any) => s.itemName,
+    materialType: (s: any) => MAT_TYPE_LABELS[s.materialType ?? 'item'] ?? s.materialType,
+    branchName: (s: any) => s.branchName || 'Head Office',
+    quantity: (s: any) => Number(s.quantity),
+    reserved: (s: any) => Number(s.reserved || 0),
+    available: (s: any) => Number(s.available),
+    stockValue: (s: any) => Number(s.stockValue),
+  });
   const branchOptions = branchType === 'warehouse' ? warehouses : branchType === 'outlet' ? outlets : [];
 
   const toggle = (key: string) => setExpanded(prev => {
@@ -222,13 +232,13 @@ export default function Stock() {
             <TableHeader>
               <TableRow className="bg-muted/10">
                 <TableHead className="w-8" />
-                <TableHead>Item</TableHead>
-                <TableHead>Item Type</TableHead>
-                <TableHead>Location</TableHead>
-                <TableHead className="text-right">Quantity</TableHead>
-                <TableHead className="text-right">Reserved</TableHead>
-                <TableHead className="text-right">Available</TableHead>
-                {canSeeValue && <TableHead className="text-right">Value</TableHead>}
+                <SortableHead k="itemName" sort={sort}>Item</SortableHead>
+                <SortableHead k="materialType" sort={sort}>Item Type</SortableHead>
+                <SortableHead k="branchName" sort={sort}>Location</SortableHead>
+                <SortableHead k="quantity" sort={sort} className="text-right">Quantity</SortableHead>
+                <SortableHead k="reserved" sort={sort} className="text-right">Reserved</SortableHead>
+                <SortableHead k="available" sort={sort} className="text-right">Available</SortableHead>
+                {canSeeValue && <SortableHead k="stockValue" sort={sort} className="text-right">Value</SortableHead>}
                 <TableHead className="text-right">Status</TableHead>
               </TableRow>
             </TableHeader>
@@ -248,7 +258,7 @@ export default function Stock() {
                     <p>No stock data found</p>
                   </TableCell>
                 </TableRow>
-              ) : filtered.map((s, i) => {
+              ) : sorted.map((s, i) => {
                 const kind     = (s.materialType ?? 'item') as string;
                 const isItem   = kind === 'item';
                 const rowKey   = `${kind}:${s.branchType}:${s.branchId}:${s.itemId}:${i}`;

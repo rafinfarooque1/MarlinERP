@@ -128,7 +128,7 @@ function Statement({ kind, range, canDownload }: { kind: 'customer' | 'vendor'; 
               { key: 'entryType', label: 'Type', render: (r) => <Badge variant="outline" className="text-[10px] capitalize">{titleCase(r.entryType)}</Badge> },
               { key: 'debit', label: 'Debit', align: 'right', render: (r) => (r.debit ? fmt(r.debit) : '—') },
               { key: 'credit', label: 'Credit', align: 'right', render: (r) => (r.credit ? fmt(r.credit) : '—') },
-              { key: 'running', label: 'Balance', align: 'right', render: (r) => <b>{fmt(r.running)}</b> },
+              { key: 'running', label: 'Balance', align: 'right', sortable: false, render: (r) => <b>{fmt(r.running)}</b> },
             ] satisfies Col<(typeof rows)[number]>[]}
             rows={rows} loading={isLoading} rowKey={(r) => r.i}
             empty="No transactions in the selected period"

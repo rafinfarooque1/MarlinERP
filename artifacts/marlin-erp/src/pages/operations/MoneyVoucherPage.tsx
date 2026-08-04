@@ -38,6 +38,7 @@ import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { isSystemLedger } from '@/lib/systemLedgers';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { BillSettlementPanel, type SettlementSelection } from '@/components/settlement/BillSettlementPanel';
 import { entryScopeKeyDown, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 
@@ -314,6 +315,17 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     return true;
   });
 
+  const { sorted, sort } = useTableSort(filtered, {
+    voucher: r => r.voucherNumber,
+    date: r => String(r[C.dateField]).split('T')[0],
+    party: r => r[C.partyNameField],
+    cash: r => r[C.cashNameField],
+    reference: r => r.referenceNumber,
+    narration: r => r.narration,
+    by: r => r.createdBy,
+    amount: r => Number(r.amount),
+  });
+
   const total = filtered.reduce((s, r) => s + Number(r.amount), 0);
   const hasFilters = search || fromDate || toDate || cashFilter !== 'all' || byFilter !== 'all';
 
@@ -542,14 +554,14 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Voucher #</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>{C.partyLabel}</TableHead>
-                <TableHead>Cash / Bank</TableHead>
-                <TableHead>Reference</TableHead>
-                <TableHead>Narration</TableHead>
-                <TableHead>By</TableHead>
-                <TableHead className="text-right">Amount</TableHead>
+                <SortableHead k="voucher" sort={sort}>Voucher #</SortableHead>
+                <SortableHead k="date" sort={sort}>Date</SortableHead>
+                <SortableHead k="party" sort={sort}>{C.partyLabel}</SortableHead>
+                <SortableHead k="cash" sort={sort}>Cash / Bank</SortableHead>
+                <SortableHead k="reference" sort={sort}>Reference</SortableHead>
+                <SortableHead k="narration" sort={sort}>Narration</SortableHead>
+                <SortableHead k="by" sort={sort}>By</SortableHead>
+                <SortableHead k="amount" sort={sort} className="text-right">Amount</SortableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -561,7 +573,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                   <C.Icon className="w-10 h-10 mx-auto mb-3 opacity-20" />
                   <p>{hasFilters ? 'No vouchers match the filters' : `No ${C.title.toLowerCase()}s yet`}</p>
                 </TableCell></TableRow>
-              ) : filtered.map(r => (
+              ) : sorted.map(r => (
                 <TableRow key={r.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-primary font-bold text-sm whitespace-nowrap">
                     {r.voucherNumber}

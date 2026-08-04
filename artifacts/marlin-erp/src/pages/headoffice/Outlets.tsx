@@ -17,6 +17,7 @@ import { Plus, Search, Edit2, Trash2, Store, Download, Eye, ShieldOff } from 'lu
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { useOutletsEnabled, OUTLETS_LEGACY_NOTE } from '@/lib/useFeatureFlags';
 import { Archive } from 'lucide-react';
@@ -76,6 +77,12 @@ export default function Outlets() {
   };
 
   const filtered = outlets.filter(o => o.name.toLowerCase().includes(search.toLowerCase()) || o.warehouseName?.toLowerCase().includes(search.toLowerCase()));
+  const { sorted, sort } = useTableSort(filtered, {
+    name: o => o.name,
+    warehouseName: o => o.warehouseName,
+    contactPerson: o => o.contactPerson,
+    phone: o => o.phone,
+  });
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   if (!perm.isLoading && !perm.canView) {
@@ -142,10 +149,10 @@ export default function Outlets() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Name</TableHead>
-                <TableHead>Warehouse</TableHead>
-                <TableHead>Contact</TableHead>
-                <TableHead>Phone</TableHead>
+                <SortableHead k="name" sort={sort}>Name</SortableHead>
+                <SortableHead k="warehouseName" sort={sort}>Warehouse</SortableHead>
+                <SortableHead k="contactPerson" sort={sort}>Contact</SortableHead>
+                <SortableHead k="phone" sort={sort}>Phone</SortableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -156,7 +163,7 @@ export default function Outlets() {
                 <TableRow><TableCell colSpan={5} className="text-center py-16 text-muted-foreground">
                   <Store className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No outlets found</p>
                 </TableCell></TableRow>
-              ) : filtered.map(o => (
+              ) : sorted.map(o => (
                 <TableRow key={o.id} className="hover:bg-muted/10">
                   <TableCell className="font-semibold">{o.name}</TableCell>
                   <TableCell className="text-muted-foreground text-sm">{o.warehouseName}</TableCell>

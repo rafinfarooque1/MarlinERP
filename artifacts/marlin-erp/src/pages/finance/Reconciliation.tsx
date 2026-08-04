@@ -20,6 +20,7 @@ import {
 import { toast } from 'sonner';
 import { CheckSquare, Layers, Info, Link2, Link2Off, ShieldCheck } from 'lucide-react';
 import { paymentModeLabel } from '@/lib/paymentModes';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 
 // ── Reconciled/Matched entry shape (raw customFetch) ─────────────────────────
 interface ReconciledEntry {
@@ -251,6 +252,36 @@ export default function Reconciliation() {
     }
   }
 
+  // ── Column sorting per tab (default = server order until a header click) ──
+  const { sorted: sortedPending, sort: pendingSort } = useTableSort(pending, {
+    invoice: p => p.invoiceNumber,
+    customer: p => p.customerName,
+    location: p => p.locationName,
+    date: p => p.paymentDate,
+    method: p => paymentModeLabel(p.method),
+    reference: p => p.referenceNumber,
+    amount: p => Number(p.amount),
+  });
+  const { sorted: sortedReconciled, sort: reconciledSort } = useTableSort(reconciledEntries, {
+    invoice: e => e.invoiceNumber,
+    customer: e => e.customerName,
+    location: e => e.locationName,
+    date: e => e.paymentDate,
+    method: e => paymentModeLabel(e.method),
+    status: e => e.reconciliationStatus,
+    matched: e => e.matchedReference,
+    amount: e => Number(e.amount),
+  });
+  const { sorted: sortedBatches, sort: batchesSort } = useTableSort(batches, {
+    batchRef: b => b.batchReference,
+    settlementDate: b => b.settlementDate,
+    bank: b => b.bankLedgerName,
+    gross: b => Number(b.grossAmount),
+    charges: b => Number(b.charges),
+    net: b => Number(b.netAmount),
+    items: b => Number(b.itemCount),
+  });
+
   return (
     <AppLayout>
       <div className="p-4 md:p-6 space-y-4">
@@ -350,17 +381,17 @@ export default function Reconciliation() {
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-10"><Checkbox checked={selected.size === pending.length && pending.length > 0} onCheckedChange={v => v ? selectAll() : clearSel()} /></TableHead>
-                      <TableHead>Invoice</TableHead>
-                      <TableHead>Customer</TableHead>
-                      <TableHead>Location</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Method</TableHead>
-                      <TableHead>Reference</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
+                      <SortableHead k="invoice" sort={pendingSort}>Invoice</SortableHead>
+                      <SortableHead k="customer" sort={pendingSort}>Customer</SortableHead>
+                      <SortableHead k="location" sort={pendingSort}>Location</SortableHead>
+                      <SortableHead k="date" sort={pendingSort}>Date</SortableHead>
+                      <SortableHead k="method" sort={pendingSort}>Method</SortableHead>
+                      <SortableHead k="reference" sort={pendingSort}>Reference</SortableHead>
+                      <SortableHead k="amount" sort={pendingSort} className="text-right">Amount</SortableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {pending.map(p => (
+                    {sortedPending.map(p => (
                       <TableRow key={p.id} className={selected.has(p.id) ? 'bg-primary/5' : ''}>
                         <TableCell><Checkbox checked={selected.has(p.id)} onCheckedChange={() => toggleRow(p.id)} /></TableCell>
                         <TableCell className="font-mono text-xs">{p.invoiceNumber}</TableCell>
@@ -414,19 +445,19 @@ export default function Reconciliation() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Invoice</TableHead>
-                      <TableHead>Customer</TableHead>
-                      <TableHead>Location</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Method</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Matched To</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
+                      <SortableHead k="invoice" sort={reconciledSort}>Invoice</SortableHead>
+                      <SortableHead k="customer" sort={reconciledSort}>Customer</SortableHead>
+                      <SortableHead k="location" sort={reconciledSort}>Location</SortableHead>
+                      <SortableHead k="date" sort={reconciledSort}>Date</SortableHead>
+                      <SortableHead k="method" sort={reconciledSort}>Method</SortableHead>
+                      <SortableHead k="status" sort={reconciledSort}>Status</SortableHead>
+                      <SortableHead k="matched" sort={reconciledSort}>Matched To</SortableHead>
+                      <SortableHead k="amount" sort={reconciledSort} className="text-right">Amount</SortableHead>
                       <TableHead className="text-right">Action</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {reconciledEntries.map(e => (
+                    {sortedReconciled.map(e => (
                       <TableRow key={e.id}>
                         <TableCell className="font-mono text-xs">{e.invoiceNumber}</TableCell>
                         <TableCell className="text-sm">{e.customerName ?? <span className="text-muted-foreground italic text-xs">Walk-in</span>}</TableCell>
@@ -482,18 +513,18 @@ export default function Reconciliation() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Batch Ref</TableHead>
-                      <TableHead>Settlement Date</TableHead>
-                      <TableHead>Bank Account</TableHead>
-                      <TableHead className="text-right">Gross</TableHead>
-                      <TableHead className="text-right">Charges</TableHead>
-                      <TableHead className="text-right">Net</TableHead>
-                      <TableHead className="text-right">Items</TableHead>
+                      <SortableHead k="batchRef" sort={batchesSort}>Batch Ref</SortableHead>
+                      <SortableHead k="settlementDate" sort={batchesSort}>Settlement Date</SortableHead>
+                      <SortableHead k="bank" sort={batchesSort}>Bank Account</SortableHead>
+                      <SortableHead k="gross" sort={batchesSort} className="text-right">Gross</SortableHead>
+                      <SortableHead k="charges" sort={batchesSort} className="text-right">Charges</SortableHead>
+                      <SortableHead k="net" sort={batchesSort} className="text-right">Net</SortableHead>
+                      <SortableHead k="items" sort={batchesSort} className="text-right">Items</SortableHead>
                       <TableHead />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {batches.map(b => (
+                    {sortedBatches.map(b => (
                       <TableRow key={b.id}>
                         <TableCell className="font-mono text-xs font-semibold">{b.batchReference}</TableCell>
                         <TableCell className="text-sm">{b.settlementDate}</TableCell>

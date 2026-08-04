@@ -23,6 +23,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { useDateRange, RangeBar } from '@/pages/reports/shared';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 import { entryScopeKeyDown, autoFocusFirst, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 
@@ -60,6 +61,15 @@ function LocationDrilldown({ loc, onBack, canDownload }: { loc: LocationExpenseS
   const expenses = data?.expenses ?? [];
   const [viewItem, setViewItem] = useState<any>(null);
 
+  const { sorted, sort } = useTableSort(expenses, {
+    voucher: e => e.voucherNumber,
+    date: e => e.expenseDate,
+    description: e => e.description,
+    category: e => (e as any).category,
+    account: e => e.expenseLedgerName,
+    amount: e => Number(e.amount),
+  });
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
@@ -88,12 +98,12 @@ function LocationDrilldown({ loc, onBack, canDownload }: { loc: LocationExpenseS
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/10">
-              <TableHead>Voucher</TableHead>
-              <TableHead>Date</TableHead>
-              <TableHead>Description</TableHead>
-              <TableHead>Category</TableHead>
-              <TableHead>Expense Account</TableHead>
-              <TableHead className="text-right">Amount</TableHead>
+              <SortableHead k="voucher" sort={sort}>Voucher</SortableHead>
+              <SortableHead k="date" sort={sort}>Date</SortableHead>
+              <SortableHead k="description" sort={sort}>Description</SortableHead>
+              <SortableHead k="category" sort={sort}>Category</SortableHead>
+              <SortableHead k="account" sort={sort}>Expense Account</SortableHead>
+              <SortableHead k="amount" sort={sort} className="text-right">Amount</SortableHead>
               <TableHead />
             </TableRow>
           </TableHeader>
@@ -111,7 +121,7 @@ function LocationDrilldown({ loc, onBack, canDownload }: { loc: LocationExpenseS
                   <p>No expenses recorded for this location</p>
                 </TableCell>
               </TableRow>
-            ) : expenses.map(e => (
+            ) : sorted.map(e => (
               <TableRow key={e.id} className="hover:bg-muted/10">
                 <TableCell className="font-mono text-xs text-primary whitespace-nowrap">
                   {e.voucherNumber || <span className="text-muted-foreground">—</span>}
@@ -425,6 +435,17 @@ export default function Expenses() {
   });
   const total = filtered.reduce((s, e) => s + Number(e.amount || 0), 0);
 
+  const { sorted, sort } = useTableSort(filtered, {
+    voucher: e => e.expenseNumber ?? e.voucherNumber,
+    date: e => e.expenseDate,
+    description: e => e.description,
+    category: e => e.category,
+    account: e => e.ledgerAccountName,
+    location: e => e.locationName,
+    paidFrom: e => e.paymentAccountName,
+    amount: e => Number(e.amount),
+  });
+
   if (!perm.isLoading && !perm.canView) {
     return (
       <AppLayout>
@@ -511,14 +532,14 @@ export default function Expenses() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/10">
-                    <TableHead>Voucher</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead>Category</TableHead>
-                    <TableHead>Expense Account</TableHead>
-                    <TableHead>Location</TableHead>
-                    <TableHead>Paid From</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
+                    <SortableHead k="voucher" sort={sort}>Voucher</SortableHead>
+                    <SortableHead k="date" sort={sort}>Date</SortableHead>
+                    <SortableHead k="description" sort={sort}>Description</SortableHead>
+                    <SortableHead k="category" sort={sort}>Category</SortableHead>
+                    <SortableHead k="account" sort={sort}>Expense Account</SortableHead>
+                    <SortableHead k="location" sort={sort}>Location</SortableHead>
+                    <SortableHead k="paidFrom" sort={sort}>Paid From</SortableHead>
+                    <SortableHead k="amount" sort={sort} className="text-right">Amount</SortableHead>
                     <TableHead />
                   </TableRow>
                 </TableHeader>
@@ -536,7 +557,7 @@ export default function Expenses() {
                         <p>No expenses recorded</p>
                       </TableCell>
                     </TableRow>
-                  ) : filtered.map(e => (
+                  ) : sorted.map(e => (
                     <TableRow key={`${e.source}-${e.id}`} className="hover:bg-muted/10">
                       <TableCell className="font-mono text-xs text-primary whitespace-nowrap">
                         {e.expenseNumber ?? e.voucherNumber ?? <span className="text-muted-foreground">—</span>}

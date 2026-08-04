@@ -14,6 +14,7 @@ import { ShieldOff, Plus, Search, Wallet, Clock, CheckCircle2, Loader2, IndianRu
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadAdvancePDF } from '@/lib/pdfUtils';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(n);
@@ -254,6 +255,17 @@ export default function Advances() {
     return matchSearch && matchStatus;
   });
 
+  const { sorted, sort } = useTableSort(filtered, {
+    employee: (a: any) => a.employeeName,
+    date: (a: any) => a.date,
+    amount: (a: any) => Number(a.amount),
+    note: (a: any) => a.note,
+    status: (a: any) =>
+      a.isDeducted ? (a.deductedPayrollId ? 'Recovered (payroll)' : 'Recovered (cash)')
+      : a.deductedPayrollId ? 'In payroll'
+      : 'Pending',
+  });
+
   return (
     <AppLayout>
       <div className="space-y-6 max-w-5xl">
@@ -352,16 +364,16 @@ export default function Advances() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Employee</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead>Note</TableHead>
-                  <TableHead>Status</TableHead>
+                  <SortableHead k="employee" sort={sort}>Employee</SortableHead>
+                  <SortableHead k="date" sort={sort}>Date</SortableHead>
+                  <SortableHead k="amount" sort={sort} className="text-right">Amount</SortableHead>
+                  <SortableHead k="note" sort={sort}>Note</SortableHead>
+                  <SortableHead k="status" sort={sort}>Status</SortableHead>
                   <TableHead className="w-10" />
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.map((a: any) => (
+                {sorted.map((a: any) => (
                   <TableRow key={a.id}>
                     <TableCell className="font-medium">{a.employeeName}</TableCell>
                     <TableCell className="text-muted-foreground">{fmtDate(a.date)}</TableCell>

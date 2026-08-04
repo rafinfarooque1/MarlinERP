@@ -145,8 +145,8 @@ export default function AssetReports() {
     { key: 'purchaseDate', label: 'Purchased', render: a => fmtDate(a.purchaseDate) },
     { key: 'currentLocationName', label: 'Location', render: a => a.currentLocationName || '—' },
     { key: 'vendorName', label: 'Vendor', render: a => a.vendorName || '—' },
-    { key: 'quantity', label: 'Qty', align: 'right', render: a => String(Number(a.quantity)) },
-    { key: 'totalCost', label: 'Cost', align: 'right', render: a => fmt(a.totalCost) },
+    { key: 'quantity', label: 'Qty', align: 'right', sortValue: a => Number(a.quantity), render: a => String(Number(a.quantity)) },
+    { key: 'totalCost', label: 'Cost', align: 'right', sortValue: a => Number(a.totalCost), render: a => fmt(a.totalCost) },
     { key: 'status', label: 'Status', render: a => <AssetStatusBadge status={a.status} /> },
     { key: 'warrantyEnd', label: 'Warranty End', render: a => a.warrantyEnd ? fmtDate(a.warrantyEnd) : '—' },
   ];
@@ -158,10 +158,10 @@ export default function AssetReports() {
     { key: 'invoiceNumber', label: 'Invoice No.', render: a => a.invoiceNumber || '—' },
     { key: 'vendorName', label: 'Vendor', render: a => a.vendorName || '—' },
     { key: 'locationName', label: 'Location', render: a => a.locationName || '—' },
-    { key: 'quantity', label: 'Qty', align: 'right', render: a => String(Number(a.quantity)) },
-    { key: 'acquisitionCost', label: 'Unit Cost', align: 'right', render: a => fmt(a.acquisitionCost) },
-    { key: 'gstAmount', label: 'GST', align: 'right', render: a => `${fmt(a.gstAmount)} (${Number(a.gstRate)}%)` },
-    { key: 'totalCost', label: 'Total', align: 'right', render: a => fmt(a.totalCost) },
+    { key: 'quantity', label: 'Qty', align: 'right', sortValue: a => Number(a.quantity), render: a => String(Number(a.quantity)) },
+    { key: 'acquisitionCost', label: 'Unit Cost', align: 'right', sortValue: a => Number(a.acquisitionCost), render: a => fmt(a.acquisitionCost) },
+    { key: 'gstAmount', label: 'GST', align: 'right', sortValue: a => Number(a.gstAmount), render: a => `${fmt(a.gstAmount)} (${Number(a.gstRate)}%)` },
+    { key: 'totalCost', label: 'Total', align: 'right', sortValue: a => Number(a.totalCost), render: a => fmt(a.totalCost) },
     { key: 'paymentMode', label: 'Payment', render: a => `${PAYMENT_MODE_LABELS[a.paymentMode] ?? a.paymentMode} · ${PAYMENT_STATUS_LABELS[a.paymentStatus] ?? a.paymentStatus}` },
   ];
 
@@ -203,7 +203,7 @@ export default function AssetReports() {
     { key: 'assetCode', label: 'Code', render: d => <span className="font-mono font-semibold">{d.assetCode}</span> },
     { key: 'assetName', label: 'Asset' },
     { key: 'disposalType', label: 'Type', render: d => ASSET_STATUS_LABELS[d.disposalType] ?? d.disposalType },
-    { key: 'totalCost', label: 'Asset Cost', align: 'right', render: d => d.totalCost != null ? fmt(d.totalCost) : '—' },
+    { key: 'totalCost', label: 'Asset Cost', align: 'right', sortValue: d => d.totalCost != null ? Number(d.totalCost) : null, render: d => d.totalCost != null ? fmt(d.totalCost) : '—' },
     { key: 'reason', label: 'Reason', render: d => d.reason || '—' },
     { key: 'createdBy', label: 'Recorded By', render: d => d.createdBy || '—' },
   ];

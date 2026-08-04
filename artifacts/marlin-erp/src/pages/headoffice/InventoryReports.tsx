@@ -7,12 +7,13 @@ import {
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Boxes, Download, ShieldOff, CheckCircle2, AlertTriangle, PackageX } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 
 const fmt = (n: number) => `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -108,6 +109,68 @@ export default function InventoryReports() {
   const expRows = expired.data?.rows ?? [];
   const movementRows = movement.data?.rows ?? [];
   const reorderRows = reorder.data ?? [];
+
+  const locationRows = val?.locations ?? [];
+  const locationSort = useTableSort(locationRows, {
+    branchName: r => r.branchName,
+    branchType: r => cap(r.branchType),
+    itemCount: r => Number(r.itemCount),
+    totalQuantity: r => Number(r.totalQuantity),
+    onHandValue: r => Number(r.onHandValue),
+    inTransitValue: r => Number(r.inTransitValue),
+    totalValue: r => Number(r.totalValue),
+  });
+  const valSort = useTableSort(filteredValRows, {
+    typeLabel: r => r.typeLabel,
+    itemName: r => r.itemName,
+    unit: r => r.unit,
+    branchName: r => r.branchName,
+    quantity: r => Number(r.quantity),
+    reserved: r => Number(r.reserved),
+    available: r => Number(r.available),
+    avgCost: r => Number(r.avgCost),
+    value: r => Number(r.value),
+  });
+  const nearExpSort = useTableSort(nearExpRows, {
+    typeLabel: r => r.typeLabel,
+    itemName: r => r.itemName,
+    batchNumber: r => r.batchNumber,
+    branchName: r => r.branchName,
+    expiryDate: r => r.expiryDate,
+    daysToExpiry: r => Number(r.daysToExpiry),
+    quantity: r => Number(r.quantity),
+    available: r => Number(r.available),
+    value: r => Number(r.value),
+  });
+  const expSort = useTableSort(expRows, {
+    typeLabel: r => r.typeLabel,
+    itemName: r => r.itemName,
+    batchNumber: r => r.batchNumber,
+    branchName: r => r.branchName,
+    expiryDate: r => r.expiryDate,
+    daysToExpiry: r => Number(r.daysToExpiry),
+    quantity: r => Number(r.quantity),
+    available: r => Number(r.available),
+    value: r => Number(r.value),
+  });
+  const movementSort = useTableSort(movementRows as any[], {
+    classLabel: (r: any) => r.classLabel,
+    typeLabel: (r: any) => r.typeLabel,
+    itemName: (r: any) => r.itemName,
+    branchName: (r: any) => r.branchName,
+    daysSinceOutbound: (r: any) => (r.daysSinceOutbound != null ? Number(r.daysSinceOutbound) : null),
+    quantity: (r: any) => Number(r.quantity),
+    available: (r: any) => Number(r.available),
+    value: (r: any) => Number(r.value),
+  });
+  const reorderSort = useTableSort(reorderRows, {
+    itemName: r => r.itemName,
+    unit: r => r.unit,
+    branchName: r => r.branchName,
+    quantity: r => Number(r.quantity),
+    reorderLevel: r => Number(r.reorderLevel),
+    shortfall: r => Number(r.shortfall),
+  });
 
   const exportValuation = () => {
     downloadCSV('stock-valuation.csv', valRows.map((r: ValuationRow) => ({
@@ -218,13 +281,13 @@ export default function InventoryReports() {
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-muted/10">
-                      <TableHead>Location</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead className="text-right">Lines</TableHead>
-                      <TableHead className="text-right">Total Qty</TableHead>
-                      <TableHead className="text-right">On-hand</TableHead>
-                      <TableHead className="text-right">In-transit</TableHead>
-                      <TableHead className="text-right">Total Value</TableHead>
+                      <SortableHead k="branchName" sort={locationSort.sort}>Location</SortableHead>
+                      <SortableHead k="branchType" sort={locationSort.sort}>Type</SortableHead>
+                      <SortableHead k="itemCount" sort={locationSort.sort} className="text-right">Lines</SortableHead>
+                      <SortableHead k="totalQuantity" sort={locationSort.sort} className="text-right">Total Qty</SortableHead>
+                      <SortableHead k="onHandValue" sort={locationSort.sort} className="text-right">On-hand</SortableHead>
+                      <SortableHead k="inTransitValue" sort={locationSort.sort} className="text-right">In-transit</SortableHead>
+                      <SortableHead k="totalValue" sort={locationSort.sort} className="text-right">Total Value</SortableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -234,7 +297,7 @@ export default function InventoryReports() {
                       ))
                     ) : (val?.locations.length ?? 0) === 0 ? (
                       <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground text-sm">No stock locations</TableCell></TableRow>
-                    ) : val!.locations.map((l, i) => (
+                    ) : locationSort.sorted.map((l, i) => (
                       <TableRow key={i} className="hover:bg-muted/10">
                         <TableCell className="text-sm font-medium">{l.branchName}</TableCell>
                         <TableCell><Badge variant="secondary" className="text-xs">{cap(l.branchType)}</Badge></TableCell>
@@ -270,15 +333,15 @@ export default function InventoryReports() {
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-muted/10">
-                      <TableHead>Type</TableHead>
-                      <TableHead>Item</TableHead>
-                      <TableHead>Unit</TableHead>
-                      <TableHead>Location</TableHead>
-                      <TableHead className="text-right">Qty</TableHead>
-                      <TableHead className="text-right">Rsvd</TableHead>
-                      <TableHead className="text-right">Avail</TableHead>
-                      <TableHead className="text-right">Avg Cost</TableHead>
-                      <TableHead className="text-right">Value</TableHead>
+                      <SortableHead k="typeLabel" sort={valSort.sort}>Type</SortableHead>
+                      <SortableHead k="itemName" sort={valSort.sort}>Item</SortableHead>
+                      <SortableHead k="unit" sort={valSort.sort}>Unit</SortableHead>
+                      <SortableHead k="branchName" sort={valSort.sort}>Location</SortableHead>
+                      <SortableHead k="quantity" sort={valSort.sort} className="text-right">Qty</SortableHead>
+                      <SortableHead k="reserved" sort={valSort.sort} className="text-right">Rsvd</SortableHead>
+                      <SortableHead k="available" sort={valSort.sort} className="text-right">Avail</SortableHead>
+                      <SortableHead k="avgCost" sort={valSort.sort} className="text-right">Avg Cost</SortableHead>
+                      <SortableHead k="value" sort={valSort.sort} className="text-right">Value</SortableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -288,7 +351,7 @@ export default function InventoryReports() {
                       ))
                     ) : filteredValRows.length === 0 ? (
                       <TableRow><TableCell colSpan={9} className="text-center py-8 text-muted-foreground text-sm">No matching stock</TableCell></TableRow>
-                    ) : filteredValRows.map((r, i) => (
+                    ) : valSort.sorted.map((r, i) => (
                       <TableRow key={i} className="hover:bg-muted/10">
                         <TableCell><Badge variant="outline" className="text-[10px]">{r.typeLabel}</Badge></TableCell>
                         <TableCell className="text-sm font-medium">{r.itemName}</TableCell>
@@ -365,15 +428,15 @@ export default function InventoryReports() {
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-muted/10">
-                      <TableHead>Type</TableHead>
-                      <TableHead>Item</TableHead>
-                      <TableHead>Batch</TableHead>
-                      <TableHead>Location</TableHead>
-                      <TableHead>Expiry</TableHead>
-                      <TableHead className="text-right">Shelf Life</TableHead>
-                      <TableHead className="text-right">Qty</TableHead>
-                      <TableHead className="text-right">Avail</TableHead>
-                      <TableHead className="text-right">Value</TableHead>
+                      <SortableHead k="typeLabel" sort={nearExpSort.sort}>Type</SortableHead>
+                      <SortableHead k="itemName" sort={nearExpSort.sort}>Item</SortableHead>
+                      <SortableHead k="batchNumber" sort={nearExpSort.sort}>Batch</SortableHead>
+                      <SortableHead k="branchName" sort={nearExpSort.sort}>Location</SortableHead>
+                      <SortableHead k="expiryDate" sort={nearExpSort.sort}>Expiry</SortableHead>
+                      <SortableHead k="daysToExpiry" sort={nearExpSort.sort} className="text-right">Shelf Life</SortableHead>
+                      <SortableHead k="quantity" sort={nearExpSort.sort} className="text-right">Qty</SortableHead>
+                      <SortableHead k="available" sort={nearExpSort.sort} className="text-right">Avail</SortableHead>
+                      <SortableHead k="value" sort={nearExpSort.sort} className="text-right">Value</SortableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -383,7 +446,7 @@ export default function InventoryReports() {
                       ))
                     ) : nearExpRows.length === 0 ? (
                       <TableRow><TableCell colSpan={9} className="text-center py-8 text-muted-foreground text-sm">No batches nearing expiry</TableCell></TableRow>
-                    ) : nearExpRows.map((r) => (
+                    ) : nearExpSort.sorted.map((r) => (
                       <TableRow key={r.id} className="hover:bg-muted/10">
                         <TableCell><Badge variant="outline" className="text-[10px]">{r.typeLabel}</Badge></TableCell>
                         <TableCell className="text-sm font-medium">{r.itemName}</TableCell>
@@ -458,15 +521,15 @@ export default function InventoryReports() {
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-muted/10">
-                      <TableHead>Type</TableHead>
-                      <TableHead>Item</TableHead>
-                      <TableHead>Batch</TableHead>
-                      <TableHead>Location</TableHead>
-                      <TableHead>Expired On</TableHead>
-                      <TableHead className="text-right">Days Ago</TableHead>
-                      <TableHead className="text-right">Qty</TableHead>
-                      <TableHead className="text-right">Avail</TableHead>
-                      <TableHead className="text-right">Value</TableHead>
+                      <SortableHead k="typeLabel" sort={expSort.sort}>Type</SortableHead>
+                      <SortableHead k="itemName" sort={expSort.sort}>Item</SortableHead>
+                      <SortableHead k="batchNumber" sort={expSort.sort}>Batch</SortableHead>
+                      <SortableHead k="branchName" sort={expSort.sort}>Location</SortableHead>
+                      <SortableHead k="expiryDate" sort={expSort.sort}>Expired On</SortableHead>
+                      <SortableHead k="daysToExpiry" sort={expSort.sort} className="text-right">Days Ago</SortableHead>
+                      <SortableHead k="quantity" sort={expSort.sort} className="text-right">Qty</SortableHead>
+                      <SortableHead k="available" sort={expSort.sort} className="text-right">Avail</SortableHead>
+                      <SortableHead k="value" sort={expSort.sort} className="text-right">Value</SortableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -476,7 +539,7 @@ export default function InventoryReports() {
                       ))
                     ) : expRows.length === 0 ? (
                       <TableRow><TableCell colSpan={9} className="text-center py-8 text-muted-foreground text-sm">No expired stock</TableCell></TableRow>
-                    ) : expRows.map((r) => (
+                    ) : expSort.sorted.map((r) => (
                       <TableRow key={r.id} className="hover:bg-muted/10">
                         <TableCell><Badge variant="outline" className="text-[10px]">{r.typeLabel}</Badge></TableCell>
                         <TableCell className="text-sm font-medium">{r.itemName}</TableCell>
@@ -564,14 +627,14 @@ export default function InventoryReports() {
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-muted/10">
-                      <TableHead>Class</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Item</TableHead>
-                      <TableHead>Location</TableHead>
-                      <TableHead className="text-right">Days Since Outbound</TableHead>
-                      <TableHead className="text-right">Qty</TableHead>
-                      <TableHead className="text-right">Avail</TableHead>
-                      <TableHead className="text-right">Value</TableHead>
+                      <SortableHead k="classLabel" sort={movementSort.sort}>Class</SortableHead>
+                      <SortableHead k="typeLabel" sort={movementSort.sort}>Type</SortableHead>
+                      <SortableHead k="itemName" sort={movementSort.sort}>Item</SortableHead>
+                      <SortableHead k="branchName" sort={movementSort.sort}>Location</SortableHead>
+                      <SortableHead k="daysSinceOutbound" sort={movementSort.sort} className="text-right">Days Since Outbound</SortableHead>
+                      <SortableHead k="quantity" sort={movementSort.sort} className="text-right">Qty</SortableHead>
+                      <SortableHead k="available" sort={movementSort.sort} className="text-right">Avail</SortableHead>
+                      <SortableHead k="value" sort={movementSort.sort} className="text-right">Value</SortableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -581,7 +644,7 @@ export default function InventoryReports() {
                       ))
                     ) : movementRows.length === 0 ? (
                       <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground text-sm">No stock in selected class</TableCell></TableRow>
-                    ) : movementRows.map((r: any, i: number) => {
+                    ) : movementSort.sorted.map((r: any, i: number) => {
                       const classMap: Record<string, string> = {
                         fast: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
                         slow: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
@@ -630,12 +693,12 @@ export default function InventoryReports() {
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-muted/10">
-                      <TableHead>Item</TableHead>
-                      <TableHead>Unit</TableHead>
-                      <TableHead>Location</TableHead>
-                      <TableHead className="text-right">Current Qty</TableHead>
-                      <TableHead className="text-right">Reorder Level</TableHead>
-                      <TableHead className="text-right">Shortfall</TableHead>
+                      <SortableHead k="itemName" sort={reorderSort.sort}>Item</SortableHead>
+                      <SortableHead k="unit" sort={reorderSort.sort}>Unit</SortableHead>
+                      <SortableHead k="branchName" sort={reorderSort.sort}>Location</SortableHead>
+                      <SortableHead k="quantity" sort={reorderSort.sort} className="text-right">Current Qty</SortableHead>
+                      <SortableHead k="reorderLevel" sort={reorderSort.sort} className="text-right">Reorder Level</SortableHead>
+                      <SortableHead k="shortfall" sort={reorderSort.sort} className="text-right">Shortfall</SortableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -650,7 +713,7 @@ export default function InventoryReports() {
                           All stock is above reorder levels
                         </TableCell>
                       </TableRow>
-                    ) : reorderRows.map((r, i) => (
+                    ) : reorderSort.sorted.map((r, i) => (
                       <TableRow key={i} className="hover:bg-muted/10">
                         <TableCell className="text-sm font-medium">{r.itemName}</TableCell>
                         <TableCell className="text-xs text-muted-foreground">{r.unit || '—'}</TableCell>

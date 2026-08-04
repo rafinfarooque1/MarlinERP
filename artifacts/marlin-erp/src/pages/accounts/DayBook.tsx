@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { BookOpenCheck, Download, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 
 const inr = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
@@ -41,6 +42,14 @@ export default function DayBook() {
   const entries = data?.entries ?? [];
   const byType = data?.totals.byType ?? {};
   const companyLevel = (data as any)?.location ? (data as any)?.companyLevel : null;
+
+  const { sorted, sort } = useTableSort(entries, {
+    type: e => SOURCE_META[e.source]?.label ?? e.source,
+    voucher: e => e.voucherNumber,
+    particulars: e => e.particulars,
+    narration: e => e.narration,
+    amount: e => Number(e.amount),
+  });
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -114,11 +123,11 @@ export default function DayBook() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Type</TableHead>
-                <TableHead>Voucher / Invoice #</TableHead>
-                <TableHead>Particulars</TableHead>
-                <TableHead>Narration</TableHead>
-                <TableHead className="text-right">Amount</TableHead>
+                <SortableHead k="type" sort={sort}>Type</SortableHead>
+                <SortableHead k="voucher" sort={sort}>Voucher / Invoice #</SortableHead>
+                <SortableHead k="particulars" sort={sort}>Particulars</SortableHead>
+                <SortableHead k="narration" sort={sort}>Narration</SortableHead>
+                <SortableHead k="amount" sort={sort} className="text-right">Amount</SortableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -129,7 +138,7 @@ export default function DayBook() {
                   <BookOpenCheck className="w-10 h-10 mx-auto mb-3 opacity-20" />
                   <p>No transactions on {new Date(`${date}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
                 </TableCell></TableRow>
-              ) : entries.map(e => (
+              ) : sorted.map(e => (
                 <TableRow key={e.id} className="hover:bg-muted/10">
                   <TableCell>
                     <Badge className={`${SOURCE_META[e.source]?.cls ?? 'bg-muted text-muted-foreground'} border-0 hover:${SOURCE_META[e.source]?.cls ?? ''}`}>

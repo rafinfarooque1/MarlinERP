@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { FileSpreadsheet, Download, CheckCircle2, AlertTriangle, ShieldOff } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { GstScopeFilter, gstScopeLabel, type GstScope } from '@/components/accounts/GstScopeFilter';
 import { PaymentStatusBadge } from '@/pages/accounts/GstSummary';
@@ -26,6 +27,17 @@ const monthLabel = (m: string) => {
 };
 
 function HsnTable({ title, rows, loading }: { title: string; rows: HsnSummaryRow[]; loading: boolean }) {
+  const { sorted, sort } = useTableSort(rows, {
+    hsn: r => r.hsnCode,
+    rate: r => Number(r.taxRate),
+    qty: r => Number(r.quantity),
+    unit: r => r.unit,
+    taxable: r => Number(r.taxableValue),
+    cgst: r => Number(r.cgst),
+    sgst: r => Number(r.sgst),
+    igst: r => Number(r.igst),
+    totalTax: r => Number(r.taxAmount),
+  });
   return (
     <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
       <div className="p-4 border-b border-border bg-muted/20">
@@ -35,15 +47,15 @@ function HsnTable({ title, rows, loading }: { title: string; rows: HsnSummaryRow
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/10">
-              <TableHead>HSN</TableHead>
-              <TableHead>Rate</TableHead>
-              <TableHead className="text-right">Qty</TableHead>
-              <TableHead>Unit</TableHead>
-              <TableHead className="text-right">Taxable Value</TableHead>
-              <TableHead className="text-right">CGST</TableHead>
-              <TableHead className="text-right">SGST</TableHead>
-              <TableHead className="text-right">IGST</TableHead>
-              <TableHead className="text-right">Total Tax</TableHead>
+              <SortableHead k="hsn" sort={sort}>HSN</SortableHead>
+              <SortableHead k="rate" sort={sort}>Rate</SortableHead>
+              <SortableHead k="qty" sort={sort} className="text-right">Qty</SortableHead>
+              <SortableHead k="unit" sort={sort}>Unit</SortableHead>
+              <SortableHead k="taxable" sort={sort} className="text-right">Taxable Value</SortableHead>
+              <SortableHead k="cgst" sort={sort} className="text-right">CGST</SortableHead>
+              <SortableHead k="sgst" sort={sort} className="text-right">SGST</SortableHead>
+              <SortableHead k="igst" sort={sort} className="text-right">IGST</SortableHead>
+              <SortableHead k="totalTax" sort={sort} className="text-right">Total Tax</SortableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -51,7 +63,7 @@ function HsnTable({ title, rows, loading }: { title: string; rows: HsnSummaryRow
               <TableRow><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
             ) : rows.length === 0 ? (
               <TableRow><TableCell colSpan={9} className="text-center py-8 text-muted-foreground text-sm">No records in this period</TableCell></TableRow>
-            ) : rows.map((r, i) => (
+            ) : sorted.map((r, i) => (
               <TableRow key={i} className="hover:bg-muted/10">
                 <TableCell className="font-mono text-xs">{r.hsnCode}</TableCell>
                 <TableCell><Badge variant="secondary">{r.taxRate}%</Badge></TableCell>
@@ -136,6 +148,39 @@ export default function GstReturns() {
   const b2cs = g1.data?.b2cs ?? [];
   const d3b: Gstr3bResponse | undefined = g3b.data;
   const reconRows = recon.data?.rows ?? [];
+
+  const b2bSort = useTableSort(b2b, {
+    invoice: r => r.invoiceNumber,
+    date: r => r.saleDate,
+    customer: r => r.customerName,
+    gstin: r => r.gstin,
+    pos: r => r.placeOfSupply,
+    warehouse: r => r.warehouseName,
+    rate: r => Number(r.taxRate),
+    taxable: r => Number(r.taxableValue),
+    cgst: r => Number(r.cgst),
+    sgst: r => Number(r.sgst),
+    igst: r => Number(r.igst),
+    invoiceValue: r => Number(r.invoiceValue),
+    payStatus: r => r.paymentStatus,
+    payMode: r => r.paymentModes,
+  });
+  const b2csSort = useTableSort(b2cs, {
+    pos: r => r.placeOfSupply,
+    rate: r => Number(r.taxRate),
+    taxable: r => Number(r.taxableValue),
+    cgst: r => Number(r.cgst),
+    sgst: r => Number(r.sgst),
+    igst: r => Number(r.igst),
+    taxAmount: r => Number(r.taxAmount),
+  });
+  const reconSort = useTableSort(reconRows, {
+    head: r => r.head,
+    ledger: r => r.ledgerCode,
+    ledgerAmount: r => Number(r.ledgerAmount),
+    registerAmount: r => Number(r.registerAmount),
+    difference: r => Number(r.difference),
+  });
 
   const exportHsn = () => {
     const mk = (r: HsnSummaryRow, type: string) => ({
@@ -328,20 +373,20 @@ export default function GstReturns() {
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-muted/10">
-                      <TableHead>Invoice</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Customer</TableHead>
-                      <TableHead>GSTIN</TableHead>
-                      <TableHead>POS</TableHead>
-                      <TableHead>Warehouse</TableHead>
-                      <TableHead>Rate</TableHead>
-                      <TableHead className="text-right">Taxable</TableHead>
-                      <TableHead className="text-right">CGST</TableHead>
-                      <TableHead className="text-right">SGST</TableHead>
-                      <TableHead className="text-right">IGST</TableHead>
-                      <TableHead className="text-right">Invoice Value</TableHead>
-                      <TableHead>Payment Status</TableHead>
-                      <TableHead>Payment Mode</TableHead>
+                      <SortableHead k="invoice" sort={b2bSort.sort}>Invoice</SortableHead>
+                      <SortableHead k="date" sort={b2bSort.sort}>Date</SortableHead>
+                      <SortableHead k="customer" sort={b2bSort.sort}>Customer</SortableHead>
+                      <SortableHead k="gstin" sort={b2bSort.sort}>GSTIN</SortableHead>
+                      <SortableHead k="pos" sort={b2bSort.sort}>POS</SortableHead>
+                      <SortableHead k="warehouse" sort={b2bSort.sort}>Warehouse</SortableHead>
+                      <SortableHead k="rate" sort={b2bSort.sort}>Rate</SortableHead>
+                      <SortableHead k="taxable" sort={b2bSort.sort} className="text-right">Taxable</SortableHead>
+                      <SortableHead k="cgst" sort={b2bSort.sort} className="text-right">CGST</SortableHead>
+                      <SortableHead k="sgst" sort={b2bSort.sort} className="text-right">SGST</SortableHead>
+                      <SortableHead k="igst" sort={b2bSort.sort} className="text-right">IGST</SortableHead>
+                      <SortableHead k="invoiceValue" sort={b2bSort.sort} className="text-right">Invoice Value</SortableHead>
+                      <SortableHead k="payStatus" sort={b2bSort.sort}>Payment Status</SortableHead>
+                      <SortableHead k="payMode" sort={b2bSort.sort}>Payment Mode</SortableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -349,7 +394,7 @@ export default function GstReturns() {
                       <TableRow><TableCell colSpan={14}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
                     ) : b2b.length === 0 ? (
                       <TableRow><TableCell colSpan={14} className="text-center py-8 text-muted-foreground text-sm">No B2B invoices in this period</TableCell></TableRow>
-                    ) : b2b.map((r, i) => (
+                    ) : b2bSort.sorted.map((r, i) => (
                       <TableRow key={i} className="hover:bg-muted/10">
                         <TableCell className="font-mono text-xs">{r.invoiceNumber}</TableCell>
                         <TableCell className="text-xs">{r.saleDate}</TableCell>
@@ -379,13 +424,13 @@ export default function GstReturns() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/10">
-                    <TableHead>Place of Supply</TableHead>
-                    <TableHead>Rate</TableHead>
-                    <TableHead className="text-right">Taxable</TableHead>
-                    <TableHead className="text-right">CGST</TableHead>
-                    <TableHead className="text-right">SGST</TableHead>
-                    <TableHead className="text-right">IGST</TableHead>
-                    <TableHead className="text-right">Total Tax</TableHead>
+                    <SortableHead k="pos" sort={b2csSort.sort}>Place of Supply</SortableHead>
+                    <SortableHead k="rate" sort={b2csSort.sort}>Rate</SortableHead>
+                    <SortableHead k="taxable" sort={b2csSort.sort} className="text-right">Taxable</SortableHead>
+                    <SortableHead k="cgst" sort={b2csSort.sort} className="text-right">CGST</SortableHead>
+                    <SortableHead k="sgst" sort={b2csSort.sort} className="text-right">SGST</SortableHead>
+                    <SortableHead k="igst" sort={b2csSort.sort} className="text-right">IGST</SortableHead>
+                    <SortableHead k="taxAmount" sort={b2csSort.sort} className="text-right">Total Tax</SortableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -393,7 +438,7 @@ export default function GstReturns() {
                     <TableRow><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
                   ) : b2cs.length === 0 ? (
                     <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground text-sm">No B2C sales in this period</TableCell></TableRow>
-                  ) : b2cs.map((r, i) => (
+                  ) : b2csSort.sorted.map((r, i) => (
                     <TableRow key={i} className="hover:bg-muted/10">
                       <TableCell className="text-xs">{r.placeOfSupply || '—'}</TableCell>
                       <TableCell><Badge variant="secondary">{r.taxRate}%</Badge></TableCell>
@@ -474,17 +519,17 @@ export default function GstReturns() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/10">
-                    <TableHead>Tax Head</TableHead>
-                    <TableHead>Ledger</TableHead>
-                    <TableHead className="text-right">Ledger Balance</TableHead>
-                    <TableHead className="text-right">Register Total</TableHead>
-                    <TableHead className="text-right">Difference</TableHead>
+                    <SortableHead k="head" sort={reconSort.sort}>Tax Head</SortableHead>
+                    <SortableHead k="ledger" sort={reconSort.sort}>Ledger</SortableHead>
+                    <SortableHead k="ledgerAmount" sort={reconSort.sort} className="text-right">Ledger Balance</SortableHead>
+                    <SortableHead k="registerAmount" sort={reconSort.sort} className="text-right">Register Total</SortableHead>
+                    <SortableHead k="difference" sort={reconSort.sort} className="text-right">Difference</SortableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {recon.isLoading ? (
                     <TableRow><TableCell colSpan={5}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
-                  ) : reconRows.map((r) => (
+                  ) : reconSort.sorted.map((r) => (
                     <TableRow key={r.ledgerCode} className="hover:bg-muted/10">
                       <TableCell className="text-sm font-medium">{r.head}</TableCell>
                       <TableCell className="font-mono text-xs text-muted-foreground">{r.ledgerCode}</TableCell>

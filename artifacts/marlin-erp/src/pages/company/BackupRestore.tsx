@@ -31,6 +31,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { toast } from 'sonner';
 import {
   DatabaseBackup, ShieldOff, ShieldCheck, ShieldAlert, Download, Trash2, Upload,
@@ -186,6 +187,22 @@ export default function BackupRestore() {
 
   const backups = listData?.backups ?? [];
   const events = historyData?.events ?? [];
+
+  const { sorted: sortedBackups, sort: backupSort } = useTableSort(backups, {
+    backup: b => b.filename,
+    contents: b => SCOPE_LABELS[b.scope] ?? b.scope,
+    size: b => Number(b.sizeBytes),
+    restores: b => b.verifyStatus,
+    createdBy: b => b.createdBy,
+  });
+
+  const { sorted: sortedEvents, sort: eventSort } = useTableSort(events, {
+    when: e => e.startedAt,
+    from: e => e.filename,
+    outcome: e => e.status,
+    by: e => e.performedBy,
+    undoCopy: e => e.safetyFilename,
+  });
   const isHeadOffice = me?.branchType === 'headoffice';
   // The strictest combination in the app — see the route comments. Restore is the
   // one action that can destroy every record at once.
@@ -522,11 +539,11 @@ export default function BackupRestore() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Backup</TableHead>
-                    <TableHead className="hidden md:table-cell">Contents</TableHead>
-                    <TableHead>Size</TableHead>
-                    <TableHead>Restores?</TableHead>
-                    <TableHead className="hidden lg:table-cell">Created by</TableHead>
+                    <SortableHead k="backup" sort={backupSort}>Backup</SortableHead>
+                    <SortableHead k="contents" sort={backupSort} className="hidden md:table-cell">Contents</SortableHead>
+                    <SortableHead k="size" sort={backupSort}>Size</SortableHead>
+                    <SortableHead k="restores" sort={backupSort}>Restores?</SortableHead>
+                    <SortableHead k="createdBy" sort={backupSort} className="hidden lg:table-cell">Created by</SortableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -543,7 +560,7 @@ export default function BackupRestore() {
                         </p>
                       </TableCell>
                     </TableRow>
-                  ) : backups.map(b => (
+                  ) : sortedBackups.map(b => (
                     // Keyed on the Fragment: a row can be followed by its verify
                     // panel, so the key has to sit on the pair, not the first row.
                     <Fragment key={b.id}>
@@ -753,11 +770,11 @@ export default function BackupRestore() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>When</TableHead>
-                    <TableHead>Restored from</TableHead>
-                    <TableHead>Outcome</TableHead>
-                    <TableHead className="hidden lg:table-cell">By</TableHead>
-                    <TableHead className="hidden md:table-cell">Undo copy</TableHead>
+                    <SortableHead k="when" sort={eventSort}>When</SortableHead>
+                    <SortableHead k="from" sort={eventSort}>Restored from</SortableHead>
+                    <SortableHead k="outcome" sort={eventSort}>Outcome</SortableHead>
+                    <SortableHead k="by" sort={eventSort} className="hidden lg:table-cell">By</SortableHead>
+                    <SortableHead k="undoCopy" sort={eventSort} className="hidden md:table-cell">Undo copy</SortableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -767,7 +784,7 @@ export default function BackupRestore() {
                         No restore has ever been run on this system.
                       </TableCell>
                     </TableRow>
-                  ) : events.map(ev => (
+                  ) : sortedEvents.map(ev => (
                     <TableRow key={ev.id}>
                       <TableCell className="text-sm whitespace-nowrap">{fmtTime(ev.startedAt)}</TableCell>
                       <TableCell>

@@ -1,4 +1,4 @@
-import { useState, useRef, Fragment } from 'react';
+import { useState, useRef, useMemo, Fragment } from 'react';
 import {
   useListJournalVouchers, useCreateJournalVoucher, useDeleteJournalVoucher,
   useListAccountsFlat, type JournalVoucher,
@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { downloadCSV } from '@/lib/download';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { entryScopeKeyDown, autoFocusFirst, focusField, focusAndOpen, useEntryShortcuts } from '@/lib/keyboard-entry';
@@ -129,11 +130,18 @@ export default function Journal() {
     });
   };
 
-  const filtered = (vouchers as JournalVoucher[]).filter(v =>
+  const filtered = useMemo(() => (vouchers as JournalVoucher[]).filter(v =>
     v.voucherNumber?.toLowerCase().includes(search.toLowerCase()) ||
     v.narration?.toLowerCase().includes(search.toLowerCase()) ||
     v.lines.some(l => l.ledgerName.toLowerCase().includes(search.toLowerCase()))
-  );
+  ), [vouchers, search]);
+
+  const { sorted, sort } = useTableSort(filtered, {
+    voucher: v => v.voucherNumber,
+    date: v => v.voucherDate,
+    narration: v => v.narration,
+    amount: v => Number(v.totalAmount),
+  });
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -182,10 +190,10 @@ export default function Journal() {
             <TableHeader>
               <TableRow className="bg-muted/10">
                 <TableHead className="w-8" />
-                <TableHead>Voucher #</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Narration</TableHead>
-                <TableHead className="text-right">Amount</TableHead>
+                <SortableHead k="voucher" sort={sort}>Voucher #</SortableHead>
+                <SortableHead k="date" sort={sort}>Date</SortableHead>
+                <SortableHead k="narration" sort={sort}>Narration</SortableHead>
+                <SortableHead k="amount" sort={sort} className="text-right">Amount</SortableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
@@ -196,7 +204,7 @@ export default function Journal() {
                 <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
                   <BookOpen className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No journal vouchers yet</p>
                 </TableCell></TableRow>
-              ) : filtered.map(v => (
+              ) : sorted.map(v => (
                 <Fragment key={v.id}>
                   <TableRow className="hover:bg-muted/10 cursor-pointer" onClick={() => setExpanded(expanded === v.id ? null : v.id)}>
                     <TableCell className="pr-0">

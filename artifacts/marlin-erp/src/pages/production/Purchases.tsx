@@ -24,6 +24,7 @@ import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { usePermission } from '@/lib/usePermission';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { activeProductsWithSelection } from '@/lib/productStatus';
 import { useActingLocations, decodeLocation, encodeLocation } from '@/lib/useActingLocation';
 import { useDateRange, RangeBar } from '@/pages/reports/shared';
@@ -452,6 +453,16 @@ export default function Purchases() {
 
   // Rows already match the server-side search — no client filtering needed
   const filtered = purchases;
+  const { sorted, sort } = useTableSort(filtered, {
+    bill: (p: any) => p.id,
+    date: (p: any) => p.purchaseDate,
+    vendor: (p: any) => p.vendorName,
+    invoice: (p: any) => p.invoiceNumber,
+    location: (p: any) => p.locationName ?? 'Head Office',
+    items: (p: any) => (p.lineItems as any[])?.length || 0,
+    tax: (p: any) => Number(p.taxTotal || 0) || null,
+    total: (p: any) => Number(p.totalAmount),
+  });
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -504,14 +515,14 @@ export default function Purchases() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Bill #</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Vendor</TableHead>
-                <TableHead>Invoice Ref</TableHead>
-                {locations.isHeadOffice && <TableHead>Location</TableHead>}
-                <TableHead>Items</TableHead>
-                <TableHead className="text-right">Tax</TableHead>
-                <TableHead className="text-right">Total</TableHead>
+                <SortableHead k="bill" sort={sort}>Bill #</SortableHead>
+                <SortableHead k="date" sort={sort}>Date</SortableHead>
+                <SortableHead k="vendor" sort={sort}>Vendor</SortableHead>
+                <SortableHead k="invoice" sort={sort}>Invoice Ref</SortableHead>
+                {locations.isHeadOffice && <SortableHead k="location" sort={sort}>Location</SortableHead>}
+                <SortableHead k="items" sort={sort}>Items</SortableHead>
+                <SortableHead k="tax" sort={sort} className="text-right">Tax</SortableHead>
+                <SortableHead k="total" sort={sort} className="text-right">Total</SortableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
@@ -522,7 +533,7 @@ export default function Purchases() {
                 <TableRow><TableCell colSpan={locations.isHeadOffice ? 9 : 8} className="text-center py-16 text-muted-foreground">
                   <ShoppingCart className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No purchase bills yet</p>
                 </TableCell></TableRow>
-              ) : filtered.map(p => (
+              ) : sorted.map(p => (
                 <TableRow key={p.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-primary font-bold text-sm">#{String(p.id).padStart(4, '0')}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
@@ -571,7 +582,7 @@ export default function Purchases() {
               </div>
             ) : (
               <div className="p-3 space-y-2">
-                {filtered.map(p => (
+                {sorted.map(p => (
                   <div key={p.id} className="border border-border rounded-lg p-3">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">

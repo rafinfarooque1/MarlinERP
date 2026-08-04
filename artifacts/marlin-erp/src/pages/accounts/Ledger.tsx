@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { FileText, Download, Calendar, ShieldOff } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 
@@ -35,6 +36,14 @@ export default function Ledger() {
   );
 
   const entries = (statement as any)?.entries || (statement as any)?.transactions || [];
+
+  const { sorted, sort } = useTableSort(entries as any[], {
+    date: (e: any) => e.date,
+    description: (e: any) => e.description,
+    type: (e: any) => e.entryType,
+    debit: (e: any) => Number(e.debit) || null,
+    credit: (e: any) => Number(e.credit) || null,
+  });
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -99,11 +108,11 @@ export default function Ledger() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Date</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead className="text-right">Debit</TableHead>
-                <TableHead className="text-right">Credit</TableHead>
+                <SortableHead k="date" sort={sort}>Date</SortableHead>
+                <SortableHead k="description" sort={sort}>Description</SortableHead>
+                <SortableHead k="type" sort={sort}>Type</SortableHead>
+                <SortableHead k="debit" sort={sort} className="text-right">Debit</SortableHead>
+                <SortableHead k="credit" sort={sort} className="text-right">Credit</SortableHead>
                 <TableHead className="text-right">Balance</TableHead>
               </TableRow>
             </TableHeader>
@@ -116,7 +125,7 @@ export default function Ledger() {
                 <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : entries.length === 0 ? (
                 <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">No entries for this period</TableCell></TableRow>
-              ) : entries.map((e: any, i: number) => (
+              ) : sorted.map((e: any, i: number) => (
                 <TableRow key={i} className="hover:bg-muted/10">
                   <TableCell className="text-sm">{new Date(e.date).toLocaleDateString('en-IN')}</TableCell>
                   <TableCell className="text-sm">{e.description}</TableCell>

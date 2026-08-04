@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useListPayments, useCreatePayment, useDeletePayment, useListAccountsFlat, useCashBankLedgersFlat } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -15,6 +15,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { isSystemLedger } from '@/lib/systemLedgers';
@@ -77,14 +78,24 @@ export default function Payment() {
     });
   };
 
-  const filtered = (payments as any[]).filter(p =>
+  const filtered = useMemo(() => (payments as any[]).filter(p =>
     p.voucherNumber?.toLowerCase().includes(search.toLowerCase()) ||
     p.paidFromName?.toLowerCase().includes(search.toLowerCase()) ||
     p.paidToName?.toLowerCase().includes(search.toLowerCase()) ||
     p.narration?.toLowerCase().includes(search.toLowerCase())
-  );
+  ), [payments, search]);
 
   const total = filtered.reduce((s: number, p: any) => s + Number(p.amount), 0);
+
+  const { sorted, sort } = useTableSort(filtered, {
+    voucher: (p: any) => p.voucherNumber,
+    date: (p: any) => p.paymentDate,
+    from: (p: any) => p.paidFromName,
+    to: (p: any) => p.paidToName,
+    reference: (p: any) => p.referenceNumber,
+    narration: (p: any) => p.narration,
+    amount: (p: any) => Number(p.amount),
+  });
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -143,13 +154,13 @@ export default function Payment() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Voucher #</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Paid From</TableHead>
-                <TableHead>Paid To</TableHead>
-                <TableHead>Reference</TableHead>
-                <TableHead>Narration</TableHead>
-                <TableHead className="text-right">Amount</TableHead>
+                <SortableHead k="voucher" sort={sort}>Voucher #</SortableHead>
+                <SortableHead k="date" sort={sort}>Date</SortableHead>
+                <SortableHead k="from" sort={sort}>Paid From</SortableHead>
+                <SortableHead k="to" sort={sort}>Paid To</SortableHead>
+                <SortableHead k="reference" sort={sort}>Reference</SortableHead>
+                <SortableHead k="narration" sort={sort}>Narration</SortableHead>
+                <SortableHead k="amount" sort={sort} className="text-right">Amount</SortableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
@@ -160,7 +171,7 @@ export default function Payment() {
                 <TableRow><TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
                   <ArrowUpLeft className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No payment vouchers yet</p>
                 </TableCell></TableRow>
-              ) : filtered.map((p: any) => (
+              ) : sorted.map((p: any) => (
                 <TableRow key={p.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-primary font-bold text-sm">{p.voucherNumber}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">

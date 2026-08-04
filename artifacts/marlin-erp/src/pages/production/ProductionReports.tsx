@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { BarChart3, Download, AlertTriangle, Factory, Trash2, IndianRupee, Scale } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 
 type Tab = 'output' | 'consumption' | 'wastage' | 'batches';
 
@@ -37,6 +38,44 @@ export default function ProductionReports() {
   const [to, setTo] = useState(today());
   const [tab, setTab] = useState<Tab>('output');
   const { data, isLoading } = useProductionReports(from, to);
+
+  const outputSort = useTableSort(data?.output ?? [], {
+    item: (o: any) => o.itemName,
+    batches: (o: any) => Number(o.batchCount),
+    produced: (o: any) => Number(o.producedQty),
+    wastage: (o: any) => Number(o.wastageQty) || null,
+    totalCost: (o: any) => o.totalCost == null ? null : Number(o.totalCost),
+    avgCost: (o: any) => o.avgCostPerUnit == null ? null : Number(o.avgCostPerUnit),
+  });
+  const consumptionSort = useTableSort(data?.consumption ?? [], {
+    material: (c: any) => c.materialName,
+    type: (c: any) => c.materialType === 'raw_material' ? 'Packing Material' : 'Raw Material',
+    consumed: (c: any) => Number(c.consumedQty),
+    expected: (c: any) => c.expectedQty == null ? null : Number(c.expectedQty),
+    variance: (c: any) => c.varianceQty == null ? null : Number(c.varianceQty),
+    cost: (c: any) => c.consumedCost == null ? null : Number(c.consumedCost),
+  });
+  const wastageSort = useTableSort(data?.wastage ?? [], {
+    batch: (w: any) => w.batchNumber,
+    date: (w: any) => w.productionDate,
+    item: (w: any) => w.itemName,
+    produced: (w: any) => Number(w.producedQty),
+    wasted: (w: any) => Number(w.wastageQty),
+    value: (w: any) => Number(w.wastageValue),
+  });
+  const batchesSort = useTableSort(data?.batches ?? [], {
+    batch: (b: any) => b.batchNumber,
+    date: (b: any) => b.productionDate,
+    item: (b: any) => b.itemName,
+    location: (b: any) => b.locationName ?? 'Head Office',
+    produced: (b: any) => Number(b.producedQty),
+    rm: (b: any) => (b.rmCost == null ? (b.materialCost == null ? null : Number(b.materialCost)) : Number(b.rmCost)),
+    pm: (b: any) => b.pmCost == null ? null : Number(b.pmCost),
+    labour: (b: any) => b.labourCost == null ? null : Number(b.labourCost),
+    overhead: (b: any) => b.overheadAmount == null ? null : Number(b.overheadAmount),
+    totalCost: (b: any) => b.totalCost == null ? null : Number(b.totalCost),
+    costPerUnit: (b: any) => b.costPerUnit == null ? null : Number(b.costPerUnit),
+  });
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -174,12 +213,12 @@ export default function ProductionReports() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/10">
-                  <TableHead>Item</TableHead>
-                  <TableHead className="text-right">Batches</TableHead>
-                  <TableHead className="text-right">Produced</TableHead>
-                  <TableHead className="text-right">Wastage</TableHead>
-                  <TableHead className="text-right">Total Cost</TableHead>
-                  <TableHead className="text-right">Avg Cost/Unit</TableHead>
+                  <SortableHead k="item" sort={outputSort.sort}>Item</SortableHead>
+                  <SortableHead k="batches" sort={outputSort.sort} className="text-right">Batches</SortableHead>
+                  <SortableHead k="produced" sort={outputSort.sort} className="text-right">Produced</SortableHead>
+                  <SortableHead k="wastage" sort={outputSort.sort} className="text-right">Wastage</SortableHead>
+                  <SortableHead k="totalCost" sort={outputSort.sort} className="text-right">Total Cost</SortableHead>
+                  <SortableHead k="avgCost" sort={outputSort.sort} className="text-right">Avg Cost/Unit</SortableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -187,7 +226,7 @@ export default function ProductionReports() {
                   <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
                     <Factory className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No production in this period</p>
                   </TableCell></TableRow>
-                ) : data.output.map(o => (
+                ) : outputSort.sorted.map(o => (
                   <TableRow key={o.itemId} className="hover:bg-muted/10">
                     <TableCell className="font-medium">{o.itemName}</TableCell>
                     <TableCell className="text-right font-mono">{o.batchCount}</TableCell>
@@ -203,12 +242,12 @@ export default function ProductionReports() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/10">
-                  <TableHead>Material</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead className="text-right">Consumed</TableHead>
-                  <TableHead className="text-right">BOM Expected</TableHead>
-                  <TableHead className="text-right">Variance</TableHead>
-                  <TableHead className="text-right">Cost</TableHead>
+                  <SortableHead k="material" sort={consumptionSort.sort}>Material</SortableHead>
+                  <SortableHead k="type" sort={consumptionSort.sort}>Type</SortableHead>
+                  <SortableHead k="consumed" sort={consumptionSort.sort} className="text-right">Consumed</SortableHead>
+                  <SortableHead k="expected" sort={consumptionSort.sort} className="text-right">BOM Expected</SortableHead>
+                  <SortableHead k="variance" sort={consumptionSort.sort} className="text-right">Variance</SortableHead>
+                  <SortableHead k="cost" sort={consumptionSort.sort} className="text-right">Cost</SortableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -216,7 +255,7 @@ export default function ProductionReports() {
                   <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
                     <Scale className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No material consumption in this period</p>
                   </TableCell></TableRow>
-                ) : data.consumption.map(c => (
+                ) : consumptionSort.sorted.map(c => (
                   <TableRow key={`${c.materialType}-${c.materialId}`} className="hover:bg-muted/10">
                     <TableCell className="font-medium">{c.materialName}</TableCell>
                     <TableCell><Badge variant="secondary" className="text-xs">{c.materialType === 'raw_material' ? 'Packing Material' : 'Raw Material'}</Badge></TableCell>
@@ -240,12 +279,12 @@ export default function ProductionReports() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/10">
-                  <TableHead>Batch</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Item</TableHead>
-                  <TableHead className="text-right">Produced</TableHead>
-                  <TableHead className="text-right">Wasted</TableHead>
-                  <TableHead className="text-right">Value Lost</TableHead>
+                  <SortableHead k="batch" sort={wastageSort.sort}>Batch</SortableHead>
+                  <SortableHead k="date" sort={wastageSort.sort}>Date</SortableHead>
+                  <SortableHead k="item" sort={wastageSort.sort}>Item</SortableHead>
+                  <SortableHead k="produced" sort={wastageSort.sort} className="text-right">Produced</SortableHead>
+                  <SortableHead k="wasted" sort={wastageSort.sort} className="text-right">Wasted</SortableHead>
+                  <SortableHead k="value" sort={wastageSort.sort} className="text-right">Value Lost</SortableHead>
                   <TableHead>Reasons</TableHead>
                 </TableRow>
               </TableHeader>
@@ -254,7 +293,7 @@ export default function ProductionReports() {
                   <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
                     <Trash2 className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No wastage recorded in this period</p>
                   </TableCell></TableRow>
-                ) : data.wastage.map(w => (
+                ) : wastageSort.sorted.map(w => (
                   <TableRow key={w.productionId} className="hover:bg-muted/10">
                     <TableCell className="font-mono text-primary font-bold">{w.batchNumber}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{new Date(w.productionDate).toLocaleDateString('en-IN')}</TableCell>
@@ -263,7 +302,7 @@ export default function ProductionReports() {
                     <TableCell className="text-right font-mono font-bold text-destructive">{qty(w.wastageQty)}</TableCell>
                     <TableCell className="text-right font-mono">{inr(w.wastageValue)}</TableCell>
                     <TableCell className="text-sm text-muted-foreground max-w-[280px]">
-                      {w.lines.map((l, i) => <span key={i} className="block">{qty(l.quantity)} — {l.reason}</span>)}
+                      {w.lines.map((l: any, i: number) => <span key={i} className="block">{qty(l.quantity)} — {l.reason}</span>)}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -273,17 +312,17 @@ export default function ProductionReports() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/10">
-                  <TableHead>Batch</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Item</TableHead>
-                  <TableHead>Location</TableHead>
-                  <TableHead className="text-right">Produced</TableHead>
-                  <TableHead className="text-right">Raw Mat.</TableHead>
-                  <TableHead className="text-right">Packing</TableHead>
-                  <TableHead className="text-right">Labour</TableHead>
-                  <TableHead className="text-right">Overhead</TableHead>
-                  <TableHead className="text-right">Total Cost</TableHead>
-                  <TableHead className="text-right">Cost/Unit</TableHead>
+                  <SortableHead k="batch" sort={batchesSort.sort}>Batch</SortableHead>
+                  <SortableHead k="date" sort={batchesSort.sort}>Date</SortableHead>
+                  <SortableHead k="item" sort={batchesSort.sort}>Item</SortableHead>
+                  <SortableHead k="location" sort={batchesSort.sort}>Location</SortableHead>
+                  <SortableHead k="produced" sort={batchesSort.sort} className="text-right">Produced</SortableHead>
+                  <SortableHead k="rm" sort={batchesSort.sort} className="text-right">Raw Mat.</SortableHead>
+                  <SortableHead k="pm" sort={batchesSort.sort} className="text-right">Packing</SortableHead>
+                  <SortableHead k="labour" sort={batchesSort.sort} className="text-right">Labour</SortableHead>
+                  <SortableHead k="overhead" sort={batchesSort.sort} className="text-right">Overhead</SortableHead>
+                  <SortableHead k="totalCost" sort={batchesSort.sort} className="text-right">Total Cost</SortableHead>
+                  <SortableHead k="costPerUnit" sort={batchesSort.sort} className="text-right">Cost/Unit</SortableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -291,7 +330,7 @@ export default function ProductionReports() {
                   <TableRow><TableCell colSpan={11} className="text-center py-16 text-muted-foreground">
                     <Factory className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No batches in this period</p>
                   </TableCell></TableRow>
-                ) : data.batches.map(b => (
+                ) : batchesSort.sorted.map(b => (
                   <TableRow key={b.id} className="hover:bg-muted/10">
                     <TableCell className="font-mono text-primary font-bold">{b.batchNumber}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{new Date(b.productionDate).toLocaleDateString('en-IN')}</TableCell>

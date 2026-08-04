@@ -28,6 +28,7 @@ import { Plus, Search, Trash2, Download, Landmark, Paperclip } from 'lucide-reac
 import { usePermission } from '@/lib/usePermission';
 import { toast } from 'sonner';
 import { downloadCSV } from '@/lib/download';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { attachmentViewUrl } from '@workspace/api-client-react';
 import { AttachmentField } from '@/components/AttachmentField';
 import { useActingLocations, decodeLocation } from '@/lib/useActingLocation';
@@ -90,6 +91,21 @@ export default function AssetPurchases() {
   const locations = useActingLocations();
 
   const activeCategories = categories.filter(c => c.status === 'active');
+
+  const { sorted, sort } = useTableSort(purchases, {
+    date: p => p.purchaseDate,
+    code: p => p.assetCode,
+    asset: p => p.assetName,
+    category: p => p.categoryName,
+    vendor: p => p.vendorName,
+    location: p => p.locationName,
+    qty: p => Number(p.quantity),
+    unitCost: p => Number(p.acquisitionCost),
+    gst: p => Number(p.gstAmount),
+    total: p => Number(p.totalCost),
+    payment: p => PAYMENT_MODE_LABELS[p.paymentMode] ?? p.paymentMode,
+    voucher: p => p.voucherNumber,
+  });
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -218,18 +234,18 @@ export default function AssetPurchases() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Date</TableHead>
-                <TableHead>Code</TableHead>
-                <TableHead>Asset</TableHead>
-                <TableHead>Category</TableHead>
-                <TableHead>Vendor</TableHead>
-                <TableHead>Location</TableHead>
-                <TableHead className="text-right">Qty</TableHead>
-                <TableHead className="text-right">Unit Cost</TableHead>
-                <TableHead className="text-right">GST</TableHead>
-                <TableHead className="text-right">Total</TableHead>
-                <TableHead>Payment</TableHead>
-                <TableHead>Voucher</TableHead>
+                <SortableHead k="date" sort={sort}>Date</SortableHead>
+                <SortableHead k="code" sort={sort}>Code</SortableHead>
+                <SortableHead k="asset" sort={sort}>Asset</SortableHead>
+                <SortableHead k="category" sort={sort}>Category</SortableHead>
+                <SortableHead k="vendor" sort={sort}>Vendor</SortableHead>
+                <SortableHead k="location" sort={sort}>Location</SortableHead>
+                <SortableHead k="qty" sort={sort} className="text-right">Qty</SortableHead>
+                <SortableHead k="unitCost" sort={sort} className="text-right">Unit Cost</SortableHead>
+                <SortableHead k="gst" sort={sort} className="text-right">GST</SortableHead>
+                <SortableHead k="total" sort={sort} className="text-right">Total</SortableHead>
+                <SortableHead k="payment" sort={sort}>Payment</SortableHead>
+                <SortableHead k="voucher" sort={sort}>Voucher</SortableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
@@ -240,7 +256,7 @@ export default function AssetPurchases() {
                 <TableRow><TableCell colSpan={13} className="text-center py-16 text-muted-foreground">
                   <Landmark className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No asset purchases recorded</p>
                 </TableCell></TableRow>
-              ) : purchases.map(p => (
+              ) : sorted.map(p => (
                 <TableRow key={p.id} className="hover:bg-muted/10">
                   <TableCell className="whitespace-nowrap text-sm">{fmtDate(p.purchaseDate)}</TableCell>
                   <TableCell className="font-mono text-sm font-semibold whitespace-nowrap">{p.assetCode}</TableCell>

@@ -29,6 +29,7 @@ import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
@@ -351,6 +352,14 @@ export default function Employees() {
     return matchSearch && matchStatus && matchBranchType && matchBranchLoc;
   });
 
+  const { sorted, sort } = useTableSort(filtered, {
+    employee: (e: any) => e.name,
+    role: (e: any) => e.hierarchyName,
+    location: (e: any) => e.branchName,
+    salary: (e: any) => Number(e.salary || 0),
+    status: (e: any) => (e.isActive ? 'Active' : 'Resigned'),
+  });
+
   const activeCount   = employees.filter(e => e.isActive).length;
   const inactiveCount = employees.filter(e => !e.isActive).length;
 
@@ -438,11 +447,11 @@ export default function Employees() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Employee</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Location</TableHead>
-                <TableHead>Salary</TableHead>
-                <TableHead>Status</TableHead>
+                <SortableHead k="employee" sort={sort}>Employee</SortableHead>
+                <SortableHead k="role" sort={sort}>Role</SortableHead>
+                <SortableHead k="location" sort={sort}>Location</SortableHead>
+                <SortableHead k="salary" sort={sort}>Salary</SortableHead>
+                <SortableHead k="status" sort={sort}>Status</SortableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -455,7 +464,7 @@ export default function Employees() {
                 <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
                   <Users className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No employees found</p>
                 </TableCell></TableRow>
-              ) : filtered.map(emp => (
+              ) : sorted.map(emp => (
                 <TableRow key={emp.id} className={`hover:bg-muted/10 ${!emp.isActive ? 'opacity-60' : ''}`}>
                   <TableCell>
                     <div className="flex items-center gap-3">

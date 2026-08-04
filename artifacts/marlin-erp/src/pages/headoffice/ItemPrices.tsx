@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { SearchableItemSelect } from '@/components/ui/searchable-item-select';
 import { useListItemPrices, useSetItemPrice, useListItems, useListOutlets, useListWarehouses } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -15,6 +15,7 @@ import { Plus, Search, Tag, Download, Edit2, Calendar, AlertTriangle, Building2,
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { activeProductsWithSelection } from '@/lib/productStatus';
 import { Badge } from '@/components/ui/badge';
@@ -103,13 +104,6 @@ export default function ItemPrices() {
     });
   };
 
-  // filters
-  let filtered = itemPrices.filter((ip: any) =>
-    ip.itemName?.toLowerCase().includes(search.toLowerCase()) ||
-    ip.outletName?.toLowerCase().includes(search.toLowerCase())
-  );
-  if (itemFilter !== 'all') filtered = filtered.filter((ip: any) => String(ip.itemId) === itemFilter);
-
   const today = new Date().toISOString().split('T')[0];
   const isPriceActive = (ip: any) => {
     if (!ip.validFrom && !ip.validTo) return true;
@@ -117,6 +111,27 @@ export default function ItemPrices() {
     const toOk   = !ip.validTo   || ip.validTo   >= today;
     return fromOk && toOk;
   };
+
+  // filters — build once so search/item filter stay upstream of sorting; merge
+  // the computed active flag onto each row so the status accessor is row-local.
+  const filtered = useMemo(() => {
+    let rows = itemPrices.filter((ip: any) =>
+      ip.itemName?.toLowerCase().includes(search.toLowerCase()) ||
+      ip.outletName?.toLowerCase().includes(search.toLowerCase())
+    );
+    if (itemFilter !== 'all') rows = rows.filter((ip: any) => String(ip.itemId) === itemFilter);
+    return rows.map((ip: any) => ({ ...ip, _active: isPriceActive(ip) }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemPrices, search, itemFilter, today]);
+
+  const { sorted, sort } = useTableSort(filtered, {
+    itemName:  (ip: any) => ip.itemName,
+    outletName:(ip: any) => ip.outletName,
+    price:     (ip: any) => Number(ip.price),
+    validFrom: (ip: any) => ip.validFrom || null,
+    status:    (ip: any) => (ip._active ? 'Active' : 'Inactive'),
+    updatedAt: (ip: any) => ip.updatedAt || null,
+  });
 
   const locationTypeIcon = (lt: string) => {
     if (lt === 'warehouse')  return <Warehouse className="w-3.5 h-3.5 inline mr-1 text-blue-500"   />;
@@ -183,12 +198,12 @@ export default function ItemPrices() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Item</TableHead>
-                <TableHead>Location</TableHead>
-                <TableHead className="text-right">Price (₹)</TableHead>
-                <TableHead>Validity Period</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Updated</TableHead>
+                <SortableHead k="itemName" sort={sort}>Item</SortableHead>
+                <SortableHead k="outletName" sort={sort}>Location</SortableHead>
+                <SortableHead k="price" sort={sort} className="text-right">Price (₹)</SortableHead>
+                <SortableHead k="validFrom" sort={sort}>Validity Period</SortableHead>
+                <SortableHead k="status" sort={sort}>Status</SortableHead>
+                <SortableHead k="updatedAt" sort={sort} className="text-right">Updated</SortableHead>
                 {perm.canEdit && <TableHead />}
               </TableRow>
             </TableHeader>
@@ -203,8 +218,8 @@ export default function ItemPrices() {
                     <Tag className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No prices configured yet</p>
                   </TableCell>
                 </TableRow>
-              ) : filtered.map((ip: any, i: number) => {
-                const active = isPriceActive(ip);
+              ) : sorted.map((ip: any, i: number) => {
+                const active = ip._active;
                 return (
                   <TableRow key={i} className="hover:bg-muted/10">
                     <TableCell className="font-semibold">{ip.itemName}</TableCell>

@@ -92,9 +92,9 @@ function RegisterReport({ range, canDownload }: { range: RangeState; canDownload
           { key: 'billNumber', label: 'Bill No', render: (r) => <span className="font-mono text-xs text-primary font-bold">{r.billNumber}</span> },
           { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
           { key: 'vendorName', label: 'Vendor', render: (r) => <span className="font-medium">{r.vendorName}</span> },
-          { key: 'gross', label: 'Gross', align: 'right', render: (r) => fmt(g(r)) },
-          { key: 'inputGst', label: 'Input GST', align: 'right', render: (r) => fmt(ig(r)) },
-          { key: 'net', label: 'Net', align: 'right', render: (r) => <b>{fmt(nt(r))}</b> },
+          { key: 'gross', label: 'Gross', align: 'right', sortValue: (r) => g(r), render: (r) => fmt(g(r)) },
+          { key: 'inputGst', label: 'Input GST', align: 'right', sortValue: (r) => ig(r), render: (r) => fmt(ig(r)) },
+          { key: 'net', label: 'Net', align: 'right', sortValue: (r) => nt(r), render: (r) => <b>{fmt(nt(r))}</b> },
         ] as Col<(typeof rows)[number]>[]}
         rows={rows} loading={isLoading} rowKey={(r) => r.id}
         footer={['TOTAL', '', '', fmt(t?.gross ?? t?.total), fmt(t?.inputGst ?? t?.tax), fmt(t?.net ?? ((t?.total ?? 0) - (t?.tax ?? 0)))]}

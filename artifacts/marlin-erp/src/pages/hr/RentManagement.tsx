@@ -27,6 +27,7 @@ import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV, printHTML } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useIsHeadOffice } from '@/lib/productStatus';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -278,6 +279,39 @@ export default function RentManagement() {
 
   const reportMeta = REPORTS.find(r => r.key === report)!;
 
+  // ── Sortable listing tables (filters/scope stay upstream) ──────────────────
+  const agreementsSort = useTableSort(agreements, {
+    warehouse: (a) => a.warehouseName,
+    agreement: (a) => a.agreementNumber,
+    landlord: (a) => a.landlordName,
+    monthlyRent: (a) => Number(a.monthlyRent) || null,
+    deposit: (a) => Number(a.securityDeposit) || null,
+    period: (a) => a.startDate,
+    dueDay: (a) => Number(a.dueDay),
+    outstanding: (a) => Number(a.totalOutstanding) || null,
+    status: (a) => a.status,
+  });
+  const periodsSort = useTableSort(periods, {
+    warehouse: (p) => p.warehouseName,
+    month: (p) => p.year * 100 + p.month,
+    days: (p) => Number(p.daysAccrued),
+    accrued: (p) => Number(p.accrued),
+    paid: (p) => Number(p.paid),
+    outstanding: (p) => Number(p.outstanding),
+    due: (p) => p.dueDate,
+    status: (p) => p.status,
+  });
+  const paymentsSort = useTableSort(payments, {
+    date: (p) => p.paymentDate,
+    warehouse: (p) => p.warehouseName,
+    month: (p) => p.year * 100 + p.month,
+    amount: (p) => Number(p.amount),
+    mode: (p) => p.paymentMode,
+    reference: (p) => p.referenceNumber,
+    voucher: (p) => p.voucherNumber,
+    recordedBy: (p) => p.createdBy,
+  });
+
   const exportReport = () => {
     if (!reportRows.length) { toast.error('Nothing to export for this report'); return; }
     downloadCSV(`rent-${report}-${year}.csv`, reportRows);
@@ -455,15 +489,15 @@ export default function RentManagement() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Warehouse</TableHead>
-                  <TableHead>Agreement</TableHead>
-                  <TableHead>Landlord</TableHead>
-                  <TableHead className="text-right">Monthly Rent</TableHead>
-                  <TableHead className="text-right">Deposit</TableHead>
-                  <TableHead>Period</TableHead>
-                  <TableHead className="text-center">Due Day</TableHead>
-                  <TableHead className="text-right">Outstanding</TableHead>
-                  <TableHead>Status</TableHead>
+                  <SortableHead k="warehouse" sort={agreementsSort.sort}>Warehouse</SortableHead>
+                  <SortableHead k="agreement" sort={agreementsSort.sort}>Agreement</SortableHead>
+                  <SortableHead k="landlord" sort={agreementsSort.sort}>Landlord</SortableHead>
+                  <SortableHead k="monthlyRent" sort={agreementsSort.sort} className="text-right">Monthly Rent</SortableHead>
+                  <SortableHead k="deposit" sort={agreementsSort.sort} className="text-right">Deposit</SortableHead>
+                  <SortableHead k="period" sort={agreementsSort.sort}>Period</SortableHead>
+                  <SortableHead k="dueDay" sort={agreementsSort.sort} className="text-center">Due Day</SortableHead>
+                  <SortableHead k="outstanding" sort={agreementsSort.sort} className="text-right">Outstanding</SortableHead>
+                  <SortableHead k="status" sort={agreementsSort.sort}>Status</SortableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -472,7 +506,7 @@ export default function RentManagement() {
                 {!loadingAgr && agreements.length === 0 && (
                   <TableRow><TableCell colSpan={10} className="text-center py-8 text-muted-foreground">No warehouses found.</TableCell></TableRow>
                 )}
-                {agreements.map(a => (
+                {agreementsSort.sorted.map(a => (
                   <TableRow key={a.warehouseId}>
                     <TableCell className="font-medium">{a.warehouseName}</TableCell>
                     <TableCell className="text-muted-foreground">{a.agreementNumber || '—'}</TableCell>
@@ -514,14 +548,14 @@ export default function RentManagement() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Warehouse</TableHead>
-                  <TableHead>Month</TableHead>
-                  <TableHead className="text-center">Days</TableHead>
-                  <TableHead className="text-right">Accrued</TableHead>
-                  <TableHead className="text-right">Paid</TableHead>
-                  <TableHead className="text-right">Outstanding</TableHead>
-                  <TableHead>Due</TableHead>
-                  <TableHead>Status</TableHead>
+                  <SortableHead k="warehouse" sort={periodsSort.sort}>Warehouse</SortableHead>
+                  <SortableHead k="month" sort={periodsSort.sort}>Month</SortableHead>
+                  <SortableHead k="days" sort={periodsSort.sort} className="text-center">Days</SortableHead>
+                  <SortableHead k="accrued" sort={periodsSort.sort} className="text-right">Accrued</SortableHead>
+                  <SortableHead k="paid" sort={periodsSort.sort} className="text-right">Paid</SortableHead>
+                  <SortableHead k="outstanding" sort={periodsSort.sort} className="text-right">Outstanding</SortableHead>
+                  <SortableHead k="due" sort={periodsSort.sort}>Due</SortableHead>
+                  <SortableHead k="status" sort={periodsSort.sort}>Status</SortableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -532,7 +566,7 @@ export default function RentManagement() {
                     No rent accrued in {year}. Activate an agreement to start accruing.
                   </TableCell></TableRow>
                 )}
-                {periods.map(p => (
+                {periodsSort.sorted.map(p => (
                   <TableRow key={`${p.warehouseId}-${p.year}-${p.month}`}>
                     <TableCell className="font-medium">{p.warehouseName}</TableCell>
                     <TableCell>{MONTHS[p.month - 1]} {p.year}</TableCell>
@@ -572,21 +606,21 @@ export default function RentManagement() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Warehouse</TableHead>
-                  <TableHead>For Month</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead>Mode</TableHead>
-                  <TableHead>Reference</TableHead>
-                  <TableHead>Voucher</TableHead>
-                  <TableHead>Recorded By</TableHead>
+                  <SortableHead k="date" sort={paymentsSort.sort}>Date</SortableHead>
+                  <SortableHead k="warehouse" sort={paymentsSort.sort}>Warehouse</SortableHead>
+                  <SortableHead k="month" sort={paymentsSort.sort}>For Month</SortableHead>
+                  <SortableHead k="amount" sort={paymentsSort.sort} className="text-right">Amount</SortableHead>
+                  <SortableHead k="mode" sort={paymentsSort.sort}>Mode</SortableHead>
+                  <SortableHead k="reference" sort={paymentsSort.sort}>Reference</SortableHead>
+                  <SortableHead k="voucher" sort={paymentsSort.sort}>Voucher</SortableHead>
+                  <SortableHead k="recordedBy" sort={paymentsSort.sort}>Recorded By</SortableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {payments.length === 0 && (
                   <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground">No rent payments in {year}.</TableCell></TableRow>
                 )}
-                {payments.map(p => (
+                {paymentsSort.sorted.map(p => (
                   <TableRow key={p.id}>
                     <TableCell>{dmy(p.paymentDate)}</TableCell>
                     <TableCell className="font-medium">{p.warehouseName}</TableCell>

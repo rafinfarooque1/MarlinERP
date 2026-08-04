@@ -27,6 +27,7 @@ import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { useUnits } from '@/lib/useUnits';
 import { useIsHeadOffice, HEAD_OFFICE_ONLY_HINT, isActiveProduct } from '@/lib/productStatus';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 
 // Fixed assets moved to the standalone Assets module (Assets › Asset
 // Purchases / Register) — the Item Master handles sale inventory only.
@@ -159,6 +160,30 @@ export default function ItemMaster() {
       (i.itemCode || '').toLowerCase().includes(q) ||
       (i.barcode || '').toLowerCase().includes(q))
   );
+
+  // Resolve the displayed stock quantity per row (location slice when active,
+  // else the item's own stock) so the sort accessor stays row-derived.
+  const filteredWithStock = useMemo(
+    () => filtered.map(i => ({
+      ...i,
+      _resolvedStock: stockMap
+        ? (stockMap.get(`${i._type}:${i.id}`) ?? 0)
+        : i.stock,
+    })),
+    [filtered, stockMap],
+  );
+
+  const { sorted, sort } = useTableSort(filteredWithStock, {
+    type: (i: any) => TYPE_LABELS[i._type as ItemType] ?? i._type,
+    code: (i: any) => i.itemCode,
+    name: (i: any) => i.name,
+    unit: (i: any) => i.unit,
+    hsn: (i: any) => i.hsnCode,
+    tax: (i: any) => Number(i.taxRate) || null,
+    mrp: (i: any) => Number(i.mrp ?? 0),
+    stock: (i: any) => Number(i._resolvedStock ?? 0),
+    status: (i: any) => isActiveProduct(i) ? 'Active' : 'Inactive',
+  });
 
   const isLoading = rmLoading || mLoading || iLoading;
 
@@ -416,21 +441,21 @@ export default function ItemMaster() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Type</TableHead>
-                <TableHead>Code</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Unit</TableHead>
-                <TableHead>HSN</TableHead>
-                <TableHead>Tax</TableHead>
-                <TableHead className="text-right">MRP (₹)</TableHead>
-                <TableHead className="text-right">
+                <SortableHead k="type" sort={sort}>Type</SortableHead>
+                <SortableHead k="code" sort={sort}>Code</SortableHead>
+                <SortableHead k="name" sort={sort}>Name</SortableHead>
+                <SortableHead k="unit" sort={sort}>Unit</SortableHead>
+                <SortableHead k="hsn" sort={sort}>HSN</SortableHead>
+                <SortableHead k="tax" sort={sort}>Tax</SortableHead>
+                <SortableHead k="mrp" sort={sort} className="text-right">MRP (₹)</SortableHead>
+                <SortableHead k="stock" sort={sort} className="text-right">
                   {locType === 'all' ? 'Stock' :
                    locType === 'headoffice' ? 'HO Stock' :
                    locType === 'warehouse' && locId != null ? `${(warehouses as any[]).find((w: any) => w.id === locId)?.name ?? 'Warehouse'} Stock` :
                    locType === 'outlet' && locId != null ? `${(outlets as any[]).find((o: any) => o.id === locId)?.name ?? 'Outlet'} Stock` :
                    'Stock'}
-                </TableHead>
-                <TableHead>Status</TableHead>
+                </SortableHead>
+                <SortableHead k="status" sort={sort}>Status</SortableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
@@ -441,7 +466,7 @@ export default function ItemMaster() {
                 <TableRow><TableCell colSpan={10} className="text-center py-16 text-muted-foreground">
                   <Layers className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No items found</p>
                 </TableCell></TableRow>
-              ) : filtered.map(item => {
+              ) : sorted.map(item => {
                 // Show mrp for all types
                 const displayCost = Number((item as any).mrp ?? 0);
                 const active = isActiveProduct(item);
@@ -472,9 +497,7 @@ export default function ItemMaster() {
                   </TableCell>
                   <TableCell className="text-right font-mono font-bold">
                     {(() => {
-                      const qty = stockMap
-                        ? (stockMap.get(`${item._type}:${item.id}`) ?? 0)
-                        : item.stock;
+                      const qty = (item as any)._resolvedStock;
                       return qty > 0
                         ? qty.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 3 })
                         : <span className="text-muted-foreground font-normal">0</span>;

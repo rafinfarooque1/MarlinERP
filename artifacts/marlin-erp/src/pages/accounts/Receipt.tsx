@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useListReceipts, useCreateReceipt, useDeleteReceipt, useListAccountsFlat, useCashBankLedgersFlat } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -15,6 +15,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { isSystemLedger } from '@/lib/systemLedgers';
@@ -76,14 +77,24 @@ export default function ReceiptPage() {
     });
   };
 
-  const filtered = (receipts as any[]).filter(r =>
+  const filtered = useMemo(() => (receipts as any[]).filter(r =>
     r.voucherNumber?.toLowerCase().includes(search.toLowerCase()) ||
     r.receivedFromName?.toLowerCase().includes(search.toLowerCase()) ||
     r.receivedInName?.toLowerCase().includes(search.toLowerCase()) ||
     r.narration?.toLowerCase().includes(search.toLowerCase())
-  );
+  ), [receipts, search]);
 
   const total = filtered.reduce((s: number, r: any) => s + Number(r.amount), 0);
+
+  const { sorted, sort } = useTableSort(filtered, {
+    voucher: (r: any) => r.voucherNumber,
+    date: (r: any) => r.receiptDate,
+    from: (r: any) => r.receivedFromName,
+    in: (r: any) => r.receivedInName,
+    reference: (r: any) => r.referenceNumber,
+    narration: (r: any) => r.narration,
+    amount: (r: any) => Number(r.amount),
+  });
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -142,13 +153,13 @@ export default function ReceiptPage() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Voucher #</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Received From</TableHead>
-                <TableHead>Received In</TableHead>
-                <TableHead>Reference</TableHead>
-                <TableHead>Narration</TableHead>
-                <TableHead className="text-right">Amount</TableHead>
+                <SortableHead k="voucher" sort={sort}>Voucher #</SortableHead>
+                <SortableHead k="date" sort={sort}>Date</SortableHead>
+                <SortableHead k="from" sort={sort}>Received From</SortableHead>
+                <SortableHead k="in" sort={sort}>Received In</SortableHead>
+                <SortableHead k="reference" sort={sort}>Reference</SortableHead>
+                <SortableHead k="narration" sort={sort}>Narration</SortableHead>
+                <SortableHead k="amount" sort={sort} className="text-right">Amount</SortableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
@@ -159,7 +170,7 @@ export default function ReceiptPage() {
                 <TableRow><TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
                   <ArrowDownRight className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No receipt vouchers yet</p>
                 </TableCell></TableRow>
-              ) : filtered.map((r: any) => (
+              ) : sorted.map((r: any) => (
                 <TableRow key={r.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-emerald-500 font-bold text-sm">{r.voucherNumber}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">

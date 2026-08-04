@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useLocationContext } from '@/lib/locationContext';
@@ -7,6 +7,7 @@ import { useAllOutlets, useIsLocationKindEnabled } from '@/lib/locationStructure
 import { LocationFilter, parseLocationFilter } from '@/components/ui/LocationFilter';
 import { Package, AlertTriangle, Search, ShieldOff } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -72,13 +73,44 @@ export default function SalesStock() {
       )
     : (allStock as any[]);
 
-  const filtered = stock.filter(s =>
-    !search ||
-    (s.itemName ?? '').toLowerCase().includes(search.toLowerCase()) ||
-    (s.branchName ?? '').toLowerCase().includes(search.toLowerCase())
-  );
+  // Enrich rows with the derived display values (item name/unit, nearest-expiry,
+  // status) so the sort accessors compare exactly what the cells render, and
+  // preserve the existing default order (quantity desc).
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase();
+    const rows = stock.filter(s =>
+      !search ||
+      (s.itemName ?? '').toLowerCase().includes(q) ||
+      (s.branchName ?? '').toLowerCase().includes(q)
+    );
+    const enriched = rows.map((entry: any) => {
+      const item = itemMap.get(entry.itemId);
+      const qty = Number(entry.quantity ?? 0);
+      const reorder = Number(entry.reorderLevel ?? 10);
+      const isLow = qty > 0 && (entry.lowStock ?? qty < reorder);
+      const isEmpty = qty <= 0;
+      const nb = nearestExpiry.get(Number(entry.itemId));
+      return {
+        ...entry,
+        _name: entry.itemName || item?.name || `Item #${entry.itemId}`,
+        _unit: item?.unit ?? '',
+        _qty: qty,
+        _expiry: nb?.expiryDate ?? '',
+        _status: isEmpty ? 'Out of Stock' : isLow ? 'Low' : 'In Stock',
+      };
+    });
+    return enriched.sort((a, b) => b._qty - a._qty);
+  }, [stock, search, itemMap, nearestExpiry]);
 
-  const sorted = [...filtered].sort((a, b) => Number(b.quantity) - Number(a.quantity));
+  const { sorted, sort } = useTableSort(filtered, {
+    item: r => r._name,
+    location: r => r.branchName,
+    type: r => r.branchType,
+    unit: r => r._unit,
+    quantity: r => r._qty,
+    expiry: r => r._expiry,
+    status: r => r._status,
+  });
 
   const showLocationCol = isAll || isWarehouse;
   const title    = isAll ? 'Stock — All Locations' : `Stock — ${locationName}`;
@@ -137,13 +169,13 @@ export default function SalesStock() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Item</TableHead>
-                {showLocationCol && <TableHead>Location</TableHead>}
-                {showLocationCol && <TableHead>Type</TableHead>}
-                <TableHead>Unit</TableHead>
-                <TableHead className="text-right">Quantity</TableHead>
-                {showExpiryCol && <TableHead>Nearest Expiry</TableHead>}
-                <TableHead>Status</TableHead>
+                <SortableHead k="item" sort={sort}>Item</SortableHead>
+                {showLocationCol && <SortableHead k="location" sort={sort}>Location</SortableHead>}
+                {showLocationCol && <SortableHead k="type" sort={sort}>Type</SortableHead>}
+                <SortableHead k="unit" sort={sort}>Unit</SortableHead>
+                <SortableHead k="quantity" sort={sort} className="text-right">Quantity</SortableHead>
+                {showExpiryCol && <SortableHead k="expiry" sort={sort}>Nearest Expiry</SortableHead>}
+                <SortableHead k="status" sort={sort}>Status</SortableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

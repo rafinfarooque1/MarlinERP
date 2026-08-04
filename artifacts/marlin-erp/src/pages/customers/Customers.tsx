@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useListCustomers, useCreateCustomer, useUpdateCustomer, getListCustomersQueryKey, useGetCustomerLedger } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -20,6 +20,7 @@ import { downloadCSV } from '@/lib/download';
 import { StateCombobox } from '@/components/ui/state-combobox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { usePermission } from '@/lib/usePermission';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { PartyBalance } from '@/lib/partyBalance';
 import { CollectPaymentDialog } from './CollectPaymentDialog';
 import { usePartyLocations, rowMatchesLocation, locationValueOf, HEAD_OFFICE_VALUE } from '@/lib/usePartyLocations';
@@ -168,12 +169,24 @@ export default function Customers() {
     }
   };
 
-  const filtered = customers.filter(c =>
+  const filtered = useMemo(() => customers.filter(c =>
     (c.name.toLowerCase().includes(search.toLowerCase()) ||
      c.phone?.includes(search) ||
      c.email?.toLowerCase().includes(search.toLowerCase())) &&
     rowMatchesLocation(locFilter, (c as any).locationType ?? (c as any).location_type, (c as any).locationId ?? (c as any).location_id)
-  );
+  ).map(c => ({
+    ...c,
+    _locationName: loc.nameOf((c as any).locationType ?? (c as any).location_type, (c as any).locationId ?? (c as any).location_id),
+  })), [customers, search, locFilter, loc]);
+
+  const { sorted, sort } = useTableSort(filtered, {
+    name: c => c.name,
+    phone: c => c.phone,
+    state: c => (c as any).state,
+    gst: c => c.gstNumber,
+    location: c => (c as any)._locationName,
+    balance: c => Number((c as any).outstandingBalance) || null,
+  });
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -236,12 +249,12 @@ export default function Customers() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Name</TableHead>
-                <TableHead>Phone</TableHead>
-                <TableHead>State</TableHead>
-                <TableHead>GST No.</TableHead>
-                <TableHead>Location</TableHead>
-                <TableHead className="text-right">Balance</TableHead>
+                <SortableHead k="name" sort={sort}>Name</SortableHead>
+                <SortableHead k="phone" sort={sort}>Phone</SortableHead>
+                <SortableHead k="state" sort={sort}>State</SortableHead>
+                <SortableHead k="gst" sort={sort}>GST No.</SortableHead>
+                <SortableHead k="location" sort={sort}>Location</SortableHead>
+                <SortableHead k="balance" sort={sort} className="text-right">Balance</SortableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -252,7 +265,7 @@ export default function Customers() {
                 <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
                   <UserCheck className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>{customers.length === 0 ? 'No customers yet' : 'No customers match this search or location'}</p>
                 </TableCell></TableRow>
-              ) : filtered.map(c => (
+              ) : sorted.map(c => (
                 <TableRow key={c.id} className="hover:bg-muted/10">
                   <TableCell className="font-semibold">{c.name}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{c.phone || '—'}</TableCell>
@@ -285,7 +298,7 @@ export default function Customers() {
               <div className="text-center py-16 text-muted-foreground">
                 <UserCheck className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>{customers.length === 0 ? 'No customers yet' : 'No customers match this search or location'}</p>
               </div>
-            ) : filtered.map(c => (
+            ) : sorted.map(c => (
               <div key={c.id} className="border border-border rounded-lg p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">

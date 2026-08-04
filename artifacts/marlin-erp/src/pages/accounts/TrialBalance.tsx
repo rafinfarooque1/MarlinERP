@@ -7,6 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Scale, Download, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 
@@ -26,6 +27,13 @@ export default function TrialBalance() {
 
   const rows = data?.rows ?? [];
   const companyLevel = data?.location ? data?.companyLevel : null;
+  const { sorted, sort } = useTableSort(rows, {
+    ledger: r => r.name,
+    group: r => r.groupName,
+    type: r => TYPE_LABEL[r.type ?? ''] ?? r.type,
+    debit: r => Number(r.debit) || null,
+    credit: r => Number(r.credit) || null,
+  });
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -101,11 +109,11 @@ export default function TrialBalance() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Ledger</TableHead>
-                <TableHead>Group</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead className="text-right">Debit</TableHead>
-                <TableHead className="text-right">Credit</TableHead>
+                <SortableHead k="ledger" sort={sort}>Ledger</SortableHead>
+                <SortableHead k="group" sort={sort}>Group</SortableHead>
+                <SortableHead k="type" sort={sort}>Type</SortableHead>
+                <SortableHead k="debit" sort={sort} className="text-right">Debit</SortableHead>
+                <SortableHead k="credit" sort={sort} className="text-right">Credit</SortableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -115,7 +123,7 @@ export default function TrialBalance() {
                 <TableRow><TableCell colSpan={5} className="text-center py-16 text-muted-foreground">
                   <Scale className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No postings in this period</p>
                 </TableCell></TableRow>
-              ) : rows.map(r => (
+              ) : sorted.map(r => (
                 <TableRow key={r.ledgerId} className="hover:bg-muted/10">
                   <TableCell className="font-medium text-sm">{r.name}</TableCell>
                   <TableCell className="text-muted-foreground text-sm">{r.groupName || '—'}</TableCell>

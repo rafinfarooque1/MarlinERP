@@ -22,6 +22,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -351,6 +352,46 @@ export default function Attendance() {
     })
     .sort((a, b) => String(b.date).localeCompare(String(a.date)) || (empNameMap.get(a.employeeId) ?? '').localeCompare(empNameMap.get(b.employeeId) ?? ''));
   const rangeUnbounded = !range.from && !range.to;
+
+  // Employee-view range rows (server already scopes to the current employee),
+  // in the same default order the register uses (newest day first).
+  const myRangeRows = useMemo(
+    () => (rangeRows as any[]).slice().sort((a, b) => String(b.date).localeCompare(String(a.date))),
+    [rangeRows],
+  );
+
+  // ── Sortable views (filters/search stay upstream) ──────────────────────────
+  const daySort = useTableSort(filtered, {
+    employee: (a: any) => a.employeeName,
+    firstIn: (a: any) => a.checkIn,
+    lastOut: (a: any) => a.checkOut,
+    hours: (a: any) => (a.hoursWorked != null ? Number(a.hoursWorked) : null),
+    late: (a: any) => (a.checkIn ? a.lateMinutes : null),
+    ot: (a: any) => (a.overtimeHours != null ? Number(a.overtimeHours) : null),
+    status: (a: any) => a.status,
+  });
+  const rangeSort = useTableSort(filteredRange, {
+    date: (a: any) => a.date,
+    employee: (a: any) => empNameMap.get(a.employeeId) ?? '',
+    checkIn: (a: any) => a.checkIn,
+    checkOut: (a: any) => a.checkOut,
+    hours: (a: any) => (a.hoursWorked != null ? Number(a.hoursWorked) : null),
+    status: (a: any) => a.status,
+  });
+  const myRangeSort = useTableSort(myRangeRows, {
+    date: (a: any) => a.date,
+    checkIn: (a: any) => a.checkIn,
+    checkOut: (a: any) => a.checkOut,
+    hours: (a: any) => (a.hoursWorked != null ? Number(a.hoursWorked) : null),
+    status: (a: any) => a.status,
+  });
+  const myLeavesSort = useTableSort(myLeaves as any[], {
+    type: (l: any) => l.leaveType,
+    from: (l: any) => l.fromDate,
+    to: (l: any) => l.toDate,
+    reason: (l: any) => l.reason,
+    status: (l: any) => l.status ?? 'pending',
+  });
 
   // ── Access denied ───────────────────────────────────────────────────────────
   if (!perm.isLoading && !perm.canView) {
@@ -694,12 +735,12 @@ export default function Attendance() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/10">
-                  <TableHead>Date</TableHead>
-                  <TableHead>Employee</TableHead>
-                  <TableHead>Check-In</TableHead>
-                  <TableHead>Check-Out</TableHead>
-                  <TableHead>Hours</TableHead>
-                  <TableHead>Status</TableHead>
+                  <SortableHead k="date" sort={rangeSort.sort}>Date</SortableHead>
+                  <SortableHead k="employee" sort={rangeSort.sort}>Employee</SortableHead>
+                  <SortableHead k="checkIn" sort={rangeSort.sort}>Check-In</SortableHead>
+                  <SortableHead k="checkOut" sort={rangeSort.sort}>Check-Out</SortableHead>
+                  <SortableHead k="hours" sort={rangeSort.sort}>Hours</SortableHead>
+                  <SortableHead k="status" sort={rangeSort.sort}>Status</SortableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -721,7 +762,7 @@ export default function Attendance() {
                       <p>No attendance records in this period</p>
                     </TableCell>
                   </TableRow>
-                ) : filteredRange.map((a: any) => (
+                ) : rangeSort.sorted.map((a: any) => (
                   <TableRow key={`${a.date}:${a.employeeId}`} className="hover:bg-muted/10">
                     <TableCell className="text-sm font-mono">{a.date}</TableCell>
                     <TableCell className="font-semibold">{empNameMap.get(a.employeeId) ?? `#${a.employeeId}`}</TableCell>
@@ -747,15 +788,15 @@ export default function Attendance() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/10">
-                  <TableHead>Employee</TableHead>
+                  <SortableHead k="employee" sort={daySort.sort}>Employee</SortableHead>
                   <TableHead>Sessions</TableHead>
-                  <TableHead>First In</TableHead>
-                  <TableHead>Last Out</TableHead>
+                  <SortableHead k="firstIn" sort={daySort.sort}>First In</SortableHead>
+                  <SortableHead k="lastOut" sort={daySort.sort}>Last Out</SortableHead>
                   <TableHead>Location</TableHead>
-                  <TableHead>Hours</TableHead>
-                  <TableHead>Late</TableHead>
-                  <TableHead>OT</TableHead>
-                  <TableHead>Status</TableHead>
+                  <SortableHead k="hours" sort={daySort.sort}>Hours</SortableHead>
+                  <SortableHead k="late" sort={daySort.sort}>Late</SortableHead>
+                  <SortableHead k="ot" sort={daySort.sort}>OT</SortableHead>
+                  <SortableHead k="status" sort={daySort.sort}>Status</SortableHead>
                   <TableHead className="text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
@@ -771,7 +812,7 @@ export default function Attendance() {
                       <p>No attendance records for {date}</p>
                     </TableCell>
                   </TableRow>
-                ) : filtered.map((a: any) => (
+                ) : daySort.sorted.map((a: any) => (
                   <TableRow key={a.employeeId} className="hover:bg-muted/10">
                     <TableCell className="font-semibold">{a.employeeName}</TableCell>
                     <TableCell><SessionsCell punches={a.punches} /></TableCell>
@@ -881,11 +922,11 @@ export default function Attendance() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Date</TableHead>
-                <TableHead>Check-In</TableHead>
-                <TableHead>Check-Out</TableHead>
-                <TableHead>Hours</TableHead>
-                <TableHead>Status</TableHead>
+                <SortableHead k="date" sort={myRangeSort.sort}>Date</SortableHead>
+                <SortableHead k="checkIn" sort={myRangeSort.sort}>Check-In</SortableHead>
+                <SortableHead k="checkOut" sort={myRangeSort.sort}>Check-Out</SortableHead>
+                <SortableHead k="hours" sort={myRangeSort.sort}>Hours</SortableHead>
+                <SortableHead k="status" sort={myRangeSort.sort}>Status</SortableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -907,10 +948,7 @@ export default function Attendance() {
                     <p className="text-sm">No records in this period</p>
                   </TableCell>
                 </TableRow>
-              ) : (rangeRows as any[])
-                  .slice()
-                  .sort((a, b) => String(b.date).localeCompare(String(a.date)))
-                  .map((a: any) => (
+              ) : myRangeSort.sorted.map((a: any) => (
                 <TableRow key={`${a.date}:${a.employeeId}`} className="hover:bg-muted/10">
                   <TableCell className="text-sm font-mono">{a.date}</TableCell>
                   <TableCell className="text-sm font-mono">
@@ -1020,11 +1058,11 @@ export default function Attendance() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Type</TableHead>
-                <TableHead>From</TableHead>
-                <TableHead>To</TableHead>
-                <TableHead>Reason</TableHead>
-                <TableHead>Status</TableHead>
+                <SortableHead k="type" sort={myLeavesSort.sort}>Type</SortableHead>
+                <SortableHead k="from" sort={myLeavesSort.sort}>From</SortableHead>
+                <SortableHead k="to" sort={myLeavesSort.sort}>To</SortableHead>
+                <SortableHead k="reason" sort={myLeavesSort.sort}>Reason</SortableHead>
+                <SortableHead k="status" sort={myLeavesSort.sort}>Status</SortableHead>
                 <TableHead className="text-right">Details</TableHead>
               </TableRow>
             </TableHeader>
@@ -1040,7 +1078,7 @@ export default function Attendance() {
                     <p className="text-sm">No leave applications yet</p>
                   </TableCell>
                 </TableRow>
-              ) : (myLeaves as any[]).map(l => (
+              ) : myLeavesSort.sorted.map(l => (
                 <TableRow key={l.id} className="hover:bg-muted/10">
                   <TableCell><Badge variant="outline" className="capitalize text-xs">{l.leaveType}</Badge></TableCell>
                   <TableCell className="text-sm">{new Date(l.fromDate + 'T00:00:00').toLocaleDateString('en-IN')}</TableCell>

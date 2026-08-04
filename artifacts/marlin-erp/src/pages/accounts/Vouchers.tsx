@@ -32,6 +32,7 @@ import { AccountCombobox } from '@/components/ui/account-combobox';
 import { downloadCSV } from '@/lib/download';
 import { useGetCompanySettings } from '@workspace/api-client-react';
 import { downloadVoucherPDF } from '@/lib/pdfUtils';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const inr = (n: number) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
@@ -922,6 +923,15 @@ export default function Vouchers() {
     return list;
   }, [all, typeFilter, search, fromDate, toDate]);
 
+  const { sorted, sort } = useTableSort(filtered, {
+    type: r => TYPE_META[r.type].label,
+    voucher: r => r.voucherNumber,
+    date: r => r.date,
+    description: r => r.description,
+    narration: r => r.narration,
+    amount: r => Number(r.amount),
+  });
+
   const total = useMemo(() => filtered.reduce((s, r) => s + r.amount, 0), [filtered]);
 
   const canView = perm.canView || permPay.canView;
@@ -1043,12 +1053,12 @@ export default function Vouchers() {
             <TableHeader>
               <TableRow className="bg-muted/10">
                 <TableHead className="w-8" />
-                <TableHead>Type</TableHead>
-                <TableHead>Voucher #</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead>Narration</TableHead>
-                <TableHead className="text-right">Amount</TableHead>
+                <SortableHead k="type" sort={sort}>Type</SortableHead>
+                <SortableHead k="voucher" sort={sort}>Voucher #</SortableHead>
+                <SortableHead k="date" sort={sort}>Date</SortableHead>
+                <SortableHead k="description" sort={sort}>Description</SortableHead>
+                <SortableHead k="narration" sort={sort}>Narration</SortableHead>
+                <SortableHead k="amount" sort={sort} className="text-right">Amount</SortableHead>
                 <TableHead className="w-16" />
               </TableRow>
             </TableHeader>
@@ -1071,7 +1081,7 @@ export default function Vouchers() {
                     )}
                   </TableCell>
                 </TableRow>
-              ) : filtered.map(row => {
+              ) : sorted.map(row => {
                 const isJV = !['payment', 'receipt'].includes(row.type);
                 const isExpanded = expanded === row.key;
                 const jvLines: any[] = row.raw?.lines ?? [];

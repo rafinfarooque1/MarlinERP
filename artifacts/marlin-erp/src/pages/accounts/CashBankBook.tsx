@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Wallet, Landmark, Download, AlertTriangle } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
 
 const inr = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
@@ -42,6 +43,16 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
   const { data, isLoading } = useCashBankBook(ledgerId, fromDate || undefined, toDate || undefined, loc);
   const entries = data?.entries ?? [];
   const companyLevel = (data as any)?.location ? (data as any)?.companyLevel : null;
+
+  const { sorted, sort } = useTableSort(entries, {
+    date: e => e.date,
+    type: e => SOURCE_LABEL[e.source] ?? e.source,
+    voucher: e => e.voucherNumber,
+    description: e => e.description,
+    debit: e => Number(e.debit) || null,
+    credit: e => Number(e.credit) || null,
+    balance: e => Number(e.balance),
+  });
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -132,13 +143,13 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Date</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Voucher #</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead className="text-right">In (Dr)</TableHead>
-                <TableHead className="text-right">Out (Cr)</TableHead>
-                <TableHead className="text-right">Balance</TableHead>
+                <SortableHead k="date" sort={sort}>Date</SortableHead>
+                <SortableHead k="type" sort={sort}>Type</SortableHead>
+                <SortableHead k="voucher" sort={sort}>Voucher #</SortableHead>
+                <SortableHead k="description" sort={sort}>Description</SortableHead>
+                <SortableHead k="debit" sort={sort} className="text-right">In (Dr)</SortableHead>
+                <SortableHead k="credit" sort={sort} className="text-right">Out (Cr)</SortableHead>
+                <SortableHead k="balance" sort={sort} className="text-right">Balance</SortableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -154,7 +165,7 @@ export default function CashBankBook({ kind }: { kind: 'cash' | 'bank' }) {
                     <TableCell colSpan={6} className="text-sm font-medium text-muted-foreground">Opening Balance</TableCell>
                     <TableCell className="text-right font-mono font-semibold">{inr(data?.openingBalance ?? 0)}</TableCell>
                   </TableRow>
-                  {entries.map((e, i) => (
+                  {sorted.map((e, i) => (
                     <TableRow key={i} className="hover:bg-muted/10">
                       <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{new Date(`${e.date}T00:00:00`).toLocaleDateString('en-IN')}</TableCell>
                       <TableCell><Badge variant="outline" className="text-xs">{SOURCE_LABEL[e.source] ?? e.source}</Badge></TableCell>

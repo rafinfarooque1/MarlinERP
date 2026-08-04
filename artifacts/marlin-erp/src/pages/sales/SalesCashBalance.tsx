@@ -2,7 +2,7 @@
  * SalesCashBalance — cash balance for the current selling location.
  * Staff can record deposits to bank directly from here (outlet or warehouse).
  */
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
 import { useLocationContext } from '@/lib/locationContext';
@@ -18,6 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { Banknote, Warehouse, Store, RefreshCw, ArrowUpFromLine, CheckCircle2, ArrowRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { useLocation as useWouter } from 'wouter';
@@ -50,6 +51,17 @@ export default function SalesCashBalance() {
   const balance = allBalances.find(
     b => b.locationType === locationType && b.locationId === locationId
   );
+
+  // "Recent" cap (10) stays upstream of sorting so the default order matches
+  // the incoming list; sorting only reorders those most-recent rows.
+  const recentDeposits = useMemo(() => (deposits as any[]).slice(0, 10), [deposits]);
+  const { sorted: sortedDeposits, sort } = useTableSort(recentDeposits, {
+    date: (d: any) => d.depositDate,
+    reference: (d: any) => d.depositReference,
+    bank: (d: any) => d.bankLedgerName,
+    amount: (d: any) => Number(d.amount),
+    status: (d: any) => d.status,
+  });
 
   // ── Deposit dialog state ───────────────────────────────────────────────────
   const [showDeposit, setShowDeposit]       = useState(false);
@@ -219,15 +231,15 @@ export default function SalesCashBalance() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Date</TableHead>
-                        <TableHead>Reference</TableHead>
-                        <TableHead>Bank Account</TableHead>
-                        <TableHead className="text-right">Amount</TableHead>
-                        <TableHead>Status</TableHead>
+                        <SortableHead k="date" sort={sort}>Date</SortableHead>
+                        <SortableHead k="reference" sort={sort}>Reference</SortableHead>
+                        <SortableHead k="bank" sort={sort}>Bank Account</SortableHead>
+                        <SortableHead k="amount" sort={sort} className="text-right">Amount</SortableHead>
+                        <SortableHead k="status" sort={sort}>Status</SortableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {deposits.slice(0, 10).map((d: any) => (
+                      {sortedDeposits.map((d: any) => (
                         <TableRow key={d.id}>
                           <TableCell className="text-sm text-muted-foreground">{d.depositDate}</TableCell>
                           <TableCell className="font-mono text-xs">{d.depositReference ?? '—'}</TableCell>

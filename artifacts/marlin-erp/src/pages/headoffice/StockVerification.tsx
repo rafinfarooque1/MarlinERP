@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ClipboardCheck, Info, ShieldOff, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 
@@ -285,6 +286,15 @@ function HistoryTab() {
   const { data: verifications = [], isLoading } = useListStockVerifications();
   const [selected, setSelected] = useState<StockVerificationType | null>(null);
 
+  const { sorted, sort } = useTableSort(verifications, {
+    verifyDate:    v => v.verifyDate,
+    branchName:    v => v.branchName,
+    itemsCounted:  v => Number(v.lineCount ?? v.lines.length),
+    adjustedCount: v => Number(v.adjustedCount ?? 0),
+    createdBy:     v => v.createdBy,
+    notes:         v => v.notes,
+  });
+
   return (
     <div className="space-y-4">
       <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
@@ -292,12 +302,12 @@ function HistoryTab() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Date</TableHead>
-                <TableHead>Location</TableHead>
-                <TableHead className="text-right">Items Counted</TableHead>
-                <TableHead className="text-right">Adjusted</TableHead>
-                <TableHead>By</TableHead>
-                <TableHead>Notes</TableHead>
+                <SortableHead k="verifyDate" sort={sort}>Date</SortableHead>
+                <SortableHead k="branchName" sort={sort}>Location</SortableHead>
+                <SortableHead k="itemsCounted" sort={sort} className="text-right">Items Counted</SortableHead>
+                <SortableHead k="adjustedCount" sort={sort} className="text-right">Adjusted</SortableHead>
+                <SortableHead k="createdBy" sort={sort}>By</SortableHead>
+                <SortableHead k="notes" sort={sort}>Notes</SortableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -313,7 +323,7 @@ function HistoryTab() {
                   </TableCell>
                 </TableRow>
               ) : (
-                verifications.map(v => (
+                sorted.map(v => (
                   <TableRow key={v.id} className="hover:bg-muted/10 cursor-pointer" onClick={() => setSelected(v)}>
                     <TableCell className="text-sm">{fmtDate(v.verifyDate)}</TableCell>
                     <TableCell className="font-medium">{v.branchName}</TableCell>

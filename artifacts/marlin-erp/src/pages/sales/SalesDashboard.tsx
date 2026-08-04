@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import {
   ShoppingCart, ArrowLeftRight, Receipt, ChevronDown, ChevronUp,
   TrendingUp, Package, Wallet, CalendarDays, Store, Warehouse,
@@ -231,6 +232,30 @@ export default function SalesDashboard() {
 
   const toggle = (s: Section) => setOpen(prev => prev === s ? null : s);
 
+  // Sorting for the single-location (non-grouped) detail tables. The grouped
+  // (all/warehouse) views are hierarchical location sections and are left as-is.
+  const salesSort = useTableSort(daySales, {
+    invoice: (s: any) => s.invoiceNumber ?? `#${s.id}`,
+    customer: (s: any) => s.customerName,
+    amount: (s: any) => Number(s.totalAmount ?? 0),
+    paid: (s: any) => Number(s.amountPaid ?? 0),
+    balance: (s: any) => Math.max(0, Number(s.totalAmount ?? 0) - Number(s.amountPaid ?? 0)),
+    status: (s: any) => s.paymentStatus ?? 'unpaid',
+  });
+  const transfersSort = useTableSort(dayTransfers, {
+    challan: (t: any) => t.challanNumber ?? `#${t.id}`,
+    from: (t: any) => t.fromName ?? `${t.fromType} #${t.fromId}`,
+    to: (t: any) => t.toName ?? `${t.toType} #${t.toId}`,
+    items: (t: any) => (t.lineItems ?? []).length,
+    status: (t: any) => t.status,
+  });
+  const expensesSort = useTableSort(dayExpenses, {
+    voucher: (e: any) => e.voucherNumber ?? `#${e.id}`,
+    category: (e: any) => e.expenseLedgerName,
+    description: (e: any) => e.description,
+    amount: (e: any) => Number(e.amount),
+  });
+
   // ── All-mode / Warehouse-mode: group by location ──────────────────────────
 
   function groupByLocation<T extends { locationType?: string; locationId?: number; locationName?: string }>(items: T[]) {
@@ -406,16 +431,16 @@ export default function SalesDashboard() {
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-muted/10">
-                      <TableHead>Invoice</TableHead>
-                      <TableHead>Customer</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                      <TableHead className="text-right">Paid</TableHead>
-                      <TableHead className="text-right">Balance</TableHead>
-                      <TableHead>Status</TableHead>
+                      <SortableHead k="invoice" sort={salesSort.sort}>Invoice</SortableHead>
+                      <SortableHead k="customer" sort={salesSort.sort}>Customer</SortableHead>
+                      <SortableHead k="amount" sort={salesSort.sort} className="text-right">Amount</SortableHead>
+                      <SortableHead k="paid" sort={salesSort.sort} className="text-right">Paid</SortableHead>
+                      <SortableHead k="balance" sort={salesSort.sort} className="text-right">Balance</SortableHead>
+                      <SortableHead k="status" sort={salesSort.sort}>Status</SortableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {daySales.map((s: any) => (
+                    {salesSort.sorted.map((s: any) => (
                       <TableRow key={s.id}>
                         <TableCell className="font-mono text-xs font-bold text-primary">{s.invoiceNumber ?? `#${s.id}`}</TableCell>
                         <TableCell className="text-sm">{s.customerName ?? <span className="text-muted-foreground italic">Walk-in</span>}</TableCell>
@@ -484,15 +509,15 @@ export default function SalesDashboard() {
                   <Table>
                     <TableHeader>
                       <TableRow className="bg-muted/10">
-                        <TableHead>Challan</TableHead>
-                        <TableHead>From</TableHead>
-                        <TableHead>To</TableHead>
-                        <TableHead>Items</TableHead>
-                        <TableHead>Status</TableHead>
+                        <SortableHead k="challan" sort={transfersSort.sort}>Challan</SortableHead>
+                        <SortableHead k="from" sort={transfersSort.sort}>From</SortableHead>
+                        <SortableHead k="to" sort={transfersSort.sort}>To</SortableHead>
+                        <SortableHead k="items" sort={transfersSort.sort}>Items</SortableHead>
+                        <SortableHead k="status" sort={transfersSort.sort}>Status</SortableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {dayTransfers.map((t: any) => (
+                      {transfersSort.sorted.map((t: any) => (
                         <TableRow key={t.id}>
                           <TableCell className="font-mono text-xs font-bold text-primary">{t.challanNumber ?? `#${t.id}`}</TableCell>
                           <TableCell className="text-sm">{t.fromName ?? `${t.fromType} #${t.fromId}`}<span className="text-muted-foreground capitalize text-xs ml-1">({t.fromType})</span></TableCell>
@@ -564,14 +589,14 @@ export default function SalesDashboard() {
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-muted/10">
-                      <TableHead>Voucher</TableHead>
-                      <TableHead>Category</TableHead>
-                      <TableHead>Description</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
+                      <SortableHead k="voucher" sort={expensesSort.sort}>Voucher</SortableHead>
+                      <SortableHead k="category" sort={expensesSort.sort}>Category</SortableHead>
+                      <SortableHead k="description" sort={expensesSort.sort}>Description</SortableHead>
+                      <SortableHead k="amount" sort={expensesSort.sort} className="text-right">Amount</SortableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {dayExpenses.map((e: any) => (
+                    {expensesSort.sorted.map((e: any) => (
                       <TableRow key={e.id}>
                         <TableCell className="font-mono text-xs text-muted-foreground">{e.voucherNumber ?? `#${e.id}`}</TableCell>
                         <TableCell className="text-sm font-medium">{e.expenseLedgerName}</TableCell>

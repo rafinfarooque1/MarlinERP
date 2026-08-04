@@ -21,6 +21,7 @@ import { useUnits } from '@/lib/useUnits';
 import { Link } from 'wouter';
 import { usePermission } from '@/lib/usePermission';
 import { useIsHeadOffice, HEAD_OFFICE_ONLY_HINT, isActiveProduct } from '@/lib/productStatus';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
@@ -74,6 +75,15 @@ export default function Items() {
   };
 
   const filtered = items.filter(i => i.name.toLowerCase().includes(search.toLowerCase()) || i.hsnCode?.includes(search));
+  const { sorted, sort } = useTableSort(filtered, {
+    code: (i: any) => i.itemCode,
+    name: i => i.name,
+    hsn: i => i.hsnCode,
+    tax: i => Number(i.taxRate),
+    unit: i => i.unit,
+    stock: i => Number(i.productionStock || 0),
+    status: i => isActiveProduct(i) ? 'Active' : 'Inactive',
+  });
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   if (!perm.isLoading && !perm.canView) {
@@ -121,13 +131,13 @@ export default function Items() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Code</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>HSN Code</TableHead>
-                <TableHead>Tax Rate</TableHead>
-                <TableHead>Unit</TableHead>
-                <TableHead>Production Stock</TableHead>
-                <TableHead>Status</TableHead>
+                <SortableHead k="code" sort={sort}>Code</SortableHead>
+                <SortableHead k="name" sort={sort}>Name</SortableHead>
+                <SortableHead k="hsn" sort={sort}>HSN Code</SortableHead>
+                <SortableHead k="tax" sort={sort}>Tax Rate</SortableHead>
+                <SortableHead k="unit" sort={sort}>Unit</SortableHead>
+                <SortableHead k="stock" sort={sort}>Production Stock</SortableHead>
+                <SortableHead k="status" sort={sort}>Status</SortableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -138,7 +148,7 @@ export default function Items() {
                 <TableRow><TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
                   <Package className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No items found</p>
                 </TableCell></TableRow>
-              ) : filtered.map(item => {
+              ) : sorted.map(item => {
                 const active = isActiveProduct(item);
                 return (
                 <TableRow key={item.id} className={`hover:bg-muted/10 ${active ? '' : 'opacity-60'}`}>

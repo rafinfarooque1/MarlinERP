@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Receipt, TrendingUp, TrendingDown, Info, ShieldOff, FileText } from 'lucide-react';
 import { downloadCSV } from '@/lib/download';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { usePermission } from '@/lib/usePermission';
 import { GstScopeFilter, gstScopeLabel, type GstScope } from '@/components/accounts/GstScopeFilter';
@@ -29,6 +30,17 @@ const payStatusLabel = (s: string) =>
 export function GstDocumentsTable({ title, icon, rows, loading }: {
   title: string; icon: React.ReactNode; rows: GstDocumentRow[]; loading: boolean;
 }) {
+  const { sorted, sort } = useTableSort(rows, {
+    date: r => r.date,
+    doc: r => r.documentNumber,
+    party: r => r.partyName,
+    warehouse: r => r.warehouseName,
+    taxable: r => Number(r.taxableValue),
+    tax: r => Number(r.taxAmount),
+    total: r => Number(r.invoiceValue),
+    payStatus: r => r.paymentStatus,
+    payMode: r => r.paymentModes,
+  });
   return (
     <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
       <div className="p-4 border-b border-border bg-muted/20">
@@ -38,15 +50,15 @@ export function GstDocumentsTable({ title, icon, rows, loading }: {
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/10">
-              <TableHead>Date</TableHead>
-              <TableHead>{title.startsWith('Outward') ? 'Invoice No' : 'Purchase No'}</TableHead>
-              <TableHead>Party</TableHead>
-              <TableHead>Warehouse</TableHead>
-              <TableHead className="text-right">Taxable</TableHead>
-              <TableHead className="text-right">Tax</TableHead>
-              <TableHead className="text-right">Total</TableHead>
-              <TableHead>Payment Status</TableHead>
-              <TableHead>Payment Mode</TableHead>
+              <SortableHead k="date" sort={sort}>Date</SortableHead>
+              <SortableHead k="doc" sort={sort}>{title.startsWith('Outward') ? 'Invoice No' : 'Purchase No'}</SortableHead>
+              <SortableHead k="party" sort={sort}>Party</SortableHead>
+              <SortableHead k="warehouse" sort={sort}>Warehouse</SortableHead>
+              <SortableHead k="taxable" sort={sort} className="text-right">Taxable</SortableHead>
+              <SortableHead k="tax" sort={sort} className="text-right">Tax</SortableHead>
+              <SortableHead k="total" sort={sort} className="text-right">Total</SortableHead>
+              <SortableHead k="payStatus" sort={sort}>Payment Status</SortableHead>
+              <SortableHead k="payMode" sort={sort}>Payment Mode</SortableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -54,7 +66,7 @@ export function GstDocumentsTable({ title, icon, rows, loading }: {
               <TableRow><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
             ) : rows.length === 0 ? (
               <TableRow><TableCell colSpan={9} className="text-center py-8 text-muted-foreground text-sm">No documents in this period</TableCell></TableRow>
-            ) : rows.map((r, i) => (
+            ) : sorted.map((r, i) => (
               <TableRow key={i} className="hover:bg-muted/10">
                 <TableCell className="text-xs whitespace-nowrap">{r.date}</TableCell>
                 <TableCell className="font-mono text-xs whitespace-nowrap">
@@ -134,6 +146,31 @@ export default function GstSummary() {
   const totalOutputTax = salesData.reduce((s, r) => s + Number(r.taxAmount || 0), 0);
   const totalInputTax = purchasesData.reduce((s, r) => s + Number(r.taxAmount || 0), 0);
   const netGst = totalOutputTax - totalInputTax;
+
+  const salesSort = useTableSort(salesData, {
+    rate: r => Number(r.taxRate),
+    taxable: r => Number(r.taxableValue),
+    cgst: r => Number(r.cgst),
+    sgst: r => Number(r.sgst),
+    igst: r => Number(r.igst),
+    tax: r => Number(r.taxAmount),
+  });
+  const purchasesSort = useTableSort(purchasesData, {
+    rate: r => Number(r.taxRate),
+    taxable: r => Number(r.taxableValue),
+    cgst: r => Number(r.cgst),
+    sgst: r => Number(r.sgst),
+    igst: r => Number(r.igst ?? 0),
+    tax: r => Number(r.taxAmount),
+  });
+  const monthSort = useTableSort(monthWise, {
+    month: r => r.month,
+    outputTaxable: r => Number(r.outputTaxable),
+    outputTax: r => Number(r.outputTax),
+    inputTaxable: r => Number(r.inputTaxable),
+    inputTax: r => Number(r.inputTax),
+    netGst: r => Number(r.netGst),
+  });
 
   const scopeText = gstScopeLabel(scope, filters.data?.gstins ?? []);
 
@@ -253,12 +290,12 @@ export default function GstSummary() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/10">
-                  <TableHead>Rate</TableHead>
-                  <TableHead className="text-right">Taxable</TableHead>
-                  <TableHead className="text-right">CGST</TableHead>
-                  <TableHead className="text-right">SGST</TableHead>
-                  <TableHead className="text-right">IGST</TableHead>
-                  <TableHead className="text-right">Total Tax</TableHead>
+                  <SortableHead k="rate" sort={salesSort.sort}>Rate</SortableHead>
+                  <SortableHead k="taxable" sort={salesSort.sort} className="text-right">Taxable</SortableHead>
+                  <SortableHead k="cgst" sort={salesSort.sort} className="text-right">CGST</SortableHead>
+                  <SortableHead k="sgst" sort={salesSort.sort} className="text-right">SGST</SortableHead>
+                  <SortableHead k="igst" sort={salesSort.sort} className="text-right">IGST</SortableHead>
+                  <SortableHead k="tax" sort={salesSort.sort} className="text-right">Total Tax</SortableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -268,7 +305,7 @@ export default function GstSummary() {
                   <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground text-sm">
                     No taxable sales in this period
                   </TableCell></TableRow>
-                ) : salesData.map(r => (
+                ) : salesSort.sorted.map(r => (
                   <TableRow key={r.taxRate} className="hover:bg-muted/10">
                     <TableCell><Badge variant="secondary">{r.taxRate}%</Badge></TableCell>
                     <TableCell className="text-right font-mono text-xs">{fmt(Number(r.taxableValue))}</TableCell>
@@ -302,12 +339,12 @@ export default function GstSummary() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/10">
-                  <TableHead>Rate</TableHead>
-                  <TableHead className="text-right">Purchase Value</TableHead>
-                  <TableHead className="text-right">CGST</TableHead>
-                  <TableHead className="text-right">SGST</TableHead>
-                  <TableHead className="text-right">IGST</TableHead>
-                  <TableHead className="text-right">Total Tax</TableHead>
+                  <SortableHead k="rate" sort={purchasesSort.sort}>Rate</SortableHead>
+                  <SortableHead k="taxable" sort={purchasesSort.sort} className="text-right">Purchase Value</SortableHead>
+                  <SortableHead k="cgst" sort={purchasesSort.sort} className="text-right">CGST</SortableHead>
+                  <SortableHead k="sgst" sort={purchasesSort.sort} className="text-right">SGST</SortableHead>
+                  <SortableHead k="igst" sort={purchasesSort.sort} className="text-right">IGST</SortableHead>
+                  <SortableHead k="tax" sort={purchasesSort.sort} className="text-right">Total Tax</SortableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -317,7 +354,7 @@ export default function GstSummary() {
                   <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground text-sm">
                     No purchase data in this period
                   </TableCell></TableRow>
-                ) : purchasesData.map((r, i) => (
+                ) : purchasesSort.sorted.map((r, i) => (
                   <TableRow key={i} className="hover:bg-muted/10">
                     <TableCell>
                       <div className="flex items-center gap-1">
@@ -350,12 +387,12 @@ export default function GstSummary() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Month</TableHead>
-                <TableHead className="text-right">Output Taxable</TableHead>
-                <TableHead className="text-right">Output Tax</TableHead>
-                <TableHead className="text-right">Input Taxable</TableHead>
-                <TableHead className="text-right">Input Tax</TableHead>
-                <TableHead className="text-right">Net GST</TableHead>
+                <SortableHead k="month" sort={monthSort.sort}>Month</SortableHead>
+                <SortableHead k="outputTaxable" sort={monthSort.sort} className="text-right">Output Taxable</SortableHead>
+                <SortableHead k="outputTax" sort={monthSort.sort} className="text-right">Output Tax</SortableHead>
+                <SortableHead k="inputTaxable" sort={monthSort.sort} className="text-right">Input Taxable</SortableHead>
+                <SortableHead k="inputTax" sort={monthSort.sort} className="text-right">Input Tax</SortableHead>
+                <SortableHead k="netGst" sort={monthSort.sort} className="text-right">Net GST</SortableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -365,7 +402,7 @@ export default function GstSummary() {
                 <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground text-sm">
                   No activity in this period
                 </TableCell></TableRow>
-              ) : monthWise.map(m => (
+              ) : monthSort.sorted.map(m => (
                 <TableRow key={m.month} className="hover:bg-muted/10">
                   <TableCell className="text-sm font-medium">
                     {new Date(`${m.month}-01T00:00:00`).toLocaleString('en-IN', { month: 'short', year: 'numeric' })}

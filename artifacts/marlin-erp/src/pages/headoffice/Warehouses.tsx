@@ -16,6 +16,7 @@ import { Plus, Search, Edit2, Trash2, Warehouse, Download, Eye, ShieldOff, Alert
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -165,6 +166,14 @@ export default function Warehouses() {
   };
 
   const filtered = warehouses.filter(w => w.name.toLowerCase().includes(search.toLowerCase()) || w.state?.toLowerCase().includes(search.toLowerCase()));
+  const { sorted, sort } = useTableSort(filtered, {
+    name: w => w.name,
+    billingName: w => (w as any).billingName,
+    state: w => w.state,
+    gstNumber: w => w.gstNumber,
+    phone: w => w.phone,
+    billingProfile: w => billingGaps(w as any).length,
+  });
   const isPending = createMutation.isPending || updateMutation.isPending;
   const incompleteCount = warehouses.filter(w => billingGaps(w as any).length > 0).length;
 
@@ -229,12 +238,12 @@ export default function Warehouses() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Name</TableHead>
-                <TableHead>Billing Name</TableHead>
-                <TableHead>State</TableHead>
-                <TableHead>GSTIN</TableHead>
-                <TableHead>Phone</TableHead>
-                <TableHead>Billing Profile</TableHead>
+                <SortableHead k="name" sort={sort}>Name</SortableHead>
+                <SortableHead k="billingName" sort={sort}>Billing Name</SortableHead>
+                <SortableHead k="state" sort={sort}>State</SortableHead>
+                <SortableHead k="gstNumber" sort={sort}>GSTIN</SortableHead>
+                <SortableHead k="phone" sort={sort}>Phone</SortableHead>
+                <SortableHead k="billingProfile" sort={sort}>Billing Profile</SortableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -245,7 +254,7 @@ export default function Warehouses() {
                 <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
                   <Warehouse className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No warehouses found</p>
                 </TableCell></TableRow>
-              ) : filtered.map(w => {
+              ) : sorted.map(w => {
                 const gaps = billingGaps(w as any);
                 return (
                 <TableRow key={w.id} className="hover:bg-muted/10">

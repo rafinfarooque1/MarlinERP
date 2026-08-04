@@ -24,6 +24,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useOutletsEnabled, useClearOutletSelection } from '@/lib/useFeatureFlags';
 
 const schema = z.object({
@@ -200,6 +201,19 @@ export default function Leave() {
     return !q || l.employeeName?.toLowerCase().includes(q) || String(l.employeeId).includes(q);
   });
 
+  const { sorted, sort } = useTableSort(filtered, {
+    employee: (l: any) => l.employeeName,
+    branch: (l: any) => l.branchName,
+    role: (l: any) => l.roleName,
+    type: (l: any) => LEAVE_TYPE_LABEL[l.leaveType] ?? l.leaveType,
+    from: (l: any) => l.fromDate,
+    to: (l: any) => l.toDate,
+    days: (l: any) => { const d = leaveDays(l); return d === '—' ? null : Number(d); },
+    appliedOn: (l: any) => l.createdAt,
+    status: (l: any) => l.status || 'pending',
+    approver: (l: any) => l.approverName,
+  });
+
   if (!perm.isLoading && !perm.canView) {
     return (
       <AppLayout>
@@ -336,16 +350,16 @@ export default function Leave() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Employee</TableHead>
-                <TableHead>Branch</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>From</TableHead>
-                <TableHead>To</TableHead>
-                <TableHead>Days</TableHead>
-                <TableHead>Applied On</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Approver</TableHead>
+                <SortableHead k="employee" sort={sort}>Employee</SortableHead>
+                <SortableHead k="branch" sort={sort}>Branch</SortableHead>
+                <SortableHead k="role" sort={sort}>Role</SortableHead>
+                <SortableHead k="type" sort={sort}>Type</SortableHead>
+                <SortableHead k="from" sort={sort}>From</SortableHead>
+                <SortableHead k="to" sort={sort}>To</SortableHead>
+                <SortableHead k="days" sort={sort}>Days</SortableHead>
+                <SortableHead k="appliedOn" sort={sort}>Applied On</SortableHead>
+                <SortableHead k="status" sort={sort}>Status</SortableHead>
+                <SortableHead k="approver" sort={sort}>Approver</SortableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -356,7 +370,7 @@ export default function Leave() {
                 <TableRow><TableCell colSpan={11} className="text-center py-16 text-muted-foreground">
                   <CalendarOff className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No leave requests match these filters</p>
                 </TableCell></TableRow>
-              ) : filtered.map(l => (
+              ) : sorted.map(l => (
                 <TableRow key={l.id} className="hover:bg-muted/10">
                   <TableCell>
                     <p className="font-semibold leading-tight">{l.employeeName}</p>

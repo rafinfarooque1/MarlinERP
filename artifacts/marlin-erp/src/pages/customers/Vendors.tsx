@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   useListVendors, useCreateVendor, useUpdateVendor, getListVendorsQueryKey,
   useGetVendorLedger, useGetCashBankLedgers, useRecordVendorPayment,
@@ -23,6 +23,7 @@ import { downloadCSV } from '@/lib/download';
 import { StateCombobox } from '@/components/ui/state-combobox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { usePermission } from '@/lib/usePermission';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { PartyBalance } from '@/lib/partyBalance';
 import { usePartyLocations, rowMatchesLocation, locationValueOf, HEAD_OFFICE_VALUE } from '@/lib/usePartyLocations';
 
@@ -350,11 +351,23 @@ export default function Vendors() {
     }
   };
 
-  const filtered = vendors.filter(v =>
+  const filtered = useMemo(() => vendors.filter(v =>
     (v.name.toLowerCase().includes(search.toLowerCase()) ||
      v.phone?.includes(search)) &&
     rowMatchesLocation(locFilter, (v as any).locationType ?? (v as any).location_type, (v as any).locationId ?? (v as any).location_id)
-  );
+  ).map(v => ({
+    ...v,
+    _locationName: loc.nameOf((v as any).locationType ?? (v as any).location_type, (v as any).locationId ?? (v as any).location_id),
+  })), [vendors, search, locFilter, loc]);
+
+  const { sorted, sort } = useTableSort(filtered, {
+    name: v => v.name,
+    phone: v => v.phone,
+    state: v => (v as any).state,
+    gst: v => v.gstNumber,
+    location: v => (v as any)._locationName,
+    balance: v => Number((v as any).outstandingBalance) || null,
+  });
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -417,12 +430,12 @@ export default function Vendors() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Name</TableHead>
-                <TableHead>Phone</TableHead>
-                <TableHead>State</TableHead>
-                <TableHead>GST No.</TableHead>
-                <TableHead>Location</TableHead>
-                <TableHead className="text-right">Balance</TableHead>
+                <SortableHead k="name" sort={sort}>Name</SortableHead>
+                <SortableHead k="phone" sort={sort}>Phone</SortableHead>
+                <SortableHead k="state" sort={sort}>State</SortableHead>
+                <SortableHead k="gst" sort={sort}>GST No.</SortableHead>
+                <SortableHead k="location" sort={sort}>Location</SortableHead>
+                <SortableHead k="balance" sort={sort} className="text-right">Balance</SortableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -433,7 +446,7 @@ export default function Vendors() {
                 <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
                   <Truck className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>{vendors.length === 0 ? 'No vendors yet' : 'No vendors match this search or location'}</p>
                 </TableCell></TableRow>
-              ) : filtered.map(v => (
+              ) : sorted.map(v => (
                 <TableRow key={v.id} className="hover:bg-muted/10">
                   <TableCell className="font-semibold">{v.name}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{v.phone || '—'}</TableCell>
@@ -474,7 +487,7 @@ export default function Vendors() {
               <div className="text-center py-16 text-muted-foreground">
                 <Truck className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>{vendors.length === 0 ? 'No vendors yet' : 'No vendors match this search or location'}</p>
               </div>
-            ) : filtered.map(v => (
+            ) : sorted.map(v => (
               <div key={v.id} className="border border-border rounded-lg p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">

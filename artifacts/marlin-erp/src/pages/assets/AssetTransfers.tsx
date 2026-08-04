@@ -21,6 +21,7 @@ import { Plus, ArrowRightLeft, Download } from 'lucide-react';
 import { usePermission } from '@/lib/usePermission';
 import { toast } from 'sonner';
 import { downloadCSV } from '@/lib/download';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { fmtDate } from '@/pages/reports/shared';
 import { AssetsAccessDenied, useAssetLocationOptions, locKey } from './shared';
 
@@ -45,6 +46,17 @@ export default function AssetTransfers() {
   const { data: activeAssets = [] } = useAssetPurchases({ status: 'active' });
   const createTransfer = useCreateAssetTransfer();
   const locationOptions = useAssetLocationOptions();
+
+  const { sorted, sort } = useTableSort(transfers, {
+    date: t => t.transferDate,
+    code: t => t.assetCode,
+    asset: t => t.assetName,
+    from: t => t.fromName,
+    to: t => t.toName,
+    approvedBy: t => t.approvedBy,
+    reason: t => t.reason,
+    recordedBy: t => t.createdBy,
+  });
 
   const [form, setForm] = useState({ assetId: '', to: '', transferDate: todayIso(), approvedBy: '', reason: '' });
   const selectedAsset: AssetPurchase | undefined = (activeAssets as AssetPurchase[]).find(a => String(a.id) === form.assetId);
@@ -107,14 +119,14 @@ export default function AssetTransfers() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Date</TableHead>
-                <TableHead>Code</TableHead>
-                <TableHead>Asset</TableHead>
-                <TableHead>From</TableHead>
-                <TableHead>To</TableHead>
-                <TableHead>Approved By</TableHead>
-                <TableHead>Reason</TableHead>
-                <TableHead>Recorded By</TableHead>
+                <SortableHead k="date" sort={sort}>Date</SortableHead>
+                <SortableHead k="code" sort={sort}>Code</SortableHead>
+                <SortableHead k="asset" sort={sort}>Asset</SortableHead>
+                <SortableHead k="from" sort={sort}>From</SortableHead>
+                <SortableHead k="to" sort={sort}>To</SortableHead>
+                <SortableHead k="approvedBy" sort={sort}>Approved By</SortableHead>
+                <SortableHead k="reason" sort={sort}>Reason</SortableHead>
+                <SortableHead k="recordedBy" sort={sort}>Recorded By</SortableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -124,7 +136,7 @@ export default function AssetTransfers() {
                 <TableRow><TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
                   <ArrowRightLeft className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No transfers recorded</p>
                 </TableCell></TableRow>
-              ) : transfers.map(t => (
+              ) : sorted.map(t => (
                 <TableRow key={t.id} className="hover:bg-muted/10">
                   <TableCell className="whitespace-nowrap text-sm">{fmtDate(t.transferDate)}</TableCell>
                   <TableCell className="font-mono text-sm font-semibold whitespace-nowrap">{t.assetCode}</TableCell>

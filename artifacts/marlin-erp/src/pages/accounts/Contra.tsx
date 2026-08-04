@@ -18,6 +18,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { entryScopeKeyDown, autoFocusFirst, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 
@@ -98,6 +99,15 @@ export default function Contra() {
 
   const total = rows.reduce((s, v) => s + v.totalAmount, 0);
 
+  const { sorted, sort } = useTableSort(rows, {
+    voucher: v => v.voucherNumber,
+    date: v => v.voucherDate,
+    from: v => v.fromName,
+    to: v => v.toName,
+    narration: v => v.narration,
+    amount: v => Number(v.totalAmount),
+  });
+
   if (!perm.isLoading && !perm.canView) {
     return (
       <AppLayout>
@@ -151,12 +161,12 @@ export default function Contra() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Voucher #</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>From</TableHead>
-                <TableHead>To</TableHead>
-                <TableHead>Narration</TableHead>
-                <TableHead className="text-right">Amount</TableHead>
+                <SortableHead k="voucher" sort={sort}>Voucher #</SortableHead>
+                <SortableHead k="date" sort={sort}>Date</SortableHead>
+                <SortableHead k="from" sort={sort}>From</SortableHead>
+                <SortableHead k="to" sort={sort}>To</SortableHead>
+                <SortableHead k="narration" sort={sort}>Narration</SortableHead>
+                <SortableHead k="amount" sort={sort} className="text-right">Amount</SortableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
@@ -167,7 +177,7 @@ export default function Contra() {
                 <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
                   <ArrowLeftRight className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No contra vouchers yet</p>
                 </TableCell></TableRow>
-              ) : rows.map(v => (
+              ) : sorted.map(v => (
                 <TableRow key={v.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-primary font-bold text-sm">{v.voucherNumber}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">

@@ -14,6 +14,7 @@ import {
   ShieldOff,
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 
 const MODULES = [
   { value: 'all',        label: 'All Modules' },
@@ -135,6 +136,15 @@ export default function AuditLog() {
   const total      = data?.total      ?? 0;
   const totalPages = data?.totalPages ?? 1;
 
+  const { sorted, sort } = useTableSort(logs, {
+    timestamp: l => l.createdAt,
+    action: l => l.action,
+    module: l => l.module,
+    entity: l => l.entityType,
+    description: l => l.description,
+    user: l => l.user,
+  });
+
   const resetFilters = () => {
     setModule('all'); setAction('all'); setDateFrom(''); setDateTo('');
     setSearch(''); setSearchInput(''); setPage(1);
@@ -237,12 +247,12 @@ export default function AuditLog() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead className="w-40">Timestamp</TableHead>
-                <TableHead className="w-24">Action</TableHead>
-                <TableHead className="w-28">Module</TableHead>
-                <TableHead className="w-28">Entity</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead className="w-28">User</TableHead>
+                <SortableHead k="timestamp" sort={sort} className="w-40">Timestamp</SortableHead>
+                <SortableHead k="action" sort={sort} className="w-24">Action</SortableHead>
+                <SortableHead k="module" sort={sort} className="w-28">Module</SortableHead>
+                <SortableHead k="entity" sort={sort} className="w-28">Entity</SortableHead>
+                <SortableHead k="description" sort={sort}>Description</SortableHead>
+                <SortableHead k="user" sort={sort} className="w-28">User</SortableHead>
                 <TableHead className="w-10" />
               </TableRow>
             </TableHeader>
@@ -261,7 +271,7 @@ export default function AuditLog() {
                   </TableCell>
                 </TableRow>
               ) : (
-                logs.map(log => (
+                sorted.map(log => (
                   <TableRow key={log.id} className="hover:bg-muted/10">
                     <TableCell className="text-xs text-muted-foreground whitespace-nowrap font-mono">
                       {new Date(log.createdAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}

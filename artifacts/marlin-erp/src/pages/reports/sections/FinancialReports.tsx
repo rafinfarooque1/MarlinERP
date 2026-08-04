@@ -280,7 +280,7 @@ function LineTable({
   return (
     <RTable
       cols={[
-        { key: 'name', label: 'Particulars', render: (l) => (
+        { key: 'name', label: 'Particulars', sortable: false, render: (l) => (
           <span className="flex items-center gap-1" style={{ paddingLeft: l.depth * 16 }}>
             {l.hasChildren ? (
               <button
@@ -299,7 +299,7 @@ function LineTable({
             <span className={l.bold ? 'font-semibold' : ''}>{l.name}</span>
           </span>
         ) },
-        { key: 'amount', label: 'Amount', align: 'right', render: (l) => (
+        { key: 'amount', label: 'Amount', align: 'right', sortable: false, render: (l) => (
           <span className={l.bold ? 'font-bold' : ''}>{fmt(l.amount)}</span>
         ) },
       ] satisfies Col<Line>[]}

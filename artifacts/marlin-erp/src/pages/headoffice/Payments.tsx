@@ -16,6 +16,7 @@ import {
   getListSalesQueryKey,
 } from '@workspace/api-client-react';
 import { useQueryClient } from '@tanstack/react-query';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { toast } from 'sonner';
 import { IndianRupee, Search, AlertTriangle, Banknote, Receipt } from 'lucide-react';
 
@@ -235,6 +236,17 @@ export default function Payments() {
       return (order[a.paymentStatus ?? 'paid'] ?? 2) - (order[b.paymentStatus ?? 'paid'] ?? 2);
     });
 
+  const { sorted, sort } = useTableSort(filtered, {
+    invoice: s => s.invoiceNumber,
+    date: s => s.saleDate,
+    customer: s => s.customerName || 'Walk-in',
+    outlet: s => s.outletName,
+    total: s => Number(s.totalAmount) || null,
+    paid: s => Number(s.amountPaid ?? 0) || null,
+    balance: s => Number(s.balanceDue ?? 0) || null,
+    status: s => s.paymentStatus ?? 'paid',
+  });
+
   if (!perm.isLoading && !perm.canView) {
     return (
       <AppLayout>
@@ -314,19 +326,19 @@ export default function Payments() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Invoice</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Customer</TableHead>
-                  <TableHead>Outlet</TableHead>
-                  <TableHead className="text-right">Total</TableHead>
-                  <TableHead className="text-right">Paid</TableHead>
-                  <TableHead className="text-right">Balance Due</TableHead>
-                  <TableHead>Status</TableHead>
+                  <SortableHead k="invoice" sort={sort}>Invoice</SortableHead>
+                  <SortableHead k="date" sort={sort}>Date</SortableHead>
+                  <SortableHead k="customer" sort={sort}>Customer</SortableHead>
+                  <SortableHead k="outlet" sort={sort}>Outlet</SortableHead>
+                  <SortableHead k="total" sort={sort} className="text-right">Total</SortableHead>
+                  <SortableHead k="paid" sort={sort} className="text-right">Paid</SortableHead>
+                  <SortableHead k="balance" sort={sort} className="text-right">Balance Due</SortableHead>
+                  <SortableHead k="status" sort={sort}>Status</SortableHead>
                   <TableHead />
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.map((s: any) => (
+                {sorted.map((s: any) => (
                   <TableRow key={s.id} className={Number(s.balanceDue ?? 0) > 0 ? 'bg-red-500/2' : ''}>
                     <TableCell className="font-mono text-xs font-semibold">{s.invoiceNumber}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{new Date(s.saleDate).toLocaleDateString('en-IN')}</TableCell>

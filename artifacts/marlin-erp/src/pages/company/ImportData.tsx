@@ -27,6 +27,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { toast } from 'sonner';
 import {
   ShieldOff, Upload, Download, FileSpreadsheet, Users, Truck, BookOpen,
@@ -169,6 +170,20 @@ export default function ImportData() {
   const resolveParties = useResolveImportParties();
 
   const batches = historyData?.batches ?? [];
+
+  const { sorted: sortedBatches, sort: batchSort } = useTableSort(batches, {
+    batchId: b => b.displayId ?? `IMP${String(b.id).padStart(6, '0')}`,
+    when: b => b.createdAt,
+    module: b => MODULE_LABEL(b.module),
+    file: b => b.filename,
+    location: b => b.locationName,
+    by: b => b.createdBy,
+    rows: b => Number(b.totalRows),
+    imported: b => b.status === 'validated' ? null : Number(b.importedRows),
+    failed: b => b.status === 'validated' ? null : Number(b.failedRows),
+    status: b => b.status,
+  });
+
   const txn = isTxn(module);
   const voucher = isVoucher(module);
   const locationRequired = needsLocation(module);
@@ -730,21 +745,21 @@ export default function ImportData() {
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <TableHead>Batch ID</TableHead>
-                          <TableHead>When</TableHead>
-                          <TableHead>Module</TableHead>
-                          <TableHead>File</TableHead>
-                          <TableHead>Location</TableHead>
-                          <TableHead>By</TableHead>
-                          <TableHead className="text-right">Rows</TableHead>
-                          <TableHead className="text-right">Imported</TableHead>
-                          <TableHead className="text-right">Failed</TableHead>
-                          <TableHead>Status</TableHead>
+                          <SortableHead k="batchId" sort={batchSort}>Batch ID</SortableHead>
+                          <SortableHead k="when" sort={batchSort}>When</SortableHead>
+                          <SortableHead k="module" sort={batchSort}>Module</SortableHead>
+                          <SortableHead k="file" sort={batchSort}>File</SortableHead>
+                          <SortableHead k="location" sort={batchSort}>Location</SortableHead>
+                          <SortableHead k="by" sort={batchSort}>By</SortableHead>
+                          <SortableHead k="rows" sort={batchSort} className="text-right">Rows</SortableHead>
+                          <SortableHead k="imported" sort={batchSort} className="text-right">Imported</SortableHead>
+                          <SortableHead k="failed" sort={batchSort} className="text-right">Failed</SortableHead>
+                          <SortableHead k="status" sort={batchSort}>Status</SortableHead>
                           <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {batches.map((b) => (
+                        {sortedBatches.map((b) => (
                           <TableRow key={b.id}>
                             <TableCell className="font-mono text-xs whitespace-nowrap">{b.displayId ?? `IMP${String(b.id).padStart(6, '0')}`}</TableCell>
                             <TableCell className="whitespace-nowrap">{fmtTime(b.createdAt)}</TableCell>

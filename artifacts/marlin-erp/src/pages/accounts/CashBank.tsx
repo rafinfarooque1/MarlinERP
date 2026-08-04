@@ -17,6 +17,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 
 const BAD_BALANCE = 'Please enter a valid opening balance.';
 
@@ -85,6 +86,15 @@ export default function CashBank() {
   const linked = filtered.filter(a => a.currentBalance != null);
   const totalBalance = linked.reduce((s, a) => s + Number(a.currentBalance ?? 0), 0);
   const anyUnlinked = filtered.some(a => a.currentBalance == null);
+
+  const { sorted, sort } = useTableSort(filtered, {
+    name: a => a.name,
+    type: a => a.accountType,
+    bank: a => a.bankName,
+    accountNumber: a => a.accountNumber,
+    storedBalance: a => Number(a.storedBalance ?? 0),
+    balance: a => a.currentBalance == null ? null : Number(a.currentBalance),
+  });
 
   const typeColor = (t: string) => t === 'cash' ? 'bg-emerald-500/10 text-emerald-500' : t === 'bank' ? 'bg-primary/10 text-primary' : t === 'upi' ? 'bg-purple-500/10 text-purple-500' : 'bg-muted';
 
@@ -162,19 +172,19 @@ export default function CashBank() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Name</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Bank</TableHead>
-                <TableHead>Account No.</TableHead>
+                <SortableHead k="name" sort={sort}>Name</SortableHead>
+                <SortableHead k="type" sort={sort}>Type</SortableHead>
+                <SortableHead k="bank" sort={sort}>Bank</SortableHead>
+                <SortableHead k="accountNumber" sort={sort}>Account No.</SortableHead>
                 {/* Not "Opening Balance": creating an expense decrements this same
                     column, so on any account that has been paid from it is a stale
                     running figure rather than the amount originally entered. */}
-                <TableHead className="text-right">
+                <SortableHead k="storedBalance" sort={sort} className="text-right">
                   <span title="Seeded from the opening balance when the account was added, then reduced by expenses paid from it. No accounting entry maintains this figure.">
                     Stored Balance
                   </span>
-                </TableHead>
-                <TableHead className="text-right">Balance</TableHead>
+                </SortableHead>
+                <SortableHead k="balance" sort={sort} className="text-right">Balance</SortableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -184,7 +194,7 @@ export default function CashBank() {
                 <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
                   <Banknote className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No payment accounts yet</p>
                 </TableCell></TableRow>
-              ) : filtered.map(a => (
+              ) : sorted.map(a => (
                 <TableRow key={a.id} className="hover:bg-muted/10">
                   <TableCell className="font-semibold">{a.name}</TableCell>
                   <TableCell><Badge variant="outline" className={`capitalize ${typeColor(a.accountType)}`}>{a.accountType}</Badge></TableCell>

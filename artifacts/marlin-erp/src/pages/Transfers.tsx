@@ -49,6 +49,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LocationFilter, parseLocationFilter } from '@/components/ui/LocationFilter';
 import { autoFocusFirst, entryScopeKeyDown, useEntryShortcuts } from '@/lib/keyboard-entry';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 
 // ── Form schema ───────────────────────────────────────────────────────────────
 const schema = z.object({
@@ -423,6 +424,15 @@ export default function Transfers() {
   const filtered = tab === 'all' ? locFiltered : locFiltered.filter((t: any) => t.status === tab);
   const pendingCount = list.filter((t: any) => t.status === 'in_transit').length;
 
+  const { sorted, sort } = useTableSort(filtered, {
+    challan: (t: any) => t.challanNumber || `DC-${String(t.id).padStart(4, '0')}`,
+    date: (t: any) => t.transferDate,
+    from: (t: any) => t.fromName,
+    to: (t: any) => t.toName,
+    items: (t: any) => Number(t.lineItems?.length ?? 0),
+    status: (t: any) => (STATUS_CFG[t.status]?.label ?? t.status),
+  });
+
   // Employee can only approve transfers coming TO their location
   const canReceive = (t: any) =>
     t.status === 'in_transit' && (
@@ -789,12 +799,12 @@ export default function Transfers() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Challan</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>From</TableHead>
-                <TableHead>To</TableHead>
-                <TableHead>Items</TableHead>
-                <TableHead>Status</TableHead>
+                <SortableHead k="challan" sort={sort}>Challan</SortableHead>
+                <SortableHead k="date" sort={sort}>Date</SortableHead>
+                <SortableHead k="from" sort={sort}>From</SortableHead>
+                <SortableHead k="to" sort={sort}>To</SortableHead>
+                <SortableHead k="items" sort={sort}>Items</SortableHead>
+                <SortableHead k="status" sort={sort}>Status</SortableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -812,7 +822,7 @@ export default function Transfers() {
                     <p>{tab === 'in_transit' ? 'No pending approvals' : 'No transfers found'}</p>
                   </TableCell>
                 </TableRow>
-              ) : filtered.map((t: any) => (
+              ) : sorted.map((t: any) => (
                 <TableRow key={t.id} className={`hover:bg-muted/10 ${t.status === 'in_transit' ? 'border-l-2 border-l-amber-500' : ''}`}>
                   <TableCell className="font-mono text-primary font-bold text-sm">{t.challanNumber || `DC-${String(t.id).padStart(4, '0')}`}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">

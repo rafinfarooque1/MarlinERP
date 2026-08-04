@@ -701,8 +701,8 @@ function TransfersReport({ canDownload }: { canDownload: boolean }) {
           { key: 'transferDate', label: 'Date', render: (t) => fmtDate(t.transferDate) },
           { key: 'fromName', label: 'From', render: (t) => <span className="font-medium">{t.fromName}</span> },
           { key: 'toName', label: 'To', render: (t) => <span className="font-medium">{t.toName}</span> },
-          { key: 'lines', label: 'Lines', align: 'center', render: (t) => (t.lineItems ?? []).length },
-          { key: 'qty', label: 'Total Qty', align: 'right', render: (t) => num(qtyOf(t)) },
+          { key: 'lines', label: 'Lines', align: 'center', sortValue: (t) => (t.lineItems ?? []).length, render: (t) => (t.lineItems ?? []).length },
+          { key: 'qty', label: 'Total Qty', align: 'right', sortValue: (t) => qtyOf(t), render: (t) => num(qtyOf(t)) },
           { key: 'status', label: 'Status', render: (t) => statusBadge(t.status) },
         ] satisfies Col<TransferRow>[]}
         rows={rows} loading={isLoading} rowKey={(t) => t.id}

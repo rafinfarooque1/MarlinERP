@@ -24,6 +24,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { activeProducts } from '@/lib/productStatus';
 import { useActingLocations, decodeLocation } from '@/lib/useActingLocation';
 import { useDateRange, RangeBar } from '@/pages/reports/shared';
@@ -296,6 +297,17 @@ export default function ProductionList() {
   };
 
   const filtered = productions.filter(p => p.itemName?.toLowerCase().includes(search.toLowerCase()));
+  const { sorted, sort } = useTableSort(filtered, {
+    batch: (p: any) => p.batchNumber || `B-${String(p.id).padStart(4, '0')}`,
+    date: (p: any) => p.productionDate,
+    item: (p: any) => p.itemName,
+    location: (p: any) => p.locationName ?? 'Head Office',
+    qty: (p: any) => Number(p.producedQuantity),
+    costPerUnit: (p: any) => p.costPerUnit == null ? null : Number(p.costPerUnit),
+    wastage: (p: any) => Number(p.wastageQty) || null,
+    expiry: (p: any) => p.expiryDate || null,
+    materials: (p: any) => p.materialUsed?.length || 0,
+  });
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -356,15 +368,15 @@ export default function ProductionList() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Batch</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Item</TableHead>
-                {locations.isHeadOffice && <TableHead>Location</TableHead>}
-                <TableHead>Qty Produced</TableHead>
-                <TableHead className="text-right">Cost/Unit</TableHead>
-                <TableHead className="text-right">Wastage</TableHead>
-                <TableHead>Expiry</TableHead>
-                <TableHead>Materials Used</TableHead>
+                <SortableHead k="batch" sort={sort}>Batch</SortableHead>
+                <SortableHead k="date" sort={sort}>Date</SortableHead>
+                <SortableHead k="item" sort={sort}>Item</SortableHead>
+                {locations.isHeadOffice && <SortableHead k="location" sort={sort}>Location</SortableHead>}
+                <SortableHead k="qty" sort={sort}>Qty Produced</SortableHead>
+                <SortableHead k="costPerUnit" sort={sort} className="text-right">Cost/Unit</SortableHead>
+                <SortableHead k="wastage" sort={sort} className="text-right">Wastage</SortableHead>
+                <SortableHead k="expiry" sort={sort}>Expiry</SortableHead>
+                <SortableHead k="materials" sort={sort}>Materials Used</SortableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
@@ -375,7 +387,7 @@ export default function ProductionList() {
                 <TableRow><TableCell colSpan={locations.isHeadOffice ? 10 : 9} className="text-center py-16 text-muted-foreground">
                   <Factory className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No production batches yet</p>
                 </TableCell></TableRow>
-              ) : filtered.map(p => (
+              ) : sorted.map(p => (
                 <TableRow key={p.id} className="hover:bg-muted/10">
                   <TableCell className="font-mono text-primary font-bold">{(p as any).batchNumber || `B-${String(p.id).padStart(4, '0')}`}</TableCell>
                   <TableCell className="text-sm text-muted-foreground flex items-center gap-1">

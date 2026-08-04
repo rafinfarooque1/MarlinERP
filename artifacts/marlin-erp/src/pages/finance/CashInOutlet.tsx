@@ -18,6 +18,7 @@ import { Banknote, ArrowUpFromLine, CheckCircle2, Store, Warehouse, ArrowUpDown,
 import { buildHierarchy } from '@/lib/locationHierarchy';
 import { useLocationCashBalances, useIsLocationKindEnabled } from '@/lib/locationStructure';
 import { useClearOutletSelection } from '@/lib/useFeatureFlags';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 
 function fmt(n: number) {
   return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -186,6 +187,21 @@ export default function CashBalance() {
   const reconcileMutation = useReconcileCashDeposit();
 
   const selectedDeposit = deposits.find(d => d.id === reconcileDepositId);
+
+  // Deposits table sorting — preserves the server's default order until a
+  // header is clicked. Location name merged in so the accessor stays row-local.
+  const depositRows = useMemo(() => deposits.map(d => ({
+    ...d,
+    _locationName: (d as any).locationName ?? (d as any).outletName ?? '',
+  })), [deposits]);
+  const { sorted: sortedDeposits, sort: depositSort } = useTableSort(depositRows, {
+    location: d => (d as any)._locationName,
+    date: d => d.depositDate,
+    reference: d => d.depositReference,
+    bank: d => d.bankLedgerName,
+    amount: d => Number(d.amount),
+    status: d => d.status,
+  });
 
   function openReconcile(deposit: any) {
     setReconcileDepositId(deposit.id);
@@ -527,17 +543,17 @@ export default function CashBalance() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Location</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Reference</TableHead>
-                      <TableHead>Bank Account</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                      <TableHead>Status</TableHead>
+                      <SortableHead k="location" sort={depositSort}>Location</SortableHead>
+                      <SortableHead k="date" sort={depositSort}>Date</SortableHead>
+                      <SortableHead k="reference" sort={depositSort}>Reference</SortableHead>
+                      <SortableHead k="bank" sort={depositSort}>Bank Account</SortableHead>
+                      <SortableHead k="amount" sort={depositSort} className="text-right">Amount</SortableHead>
+                      <SortableHead k="status" sort={depositSort}>Status</SortableHead>
                       <TableHead />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {deposits.map(d => (
+                    {sortedDeposits.map(d => (
                       <TableRow key={d.id}>
                         <TableCell className="text-sm font-medium">
                           <span className="flex items-center gap-1.5">

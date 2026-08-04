@@ -3,11 +3,12 @@ import { usePaginatedStockLedger, type StockLedgerRow } from '@workspace/api-cli
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Search, BookOpen, Download, ShieldOff, TrendingUp, TrendingDown } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { downloadCSV } from '@/lib/download';
+import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 
 const money = (n: number) => `₹${(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -84,6 +85,18 @@ export default function StockLedger() {
   const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
 
   useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+
+  const { sorted, sort } = useTableSort(rows, {
+    createdAt:      r => r.createdAt,
+    txnType:        r => TXN_LABELS[r.txnType] ?? r.txnType,
+    itemName:       r => r.itemName,
+    materialType:   r => MAT_LABELS[r.materialType] ?? r.materialType,
+    branchName:     r => r.branchName || r.branchType,
+    qtyChange:      r => Number(r.qtyChange),
+    runningBalance: r => Number(r.runningBalance),
+    unitCost:       r => (r.unitCost != null ? Number(r.unitCost) : null),
+    docType:        r => (r.docType && r.docId ? `${r.docType} ${r.docId}` : null),
+  });
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -184,15 +197,15 @@ export default function StockLedger() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead>Date & Time</TableHead>
-                <TableHead>Transaction</TableHead>
-                <TableHead>Item</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Location</TableHead>
-                <TableHead className="text-right">Qty Change</TableHead>
-                <TableHead className="text-right">Running Balance</TableHead>
-                {canSeeValue && <TableHead className="text-right">Unit Cost</TableHead>}
-                <TableHead>Source Doc</TableHead>
+                <SortableHead k="createdAt" sort={sort}>Date &amp; Time</SortableHead>
+                <SortableHead k="txnType" sort={sort}>Transaction</SortableHead>
+                <SortableHead k="itemName" sort={sort}>Item</SortableHead>
+                <SortableHead k="materialType" sort={sort}>Type</SortableHead>
+                <SortableHead k="branchName" sort={sort}>Location</SortableHead>
+                <SortableHead k="qtyChange" sort={sort} className="text-right">Qty Change</SortableHead>
+                <SortableHead k="runningBalance" sort={sort} className="text-right">Running Balance</SortableHead>
+                {canSeeValue && <SortableHead k="unitCost" sort={sort} className="text-right">Unit Cost</SortableHead>}
+                <SortableHead k="docType" sort={sort}>Source Doc</SortableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -210,7 +223,7 @@ export default function StockLedger() {
                     <p className="text-xs mt-1 opacity-60">Entries appear automatically when purchases, production, transfers, or returns are recorded.</p>
                   </TableCell>
                 </TableRow>
-              ) : rows.map(r => {
+              ) : sorted.map(r => {
                 const isIn = r.qtyChange > 0;
                 return (
                   <TableRow key={r.id} className="hover:bg-muted/10">

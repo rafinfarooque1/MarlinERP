@@ -1,0 +1,204 @@
+Implement enterprise-grade column sorting across every data table in the ERP.
+
+The behavior should be exactly like Excel, Tally Prime, SAP Business One, Zoho Books, and ERPNext.
+
+Requirements
+
+1. Every table listing records should support sorting by clicking the column header.
+
+Examples:
+- Sales
+- Purchase Bills
+- Quotations
+- Receipt Vouchers
+- Payment Vouchers
+- Journal Vouchers
+- Contra Vouchers
+- Credit Notes
+- Debit Notes
+- Customers
+- Vendors
+- Employees
+- Stock
+- Item Master
+- Batches
+- Production
+- Expenses
+- Cash Book
+- Bank Book
+- Day Book
+- Ledger Statements
+- Trial Balance
+- Reports
+- Every other grid/table in the ERP.
+
+2. Clicking a column header should sort the ENTIRE ROW, not just that column.
+
+Example:
+
+Invoice | Date | Customer | Total
+
+The invoice, customer, amount, status, tax, location and every other field should move together as one record.
+
+3. Sorting behavior
+
+First click
+Ascending ↑
+
+Second click
+Descending ↓
+
+Third click
+Return to Default ERP Order (optional but preferred).
+
+4. Supported columns
+
+Dates
+Invoice No
+Voucher No
+Customer
+Vendor
+Item Name
+Location
+Warehouse
+Status
+Quantity
+Amount
+Tax
+Discount
+Balance
+MRP
+Purchase Rate
+Selling Price
+Created Date
+Updated Date
+Employee
+Any visible column.
+
+5. Correct sorting types
+
+Dates
+Chronological order
+
+Numbers
+Numeric order
+(Not text sorting)
+
+Currency
+Numeric order
+
+Invoice Numbers
+Natural sorting
+
+Example:
+
+INV0001
+INV0002
+INV0009
+INV0010
+
+NOT
+
+INV0001
+INV0010
+INV0002
+
+Text
+Alphabetical
+
+6. Sorting indicators
+
+Show
+
+▲ Ascending
+
+▼ Descending
+
+on the active column.
+
+Only one column should display the active sort indicator.
+
+7. Preserve filters
+
+If the user filters
+
+Location = Ragiguda
+
+then sorting should only rearrange the filtered rows.
+
+Do not remove filters.
+
+8. Preserve search
+
+If search returns 15 rows
+
+sorting should reorder only those 15 rows.
+
+9. Pagination
+
+Sorting should happen before pagination.
+
+Page 1
+
+Page 2
+
+Page 3
+
+must remain correct.
+
+10. Server-side sorting
+
+Large tables should use server-side ORDER BY instead of downloading every record.
+
+11. Performance
+
+Sorting should remain fast even with
+
+100,000+
+
+records.
+
+12. Default order
+
+When no sorting is selected,
+
+continue using the existing ERP default ordering.
+
+13. Testing
+
+Verify sorting on
+
+Sales
+Purchase Bills
+Customers
+Vendors
+Items
+Receipt Voucher
+Payment Voucher
+Ledger
+Cash Book
+Bank Book
+Trial Balance
+Stock
+
+Test all sortable column types:
+
+Date
+
+Invoice
+
+Voucher
+
+Text
+
+Currency
+
+Number
+
+Status
+
+Location
+
+Verify that clicking Date sorts the complete rows correctly from oldest to newest and newest to oldest.
+
+The sorting should behave exactly like professional ERP software and Excel, where clicking a column header rearranges the complete records while preserving all row data.

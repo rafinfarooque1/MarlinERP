@@ -113,3 +113,4 @@
 - [Responsive design conventions](responsive-design.md) — desktop pixel-identical: touch bumps live in ui/ primitives (max-md:), md:hidden card lists beside hidden md:block tables, entry grids scroll (never restructure).
 - [Org role restructure](org-role-restructure.md) — root = Administrator, Management is view-only level 2; hierarchy migrations must fail closed (no marker) on name clashes/multi-root; reset rebuilds the tree via shared helper.
 - [Keyboard Entry Mode](keyboard-entry-mode.md) — all entry forms share keyboard-entry.tsx conventions; cmdk needs CommandList for arrow-nav; isPending is not a double-submit guard — sync submitLockRef.
+- [Table sorting](table-sorting.md) — every table sorts via lib/tableSort.tsx / RTable; accessors return RAW values, footers pinned, tri-state to default; see file for the non-sortable list.
