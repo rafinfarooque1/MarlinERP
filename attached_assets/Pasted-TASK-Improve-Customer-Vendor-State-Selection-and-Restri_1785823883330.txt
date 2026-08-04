@@ -1,0 +1,202 @@
+TASK: Improve Customer/Vendor State Selection and Restrict POS MRP Editing
+
+====================================================
+PART 1 - IMPROVE STATE DROPDOWN
+====================================================
+
+The current State dropdown while creating or editing Customers and Vendors is difficult to use.
+
+Problems:
+- Long list of Indian states.
+- User has to scroll manually.
+- Dropdown sometimes freezes.
+- No search.
+- Poor user experience.
+
+Replace the current dropdown with a searchable dropdown (React Select / Command Palette style).
+
+Requirements:
+
+• User should be able to type:
+  - kar → Karnataka
+  - tam → Tamil Nadu
+  - del → Delhi
+
+• Keyboard navigation:
+  - Up/Down arrows
+  - Enter to select
+  - Escape to close
+
+• Mouse wheel scrolling should work smoothly.
+
+• Dropdown should remain scrollable.
+
+• Selected state should remain visible.
+
+• Keep the same list of Indian States and Union Territories.
+
+Do NOT change database values.
+
+Only improve the UI component.
+
+Apply this everywhere State selection exists:
+
+- Customer
+- Vendor
+- Company Profile
+- Warehouse
+- Outlet
+- Any future State field
+
+====================================================
+PART 2 - POS MRP RESTRICTION
+====================================================
+
+Currently, after selecting an item in POS, users can freely edit the MRP.
+
+This should change.
+
+Business Rule:
+
+MRP can NEVER be reduced.
+
+MRP can ONLY remain the same or increase.
+
+Example:
+
+Item Master MRP
+
+₹280
+
+Allowed:
+
+₹280
+₹285
+₹300
+₹350
+
+Not Allowed:
+
+₹279
+₹270
+₹250
+₹100
+
+If user tries to enter a value lower than Item Master MRP:
+
+• Reject immediately.
+• Show validation:
+
+"MRP cannot be lower than the Item Master MRP. Use Discount if you want to reduce the selling price."
+
+Automatically reset the field back to the original MRP.
+
+====================================================
+PART 3 - DISCOUNT IS THE ONLY WAY TO REDUCE PRICE
+====================================================
+
+If selling below MRP is required,
+
+the user must use:
+
+Disc / Unit (₹)
+
+Example:
+
+Item Master MRP
+
+₹280
+
+Customer Price
+
+₹260
+
+MRP remains:
+
+₹280
+
+Discount:
+
+₹20
+
+This preserves:
+
+• Actual MRP
+• Discount reporting
+• Margin analysis
+• Sales reports
+• Profit calculation
+
+====================================================
+PART 4 - EDITING EXISTING SALES
+====================================================
+
+Apply the same rule while editing existing POS invoices.
+
+MRP cannot be reduced.
+
+Only increased.
+
+Selling below MRP must always happen through the Discount field.
+
+====================================================
+PART 5 - VALIDATION
+====================================================
+
+Validation should happen:
+
+• Frontend (instant validation)
+
+AND
+
+• Backend API
+
+Never trust only the UI.
+
+Even API requests should reject MRP lower than Item Master MRP.
+
+====================================================
+PART 6 - REPORTING
+====================================================
+
+Reports should continue using:
+
+Item Master MRP
+
+Selling Price
+
+Discount
+
+Do NOT overwrite MRP with discounted values.
+
+====================================================
+PART 7 - TEST CASES
+====================================================
+
+Verify:
+
+✓ State dropdown is searchable.
+✓ Mouse scrolling works.
+✓ Keyboard navigation works.
+✓ Customer state selection works.
+✓ Vendor state selection works.
+✓ Warehouse state selection works.
+✓ Company Profile state selection works.
+
+MRP:
+
+✓ Equal to master MRP → Allowed.
+✓ Higher than master MRP → Allowed.
+✓ Lower than master MRP → Blocked.
+✓ Discount still works.
+✓ Existing invoice editing follows same rule.
+✓ Backend rejects invalid requests.
+✓ Reports continue showing correct MRP and Discount.
+
+====================================================
+EXPECTED RESULT
+====================================================
+
+1. State selection becomes fast, searchable, and scrollable throughout the ERP.
+
+2. In POS, MRP can only stay the same or increase. Selling below MRP is only possible through the Discount field, ensuring accurate pricing, reporting, profitability, and accounting consistency.
