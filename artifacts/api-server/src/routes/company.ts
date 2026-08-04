@@ -11,6 +11,7 @@ import { normalizeUpiId } from "../lib/upi";
 import { createBackup } from "../lib/backup/create";
 import { objectStorageConfigured } from "../lib/backup/files";
 import { logActivity } from "../lib/audit";
+import { ensureStandardOrgTree } from "../migrations/orgHierarchyRestructure";
 
 const router = Router();
 
@@ -642,10 +643,16 @@ router.post("/company/reset", requireModuleAction("page:/company/settings", "del
   // Step 1: fresh level-1 hierarchy (all others were wiped above)
   const { rows: [hierRow] } = await pool.query(`
     INSERT INTO hierarchies (name, level, description)
-    VALUES ('Management', 1, 'Full access — seeded by system reset')
+    VALUES ('Administrator', 1, 'System administrator — unrestricted access')
     RETURNING id
   `);
   const hierResult = hierRow ?? (await pool.query(`SELECT id FROM hierarchies WHERE level = 1 LIMIT 1`)).rows[0];
+
+  // Rebuild the standard org tree (Management + manager roles and Management's
+  // seeded view-only permissions). The one-time restructure migration cannot
+  // re-run — migration_log deliberately survives the reset — so without this a
+  // reset company would keep only the Administrator role forever.
+  await ensureStandardOrgTree(pool);
 
   // Step 2: reseed admin employee with fresh bcrypt password
   if (hierResult) {

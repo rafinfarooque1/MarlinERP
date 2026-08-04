@@ -26,6 +26,7 @@ import { PAGE_PERM_KEYS, LEGACY_MODULE_TO_PAGES } from "./lib/pagePermissions";
 import { ensureChartStructure } from "./lib/chartGroups";
 import { DATE_COLUMNS } from "./lib/dateColumns";
 import { addQuotations } from "./migrations/quotations";
+import { runOrgHierarchyRestructure } from "./migrations/orgHierarchyRestructure";
 
 async function runMigrations() {
   // Existing migrations
@@ -108,10 +109,12 @@ async function runMigrations() {
     );
   `);
 
-  // Seed default admin user — step 1: ensure a level-1 hierarchy row exists
+  // Seed default admin user — step 1: ensure a level-1 hierarchy row exists.
+  // Named Administrator (the system admin); the monitoring-only Management
+  // role and the standard manager tree are built by runOrgHierarchyRestructure.
   await pool.query(
     `INSERT INTO hierarchies (name, level, description)
-     SELECT 'Management', 1, 'Top-level management'
+     SELECT 'Administrator', 1, 'System administrator — unrestricted access'
      WHERE NOT EXISTS (SELECT 1 FROM hierarchies WHERE level = 1)`
   );
   // Seed default admin user — step 2: upsert admin with correct password
@@ -3339,6 +3342,20 @@ await addPurchaseBillFields(pool);
 // stamped by the sale-creation transaction. Includes one-time permission
 // seeding for the new page under default-deny.
 await addQuotations(pool);
+
+// Org restructure — rename the level-1 root "Management" → "Administrator"
+// (same row, so its employees keep full access via the level-1 bypass) and
+// build the standard tree: Management (monitoring/view-only, seeded rows)
+// under Administrator, standard manager roles under Management. One-time,
+// migration_log-guarded; the factory reset re-creates the tree through the
+// shared ensureStandardOrgTree helper. Fail-closed and non-fatal: on any
+// anomaly (duplicate names, multiple roots) it rolls back, writes no marker,
+// logs, and retries next boot — the app keeps running on the old structure.
+try {
+  await runOrgHierarchyRestructure(pool);
+} catch (err) {
+  console.error("[migration] org_hierarchy_restructure_v1 FAILED (non-fatal, retries next boot):", (err as Error).message);
+}
 
 // Voucher provenance — records which journal vouchers a person actually typed,
 // so only those can be edited by hand. Additive and re-runnable: it only ever

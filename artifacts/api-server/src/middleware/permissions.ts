@@ -218,7 +218,7 @@ export const INVENTORY_VALUATION_PAGE = "page:/headoffice/inventory-reports";
 /**
  * "May this role see inventory cost and value?"
  *
- * Level-1 Management passes through the bypass inside hasModuleAction, so
+ * The level-1 Administrator passes through the bypass inside hasModuleAction, so
  * admins keep full visibility without needing a permission row. Every other
  * role is default-deny: a missing or false row hides the money.
  *

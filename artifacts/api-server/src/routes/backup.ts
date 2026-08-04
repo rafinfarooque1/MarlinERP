@@ -10,7 +10,7 @@
  *
  *   Head Office  +  Approve on this page  +  the caller's own password
  *
- * Level-1 (Management) roles hold every right implicitly, as everywhere else, so
+ * Level-1 (Administrator) roles hold every right implicitly, as everywhere else, so
  * out of the box the administrator can restore and nobody else can. Any other
  * role has to be granted Approve on the Permissions page deliberately. A flag
  * living only here would be invisible to that page, and an authorisation rule
