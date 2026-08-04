@@ -441,6 +441,19 @@ router.get("/accounts/journal-vouchers", requireModuleView("page:/accounts/vouch
     params.push(own.locationType); conds.push(`v.location_type = $${params.length}`);
     params.push(own.locationId);   conds.push(`v.location_id = $${params.length}`);
   }
+  // View narrowing: the global location selector (or explicit query params)
+  // narrows on the voucher's location stamp, ANDed onto the LBAC above so it
+  // can only narrow. Unstamped legacy vouchers belong to Head Office; HO
+  // matches on type alone (voucher HO rows carry id 0).
+  const jvViewLoc = getLocationFilter(req);
+  if (jvViewLoc) {
+    params.push(jvViewLoc.locationType);
+    conds.push(`COALESCE(v.location_type,'headoffice') = $${params.length}`);
+    if (jvViewLoc.locationType !== "headoffice") {
+      params.push(jvViewLoc.locationId);
+      conds.push(`v.location_id = $${params.length}`);
+    }
+  }
   if (type && JV_TYPES.has(type)) { params.push(type); conds.push(`v.voucher_type = $${params.length}`); }
   if (isDate(fromDate)) { params.push(fromDate); conds.push(`v.voucher_date >= $${params.length}`); }
   if (isDate(toDate))   { params.push(toDate);   conds.push(`v.voucher_date <= $${params.length}`); }
@@ -885,7 +898,7 @@ export {
   filterPostingsByLocation, companyLevelSummary,
   type PostingLocationFilter,
 };
-import { getPostingLocationFilter } from "../lib/requestLocation";
+import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
 
 export async function buildDerivedPostings(opts: { toDate?: string } = {}): Promise<Posting[]> {
   const { toDate } = opts;

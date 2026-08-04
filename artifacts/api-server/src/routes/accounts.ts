@@ -2252,6 +2252,20 @@ router.get("/accounts/location-expenses/all", requireModuleView(["page:/accounts
     locationFilterAll = ` AND ${locationIdentitySql(identities, allParams)}`;
   }
 
+  // View narrowing from the global location selector (or explicit query
+  // params), ANDed onto the LBAC above so it can only narrow. A mirror place
+  // (same site as both warehouse and outlet) matches across both identities,
+  // the same way LBAC reads do.
+  const allViewLoc = getLocationFilter(req);
+  if (allViewLoc) {
+    if (allViewLoc.locationType === "headoffice") {
+      locationFilterAll += ` AND (p.location_type = 'headoffice' OR p.location_type IS NULL)`;
+    } else {
+      const viewIdent = await resolveLocationIdentities(allViewLoc.locationType, Number(allViewLoc.locationId));
+      locationFilterAll += ` AND ${locationIdentitySql(viewIdent, allParams)}`;
+    }
+  }
+
   // Location comes off the row's own stamp; names are looked up from it. The
   // funding ledger is reported separately because it is now Cash, Bank or
   // Expense Payable depending on the payment method.
@@ -2823,8 +2837,23 @@ router.get("/gst/summary", requireModuleView(["page:/accounts/gst", "page:/accou
   // output stays byte-identical.
   const gstinQ = typeof req.query.gstin === "string" && req.query.gstin.trim() ? req.query.gstin.trim() : undefined;
   const whQ = Number(req.query.warehouseId);
-  const gstScope = (gstinQ || (Number.isInteger(whQ) && whQ > 0))
-    ? await resolveGstScope({ gstin: gstinQ, warehouseId: Number.isInteger(whQ) && whQ > 0 ? whQ : undefined })
+  let whEff = Number.isInteger(whQ) && whQ > 0 ? whQ : undefined;
+  // No explicit filter → fall back to the global location context the way the
+  // GSTR-1/3B endpoints do (parseGstScope in gst.ts): filings are per GSTIN,
+  // so a warehouse maps to its own filing scope, an outlet to its parent
+  // warehouse's, and Head Office / All to the company-wide view.
+  if (!gstinQ && !whEff) {
+    const gstViewLoc = getLocationFilter(req);
+    if (gstViewLoc?.locationType === "warehouse") {
+      whEff = Number(gstViewLoc.locationId);
+    } else if (gstViewLoc?.locationType === "outlet") {
+      const { rows: owh } = await pool.query(`SELECT warehouse_id FROM outlets WHERE id = $1`, [gstViewLoc.locationId]);
+      const wid = Number(owh[0]?.warehouse_id);
+      if (Number.isFinite(wid) && wid > 0) whEff = wid;
+    }
+  }
+  const gstScope = (gstinQ || whEff)
+    ? await resolveGstScope({ gstin: gstinQ, warehouseId: whEff })
     : null;
   let saleIdOk: Set<number> | null = null;
   let purchaseIdOk: Set<number> | null = null;

@@ -41,3 +41,28 @@ Invariants — breaking any of these reintroduces a past bug class:
 - Persistence: `employees.ui_location_pref` (JSON string via
   PUT /auth/location-pref, so "picked All" ≠ "never set"); the client hydrates
   it only when localStorage has no value — local wins.
+
+## Aug 2026 sweep — "HO behaves like All" bug class
+
+**Root cause pattern:** any route that parses `req.query.locationType` RAW
+(instead of `getLocationFilter`) silently ignores the sidebar selector — the
+page looks location-aware (its own dropdown works) while the global selector
+does nothing. The whole `/reports/*` family, the JV list, `/reports/fin/
+{expenses,salary,gst}`, `/gst/summary`, `/accounts/location-expenses/all` and
+`/productions/reports` all had this. **Rule: never parse location query params
+by hand in a read route — always `getLocationFilter`/`getPostingLocationFilter`.**
+
+- `queryHasLocation` must test KEY PRESENCE, not non-empty value: with the old
+  non-empty test, `?locationType=` + a warehouse header applied the warehouse
+  filter (header leaked through a present-but-empty query key).
+- Transfer reports match the selected location as **source OR destination**
+  (`from_*`/`to_*` pairs); HO matches on type alone on either side.
+- **Intentional exception:** `/gst/gstr1|gstr3b|documents|hsn-summary|summary`
+  stay on per-GSTIN FILING scope (parseGstScope): HO/All → company GSTIN,
+  warehouse → its own GSTIN, outlet → parent warehouse's. HO = All there is
+  correct — returns are filed per registration, not per location.
+- **Verification technique:** hash-compare each endpoint's JSON under
+  `all` / `headoffice` / `warehouse:1` headers. But a matching hash is only a
+  bug if the DATA says so — check the location distribution of the underlying
+  table first (all-HO-stamped rows legitimately make HO = All; empty tables
+  make everything equal).

@@ -207,6 +207,14 @@ router.get("/productions/reports", requireModuleView("page:/production/reports")
   const scope = await getUserDataScope((req as any).employee ?? { branchType: "headoffice", branchId: 0 });
   const params: unknown[] = [from, to];
   const where = scopeLocationTypeWhere(scope, params, "p");
+  // View narrowing from the global location selector (or explicit query
+  // params) — same expressions as the production list route: legacy runs
+  // without location stamps belong to Head Office.
+  const rptConds: string[] = [where];
+  pushLocationFilter(
+    rptConds, params, getLocationFilter(req),
+    "COALESCE(p.location_type, 'headoffice')", "COALESCE(p.location_id, 1)",
+  );
   if (where === "FALSE") {
     res.json({ from: from || null, to: to || null, totals: { batchCount: 0, producedQty: 0, wastageQty: 0, wastageValue: 0, totalCost: 0, rmCost: 0, pmCost: 0, labourCost: 0, overheadAmount: 0 }, output: [], consumption: [], wastage: [], batches: [] });
     return;
@@ -221,7 +229,7 @@ router.get("/productions/reports", requireModuleView("page:/production/reports")
      FROM productions p
      WHERE ($1 = '' OR production_date >= $1::date)
        AND ($2 = '' OR production_date <= $2::date)
-       AND ${where}
+       AND ${rptConds.join(" AND ")}
      ORDER BY production_date, id`,
     params
   );

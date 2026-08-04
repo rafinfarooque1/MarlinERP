@@ -39,8 +39,11 @@ function headerQuery(req: Request): Record<string, unknown> {
 }
 
 function queryHasLocation(req: Request): boolean {
-  const lt = (req.query as Record<string, unknown>).locationType;
-  return typeof lt === "string" && lt !== "";
+  // The PRESENCE of the key selects the query source — a present but empty or
+  // malformed value degrades to "no narrowing" (per queryFilters rules), it
+  // must NOT fall back to the header. Otherwise ?locationType= plus a
+  // warehouse header would silently apply the warehouse filter.
+  return Object.prototype.hasOwnProperty.call(req.query as Record<string, unknown>, "locationType");
 }
 
 /** Merged location view-filter for SQL list endpoints (queryFilters shape). */

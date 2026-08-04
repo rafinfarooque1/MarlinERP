@@ -16,6 +16,18 @@ import { requireModuleView, canViewStockValuation } from "../middleware/permissi
 import { lineTaxHeads } from "../lib/gst";
 import { creditAdjustmentsExpr, outstandingExpr, computePaymentPosition } from "../lib/salePaymentPosition";
 import { isIsoDate } from "../lib/dateInput";
+import { getLocationFilter } from "../lib/requestLocation";
+
+// Effective location VIEW filter for the report queries: explicit
+// locationType/locationId query params win, else the global x-location-*
+// header context (the sidebar selector). Returns ['', 0] when unfiltered;
+// Head Office returns ['headoffice', 0] so the SQL matches on type alone
+// (HO placeholder ids differ per table — never match HO by id).
+function viewLocParams(req: any): [string, number] {
+  const loc = getLocationFilter(req);
+  if (!loc) return ["", 0];
+  return [loc.locationType, loc.locationType === "headoffice" ? 0 : Number(loc.locationId) || 0];
+}
 
 const router = Router();
 
@@ -69,15 +81,11 @@ async function materialNameMaps(): Promise<Record<string, Map<number, { name: st
 router.get("/reports/sales-register", requireModuleView("page:/reports/sales"), async (req, res): Promise<void> => {
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
-  const locationType = typeof req.query.locationType === "string" ? req.query.locationType : "";
-  const locationId = typeof req.query.locationId === "string" ? parseInt(req.query.locationId, 10) : 0;
-  if (locationType && !["outlet", "warehouse", "headoffice"].includes(locationType)) {
-    res.status(400).json({ error: "locationType must be outlet, warehouse or headoffice" }); return;
-  }
+  const [locationType, locationId] = viewLocParams(req);
 
   // Build params array and apply server-side scope for non-HO users
   const { getUserDataScope: getScope, scopeSalesWhere: salesScope } = await import("../lib/dataScope");
-  const rparams: unknown[] = [range.from, range.to, locationType, Number.isFinite(locationId) ? locationId : 0];
+  const rparams: unknown[] = [range.from, range.to, locationType, locationId];
   let scopeCond = "TRUE";
   const scopeEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
   if (scopeEmp && scopeEmp.branchType !== "headoffice") {
@@ -158,7 +166,7 @@ router.get("/reports/sales-by-item", requireModuleView("page:/reports/sales"), a
   const { getUserDataScope: getScope2, scopeSalesWhere: sScope2 } = await import("../lib/dataScope");
   const emp2 = (req as any).employee as { branchType: string; branchId: number } | undefined;
   const scope2 = emp2 ? await getScope2(emp2) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
-  const itemParams: any[] = [range.from, range.to];
+  const itemParams: any[] = [range.from, range.to, ...viewLocParams(req)];
   const itemScopeCond = sScope2(scope2, itemParams);
 
   const { rows } = await pool.query<any>(
@@ -173,6 +181,8 @@ router.get("/reports/sales-by-item", requireModuleView("page:/reports/sales"), a
      WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
        AND ($1 = '' OR s.sale_date >= $1::date)
        AND ($2 = '' OR s.sale_date <= $2::date)
+       AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
+       AND ($4 = 0 OR COALESCE(s.location_id, s.outlet_id) = $4)
        AND ${itemScopeCond}
      GROUP BY 1 ORDER BY 4 DESC NULLS LAST`,
     itemParams,
@@ -211,7 +221,7 @@ router.get("/reports/sales-by-location", requireModuleView("page:/reports/sales"
   const { getUserDataScope: getScope3, scopeSalesWhere: sScope3 } = await import("../lib/dataScope");
   const emp3 = (req as any).employee as { branchType: string; branchId: number } | undefined;
   const scope3 = emp3 ? await getScope3(emp3) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
-  const locParams: any[] = [range.from, range.to];
+  const locParams: any[] = [range.from, range.to, ...viewLocParams(req)];
   const locScopeCond = sScope3(scope3, locParams);
 
   const { rows } = await pool.query<any>(
@@ -230,6 +240,8 @@ router.get("/reports/sales-by-location", requireModuleView("page:/reports/sales"
      WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
        AND ($1 = '' OR s.sale_date >= $1::date)
        AND ($2 = '' OR s.sale_date <= $2::date)
+       AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
+       AND ($4 = 0 OR COALESCE(s.location_id, s.outlet_id) = $4)
        AND ${locScopeCond}
      GROUP BY 1, 2 ORDER BY 6 DESC NULLS LAST`,
     locParams,
@@ -268,12 +280,8 @@ router.get("/reports/sales-by-location", requireModuleView("page:/reports/sales"
 router.get("/reports/discounts", requireModuleView("page:/reports/sales"), async (req, res): Promise<void> => {
   const range = parseRange(req as any);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD dates" }); return; }
-  const locationType = typeof req.query.locationType === "string" ? req.query.locationType : "";
-  const locationId = typeof req.query.locationId === "string" ? parseInt(req.query.locationId, 10) : 0;
-  if (locationType && !["outlet", "warehouse", "headoffice"].includes(locationType)) {
-    res.status(400).json({ error: "locationType must be outlet, warehouse or headoffice" }); return;
-  }
-  const args = [range.from, range.to, locationType, Number.isFinite(locationId) ? locationId : 0];
+  const [locationType, locationId] = viewLocParams(req);
+  const args = [range.from, range.to, locationType, locationId];
 
   // LBAC: mandatory scope enforcement — non-HO users can only see their own location's data
   const { getUserDataScope: discScope, scopeSalesWhere: discSales } = await import("../lib/dataScope");
@@ -387,6 +395,7 @@ router.get("/reports/purchase-register", requireModuleView("page:/reports/sales"
     }); return;
   }
   const vendorId = typeof req.query.vendorId === "string" ? parseInt(req.query.vendorId, 10) : 0;
+  const [prLocType, prLocId] = viewLocParams(req);
 
   const { rows } = await pool.query<any>(
     `SELECT p.id, p.invoice_number, to_char(p.purchase_date,'YYYY-MM-DD') AS purchase_date,
@@ -400,8 +409,10 @@ router.get("/reports/purchase-register", requireModuleView("page:/reports/sales"
        AND ($1 = '' OR p.purchase_date >= $1::date)
        AND ($2 = '' OR p.purchase_date <= $2::date)
        AND ($3 = 0 OR p.vendor_id = $3)
+       AND ($4 = '' OR COALESCE(p.location_type,'headoffice') = $4)
+       AND ($5 = 0 OR p.location_id = $5)
      ORDER BY p.purchase_date, p.id`,
-    [range.from, range.to, Number.isFinite(vendorId) ? vendorId : 0],
+    [range.from, range.to, Number.isFinite(vendorId) ? vendorId : 0, prLocType, prLocId],
   );
 
   // Input GST is derived per-line via the cgst/sgst/igst heads — exactly the
@@ -487,8 +498,10 @@ router.get("/reports/purchases-by-vendor", requireModuleView("page:/reports/sale
      WHERE p.branch_transfer_id IS NULL AND p.cancelled_at IS NULL
        AND ($1 = '' OR p.purchase_date >= $1::date)
        AND ($2 = '' OR p.purchase_date <= $2::date)
+       AND ($3 = '' OR COALESCE(p.location_type,'headoffice') = $3)
+       AND ($4 = 0 OR p.location_id = $4)
      GROUP BY 1, 2 ORDER BY 6 DESC NULLS LAST`,
-    [range.from, range.to],
+    [range.from, range.to, ...viewLocParams(req)],
   );
   const list = rows.map((r: any) => ({
     vendorId: r.vendor_id == null ? null : Number(r.vendor_id),
@@ -530,8 +543,10 @@ router.get("/reports/purchases-by-material", requireModuleView("page:/reports/sa
      WHERE p.branch_transfer_id IS NULL AND p.cancelled_at IS NULL
        AND ($1 = '' OR p.purchase_date >= $1::date)
        AND ($2 = '' OR p.purchase_date <= $2::date)
+       AND ($3 = '' OR COALESCE(p.location_type,'headoffice') = $3)
+       AND ($4 = 0 OR p.location_id = $4)
      GROUP BY 1, 2 ORDER BY 6 DESC NULLS LAST`,
-    [range.from, range.to],
+    [range.from, range.to, ...viewLocParams(req)],
   );
   const maps = await materialNameMaps();
   const typeLabel: Record<string, string> = { material: "Raw Material", raw_material: "Packing Material", item: "Item Name (SKU)" };
@@ -577,7 +592,7 @@ router.get("/reports/profitability", requireModuleView("page:/reports/sales"), a
   const { getUserDataScope: getScope4, scopeSalesWhere: sScope4 } = await import("../lib/dataScope");
   const emp4 = (req as any).employee as { branchType: string; branchId: number } | undefined;
   const scope4 = emp4 ? await getScope4(emp4) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
-  const profitParams: any[] = [range.from, range.to];
+  const profitParams: any[] = [range.from, range.to, ...viewLocParams(req)];
   const profitScopeCond = sScope4(scope4, profitParams);
 
   const { rows: sales } = await pool.query<any>(
@@ -587,6 +602,8 @@ router.get("/reports/profitability", requireModuleView("page:/reports/sales"), a
      WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
        AND ($1 = '' OR s.sale_date >= $1::date)
        AND ($2 = '' OR s.sale_date <= $2::date)
+       AND ($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
+       AND ($4 = 0 OR COALESCE(s.location_id, s.outlet_id) = $4)
        AND ${profitScopeCond}`,
     profitParams,
   );
@@ -685,12 +702,17 @@ router.get("/reports/sales-stock-combined", requireModuleView("page:/reports/sal
   const emp5 = (req as any).employee as { branchType: string; branchId: number } | undefined;
   const scope5 = emp5 ? await getScope5(emp5) : { isHeadOffice: true, warehouseIds: [], outletIds: [] };
 
-  const aggParams: any[] = [range.from, range.to];
+  const [csLocType, csLocId] = viewLocParams(req);
+  const aggParams: any[] = [range.from, range.to, csLocType, csLocId];
   const aggScope = sScope5(scope5, aggParams);
-  const locParams: any[] = [range.from, range.to];
+  const locParams: any[] = [range.from, range.to, csLocType, csLocId];
   const locScope = sScope5(scope5, locParams);
-  const topParams: any[] = [range.from, range.to];
+  const topParams: any[] = [range.from, range.to, csLocType, csLocId];
   const topScope = sScope5(scope5, topParams);
+  // Sales tables key location as location_type/location_id (outlet fallback);
+  // stock_entries keys the same place as branch_type/branch_id.
+  const salesLocCond = `($3 = '' OR COALESCE(s.location_type,'outlet') = $3)
+         AND ($4 = 0 OR COALESCE(s.location_id, s.outlet_id) = $4)`;
 
   const [salesAgg, byLoc, topItems, stockRows, maps] = await Promise.all([
     pool.query<any>(
@@ -704,6 +726,7 @@ router.get("/reports/sales-stock-combined", requireModuleView("page:/reports/sal
        FROM sales s
        WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
          AND ($1 = '' OR s.sale_date >= $1::date) AND ($2 = '' OR s.sale_date <= $2::date)
+         AND ${salesLocCond}
          AND ${aggScope}`,
       aggParams,
     ),
@@ -717,6 +740,7 @@ router.get("/reports/sales-stock-combined", requireModuleView("page:/reports/sal
        FROM sales s
        WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
          AND ($1 = '' OR s.sale_date >= $1::date) AND ($2 = '' OR s.sale_date <= $2::date)
+         AND ${salesLocCond}
          AND ${locScope}
        GROUP BY 1, 2 ORDER BY 4 DESC NULLS LAST`,
       locParams,
@@ -729,6 +753,7 @@ router.get("/reports/sales-stock-combined", requireModuleView("page:/reports/sal
        FROM sales s, jsonb_array_elements(s.line_items) li
        WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL
          AND ($1 = '' OR s.sale_date >= $1::date) AND ($2 = '' OR s.sale_date <= $2::date)
+         AND ${salesLocCond}
          AND ${topScope}
        GROUP BY 1 ORDER BY 3 DESC NULLS LAST LIMIT 10`,
       topParams,
@@ -741,7 +766,10 @@ router.get("/reports/sales-stock-combined", requireModuleView("page:/reports/sal
        FROM stock_entries se
        JOIN items i ON i.id = se.item_id
        WHERE se.material_type = 'item'
+         AND ($1 = '' OR se.branch_type = $1)
+         AND ($2 = 0 OR se.branch_id = $2)
        GROUP BY 1, 2 ORDER BY 5 DESC`,
+      [csLocType, csLocId],
     ),
     locationMaps(),
   ]);
@@ -816,6 +844,10 @@ router.get("/reports/gst-transfers", requireModuleView("page:/reports/sales"), a
   }
   const range = parseRange(req);
   if (!range) { res.status(400).json({ error: "from/to must be YYYY-MM-DD" }); return; }
+  // View narrowing: a transfer belongs to the selected location when that
+  // location is its source OR its destination (HO matches on type alone,
+  // its id param is 0 and skips the id condition).
+  const [gtLocType, gtLocId] = viewLocParams(req);
 
   const [{ rows: transfers }, { rows: [cust] }, maps] = await Promise.all([
     // Driven from the transfer, not from `sales`, so a transfer still in transit
@@ -838,8 +870,10 @@ router.get("/reports/gst-transfers", requireModuleView("page:/reports/sales"), a
         WHERE COALESCE(t.transfer_type, 'internal') <> 'internal'
           AND ($1 = '' OR t.transfer_date >= $1::date)
           AND ($2 = '' OR t.transfer_date <= $2::date)
+          AND ($3 = '' OR (t.from_type = $3 AND ($4 = 0 OR t.from_id = $4))
+                       OR (t.to_type   = $3 AND ($4 = 0 OR t.to_id   = $4)))
         ORDER BY t.transfer_date DESC, t.id DESC`,
-      [range.from, range.to],
+      [range.from, range.to, gtLocType, gtLocId],
     ),
     pool.query<any>(
       `SELECT COUNT(*) AS invoices,
@@ -849,8 +883,10 @@ router.get("/reports/gst-transfers", requireModuleView("page:/reports/sales"), a
          FROM sales
         WHERE branch_transfer_id IS NULL AND cancelled_at IS NULL
           AND ($1 = '' OR sale_date >= $1::date)
-          AND ($2 = '' OR sale_date <= $2::date)`,
-      [range.from, range.to],
+          AND ($2 = '' OR sale_date <= $2::date)
+          AND ($3 = '' OR COALESCE(location_type,'outlet') = $3)
+          AND ($4 = 0 OR COALESCE(location_id, outlet_id) = $4)`,
+      [range.from, range.to, gtLocType, gtLocId],
     ),
     locationMaps(),
   ]);
@@ -1003,6 +1039,23 @@ router.get("/reports/branch-transfers", requireModuleView("page:/reports/sales")
   // reference a relation that isn't there and the scope would silently break.
   const scopeCond = btWhere(scope, params, "t");
 
+  // View narrowing from the global location selector: the transfer is kept
+  // when the selected location is its source OR its destination, ANDed onto
+  // LBAC so it can only narrow. Explicit sourceType/destType query params
+  // above remain the finer, single-sided filters.
+  const [btLocType, btLocId] = viewLocParams(req);
+  let btViewCond = "TRUE";
+  if (btLocType) {
+    params.push(btLocType);
+    const tIdx = params.length;
+    if (btLocType === "headoffice") {
+      btViewCond = `(t.from_type = $${tIdx} OR t.to_type = $${tIdx})`;
+    } else {
+      params.push(btLocId);
+      btViewCond = `((t.from_type = $${tIdx} AND t.from_id = $${tIdx + 1}) OR (t.to_type = $${tIdx} AND t.to_id = $${tIdx + 1}))`;
+    }
+  }
+
   const { rows: transfers } = await pool.query<any>(
     `SELECT t.id, t.challan_number,
             to_char(t.transfer_date,'YYYY-MM-DD')        AS transfer_date,
@@ -1042,6 +1095,7 @@ router.get("/reports/branch-transfers", requireModuleView("page:/reports/sales")
               SELECT 1 FROM jsonb_array_elements(COALESCE(t.line_items,'[]'::jsonb)) mli
                WHERE COALESCE(mli->>'materialType', 'item') = $9))
         AND ${scopeCond}
+        AND ${btViewCond}
       ORDER BY t.transfer_date DESC, t.id DESC`,
     params,
   );

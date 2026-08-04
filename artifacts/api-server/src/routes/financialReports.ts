@@ -22,7 +22,7 @@ import {
   postingMatchesLocation, companyLevelSummary,
   type PostingLocationFilter,
 } from "../lib/postingLocation";
-import { getPostingLocationFilter } from "../lib/requestLocation";
+import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
 
 const router = Router();
 const REPORTS_KEY = "page:/reports/sales";
@@ -323,7 +323,9 @@ const GST_LEDGERS = {
 router.get("/reports/fin/gst", requireModuleView(REPORTS_KEY), async (req, res): Promise<void> => {
   if (!headOfficeOnly(req)) { res.json({ output: null, input: null }); return; }
   const { from, to } = range(req);
-  const { inRange } = await splitPostings(from, to);
+  // Narrow the posting stream by the selected location, exactly as the cash,
+  // bank and day-book reports do.
+  const { inRange } = await splitPostings(from, to, getPostingLocationFilter(req));
   const chart = await loadChart();
 
   const idOf = (code: string) => chart.byCode.get(code)?.id ?? -1;
@@ -386,11 +388,11 @@ router.get("/reports/fin/gst", requireModuleView(REPORTS_KEY), async (req, res):
 
 router.get("/reports/fin/expenses", requireModuleView(REPORTS_KEY), async (req, res): Promise<void> => {
   const { from, to } = range(req);
-  const locationType = typeof req.query.locationType === "string" ? req.query.locationType : "";
-  const locationId = Number(req.query.locationId) || 0;
-  if (locationType && !["outlet", "warehouse", "headoffice"].includes(locationType)) {
-    res.status(400).json({ error: "locationType must be outlet, warehouse or headoffice" }); return;
-  }
+  // Explicit query params win, else the global x-location-* header context
+  // (the sidebar selector). HO narrows on type alone — its id is 0.
+  const expViewLoc = getLocationFilter(req);
+  const locationType = expViewLoc?.locationType ?? "";
+  const locationId = expViewLoc?.locationType === "headoffice" ? 0 : Number(expViewLoc?.locationId) || 0;
 
   // A location employee sees only their own location's spend, whatever they ask for.
   const emp = (req as any).employee;
@@ -416,7 +418,7 @@ router.get("/reports/fin/expenses", requireModuleView(REPORTS_KEY), async (req, 
       -- pinning them to ::date alone breaks while the column is still text.
       WHERE ($1::date IS NULL OR e.expense_date::date >= $1::date)
         AND ($2::date IS NULL OR e.expense_date::date <= $2::date)
-        AND ($3::text = ''   OR e.location_type = $3)
+        AND ($3::text = ''   OR COALESCE(e.location_type,'headoffice') = $3)
         AND ($4::int  = 0    OR e.location_id   = $4)
       ORDER BY e.expense_date DESC, e.id DESC`,
     [from, to, effType, effId],
@@ -488,6 +490,9 @@ interface SalaryRow {
 router.get("/reports/fin/salary", requireModuleView(REPORTS_KEY), async (req, res): Promise<void> => {
   if (!headOfficeOnly(req)) { res.json({ rows: [], totals: null }); return; }
   const { from, to } = range(req);
+  // Global location context: salary belongs to the employee's branch, so the
+  // selected location narrows on it (HO = head-office staff only).
+  const salViewLoc = getLocationFilter(req);
 
   // payroll is stored as month + year, not a date, so the window is applied to
   // the last day of the payroll month — a June run belongs to June however late
@@ -519,6 +524,14 @@ router.get("/reports/fin/salary", requireModuleView(REPORTS_KEY), async (req, re
 
   const items: SalaryRow[] = (rows as any[])
     .filter((r: any) => {
+      if (salViewLoc) {
+        const bt = String(r.branch_type ?? "headoffice");
+        if (salViewLoc.locationType === "headoffice") {
+          if (bt !== "headoffice") return false;
+        } else if (bt !== salViewLoc.locationType || Number(r.branch_id) !== Number(salViewLoc.locationId)) {
+          return false;
+        }
+      }
       const y = Number(r.year), m = Number(r.month);
       if (!y || !m) return true;
       if (from && endOfMonth(y, m) < from) return false;
