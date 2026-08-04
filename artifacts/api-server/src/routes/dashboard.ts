@@ -6,7 +6,7 @@ import { pushLocationFilter, type ParsedLocationFilter } from "../lib/queryFilte
 import { stockValuation } from "../lib/valuation";
 import { requireModuleView, canViewStockValuation } from "../middleware/permissions";
 import { buildDerivedPostings } from "./journal";
-import { companyBalances, companyFinancials, dayMoneyFlows, ledgerSubtreeLookup } from "../lib/dashboardFinancials";
+import { companyBalances, companyFinancials, rangeMoneyFlows, ledgerSubtreeLookup } from "../lib/dashboardFinancials";
 import { outstandingExpr, outstandingAsOfExpr } from "../lib/salePaymentPosition";
 import { isIsoDate } from "../lib/dateInput";
 import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
@@ -85,8 +85,8 @@ router.get("/dashboard/summary", requireModuleView("page:/"), async (req, res): 
     (async () => allPostings) as unknown as typeof buildDerivedPostings,
     { location: postingLoc },
   );
-  const todayMoney = dayMoneyFlows(allPostings as never[], {
-    date: today, location: postingLoc, subtree: await ledgerSubtreeLookup(),
+  const todayMoney = rangeMoneyFlows(allPostings as never[], {
+    fromDate: today, toDate: today, location: postingLoc, subtree: await ledgerSubtreeLookup(),
   });
 
   // ── Other metrics ─────────────────────────────────────────────────────
@@ -537,10 +537,9 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       : effLocType && effLocId != null
       ? ({ type: effLocType as "warehouse" | "outlet", id: effLocId } as const)
       : null;
-  // One posting build per distinct cap. companyFinancials wants the stream
-  // capped at the selected range's end, while "today's money" is anchored to
-  // TODAY regardless of the range — viewing last month must not zero the
-  // today tiles. When the range includes today the two share a single build.
+  // One posting build per distinct cap. companyFinancials and the money-flow
+  // tiles both want the stream capped at the selected range's end, so they
+  // share a single build per toDate.
   const postingsCache = new Map<string, ReturnType<typeof buildDerivedPostings>>();
   const cachedPostings: typeof buildDerivedPostings = (opts) => {
     const key = (opts as { toDate?: string | null } | undefined)?.toDate ?? "";
@@ -555,13 +554,17 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
         location: postingLoc,
       })
     : Promise.resolve(null);
-  // Today's cash/bank movement off the SAME stream as the balance tiles, so
-  // "cash in hand" and "cash in today" cannot disagree about today's postings.
-  const todayStr = new Date().toISOString().split("T")[0];
-  const todayMoneyP = scope.isHeadOffice || postingLoc
-    ? (async () => dayMoneyFlows(
-        (await cachedPostings(toDate && toDate >= todayStr ? { toDate } : {})) as never[],
-        { date: todayStr, location: postingLoc, subtree: await ledgerSubtreeLookup() },
+  // Cash/bank movement for the SELECTED range and location, off the SAME
+  // stream as the balance tiles — the Money In/Out tiles follow the date
+  // filter like every other KPI, so "yesterday" shows yesterday's flows and
+  // an empty range means all-time totals.
+  const moneyFlowsP = scope.isHeadOffice || postingLoc
+    ? (async () => rangeMoneyFlows(
+        (await cachedPostings(toDate ? { toDate } : {})) as never[],
+        {
+          fromDate: fromDate || null, toDate: toDate || null,
+          location: postingLoc, subtree: await ledgerSubtreeLookup(),
+        },
       ))()
     : Promise.resolve(null);
 
@@ -761,7 +764,7 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
   const salesCount = Number(salesTotals.rows[0]?.count ?? 0);
   const outputQty = qty(productionAgg.rows[0]?.output_qty);
   const wastageQty = qty(productionAgg.rows[0]?.wastage_qty);
-  const [accounting, todayMoney] = await Promise.all([accountingP, todayMoneyP]);
+  const [accounting, moneyFlows] = await Promise.all([accountingP, moneyFlowsP]);
   // Same rule as the Stock screen: no valuation right, no valuation figure.
   const showValuation = await canViewStockValuation((req as any).employee?.hierarchyId);
 
@@ -884,10 +887,13 @@ router.get("/dashboard/bi", requireModuleView("page:/"), async (req, res): Promi
       balance: accounting ? accounting.bankBalance : null,
       companyWide: !postingLoc,
     },
-    // Today's money movement — debits (in) and credits (out) over the cash and
-    // bank ledger subtrees, always anchored to TODAY regardless of the selected
-    // date range. Null exactly when the balance tiles are null.
-    todayMoney,
+    // Money movement for the SELECTED range — debits (in) and credits (out)
+    // over the cash and bank ledger subtrees, following the date filter and
+    // location like every other KPI. Null exactly when the balance tiles are
+    // null. Kept under the legacy `todayMoney` key too so an older client
+    // build (or the mobile app) keeps rendering during rollout.
+    moneyFlows,
+    todayMoney: moneyFlows,
     topItems: topItemsRows.rows.map((r: any) => ({
       itemId: Number(r.item_id), name: r.name, qty: qty(r.qty), revenue: money(r.revenue),
     })),

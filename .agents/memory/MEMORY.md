@@ -96,7 +96,7 @@
 - [Quotations module](quotations-module.md) — parallel doc store, zero books impact by construction; one-sale-per-quote via 2 partial uniques + FOR UPDATE; explicit JSX generics break the vite build; pdftotext for PDF checks.
 - [Money voucher provenance](money-voucher-provenance.md) — payments/receipts store `source`; every producer must stamp it; edit rights derive from it and NULL fails closed; never re-sweep NULL→manual.
 - [Advance recovery vs payroll](advance-recovery.md) — one settlement path per advance; generate/recover/approve all serialize on the advance row lock; is_deducted TRUE + NULL payroll id = cash recovery.
-- [Dashboard todayMoney](dashboard-kpi-sources.md) — Dashboard UI reads /dashboard/bi (NOT /summary); todayMoney is anchored to TODAY regardless of the selected date range, via a per-toDate postings cache.
+- [Dashboard money flows](dashboard-kpi-sources.md) — Dashboard UI reads /dashboard/bi (NOT /summary); moneyFlows follows the selected range+location (todayMoney = legacy mirror); /summary stays today-anchored.
 - [P&L returns split & GP/NP tiles](pnl-returns-split.md) — GP/NP tiles read the P&L's own summary (never recomputed); returns recovered from note-sourced postings on the sales/purchases subtrees; statement splits must be remainder-based.
 - [Shared surface guards](shared-surface-guards.md) — a second page over existing endpoints: widen the lookup GETs too, bind any-of guards to the request kind, seed new page keys + regenerate pagePermissions.
 - [shadcn Form context](shadcn-form-context.md) — FormItem/FormLabel outside a FormField render prop crash the whole route at runtime; plain label for non-RHF controls.

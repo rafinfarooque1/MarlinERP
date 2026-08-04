@@ -45,3 +45,22 @@ Rules that survive:
 - A branch login is FORCED to its own location's slice (never `null`, never
   the company figure).
 - Still one source of truth: the same slice feeds dashboard, reports and P&L.
+
+# Money In/Out tiles follow the selected range (Aug 2026)
+
+`/dashboard/bi` returns `moneyFlows` = cash/bank debits (in) and credits (out)
+for the REQUESTED fromDate/toDate and location, via `rangeMoneyFlows` (both
+bounds optional → all-time). `todayMoney` in that response is now only a
+legacy mirror of `moneyFlows`; the old `/dashboard/summary` endpoint keeps a
+genuinely today-anchored `todayMoney`.
+
+**Why:** the owner explicitly wanted the tiles to behave like every other KPI
+("yesterday shows yesterday's money"), replacing the earlier deliberate
+today-anchoring.
+
+**How to apply:** validate any change to these tiles against
+`/accounts/cash-bank-book` totalDebit/totalCredit on the STD-CASH and
+STD-BANK group ledgers for the same range — they must match exactly (same
+derived stream, same location helper). Opening balances are not postings, so
+they never count as movement. The per-toDate postings cache is shared with
+`companyFinancials`; a from-only request filters the uncapped stream.

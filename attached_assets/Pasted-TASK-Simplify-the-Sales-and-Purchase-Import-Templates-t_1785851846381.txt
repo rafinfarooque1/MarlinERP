@@ -1,0 +1,319 @@
+TASK: Simplify the Sales and Purchase Import Templates to match ERP data entry.
+
+The current Sales and Purchase import templates ask for too many fields. This makes importing old ERP data difficult. The import should behave exactly like manual entry in the ERP.
+
+==========================================================
+SALES IMPORT
+==========================================================
+
+The Sales Import should only ask for the minimum required fields.
+
+Keep only the following columns:
+
+• Invoice No (Optional)
+  - If blank, auto-generate invoice number.
+
+• Date *
+
+• Location *
+
+• Customer Name *
+  - If customer does not exist, ask during import whether to:
+    1. Create new customer
+    2. Map to existing customer
+
+• GSTIN (Optional)
+  - If customer is new, save GSTIN.
+
+• Item Name *
+  - Match against Item Master.
+  - If item not found, stop import and show validation.
+
+• Quantity *
+
+• Unit (Optional)
+  - If blank, use Item Master default unit.
+
+• Price *
+  - This is the selling MRP / selling price.
+
+• Discount (Optional)
+  - Per unit discount.
+  - Default = 0.
+
+• Bill Discount (Optional)
+  - Default = 0.
+
+• Payment Status
+  - Paid
+  - Partial
+  - Unpaid
+
+• Paid Amount
+  - Required only if Paid or Partial.
+  - If blank:
+      Paid → use Grand Total
+      Partial → validation error
+      Unpaid → 0
+
+• Payment Account (Optional)
+  - Cash
+  - Bank
+  - UPI
+  - Customer Credit
+
+• Reference (Optional)
+
+• Narration (Optional)
+
+==========================================================
+REMOVE THESE COLUMNS FROM SALES IMPORT
+==========================================================
+
+Do NOT ask for
+
+❌ Taxable Amount
+
+❌ GST %
+
+❌ CGST
+
+❌ SGST
+
+❌ IGST
+
+❌ Total Tax
+
+❌ Invoice Total
+
+❌ Ledger
+
+❌ Receivable Ledger
+
+❌ Sales Ledger
+
+❌ Journal Voucher
+
+❌ Accounting Voucher
+
+❌ Tax Ledger
+
+❌ Item GST Split
+
+❌ Taxable Value
+
+❌ Any accounting fields
+
+These must all be generated automatically.
+
+==========================================================
+AUTO CALCULATE DURING IMPORT
+==========================================================
+
+Exactly like manual Sales Entry.
+
+For every imported invoice:
+
+• Read GST rate from Item Master.
+
+• Read HSN from Item Master.
+
+• Read Tax Inclusive / Tax Exclusive from Item Master.
+
+• Calculate
+
+Taxable Amount
+
+CGST
+
+SGST
+
+IGST
+
+Grand Total
+
+GST Ledger Posting
+
+Customer Ledger Posting
+
+Inventory Posting
+
+COGS
+
+Journal Entries
+
+Outstanding Amount
+
+Advance
+
+Everything automatically.
+
+The import must produce the exact same accounting entries as a manually created Sale.
+
+==========================================================
+PURCHASE IMPORT
+==========================================================
+
+Purchase Import should also follow the same concept.
+
+Keep only
+
+Purchase Bill No (Optional)
+
+Date *
+
+Location *
+
+Vendor Name *
+
+GSTIN (Optional)
+
+Vendor Invoice No
+
+Item Name *
+
+Quantity *
+
+Unit (Optional)
+
+Purchase Rate *
+
+Discount (Optional)
+
+Bill Discount (Optional)
+
+Payment Status
+
+Paid Amount
+
+Payment Account
+
+Reference
+
+Narration
+
+==========================================================
+REMOVE THESE COLUMNS
+==========================================================
+
+Remove
+
+❌ HSN
+
+❌ GST %
+
+❌ CGST
+
+❌ SGST
+
+❌ IGST
+
+❌ Taxable Amount
+
+❌ GST Amount
+
+❌ Inventory Ledger
+
+❌ Purchase Ledger
+
+❌ Journal Ledger
+
+❌ Voucher Entries
+
+❌ Accounting Fields
+
+Everything should be generated automatically.
+
+==========================================================
+AUTO CALCULATE PURCHASE
+==========================================================
+
+During import:
+
+Read Item Master
+
+Read HSN
+
+Read GST Rate
+
+Read Inclusive / Exclusive
+
+Generate
+
+Stock Entry
+
+Purchase Voucher
+
+Vendor Ledger
+
+GST Input
+
+Inventory Value
+
+Journal Voucher
+
+Outstanding
+
+Payable
+
+Exactly as if the Purchase Bill was entered manually.
+
+==========================================================
+CUSTOMER / VENDOR HANDLING
+==========================================================
+
+If Customer or Vendor does not exist:
+
+Do NOT fail immediately.
+
+Instead, after file upload, show a review screen.
+
+Example:
+
+Customer "ABC Traders" not found.
+
+Create New Customer?
+
+Location
+
+GSTIN
+
+State
+
+Opening Balance = 0
+
+Save
+
+or
+
+Map to Existing Customer
+
+Same for Vendor.
+
+==========================================================
+ITEM HANDLING
+==========================================================
+
+If Item Name does not exist
+
+Show Validation
+
+Do not import.
+
+Allow user to download the error report.
+
+==========================================================
+GOAL
+==========================================================
+
+The import template should be as simple as manual ERP entry.
+
+The user should only provide business information.
+
+The ERP should automatically generate all accounting, GST, ledgers, vouchers, stock movements, inventory valuation, receivables, payables, and journals exactly as the manual Sales and Purchase modules already do.
+
+There must be NO difference between:
+• Manual Sale vs Imported Sale
+• Manual Purchase vs Imported Purchase
+
+Both should create identical accounting entries and reports.

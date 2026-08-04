@@ -174,17 +174,28 @@ async function balancesFrom(
 }
 
 /**
- * One day's money movement across the cash and bank subtrees, read from the
- * SAME derived posting stream as the balance tiles — so "cash in today" is by
- * construction the amount the Cash Book gained today. Debits into a cash/bank
- * ledger are money in; credits are money out. A cash→bank deposit counts on
- * both sides, exactly as a cash book shows it.
+ * Money movement across the cash and bank subtrees for a date range, read from
+ * the SAME derived posting stream as the balance tiles — so "cash in" is by
+ * construction the amount the Cash Book gained over the period. Debits into a
+ * cash/bank ledger are money in; credits are money out. A cash→bank deposit
+ * counts on both sides, exactly as a cash book shows it.
+ *
+ * Both bounds are optional: no fromDate/toDate = all-time flows. Opening
+ * balances are NOT part of the posting stream, so they never count as a
+ * movement — the Cash Book shows them as balance b/f, not a receipt.
  */
-export function dayMoneyFlows(
+export function rangeMoneyFlows(
   postings: Posting[],
-  opts: { date: string; location?: PostingLocationFilter | null; subtree: (code: string) => number[] },
+  opts: {
+    fromDate?: string | null;
+    toDate?: string | null;
+    location?: PostingLocationFilter | null;
+    subtree: (code: string) => number[];
+  },
 ): { cashIn: number; cashOut: number; bankIn: number; bankOut: number; totalIn: number; totalOut: number } {
   const location = opts.location ?? null;
+  const fromDate = opts.fromDate || null;
+  const toDate = opts.toDate || null;
   const sliced = location
     ? (filterPostingsByLocation(postings as never[], location) as unknown as Posting[])
     : postings;
@@ -197,7 +208,8 @@ export function dayMoneyFlows(
     const d = (p.date as unknown) instanceof Date
       ? (p.date as unknown as Date).toISOString().slice(0, 10)
       : String(p.date).slice(0, 10);
-    if (d !== opts.date) continue;
+    if (fromDate && d < fromDate) continue;
+    if (toDate && d > toDate) continue;
     if (cashIds.has(p.ledgerId)) { cashIn += p.debit; cashOut += p.credit; }
     else if (bankIds.has(p.ledgerId)) { bankIn += p.debit; bankOut += p.credit; }
   }

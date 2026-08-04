@@ -127,13 +127,18 @@ export default function Dashboard() {
   const locMax = Math.max(0, ...(s?.byLocation.map(l => l.total) ?? [0]));
   const topItemMax = Math.max(0, ...(bi?.topItems.map(i => i.revenue) ?? [0]));
 
-  // Today's money movement — same posting stream as the balance tiles, always
-  // anchored to today regardless of the selected date range. The generated
-  // response type predates the field, hence the cast.
-  const tm = (bi as any)?.todayMoney as {
+  // Money movement for the SELECTED range — same posting stream as the
+  // balance tiles, following the date filter and location like every other
+  // KPI. The generated response type predates the field, hence the cast.
+  // (`todayMoney` is the legacy key the server still mirrors.)
+  const tm = ((bi as any)?.moneyFlows ?? (bi as any)?.todayMoney) as {
     cashIn: number; cashOut: number; bankIn: number; bankOut: number;
     totalIn: number; totalOut: number;
   } | null | undefined;
+  // Tile label follows the picked preset: "Today"/"Yesterday" read naturally
+  // on a one-day range; longer ranges drop the suffix (the period is already
+  // shown in the header).
+  const moneySuffix = range.preset === 'today' ? ' Today' : range.preset === 'yesterday' ? ' Yesterday' : '';
 
   // GP / NP for the selected period — served off the SAME P&L build as the
   // Expenses tile, so they always equal the Profit & Loss report for the same
@@ -215,19 +220,19 @@ export default function Dashboard() {
         : undefined,
       className: SPAN3,
     },
-    // ── Row 4: Money In Today · Money Out Today ─────────────────────────────
+    // ── Row 4: Money In · Money Out (for the selected period) ───────────────
     // Across all tills and bank accounts — read off the same books as the
     // balances, so a till sale, a voucher or a journal all move it. '—'
     // exactly when the balance tiles read '—'.
     {
-      label: 'Money In Today',
+      label: `Money In${moneySuffix}`,
       value: tm == null ? '—' : fmt(tm.totalIn),
       tone: (tm?.totalIn ?? 0) > 0 ? 'pos' : 'default',
       hint: tm ? `Cash ${fmt(tm.cashIn)} · Bank ${fmt(tm.bankIn)}` : undefined,
       className: SPAN3,
     },
     {
-      label: 'Money Out Today',
+      label: `Money Out${moneySuffix}`,
       value: tm == null ? '—' : fmt(tm.totalOut),
       tone: (tm?.totalOut ?? 0) > 0 ? 'neg' : 'default',
       hint: tm ? `Cash ${fmt(tm.cashOut)} · Bank ${fmt(tm.bankOut)}` : undefined,

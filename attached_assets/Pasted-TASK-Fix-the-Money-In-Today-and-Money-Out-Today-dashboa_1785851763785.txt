@@ -1,0 +1,134 @@
+TASK: Fix the "Money In Today" and "Money Out Today" dashboard cards so they respect the selected date filter.
+
+Currently, these two cards always show today's values regardless of the selected dashboard date range.
+
+This is incorrect.
+
+=========================================================
+REQUIRED BEHAVIOUR
+=========================================================
+
+The Money In and Money Out cards must always follow the currently selected dashboard filter.
+
+Examples:
+
+• Today
+  → Show today's Money In and Money Out.
+
+• Yesterday
+  → Show only yesterday's Money In and Money Out.
+
+• Last 7 Days
+  → Show the total Money In and Money Out for the last 7 days.
+
+• This Month
+  → Show the total Money In and Money Out for this month.
+
+• Quarter
+  → Show the total for the selected quarter.
+
+• This FY
+  → Show the total for the current financial year.
+
+• All Time
+  → Show all-time totals.
+
+• Custom Date Range
+  → Show totals only within the selected From Date and To Date.
+
+=========================================================
+MONEY IN
+=========================================================
+
+Money In should include only actual incoming money.
+
+Examples:
+
+• Receipt Vouchers
+• Customer Collections
+• Advance Receipts
+• Cash Sales
+• Bank Collections
+• Other Income Receipts
+
+Split below into:
+
+Cash ₹xxxx.xx
+
+Bank ₹xxxx.xx
+
+=========================================================
+MONEY OUT
+=========================================================
+
+Money Out should include only actual outgoing money.
+
+Examples:
+
+• Payment Vouchers
+• Vendor Payments
+• Salary Payments
+• Rent Payments
+• Expense Payments
+• Cash Withdrawals
+• Bank Payments
+• Other Outgoing Payments
+
+Split below into:
+
+Cash ₹xxxx.xx
+
+Bank ₹xxxx.xx
+
+=========================================================
+LOCATION FILTER
+=========================================================
+
+The selected location must also be respected.
+
+Examples:
+
+If "Head Office" is selected:
+Only Head Office transactions should be considered.
+
+If "Frozen Hub - Ragiguda" is selected:
+Only Ragiguda transactions should be considered.
+
+If "All Locations" is selected:
+Show the consolidated values from all locations.
+
+=========================================================
+LIVE UPDATE
+=========================================================
+
+Whenever the user changes:
+
+• Date Filter
+• Custom Date
+• Financial Year
+• Quarter
+• Location
+
+the Money In and Money Out cards must refresh automatically without requiring a page reload.
+
+=========================================================
+VALIDATION
+=========================================================
+
+Verify the totals against:
+
+• Cash Book
+• Bank Book
+• Receipt Vouchers
+• Payment Vouchers
+• Day Book
+
+All reports must show identical values for the selected period and location.
+
+There should never be any mismatch.
+
+=========================================================
+EXPECTED RESULT
+=========================================================
+
+The Money In and Money Out cards should behave exactly like every other dashboard KPI (Sales, Purchases, Expenses, etc.), always reflecting the currently selected date range and location instead of always showing today's figures.
