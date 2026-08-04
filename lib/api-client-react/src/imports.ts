@@ -21,6 +21,8 @@ export type ImportRowStatus =
 
 export interface ImportBatch {
   id: number;
+  /** Human-facing batch id, e.g. "IMP000023". */
+  displayId: string;
   module: ImportModule;
   filename: string;
   status: ImportBatchStatus;
@@ -35,6 +37,8 @@ export interface ImportBatch {
   /** Target location (sales/purchase imports) — where documents are stamped. */
   locationType: string | null;
   locationId: number | null;
+  /** Display name of the target location (resolved server-side). */
+  locationName?: string | null;
   createdBy: string;
   createdAt: string;
   committedAt: string | null;
@@ -117,6 +121,15 @@ export interface ImportCommitResponse {
 export interface ImportRollbackResponse {
   batch: ImportBatch;
   removed: number;
+  /** Per-type breakdown of records deleted (customers, vendors, ledgers, …). */
+  removedCounts?: Record<string, number>;
+  /** Automatic post-deletion checks (books balanced, nothing left behind). */
+  verification?: {
+    ok: boolean;
+    leftoverStamps: number;
+    booksBalanced: boolean;
+    orphanSaleReceipts: number;
+  };
 }
 
 /** 409 payload when rollback refuses because records have since been used. */

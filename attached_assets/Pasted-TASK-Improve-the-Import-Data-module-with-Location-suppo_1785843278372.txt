@@ -1,0 +1,402 @@
+TASK: Improve the Import Data module with Location support and safe rollback of imports.
+
+This is a production ERP. The Import module must support multi-location businesses and allow complete rollback of imported data.
+
+========================================================
+1. ADD LOCATION COLUMN TO CUSTOMER IMPORT
+========================================================
+
+Customer import template must include:
+
+Location *
+
+The location should be mandatory.
+
+Example:
+
+Head Office
+Frozen Hub - Ragiguda
+Frozen Hub - Calicut
+Warehouse A
+Warehouse B
+
+During import:
+
+• If location exists → assign customer to that location.
+• If location doesn't exist → validation error.
+• Customer belongs to the selected location.
+• Opening balance ledger should also belong to that location.
+
+Customer list page should display customer location.
+
+========================================================
+2. ADD LOCATION COLUMN TO VENDOR IMPORT
+========================================================
+
+Vendor import template must include:
+
+Location *
+
+Rules:
+
+• Mandatory field.
+• Vendor belongs to selected location.
+• Vendor ledger created under that location.
+• Opening payable posted for that location.
+
+Vendor list should display Location.
+
+========================================================
+3. ADD LOCATION COLUMN TO LEDGER IMPORT
+========================================================
+
+Ledger template must include:
+
+Location *
+
+Example
+
+Ledger Name
+Group
+Opening Balance
+Dr/Cr
+Location
+
+The imported ledger should belong to that location.
+
+Head Office ledgers remain Head Office.
+
+Warehouse ledgers remain warehouse specific.
+
+========================================================
+4. SALES / PURCHASE / RECEIPT / PAYMENT
+========================================================
+
+Verify all templates include Location.
+
+If missing, add Location column.
+
+Validation:
+
+Location must exist.
+
+No automatic creation.
+
+========================================================
+5. IMPORT HISTORY
+========================================================
+
+Current Import History only records uploads.
+
+Need proper rollback.
+
+Every import batch should receive
+
+Import Batch ID
+
+Example
+
+IMP000001
+
+IMP000002
+
+IMP000003
+
+Every imported record stores
+
+importBatchId
+
+========================================================
+6. DELETE IMPORT HISTORY
+========================================================
+
+When user clicks Delete on an Import History record:
+
+Show confirmation dialog.
+
+Example
+
+Delete this import?
+
+This will permanently remove ALL records imported in this batch.
+
+This action cannot be undone.
+
+Cancel
+Delete
+
+========================================================
+7. ROLLBACK IMPORT
+========================================================
+
+Deleting an Import Batch must delete EVERYTHING created by that batch.
+
+Examples
+
+Customer Import
+
+Delete customers
+
+Delete customer ledgers
+
+Delete opening balances
+
+Delete journal entries
+
+Delete opening vouchers
+
+Delete related audit entries
+
+--------------------------------------------------------
+
+Vendor Import
+
+Delete vendors
+
+Delete vendor ledgers
+
+Delete opening balances
+
+Delete journals
+
+Delete opening vouchers
+
+--------------------------------------------------------
+
+Ledger Import
+
+Delete ledgers
+
+Delete opening journals
+
+Delete opening balances
+
+--------------------------------------------------------
+
+Sales Import
+
+Delete invoices
+
+Delete sale items
+
+Delete stock movements
+
+Delete customer receivables
+
+Delete GST journals
+
+Delete payment allocations
+
+Delete inventory transactions
+
+Delete batch movements
+
+Delete voucher entries
+
+--------------------------------------------------------
+
+Purchase Import
+
+Delete purchase bills
+
+Delete stock entries
+
+Delete vendor payables
+
+Delete inventory valuation
+
+Delete journals
+
+Delete GST entries
+
+Delete voucher entries
+
+--------------------------------------------------------
+
+Receipt Import
+
+Delete receipts
+
+Undo customer allocations
+
+Undo advances
+
+Delete journals
+
+Delete vouchers
+
+--------------------------------------------------------
+
+Payment Import
+
+Delete payments
+
+Undo vendor allocations
+
+Undo advances
+
+Delete journals
+
+Delete vouchers
+
+========================================================
+8. SAFETY RULES
+========================================================
+
+Rollback must happen inside ONE database transaction.
+
+If anything fails
+
+ROLLBACK EVERYTHING.
+
+Never leave partial data.
+
+========================================================
+9. IMPORT HISTORY SCREEN
+========================================================
+
+Show
+
+Import Type
+
+Import Batch ID
+
+Imported By
+
+Import Date
+
+Location(s)
+
+Rows Imported
+
+Status
+
+Delete button
+
+========================================================
+10. DELETE PERMISSIONS
+========================================================
+
+Only
+
+Management
+
+Admin
+
+can delete import history.
+
+Warehouse users cannot.
+
+Outlet users cannot.
+
+========================================================
+11. AUDIT LOG
+========================================================
+
+Deleting an import should create an Audit Log entry.
+
+Example
+
+Deleted Import Batch IMP000023
+
+Imported Records Removed:
+
+Customers : 43
+
+Ledgers : 43
+
+Sales : 124
+
+Journal Entries : 378
+
+Deleted By
+
+Date
+
+Time
+
+========================================================
+12. ACCOUNTING CONSISTENCY
+========================================================
+
+After deleting an import batch verify automatically:
+
+Trial Balance balances
+
+Customer Ledger balances
+
+Vendor Ledger balances
+
+Inventory balances
+
+Stock valuation
+
+Receivables
+
+Payables
+
+Cash Book
+
+Bank Book
+
+Day Book
+
+Profit & Loss
+
+Balance Sheet
+
+GST reports
+
+No orphan journal entries.
+
+No orphan vouchers.
+
+No orphan stock movements.
+
+========================================================
+13. UI IMPROVEMENTS
+========================================================
+
+Customer Import Sample
+
+Add Location column.
+
+Vendor Import Sample
+
+Add Location column.
+
+Ledger Import Sample
+
+Add Location column.
+
+Show a tooltip explaining:
+
+"Location determines which branch/warehouse owns the imported record."
+
+========================================================
+14. DO NOT DELETE MANUAL DATA
+========================================================
+
+Rollback must delete ONLY records created by that Import Batch.
+
+Never delete manually created records.
+
+Never delete records from another batch.
+
+========================================================
+15. FINAL TEST
+========================================================
+
+Test the following:
+
+• Import customers with locations.
+• Import vendors with locations.
+• Import ledgers with locations.
+• Verify lists show locations correctly.
+• Verify ledgers belong to the correct location.
+• Delete an import batch.
+• Confirm all imported records are removed.
+• Confirm journals, vouchers, stock, receivables, payables, GST, and ledgers are rolled back correctly.
+• Confirm Trial Balance, Balance Sheet, Profit & Loss, Inventory, Cash Book, Bank Book, and Ledger Statements remain perfectly balanced after rollback.
+
+This rollback must be production-safe, transaction-safe, and leave no orphan or inconsistent accounting records.

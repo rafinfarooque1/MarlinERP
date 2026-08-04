@@ -38,8 +38,8 @@ const TAG = `RACE${Date.now()}`;
 const N = 40;
 const wb = new ExcelJS.Workbook();
 const ws = wb.addWorksheet("Data");
-ws.addRow(["Name *", "Phone"]);
-for (let i = 1; i <= N; i++) ws.addRow([`${TAG} Customer ${String(i).padStart(3, "0")}`, ""]);
+ws.addRow(["Name *", "Phone", "Location"]);
+for (let i = 1; i <= N; i++) ws.addRow([`${TAG} Customer ${String(i).padStart(3, "0")}`, "", "Head Office"]);
 const fileBuf = Buffer.from(await wb.xlsx.writeBuffer());
 
 const parseRes = await fetch(`${API}/imports/parse?module=customers&filename=race.xlsx`, {

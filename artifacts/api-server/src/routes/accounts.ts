@@ -117,11 +117,25 @@ const router = Router();
 // ── Chart of Accounts (tree) ───────────────────────────────────────────────
 // Consumers: Chart of Accounts page, and the Expenses page's ledger dropdown.
 router.get("/accounts/chart", requireModuleView(["page:/accounts/chart", "page:/accounts/expenses"]), async (_req, res): Promise<void> => {
-  const [result, usage] = await Promise.all([
+  const [result, usage, whsRes, outsRes] = await Promise.all([
     pool.query(`SELECT * FROM account_ledgers ORDER BY name`),
     loadLedgerUsage(pool),
+    pool.query(`SELECT id, name FROM warehouses`),
+    pool.query(`SELECT id, name FROM outlets`),
   ]);
   const rows = result.rows;
+  const whName = new Map<number, string>(whsRes.rows.map((r: any) => [Number(r.id), String(r.name)]));
+  const outName = new Map<number, string>(outsRes.rows.map((r: any) => [Number(r.id), String(r.name)]));
+  // location_type/location_id are raw-migration columns (SELECT * surfaces
+  // them via pg). Display-only ownership stamp — report scoping stays
+  // document/posting-based.
+  const locName = (t: string | null, i: any): string | null => {
+    if (!t) return null;
+    if (t === "headoffice") return "Head Office";
+    if (t === "warehouse") return whName.get(Number(i)) ?? `Warehouse #${i}`;
+    if (t === "outlet") return outName.get(Number(i)) ?? `Outlet #${i}`;
+    return String(t);
+  };
 
   // Build tree in memory
   const map = new Map<number, any>();
@@ -137,6 +151,9 @@ router.get("/accounts/chart", requireModuleView(["page:/accounts/chart", "page:/
     isGroup: r.is_group ?? false,
     isActive: r.is_active ?? true,
     createdAt: r.created_at,
+    locationType: r.location_type ?? null,
+    locationId: r.location_id != null ? Number(r.location_id) : null,
+    locationName: locName(r.location_type ?? null, r.location_id),
     children: [],
     balance: 0,
   }));

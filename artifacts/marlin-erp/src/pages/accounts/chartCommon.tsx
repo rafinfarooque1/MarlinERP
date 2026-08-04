@@ -19,6 +19,8 @@ export interface StockItem { id: number; name: string; unit: string; stock: numb
 export interface LedgerNode {
   id: number; name: string; type: string; parentId: number | null;
   code: string | null; balance: number; isGroup?: boolean; children: LedgerNode[];
+  /** Owning branch/warehouse (display only — e.g. imported ledgers). */
+  locationName?: string | null;
 }
 
 export interface GroupSummary {

@@ -322,6 +322,13 @@ function LedgerLine({ node, depth, onCreated, expansion, onBankAdd, onDelete, on
           </span>
         )}
 
+        {node.locationName && (
+          <span className="text-[9px] px-1 py-0.5 rounded bg-muted text-muted-foreground/60 font-medium shrink-0"
+            title={`Owned by ${node.locationName}`}>
+            {node.locationName}
+          </span>
+        )}
+
         {isSystem && (
           <span className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded bg-muted text-muted-foreground/50 font-medium uppercase tracking-wide shrink-0">
             <Lock className="w-2.5 h-2.5" /> system

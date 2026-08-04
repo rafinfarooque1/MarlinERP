@@ -82,6 +82,89 @@ export async function addDataImport(): Promise<void> {
     ALTER TABLE vendors   ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
   `);
 
+  // ── Location + batch-provenance columns ────────────────────────────────────
+  // Raw-migration columns: INVISIBLE to drizzle — read/write via raw SQL only.
+  //
+  // account_ledgers.location_*: which branch/warehouse OWNS the ledger.
+  // Display + import bookkeeping only — report scoping stays document-based
+  // (postings carry the location, see jv-location-visibility). NULL = global.
+  //
+  // import_batch_id: stamps every record a Data Import batch CREATED (updates
+  // to pre-existing records are deliberately NOT stamped — rollback must never
+  // touch manual data). Rollback still walks import_rows as the authority;
+  // the stamp powers traceability, per-table counts and the leftover check.
+  await pool.query(`
+    ALTER TABLE account_ledgers ADD COLUMN IF NOT EXISTS location_type text;
+    ALTER TABLE account_ledgers ADD COLUMN IF NOT EXISTS location_id integer;
+
+    ALTER TABLE customers        ADD COLUMN IF NOT EXISTS import_batch_id integer;
+    ALTER TABLE vendors          ADD COLUMN IF NOT EXISTS import_batch_id integer;
+    ALTER TABLE account_ledgers  ADD COLUMN IF NOT EXISTS import_batch_id integer;
+    ALTER TABLE opening_balances ADD COLUMN IF NOT EXISTS import_batch_id integer;
+    ALTER TABLE sales            ADD COLUMN IF NOT EXISTS import_batch_id integer;
+    ALTER TABLE purchases        ADD COLUMN IF NOT EXISTS import_batch_id integer;
+    ALTER TABLE receipts         ADD COLUMN IF NOT EXISTS import_batch_id integer;
+    ALTER TABLE payments         ADD COLUMN IF NOT EXISTS import_batch_id integer;
+  `);
+
+  // ── Backfill batch stamps from import_rows (ONE TIME) ──────────────────────
+  // Historical committed batches recorded what they created on import_rows;
+  // copy that onto the records themselves so counts and the post-rollback
+  // "nothing left behind" check work for old batches too.
+  const { rows: stamped } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'import_batch_stamps_v1'`,
+  );
+  if (stamped.length === 0) {
+    const stampSql = (table: string, type: string) => `
+      UPDATE ${table} t SET import_batch_id = r.batch_id
+        FROM import_rows r
+       WHERE r.created_record_type = '${type}' AND r.status = 'imported'
+         AND r.created_record_id = t.id AND t.import_batch_id IS NULL`;
+    await pool.query(stampSql("customers", "customer"));
+    await pool.query(stampSql("vendors", "vendor"));
+    await pool.query(stampSql("sales", "sale"));
+    await pool.query(stampSql("purchases", "purchase"));
+    await pool.query(stampSql("receipts", "receipt"));
+    await pool.query(stampSql("payments", "payment"));
+    // Ledgers arrive two ways: a ledger import's own row (created_record_id)
+    // and the auto-provisioned party ledger (created_ledger_id).
+    await pool.query(`
+      UPDATE account_ledgers l SET import_batch_id = r.batch_id
+        FROM import_rows r
+       WHERE r.status = 'imported' AND r.created_ledger_id = l.id
+         AND l.import_batch_id IS NULL`);
+    await pool.query(`
+      UPDATE opening_balances ob SET import_batch_id = r.batch_id
+        FROM import_rows r
+       WHERE r.status = 'imported' AND r.opening_balance_id = ob.id
+         AND ob.import_batch_id IS NULL`);
+    await pool.query(
+      `INSERT INTO migration_log (name) VALUES ('import_batch_stamps_v1') ON CONFLICT (name) DO NOTHING`,
+    );
+    console.log("[migration] import_batch_stamps_v1 — batch provenance stamped onto imported records");
+  }
+
+  // ── Backfill party-ledger locations (ONE TIME) ─────────────────────────────
+  // CUST-/VEND- ledgers inherit their party's location. One-time (not
+  // every-boot healing) so a deliberate manual clear is never overridden.
+  const { rows: ledLoc } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'party_ledger_location_backfill_v1'`,
+  );
+  if (ledLoc.length === 0) {
+    await pool.query(`
+      UPDATE account_ledgers al SET location_type = c.location_type, location_id = c.location_id
+        FROM customers c
+       WHERE al.code = 'CUST-' || c.id AND al.location_type IS NULL AND c.location_type IS NOT NULL`);
+    await pool.query(`
+      UPDATE account_ledgers al SET location_type = v.location_type, location_id = v.location_id
+        FROM vendors v
+       WHERE al.code = 'VEND-' || v.id AND al.location_type IS NULL AND v.location_type IS NOT NULL`);
+    await pool.query(
+      `INSERT INTO migration_log (name) VALUES ('party_ledger_location_backfill_v1') ON CONFLICT (name) DO NOTHING`,
+    );
+    console.log("[migration] party_ledger_location_backfill_v1 — party ledgers inherited party locations");
+  }
+
   // ── Permission seeding (ONE TIME) ──────────────────────────────────────────
   // page:/company/import is a NEW key under default-deny: without seeding,
   // every pre-existing role above level 1 would silently lose the module.

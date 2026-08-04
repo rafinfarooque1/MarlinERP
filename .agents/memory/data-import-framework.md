@@ -33,6 +33,39 @@ Rules that must hold for every import type, and why:
 - **Opening-balance FY** derives from the company's FY start month setting,
   never the stale financial-year text column.
 
+## Location support & batch identity
+
+- **Masters (customers/vendors/ledgers) REQUIRE a Location column** — blank is
+  a row error, name resolved case-insensitively against warehouses/outlets/
+  "Head Office" and scope-checked against the uploader. **Why:** an unstamped
+  or wrongly-stamped master is invisible to every location view.
+- **Txn/voucher files carry an OPTIONAL Location column that is a
+  cross-check only** — it must match the batch's picked location by
+  normalized NAME (mirror-safe) or the row errors; it never overrides the
+  picked location.
+- **Batch display id is DERIVED, never stored:** `IMP${id padded to 6}` via
+  `batchDisplayId()`; UI keeps a client-side fallback format.
+- **`import_batch_id` stamps go ONLY on records a batch CREATED** (8 tables);
+  duplicate-update paths stay unstamped and are never rolled back. Rollback
+  authority remains `import_rows`; stamps power counts + leftover checks.
+
+## Rollback delete (counts, verification, role gate)
+
+- **Role gate on rollback:** hierarchies.level ≤ 2 (Admin/Management) checked
+  server-side ON TOP of the page delete right, fails closed on missing role.
+- **Counts snapshot inside the txn BEFORE deletes** (one multi-subselect over
+  the stamp columns) feeds the response, audit description AND
+  `activity_log.metadata`.
+- **Post-rollback verification runs AFTER COMMIT** (books derive via pool, an
+  in-txn check can't see uncommitted deletes): leftover stamps = 0, TB
+  balanced via `buildDerivedPostings({})`, and **batch-EXACT orphan check** —
+  capture the batch's sale invoice numbers inside the txn, then assert no
+  receipt with those voucher numbers survived. **Why:** a global orphan-count
+  delta lets unrelated concurrent writes mask a real leftover (review
+  finding); dev data already holds legacy orphans, so absolute counts fail.
+- **Audit write is fire-and-forget** — tests must sleep briefly before
+  querying `activity_log`.
+
 ## Transaction imports (sales & purchase invoices)
 
 - **Imported SALES draw a fresh SB2B/SB2C number from the shared allocator**

@@ -1,0 +1,243 @@
+TASK: Redesign the Purchase Bill entry screen for better usability and accounting workflow.
+
+The current Purchase Bill item table is cramped and difficult to use. I need the layout redesigned so every column is properly aligned and fully visible without overlapping. Follow standard ERP purchase entry screens.
+
+====================================================
+1. REDESIGN THE ITEM TABLE
+====================================================
+
+The item grid must be properly aligned.
+
+Current columns are compressed and difficult to edit.
+
+Arrange them in a clean table with proper spacing.
+
+Suggested order:
+
+Item Name | HSN Code | Qty | Rate | Discount | GST % | Total
+
+Requirements:
+
+• Every column should have sufficient width.
+• HSN column must always be visible.
+• Qty, Rate, Discount and GST should not overlap.
+• Numeric columns should be center/right aligned.
+• Item name should have the largest width.
+• Total should always be visible without horizontal scrolling.
+• Table should remain responsive.
+
+====================================================
+2. HSN COLUMN
+====================================================
+
+The HSN Code must be a dedicated visible column.
+
+Do NOT hide it.
+
+Every row must clearly display:
+
+HSN Code
+
+Example
+
+Item Name
+HSN Code
+Qty
+Rate
+Discount
+GST
+Total
+
+====================================================
+3. GST TYPE (INTER / INTRA)
+====================================================
+
+Currently every item has an Inter/Intra selector.
+
+Remove the GST Type selector from every row.
+
+Instead create ONE GST Type selector for the entire Purchase Bill.
+
+Place it beside:
+
+GST Inclusive / GST Exclusive
+
+Example:
+
+GST Mode:
+
+GST Inclusive ▼
+
+GST Type:
+
+○ Intra State
+○ Inter State
+
+OR
+
+Dropdown
+
+GST Type:
+Intra State
+Inter State
+
+This selection applies to ALL items in the bill.
+
+No per-item GST type selection.
+
+====================================================
+4. PLACE GST TYPE NEAR GST MODE
+====================================================
+
+Current top section:
+
+GST Inclusive / GST Exclusive
+
+Update to:
+
+GST Mode:
+GST Inclusive ▼
+
+GST Type:
+Intra State ▼
+
+Both controls should be next to each other above the item table.
+
+====================================================
+5. REMOVE DUPLICATE GST CONTROLS
+====================================================
+
+Remove the GST Type dropdown from every item row.
+
+Only GST percentage remains per item.
+
+Example:
+
+Item
+HSN
+Qty
+Rate
+Disc
+GST %
+Total
+
+====================================================
+6. KEEP GST PERCENTAGE PER ITEM
+====================================================
+
+GST %
+
+still belongs to each item because different products may have:
+
+5%
+
+12%
+
+18%
+
+28%
+
+Only the GST TYPE (Inter/Intra) becomes bill level.
+
+====================================================
+7. BATCH ROW
+====================================================
+
+Batch
+Manufacturing Date
+Expiry
+
+should remain below each item as currently implemented.
+
+Only improve alignment.
+
+====================================================
+8. HEADER SECTION
+====================================================
+
+Keep
+
+Vendor
+Date
+Vendor Invoice Number
+Receiving Location
+
+aligned in a single row with equal spacing.
+
+====================================================
+9. SUMMARY
+====================================================
+
+Summary panel should remain on the right (or bottom on smaller screens).
+
+Show
+
+Subtotal
+
+Taxable Amount
+
+CGST
+
+SGST
+
+OR
+
+IGST
+
+Grand Total
+
+====================================================
+10. UI IMPROVEMENTS
+====================================================
+
+Increase spacing.
+
+Proper padding.
+
+Consistent input height.
+
+Proper column alignment.
+
+No clipped text.
+
+No overlapping controls.
+
+No unnecessary scrolling inside the popup.
+
+====================================================
+11. RESPONSIVE
+====================================================
+
+The Purchase Bill dialog should resize properly.
+
+The item table should always remain readable.
+
+Avoid horizontal scrolling whenever possible.
+
+====================================================
+12. DO NOT CHANGE ACCOUNTING LOGIC
+====================================================
+
+This is a UI/UX improvement only.
+
+Do NOT modify:
+
+Inventory Posting
+
+Purchase Ledger
+
+GST Calculation
+
+Vendor Ledger
+
+Journal Entries
+
+Stock Update
+
+Batch Logic
+
+Tax Logic
+
+Only improve the Purchase Bill entry screen layout and move the GST Type selector from item level to bill level.
+
+The result should look like a professional ERP purchase entry screen where every column is clearly visible and easy to use.

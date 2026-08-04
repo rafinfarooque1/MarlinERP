@@ -286,7 +286,12 @@ export default function ImportData() {
     try {
       const r = await rollbackBatch.mutateAsync({ id: rollbackTarget.id });
       setRollbackTarget(null);
-      toast.success(`Rolled back — ${r.removed} record${r.removed === 1 ? '' : 's'} removed.`);
+      const v = r.verification;
+      if (v && !v.ok) {
+        toast.warning(`Deleted ${r.removed} record${r.removed === 1 ? '' : 's'}, but the automatic post-deletion check flagged an issue — check the audit log.`);
+      } else {
+        toast.success(`Import deleted — ${r.removed} record${r.removed === 1 ? '' : 's'} removed.${v ? ' Books verified: balanced, nothing left behind.' : ''}`);
+      }
     } catch (e: any) {
       setRollbackTarget(null);
       const body = e?.data as ImportRollbackBlocked | undefined;
@@ -373,6 +378,7 @@ export default function ImportData() {
                     {voucher
                       ? `Every voucher in the file is stamped to this location and its cash/bank ledgers — collections allocate against ${partyWord} ${module === 'receipts' ? 'invoices' : 'bills'} raised here (Head Office sees all locations). Pick it before uploading.`
                       : `Every ${module === 'sales' ? 'invoice' : 'bill'} in the file is recorded at this location — its stock, ledgers and reports carry the effects. Pick it before uploading.`}
+                    {' '}Location determines which branch/warehouse owns the imported record.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -400,7 +406,7 @@ export default function ImportData() {
                     ? `Columns marked * are required. One row per voucher. ${module === 'receipts' ? 'Against Invoice' : 'Against Bill'} settles only that ${module === 'receipts' ? 'invoice' : 'bill'}; blank auto-allocates oldest-first, excess becomes a ${partyWord} advance. ${module === 'receipts' ? 'Received In' : 'Paid From'} is Cash, Bank or an exact bank ledger name.`
                     : txn
                       ? `Columns marked * are required. One row per invoice line — rows of one invoice must sit together with the same invoice number, date and ${partyWord}. Prices are GST-exclusive; GST comes from the product master.`
-                      : 'Columns marked * are required. Duplicate names are flagged — you decide at commit whether to skip or update them.'}
+                      : 'Columns marked * are required. Location determines which branch/warehouse owns the imported record — use "Head Office" or an exact warehouse/outlet name. Duplicate names are flagged — you decide at commit whether to skip or update them.'}
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-wrap items-center gap-3">
@@ -592,9 +598,11 @@ export default function ImportData() {
                     <Table>
                       <TableHeader>
                         <TableRow>
+                          <TableHead>Batch ID</TableHead>
                           <TableHead>When</TableHead>
                           <TableHead>Module</TableHead>
                           <TableHead>File</TableHead>
+                          <TableHead>Location</TableHead>
                           <TableHead>By</TableHead>
                           <TableHead className="text-right">Rows</TableHead>
                           <TableHead className="text-right">Imported</TableHead>
@@ -606,9 +614,11 @@ export default function ImportData() {
                       <TableBody>
                         {batches.map((b) => (
                           <TableRow key={b.id}>
+                            <TableCell className="font-mono text-xs whitespace-nowrap">{b.displayId ?? `IMP${String(b.id).padStart(6, '0')}`}</TableCell>
                             <TableCell className="whitespace-nowrap">{fmtTime(b.createdAt)}</TableCell>
                             <TableCell>{MODULE_LABEL(b.module)}</TableCell>
                             <TableCell className="max-w-[14rem] truncate" title={b.filename}>{b.filename}</TableCell>
+                            <TableCell className="whitespace-nowrap">{b.locationName ?? '—'}</TableCell>
                             <TableCell>{b.createdBy}</TableCell>
                             <TableCell className="text-right">{b.totalRows}</TableCell>
                             <TableCell className="text-right">
@@ -627,7 +637,7 @@ export default function ImportData() {
                                   disabled={!perm.canDelete || rollbackBatch.isPending}
                                   onClick={() => setRollbackTarget(b)}
                                 >
-                                  <RotateCcw className="w-4 h-4 mr-1" />Rollback
+                                  <RotateCcw className="w-4 h-4 mr-1" />Delete
                                 </Button>
                               )}
                             </TableCell>
@@ -728,8 +738,11 @@ export default function ImportData() {
       <Dialog open={rollbackTarget != null} onOpenChange={(open) => { if (!open) setRollbackTarget(null); }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Roll back this import?</DialogTitle>
+            <DialogTitle>Delete this import?</DialogTitle>
             <DialogDescription>
+              {rollbackTarget && <span className="block font-medium text-foreground mb-2">
+                This will permanently remove ALL records imported in batch {rollbackTarget.displayId ?? `IMP${String(rollbackTarget.id).padStart(6, '0')}`}. This action cannot be undone.
+              </span>}
               {rollbackTarget && (isVoucher(rollbackTarget.module) ? (
                 <>Every voucher created by "{rollbackTarget.filename}" ({rollbackTarget.importedRows} voucher{rollbackTarget.importedRows === 1 ? '' : 's'}) will be
                 removed — allocations unwound so {rollbackTarget.module === 'receipts' ? 'invoice' : 'bill'} dues are restored, and any advances they created withdrawn.
@@ -749,7 +762,7 @@ export default function ImportData() {
             <Button variant="outline" onClick={() => setRollbackTarget(null)}>Cancel</Button>
             <Button variant="destructive" onClick={handleRollback} disabled={rollbackBatch.isPending}>
               {rollbackBatch.isPending && <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />}
-              Roll back
+              Delete permanently
             </Button>
           </DialogFooter>
         </DialogContent>

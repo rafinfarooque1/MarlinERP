@@ -114,6 +114,7 @@ export async function createCustomerWithLedger(
   });
   await applyPartyExtras("customers", row.id, { pan, notes });
   const ledgerId = await ensureCustomerLedger(row.id, row.name);
+  if (ledgerId) await stampLedgerLocation(ledgerId, stamp);
   return { row, ledgerId };
 }
 
@@ -132,7 +133,22 @@ export async function createVendorWithLedger(
   });
   await applyPartyExtras("vendors", row.id, { pan, notes });
   const ledgerId = await ensureVendorLedger(row.id, row.name);
+  if (ledgerId) await stampLedgerLocation(ledgerId, stamp);
   return { row, ledgerId };
+}
+
+/**
+ * Party ledgers inherit the party's location (display/ownership only — report
+ * scoping stays document-based). Only fills a NULL stamp: an existing ledger
+ * that was deliberately re-homed or cleared is never overridden.
+ * location_type/location_id on account_ledgers are raw-migration columns.
+ */
+async function stampLedgerLocation(ledgerId: number, stamp: LocationStamp): Promise<void> {
+  await pool.query(
+    `UPDATE account_ledgers SET location_type = $1, location_id = $2
+      WHERE id = $3 AND location_type IS NULL`,
+    [stamp.type, stamp.id, ledgerId],
+  ).catch(() => {}); // non-fatal, same contract as ensure*Ledger
 }
 
 // ── Credit-control fields (raw columns on customers) ────────────────────────

@@ -34,6 +34,7 @@ import { resolveActingLocation } from "../lib/productionCosting";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE } from "../lib/featureFlags";
 import { isValidGstSlab } from "../lib/gst";
 import { buildSaleLines } from "./sales";
+import { buildDerivedPostings } from "./journal";
 import { priceBill, buildNameMaps, resolveSupplyTaxType, type NameMaps } from "./purchases";
 import {
   importSaleDoc, importPurchaseDoc,
@@ -101,9 +102,18 @@ const OPENING_COLS: ColSpec[] = [
 const NOTES_COL: ColSpec = { key: "notes", header: "Notes", example: "Migrated from old ERP", hint: "Free text", aliases: ["notes", "remarks", "note", "comment", "comments"] };
 
 const PARTY_LOCATION_COL: ColSpec = {
-  key: "location", header: "Location", example: "Head Office",
-  hint: "Head Office, or the exact name of a warehouse/outlet; blank = your default location",
+  key: "location", header: "Location", required: true, example: "Head Office",
+  hint: "Required — determines which branch/warehouse owns the imported record. Head Office, or the exact name of a warehouse/outlet",
   aliases: ["location", "locationname", "branch", "branchname", "assignedlocation", "site", "warehouse", "outlet"],
+};
+
+// Transaction/voucher files are imported INTO one location picked at upload;
+// this column is an optional cross-check so a file exported for one branch
+// cannot be silently committed into another.
+const TXN_LOCATION_COL: ColSpec = {
+  key: "location", header: "Location", example: "Head Office",
+  hint: "Optional cross-check — must match the location you pick at upload; a different location is an error",
+  aliases: ["location", "locationname", "branch", "branchname", "site"],
 };
 
 const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
@@ -133,6 +143,7 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
     columns: [
       { key: "name", header: "Ledger Name", required: true, example: "Office Electricity", hint: "Ledger name (required, must be unique)", aliases: ["ledgername", "name", "accountname", "account", "ledger"] },
       { key: "group", header: "Ledger Group", required: true, example: "Indirect Expense", hint: "Must match an existing group — see the 'Valid Groups' sheet", aliases: ["ledgergroup", "group", "under", "parentgroup", "parent", "groupname", "accountgroup"] },
+      PARTY_LOCATION_COL,
       ...OPENING_COLS,
       { key: "gstApplicable", header: "GST Applicable", example: "No", hint: "Yes or No", aliases: ["gstapplicable", "gst", "gstyn"] },
       NOTES_COL,
@@ -160,6 +171,7 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
       { key: "paymentMode", header: "Payment Mode", example: "Cash", hint: "Cash / UPI / Bank / Credit (card, NEFT, RTGS, cheque count as Bank)", aliases: ["paymentmode", "mode", "paymenttype", "method", "paymentmethod", "modeofpayment"] },
       { key: "reference", header: "Reference", example: "", hint: "Cheque / UTR / reference number", aliases: ["reference", "referenceno", "refno", "ref", "chequeno", "utr", "utrno", "txnid"] },
       { key: "narration", header: "Narration", example: "Migrated from old ERP", hint: "Free text (informational)", aliases: ["narration", "notes", "remarks", "note", "comment", "comments"] },
+      TXN_LOCATION_COL,
     ],
   },
   purchases: {
@@ -178,6 +190,7 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
       { key: "paidAmount", header: "Paid Amount", example: 0, hint: "Amount already paid — recorded as a settlement from the selected location's cash", aliases: ["paidamount", "amountpaid", "paid", "advancepaid"] },
       { key: "reference", header: "Reference", example: "", hint: "Cheque / UTR / reference number", aliases: ["reference", "referenceno", "refno", "ref", "chequeno", "utr", "utrno", "txnid"] },
       { key: "narration", header: "Narration", example: "Migrated from old ERP", hint: "Stored on the bill", aliases: ["narration", "notes", "remarks", "note", "comment", "comments"] },
+      TXN_LOCATION_COL,
     ],
   },
   receipts: {
@@ -192,6 +205,7 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
       { key: "againstInvoice", header: "Against Invoice", example: "", hint: "Optional invoice number — the amount settles ONLY that invoice; blank auto-allocates against the customer's oldest unpaid invoices", aliases: ["againstinvoice", "against", "againstbill", "invoiceno", "invoicenumber", "invoice", "billno", "billnumber", "againstinvoiceno"] },
       { key: "reference", header: "Reference", example: "", hint: "Cheque / UTR / reference number", aliases: ["reference", "referenceno", "refno", "ref", "chequeno", "utr", "utrno", "txnid"] },
       { key: "narration", header: "Narration", example: "Migrated from old ERP", hint: "Stored on the voucher", aliases: ["narration", "notes", "remarks", "note", "comment", "comments", "description"] },
+      TXN_LOCATION_COL,
     ],
   },
   payments: {
@@ -206,6 +220,7 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
       { key: "againstInvoice", header: "Against Bill", example: "", hint: "Optional bill number — the amount settles ONLY that bill; blank auto-allocates against the vendor's oldest unpaid bills", aliases: ["againstbill", "against", "againstinvoice", "billno", "billnumber", "invoiceno", "invoicenumber", "invoice", "againstbillno"] },
       { key: "reference", header: "Reference", example: "", hint: "Cheque / UTR / reference number", aliases: ["reference", "referenceno", "refno", "ref", "chequeno", "utr", "utrno", "txnid"] },
       { key: "narration", header: "Narration", example: "Migrated from old ERP", hint: "Stored on the voucher", aliases: ["narration", "notes", "remarks", "note", "comment", "comments", "description"] },
+      TXN_LOCATION_COL,
     ],
   },
 };
@@ -485,32 +500,6 @@ function validateRow(
     if ((values.address ?? "").trim()) norm.address = values.address.trim();
     if ((values.notes ?? "").trim()) norm.notes = values.notes.trim();
 
-    // Assigned location — optional. Blank keeps the batch default (the
-    // uploader's own location). A named location must exist AND be inside the
-    // uploader's scope: a branch user must not be able to home a record
-    // outside (or hide one from) their own branch.
-    const locRaw = (values.location ?? "").trim();
-    if (locRaw && ctx.partyLocations) {
-      const lkey = normHeader(locRaw);
-      const resolved = (lkey === "headoffice" || lkey === "ho" || lkey === "hq")
-        ? { type: "headoffice", id: 0, name: "Head Office" }
-        : ctx.partyLocations.get(lkey);
-      if (!resolved) {
-        errors.push(`Location "${locRaw}" does not match Head Office or any warehouse/outlet`);
-        suggestions.push(`Use "Head Office" or an exact warehouse/outlet name, or leave blank`);
-      } else if (ctx.allowedLocationKeys && resolved.type === "headoffice" && !ctx.allowedLocationKeys.has("headoffice:0")) {
-        errors.push(`You do not have access to assign records to Head Office`);
-        suggestions.push("Leave the Location column blank to use your own location");
-      } else if (ctx.allowedLocationKeys && resolved.type !== "headoffice" && !ctx.allowedLocationKeys.has(`${resolved.type}:${resolved.id}`)) {
-        errors.push(`You do not have access to assign records to "${resolved.name}"`);
-        suggestions.push("Leave the Location column blank to use your own location");
-      } else {
-        norm.locationType = resolved.type;
-        norm.locationId = resolved.id;
-        norm.locationName = resolved.name;
-      }
-    }
-
     if (module === "customers") {
       const cl = parseMoney((values.creditLimit ?? "").trim());
       if (cl !== null) {
@@ -544,6 +533,39 @@ function validateRow(
     if (gstApp === "invalid") warnings.push(`GST Applicable "${values.gstApplicable}" not understood — leaving unset (use Yes or No)`);
     else if (gstApp !== null) norm.gstApplicable = gstApp;
     if ((values.notes ?? "").trim()) norm.notes = values.notes.trim();
+  }
+
+  // Assigned location — REQUIRED for all three master modules: every imported
+  // customer, vendor and ledger is owned by exactly one branch/warehouse
+  // (spec: "Location determines which branch/warehouse owns the imported
+  // record"). A named location must exist AND be inside the uploader's scope:
+  // a branch user must not be able to home a record outside (or hide one
+  // from) their own branch.
+  if (ctx.partyLocations) {
+    const locRaw = (values.location ?? "").trim();
+    if (!locRaw) {
+      errors.push("Location is required — it decides which branch/warehouse owns this record");
+      suggestions.push(`Use "Head Office" or an exact warehouse/outlet name`);
+    } else {
+      const lkey = normHeader(locRaw);
+      const resolved = (lkey === "headoffice" || lkey === "ho" || lkey === "hq")
+        ? { type: "headoffice", id: 0, name: "Head Office" }
+        : ctx.partyLocations.get(lkey);
+      if (!resolved) {
+        errors.push(`Location "${locRaw}" does not match Head Office or any warehouse/outlet`);
+        suggestions.push(`Use "Head Office" or an exact warehouse/outlet name`);
+      } else if (ctx.allowedLocationKeys && resolved.type === "headoffice" && !ctx.allowedLocationKeys.has("headoffice:0")) {
+        errors.push(`You do not have access to assign records to Head Office`);
+        suggestions.push("Use your own location's name in the Location column");
+      } else if (ctx.allowedLocationKeys && resolved.type !== "headoffice" && !ctx.allowedLocationKeys.has(`${resolved.type}:${resolved.id}`)) {
+        errors.push(`You do not have access to assign records to "${resolved.name}"`);
+        suggestions.push("Use your own location's name in the Location column");
+      } else {
+        norm.locationType = resolved.type;
+        norm.locationId = resolved.id;
+        norm.locationName = resolved.name;
+      }
+    }
   }
 
   // Opening balance + Dr/Cr — all three modules
@@ -706,6 +728,35 @@ interface TxnDocAcc {
  * priceBill) so paid-amount checks and GST cross-checks can never disagree
  * with what actually gets recorded.
  */
+/**
+ * Optional per-row Location cross-check for transaction/voucher files.
+ * Every document in the file is recorded at the batch's location (picked at
+ * upload) — a non-blank Location cell must therefore name that SAME location.
+ * This catches "exported for branch A, imported into branch B" mistakes.
+ * Mirror-safe: matches on the normalised NAME, never on type+id.
+ */
+async function loadRowLocationCheck(loc: { type: string; id: number }): Promise<(locRaw: string) => string | null> {
+  const [{ rows: whs }, { rows: outs }] = await Promise.all([
+    pool.query<any>(`SELECT id, name FROM warehouses`),
+    pool.query<any>(`SELECT id, name FROM outlets`),
+  ]);
+  const known = new Set<string>();
+  for (const r of [...whs, ...outs]) known.add(normHeader(String(r.name)));
+  let batchName = "Head Office";
+  if (loc.type === "warehouse") batchName = String(whs.find((w: any) => Number(w.id) === loc.id)?.name ?? "warehouse");
+  else if (loc.type === "outlet") batchName = String(outs.find((o: any) => Number(o.id) === loc.id)?.name ?? "outlet");
+  return (locRaw: string): string | null => {
+    const lkey = normHeader(locRaw);
+    const isHO = lkey === "headoffice" || lkey === "ho" || lkey === "hq";
+    const matches = loc.type === "headoffice" ? isHO : lkey === normHeader(batchName);
+    if (matches) return null;
+    if (!isHO && !known.has(lkey)) {
+      return `Location "${locRaw}" does not match Head Office or any warehouse/outlet`;
+    }
+    return `Location "${locRaw}" does not match "${batchName}" — this file is being imported into ${batchName}; re-upload with the right location selected`;
+  };
+}
+
 async function validateTransactionRows(
   module: TxnModule,
   rowsIn: TxnRowInput[],
@@ -715,6 +766,7 @@ async function validateTransactionRows(
   counts: { valid: number; warning: number; error: number; needsParty: number };
 }> {
   const ctx = await loadTxnContext(module, loc);
+  const checkRowLoc = await loadRowLocationCheck(loc);
   const todayIso = new Date().toISOString().slice(0, 10);
   const partyLabel = module === "sales" ? "Customer" : "Vendor";
 
@@ -742,6 +794,13 @@ async function validateTransactionRows(
       s.warnings.push(`Date ${dateIso} is in the future`);
     }
     if (dateIso) s.norm.dateIso = dateIso;
+
+    // Location cross-check (optional column)
+    const rowLocRaw = (values.location ?? "").trim();
+    if (rowLocRaw) {
+      const locErr = checkRowLoc(rowLocRaw);
+      if (locErr) s.errors.push(locErr);
+    }
 
     // Party
     const partyName = (values.party ?? "").trim();
@@ -1152,6 +1211,7 @@ async function validateVoucherRows(
   counts: { valid: number; warning: number; error: number; needsParty: number };
 }> {
   const ctx = await loadVoucherContext(module, loc);
+  const checkRowLoc = await loadRowLocationCheck(loc);
   const todayIso = new Date().toISOString().slice(0, 10);
   const partyLabel = module === "receipts" ? "Customer" : "Vendor";
   const docLabel = module === "receipts" ? "Invoice" : "Bill";
@@ -1196,6 +1256,13 @@ async function validateVoucherRows(
       s.warnings.push(`Date ${dateIso} is in the future`);
     }
     if (dateIso) s.norm.dateIso = dateIso;
+
+    // Location cross-check (optional column)
+    const rowLocRaw = (values.location ?? "").trim();
+    if (rowLocRaw) {
+      const locErr = checkRowLoc(rowLocRaw);
+      if (locErr) s.errors.push(locErr);
+    }
 
     // Party
     const partyName = (values.party ?? "").trim();
@@ -1318,9 +1385,15 @@ async function validateVoucherRows(
 
 // ── Serialisation ────────────────────────────────────────────────────────────
 
+/** Human-facing batch id shown in history, dialogs and the audit trail. */
+function batchDisplayId(id: number): string {
+  return `IMP${String(id).padStart(6, "0")}`;
+}
+
 function batchJson(b: any) {
   return {
     id: Number(b.id),
+    displayId: batchDisplayId(Number(b.id)),
     module: b.module,
     filename: b.filename,
     status: b.status,
@@ -1537,11 +1610,12 @@ router.post(
       for (const r of rows) if (!existingByName.has(r.lname)) existingByName.set(r.lname, Number(r.id));
     }
 
-    // Party modules: index of assignable locations, plus which of them the
+    // Master modules: index of assignable locations, plus which of them the
     // uploader may actually assign (Head Office = all; branch = own scope).
+    // Ledgers included — an imported ledger is owned by a location too.
     let partyLocations: ValidateContext["partyLocations"];
     let allowedLocationKeys: ValidateContext["allowedLocationKeys"];
-    if (module === "customers" || module === "vendors") {
+    if (module === "customers" || module === "vendors" || module === "ledgers") {
       partyLocations = new Map();
       const [{ rows: whs }, { rows: outs }] = await Promise.all([
         pool.query<any>(`SELECT id, name FROM warehouses`),
@@ -1747,23 +1821,48 @@ router.post("/imports/batches/:id/resolve-parties", requireModuleAction(PERM, "a
 
 // ── 3. History + detail ──────────────────────────────────────────────────────
 
+/** Resolve a batch's location stamp to a display name for the history list. */
+async function locationNameResolver(): Promise<(b: any) => string | null> {
+  const [{ rows: whs }, { rows: outs }] = await Promise.all([
+    pool.query<any>(`SELECT id, name FROM warehouses`),
+    pool.query<any>(`SELECT id, name FROM outlets`),
+  ]);
+  const wh = new Map<number, string>(whs.map((r: any) => [Number(r.id), String(r.name)] as [number, string]));
+  const out = new Map<number, string>(outs.map((r: any) => [Number(r.id), String(r.name)] as [number, string]));
+  return (b: any): string | null => {
+    const t = b.location_type ?? null;
+    if (!t) return null;
+    if (t === "headoffice") return "Head Office";
+    if (t === "warehouse") return wh.get(Number(b.location_id)) ?? `Warehouse #${b.location_id}`;
+    if (t === "outlet") return out.get(Number(b.location_id)) ?? `Outlet #${b.location_id}`;
+    return String(t);
+  };
+}
+
 router.get("/imports/batches", requireModuleView(PERM), async (_req: Request, res: Response): Promise<void> => {
-  const { rows } = await pool.query(`SELECT * FROM import_batches ORDER BY id DESC LIMIT 200`);
-  res.json({ batches: rows.map(batchJson) });
+  const [{ rows }, nameOf] = await Promise.all([
+    pool.query(`SELECT * FROM import_batches ORDER BY id DESC LIMIT 200`),
+    locationNameResolver(),
+  ]);
+  res.json({ batches: rows.map((b: any) => ({ ...batchJson(b), locationName: nameOf(b) })) });
 });
 
 router.get("/imports/batches/:id", requireModuleView(PERM), async (req: Request, res: Response): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
   const { rows: [batch] } = await pool.query(`SELECT * FROM import_batches WHERE id = $1`, [id]);
   if (!batch) { res.status(404).json({ error: "Import batch not found" }); return; }
-  const { rows } = await pool.query(`SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [id]);
-  res.json({ batch: batchJson(batch), rows: rows.map(rowJson) });
+  const [{ rows }, nameOf] = await Promise.all([
+    pool.query(`SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [id]),
+    locationNameResolver(),
+  ]);
+  res.json({ batch: { ...batchJson(batch), locationName: nameOf(batch) }, rows: rows.map(rowJson) });
 });
 
 // ── 4. Commit ────────────────────────────────────────────────────────────────
 
 router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), async (req: Request, res: Response): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid batch id" }); return; }
   const body = (req.body ?? {}) as { skipRowIds?: unknown; duplicateAction?: unknown };
   const duplicateAction = body.duplicateAction === "update" ? "update" : "skip";
   const skipSet = new Set<number>(
@@ -1878,6 +1977,14 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
             reference: hn.reference ?? null,
             loc, user,
           });
+          // Batch provenance stamps — the bill, its sale-trail receipt (named
+          // after the NEW invoice number) and any clearing receipts.
+          await pool.query(`UPDATE sales SET import_batch_id = $1 WHERE id = $2`, [id, result.saleId]);
+          await pool.query(
+            `UPDATE receipts SET import_batch_id = $1
+              WHERE (voucher_number = $2 OR id = ANY($3::int[])) AND import_batch_id IS NULL`,
+            [id, result.invoiceNumber, result.clearingReceiptIds ?? []],
+          );
           counts.imported += docRows.length;
           for (const r of docRows) {
             await setRow(r.id, { status: "imported", reason: null, created_record_type: "sale", created_record_id: result.saleId });
@@ -1904,6 +2011,11 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
             reference: hn.reference ?? null,
             loc, user,
           });
+          // Batch provenance stamps — the bill and its settlement payment.
+          await pool.query(`UPDATE purchases SET import_batch_id = $1 WHERE id = $2`, [id, result.purchaseId]);
+          if (result.paymentId) {
+            await pool.query(`UPDATE payments SET import_batch_id = $1 WHERE id = $2`, [id, result.paymentId]);
+          }
           counts.imported += docRows.length;
           for (const r of docRows) {
             await setRow(r.id, { status: "imported", reason: null, created_record_type: "purchase", created_record_id: result.purchaseId });
@@ -1970,6 +2082,8 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
               explicitPurchaseId: norm.explicitPurchaseId != null ? Number(norm.explicitPurchaseId) : null,
             });
         counts.imported++;
+        // Batch provenance stamp (module name === table name here).
+        await pool.query(`UPDATE ${module} SET import_batch_id = $1 WHERE id = $2`, [id, result.id]);
         await setRow(r.id, {
           status: "imported", reason: null,
           created_record_type: module === "receipts" ? "receipt" : "payment",
@@ -2078,6 +2192,16 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
         const { row, ledgerId } = module === "customers"
           ? await createCustomerWithLedger(input, rowStamp)
           : await createVendorWithLedger(input, rowStamp);
+        // Batch provenance stamps — only on records this batch CREATED
+        // (duplicate updates are deliberately never stamped: rollback must
+        // never touch manual data).
+        await pool.query(`UPDATE ${module} SET import_batch_id = $1 WHERE id = $2`, [id, row.id]);
+        if (ledgerId) {
+          await pool.query(
+            `UPDATE account_ledgers SET import_batch_id = $1 WHERE id = $2 AND import_batch_id IS NULL`,
+            [id, ledgerId],
+          );
+        }
         if (module === "customers" && norm.creditLimit !== undefined) {
           await pool.query(`UPDATE customers SET credit_limit = $1 WHERE id = $2`, [norm.creditLimit, row.id]);
         }
@@ -2091,6 +2215,10 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
               notes: `Imported (batch #${id})`, user, ledgerName: name,
             });
             obId = ob.id;
+            await pool.query(
+              `UPDATE opening_balances SET import_batch_id = $1 WHERE id = $2 AND import_batch_id IS NULL`,
+              [id, obId],
+            );
           } else {
             reason = "Created, but the party ledger could not be provisioned — opening balance NOT recorded";
           }
@@ -2156,6 +2284,16 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
         description: descriptionParts.length ? descriptionParts.join(" · ") : null,
         isGroup: false, user,
       });
+      // Location + batch provenance stamps (raw-migration columns — raw SQL
+      // only). Location is required on new batches; rows from batches
+      // validated before the column existed fall back to the batch stamp.
+      const ledgerLoc = typeof norm.locationType === "string" && norm.locationType
+        ? { type: String(norm.locationType), id: Number(norm.locationId ?? 0) }
+        : stamp;
+      await pool.query(
+        `UPDATE account_ledgers SET location_type = $1, location_id = $2, import_batch_id = $3 WHERE id = $4`,
+        [ledgerLoc.type, ledgerLoc.id, id, created.id],
+      );
       let obId: number | null = null;
       if (opening > 0) {
         const ob = await upsertOpeningBalance({
@@ -2164,6 +2302,10 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
           notes: `Imported (batch #${id})`, user, ledgerName: name,
         });
         obId = ob.id;
+        await pool.query(
+          `UPDATE opening_balances SET import_batch_id = $1 WHERE id = $2 AND import_batch_id IS NULL`,
+          [id, obId],
+        );
       }
       counts.imported++;
       await setRow(r.id, {
@@ -2208,9 +2350,107 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
 
 // ── 5. Rollback ──────────────────────────────────────────────────────────────
 
+/**
+ * Per-table counts of records carrying a batch's provenance stamp.
+ * Called BEFORE the deletes (audit breakdown) and AFTER the commit
+ * (leftover check — every count must be zero then).
+ */
+async function batchRecordCounts(
+  q: { query: (sql: string, params?: unknown[]) => Promise<any> },
+  batchId: number,
+): Promise<Record<string, number>> {
+  const { rows: [r] } = await q.query(
+    `SELECT
+       (SELECT COUNT(*) FROM customers        WHERE import_batch_id = $1)::int AS "customers",
+       (SELECT COUNT(*) FROM vendors          WHERE import_batch_id = $1)::int AS "vendors",
+       (SELECT COUNT(*) FROM account_ledgers  WHERE import_batch_id = $1)::int AS "ledgers",
+       (SELECT COUNT(*) FROM opening_balances WHERE import_batch_id = $1)::int AS "openingBalances",
+       (SELECT COUNT(*) FROM sales            WHERE import_batch_id = $1)::int AS "sales",
+       (SELECT COUNT(*) FROM purchases        WHERE import_batch_id = $1)::int AS "purchases",
+       (SELECT COUNT(*) FROM receipts         WHERE import_batch_id = $1)::int AS "receipts",
+       (SELECT COUNT(*) FROM payments         WHERE import_batch_id = $1)::int AS "payments"`,
+    [batchId],
+  );
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(r ?? {})) out[k] = Number(v);
+  return out;
+}
+
+const COUNT_LABELS: Array<[string, string]> = [
+  ["customers", "customers"], ["vendors", "vendors"], ["ledgers", "ledgers"],
+  ["openingBalances", "opening balances"], ["sales", "sales invoices"],
+  ["purchases", "purchase bills"], ["receipts", "receipts"], ["payments", "payments"],
+];
+
+function describeCounts(counts: Record<string, number>): string {
+  const parts = COUNT_LABELS.filter(([k]) => (counts[k] ?? 0) > 0).map(([k, l]) => `${counts[k]} ${l}`);
+  return parts.length ? parts.join(", ") : "no stamped records";
+}
+
+/** Invoice numbers of the sales THIS batch created — captured inside the
+ * delete transaction (before the deletes) so verification can check the
+ * exact documents this rollback touched, immune to unrelated concurrent
+ * activity elsewhere in the books. */
+async function batchSaleInvoiceNumbers(
+  q: { query: (sql: string, params?: unknown[]) => Promise<any> },
+  batchId: number,
+): Promise<string[]> {
+  const { rows } = await q.query(
+    `SELECT invoice_number FROM sales WHERE import_batch_id = $1`, [batchId],
+  );
+  return rows.map((r: any) => String(r.invoice_number)).filter(Boolean);
+}
+
+/**
+ * Post-rollback verification (runs AFTER the delete transaction commits —
+ * the books derive postings through the pool, so an in-transaction check
+ * would not see the uncommitted deletes).
+ *   1. leftoverStamps — nothing anywhere still carries this batch's stamp;
+ *   2. booksBalanced  — every derived posting still nets Dr == Cr;
+ *   3. orphanSaleReceipts — no sale-trail receipt belonging to one of THIS
+ *      batch's (now deleted) invoices survived the rollback. The check is
+ *      exact (by voucher number), so unrelated concurrent writes can neither
+ *      trip it nor mask a real leftover.
+ */
+async function verifyAfterRollback(batchId: number, batchInvoiceNumbers: string[]): Promise<{
+  ok: boolean; leftoverStamps: number; booksBalanced: boolean; orphanSaleReceipts: number;
+}> {
+  const leftover = await batchRecordCounts(pool, batchId);
+  const leftoverStamps = Object.values(leftover).reduce((a, b) => a + b, 0);
+  const postings = await buildDerivedPostings({});
+  const debit = postings.reduce((s: number, p: any) => s + Number(p.debit ?? 0), 0);
+  const credit = postings.reduce((s: number, p: any) => s + Number(p.credit ?? 0), 0);
+  const booksBalanced = Math.abs(debit - credit) < 0.01;
+  let orphanSaleReceipts = 0;
+  if (batchInvoiceNumbers.length > 0) {
+    const { rows: [orph] } = await pool.query<any>(
+      `SELECT COUNT(*)::int AS n FROM receipts WHERE voucher_number = ANY($1)`,
+      [batchInvoiceNumbers],
+    );
+    orphanSaleReceipts = Number(orph?.n ?? 0);
+  }
+  return {
+    ok: leftoverStamps === 0 && booksBalanced && orphanSaleReceipts === 0,
+    leftoverStamps, booksBalanced, orphanSaleReceipts,
+  };
+}
+
 router.post("/imports/batches/:id/rollback", requireModuleAction(PERM, "delete"), async (req: Request, res: Response): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid batch id" }); return; }
   const user = username(req);
+
+  // Deleting an import batch is restricted to top-management roles (level 1 =
+  // Administrator, level 2 = Management) ON TOP of the page delete right —
+  // branch staff must never be able to erase migrated history even if a
+  // permissive page permission slips through. Fails closed on missing role.
+  const hierarchyId = (req as any).employee?.hierarchyId ?? null;
+  const { rows: [lvl] } = await pool.query<any>(`SELECT level FROM hierarchies WHERE id = $1`, [hierarchyId]);
+  const roleLevel = lvl?.level == null ? null : Number(lvl.level);
+  if (roleLevel == null || roleLevel > 2) {
+    res.status(403).json({ error: "Only Admin or Management can delete an import batch." });
+    return;
+  }
 
   const client = await pool.connect();
   try {
@@ -2237,6 +2477,12 @@ router.post("/imports/batches/:id/rollback", requireModuleAction(PERM, "delete")
     if (batch.status !== "committed") {
       await client.query("ROLLBACK"); res.status(409).json({ error: "Only committed batches can be rolled back." }); return;
     }
+
+    // What this batch stamped — captured BEFORE the deletes so the audit
+    // entry can list how many records of each kind were removed, and so
+    // verification can check the exact invoices this rollback deletes.
+    const countsSnapshot = await batchRecordCounts(client, id);
+    const batchInvoices = await batchSaleInvoiceNumbers(client, id);
 
     // ── Transaction batches: reverse whole documents, all-or-nothing ──
     // Runs INSIDE this transaction: if any document is blocked by downstream
@@ -2290,13 +2536,15 @@ router.post("/imports/batches/:id/rollback", requireModuleAction(PERM, "delete")
       );
       await client.query("COMMIT");
 
+      const verification = await verifyAfterRollback(id, batchInvoices);
       logActivity({
         action: "DELETE", module: "imports", entityType: "import_batch", entityId: id,
-        description: `Rolled back ${batch.module} import "${batch.filename}" — reversed ${removed} document${removed === 1 ? "" : "s"} (stock, settlements and books restored)`,
+        description: `Deleted import batch ${batchDisplayId(id)} (${batch.module} import "${batch.filename}") — removed ${describeCounts(countsSnapshot)}; stock, settlements and books restored; verification ${verification.ok ? "passed" : "FAILED"} (books ${verification.booksBalanced ? "balanced" : "NOT balanced"}, ${verification.leftoverStamps} leftover records)`,
         user,
+        metadata: { displayId: batchDisplayId(id), removedCounts: countsSnapshot, verification },
       }).catch(() => {});
 
-      res.json({ batch: batchJson(finishedTxn), removed });
+      res.json({ batch: batchJson(finishedTxn), removed, removedCounts: countsSnapshot, verification });
       return;
     }
 
@@ -2345,13 +2593,15 @@ router.post("/imports/batches/:id/rollback", requireModuleAction(PERM, "delete")
       );
       await client.query("COMMIT");
 
+      const verification = await verifyAfterRollback(id, batchInvoices);
       logActivity({
         action: "DELETE", module: "imports", entityType: "import_batch", entityId: id,
-        description: `Rolled back ${batch.module} import "${batch.filename}" — removed ${removed} voucher${removed === 1 ? "" : "s"} (allocations unwound, dues and advances restored)`,
+        description: `Deleted import batch ${batchDisplayId(id)} (${batch.module} import "${batch.filename}") — removed ${describeCounts(countsSnapshot)}; allocations unwound, dues and advances restored; verification ${verification.ok ? "passed" : "FAILED"} (books ${verification.booksBalanced ? "balanced" : "NOT balanced"}, ${verification.leftoverStamps} leftover records)`,
         user,
+        metadata: { displayId: batchDisplayId(id), removedCounts: countsSnapshot, verification },
       }).catch(() => {});
 
-      res.json({ batch: batchJson(finishedV), removed });
+      res.json({ batch: batchJson(finishedV), removed, removedCounts: countsSnapshot, verification });
       return;
     }
 
@@ -2461,13 +2711,15 @@ router.post("/imports/batches/:id/rollback", requireModuleAction(PERM, "delete")
     );
     await client.query("COMMIT");
 
+    const verification = await verifyAfterRollback(id, batchInvoices);
     logActivity({
       action: "DELETE", module: "imports", entityType: "import_batch", entityId: id,
-      description: `Rolled back ${batch.module} import "${batch.filename}" — removed ${created.length} created record${created.length === 1 ? "" : "s"}`,
+      description: `Deleted import batch ${batchDisplayId(id)} (${batch.module} import "${batch.filename}") — removed ${describeCounts(countsSnapshot)}; verification ${verification.ok ? "passed" : "FAILED"} (books ${verification.booksBalanced ? "balanced" : "NOT balanced"}, ${verification.leftoverStamps} leftover records)`,
       user,
+      metadata: { displayId: batchDisplayId(id), removedCounts: countsSnapshot, verification },
     }).catch(() => {});
 
-    res.json({ batch: batchJson(finished), removed: created.length });
+    res.json({ batch: batchJson(finished), removed: created.length, removedCounts: countsSnapshot, verification });
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
     throw e;
