@@ -24,6 +24,7 @@ import { StateCombobox } from '@/components/ui/state-combobox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { usePermission } from '@/lib/usePermission';
 import { PartyBalance } from '@/lib/partyBalance';
+import { usePartyLocations, rowMatchesLocation, locationValueOf, HEAD_OFFICE_VALUE } from '@/lib/usePartyLocations';
 
 // ── Schemas ───────────────────────────────────────────────────────────────────
 const vendorSchema = z.object({
@@ -35,6 +36,7 @@ const vendorSchema = z.object({
   state: z.string().optional(),
   bankName: z.string().optional(),
   accountNumber: z.string().optional(),
+  location: z.string().optional(),
 });
 type VendorFormValues = z.infer<typeof vendorSchema>;
 
@@ -134,6 +136,7 @@ function VendorLedger({ vendorId }: { vendorId: number }) {
 function VendorSheet({ vendor, onClose, onPay, canPay }: { vendor: any; onClose: () => void; onPay: (v: any) => void; canPay: boolean }) {
   const [activeTab, setActiveTab] = useState<'details' | 'ledger'>('details');
   const { data: ledger } = useGetVendorLedger(vendor.id);
+  const loc = usePartyLocations();
 
   return (
     <Sheet open onOpenChange={v => !v && onClose()}>
@@ -176,7 +179,7 @@ function VendorSheet({ vendor, onClose, onPay, canPay }: { vendor: any; onClose:
               </div>
             </div>
             <Separator />
-            {[['Phone', vendor.phone || '—'], ['Email', vendor.email || '—'], ['State', vendor.state || '—'], ['GSTIN', vendor.gstNumber || vendor.gst_number || '—'], ['Address', vendor.address || '—'], ['Bank Name', vendor.bankName || vendor.bank_name || '—'], ['Account Number', vendor.accountNumber || vendor.account_number || '—']].map(([k, v]) => (
+            {[['Phone', vendor.phone || '—'], ['Email', vendor.email || '—'], ['State', vendor.state || '—'], ['GSTIN', vendor.gstNumber || vendor.gst_number || '—'], ['Location', loc.nameOf(vendor.locationType ?? vendor.location_type, vendor.locationId ?? vendor.location_id)], ['Address', vendor.address || '—'], ['Bank Name', vendor.bankName || vendor.bank_name || '—'], ['Account Number', vendor.accountNumber || vendor.account_number || '—']].map(([k, v]) => (
               <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
                 <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                 <span className="font-medium">{v}</span>
@@ -301,6 +304,8 @@ function PaymentDialog({ vendor, onClose }: { vendor: any; onClose: () => void }
 export default function Vendors() {
   const perm = usePermission('page:/vendors');
   const { data: vendors = [], isLoading } = useListVendors();
+  const loc = usePartyLocations();
+  const [locFilter, setLocFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
@@ -312,24 +317,33 @@ export default function Vendors() {
 
   const form = useForm<VendorFormValues>({
     resolver: zodResolver(vendorSchema),
-    defaultValues: { name: '', phone: '', email: '', address: '', gstNumber: '', state: '', bankName: '', accountNumber: '' },
+    defaultValues: { name: '', phone: '', email: '', address: '', gstNumber: '', state: '', bankName: '', accountNumber: '', location: HEAD_OFFICE_VALUE },
   });
 
   const openEdit = (v: any) => {
     setEditItem(v);
-    form.reset({ name: v.name, phone: v.phone ?? '', email: v.email ?? '', address: v.address ?? '', gstNumber: v.gstNumber ?? '', state: v.state ?? '', bankName: v.bankName ?? '', accountNumber: v.accountNumber ?? '' });
+    form.reset({ name: v.name, phone: v.phone ?? '', email: v.email ?? '', address: v.address ?? '', gstNumber: v.gstNumber ?? '', state: v.state ?? '', bankName: v.bankName ?? '', accountNumber: v.accountNumber ?? '', location: locationValueOf(v.locationType ?? v.location_type, v.locationId ?? v.location_id) });
     setIsOpen(true);
   };
   const closeDialog = () => { setIsOpen(false); setEditItem(null); form.reset(); };
 
   const onSubmit = (data: VendorFormValues) => {
+    // Only Head Office may assign a location; branch users are stamped by
+    // their session on the server, so their payload carries no location.
+    const { location, ...rest } = data;
+    const payload: any = { ...rest };
+    if (loc.isHeadOffice && location) {
+      const [locationType, locationId] = location.split(':');
+      payload.locationType = locationType;
+      payload.locationId = Number(locationId) || 0;
+    }
     if (editItem) {
-      updateMutation.mutate({ id: editItem.id, data: data as any }, {
+      updateMutation.mutate({ id: editItem.id, data: payload as any }, {
         onSuccess: () => { toast.success('Vendor updated'); queryClient.invalidateQueries({ queryKey: getListVendorsQueryKey() }); closeDialog(); },
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
       });
     } else {
-      createMutation.mutate({ data: data as any }, {
+      createMutation.mutate({ data: payload as any }, {
         onSuccess: () => { toast.success('Vendor added'); queryClient.invalidateQueries({ queryKey: getListVendorsQueryKey() }); closeDialog(); },
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
       });
@@ -337,8 +351,9 @@ export default function Vendors() {
   };
 
   const filtered = vendors.filter(v =>
-    v.name.toLowerCase().includes(search.toLowerCase()) ||
-    v.phone?.includes(search)
+    (v.name.toLowerCase().includes(search.toLowerCase()) ||
+     v.phone?.includes(search)) &&
+    rowMatchesLocation(locFilter, (v as any).locationType ?? (v as any).location_type, (v as any).locationId ?? (v as any).location_id)
   );
 
   if (!perm.isLoading && !perm.canView) {
@@ -370,7 +385,7 @@ export default function Vendors() {
           </div>
           <div className="flex gap-2">
             {perm.canDownload && (
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('vendors.csv', filtered.map(v => ({ Name: v.name, Phone: v.phone || '', State: (v as any).state || '', GST: v.gstNumber || '', Balance: (v as any).outstandingBalance || 0 })))}>
+            <Button variant="outline" size="sm" onClick={() => downloadCSV('vendors.csv', filtered.map(v => ({ Name: v.name, Phone: v.phone || '', State: (v as any).state || '', GST: v.gstNumber || '', Location: loc.nameOf((v as any).locationType ?? (v as any).location_type, (v as any).locationId ?? (v as any).location_id), Balance: (v as any).outstandingBalance || 0 })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
             )}
@@ -381,9 +396,22 @@ export default function Vendors() {
         </div>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
-            <Search className="w-4 h-4 text-muted-foreground" />
-            <Input placeholder="Search name or phone..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm" />
+          <div className="p-4 border-b border-border flex flex-col sm:flex-row sm:items-center gap-2 bg-muted/20">
+            <div className="flex items-center gap-2 flex-1">
+              <Search className="w-4 h-4 text-muted-foreground" />
+              <Input placeholder="Search name or phone..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm" />
+            </div>
+            <Select value={locFilter} onValueChange={setLocFilter}>
+              <SelectTrigger className="w-full sm:w-52 h-9 bg-background" data-testid="select-vendor-location-filter">
+                <SelectValue placeholder="All Locations" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Locations</SelectItem>
+                {loc.filterOptions.map(o => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <Table>
             <TableHeader>
@@ -392,16 +420,17 @@ export default function Vendors() {
                 <TableHead>Phone</TableHead>
                 <TableHead>State</TableHead>
                 <TableHead>GST No.</TableHead>
+                <TableHead>Location</TableHead>
                 <TableHead className="text-right">Balance</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
-                  <Truck className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No vendors yet</p>
+                <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
+                  <Truck className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>{vendors.length === 0 ? 'No vendors yet' : 'No vendors match this search or location'}</p>
                 </TableCell></TableRow>
               ) : filtered.map(v => (
                 <TableRow key={v.id} className="hover:bg-muted/10">
@@ -409,6 +438,7 @@ export default function Vendors() {
                   <TableCell className="text-sm text-muted-foreground">{v.phone || '—'}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{(v as any).state || '—'}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{v.gstNumber || '—'}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{loc.nameOf((v as any).locationType ?? (v as any).location_type, (v as any).locationId ?? (v as any).location_id)}</TableCell>
                   <TableCell className="text-right">
                     <PartyBalance kind="vendor" balance={(v as any).outstandingBalance} className="text-sm" />
                   </TableCell>
@@ -461,6 +491,28 @@ export default function Vendors() {
                   </FormItem>
                 )} />
               </div>
+              {loc.isHeadOffice ? (
+                <FormField control={form.control} name="location" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Assigned Location</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value || HEAD_OFFICE_VALUE}>
+                      <FormControl><SelectTrigger data-testid="select-vendor-location"><SelectValue placeholder="Head Office" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {loc.assignOptions.map(o => (
+                          <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[11px] text-muted-foreground">Head Office vendors are shared with every location</p>
+                  </FormItem>
+                )} />
+              ) : (
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">Assigned Location</p>
+                  <div className="h-9 px-3 rounded-md border border-border bg-muted/40 flex items-center text-sm text-muted-foreground">{loc.myLocationLabel}</div>
+                  <p className="text-[11px] text-muted-foreground">Set by your login location</p>
+                </div>
+              )}
               <FormField control={form.control} name="address" render={({ field }) => (
                 <FormItem><FormLabel>Address</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
               )} />

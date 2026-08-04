@@ -81,6 +81,72 @@ function pickVendor(body: StrRecord): StrRecord {
   return r;
 }
 
+/**
+ * Resolve a requested location re-assignment on a party PATCH.
+ *
+ * Returns null when the body carries no locationType (no relocation asked),
+ * the validated `{type, id}` stamp when it may proceed, or `{error, status}`.
+ * Only Head Office users may move a party between locations — a branch user's
+ * writes are stamped by their session, and letting them re-home a record
+ * would let them move data out of (or into) their own scope. The guard runs
+ * on the EFFECTIVE value: the target must exist, and an outlet target is new
+ * outlet activity, refused while outlets are disabled.
+ */
+async function resolveRelocation(
+  req: any,
+): Promise<{ type: string; id: number } | { error: string; status: number } | null> {
+  const body = (req.body ?? {}) as StrRecord;
+  if (!("locationType" in body) || body.locationType == null || body.locationType === "") return null;
+  const emp = req.employee as { branchType?: string } | undefined;
+  if ((emp?.branchType ?? "") !== "headoffice") {
+    return { error: "Only Head Office users can change a record's assigned location", status: 403 };
+  }
+  const type = String(body.locationType);
+  if (type === "headoffice") return { type: "headoffice", id: 0 };
+  if (type !== "warehouse" && type !== "outlet") {
+    return { error: "locationType must be headoffice, warehouse or outlet", status: 400 };
+  }
+  const id = Number(body.locationId);
+  if (!Number.isFinite(id) || id <= 0) {
+    return { error: "locationId is required for a warehouse or outlet", status: 400 };
+  }
+  const table = type === "warehouse" ? "warehouses" : "outlets";
+  const { rows: [target] } = await pool.query(`SELECT id FROM ${table} WHERE id = $1`, [id]);
+  if (!target) return { error: `That ${type} does not exist`, status: 400 };
+  if (type === "outlet" && await outletWritesBlocked(pool)) {
+    return { error: OUTLETS_DISABLED_MESSAGE, status: 409 };
+  }
+  return { type, id };
+}
+
+/**
+ * LBAC gate for single-party routes (mutations and the ledger statement).
+ *
+ * The list endpoints scope by the stored location stamp, but /:id routes
+ * address a row directly — without this check a branch user could read or
+ * edit another location's party just by knowing its id. Same visibility rule
+ * as the lists: customers must be inside the caller's scope; vendors also
+ * pass when stamped Head Office (shared master records). Out-of-scope reads
+ * as "not_found" — a 404 that does not confirm the record exists.
+ */
+async function partyScopeCheck(
+  req: any,
+  kind: "customer" | "vendor",
+  id: number,
+): Promise<"ok" | "not_found"> {
+  const emp = req.employee as { branchType?: string; branchId?: number } | undefined;
+  if ((emp?.branchType ?? "headoffice") === "headoffice") return "ok";
+  const table = kind === "customer" ? "customers" : "vendors";
+  const { rows: [row] } = await pool.query<{ lt: string; lid: number }>(
+    `SELECT COALESCE(location_type, 'headoffice') AS lt, COALESCE(location_id, 0) AS lid
+       FROM ${table} WHERE id = $1`, [id]);
+  if (!row) return "not_found";
+  if (kind === "vendor" && row.lt === "headoffice") return "ok";
+  const { getUserDataScope, isLocationInScope } = await import("../lib/dataScope");
+  const scope = await getUserDataScope({ branchType: String(emp!.branchType), branchId: Number(emp!.branchId) });
+  return isLocationInScope(scope, row.lt, Number(row.lid)) ? "ok" : "not_found";
+}
+
 // ── Credit-control fields & party creation ─────────────────────────────────
 // Shared with the Data Import commit path (lib/partyCreate.ts) so an imported
 // party is provisioned exactly like a manually created one.
@@ -97,7 +163,13 @@ router.get("/customers", requireModuleView(["page:/sales/pos", "page:/accounts/v
   const { getUserDataScope, scopeLocationTypeWhere } = await import("../lib/dataScope");
   const scope = await getUserDataScope(emp);
   const params: any[] = [];
-  const scopeCond = scopeLocationTypeWhere(scope, params, "c");
+  const conds: string[] = [scopeLocationTypeWhere(scope, params, "c")];
+  // View narrowing (page filter or the global selector) — ANDed ON TOP of the
+  // LBAC scope above, so it can only narrow what the caller may already see.
+  const { getLocationFilter } = await import("../lib/requestLocation");
+  const { pushLocationFilter } = await import("../lib/queryFilters");
+  pushLocationFilter(conds, params, getLocationFilter(req),
+    `COALESCE(c.location_type, 'headoffice')`, `c.location_id`);
   const { rows } = await pool.query<any>(`
     SELECT
       c.*,
@@ -107,7 +179,7 @@ router.get("/customers", requireModuleView(["page:/sales/pos", "page:/accounts/v
       GREATEST(0, COALESCE(SUM(${outstandingExpr("s")}), 0)) AS "invoiceOutstanding"
     FROM customers c
     LEFT JOIN sales s ON s.customer_id = c.id
-    WHERE ${scopeCond}
+    WHERE ${conds.join(" AND ")}
     GROUP BY c.id
     ORDER BY c.id
   `, params);
@@ -133,6 +205,9 @@ router.get("/customers", requireModuleView(["page:/sales/pos", "page:/accounts/v
     advanceBalance:      Number(r.advanceBalance),
     creditLimit:         Number(r.credit_limit ?? 0),
     creditDays:          Number(r.credit_days ?? 0),
+    // Raw-migration columns surfaced in camelCase for the UI.
+    locationType:        r.location_type ?? null,
+    locationId:          r.location_id == null ? null : Number(r.location_id),
   })));
 });
 
@@ -144,15 +219,16 @@ router.post("/customers", requireModuleAction("page:/customers", "add"), async (
   }
   const creditErr = validateCreditFields(req.body);
   if (creditErr) { res.status(400).json({ error: creditErr }); return; }
-  // LBAC: stamp location from the authenticated employee's session — never trust client
+  // LBAC: stamp location from the authenticated employee's session — never trust client.
   const empLbac = (req as any).employee as { branchType: string; branchId: number } | undefined;
   let stampType = empLbac?.branchType ?? 'headoffice';
   let stampId   = empLbac?.branchId  ?? 0;
-  // HO users may explicitly assign a customer to a specific location via request body
-  if (stampType === 'headoffice') {
-    const { locationType: ct, locationId: ci } = req.body as { locationType?: string; locationId?: number };
-    if (ct && ci) { stampType = ct; stampId = Number(ci); }
-  }
+  // HO users may assign an explicit location — via the SAME validated resolver
+  // as PATCH (target must exist, non-HO callers are refused), so a bad body
+  // cannot persist a stamp no location filter will ever match.
+  const createLoc = await resolveRelocation(req);
+  if (createLoc && "error" in createLoc) { res.status(createLoc.status).json({ error: createLoc.error }); return; }
+  if (createLoc) { stampType = createLoc.type; stampId = createLoc.id; }
   // Assigning a new customer to a retired outlet is new outlet activity. Guard the
   // EFFECTIVE stamp, not the request body — an outlet-stationed user lands on an
   // outlet through their session without ever naming one. Checked before the
@@ -183,10 +259,13 @@ router.patch("/customers/:id", requireModuleAction("page:/customers", "edit"), a
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   const data = pickCustomer(req.body);
+  if (await partyScopeCheck(req, "customer", id) !== "ok") { res.status(404).json({ error: "Not found" }); return; }
   const creditErr = validateCreditFields(req.body);
   if (creditErr) { res.status(400).json({ error: creditErr }); return; }
   const hasCreditFields = ('creditLimit' in req.body) || ('creditDays' in req.body);
-  if (Object.keys(data).length === 0 && !hasCreditFields) { res.status(400).json({ error: "No valid fields to update" }); return; }
+  const reloc = await resolveRelocation(req);
+  if (reloc && "error" in reloc) { res.status(reloc.status).json({ error: reloc.error }); return; }
+  if (Object.keys(data).length === 0 && !hasCreditFields && !reloc) { res.status(400).json({ error: "No valid fields to update" }); return; }
 
   let row;
   if (Object.keys(data).length > 0) {
@@ -195,6 +274,12 @@ router.patch("/customers/:id", requireModuleAction("page:/customers", "edit"), a
     [row] = await db.select().from(customersTable).where(eq(customersTable.id, id)).limit(1);
   }
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
+  if (reloc) {
+    // Raw columns: drizzle cannot see location_type/location_id, so the
+    // re-assignment writes them via raw SQL (see raw-migration convention).
+    await pool.query(`UPDATE customers SET location_type = $1, location_id = $2 WHERE id = $3`,
+      [reloc.type, reloc.id, id]);
+  }
   await applyCreditFields(id, req.body);
   // Keep the linked debtor ledger's name in sync when the customer is renamed
   if (typeof (data as any).name === "string" && String((data as any).name).trim()) {
@@ -210,6 +295,7 @@ router.patch("/customers/:id", requireModuleAction("page:/customers", "edit"), a
 router.delete("/customers/:id", requireModuleAction("page:/customers", "delete"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
+  if (await partyScopeCheck(req, "customer", id) !== "ok") { res.status(404).json({ error: "Not found" }); return; }
 
   // Always check business documents first — independent of ledger existence
   const { rows: [docCnt] } = await pool.query<{ count: string }>(
@@ -254,7 +340,12 @@ router.get("/vendors", requireModuleView(["page:/production/purchase", "page:/ac
   const scope = await getUserDataScope(emp);
   const params: any[] = [];
   // HO-created vendors (headoffice/null) are shared master records visible to all locations
-  const scopeCond = scopeLocationTypeWhere(scope, params, "v", true);
+  const vendorConds: string[] = [scopeLocationTypeWhere(scope, params, "v", true)];
+  // View narrowing (page filter or global selector) — ANDed on top of LBAC.
+  const { getLocationFilter } = await import("../lib/requestLocation");
+  const { pushLocationFilter } = await import("../lib/queryFilters");
+  pushLocationFilter(vendorConds, params, getLocationFilter(req),
+    `COALESCE(v.location_type, 'headoffice')`, `v.location_id`);
   const { rows } = await pool.query<any>(`
     SELECT
       v.*,
@@ -271,7 +362,7 @@ router.get("/vendors", requireModuleView(["page:/production/purchase", "page:/ac
       ), 0) AS "totalPaid"
     FROM vendors v
     LEFT JOIN purchases p ON p.vendor_id = v.id
-    WHERE ${scopeCond}
+    WHERE ${vendorConds.join(" AND ")}
     GROUP BY v.id
     ORDER BY v.id
   `, params);
@@ -297,6 +388,8 @@ router.get("/vendors", requireModuleView(["page:/production/purchase", "page:/ac
     outstandingBalance: r.outstandingBalance == null ? null : Number(r.outstandingBalance),
     ledgerBalance:      r.ledgerBalance == null ? null : Number(r.ledgerBalance),
     advanceBalance:     Number(r.advanceBalance),
+    locationType:       r.location_type ?? null,
+    locationId:         r.location_id == null ? null : Number(r.location_id),
   })));
 });
 
@@ -310,11 +403,10 @@ router.post("/vendors", requireModuleAction("page:/vendors", "add"), async (req,
   const vendEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
   let vendStampType = vendEmp?.branchType ?? 'headoffice';
   let vendStampId   = vendEmp?.branchId  ?? 0;
-  // HO users may override via request body
-  if (vendStampType === 'headoffice') {
-    const { locationType: ct, locationId: ci } = req.body as { locationType?: string; locationId?: number };
-    if (ct && ci) { vendStampType = ct; vendStampId = Number(ci); }
-  }
+  // HO users may assign an explicit location — same validated resolver as PATCH.
+  const vendLoc = await resolveRelocation(req);
+  if (vendLoc && "error" in vendLoc) { res.status(vendLoc.status).json({ error: vendLoc.error }); return; }
+  if (vendLoc) { vendStampType = vendLoc.type; vendStampId = vendLoc.id; }
   // Same rule as customers, and on the same effective-stamp basis.
   if (vendStampType === 'outlet' && await outletWritesBlocked(pool)) {
     res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
@@ -339,9 +431,21 @@ router.patch("/vendors/:id", requireModuleAction("page:/vendors", "edit"), async
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
   const data = pickVendor(req.body);
-  if (Object.keys(data).length === 0) { res.status(400).json({ error: "No valid fields to update" }); return; }
-  const [row] = await db.update(vendorsTable).set(data).where(eq(vendorsTable.id, id)).returning();
+  if (await partyScopeCheck(req, "vendor", id) !== "ok") { res.status(404).json({ error: "Not found" }); return; }
+  const reloc = await resolveRelocation(req);
+  if (reloc && "error" in reloc) { res.status(reloc.status).json({ error: reloc.error }); return; }
+  if (Object.keys(data).length === 0 && !reloc) { res.status(400).json({ error: "No valid fields to update" }); return; }
+  let row;
+  if (Object.keys(data).length > 0) {
+    [row] = await db.update(vendorsTable).set(data).where(eq(vendorsTable.id, id)).returning();
+  } else {
+    [row] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, id)).limit(1);
+  }
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
+  if (reloc) {
+    await pool.query(`UPDATE vendors SET location_type = $1, location_id = $2 WHERE id = $3`,
+      [reloc.type, reloc.id, id]);
+  }
   // Keep the linked creditor ledger's name in sync when the vendor is renamed
   if (typeof (data as any).name === "string" && String((data as any).name).trim()) {
     await pool.query(
@@ -355,6 +459,7 @@ router.patch("/vendors/:id", requireModuleAction("page:/vendors", "edit"), async
 router.delete("/vendors/:id", requireModuleAction("page:/vendors", "delete"), async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const id = parseInt(raw, 10);
+  if (await partyScopeCheck(req, "vendor", id) !== "ok") { res.status(404).json({ error: "Not found" }); return; }
 
   // Always check business documents first — independent of ledger existence
   const { rows: [docCnt] } = await pool.query<{ count: string }>(
@@ -398,39 +503,88 @@ router.delete("/vendors/:id", requireModuleAction("page:/vendors", "delete"), as
  * ledger's job, and doing it here is what produced two different answers for the
  * same party.
  */
-async function partyDocumentTotals(kind: "vendor" | "customer", id: number) {
+async function partyDocumentTotals(
+  kind: "vendor" | "customer",
+  id: number,
+  // Located view: when the statement is narrowed to one location, these
+  // context figures must describe the SAME slice — a company-wide "billed"
+  // next to a located balance reads like a discrepancy.
+  loc?: { type: string; id: number | null } | null,
+) {
+  const locCond = (typeExpr: string, idExpr: string, params: unknown[]): string => {
+    if (!loc || loc.type === "company") return "TRUE";
+    if (loc.type === "headoffice") return `${typeExpr} = 'headoffice'`; // type alone — HO ids vary per table
+    params.push(loc.type, Number(loc.id ?? 0));
+    return `${typeExpr} = $${params.length - 1} AND ${idExpr} = $${params.length}`;
+  };
   if (kind === "customer") {
+    const params: unknown[] = [id];
+    // Sale location per the sale-location-resolution convention (legacy rows
+    // carry only outlet_id).
+    const cond = locCond(`COALESCE(s.location_type, 'outlet')`, `COALESCE(s.location_id, s.outlet_id, 0)`, params);
     const { rows } = await pool.query<any>(
       `SELECT COALESCE(SUM(total_amount), 0) AS billed, COALESCE(SUM(amount_paid), 0) AS paid
-         FROM sales
-        WHERE customer_id = $1 AND branch_transfer_id IS NULL AND cancelled_at IS NULL`,
-      [id],
+         FROM sales s
+        WHERE s.customer_id = $1 AND s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL AND ${cond}`,
+      params,
     );
     return { totalBilled: Number(rows[0]?.billed ?? 0), totalPaid: Number(rows[0]?.paid ?? 0) };
   }
+  const prParams: unknown[] = [id];
+  const prCond = locCond(`COALESCE(p.location_type, 'headoffice')`, `COALESCE(p.location_id, 0)`, prParams);
+  const payParams: unknown[] = [`VEND-${id}`];
+  const payCond = locCond(`COALESCE(pay.location_type, 'headoffice')`, `COALESCE(pay.location_id, 0)`, payParams);
   const [{ rows: pr }, { rows: payr }] = await Promise.all([
     pool.query<any>(
-      `SELECT COALESCE(SUM(total_amount), 0) AS billed FROM purchases
-        WHERE vendor_id = $1 AND branch_transfer_id IS NULL`,
-      [id],
+      `SELECT COALESCE(SUM(total_amount), 0) AS billed FROM purchases p
+        WHERE p.vendor_id = $1 AND p.branch_transfer_id IS NULL AND ${prCond}`,
+      prParams,
     ),
     pool.query<any>(
       `SELECT COALESCE(SUM(pay.amount), 0) AS paid FROM payments pay
          JOIN account_ledgers al ON al.id = pay.paid_to_ledger_id
-        WHERE al.code = $1`,
-      [`VEND-${id}`],
+        WHERE al.code = $1 AND ${payCond}`,
+      payParams,
     ),
   ]);
   return { totalPurchased: Number(pr[0]?.billed ?? 0), totalPaid: Number(payr[0]?.paid ?? 0) };
 }
 
+/**
+ * The located ledger view is a VIEW request, never authority: a non-HO caller
+ * may only ask for location slices inside their own scope. Head Office and
+ * "company" slices are HO-only — a branch's LBAC does not include them.
+ */
+async function postingFilterInScope(
+  req: any,
+  loc: { type: string; id: number | null } | null,
+): Promise<boolean> {
+  if (!loc) return true;
+  const emp = req.employee as { branchType?: string; branchId?: number } | undefined;
+  if ((emp?.branchType ?? "headoffice") === "headoffice") return true;
+  if (loc.type === "headoffice" || loc.type === "company") return false;
+  const { getUserDataScope, isLocationInScope } = await import("../lib/dataScope");
+  const scope = await getUserDataScope({ branchType: String(emp!.branchType), branchId: Number(emp!.branchId) });
+  return isLocationInScope(scope, loc.type, Number(loc.id ?? 0));
+}
+
 // ── Customer ledger (the customer's account, from the posting stream) ─────
 router.get("/customers/:id/ledger", requireModuleView(["page:/customers", "page:/outstanding"]), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
+  if (await partyScopeCheck(req, "customer", id) !== "ok") { res.status(404).json({ error: "Not found" }); return; }
   const { currentPartyStatement } = await import("../lib/ledgerBalances");
+  // Located view: the global selector's headers (or explicit query params)
+  // narrow the statement to postings stamped with that location. The figures
+  // then describe the located slice, not the company-wide balance.
+  const { getPostingLocationFilter } = await import("../lib/requestLocation");
+  const { postingMatchesLocation } = await import("../lib/postingLocation");
+  const loc = getPostingLocationFilter(req);
+  if (!(await postingFilterInScope(req, loc))) {
+    res.status(403).json({ error: "You do not have access to that location's view" }); return;
+  }
   const [statement, docs] = await Promise.all([
-    currentPartyStatement("customer", id),
-    partyDocumentTotals("customer", id),
+    currentPartyStatement("customer", id, loc ? { postingFilter: (p) => postingMatchesLocation(p as any, loc) } : {}),
+    partyDocumentTotals("customer", id, loc),
   ]);
   res.json({
     // Authoritative: the customer's ledger balance, receivable-positive.
@@ -449,10 +603,17 @@ router.get("/customers/:id/ledger", requireModuleView(["page:/customers", "page:
 // ── Vendor ledger (the vendor's account, from the posting stream) ─────────
 router.get("/vendors/:id/ledger", requireModuleView(["page:/vendors", "page:/outstanding"]), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
+  if (await partyScopeCheck(req, "vendor", id) !== "ok") { res.status(404).json({ error: "Not found" }); return; }
   const { currentPartyStatement } = await import("../lib/ledgerBalances");
+  const { getPostingLocationFilter } = await import("../lib/requestLocation");
+  const { postingMatchesLocation } = await import("../lib/postingLocation");
+  const loc = getPostingLocationFilter(req);
+  if (!(await postingFilterInScope(req, loc))) {
+    res.status(403).json({ error: "You do not have access to that location's view" }); return;
+  }
   const [statement, docs] = await Promise.all([
-    currentPartyStatement("vendor", id),
-    partyDocumentTotals("vendor", id),
+    currentPartyStatement("vendor", id, loc ? { postingFilter: (p) => postingMatchesLocation(p as any, loc) } : {}),
+    partyDocumentTotals("vendor", id, loc),
   ]);
   res.json({
     // Authoritative: the vendor's ledger balance, payable-positive.

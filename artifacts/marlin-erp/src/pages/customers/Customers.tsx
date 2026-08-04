@@ -22,6 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { usePermission } from '@/lib/usePermission';
 import { PartyBalance } from '@/lib/partyBalance';
 import { CollectPaymentDialog } from './CollectPaymentDialog';
+import { usePartyLocations, rowMatchesLocation, locationValueOf, HEAD_OFFICE_VALUE } from '@/lib/usePartyLocations';
 
 const schema = z.object({
   name: z.string().min(1, 'Name required'),
@@ -33,6 +34,7 @@ const schema = z.object({
   notes: z.string().optional(),
   creditLimit: z.coerce.number().min(0, 'Must be ≥ 0').optional(),
   creditDays: z.coerce.number().int('Whole days').min(0, 'Must be ≥ 0').optional(),
+  location: z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -121,6 +123,8 @@ function CustomerLedger({ customerId }: { customerId: number }) {
 export default function Customers() {
   const perm = usePermission('page:/customers');
   const { data: customers = [], isLoading } = useListCustomers();
+  const loc = usePartyLocations();
+  const [locFilter, setLocFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
@@ -131,24 +135,33 @@ export default function Customers() {
   const createMutation = useCreateCustomer();
   const updateMutation = useUpdateCustomer();
 
-  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', phone: '', email: '', address: '', gstNumber: '', state: '', notes: '', creditLimit: 0, creditDays: 0 } });
+  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', phone: '', email: '', address: '', gstNumber: '', state: '', notes: '', creditLimit: 0, creditDays: 0, location: HEAD_OFFICE_VALUE } });
 
   const openEdit = (c: any) => {
     setEditItem(c);
-    form.reset({ name: c.name, phone: c.phone ?? '', email: c.email ?? '', address: c.address ?? '', gstNumber: c.gstNumber ?? '', state: (c as any).state ?? '', notes: c.notes ?? '', creditLimit: Number(c.creditLimit ?? 0), creditDays: Number(c.creditDays ?? 0) });
+    form.reset({ name: c.name, phone: c.phone ?? '', email: c.email ?? '', address: c.address ?? '', gstNumber: c.gstNumber ?? '', state: (c as any).state ?? '', notes: c.notes ?? '', creditLimit: Number(c.creditLimit ?? 0), creditDays: Number(c.creditDays ?? 0), location: locationValueOf((c as any).locationType ?? (c as any).location_type, (c as any).locationId ?? (c as any).location_id) });
     setIsOpen(true);
   };
 
   const closeDialog = () => { setIsOpen(false); setEditItem(null); form.reset(); };
 
   const onSubmit = (data: FormValues) => {
+    // Only Head Office may assign a location; branch users are stamped by
+    // their session on the server, so their payload carries no location.
+    const { location, ...rest } = data;
+    const payload: any = { ...rest };
+    if (loc.isHeadOffice && location) {
+      const [locationType, locationId] = location.split(':');
+      payload.locationType = locationType;
+      payload.locationId = Number(locationId) || 0;
+    }
     if (editItem) {
-      updateMutation.mutate({ id: editItem.id, data: data as any }, {
+      updateMutation.mutate({ id: editItem.id, data: payload as any }, {
         onSuccess: () => { toast.success('Customer updated'); queryClient.invalidateQueries({ queryKey: getListCustomersQueryKey() }); closeDialog(); },
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
       });
     } else {
-      createMutation.mutate({ data: data as any }, {
+      createMutation.mutate({ data: payload as any }, {
         onSuccess: () => { toast.success('Customer added'); queryClient.invalidateQueries({ queryKey: getListCustomersQueryKey() }); closeDialog(); },
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
       });
@@ -156,9 +169,10 @@ export default function Customers() {
   };
 
   const filtered = customers.filter(c =>
-    c.name.toLowerCase().includes(search.toLowerCase()) ||
-    c.phone?.includes(search) ||
-    c.email?.toLowerCase().includes(search.toLowerCase())
+    (c.name.toLowerCase().includes(search.toLowerCase()) ||
+     c.phone?.includes(search) ||
+     c.email?.toLowerCase().includes(search.toLowerCase())) &&
+    rowMatchesLocation(locFilter, (c as any).locationType ?? (c as any).location_type, (c as any).locationId ?? (c as any).location_id)
   );
 
   if (!perm.isLoading && !perm.canView) {
@@ -190,7 +204,7 @@ export default function Customers() {
           </div>
           <div className="flex gap-2">
             {perm.canDownload && (
-            <Button variant="outline" size="sm" onClick={() => downloadCSV('customers.csv', filtered.map(c => ({ Name: c.name, Phone: c.phone || '', Email: c.email || '', State: (c as any).state || '', GST: c.gstNumber || '', Address: c.address || '', Balance: c.totalPurchases || 0 })))}>
+            <Button variant="outline" size="sm" onClick={() => downloadCSV('customers.csv', filtered.map(c => ({ Name: c.name, Phone: c.phone || '', Email: c.email || '', State: (c as any).state || '', GST: c.gstNumber || '', Location: loc.nameOf((c as any).locationType ?? (c as any).location_type, (c as any).locationId ?? (c as any).location_id), Address: c.address || '', Balance: c.totalPurchases || 0 })))}>
               <Download className="w-4 h-4 mr-2" /> Export
             </Button>
             )}
@@ -201,9 +215,22 @@ export default function Customers() {
         </div>
 
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
-            <Search className="w-4 h-4 text-muted-foreground" />
-            <Input placeholder="Search name, phone, or email..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm" />
+          <div className="p-4 border-b border-border flex flex-col sm:flex-row sm:items-center gap-2 bg-muted/20">
+            <div className="flex items-center gap-2 flex-1">
+              <Search className="w-4 h-4 text-muted-foreground" />
+              <Input placeholder="Search name, phone, or email..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm" />
+            </div>
+            <Select value={locFilter} onValueChange={setLocFilter}>
+              <SelectTrigger className="w-full sm:w-52 h-9 bg-background" data-testid="select-customer-location-filter">
+                <SelectValue placeholder="All Locations" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Locations</SelectItem>
+                {loc.filterOptions.map(o => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <Table>
             <TableHeader>
@@ -212,16 +239,17 @@ export default function Customers() {
                 <TableHead>Phone</TableHead>
                 <TableHead>State</TableHead>
                 <TableHead>GST No.</TableHead>
+                <TableHead>Location</TableHead>
                 <TableHead className="text-right">Balance</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={6}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={7}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-16 text-muted-foreground">
-                  <UserCheck className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No customers yet</p>
+                <TableRow><TableCell colSpan={7} className="text-center py-16 text-muted-foreground">
+                  <UserCheck className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>{customers.length === 0 ? 'No customers yet' : 'No customers match this search or location'}</p>
                 </TableCell></TableRow>
               ) : filtered.map(c => (
                 <TableRow key={c.id} className="hover:bg-muted/10">
@@ -229,6 +257,7 @@ export default function Customers() {
                   <TableCell className="text-sm text-muted-foreground">{c.phone || '—'}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{(c as any).state || '—'}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">{c.gstNumber || '—'}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{loc.nameOf((c as any).locationType ?? (c as any).location_type, (c as any).locationId ?? (c as any).location_id)}</TableCell>
                   <TableCell className="text-right">
                     <PartyBalance kind="customer" balance={(c as any).outstandingBalance} className="text-sm" />
                   </TableCell>
@@ -291,6 +320,28 @@ export default function Customers() {
                   </FormItem>
                 )} />
               </div>
+              {loc.isHeadOffice ? (
+                <FormField control={form.control} name="location" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Assigned Location</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value || HEAD_OFFICE_VALUE}>
+                      <FormControl><SelectTrigger data-testid="select-customer-location"><SelectValue placeholder="Head Office" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {loc.assignOptions.map(o => (
+                          <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[11px] text-muted-foreground">Which location this customer belongs to</p>
+                  </FormItem>
+                )} />
+              ) : (
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">Assigned Location</p>
+                  <div className="h-9 px-3 rounded-md border border-border bg-muted/40 flex items-center text-sm text-muted-foreground">{loc.myLocationLabel}</div>
+                  <p className="text-[11px] text-muted-foreground">Set by your login location</p>
+                </div>
+              )}
               <FormField control={form.control} name="address" render={({ field }) => (
                 <FormItem><FormLabel>Address</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
               )} />
@@ -346,7 +397,7 @@ export default function Customers() {
                 </div>
               </div>
               <Separator />
-              {[['Phone', viewItem.phone || '—'], ['Email', viewItem.email || '—'], ['State', (viewItem as any).state || '—'], ['GSTIN', viewItem.gstNumber || '—'], ['Credit Limit', Number((viewItem as any).creditLimit ?? 0) > 0 ? `₹${Number((viewItem as any).creditLimit).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : 'No limit'], ['Credit Days', String(Number((viewItem as any).creditDays ?? 0) || '—')], ['Address', viewItem.address || '—'], ['Notes', viewItem.notes || '—']].map(([k, v]) => (
+              {[['Phone', viewItem.phone || '—'], ['Email', viewItem.email || '—'], ['State', (viewItem as any).state || '—'], ['GSTIN', viewItem.gstNumber || '—'], ['Location', loc.nameOf((viewItem as any).locationType ?? (viewItem as any).location_type, (viewItem as any).locationId ?? (viewItem as any).location_id)], ['Credit Limit', Number((viewItem as any).creditLimit ?? 0) > 0 ? `₹${Number((viewItem as any).creditLimit).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : 'No limit'], ['Credit Days', String(Number((viewItem as any).creditDays ?? 0) || '—')], ['Address', viewItem.address || '—'], ['Notes', viewItem.notes || '—']].map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
                   <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
                   <span className="font-medium">{v}</span>

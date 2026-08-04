@@ -1,0 +1,184 @@
+TASK: Add Location Filter and Location Column to Customers & Vendors
+
+The ERP is now location-based (Head Office, Warehouses, Outlets), so Customers and Vendors should also support location filtering.
+
+====================================================
+CUSTOMERS MODULE
+====================================================
+
+In the Customers page:
+
+1. Add a Location Filter at the top of the page.
+
+Dropdown:
+
+• All Locations (Default)
+• Head Office
+• Warehouse 1
+• Warehouse 2
+• Warehouse 3
+• Outlet 1
+• Outlet 2
+• Outlet 3
+• (All active locations)
+
+2. Add a "Location" column in the customer list.
+
+Example:
+
+Customer Name | Phone | GST | Location | Outstanding | Actions
+
+ABC Traders      9876543210   GST...   Frozen Hub - Ragigudda
+XYZ Foods        9123456789   GST...   Bengaluru Cold Store
+Walk-in Customer             Head Office
+
+3. Selecting a location should filter customers created or assigned to that location.
+
+4. "All Locations" should display every customer.
+
+====================================================
+CUSTOMER FORM
+====================================================
+
+While creating or editing a customer:
+
+Add an "Assigned Location" dropdown.
+
+Options:
+
+• Head Office
+• Warehouse
+• Outlet
+
+Default:
+
+If a Warehouse employee creates a customer:
+→ Automatically select that warehouse.
+
+If an Outlet employee creates a customer:
+→ Automatically select that outlet.
+
+Administrator can select any location.
+
+====================================================
+VENDORS MODULE
+====================================================
+
+Apply the same changes.
+
+Add:
+
+• Location Filter
+• Location Column
+• Assigned Location field
+
+Vendor list should display:
+
+Vendor Name | GST | Phone | Location | Payable | Actions
+
+====================================================
+PERMISSIONS
+====================================================
+
+Administrator
+
+• Can view all locations.
+• Can filter any location.
+• Can change assigned location.
+
+Warehouse User
+
+• Can only view vendors/customers of their warehouse.
+• Filter only shows their warehouse.
+
+Outlet User
+
+• Can only view vendors/customers of their outlet.
+
+Management
+
+• Can view all locations.
+• Read-only unless permission allows editing.
+
+====================================================
+SEARCH
+====================================================
+
+Customer/Vendor search should work together with the location filter.
+
+Example:
+
+Location:
+Frozen Hub - Ragigudda
+
+Search:
+ABC
+
+Only ABC customers from Ragigudda should appear.
+
+====================================================
+REPORTS
+====================================================
+
+Outstanding Receivables
+
+Outstanding Payables
+
+Customer Ledger
+
+Vendor Ledger
+
+Ageing Reports
+
+should also support Location filtering.
+
+====================================================
+IMPORT
+====================================================
+
+Customer Import
+
+Vendor Import
+
+must include a "Location" column.
+
+If blank:
+
+Assign to Head Office.
+
+If invalid:
+
+Show validation error.
+
+====================================================
+DATA MIGRATION
+====================================================
+
+For existing customers/vendors:
+
+If already linked to transactions at a specific location:
+
+Assign that location automatically.
+
+Otherwise:
+
+Assign to Head Office.
+
+No existing transactions should be affected.
+
+====================================================
+VALIDATION
+====================================================
+
+After implementation verify:
+
+✓ Customer page has Location Filter.
+✓ Vendor page has Location Filter.
+✓ Customer list displays Location column.
+✓ Vendor list displays Location column.
+✓ Search works with Location Filter.
+✓ Warehouse users only see their own customers/vendors.
+✓ Outlet users only see their own customers/vendors.
+✓ Administrator can view all locations.
+✓ Reports respect the selected location.
+✓ Existing data remains intact after migration.

@@ -100,12 +100,19 @@ const OPENING_COLS: ColSpec[] = [
 
 const NOTES_COL: ColSpec = { key: "notes", header: "Notes", example: "Migrated from old ERP", hint: "Free text", aliases: ["notes", "remarks", "note", "comment", "comments"] };
 
+const PARTY_LOCATION_COL: ColSpec = {
+  key: "location", header: "Location", example: "Head Office",
+  hint: "Head Office, or the exact name of a warehouse/outlet; blank = your default location",
+  aliases: ["location", "locationname", "branch", "branchname", "assignedlocation", "site", "warehouse", "outlet"],
+};
+
 const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
   customers: {
     title: "Customers",
     columns: [
       { key: "name", header: "Name", required: true, example: "Fresh Mart Traders", hint: "Customer name (required, must be unique)", aliases: ["name", "customername", "customer", "partyname", "party"] },
       ...PARTY_COMMON,
+      PARTY_LOCATION_COL,
       { key: "creditLimit", header: "Credit Limit", example: 50000, hint: "₹ credit limit; blank or 0 for none", aliases: ["creditlimit", "creditlimitrs", "creditamount"] },
       ...OPENING_COLS,
       NOTES_COL,
@@ -116,6 +123,7 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
     columns: [
       { key: "name", header: "Name", required: true, example: "Global Fruits Supply Co", hint: "Vendor name (required, must be unique)", aliases: ["name", "vendorname", "vendor", "suppliername", "supplier", "partyname", "party"] },
       ...PARTY_COMMON,
+      PARTY_LOCATION_COL,
       ...OPENING_COLS,
       NOTES_COL,
     ],
@@ -388,6 +396,10 @@ interface ValidateContext {
   existingLedgerMeta?: Map<string, { id: number; system: boolean }>;
   seenNames: Map<string, number>; // lower name → first row number in this file
   parentCandidates?: ParentCandidate[];
+  /** party modules: normalized location name → resolved location */
+  partyLocations?: Map<string, { type: string; id: number; name: string }>;
+  /** party modules: `${type}:${id}` keys the uploader may assign; null = all (Head Office) */
+  allowedLocationKeys?: Set<string> | null;
 }
 
 function validateRow(
@@ -472,6 +484,32 @@ function validateRow(
     if ((values.state ?? "").trim()) norm.state = values.state.trim();
     if ((values.address ?? "").trim()) norm.address = values.address.trim();
     if ((values.notes ?? "").trim()) norm.notes = values.notes.trim();
+
+    // Assigned location — optional. Blank keeps the batch default (the
+    // uploader's own location). A named location must exist AND be inside the
+    // uploader's scope: a branch user must not be able to home a record
+    // outside (or hide one from) their own branch.
+    const locRaw = (values.location ?? "").trim();
+    if (locRaw && ctx.partyLocations) {
+      const lkey = normHeader(locRaw);
+      const resolved = (lkey === "headoffice" || lkey === "ho" || lkey === "hq")
+        ? { type: "headoffice", id: 0, name: "Head Office" }
+        : ctx.partyLocations.get(lkey);
+      if (!resolved) {
+        errors.push(`Location "${locRaw}" does not match Head Office or any warehouse/outlet`);
+        suggestions.push(`Use "Head Office" or an exact warehouse/outlet name, or leave blank`);
+      } else if (ctx.allowedLocationKeys && resolved.type === "headoffice" && !ctx.allowedLocationKeys.has("headoffice:0")) {
+        errors.push(`You do not have access to assign records to Head Office`);
+        suggestions.push("Leave the Location column blank to use your own location");
+      } else if (ctx.allowedLocationKeys && resolved.type !== "headoffice" && !ctx.allowedLocationKeys.has(`${resolved.type}:${resolved.id}`)) {
+        errors.push(`You do not have access to assign records to "${resolved.name}"`);
+        suggestions.push("Leave the Location column blank to use your own location");
+      } else {
+        norm.locationType = resolved.type;
+        norm.locationId = resolved.id;
+        norm.locationName = resolved.name;
+      }
+    }
 
     if (module === "customers") {
       const cl = parseMoney((values.creditLimit ?? "").trim());
@@ -1490,11 +1528,38 @@ router.post(
       for (const r of rows) if (!existingByName.has(r.lname)) existingByName.set(r.lname, Number(r.id));
     }
 
+    // Party modules: index of assignable locations, plus which of them the
+    // uploader may actually assign (Head Office = all; branch = own scope).
+    let partyLocations: ValidateContext["partyLocations"];
+    let allowedLocationKeys: ValidateContext["allowedLocationKeys"];
+    if (module === "customers" || module === "vendors") {
+      partyLocations = new Map();
+      const [{ rows: whs }, { rows: outs }] = await Promise.all([
+        pool.query<any>(`SELECT id, name FROM warehouses`),
+        pool.query<any>(`SELECT id, name FROM outlets`),
+      ]);
+      for (const w of whs) partyLocations.set(normHeader(String(w.name)), { type: "warehouse", id: Number(w.id), name: String(w.name) });
+      for (const o of outs) partyLocations.set(normHeader(String(o.name)), { type: "outlet", id: Number(o.id), name: String(o.name) });
+      const uploader = (req as any).employee as { branchType: string; branchId: number } | undefined;
+      const { getUserDataScope } = await import("../lib/dataScope");
+      const scope = uploader ? await getUserDataScope(uploader) : null;
+      if (scope && !scope.isHeadOffice) {
+        allowedLocationKeys = new Set<string>([
+          ...scope.warehouseIds.map((i) => `warehouse:${i}`),
+          ...scope.outletIds.map((i) => `outlet:${i}`),
+        ]);
+      } else {
+        allowedLocationKeys = null; // Head Office assigns anywhere
+      }
+    }
+
     const ctx: ValidateContext = {
       existingByName,
       existingLedgerMeta: module === "ledgers" ? existingLedgerMeta : undefined,
       seenNames: new Map(),
       parentCandidates: module === "ledgers" ? await loadParentCandidates() : undefined,
+      partyLocations,
+      allowedLocationKeys,
     };
 
     // Walk data rows. Row numbers reported to the user are SPREADSHEET rows.
@@ -1722,7 +1787,13 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
 
   const module = batch.module as ImportModule;
   const emp = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
-  const stamp = { type: emp?.branchType ?? "headoffice", id: emp?.branchId ?? 0 };
+  // Batch default = the location validated and PERSISTED at upload time, not
+  // the committer's session: a different user pressing Commit must not
+  // silently re-home every blank-location row onto their own branch.
+  const stamp = {
+    type: String(batch.location_type ?? emp?.branchType ?? "headoffice"),
+    id: Number(batch.location_id ?? emp?.branchId ?? 0),
+  };
   const user = username(req);
   const fy = await currentFinancialYear();
 
@@ -1990,9 +2061,14 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
           ...(norm.pan !== undefined ? { pan: norm.pan } : {}),
           ...(norm.notes !== undefined ? { notes: norm.notes } : {}),
         };
+        // A per-row Location column (validated against the uploader's scope at
+        // upload time) overrides the batch default for that row only.
+        const rowStamp = typeof norm.locationType === "string" && norm.locationType
+          ? { type: String(norm.locationType), id: Number(norm.locationId ?? 0) }
+          : stamp;
         const { row, ledgerId } = module === "customers"
-          ? await createCustomerWithLedger(input, stamp)
-          : await createVendorWithLedger(input, stamp);
+          ? await createCustomerWithLedger(input, rowStamp)
+          : await createVendorWithLedger(input, rowStamp);
         if (module === "customers" && norm.creditLimit !== undefined) {
           await pool.query(`UPDATE customers SET credit_limit = $1 WHERE id = $2`, [norm.creditLimit, row.id]);
         }

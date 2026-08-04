@@ -27,6 +27,7 @@ import { ensureChartStructure } from "./lib/chartGroups";
 import { DATE_COLUMNS } from "./lib/dateColumns";
 import { addQuotations } from "./migrations/quotations";
 import { runOrgHierarchyRestructure } from "./migrations/orgHierarchyRestructure";
+import { backfillPartyLocations } from "./migrations/partyLocationBackfill";
 import { addDataImport } from "./migrations/dataImport";
 
 async function runMigrations() {
@@ -3372,6 +3373,16 @@ try {
   await addVoucherProvenance(pool);
 } catch (err) {
   console.error("[migration] voucher_provenance_v1 FAILED (non-fatal):", (err as Error).message);
+}
+
+// Party location backfill — stamps customers/vendors that predate location
+// stamping (NULL location_type) so location filters can see them. Only NULL
+// rows are touched; re-runs are no-ops. Own top-level step so a throw inside
+// runMigrations() can never silently skip it.
+try {
+  await backfillPartyLocations(pool);
+} catch (err) {
+  console.error("[migration] party_location_backfill FAILED (non-fatal):", (err as Error).message);
 }
 
 // Automatic backups and retention. Starts after the migrations above so a

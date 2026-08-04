@@ -411,7 +411,17 @@ export async function currentBalanceIndex(
 export async function currentPartyStatement(
   kind: PartyKind,
   partyId: number,
-  opts: { fromDate?: string | null; toDate?: string | null } = {},
+  opts: {
+    fromDate?: string | null; toDate?: string | null;
+    /**
+     * Presentation narrowing of the posting stream (e.g. a location slice).
+     * Applied AFTER the party's ledger is resolved on the full stream, so a
+     * filter can never make an existing ledger look unprovisioned. NOTE: a
+     * filtered statement's opening/closing are the located view's figures,
+     * not the party's company-wide balance.
+     */
+    postingFilter?: (p: Record<string, any>) => boolean;
+  } = {},
 ): Promise<(LedgerStatement & { hasLedger: boolean }) | { hasLedger: false } & LedgerStatement> {
   const { buildDerivedPostings } = await import("../routes/journal");
   // Derive the posting stream ONCE and hand the same array to both the index
@@ -424,10 +434,13 @@ export async function currentPartyStatement(
   if (ledgerId == null) {
     return { hasLedger: false, ledgerId: 0, opening: 0, closing: 0, totalDebit: 0, totalCredit: 0, entries: [] };
   }
+  const stream = opts.postingFilter
+    ? (postings as Array<Record<string, any>>).filter(opts.postingFilter)
+    : (postings as Array<Record<string, any>>);
   const st = await buildLedgerStatement(buildDerivedPostings as PostingsFn, ledgerId, {
-    ...opts,
+    fromDate: opts.fromDate, toDate: opts.toDate,
     natural: PARTY[kind].natural,
-    postings: postings as Array<Record<string, any>>,
+    postings: stream,
   });
   return { ...st, hasLedger: true };
 }

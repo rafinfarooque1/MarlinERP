@@ -1,0 +1,77 @@
+The Location dropdown already contains "All Locations" and "Head Office", but both currently return the same data. This is incorrect.
+
+The issue is NOT the UI. The issue is the filtering logic.
+
+Head Office must be treated as a normal operational location with its own Location ID and its own transactions.
+
+Required behavior:
+
+• Selecting "Head Office" must show ONLY Head Office transactions.
+• Selecting any Warehouse must show ONLY that Warehouse's transactions.
+• Selecting any Outlet must show ONLY that Outlet's transactions.
+• Selecting "All Locations" must show the consolidated totals of Head Office + all Warehouses + all Outlets.
+
+Currently, Head Office behaves exactly like All Locations. This must be corrected.
+
+Apply this location filtering consistently across the entire ERP:
+
+- Dashboard
+- Sales
+- Purchases
+- Inventory
+- Production
+- Customers
+- Vendors
+- Receipt Voucher
+- Payment Voucher
+- Journal
+- Contra
+- Credit Note
+- Debit Note
+- Cash Book
+- Bank Book
+- Ledger Statements
+- Trial Balance
+- Profit & Loss
+- Balance Sheet
+- GST Reports
+- Payroll
+- Expenses
+- Reports
+
+Head Office must have its own independent:
+
+- Sales
+- Purchases
+- Inventory
+- Production
+- Cash
+- Bank
+- Salary
+- Rent
+- Expenses
+- Customers
+- Vendors
+- Ledgers
+- Receipts
+- Payments
+- Journal Entries
+- Financial Statements
+
+These must NOT include Warehouse or Outlet data.
+
+Only "All Locations" should aggregate data from every location.
+
+Also verify all SQL queries, dashboard services, financial report services, ledger queries, inventory queries, and reporting APIs to ensure they use the selected Location ID correctly. Remove any logic that treats Head Office as equivalent to All Locations.
+
+Validation:
+
+✓ Head Office shows only Head Office data.
+✓ Warehouse shows only Warehouse data.
+✓ Outlet shows only Outlet data.
+✓ All Locations shows consolidated data.
+✓ Profit & Loss changes correctly by location.
+✓ Trial Balance changes correctly by location.
+✓ Balance Sheet changes correctly by location.
+✓ Dashboard KPIs change correctly by location.
+✓ Cash, Bank, Receivables, Payables, GP, NP, Inventory, Production, Salary and Rent all respect the selected location.
