@@ -1,0 +1,72 @@
+TASK: Improve keyboard workflow in the Purchase Bill screen for faster data entry.
+
+Currently, after clicking **Add Line**, the cursor/focus lands on the HSN Code field (or another field), requiring the user to use the mouse before selecting the next item.
+
+This slows down data entry.
+
+=========================================================
+REQUIRED CHANGE
+=========================================================
+
+After clicking **Add Line**:
+
+• Automatically create a new empty line.
+• Automatically place the keyboard focus (cursor) on the **Item Name** field of the newly created row.
+• The Item dropdown should open immediately (or be ready for typing/search), allowing the user to start typing the next item name without touching the mouse.
+
+Example workflow:
+
+1. Complete Item 1.
+2. Press **Add Line**.
+3. New row is created.
+4. Cursor automatically focuses on **Item Name**.
+5. User types the next item name immediately.
+
+No mouse interaction should be required.
+
+=========================================================
+KEYBOARD FLOW
+=========================================================
+
+The entire Purchase Bill should support fast keyboard entry.
+
+Recommended tab order:
+
+Item Name
+→ Quantity
+→ Rate
+→ Discount
+→ GST %
+→ Batch (if applicable)
+→ MFG Date
+→ EXP Date
+
+After the last editable field:
+
+• Pressing Enter should behave like clicking **Add Line**.
+• A new row should be created automatically.
+• Focus should return to the **Item Name** field of the new row.
+
+=========================================================
+DO NOT CHANGE
+=========================================================
+
+Do not auto-focus the following fields:
+
+❌ HSN Code
+❌ Batch
+❌ GST Mode
+❌ GST Type
+
+HSN should continue to populate automatically from the Item Master after selecting the item.
+
+=========================================================
+VALIDATION
+=========================================================
+
+Verify:
+
+• Add Line creates a new row.
+• Cursor always lands on the Item Name field.
+• User can complete an entire Purchase Bill using only the keyboard.
+• Existing calculations, GST, totals, inventory postings, and accounting logic remain unchanged.

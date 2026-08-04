@@ -265,6 +265,40 @@ export default function Purchases() {
 
   const resetForm = () => form.reset({ vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', location: locations.defaultValue, priceMode: 'exclusive', lineItems: [defaultLine], notes: '' });
 
+  /** Add Line for the keyboard workflow: append the row, then land focus on the
+   *  new row's Item picker and open it, so the next item name can be typed
+   *  immediately — no mouse. setTimeout(0) lets React commit the new row first. */
+  const addLine = () => {
+    append({ ...defaultLine, taxType: billTaxType, taxTypeOverride: billTaxTypeOverridden });
+    setTimeout(() => {
+      // The appended row is always the LAST picker in the dialog — resolved
+      // after the DOM update, so it stays correct even if indices shifted.
+      const triggers = document.querySelectorAll<HTMLButtonElement>('[data-testid^="purchase-line-item-"]');
+      const el = triggers[triggers.length - 1];
+      el?.focus();
+      el?.click(); // opens the picker; its search box takes focus on open
+    }, 0);
+  };
+
+  /** Enter inside a line-item text input must never fall through to the form's
+   *  implicit submission (half-typed bills were one Enter away from saving).
+   *  On the row's LAST field (Expiry) Enter acts as Add Line; on every other
+   *  input it walks to the next field in the row's tab order, like Tab. Radix
+   *  selects and the item picker handle Enter themselves and are left alone. */
+  const handleLineKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Enter' || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+    const t = e.target as HTMLElement;
+    if (!(t instanceof HTMLInputElement)) return;
+    e.preventDefault();
+    if (t.dataset.lastField === '1') { addLine(); return; }
+    const container = e.currentTarget;
+    const focusables = Array.from(
+      container.querySelectorAll<HTMLElement>('input, button, [role="combobox"]'),
+    ).filter(el => el.tabIndex >= 0 && !el.hasAttribute('disabled'));
+    const i = focusables.indexOf(t);
+    if (i >= 0) focusables[i + 1]?.focus();
+  };
+
   /** The server may correct the GST type or report anything else it changed —
    *  surfaced rather than swallowed, so a corrected bill is never a surprise. */
   const showWarnings = (resp: any) => {
@@ -601,7 +635,9 @@ export default function Purchases() {
                   </p>
                 </div>
                 <div className="border border-border rounded-lg overflow-x-auto">
-                  <div className="min-w-[890px]">
+                  {/* One Enter handler for every line input: next field, or Add
+                      Line from the row's last field. See handleLineKeyDown. */}
+                  <div className="min-w-[890px]" onKeyDown={handleLineKeyDown}>
                   <div className="grid gap-2 bg-muted/30 text-xs font-medium text-muted-foreground uppercase tracking-wide px-3 py-2.5" style={{ gridTemplateColumns: PURCHASE_GRID }}>
                     <span>Item Name</span>
                     <span>HSN Code</span>
@@ -638,6 +674,7 @@ export default function Purchases() {
                           <SearchableItemSelect
                             className="h-8 text-xs flex-1 min-w-0"
                             placeholder="Select"
+                            data-testid={`purchase-line-item-${index}`}
                             columns={['hsn', 'gst']}
                             items={activeProductsWithSelection(
                               (form.watch(`lineItems.${index}.materialType`) === 'raw_material' ? rawMaterials : form.watch(`lineItems.${index}.materialType`) === 'item' ? finishedItems : materials) as any[],
@@ -657,7 +694,10 @@ export default function Purchases() {
                             }}
                           />
                         </div>
-                        <Input className="h-9 text-xs font-mono" placeholder="HSN" {...form.register(`lineItems.${index}.hsnCode`)} />
+                        {/* HSN fills itself from the Item Master; it is out of
+                            the tab order (still mouse-editable) so Tab goes
+                            Item → Qty as billed. */}
+                        <Input className="h-9 text-xs font-mono" placeholder="HSN" tabIndex={-1} {...form.register(`lineItems.${index}.hsnCode`)} />
                         <Input className="h-9 text-xs text-right" type="number" min={0} step="0.001" {...form.register(`lineItems.${index}.quantity`)} />
                         <Input className="h-9 text-xs text-right" type="number" min={0} step="0.01" {...form.register(`lineItems.${index}.unitCost`)} />
                         <Input className="h-9 text-xs text-right" type="number" min={0} max={100} step="0.1" placeholder="0" {...form.register(`lineItems.${index}.discount`)} />
@@ -668,7 +708,7 @@ export default function Purchases() {
                           <SelectContent>{GST_RATES.map(r => <SelectItem key={r} value={String(r)}>{r}%</SelectItem>)}</SelectContent>
                         </Select>
                         <div className="text-right text-sm font-mono font-medium tabular-nums whitespace-nowrap">₹{fmt(calc.lineTotal)}</div>
-                        <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-destructive justify-self-end" onClick={() => remove(index)} disabled={fields.length === 1}>
+                        <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-8 w-8 text-destructive justify-self-end" onClick={() => remove(index)} disabled={fields.length === 1}>
                           <X className="w-3.5 h-3.5" />
                         </Button>
                       </div>
@@ -686,7 +726,7 @@ export default function Purchases() {
                         <span className="text-[10px] uppercase tracking-wide text-muted-foreground text-right">
                           Expiry <span className="text-destructive">*</span>
                         </span>
-                        <Input className="h-8 text-xs" type="date" {...form.register(`lineItems.${index}.expiryDate`)} />
+                        <Input className="h-8 text-xs" type="date" data-last-field="1" {...form.register(`lineItems.${index}.expiryDate`)} />
                         {(form.formState.errors.lineItems?.[index] as any) ? (
                           <span className="text-[10px] text-destructive">
                             {(form.formState.errors.lineItems?.[index] as any)?.mfgDate?.message
@@ -700,7 +740,7 @@ export default function Purchases() {
                   })}
                   </div>
                 </div>
-                <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => append({ ...defaultLine, taxType: billTaxType, taxTypeOverride: billTaxTypeOverridden })}>
+                <Button type="button" variant="outline" size="sm" className="mt-2" onClick={addLine}>
                   <Plus className="w-3.5 h-3.5 mr-1" /> Add Line
                 </Button>
               </div>

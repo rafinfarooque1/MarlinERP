@@ -26,7 +26,8 @@ interface Setting {
   key: string;
   label: string;
   type: 'toggle' | 'text' | 'select' | 'number';
-  options?: string[];
+  /** Plain strings store as-is; {value,label} pairs store the value and show the label. */
+  options?: Array<string | { value: string; label: string }>;
   defaultValue: any;
   /** Shown under the label — for settings whose consequences aren't obvious. */
   description?: string;
@@ -96,6 +97,18 @@ const SETTING_GROUPS: SettingGroup[] = [
         defaultValue: true,
         description:
           'Shows the coupon-code field at the POS. Independent of the discount setting. Turning this off hides it for new sales and blocks new coupons server-side — past sales that used a coupon keep showing it.',
+      },
+      {
+        key: 'defaultSalesPaymentMode',
+        label: 'Default Sales Payment Mode',
+        type: 'select',
+        options: [
+          { value: 'credit', label: 'Credit (Pay Later)' },
+          { value: 'cash', label: 'Cash' },
+        ],
+        defaultValue: 'credit',
+        description:
+          'The payment mode a new sale opens with at the POS. The cashier can still change it on each sale. Applies to new sales only — existing invoices are never touched.',
       },
     ],
   },
@@ -864,7 +877,10 @@ export default function Settings() {
                     {setting.type === 'select' && (
                       <Select value={String(values[setting.key])} onValueChange={v => set(setting.key, v)}>
                         <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
-                        <SelectContent>{setting.options?.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}</SelectContent>
+                        <SelectContent>{setting.options?.map(o => {
+                          const opt = typeof o === 'string' ? { value: o, label: o } : o;
+                          return <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>;
+                        })}</SelectContent>
                       </Select>
                     )}
                   </div>

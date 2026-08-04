@@ -187,6 +187,13 @@ router.patch("/company/settings", requireModuleAction("page:/company/settings", 
         res.status(400).json({ error: 'Working Days Per Month must be a whole number between 1 and 31' }); return;
       }
     }
+    // POS opening payment mode: only the two modes a new sale can be created
+    // with. Anything else stored here would silently fall back client-side, so
+    // reject it up front.
+    if (gsu.defaultSalesPaymentMode !== undefined && gsu.defaultSalesPaymentMode !== null
+        && gsu.defaultSalesPaymentMode !== 'credit' && gsu.defaultSalesPaymentMode !== 'cash') {
+      res.status(400).json({ error: 'Default Sales Payment Mode must be Credit or Cash' }); return;
+    }
     if (gsu.paidCasualLeavesPerMonth !== undefined && gsu.paidCasualLeavesPerMonth !== null) {
       const pl = Number(gsu.paidCasualLeavesPerMonth);
       const wdEff = Number(gsu.payrollWorkingDays ?? 30);

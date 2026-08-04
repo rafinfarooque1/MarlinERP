@@ -1,0 +1,76 @@
+TASK: Change the default Payment Mode in the Sales (Point of Sale) screen.
+
+Currently, when creating a new Sales Invoice, the default Payment Mode is **Cash**.
+
+This is not suitable for our business because most invoices are raised on credit and collected later.
+
+=========================================================
+REQUIRED CHANGE
+=========================================================
+
+Change the default Payment Mode from:
+
+❌ Cash
+
+to
+
+✅ Credit (Pay Later)
+
+Whenever a user opens the "New Sale / Record Sale" screen:
+
+• Payment Mode should automatically be selected as **Credit (Pay Later)**.
+• The user can manually change it to Cash if it is an immediate cash sale.
+• This default should apply to all new sales only.
+• Existing invoices must not be modified.
+
+=========================================================
+BUSINESS LOGIC
+=========================================================
+
+Default behaviour:
+
+1. Open New Sale
+   → Payment Mode = Credit (Pay Later)
+
+2. If user leaves it as Credit:
+   • Invoice status = Unpaid
+   • Full amount posted to Customer Receivable.
+   • Customer outstanding increases.
+
+3. If user changes Payment Mode to Cash:
+   • Invoice status = Paid
+   • Cash account is debited.
+   • Customer outstanding remains zero.
+
+4. If additional payment modes (Bank, UPI, Card, etc.) are added in future, the default should still remain **Credit (Pay Later)**.
+
+=========================================================
+SAVE USER PREFERENCE
+=========================================================
+
+Add a Company Setting:
+
+Default Sales Payment Mode
+
+Options:
+• Credit (Pay Later)
+• Cash
+
+Default value:
+✅ Credit (Pay Later)
+
+The POS should use this setting when opening a new sale.
+
+This allows the company to change the default later without modifying the code.
+
+=========================================================
+VALIDATION
+=========================================================
+
+Verify:
+
+• New Sale opens with Credit selected by default.
+• Cash sales still work normally after changing the payment mode.
+• Credit sales create customer receivables correctly.
+• Dashboard, Receivables, Customer Ledger, Trial Balance, Cash Book, and Day Book continue to work correctly.
+• Existing sales remain unchanged.

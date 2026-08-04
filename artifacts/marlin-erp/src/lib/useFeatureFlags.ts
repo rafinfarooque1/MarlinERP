@@ -18,6 +18,10 @@ export interface FeatureFlags {
   posDiscountsEnabled: boolean;
   /** POS coupon-code entry. Independent of the discount flag. */
   posCouponsEnabled: boolean;
+  /** The payment mode a NEW sale opens with. Company setting; the cashier can
+   *  always change it per sale. Applies to new sales only — editing keeps the
+   *  stored mode untouched. */
+  defaultSalesPaymentMode: 'credit' | 'cash';
 }
 
 const FLAG_DEFAULTS: FeatureFlags = {
@@ -26,6 +30,9 @@ const FLAG_DEFAULTS: FeatureFlags = {
   // functionality; an admin must explicitly switch them off in Settings.
   posDiscountsEnabled: true,
   posCouponsEnabled: true,
+  // Credit (pay later) by default: most invoices are raised on credit and
+  // collected afterwards, so the counter should not have to flip every sale.
+  defaultSalesPaymentMode: 'credit',
 };
 
 export function useFeatureFlags() {
@@ -34,16 +41,20 @@ export function useFeatureFlags() {
     queryFn: async (): Promise<FeatureFlags> => {
       const s = await customFetch<any>('/api/company/settings');
       const gs = (s?.generalSettings ?? {}) as Record<string, unknown>;
-      const bool = (k: keyof FeatureFlags) => {
+      const bool = (k: 'outletsEnabled' | 'posDiscountsEnabled' | 'posCouponsEnabled'): boolean => {
         const v = gs[k];
         if (typeof v === 'boolean') return v;
         if (typeof v === 'string') return v === 'true';
         return FLAG_DEFAULTS[k];
       };
+      // Only the two supported values pass; anything unrecognised (old data,
+      // hand-edited blob) falls back to the company default of credit.
+      const mode = gs.defaultSalesPaymentMode;
       return {
         outletsEnabled: bool('outletsEnabled'),
         posDiscountsEnabled: bool('posDiscountsEnabled'),
         posCouponsEnabled: bool('posCouponsEnabled'),
+        defaultSalesPaymentMode: mode === 'cash' ? 'cash' : 'credit',
       };
     },
     staleTime: 60_000,

@@ -195,7 +195,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   // control never clears the form value behind it, so editing a historical
   // discounted/couponed sale keeps its stored amounts intact and resubmits
   // them unchanged — which the server explicitly allows while the flag is off.
-  const { flags: featureFlags } = useFeatureFlags();
+  const { flags: featureFlags, isLoading: flagsLoading } = useFeatureFlags();
   const discountsEnabled = featureFlags.posDiscountsEnabled;
   const couponsEnabled = featureFlags.posCouponsEnabled;
   // Location narrowing comes from the ONE shared header context — this page
@@ -450,15 +450,33 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     queryFn: () => customFetch('/api/warehouses'),
   });
 
-  // When the Sales segment forces a specific location, override the default form values
+  // When the Sales segment forces a specific location, override the default form values.
+  // The opening payment mode is a Company Setting (Default Sales Payment Mode,
+  // credit unless changed) — it applies to NEW sales only; openEdit always
+  // carries the stored mode through untouched.
   const effectiveDefaultValues: FormValues = useMemo(() => ({
     ...defaultFormValues,
+    paymentMode: featureFlags.defaultSalesPaymentMode,
     locationType: (forceLocationType ?? defaultFormValues.locationType) as 'outlet' | 'warehouse' | 'headoffice',
     locationId: forceLocationId ?? defaultFormValues.locationId,
-  }), [forceLocationType, forceLocationId]);
+  }), [forceLocationType, forceLocationId, featureFlags.defaultSalesPaymentMode]);
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: effectiveDefaultValues });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
+
+  // Cold-load guard: a create form opened (or a quotation converted) before the
+  // company settings arrived captured the fallback opening mode. Once the
+  // settings resolve, correct the field — but only on a CREATE form the cashier
+  // hasn't touched. Edits always keep the sale's stored mode, and a deliberate
+  // selection (dirty field) is never overridden.
+  useEffect(() => {
+    if (flagsLoading || editItem || !isOpen) return;
+    if (form.getFieldState('paymentMode').isDirty) return;
+    if (form.getValues('paymentMode') !== featureFlags.defaultSalesPaymentMode) {
+      form.setValue('paymentMode', featureFlags.defaultSalesPaymentMode);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flagsLoading, isOpen, editItem, featureFlags.defaultSalesPaymentMode]);
 
   // ── Convert-to-Sale handoff from the Quotations page ─────────────────────
   // The quotation travels via sessionStorage (survives the navigation, never
@@ -487,7 +505,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         locationId: Number(q.locationId ?? 0),
         customerId: q.customerId ?? undefined,
         saleDate: new Date().toISOString().split('T')[0],
-        paymentMode: 'cash',
+        // A converted quotation is a NEW sale — it opens on the company's
+        // default payment mode (already in effectiveDefaultValues) like any other.
         couponCode: q.couponCode ?? '',
         billDiscount: Number(q.billDiscount ?? 0),
         lineItems: (Array.isArray(q.lineItems) && q.lineItems.length > 0 ? q.lineItems : []).map((li: any) => ({
