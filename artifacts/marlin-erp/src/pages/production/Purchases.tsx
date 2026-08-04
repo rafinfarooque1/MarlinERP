@@ -72,6 +72,11 @@ type FormValues = z.infer<typeof schema>;
 
 const defaultLine = { materialType: 'raw_material' as const, materialId: 0, hsnCode: '', quantity: 1, unitCost: 0, discount: 0, gstRate: 5, taxType: 'intra' as const, taxTypeOverride: false, batchNumber: '', mfgDate: '', expiryDate: '' };
 
+/** One shared column template for the item grid header and every row, so the
+ *  columns can never drift out of alignment. Item name gets the widest,
+ *  flexible column; the numeric columns are fixed so nothing overlaps. */
+const PURCHASE_GRID = 'minmax(230px,1fr) 100px 76px 96px 76px 84px 110px 32px';
+
 function fmt(n: number) { return n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
 /** Two-letter state code out of a GSTIN, for the intra/inter hint. */
@@ -178,6 +183,16 @@ export default function Purchases() {
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
   const watchLines = form.watch('lineItems');
   const priceMode = (form.watch('priceMode') ?? 'exclusive') as PriceMode;
+  // Bill-level GST type is a view over the lines: the selector writes every
+  // line at once, so line 0 is the bill's value. The payload keeps carrying
+  // taxType per line — the server posts exactly as before.
+  const billTaxType = (watchLines?.[0]?.taxType ?? 'intra') as 'intra' | 'inter';
+  const billTaxTypeOverridden = Boolean(watchLines?.some(l => l?.taxTypeOverride));
+  // A bill saved under the old per-line control can carry BOTH types. The
+  // selector must not silently pretend line 0 speaks for the whole bill, so a
+  // mixed bill gets a visible warning until the user picks a type (which then
+  // applies to every line). Until they do, the stored lines go back unchanged.
+  const billTaxMixed = (watchLines ?? []).some(l => ((l?.taxType ?? 'intra') as string) !== billTaxType);
 
   // Bill summary — one shared calculation, so the footer is exactly what the
   // server will store: per-line rounding to paise, then whole-rupee round-off.
@@ -461,7 +476,7 @@ export default function Purchases() {
 
       {/* ── New / Edit Purchase Bill Dialog ── */}
       <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditingId(null); resetForm(); } }}>
-        <DialogContent className="sm:max-w-5xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-6xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
               {editingId !== null ? `Edit Purchase Bill #${String(editingId).padStart(4, '0')}` : 'New Purchase Bill'}
@@ -470,8 +485,9 @@ export default function Purchases() {
           </DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6 pt-2">
-              {/* Header */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* Header — Vendor · Date · Invoice Ref · Receiving Location in
+                  ONE evenly-spaced row (stacks on small screens). */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-start">
                 <FormField control={form.control} name="vendorId" render={({ field }) => (
                   <FormItem><FormLabel>Vendor <span className="text-destructive">*</span></FormLabel>
                     <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
@@ -485,16 +501,6 @@ export default function Purchases() {
                 <FormField control={form.control} name="invoiceNumber" render={({ field }) => (
                   <FormItem><FormLabel>Invoice Ref #</FormLabel><FormControl><Input placeholder="Vendor's invoice no." {...field} /></FormControl></FormItem>
                 )} />
-                {/* Advance adjustment — a vendor holding money we paid beyond
-                    their bills can have it auto-applied to this bill. */}
-                {editingId === null && (vendorAdvance?.available ?? 0) > 0.004 && (
-                  <label className="col-span-2 lg:col-span-4 flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm cursor-pointer">
-                    <Checkbox checked={applyAdvance} onCheckedChange={v => setApplyAdvance(v === true)} />
-                    <span>
-                      Adjust available advance of <span className="font-mono font-semibold">₹{Number(vendorAdvance!.available).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span> against this bill
-                    </span>
-                  </label>
-                )}
                 {/* Receiving location. Changeable on edit too: the server
                     reverses stock at the old location and re-applies it (with
                     the payable and input GST) at the new one, in one
@@ -522,20 +528,30 @@ export default function Purchases() {
                     <FormMessage />
                   </FormItem>
                 )} />
+                {/* Advance adjustment — a vendor holding money we paid beyond
+                    their bills can have it auto-applied to this bill. */}
+                {editingId === null && (vendorAdvance?.available ?? 0) > 0.004 && (
+                  <label className="sm:col-span-2 lg:col-span-4 flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm cursor-pointer">
+                    <Checkbox checked={applyAdvance} onCheckedChange={v => setApplyAdvance(v === true)} />
+                    <span>
+                      Adjust available advance of <span className="font-mono font-semibold">₹{Number(vendorAdvance!.available).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span> against this bill
+                    </span>
+                  </label>
+                )}
               </div>
 
               {/* Line Items */}
               <div>
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                  <div className="flex items-center gap-3">
-                    <div className="text-sm font-medium">Line Items</div>
+                <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2 mb-3">
+                  <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
+                    <div className="text-sm font-medium pb-2">Line Items</div>
                     {/* Bill-level rate mode. Stored with the bill and never
                         guessed from the amounts. */}
                     <FormField control={form.control} name="priceMode" render={({ field }) => (
-                      <FormItem className="flex items-center gap-2 space-y-0">
-                        <FormLabel className="text-[11px] uppercase tracking-wide text-muted-foreground">Rates are</FormLabel>
+                      <FormItem className="space-y-1">
+                        <FormLabel className="text-[11px] uppercase tracking-wide text-muted-foreground">GST Mode</FormLabel>
                         <Select onValueChange={field.onChange} value={field.value || 'exclusive'}>
-                          <FormControl><SelectTrigger className="h-7 text-xs w-[150px]"><SelectValue /></SelectTrigger></FormControl>
+                          <FormControl><SelectTrigger className="h-8 text-xs w-[150px]"><SelectValue /></SelectTrigger></FormControl>
                           <SelectContent>
                             <SelectItem value="exclusive">GST exclusive</SelectItem>
                             <SelectItem value="inclusive">GST inclusive</SelectItem>
@@ -543,17 +559,58 @@ export default function Purchases() {
                         </Select>
                       </FormItem>
                     )} />
+                    {/* Bill-level GST type. One choice for the whole bill —
+                        applied to every line (the payload still carries it per
+                        line, so the server posts exactly as before). Changing
+                        it away from the state-derived hint marks the lines as
+                        explicit overrides, which the server preserves. */}
+                    <div className="space-y-1">
+                      <div className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">GST Type</div>
+                      <Select
+                        onValueChange={v => {
+                          (form.getValues('lineItems') ?? []).forEach((_l, i) => {
+                            form.setValue(`lineItems.${i}.taxType`, v as 'intra' | 'inter');
+                            form.setValue(`lineItems.${i}.taxTypeOverride`, hintTaxType !== null && v !== hintTaxType);
+                          });
+                        }}
+                        value={billTaxType}
+                      >
+                        <SelectTrigger className={`h-8 text-xs w-[150px] ${billTaxMixed || billTaxTypeOverridden ? 'border-amber-500' : ''}`}><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="intra">Intra State (CGST+SGST)</SelectItem>
+                          <SelectItem value="inter">Inter State (IGST)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {billTaxMixed ? (
+                      <p className="text-[10px] text-amber-600 pb-2 max-w-[360px]">
+                        This bill's lines carry different GST types (saved under the old per-line control).
+                        They are kept as-is unless you pick a GST Type, which then applies to every line.
+                      </p>
+                    ) : billTaxTypeOverridden ? (
+                      <p className="text-[10px] text-amber-600 pb-2">
+                        Differs from the type suggested by the vendor's and receiving location's registrations.
+                      </p>
+                    ) : null}
                   </div>
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-[11px] text-muted-foreground pb-1">
                     {priceMode === 'inclusive'
                       ? 'Rates include GST — tax is worked back out of the rate.'
                       : 'GST is added on top of the rate.'}
                     {' '}Mfg and expiry dates are required; leave batch blank to have one issued.
                   </p>
                 </div>
-                <div className="border border-border rounded-lg overflow-hidden">
-                  <div className="grid bg-muted/30 text-xs font-medium text-muted-foreground uppercase tracking-wide px-3 py-2" style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr 1fr auto' }}>
-                    <span>Item</span><span>HSN</span><span>Qty</span><span>Rate ₹</span><span>Disc %</span><span>GST %</span><span className="text-right">Total ₹</span><span />
+                <div className="border border-border rounded-lg overflow-x-auto">
+                  <div className="min-w-[890px]">
+                  <div className="grid gap-2 bg-muted/30 text-xs font-medium text-muted-foreground uppercase tracking-wide px-3 py-2.5" style={{ gridTemplateColumns: PURCHASE_GRID }}>
+                    <span>Item Name</span>
+                    <span>HSN Code</span>
+                    <span className="text-right">Qty</span>
+                    <span className="text-right">Rate ₹</span>
+                    <span className="text-right">Disc %</span>
+                    <span className="text-center">GST %</span>
+                    <span className="text-right">Total ₹</span>
+                    <span />
                   </div>
                   {fields.map((field, index) => {
                     const li: any = watchLines[index] || {};
@@ -563,11 +620,11 @@ export default function Purchases() {
                     );
                     return (
                       <Fragment key={field.id}>
-                      <div className="grid items-center gap-2 px-3 py-2 border-t border-border" style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr 1fr auto' }}>
+                      <div className="grid items-center gap-2 px-3 py-2.5 border-t border-border" style={{ gridTemplateColumns: PURCHASE_GRID }}>
                         {/* Item type + item selector combined */}
-                        <div className="flex gap-1">
+                        <div className="flex gap-1 min-w-0">
                           <Select onValueChange={v => form.setValue(`lineItems.${index}.materialType`, v as any)} value={form.watch(`lineItems.${index}.materialType`)}>
-                            <SelectTrigger className="w-[90px] text-xs h-8"><SelectValue /></SelectTrigger>
+                            <SelectTrigger className="w-[92px] shrink-0 text-xs h-9"><SelectValue /></SelectTrigger>
                             <SelectContent>
                               <SelectItem value="raw_material">Packing Material</SelectItem>
                               <SelectItem value="material">Raw Material</SelectItem>
@@ -600,70 +657,57 @@ export default function Purchases() {
                             }}
                           />
                         </div>
-                        <Input className="h-8 text-xs font-mono" placeholder="HSN" {...form.register(`lineItems.${index}.hsnCode`)} />
-                        <Input className="h-8 text-xs text-right" type="number" min={0} step="0.001" {...form.register(`lineItems.${index}.quantity`)} />
-                        <Input className="h-8 text-xs text-right" type="number" min={0} step="0.01" {...form.register(`lineItems.${index}.unitCost`)} />
-                        <Input className="h-8 text-xs text-right" type="number" min={0} max={100} step="0.1" placeholder="0" {...form.register(`lineItems.${index}.discount`)} />
-                        <div className="flex gap-1 items-center">
-                          <Select onValueChange={v => form.setValue(`lineItems.${index}.gstRate`, Number(v))} value={String(form.watch(`lineItems.${index}.gstRate`) ?? 5)}>
-                            <SelectTrigger className="h-8 text-xs w-[56px]"><SelectValue /></SelectTrigger>
-                            <SelectContent>{GST_RATES.map(r => <SelectItem key={r} value={String(r)}>{r}%</SelectItem>)}</SelectContent>
-                          </Select>
-                          {/* Changing this by hand marks the line as an explicit
-                              override, so the server keeps it instead of
-                              replacing it with the state-derived value. */}
-                          <Select
-                            onValueChange={v => {
-                              form.setValue(`lineItems.${index}.taxType`, v as any);
-                              form.setValue(`lineItems.${index}.taxTypeOverride`, hintTaxType !== null && v !== hintTaxType);
-                            }}
-                            value={form.watch(`lineItems.${index}.taxType`) || 'intra'}
-                          >
-                            <SelectTrigger className={`h-8 text-xs w-[52px] ${li.taxTypeOverride ? 'border-amber-500' : ''}`}><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="intra">Intra</SelectItem>
-                              <SelectItem value="inter">Inter</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="text-right text-sm font-mono font-medium">₹{fmt(calc.lineTotal)}</div>
-                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(index)} disabled={fields.length === 1}>
+                        <Input className="h-9 text-xs font-mono" placeholder="HSN" {...form.register(`lineItems.${index}.hsnCode`)} />
+                        <Input className="h-9 text-xs text-right" type="number" min={0} step="0.001" {...form.register(`lineItems.${index}.quantity`)} />
+                        <Input className="h-9 text-xs text-right" type="number" min={0} step="0.01" {...form.register(`lineItems.${index}.unitCost`)} />
+                        <Input className="h-9 text-xs text-right" type="number" min={0} max={100} step="0.1" placeholder="0" {...form.register(`lineItems.${index}.discount`)} />
+                        {/* GST % only — the intra/inter choice is bill-level,
+                            above the table. */}
+                        <Select onValueChange={v => form.setValue(`lineItems.${index}.gstRate`, Number(v))} value={String(form.watch(`lineItems.${index}.gstRate`) ?? 5)}>
+                          <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>{GST_RATES.map(r => <SelectItem key={r} value={String(r)}>{r}%</SelectItem>)}</SelectContent>
+                        </Select>
+                        <div className="text-right text-sm font-mono font-medium tabular-nums whitespace-nowrap">₹{fmt(calc.lineTotal)}</div>
+                        <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-destructive justify-self-end" onClick={() => remove(index)} disabled={fields.length === 1}>
                           <X className="w-3.5 h-3.5" />
                         </Button>
                       </div>
                       {/* Batch identity. Frozen food cannot be traced or
                           expiry-checked without dates, so those stay required;
-                          the number is issued by the server when left blank. */}
-                      <div className="flex flex-wrap items-center gap-2 px-3 pb-2 bg-emerald-500/[0.03]">
+                          the number is issued by the server when left blank.
+                          Fixed columns keep every row's batch fields lined up. */}
+                      <div className="grid items-center gap-2 px-3 py-1.5 bg-emerald-500/[0.03]" style={{ gridTemplateColumns: '44px 220px 36px 150px 50px 150px minmax(0,1fr)' }}>
                         <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Batch</span>
-                        <Input className="h-7 text-xs font-mono w-52" placeholder="Auto on save (or vendor lot no.)" {...form.register(`lineItems.${index}.batchNumber`)} />
-                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground ml-2">
+                        <Input className="h-8 text-xs font-mono" placeholder="Auto on save (or vendor lot no.)" {...form.register(`lineItems.${index}.batchNumber`)} />
+                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground text-right">
                           Mfg <span className="text-destructive">*</span>
                         </span>
-                        <Input className="h-7 text-xs w-36" type="date" {...form.register(`lineItems.${index}.mfgDate`)} />
-                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground ml-2">
+                        <Input className="h-8 text-xs" type="date" {...form.register(`lineItems.${index}.mfgDate`)} />
+                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground text-right">
                           Expiry <span className="text-destructive">*</span>
                         </span>
-                        <Input className="h-7 text-xs w-36" type="date" {...form.register(`lineItems.${index}.expiryDate`)} />
-                        {(form.formState.errors.lineItems?.[index] as any) && (
+                        <Input className="h-8 text-xs" type="date" {...form.register(`lineItems.${index}.expiryDate`)} />
+                        {(form.formState.errors.lineItems?.[index] as any) ? (
                           <span className="text-[10px] text-destructive">
                             {(form.formState.errors.lineItems?.[index] as any)?.mfgDate?.message
                               ?? (form.formState.errors.lineItems?.[index] as any)?.expiryDate?.message
                               ?? (form.formState.errors.lineItems?.[index] as any)?.hsnCode?.message}
                           </span>
-                        )}
+                        ) : <span />}
                       </div>
                       </Fragment>
                     );
                   })}
+                  </div>
                 </div>
-                <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => append({ ...defaultLine })}>
+                <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => append({ ...defaultLine, taxType: billTaxType, taxTypeOverride: billTaxTypeOverridden })}>
                   <Plus className="w-3.5 h-3.5 mr-1" /> Add Line
                 </Button>
               </div>
 
-              {/* Bill Summary */}
-              <div className="grid grid-cols-2 gap-6">
+              {/* Bill Summary — right of the notes on wide screens, below on
+                  small ones. */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <FormField control={form.control} name="notes" render={({ field }) => (
                   <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea rows={3} placeholder="Optional notes" {...field} /></FormControl></FormItem>
                 )} />

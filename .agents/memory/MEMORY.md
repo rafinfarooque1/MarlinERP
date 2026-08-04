@@ -107,4 +107,5 @@
 - [Data import framework](data-import-framework.md) — commits MUST reuse manual-creation libs; txn imports: file-order commits (avg cost), consecutive-row grouping, needs_party resolve step, one-txn rollback.
 - [Sale MRP floor](sale-mrp-floor.md) — line price ≥ master MRP (create+edit, grandfathered via stored lines); NOT in buildSaleLines (quotes exempt); test fixtures must price ≥ fixture mrp.
 - [Party location assignment](party-location-assignment.md) — ONE validated resolver for create+edit stamps; /:id routes need their own scope gate; located ledger filters totals too; import blank rows = batch stamp.
+- [Bill-level control over per-line fields](bill-level-over-per-line.md) — one control fronting a per-row stored field must surface mixed legacy rows (warn + apply-on-pick), never let row 0 silently speak for the bill.
 - [Org role restructure](org-role-restructure.md) — root = Administrator, Management is view-only level 2; hierarchy migrations must fail closed (no marker) on name clashes/multi-root; reset rebuilds the tree via shared helper.
