@@ -55,6 +55,11 @@ const corsOptions: Parameters<typeof cors>[0] = {
 app.use(cors(corsOptions));
 
 // ── Body parsing ───────────────────────────────────────────────────────────
+// The import-file upload takes the raw workbook bytes and must be parsed
+// BEFORE the global JSON parser: whichever body parser runs first claims the
+// stream, so registering raw here guarantees the route receives a Buffer no
+// matter what Content-Type the client declared.
+app.use("/api/imports/parse", express.raw({ type: () => true, limit: "10mb" }));
 // 1 MB cap prevents memory-exhaustion attacks via enormous request bodies.
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));

@@ -27,6 +27,7 @@ import { ensureChartStructure } from "./lib/chartGroups";
 import { DATE_COLUMNS } from "./lib/dateColumns";
 import { addQuotations } from "./migrations/quotations";
 import { runOrgHierarchyRestructure } from "./migrations/orgHierarchyRestructure";
+import { addDataImport } from "./migrations/dataImport";
 
 async function runMigrations() {
   // Existing migrations
@@ -3342,6 +3343,11 @@ await addPurchaseBillFields(pool);
 // stamped by the sale-creation transaction. Includes one-time permission
 // seeding for the new page under default-deny.
 await addQuotations(pool);
+
+// Data Import module — batch/row bookkeeping tables for the Import Data page,
+// pan/notes columns on parties, and one-time permission seeding for the new
+// page under default-deny.
+await addDataImport();
 
 // Org restructure — rename the level-1 root "Management" → "Administrator"
 // (same row, so its employees keep full access via the level-1 bypass) and

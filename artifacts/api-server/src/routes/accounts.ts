@@ -319,20 +319,12 @@ router.post("/accounts/chart", requireModuleAction("page:/accounts/chart", "add"
   // A user-made account carries no code, which is what keeps it renamable and
   // deletable — the same rule that protects the system groups/ledgers.
   const description = typeof body.description === "string" && body.description.trim() ? body.description.trim() : null;
-  const { rows: [created] } = await pool.query(
-    `INSERT INTO account_ledgers (name, type, parent_id, section, description, is_group, is_system_group, is_active)
-     VALUES ($1, $2, $3, $4, $5, $6, false, true)
-     RETURNING id, name, type, parent_id, section, description, is_group`,
-    [name, parent.type, parentId, parent.section ?? null, description, wantGroup],
-  );
-
-  await logActivity({
-    action: "CREATE", module: "accounts",
-    entityType: wantGroup ? "account_group" : "account_ledger", entityId: created.id,
-    description:
-      `Added chart ${wantGroup ? "group" : "ledger"} "${name}" ` +
-      `[before: none · after: name="${name}", type=${created.type}, parentId=${parentId}, isGroup=${wantGroup}]`,
-    user: (req as any).employee?.username ?? "system",
+  // Shared with the Data Import commit (lib/chartGroups.ts) so an imported
+  // ledger is created and audited exactly like a manually added one.
+  const { insertChartAccount } = await import("../lib/chartGroups");
+  const created = await insertChartAccount(pool, {
+    name, type: parent.type, parentId, section: parent.section ?? null,
+    description, isGroup: wantGroup, user: (req as any).employee?.username ?? "system",
   });
 
   res.status(201).json({
@@ -3011,23 +3003,14 @@ router.post("/accounts/opening-balances", requireModuleAction("page:/accounts/ch
     res.status(400).json({ error: `"${ledger.name}" is a group ledger — post opening balances to specific ledgers under it` }); return;
   }
 
-  // Upsert: one opening balance record per ledger per financial year
-  const { rows: [row] } = await pool.query(`
-    INSERT INTO opening_balances (ledger_id, balance, balance_type, as_of_date, financial_year, notes, created_by, updated_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-    ON CONFLICT (ledger_id, financial_year)
-    DO UPDATE SET balance = EXCLUDED.balance, balance_type = EXCLUDED.balance_type,
-                  as_of_date = EXCLUDED.as_of_date, notes = EXCLUDED.notes,
-                  updated_at = NOW()
-    RETURNING *
-  `, [ledgerId, balance.toFixed(2), balanceType, asOfDate, financialYear,
-      notes, req.employee?.username ?? "system"]);
-
-  logActivity({
-    action: "CREATE", module: "accounts", entityType: "opening_balance", entityId: row.id,
-    description: `Opening balance set for ${ledger.name} — ₹${balance.toFixed(2)} ${balanceType}`,
-    metadata: { after: { ledgerId, balance, balanceType, asOfDate, financialYear } },
-  }).catch(() => {});
+  // Upsert: one opening balance record per ledger per financial year. Shared
+  // with the Data Import commit (lib/openingBalances.ts) so both paths write
+  // and audit identically.
+  const { upsertOpeningBalance } = await import("../lib/openingBalances");
+  const row = await upsertOpeningBalance({
+    ledgerId, balance, balanceType: balanceType as "debit" | "credit", asOfDate,
+    financialYear, notes, user: req.employee?.username ?? "system", ledgerName: ledger.name,
+  });
 
   res.status(201).json({ id: row.id, ledgerId, balance, balanceType, asOfDate, financialYear, notes });
 });

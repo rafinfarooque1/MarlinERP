@@ -588,6 +588,13 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navGroup: 'Company',
     navEntries: [{ name: 'Backup & Restore', href: '/company/backup' }],
   },
+  {
+    // Data Import: migrate old-ERP masters (customers, vendors, ledgers) via
+    // Excel upload → validate → preview → commit, with per-batch rollback.
+    key: 'Import Data', permGroup: 'Company',
+    navGroup: 'Company',
+    navEntries: [{ name: 'Import Data', href: '/company/import' }],
+  },
 ];
 
 // ── Derived exports ───────────────────────────────────────────────────────────

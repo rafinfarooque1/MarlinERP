@@ -34,6 +34,7 @@ import storageRouter from "./storage";
 import rentRouter from "./rent";
 import backupRouter from "./backup";
 import assetsRouter from "./assets";
+import importsRouter from "./imports";
 const router: IRouter = Router();
 
 router.use(healthRouter);
@@ -73,5 +74,6 @@ router.use(searchRouter);
 router.use(storageRouter);
 router.use(rentRouter);
 router.use(backupRouter);
+router.use(importsRouter);
 
 export default router;

@@ -263,6 +263,10 @@
         {
           "name": "Backup & Restore",
           "href": "/company/backup"
+        },
+        {
+          "name": "Import Data",
+          "href": "/company/import"
         }
       ]
     }

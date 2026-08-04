@@ -72,6 +72,7 @@ import Profile from './pages/company/Profile';
 import AuditLog from './pages/company/AuditLog';
 import LoginHistory from './pages/company/LoginHistory';
 import BackupRestore from './pages/company/BackupRestore';
+import ImportData from './pages/company/ImportData';
 import Reconciliation from './pages/finance/Reconciliation';
 import CashInOutlet from './pages/finance/CashInOutlet';
 import ReportsCenter from './pages/reports/ReportsCenter';
@@ -387,6 +388,9 @@ function Router() {
       </Route>
       <Route path="/company/backup">
         <PermGuard href="/company/backup" pageName="Backup & Restore"><BackupRestore /></PermGuard>
+      </Route>
+      <Route path="/company/import">
+        <PermGuard href="/company/import" pageName="Import Data"><ImportData /></PermGuard>
       </Route>
 
       <Route path="/accounts/reconciliation">

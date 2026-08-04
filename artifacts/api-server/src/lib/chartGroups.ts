@@ -1,4 +1,5 @@
 import { pool as _pool } from "@workspace/db";
+import { logActivity } from "./audit";
 
 /** The shared pg pool, typed structurally so these helpers stay injectable. */
 type Pool = typeof _pool;
@@ -363,4 +364,59 @@ export function deleteBlockReason(
     return `This ledger is wired to ${list(usage.references)}. Unlink it there first.`;
   }
   return null;
+}
+
+// ── User chart-account creation ──────────────────────────────────────────────
+
+export interface InsertChartAccountOpts {
+  name: string;
+  type: string;
+  parentId: number;
+  section: string | null;
+  description: string | null;
+  isGroup: boolean;
+  user: string;
+}
+
+export interface InsertedChartAccount {
+  id: number;
+  name: string;
+  type: string;
+  parent_id: number | null;
+  section: string | null;
+  description: string | null;
+  is_group: boolean;
+}
+
+/**
+ * The ONE insert path for user-created chart accounts — shared by the manual
+ * POST /accounts/chart route and the Data Import commit, so both produce the
+ * same shape: `code` stays NULL (user accounts are codeless by design, which
+ * is what keeps them renamable and deletable), `is_system_group` false, and
+ * the same audit line.
+ *
+ * The CALLER validates the parent (group vs leaf, active, duplicate name) —
+ * both callers do, with caller-appropriate wording.
+ */
+export async function insertChartAccount(
+  pool: Pool,
+  opts: InsertChartAccountOpts,
+): Promise<InsertedChartAccount> {
+  const { rows: [created] } = await pool.query<InsertedChartAccount>(
+    `INSERT INTO account_ledgers (name, type, parent_id, section, description, is_group, is_system_group, is_active)
+     VALUES ($1, $2, $3, $4, $5, $6, false, true)
+     RETURNING id, name, type, parent_id, section, description, is_group`,
+    [opts.name, opts.type, opts.parentId, opts.section, opts.description, opts.isGroup],
+  );
+
+  await logActivity({
+    action: "CREATE", module: "accounts",
+    entityType: opts.isGroup ? "account_group" : "account_ledger", entityId: created.id,
+    description:
+      `Added chart ${opts.isGroup ? "group" : "ledger"} "${opts.name}" ` +
+      `[before: none · after: name="${opts.name}", type=${created.type}, parentId=${opts.parentId}, isGroup=${opts.isGroup}]`,
+    user: opts.user,
+  });
+
+  return created;
 }

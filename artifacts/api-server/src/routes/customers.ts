@@ -81,36 +81,13 @@ function pickVendor(body: StrRecord): StrRecord {
   return r;
 }
 
-// ── Credit-control fields (raw columns — not in the Drizzle schema) ────────
-function validateCreditFields(body: StrRecord): string | null {
-  if ('creditLimit' in body && body.creditLimit !== null) {
-    const v = Number(body.creditLimit);
-    if (!Number.isFinite(v) || v < 0) return "creditLimit must be a number ≥ 0";
-  }
-  if ('creditDays' in body && body.creditDays !== null) {
-    const v = Number(body.creditDays);
-    if (!Number.isInteger(v) || v < 0) return "creditDays must be a whole number ≥ 0";
-  }
-  return null;
-}
-
-async function applyCreditFields(id: number, body: StrRecord): Promise<void> {
-  if ('creditLimit' in body) {
-    const v = body.creditLimit === null ? 0 : Math.round(Number(body.creditLimit) * 100) / 100;
-    await pool.query(`UPDATE customers SET credit_limit = $1 WHERE id = $2`, [v, id]);
-  }
-  if ('creditDays' in body) {
-    const v = body.creditDays === null ? 0 : Number(body.creditDays);
-    await pool.query(`UPDATE customers SET credit_days = $1 WHERE id = $2`, [v, id]);
-  }
-}
-
-async function creditFieldsRow(id: number): Promise<{ creditLimit: number; creditDays: number }> {
-  const { rows: [r] } = await pool.query<any>(
-    `SELECT COALESCE(credit_limit, 0)::numeric AS cl, COALESCE(credit_days, 0) AS cd FROM customers WHERE id = $1`, [id]
-  );
-  return { creditLimit: Number(r?.cl ?? 0), creditDays: Number(r?.cd ?? 0) };
-}
+// ── Credit-control fields & party creation ─────────────────────────────────
+// Shared with the Data Import commit path (lib/partyCreate.ts) so an imported
+// party is provisioned exactly like a manually created one.
+import {
+  createCustomerWithLedger, createVendorWithLedger,
+  validateCreditFields, applyCreditFields, creditFieldsRow,
+} from "../lib/partyCreate";
 
 // ── Customers ─────────────────────────────────────────────────────────────
 // Serves HO Sales (POS), Notes (Vouchers) and Customers pages.
@@ -184,34 +161,9 @@ router.post("/customers", requireModuleAction("page:/customers", "add"), async (
     res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
   }
 
-  // Insert and stamp are one transaction. The guard above authorised this row to
-  // exist *at this location*; a row that survives without its stamp is one whose
-  // access scoping silently falls back to something nobody approved, so a failed
-  // stamp must take the insert down with it rather than leave that behind.
-  const row = await db.transaction(async (tx) => {
-    // pickCustomer whitelists keys and the guard above ensures name is present
-    const [created] = await tx.insert(customersTable)
-      .values(data as typeof customersTable.$inferInsert).returning();
-    // location_type/location_id came from a startup migration, so drizzle cannot
-    // see them on the insert — they have to be written as raw SQL.
-    await tx.execute(
-      sql`UPDATE customers SET location_type = ${stampType}, location_id = ${stampId} WHERE id = ${created.id}`,
-    );
-    return created;
-  });
-
-  // Auto-create a debtor ledger under Sundry Debtors
-  try {
-    const { rows: [parent] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = 'SYS-DEBTORS'`);
-    if (parent) {
-      await pool.query(
-        `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_system_group, description)
-         SELECT $1, 'asset', $2, 'balance_sheet', $3, false, $4
-         WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $2)`,
-        [row.name, `CUST-${row.id}`, parent.id, `Customer ledger — ${row.name}`],
-      );
-    }
-  } catch { /* non-fatal — ledger can be created manually */ }
+  // Insert + stamp + debtor-ledger provisioning live in lib/partyCreate.ts —
+  // the ONE code path shared with the Data Import commit.
+  const { row } = await createCustomerWithLedger(data as any, { type: stampType, id: stampId });
 
   await applyCreditFields(row.id, req.body);
   const credit = await creditFieldsRow(row.id);
@@ -368,31 +320,9 @@ router.post("/vendors", requireModuleAction("page:/vendors", "add"), async (req,
     res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
   }
 
-  // Atomic for the same reason as customers — and note the stamp failure here used
-  // to be swallowed outright, which quietly produced exactly the unscoped row the
-  // guard exists to prevent.
-  const row = await db.transaction(async (tx) => {
-    // pickVendor whitelists keys and the guard above ensures name is present
-    const [created] = await tx.insert(vendorsTable)
-      .values(data as typeof vendorsTable.$inferInsert).returning();
-    await tx.execute(
-      sql`UPDATE vendors SET location_type = ${vendStampType}, location_id = ${vendStampId} WHERE id = ${created.id}`,
-    );
-    return created;
-  });
-
-  // Auto-create a creditor ledger under Sundry Creditors
-  try {
-    const { rows: [parent] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = 'SYS-CREDITORS'`);
-    if (parent) {
-      await pool.query(
-        `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_system_group, description)
-         SELECT $1, 'liability', $2, 'balance_sheet', $3, false, $4
-         WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $2)`,
-        [row.name, `VEND-${row.id}`, parent.id, `Vendor ledger — ${row.name}`],
-      );
-    }
-  } catch { /* non-fatal */ }
+  // Insert + stamp + creditor-ledger provisioning live in lib/partyCreate.ts —
+  // the ONE code path shared with the Data Import commit.
+  const { row } = await createVendorWithLedger(data as any, { type: vendStampType, id: vendStampId });
 
   res.status(201).json(row);
 });
