@@ -113,7 +113,7 @@ export default function Coupons() {
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
             <Search className="w-4 h-4 text-muted-foreground" />
-            <Input placeholder="Search coupon code..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-xs" />
+            <Input placeholder="Search coupon code..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-xs max-md:max-w-full" />
           </div>
           <Table>
             <TableHeader>

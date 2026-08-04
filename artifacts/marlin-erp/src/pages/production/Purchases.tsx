@@ -508,7 +508,7 @@ export default function Purchases() {
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex flex-wrap items-center gap-2 bg-muted/20">
             <Search className="w-4 h-4 text-muted-foreground shrink-0" />
-            <Input placeholder="Search vendor or invoice..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm" />
+            <Input placeholder="Search vendor or invoice..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm max-md:max-w-full" />
             <div className="ml-auto"><RangeBar range={range} /></div>
           </div>
           <div className="hidden md:block">
@@ -768,7 +768,7 @@ export default function Purchases() {
                   {/* One Enter handler for every line input: next field, or Add
                       Line from the row's last field. See handleLineKeyDown. */}
                   <div className="min-w-[890px]" data-kbd-scope onKeyDown={handleLineKeyDown}>
-                  <div className="grid gap-2 bg-muted/30 text-xs font-medium text-muted-foreground uppercase tracking-wide px-3 py-2.5" style={{ gridTemplateColumns: PURCHASE_GRID }}>
+                  <div className="grid gap-2 bg-muted/30 text-xs font-medium text-muted-foreground uppercase tracking-wide px-3 py-2.5 max-md:sticky max-md:top-0 max-md:z-10" style={{ gridTemplateColumns: PURCHASE_GRID }}>
                     <span>Item Name</span>
                     <span>HSN Code</span>
                     <span className="text-right">Qty</span>
@@ -928,11 +928,18 @@ export default function Purchases() {
                 </div>
               </div>
 
-              <DialogFooter>
+              <DialogFooter className="max-md:sticky max-md:bottom-0 max-md:z-20 max-md:-mx-4 max-md:-mb-4 max-md:px-4 max-md:py-2 max-md:bg-background/95 max-md:backdrop-blur max-md:border-t max-md:border-border">
                 <Button variant="outline" type="button" onClick={() => { setIsOpen(false); setEditingId(null); resetForm(); }}>Cancel</Button>
                 <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
                   {(createMutation.isPending || updateMutation.isPending) ? 'Saving…' : editingId !== null ? 'Save Changes' : 'Save Purchase Bill'}
                 </Button>
+                {/* Grand total kept in view alongside the action on mobile, so a
+                    long line-item list never scrolls the figure off-screen.
+                    Placed last so flex-col-reverse renders it at the top. */}
+                <div className="flex md:hidden items-center justify-between w-full text-sm font-bold pb-1">
+                  <span>Grand Total</span>
+                  <span className="font-mono text-primary">₹{bill.totalAmount.toLocaleString('en-IN')}</span>
+                </div>
               </DialogFooter>
             </form>
           </Form>

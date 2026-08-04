@@ -263,3 +263,44 @@
     inset: -1px;
   }
 }
+
+/* ── Mobile (<768px) responsive optimisations ─────────────────────────────────
+   Every rule is scoped to phones; desktop and tablet rendering stay untouched. */
+@media (max-width: 767px) {
+  /* Slightly larger base type: 17px root → body text (text-sm) ≈ 15px, titles
+     and amounts scale with it, and rem-based touch targets grow ~6% too. */
+  html { font-size: 106.25%; }
+
+  /* Horizontal-scroll containers: native momentum swipe + a thin scrollbar
+     that shows while scrolling (iOS overlays it automatically). */
+  .overflow-x-auto, .overflow-auto {
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.45) transparent;
+  }
+  .overflow-x-auto::-webkit-scrollbar, .overflow-auto::-webkit-scrollbar {
+    height: 5px; width: 5px;
+  }
+  .overflow-x-auto::-webkit-scrollbar-thumb, .overflow-auto::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.45);
+    border-radius: 9999px;
+  }
+  .overflow-x-auto::-webkit-scrollbar-track, .overflow-auto::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* Tables: pin the first column while the rest swipes sideways. Applied via
+     the shared Table primitive's scroll wrapper (components/ui/table.tsx), so
+     every list and report table gets it without per-page work. */
+  /* Tables whose first column is a control (checkbox/action) opt out with
+     className="no-sticky-col" on the <Table>. */
+  .erp-table-scroll table:not(.no-sticky-col) th:first-child,
+  .erp-table-scroll table:not(.no-sticky-col) td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 5;
+    background-color: hsl(var(--card));
+    box-shadow: 1px 0 0 hsl(var(--border));
+  }
+  .erp-table-scroll table:not(.no-sticky-col) thead th:first-child { z-index: 6; }
+}

@@ -141,7 +141,7 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
       <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
         <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
           <Search className="w-4 h-4 text-muted-foreground shrink-0" />
-          <Input placeholder="Search voucher, party or reason..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm" />
+          <Input placeholder="Search voucher, party or reason..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm max-md:max-w-full" />
         </div>
         <Table>
           <TableHeader>
@@ -238,7 +238,7 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
                 </FormItem>
               )} />
 
-              <DialogFooter>
+              <DialogFooter className="max-md:sticky max-md:bottom-0 max-md:z-20 max-md:-mx-4 max-md:px-4 max-md:py-2 max-md:bg-background/95 max-md:backdrop-blur max-md:border-t max-md:border-border">
                 <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
                 <Button type="submit" disabled={createMutation.isPending}>
                   {createMutation.isPending ? 'Recording…' : `Record ${isCN ? 'Credit' : 'Debit'} Note`}

@@ -1035,7 +1035,7 @@ export default function Vouchers() {
               placeholder="Search voucher #, account, or narration…"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm"
+              className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm max-md:max-w-full"
             />
             <div className="flex items-center gap-1.5 ml-auto">
               <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="h-8 w-[140px] text-xs" aria-label="From date" />

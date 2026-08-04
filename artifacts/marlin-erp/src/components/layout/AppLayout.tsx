@@ -133,7 +133,24 @@ function PasswordInput({ value, onChange, placeholder, id, autoComplete }: {
 // ─── NavItem ──────────────────────────────────────────────────────────────────
 
 function NavItem({ item, isActive, currentPath, collapsed }: any) {
-  const [isOpen, setIsOpen] = useState(isActive);
+  // Remember which menu groups the user expanded (persisted per user + group
+  // name so a shared browser doesn't leak one login's layout to another) so
+  // the sidebar reopens the same way next visit.
+  let navUser = '';
+  try { navUser = JSON.parse(localStorage.getItem('marlin_user') || 'null')?.username ?? ''; } catch { /* ignore */ }
+  const navOpenKey = `marlin_nav_open:${navUser}:${item.name}`;
+  const [isOpen, setIsOpen] = useState<boolean>(() => {
+    if (item.href) return isActive;
+    try {
+      const saved = localStorage.getItem(navOpenKey);
+      if (saved != null) return saved === '1';
+    } catch { /* storage unavailable — fall back to the active-group default */ }
+    return isActive;
+  });
+  // A remembered "collapsed" must never hide the page the user is ON: force
+  // the group open (without persisting) whenever it becomes the active one,
+  // e.g. after a global-search jump or a deep link into a child page.
+  useEffect(() => { if (isActive) setIsOpen(true); }, [isActive]);
 
   if (item.href) {
     if (collapsed) {
@@ -180,7 +197,11 @@ function NavItem({ item, isActive, currentPath, collapsed }: any) {
   return (
     <div>
       <button
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => setIsOpen(o => {
+          const next = !o;
+          try { localStorage.setItem(navOpenKey, next ? '1' : '0'); } catch { /* non-fatal */ }
+          return next;
+        })}
         className={`w-full flex items-center justify-between gap-3 px-3 py-2 rounded-md transition-colors text-sm font-medium ${isActive ? 'text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
       >
         <div className="flex items-center gap-3">
@@ -443,7 +464,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         {/* Mobile overlay */}
         {sidebarOpen && (
           <div
-            className="fixed inset-0 z-40 bg-black/50 md:hidden"
+            className="fixed inset-0 z-[45] bg-black/50 md:hidden"
             onClick={() => setSidebarOpen(false)}
           />
         )}
@@ -456,6 +477,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
             md:relative md:translate-x-0
             ${collapsed ? 'w-[68px]' : 'w-64'}
+            max-md:w-[80vw] max-md:max-w-sm
           `}
         >
           {/* Logo row */}

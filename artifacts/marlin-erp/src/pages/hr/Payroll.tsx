@@ -710,7 +710,7 @@ export default function Payroll() {
               placeholder="Search employee…"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="w-48"
+              className="w-48 max-md:w-full"
             />
           </div>
           <div className="flex gap-2 flex-wrap">

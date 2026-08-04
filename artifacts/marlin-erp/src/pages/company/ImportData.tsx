@@ -672,7 +672,7 @@ export default function ImportData() {
                   )}
 
                   <div className="rounded-lg border overflow-x-auto max-h-[28rem] overflow-y-auto">
-                    <Table>
+                    <Table className="no-sticky-col">
                       <TableHeader>
                         <TableRow>
                           <TableHead className="w-10">Import</TableHead>

@@ -318,7 +318,7 @@ export default function InventoryReports() {
                 placeholder="Search item or location…"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                className="w-64"
+                className="w-64 max-md:w-full"
               />
               {perms.canDownload && valRows.length > 0 && (
                 <Button variant="outline" size="sm" onClick={exportValuation}><Download className="w-4 h-4 mr-2" /> Export CSV</Button>

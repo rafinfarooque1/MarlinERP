@@ -525,7 +525,7 @@ export default function Expenses() {
                   placeholder="Search by voucher, description, category, account, location…"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
-                  className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm"
+                  className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm max-md:max-w-full"
                 />
                 <div className="ml-auto"><RangeBar range={range} /></div>
               </div>

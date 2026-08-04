@@ -1131,7 +1131,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         {/* Sales Table */}
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex flex-wrap gap-3 bg-muted/20">
-            <div className="flex items-center gap-2 w-64">
+            <div className="flex items-center gap-2 w-64 max-md:w-full">
               <Search className="w-4 h-4 text-muted-foreground" />
               <Input placeholder="Search invoice or customer..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0" />
             </div>
@@ -1749,7 +1749,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               </div>
 
               {/* ── Tax Summary + Footer ── */}
-              <DialogFooter className="flex-col gap-0 sm:flex-col w-full pt-2 border-t border-border">
+              <DialogFooter className="flex-col gap-0 sm:flex-col w-full pt-2 border-t border-border max-md:sticky max-md:bottom-0 max-md:z-20 max-md:-mx-4 max-md:-mb-4 max-md:px-4 max-md:pb-4 max-md:bg-background/95 max-md:backdrop-blur">
                 {hasItems && (
                   <div className="w-full mb-3 rounded-lg border border-border overflow-hidden text-sm">
                     {/* Header */}

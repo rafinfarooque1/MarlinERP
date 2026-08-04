@@ -315,7 +315,7 @@ export default function Reconciliation() {
                 placeholder="Search invoice / customer…"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                className="h-8 w-52 text-sm"
+                className="h-8 w-52 text-sm max-md:w-full"
               />
               <Select value={locationFilter} onValueChange={setLocationFilter}>
                 <SelectTrigger className="h-8 w-44 text-sm"><SelectValue placeholder="All locations" /></SelectTrigger>
@@ -377,7 +377,7 @@ export default function Reconciliation() {
               </div>
             ) : (
               <div className="rounded-lg border border-border overflow-hidden">
-                <Table>
+                <Table className="no-sticky-col">
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-10"><Checkbox checked={selected.size === pending.length && pending.length > 0} onCheckedChange={v => v ? selectAll() : clearSel()} /></TableHead>

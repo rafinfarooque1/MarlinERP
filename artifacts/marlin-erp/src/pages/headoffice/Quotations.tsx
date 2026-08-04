@@ -738,7 +738,7 @@ export default function Quotations() {
         {/* Quotations table */}
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex flex-wrap gap-3 bg-muted/20">
-            <div className="flex items-center gap-2 w-64">
+            <div className="flex items-center gap-2 w-64 max-md:w-full">
               <Search className="w-4 h-4 text-muted-foreground" />
               <Input placeholder="Search quotation or customer..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0" />
             </div>
@@ -1323,7 +1323,15 @@ export default function Quotations() {
                     </div>
                   </div>
                 )}
-                <div className="flex gap-2 justify-end w-full">
+                <div className="flex gap-2 justify-end w-full max-md:flex-wrap max-md:items-center max-md:sticky max-md:bottom-0 max-md:z-20 max-md:-mx-4 max-md:-mb-4 max-md:px-4 max-md:py-2 max-md:bg-background/95 max-md:backdrop-blur max-md:border-t max-md:border-border">
+                  {/* Quoted total pinned beside the action on mobile so a long
+                      item list never scrolls the figure out of view. */}
+                  {hasItems && (
+                    <div className="flex md:hidden items-center justify-between w-full text-sm font-bold">
+                      <span>Quoted Total</span>
+                      <span className="font-mono text-primary">₹{totals.finalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    </div>
+                  )}
                   <Button variant="outline" type="button" onClick={() => { setIsOpen(false); setEditItem(null); form.reset(defaultFormValues); }}>Cancel</Button>
                   <Button type="submit" disabled={(editItem ? updateMutation.isPending : createMutation.isPending) || !watchLocationId || totals.finalAmount === 0}>
                     {editItem

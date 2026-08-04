@@ -149,7 +149,7 @@ export default function Payment() {
         <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border flex items-center gap-2 bg-muted/20">
             <Search className="w-4 h-4 text-muted-foreground shrink-0" />
-            <Input placeholder="Search voucher, account or narration..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm" />
+            <Input placeholder="Search voucher, account or narration..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm max-md:max-w-full" />
           </div>
           <Table>
             <TableHeader>
@@ -279,7 +279,7 @@ export default function Payment() {
                 </FormItem>
               )} />
 
-              <DialogFooter>
+              <DialogFooter className="max-md:sticky max-md:bottom-0 max-md:z-20 max-md:-mx-4 max-md:px-4 max-md:py-2 max-md:bg-background/95 max-md:backdrop-blur max-md:border-t max-md:border-border">
                 <Button variant="outline" type="button" onClick={() => setIsOpen(false)}>Cancel</Button>
                 <Button type="submit" disabled={createMutation.isPending}>
                   {createMutation.isPending ? 'Recording…' : 'Record Payment'}

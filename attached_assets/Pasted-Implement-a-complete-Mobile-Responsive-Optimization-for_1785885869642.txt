@@ -1,0 +1,267 @@
+Implement a complete Mobile Responsive Optimization for the ERP.
+
+This ERP is heavily used for data entry, so mobile usability must be improved without removing any functionality.
+
+=========================================================
+1. Dashboard Mobile Layout
+=========================================================
+
+Keep the dashboard cards exactly like the attached mobile reference.
+
+Display cards as:
+
+Sales | Purchases
+
+Expenses | Inventory Value
+
+Cash Balance | Bank Balance
+
+Receivables | Payables
+
+GP | NP
+
+Continue remaining widgets below.
+
+Do NOT make one card per row.
+
+Use a responsive 2-column grid.
+
+Cards should have:
+- equal width
+- equal height
+- larger numbers
+- larger titles
+- proper spacing
+- proper padding
+- no overlapping text
+
+=========================================================
+2. Mobile Tables
+=========================================================
+
+Tables are difficult to use.
+
+Instead of squeezing every column,
+
+keep desktop tables unchanged.
+
+On mobile:
+
+• Enable smooth horizontal scrolling
+
+• Horizontal scroll must use native touch swipe
+
+• Momentum scrolling on iPhone and Android
+
+• Thin scrollbar always visible while scrolling
+
+• Sticky first column wherever practical
+
+Examples:
+
+Sales
+Purchase
+Quotations
+Customers
+Vendors
+Stock
+Ledgers
+Day Book
+Cash Book
+Bank Book
+Voucher List
+Reports
+
+All tables must scroll smoothly sideways.
+
+=========================================================
+3. Forms
+=========================================================
+
+Sales
+Purchase
+Quotation
+Receipt
+Payment
+Journal
+Contra
+Debit Note
+Credit Note
+
+Current forms become unusable.
+
+On mobile:
+
+Stack fields vertically.
+
+Only line-item grids should scroll horizontally.
+
+Headers remain fixed.
+
+Buttons remain visible.
+
+=========================================================
+4. Sales Screen
+=========================================================
+
+Make entering sales easier.
+
+Item rows should horizontally scroll.
+
+Columns remain aligned.
+
+Large touch targets.
+
+Sticky header.
+
+Sticky Total.
+
+Sticky Complete Sale button.
+
+=========================================================
+5. Purchase Screen
+=========================================================
+
+Exactly same behaviour.
+
+Do NOT compress columns.
+
+Allow smooth sideways scrolling.
+
+Sticky header.
+
+Sticky Total.
+
+Sticky Save button.
+
+=========================================================
+6. Quotation Screen
+=========================================================
+
+Same improvements.
+
+Item grid scrolls horizontally.
+
+Totals remain visible.
+
+=========================================================
+7. Voucher Screens
+=========================================================
+
+Receipt
+
+Payment
+
+Journal
+
+Contra
+
+Debit Note
+
+Credit Note
+
+Ledger grids should scroll horizontally.
+
+Totals remain visible.
+
+Save button fixed at bottom.
+
+=========================================================
+8. Search & Filters
+=========================================================
+
+Search bars should become full width.
+
+Filters should wrap neatly.
+
+Date buttons should scroll horizontally instead of shrinking.
+
+=========================================================
+9. Sidebar
+=========================================================
+
+Current sidebar is difficult.
+
+Mobile:
+
+Use a slide drawer.
+
+Drawer width about 80%.
+
+Overlay background.
+
+Remember expanded menus.
+
+Close automatically after navigation.
+
+=========================================================
+10. Typography
+=========================================================
+
+Increase font sizes.
+
+Minimum:
+
+Body 15-16px
+
+Titles 18-20px
+
+Amounts 22-26px
+
+Buttons taller.
+
+Inputs taller.
+
+Dropdowns taller.
+
+=========================================================
+11. Buttons
+=========================================================
+
+Buttons must be touch friendly.
+
+Minimum height:
+
+44-48px
+
+=========================================================
+12. Horizontal Scroll Behaviour
+=========================================================
+
+Any grid wider than screen:
+
+Do NOT shrink.
+
+Do NOT wrap.
+
+Allow smooth sideways scrolling.
+
+Maintain desktop column widths.
+
+=========================================================
+13. Performance
+=========================================================
+
+Desktop UI must remain unchanged.
+
+Only mobile (<768px) receives these responsive changes.
+
+=========================================================
+14. Testing
+=========================================================
+
+Verify on:
+
+iPhone Safari
+
+Android Chrome
+
+Tablets
+
+Landscape mode
+
+Portrait mode
+
+Ensure no clipped columns, overlapping text, hidden buttons, or broken layouts.
+
+The goal is to make the ERP fully usable on mobile for real-world business operations while preserving the complete desktop experience.

@@ -412,7 +412,7 @@ export default function Vendors() {
           <div className="p-4 border-b border-border flex flex-col sm:flex-row sm:items-center gap-2 bg-muted/20">
             <div className="flex items-center gap-2 flex-1">
               <Search className="w-4 h-4 text-muted-foreground" />
-              <Input placeholder="Search name or phone..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm" />
+              <Input placeholder="Search name or phone..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm max-md:max-w-full" />
             </div>
             <Select value={locFilter} onValueChange={setLocFilter}>
               <SelectTrigger className="w-full sm:w-52 h-9 bg-background" data-testid="select-vendor-location-filter">

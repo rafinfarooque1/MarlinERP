@@ -137,7 +137,8 @@ export default function Dashboard() {
 
   // Fixed row layout (3 / 3 / 3 / 1) on md+: a 6-column grid where the first
   // three rows' cards span 2 columns and NP takes the last row full-width. On
-  // mobile the grid falls back to two columns and the rows simply stack.
+  // mobile the cards go two across (Sales|Purchases, Expenses|Inventory,
+  // Cash|Bank, Receivables|Payables, GP|NP-ish) with NP spanning both columns.
   const SPAN2 = 'md:col-span-2';
   const SPAN3 = 'md:col-span-3';
   // Inventory Value is hidden entirely for employees without the valuation
@@ -224,7 +225,7 @@ export default function Dashboard() {
       tone: pf?.net == null ? 'default' : pf.net >= 0 ? 'pos' : 'neg',
       hint: 'Net Profit · tap for P&L',
       onClick: drill('pl-net-profit'),
-      className: 'md:col-span-6',
+      className: 'col-span-2 md:col-span-6',
     },
   ];
 
@@ -265,7 +266,7 @@ export default function Dashboard() {
           </div>
         ) : (
           <>
-            <SummaryCards cards={summaryCards} gridClassName="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-3" />
+            <SummaryCards cards={summaryCards} gridClassName="grid grid-cols-2 md:grid-cols-6 gap-3" />
             {bi && bi.expenses?.total == null && (
               <p className="text-xs text-muted-foreground">
                 Expenses and Bank Balance are company-level accounting figures and are not

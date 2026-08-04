@@ -124,13 +124,13 @@ export function useDateRange(initial: RangePreset = 'month'): RangeState {
 export function RangeBar({ range, children }: { range: RangeState; children?: ReactNode }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <div className="flex items-center gap-1 bg-muted/20 border border-border rounded-lg p-1">
+      <div className="flex items-center gap-1 bg-muted/20 border border-border rounded-lg p-1 max-md:overflow-x-auto max-md:max-w-full">
         <CalendarDays className="w-3.5 h-3.5 text-muted-foreground ml-1 shrink-0" />
         {PRESETS.map((p) => (
           <button
             key={p.value}
             onClick={() => range.setPreset(p.value)}
-            className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+            className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors max-md:whitespace-nowrap max-md:shrink-0 ${
               range.preset === p.value
                 ? 'bg-primary text-primary-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground'
@@ -293,14 +293,14 @@ export function SummaryCards({
       {cards.map((c) => {
         const body = (
           <>
-            <p className="text-xs text-muted-foreground mb-1">{c.label}</p>
-            <p className={`font-bold font-mono text-sm ${TONE_CLS[c.tone ?? 'default']}`}>{c.value}</p>
+            <p className="text-xs max-md:text-sm text-muted-foreground mb-1">{c.label}</p>
+            <p className={`font-bold font-mono text-sm max-md:text-xl ${TONE_CLS[c.tone ?? 'default']}`}>{c.value}</p>
             {c.hint ? (
-              <p className="text-[10px] text-muted-foreground/70 mt-1 leading-tight">{c.hint}</p>
+              <p className="text-[10px] max-md:text-xs text-muted-foreground/70 mt-1 leading-tight">{c.hint}</p>
             ) : null}
           </>
         );
-        const base = `bg-card border border-border rounded-lg p-3 text-center ${c.className ?? ''}`;
+        const base = `bg-card border border-border rounded-lg p-3 max-md:p-4 text-center max-md:h-full ${c.className ?? ''}`;
         return c.onClick ? (
           <button
             key={c.label}

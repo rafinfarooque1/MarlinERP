@@ -293,7 +293,7 @@ export default function Payments() {
 
         {/* Filters */}
         <div className="flex flex-wrap gap-2 items-center">
-          <div className="flex items-center gap-2 flex-1 min-w-[180px] max-w-sm border border-border rounded-lg px-3 h-9 bg-background">
+          <div className="flex items-center gap-2 flex-1 min-w-[180px] max-w-sm max-md:max-w-full border border-border rounded-lg px-3 h-9 bg-background">
             <Search className="w-4 h-4 text-muted-foreground flex-shrink-0" />
             <input
               placeholder="Search invoice or customer…"

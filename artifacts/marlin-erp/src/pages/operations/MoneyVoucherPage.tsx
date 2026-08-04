@@ -523,7 +523,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
               <Search className="w-4 h-4 text-muted-foreground shrink-0" />
               <Input placeholder="Search voucher no, party, reference or narration…" value={search}
                 onChange={e => setSearch(e.target.value)}
-                className="border-transparent bg-transparent focus-visible:ring-0 max-w-md" />
+                className="border-transparent bg-transparent focus-visible:ring-0 max-w-md max-md:max-w-full" />
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="w-[150px] h-8 text-xs" title="From date" />
