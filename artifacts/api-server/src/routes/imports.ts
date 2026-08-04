@@ -141,7 +141,7 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
   sales: {
     title: "Sales Invoices",
     columns: [
-      { key: "invoiceNo", header: "Invoice No", example: "INV/25-26/0412", hint: "Old ERP invoice number — kept exactly as supplied. Repeat it on every row of a multi-item invoice; blank rows get a placeholder", aliases: ["invoiceno", "invoicenumber", "invno", "invoice", "billno", "billnumber", "vchno", "voucherno", "vouchernumber"] },
+      { key: "invoiceNo", header: "Invoice No", example: "INV/25-26/0412", hint: "Old ERP invoice number — kept as the searchable old reference; the bill itself gets the next SB2B/SB2C number. Repeat it on every row of a multi-item invoice; blank rows get a placeholder", aliases: ["invoiceno", "invoicenumber", "invno", "invoice", "billno", "billnumber", "vchno", "voucherno", "vouchernumber"] },
       { key: "date", header: "Date", required: true, example: "2025-04-12", hint: "Invoice date — YYYY-MM-DD or DD/MM/YYYY", aliases: ["date", "invoicedate", "billdate", "saledate", "vchdate", "voucherdate"] },
       { key: "party", header: "Customer", required: true, example: "Fresh Mart Traders", hint: "Customer name — unknown names can be created in the resolve step before commit", aliases: ["customer", "customername", "party", "partyname", "buyer", "buyername", "client", "clientname"] },
       { key: "gstNumber", header: "GSTIN", example: "33AAACM1234F1Z5", hint: "Customer GSTIN — used to pre-fill missing customers and cross-checked against the master", aliases: ["gstin", "gstno", "gstnumber", "gstinno", "customergstin"] },
@@ -640,8 +640,17 @@ async function loadTxnContext(module: TxnModule, loc: { type: string; id: number
 
   const existingInvoices = new Set<string>();
   if (module === "sales") {
-    const { rows } = await pool.query(`SELECT lower(invoice_number) AS inv FROM sales WHERE invoice_number IS NOT NULL`);
-    for (const r of rows) existingInvoices.add(String(r.inv));
+    // Both numbers guard against re-importing the same file: bills renumbered
+    // into the SB2B/SB2C series keep their original number in
+    // legacy_invoice_number, and the import source still carries the original.
+    const { rows } = await pool.query(
+      `SELECT lower(invoice_number) AS inv, lower(legacy_invoice_number) AS legacy_inv
+         FROM sales WHERE invoice_number IS NOT NULL`
+    );
+    for (const r of rows) {
+      existingInvoices.add(String(r.inv));
+      if (r.legacy_inv) existingInvoices.add(String(r.legacy_inv));
+    }
   } else {
     const { rows } = await pool.query(`SELECT vendor_id, lower(invoice_number) AS inv FROM purchases WHERE invoice_number IS NOT NULL`);
     for (const r of rows) existingInvoices.add(`${Number(r.vendor_id)}|${String(r.inv)}`);
@@ -1402,7 +1411,7 @@ router.get("/imports/templates/:module", requireModuleAction(PERM, "download"), 
     help.addRow([`• Items must already exist in the masters — unknown items are errors. Unknown ${party.toLowerCase()}s can be created during the import (resolve step).`]);
     if (module === "sales") {
       help.addRow(["• Payment Mode: Cash / UPI / Bank / Credit. Cash, UPI and Bank sales are recorded as fully paid at creation; use Credit + Paid Amount for partly-paid invoices."]);
-      help.addRow(["• Invoice numbers are kept exactly as supplied and must not already exist in this system."]);
+      help.addRow(["• Each imported sale is given the next SB2B/SB2C bill number automatically (B2B when the customer has a GST number). The invoice number from your file is kept as the old reference — bills stay searchable by it."]);
       help.addRow(["• Stock: each sale deducts stock at the chosen location — import purchases/opening stock first."]);
     } else {
       help.addRow(["• Paid Amount settles the bill from the selected location's cash ledger."]);

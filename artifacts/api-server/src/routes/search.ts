@@ -84,7 +84,7 @@ router.get("/search", async (req, res): Promise<void> => {
       ? pool.query(
           `SELECT s.id, s.invoice_number, s.total_amount, s.sale_date::text AS sale_date, c.name AS customer_name
            FROM sales s LEFT JOIN customers c ON c.id = s.customer_id
-           WHERE (s.invoice_number ILIKE $1 OR c.name ILIKE $1)
+           WHERE (s.invoice_number ILIKE $1 OR s.legacy_invoice_number ILIKE $1 OR c.name ILIKE $1)
              AND s.branch_transfer_id IS NULL AND ${salesScope}
            ORDER BY s.id DESC LIMIT 8`,
           salesParams,

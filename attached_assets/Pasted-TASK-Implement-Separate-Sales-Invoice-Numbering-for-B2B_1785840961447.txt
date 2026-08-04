@@ -1,0 +1,244 @@
+TASK: Implement Separate Sales Invoice Numbering for B2B and B2C (SB2B / SB2C Series)
+
+The ERP currently uses a single invoice numbering series for all Sales invoices. I need separate invoice numbering for B2B and B2C Sales Bills.
+
+This change applies ONLY to Sales Bills (Point of Sale / Sales Module). Do NOT change the numbering of Purchase, Receipt, Payment, Journal, Contra, Credit Note, Debit Note, Stock Transfer, Production, or any other vouchers.
+
+====================================================
+NEW SALES BILL SERIES
+====================================================
+
+Implement two independent Sales Bill numbering series:
+
+1. SB2B (Sales Business-to-Business)
+2. SB2C (Sales Business-to-Consumer)
+
+Example:
+
+SB2B/2026-27/000001
+SB2B/2026-27/000002
+SB2B/2026-27/000003
+
+SB2C/2026-27/000001
+SB2C/2026-27/000002
+SB2C/2026-27/000003
+
+Each series must maintain its own independent running sequence.
+
+====================================================
+B2B IDENTIFICATION
+====================================================
+
+A Sales Bill is considered B2B when:
+
+• Customer has a valid GST Number.
+• Customer is GST registered.
+• GST Number is not blank.
+
+Automatically generate:
+
+SB2B/FY/Running Number
+
+Example:
+
+SB2B/2026-27/000001
+
+No manual selection is required.
+
+====================================================
+B2C IDENTIFICATION
+====================================================
+
+A Sales Bill is considered B2C when:
+
+• Customer GST Number is blank.
+• Walk-in Customer.
+• Retail Customer.
+• Unregistered Customer.
+
+Automatically generate:
+
+SB2C/FY/Running Number
+
+Example:
+
+SB2C/2026-27/000001
+
+====================================================
+EXISTING SALES BILLS
+====================================================
+
+Update all existing Sales Bills.
+
+Rules:
+
+If Customer has GST Number
+
+Convert invoice number into
+
+SB2B/FY/Running Number
+
+If Customer has NO GST Number
+
+Convert invoice number into
+
+SB2C/FY/Running Number
+
+Maintain the original chronological order based on invoice date and creation order.
+
+Do NOT modify:
+
+• Invoice Date
+• Customer
+• Stock
+• Accounting Entries
+• GST Entries
+• Ledger Entries
+• Payments
+• Receivables
+• Inventory
+• Financial Reports
+
+Only update the invoice numbering.
+
+====================================================
+FINANCIAL YEAR
+====================================================
+
+Each Financial Year should maintain separate numbering.
+
+Example
+
+FY 2025-26
+
+SB2B/2025-26/000001
+
+SB2B/2025-26/000002
+
+SB2C/2025-26/000001
+
+SB2C/2025-26/000002
+
+FY 2026-27 starts again from:
+
+SB2B/2026-27/000001
+
+SB2C/2026-27/000001
+
+====================================================
+PRINT FORMAT
+====================================================
+
+The new Sales Bill number must appear everywhere.
+
+Invoice PDF
+
+Printed Invoice
+
+WhatsApp Invoice
+
+Invoice Preview
+
+Sales List
+
+Customer Ledger
+
+Receivables
+
+Dashboard Drill-down
+
+Reports
+
+Exports
+
+Search Results
+
+Example
+
+Invoice No:
+
+SB2B/2026-27/000145
+
+or
+
+SB2C/2026-27/000876
+
+====================================================
+DATABASE
+====================================================
+
+Maintain two independent counters:
+
+sales_invoice_counter_b2b
+
+sales_invoice_counter_b2c
+
+The counters must be generated inside a database transaction with row locking to prevent duplicate numbers during concurrent invoice creation.
+
+====================================================
+SEARCH
+====================================================
+
+Searching by:
+
+000145
+
+SB2B/2026-27/000145
+
+SB2C/2026-27/000145
+
+must correctly locate the Sales Bill.
+
+====================================================
+BACKWARD COMPATIBILITY
+====================================================
+
+Old invoice references must continue working.
+
+If any module still references the old invoice number internally, map it correctly so no existing links break.
+
+Do not affect:
+
+• Payment records
+• Receipt allocations
+• Customer Outstanding
+• GST Reports
+• Ledger Statements
+• Audit Logs
+
+====================================================
+VALIDATION
+====================================================
+
+After implementation verify:
+
+✓ Existing Sales Bills are converted correctly.
+✓ GST Customers receive SB2B numbers.
+✓ Non-GST Customers receive SB2C numbers.
+✓ Separate running sequences are maintained.
+✓ Financial Year reset works correctly.
+✓ No duplicate invoice numbers are possible.
+✓ Invoice editing does not change the invoice number.
+✓ Printing, PDF, WhatsApp, Search, Reports, Ledger Statements and Dashboard display the new invoice number.
+✓ Trial Balance, Profit & Loss, Balance Sheet and GST Reports remain unchanged.
+
+====================================================
+IMPORTANT
+====================================================
+
+This update applies ONLY to Sales Bills.
+
+Do NOT change numbering for:
+
+• Purchase Bills
+• Receipt Vouchers
+• Payment Vouchers
+• Journal Vouchers
+• Contra Vouchers
+• Credit Notes
+• Debit Notes
+• Stock Transfers
+• Production Orders
+• Any other voucher type.
+
+The only change is the Sales Bill numbering format using the new SB2B and SB2C series.

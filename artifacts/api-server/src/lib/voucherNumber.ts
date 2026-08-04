@@ -92,3 +92,58 @@ export async function nextVoucherNumber(
 
   return `${prefix}/${fyLabel}/${String(seq.last_number).padStart(4, "0")}`;
 }
+
+// ── Sales bill series (SB2B / SB2C) ──────────────────────────────────────────
+//
+// Sales bills run on TWO independent FY-scoped series, decided by the
+// customer's GST registration at billing time:
+//   SB2B/2026-27/000001 — customer holds a GST number (business-to-business)
+//   SB2C/2026-27/000001 — walk-in / retail / unregistered (business-to-consumer)
+//
+// The counters live in voucher_sequences under the names below, scoped to the
+// financial year, so each FY restarts both series at 000001. Only SALES bills
+// use these — every other voucher type keeps its own numbering untouched.
+export const SALES_SERIES = {
+  b2b: { counter: "sales_invoice_counter_b2b", prefix: "SB2B" },
+  b2c: { counter: "sales_invoice_counter_b2c", prefix: "SB2C" },
+} as const;
+
+export type SalesSeries = keyof typeof SALES_SERIES;
+
+export function salesInvoiceNumber(series: SalesSeries, fyLabel: string, seq: number): string {
+  return `${SALES_SERIES[series].prefix}/${fyLabel}/${String(seq).padStart(6, "0")}`;
+}
+
+/**
+ * Allocate the next sales bill number for a series, scoped to the financial
+ * year of the sale date. The atomic upsert row-locks the (series, FY) counter
+ * row for the rest of the transaction, so two tills billing concurrently can
+ * never draw the same number — and a rolled-back sale rolls its number back
+ * with it.
+ *
+ * MUST be called with the sale-creation transaction client so the counter
+ * bump commits/rolls back atomically with the sale row itself.
+ */
+export async function nextSalesInvoiceNumber(
+  q: Queryable,
+  series: SalesSeries,
+  saleDate?: string,
+): Promise<string> {
+  let fyStartMonth = 4;
+  try {
+    const { rows } = await q.query(`SELECT fy_start_month FROM company_settings LIMIT 1`);
+    if (rows[0]) fyStartMonth = Number(rows[0].fy_start_month ?? 4) || 4;
+  } catch {
+    /* company_settings not migrated yet — Indian FY default */
+  }
+  const fyLabel = financialYearLabel(saleDate, fyStartMonth);
+  const { rows: [seq] } = await q.query(
+    `INSERT INTO voucher_sequences (voucher_type, fy_label, last_number)
+     VALUES ($1, $2, 1)
+     ON CONFLICT (voucher_type, fy_label)
+     DO UPDATE SET last_number = voucher_sequences.last_number + 1
+     RETURNING last_number`,
+    [SALES_SERIES[series].counter, fyLabel]
+  );
+  return salesInvoiceNumber(series, fyLabel, Number(seq.last_number));
+}

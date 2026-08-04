@@ -21,7 +21,7 @@ import { addVoucherProvenance } from "./migrations/voucherProvenance";
 import { startBackupScheduler } from "./lib/backup/scheduler";
 import { PasswordService } from "./lib/password";
 import { PRODUCT_KINDS, PRODUCT_TABLE, nextProductIdentity } from "./lib/productIdentity";
-import { nextVoucherNumber } from "./lib/voucherNumber";
+import { nextVoucherNumber, financialYearLabel, salesInvoiceNumber, SALES_SERIES, type SalesSeries } from "./lib/voucherNumber";
 import { PAGE_PERM_KEYS, LEGACY_MODULE_TO_PAGES } from "./lib/pagePermissions";
 import { ensureChartStructure } from "./lib/chartGroups";
 import { DATE_COLUMNS } from "./lib/dateColumns";
@@ -2037,6 +2037,163 @@ async function runMigrations() {
     }
   } catch (e) {
     console.error('[migration] invoice_sequence_reconcile FAILED:', (e as Error).message);
+  }
+
+  // ── (8) Split sales billing into SB2B / SB2C series ────────────────────────
+  // Sales bills move from the single INV series to two independent FY-scoped
+  // series: SB2B (customer holds a GST number) and SB2C (walk-in / retail /
+  // unregistered). Every existing customer sale is renumbered in chronological
+  // order (sale_date, then id); the number it carried before lands in
+  // legacy_invoice_number so printed copies and old references still resolve.
+  //
+  // ONLY the number changes. Branch-transfer tax invoices (statutory BTR
+  // documents) are untouched, and everything money-side is renamed in the SAME
+  // transaction:
+  //  - receipts created at sale time carry voucher_number = invoice_number, and
+  //    the derived postings EXCLUDE receipts on that match — renumbering the
+  //    sale without its receipt would double-count the revenue in the books;
+  //  - quotations stamp converted_invoice_number for their sale link;
+  //  - sale_payments notes quote the number in prose.
+  await pool.query(`ALTER TABLE sales ADD COLUMN IF NOT EXISTS legacy_invoice_number TEXT`);
+  {
+    const { rows: [seriesDone] } = await pool.query(
+      `SELECT 1 FROM migration_log WHERE name = 'sales_b2b_b2c_series_v1'`
+    );
+    if (!seriesDone) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows: [csFy] } = await client.query(
+          `SELECT COALESCE(fy_start_month, 4) AS m FROM company_settings LIMIT 1`
+        );
+        const fyStartMonth = Number(csFy?.m ?? 4) || 4;
+
+        // The books-exclusion invariant this migration must not break: every
+        // sale-trail receipt matches its sale's invoice_number. Measured before
+        // and re-checked after — the rename may never make it worse.
+        const orphanTrailReceipts = () => client.query<{ c: number }>(
+          `SELECT count(*)::int AS c FROM receipts
+            WHERE source = 'sale'
+              AND voucher_number NOT IN (SELECT invoice_number FROM sales WHERE invoice_number IS NOT NULL)`
+        );
+        const { rows: [orphBefore] } = await orphanTrailReceipts();
+
+        // Chronological order decides the running numbers. B2B/B2C follows the
+        // customer's CURRENT GST registration — the only classification that
+        // exists for historical bills. Ghost 'BTR/%' rows (transfer twins whose
+        // transfer was deleted) keep their statutory numbers.
+        const { rows: bills } = await client.query<{
+          id: number; invoice_number: string; sale_date: string; is_b2b: boolean;
+        }>(
+          `SELECT s.id, s.invoice_number, s.sale_date::text AS sale_date,
+                  (NULLIF(TRIM(COALESCE(c.gst_number, '')), '') IS NOT NULL) AS is_b2b
+             FROM sales s
+             LEFT JOIN customers c ON c.id = s.customer_id
+            WHERE s.branch_transfer_id IS NULL
+              AND s.invoice_number NOT LIKE 'BTR/%'
+              AND s.invoice_number NOT LIKE 'SB2B/%'
+              AND s.invoice_number NOT LIKE 'SB2C/%'
+            ORDER BY s.sale_date, s.id`
+        );
+        const { rows: [quotReg] } = await client.query(`SELECT to_regclass('public.quotations') AS reg`);
+        const hasQuotations = quotReg?.reg != null;
+
+        const counters = new Map<string, number>();
+        let receiptsFixed = 0, quotesFixed = 0;
+        for (const b of bills) {
+          const series: SalesSeries = b.is_b2b ? 'b2b' : 'b2c';
+          const fy = financialYearLabel(b.sale_date, fyStartMonth);
+          const key = `${series}|${fy}`;
+          const seq = (counters.get(key) ?? 0) + 1;
+          counters.set(key, seq);
+          const newNum = salesInvoiceNumber(series, fy, seq);
+          await client.query(
+            `UPDATE sales SET legacy_invoice_number = invoice_number, invoice_number = $1 WHERE id = $2`,
+            [newNum, b.id]
+          );
+          const { rowCount: rc } = await client.query(
+            `UPDATE receipts
+                SET voucher_number = $1,
+                    narration = replace(COALESCE(narration, ''), $2, $1)
+              WHERE voucher_number = $2`,
+            [newNum, b.invoice_number]
+          );
+          receiptsFixed += rc ?? 0;
+          if (hasQuotations) {
+            const { rowCount: qc } = await client.query(
+              `UPDATE quotations SET converted_invoice_number = $1 WHERE converted_invoice_number = $2`,
+              [newNum, b.invoice_number]
+            );
+            quotesFixed += qc ?? 0;
+          }
+          await client.query(
+            `UPDATE sale_payments SET notes = replace(notes, $2, $1)
+              WHERE sale_id = $3 AND notes LIKE '%' || $2 || '%'`,
+            [newNum, b.invoice_number, b.id]
+          );
+        }
+
+        // Advance each series counter to the highest number just issued —
+        // renumbering without moving the allocator strands it on numbers that
+        // are already taken, and every new sale then dies on
+        // uq_sales_invoice_number (invisible to any read-only check).
+        for (const [key, n] of counters) {
+          const [series, fy] = key.split('|') as [SalesSeries, string];
+          await client.query(
+            `INSERT INTO voucher_sequences (voucher_type, fy_label, last_number)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (voucher_type, fy_label)
+             DO UPDATE SET last_number = GREATEST(voucher_sequences.last_number, EXCLUDED.last_number)`,
+            [SALES_SERIES[series].counter, fy, n]
+          );
+        }
+
+        // Prove the rename left the data sound before committing it.
+        const { rows: [stillDup] } = await client.query(
+          `SELECT count(*)::int AS c FROM (
+             SELECT invoice_number FROM sales GROUP BY invoice_number HAVING count(*) > 1
+           ) d`
+        );
+        if (stillDup.c > 0) throw new Error(`series split left ${stillDup.c} duplicate invoice number(s)`);
+        const { rows: [orphAfter] } = await orphanTrailReceipts();
+        if (orphAfter.c > orphBefore.c) {
+          throw new Error(`series split orphaned ${orphAfter.c - orphBefore.c} sale-trail receipt(s) from their invoices`);
+        }
+
+        await client.query(`INSERT INTO migration_log (name) VALUES ('sales_b2b_b2c_series_v1')`);
+        await client.query('COMMIT');
+        console.log(`[migration] sales_b2b_b2c_series_v1: renumbered ${bills.length} sale(s) across ${counters.size} series-FY bucket(s), updated ${receiptsFixed} receipt(s), ${quotesFixed} quotation link(s)`);
+      } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        console.error('[migration] sales_b2b_b2c_series_v1 FAILED (rolled back):', (e as Error).message);
+      } finally {
+        client.release();
+      }
+    }
+  }
+
+  // Forward-only reconcile for the SB2B/SB2C counters, every boot: anything
+  // that rewrites invoice numbers (manual fixes, restores) can strand the
+  // allocator behind numbers already in use, which bricks all new sales. Same
+  // rationale as the invoice_sequence reconcile above — re-heal, never rewind.
+  try {
+    for (const series of Object.keys(SALES_SERIES) as SalesSeries[]) {
+      const { prefix, counter } = SALES_SERIES[series];
+      await pool.query(
+        `INSERT INTO voucher_sequences (voucher_type, fy_label, last_number)
+         SELECT $1, split_part(s.invoice_number, '/', 2),
+                MAX((split_part(s.invoice_number, '/', 3))::int)
+           FROM sales s
+          WHERE s.invoice_number LIKE $2 || '/%'
+            AND split_part(s.invoice_number, '/', 3) ~ '^[0-9]+$'
+          GROUP BY split_part(s.invoice_number, '/', 2)
+         ON CONFLICT (voucher_type, fy_label)
+         DO UPDATE SET last_number = GREATEST(voucher_sequences.last_number, EXCLUDED.last_number)`,
+        [counter, prefix]
+      );
+    }
+  } catch (e) {
+    console.error('[migration] sales_series_counter_reconcile FAILED:', (e as Error).message);
   }
 
   // ── Chart of Accounts structure ───────────────────────────────────────────

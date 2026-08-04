@@ -42,7 +42,8 @@
 - [Historical stock dating](historical-stock-dating.md) — stock_ledger.created_at is an INSERT time, not a business date; past-date stock is mostly not derivable; anchor "held nothing" on document dates.
 - [Sale location resolution](sale-location-resolution.md) — resolve via location_type+location_id; sale_payments.outlet_id is legacy+NULL for warehouse sales so joining it silently deletes rows; warehouses holds outlet rows too
 - [Attachment ACL](attachment-acl.md) — "signed in" is not authorisation in a location-scoped app; readable only if you uploaded it (id in path) or may see the record; 404 not 403; presigned PUT can't bind content-type.
-- [Invoice numbering vs sequence](invoice-numbering-sequence.md) — renumbering documents strands the allocator counter and bricks all new creates once a unique index exists; read-only audits can't see it.
+- [Invoice numbering vs sequence](invoice-numbering-sequence.md) — renumbering strands allocators; SB2B/SB2C sales series rules: EVERY sales producer (POS + importer) must use the allocator, renames pair-rename receipts.
+- [Scratch-DB experiments](scratch-db-experiments.md) — `A && B &` backgrounds the WHOLE chain (vars lost) and `psql ""` silently hits dev; print current_database() before any scratch write.
 - [Sale cancellation](sale-cancellation.md) — a terminal state obliges EVERY write path (payments, returns) to refuse it after the row lock; filtering it from reports is not enough.
 - [Opt-in list paging](list-paging.md) — never default-cap a list endpoint the UI reads wholesale; in-memory slicing after a full fetch is pure downside.
 - [Text→DATE conversion](date-column-conversion.md) — after converting, `col <> ''` guards AND every shape-only date regex become live 22007s — read filters most of all; audits never see it.

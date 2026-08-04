@@ -8,11 +8,13 @@
  * payment allocations) — so every imported invoice lands in the books,
  * inventory, GST reports and dashboards exactly like a hand-entered one.
  *
- * The ONE deliberate difference from manual entry: the invoice number is
- * taken AS SUPPLIED from the file and the invoice-sequence allocator in
- * company_settings is never touched. Old-ERP numbers must survive the
- * migration verbatim; uniqueness is enforced by validation and by the
- * uq_src_number unique index (sales) / purchases_vendor_invoice (purchases).
+ * Imported sales draw a fresh SB2B/SB2C number from the same allocator as
+ * manual entry (series picked from the customer's GST number); the old-ERP
+ * number from the file is preserved in sales.legacy_invoice_number so the
+ * source document stays searchable. Committing the source number verbatim
+ * into invoice_number would put imported bills outside the two-series
+ * numbering and could collide with the allocator. Purchases still keep the
+ * supplied number (purchases_vendor_invoice enforces per-vendor uniqueness).
  *
  * Rollback is reversal-equivalent, not a bare row delete: stock and lots are
  * restored, settlements unwound, and — beyond what DELETE /purchases does —
@@ -35,7 +37,7 @@ import { writeStockLedger, batchResolveMeta } from "./stockLedger";
 import { availabilityAt, insufficientStockMessage } from "./reservations";
 import { isSettledAtSale, clearsThroughBank } from "./paymentModes";
 import { computePaymentPosition } from "./salePaymentPosition";
-import { nextVoucherNumber } from "./voucherNumber";
+import { nextVoucherNumber, nextSalesInvoiceNumber } from "./voucherNumber";
 import { creditMaterialAt, deductMaterialAt } from "./materialStock";
 import { productBatchIdentity, type ProductKind } from "./productIdentity";
 import { isValidGstSlab, gstSlabErrorMessage } from "./gst";
@@ -186,6 +188,7 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
 
   const client = await pool.connect();
   let saleId = 0;
+  let newInvoiceNumber = "";
   try {
     await client.query("BEGIN");
 
@@ -217,18 +220,31 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
     }
     const lineItemsWithBatches = lineItems.map((li: any, i: number) => ({ ...li, batchBreakdown: breakdowns[i] ?? [] }));
 
-    // ── Insert with the OLD ERP's invoice number — allocator never touched ──
+    // ── Allocate an SB2B/SB2C number like any other sale; the OLD ERP's
+    // number lands in legacy_invoice_number so the source document stays
+    // searchable. Importing the source number verbatim into invoice_number
+    // would put imported bills outside the two-series numbering — and an
+    // imported number shaped like SB2x/FY/n could collide with (or sit ahead
+    // of) the allocator and brick the next POS sale until a restart reconciles.
+    const { rows: [custGst] } = await client.query(
+      `SELECT NULLIF(TRIM(COALESCE(gst_number, '')), '') AS gstin FROM customers WHERE id = $1`,
+      [doc.customerId],
+    );
+    newInvoiceNumber = await nextSalesInvoiceNumber(
+      client, custGst?.gstin != null ? "b2b" : "b2c", doc.saleDate,
+    );
     const outletIdForInsert = loc.type === "outlet" ? loc.id : null;
     const { rows: [row] } = await client.query(
-      `INSERT INTO sales (invoice_number, outlet_id, location_type, location_id, customer_id, sale_date,
+      `INSERT INTO sales (invoice_number, legacy_invoice_number, outlet_id, location_type, location_id, customer_id, sale_date,
                           line_items, subtotal, tax_total, discount_total, bill_discount, total_amount,
                           payment_mode, coupon_code, amount_paid, payment_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
-      [doc.invoiceNumber, outletIdForInsert, loc.type, locationId, doc.customerId, doc.saleDate,
+       VALUES ($1, $17, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
+      [newInvoiceNumber, outletIdForInsert, loc.type, locationId, doc.customerId, doc.saleDate,
        JSON.stringify(lineItemsWithBatches), subtotal, taxTotal, 0, billDiscount, totalAmount,
        doc.paymentMode, null,
        settledAtSale ? totalAmount : 0,
-       settledAtSale ? "paid" : "unpaid"],
+       settledAtSale ? "paid" : "unpaid",
+       doc.invoiceNumber],
     );
     saleId = Number(row.id);
 
@@ -244,7 +260,7 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
         unitCost: Number(li.unitPrice ?? 0),
         docType: "sale", docId: saleId,
         txnDate: doc.saleDate,
-        notes: doc.invoiceNumber,
+        notes: newInvoiceNumber,
       };
     }));
 
@@ -264,7 +280,7 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
                                  narration, voucher_number, location_type, location_id, source)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'sale')`,
           [doc.saleDate, salesLedgerId, debitLedgerId, totalAmount,
-           `Sale: ${doc.invoiceNumber}${locationName ? ` at ${locationName}` : ""}`, doc.invoiceNumber,
+           `Sale: ${newInvoiceNumber}${locationName ? ` at ${locationName}` : ""}`, newInvoiceNumber,
            loc.type, locationId],
         );
       }
@@ -287,7 +303,7 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
                                  amount, narration, location_type, location_id, source)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'sale') RETURNING id`,
           [voucherNum, doc.saleDate, stdSalesId, tillId, paid,
-           `Cash payment for invoice ${doc.invoiceNumber}`, loc.type, locationId],
+           `Cash payment for invoice ${newInvoiceNumber}`, loc.type, locationId],
         );
         clearingReceiptId = Number(receipt.id);
         clearingReceiptIds.push(clearingReceiptId);
@@ -312,15 +328,15 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
     await client.query("COMMIT");
   } catch (e: any) {
     await client.query("ROLLBACK").catch(() => {});
-    if (e?.code === "23505" && String(e?.constraint ?? "").includes("uq_src_number")) {
-      throw new Error(`Invoice number "${doc.invoiceNumber}" already exists — it was recorded by another import or a manual entry since validation.`);
+    if (e?.code === "23505" && String(e?.constraint ?? "").includes("uq_sales_invoice_number")) {
+      throw new Error(`Invoice number allocation collided for "${doc.invoiceNumber}" — retry the commit; if it persists, restart the server so the sales counters reconcile.`);
     }
     throw e;
   } finally {
     client.release();
   }
 
-  return { saleId, invoiceNumber: doc.invoiceNumber, totalAmount: r2(totalAmount), salePaymentIds, clearingReceiptIds };
+  return { saleId, invoiceNumber: newInvoiceNumber, totalAmount: r2(totalAmount), salePaymentIds, clearingReceiptIds };
 }
 
 // ── Purchases ────────────────────────────────────────────────────────────────

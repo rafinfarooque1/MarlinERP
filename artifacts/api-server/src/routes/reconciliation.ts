@@ -204,7 +204,7 @@ router.get("/reconciliation/pending", requireModuleView("page:/accounts/reconcil
   if (toDate)   { params.push(toDate);             conds.push(`sp.payment_date <= $${params.length}`); }
   if (search) {
     params.push(`%${search}%`);
-    conds.push(`(s.invoice_number ILIKE $${params.length} OR c.name ILIKE $${params.length})`);
+    conds.push(`(s.invoice_number ILIKE $${params.length} OR s.legacy_invoice_number ILIKE $${params.length} OR c.name ILIKE $${params.length})`);
   }
 
   const where = conds.join(" AND ");
@@ -546,7 +546,7 @@ router.get("/reconciliation/reconciled", requireModuleView("page:/accounts/recon
   if (toDate)   { params.push(toDate);   conds.push(`sp.payment_date <= $${params.length}`); }
   if (search) {
     params.push(`%${search}%`);
-    conds.push(`(s.invoice_number ILIKE $${params.length} OR c.name ILIKE $${params.length})`);
+    conds.push(`(s.invoice_number ILIKE $${params.length} OR s.legacy_invoice_number ILIKE $${params.length} OR c.name ILIKE $${params.length})`);
   }
 
   const where = conds.join(" AND ");

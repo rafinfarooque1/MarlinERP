@@ -26,6 +26,7 @@ import {
   loadInvoicePaymentSettings, buildUpiRequest,
 } from "../lib/salePaymentPosition";
 import { advanceAvailable, takeAdvanceLock, attributeAdvanceConsumption, releaseAdvanceConsumption } from "../lib/advanceLedgers";
+import { nextSalesInvoiceNumber } from "../lib/voucherNumber";
 
 const router = Router();
 
@@ -411,7 +412,10 @@ router.get("/sales", requireModuleView(["page:/sales/pos", "page:/returns", "pag
   const params: unknown[] = [];
   if (q) {
     params.push(`%${q}%`);
-    conds.push(`(s.invoice_number ILIKE $${params.length} OR c.name ILIKE $${params.length} OR c.phone ILIKE $${params.length})`);
+    // legacy_invoice_number keeps the pre-SB2B/SB2C number a bill carried
+    // before the series split, so old references typed from printed copies
+    // still find the bill.
+    conds.push(`(s.invoice_number ILIKE $${params.length} OR s.legacy_invoice_number ILIKE $${params.length} OR c.name ILIKE $${params.length} OR c.phone ILIKE $${params.length})`);
   }
   if (from) { params.push(from); conds.push(`s.sale_date >= $${params.length}::date`); }
   if (to)   { params.push(to);   conds.push(`s.sale_date <= $${params.length}::date`); }
@@ -979,18 +983,21 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
     }
     lineItemsWithBatches = lineItems.map((li, i) => ({ ...li, batchBreakdown: breakdowns[i] ?? [] }));
 
-    // ── Atomically increment invoice sequence (same transaction) ────────────
-    const { rows: [comp] } = await txClient.query<{
-      invoice_sequence: number; financial_year: string | null; invoice_prefix: string | null;
-    }>(
-      `UPDATE company_settings SET invoice_sequence = invoice_sequence + 1
-       WHERE id = $1 RETURNING invoice_sequence, financial_year, invoice_prefix`,
-      [company.id]
-    );
-    const seq = comp.invoice_sequence;
-    const fy = comp.financial_year || '2025-26';
-    const prefix = comp.invoice_prefix || 'INV';
-    invoiceNumber = computeInvoiceNumber(prefix, fy, seq);
+    // ── Allocate the sales bill number (same transaction) ───────────────────
+    // Two independent FY-scoped series: SB2B when the customer holds a GST
+    // number at billing time, SB2C for walk-in / retail / unregistered
+    // customers. The series is decided automatically — no manual selection —
+    // and the number is immutable from here on: edits keep it even if the
+    // customer's GST registration changes later.
+    let saleIsB2B = false;
+    if (parsed.data.customerId) {
+      const { rows: [cgst] } = await txClient.query<{ gstin: string | null }>(
+        `SELECT NULLIF(TRIM(COALESCE(gst_number, '')), '') AS gstin FROM customers WHERE id = $1`,
+        [parsed.data.customerId]
+      );
+      saleIsB2B = cgst?.gstin != null;
+    }
+    invoiceNumber = await nextSalesInvoiceNumber(txClient, saleIsB2B ? 'b2b' : 'b2c', parsed.data.saleDate);
 
     // ── Insert sale with location columns via raw SQL (location_type/location_id not in Drizzle schema) ──
     // Counter-settled modes are recorded fully paid; credit sales start unpaid.

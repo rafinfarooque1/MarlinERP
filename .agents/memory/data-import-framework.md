@@ -35,6 +35,14 @@ Rules that must hold for every import type, and why:
 
 ## Transaction imports (sales & purchase invoices)
 
+- **Imported SALES draw a fresh SB2B/SB2C number from the shared allocator**
+  inside the import txn (series from the customer master's GST); the file's
+  number is stored only in `sales.legacy_invoice_number` (searchable old
+  reference). The sale receipt, stock-ledger notes and returned result all use
+  the NEW number so the books-exclusion invariant and rollback's
+  receipt-by-voucher delete stay consistent. Purchases still keep the supplied
+  number (per-vendor uniqueness).
+
 - **Commit via extracted doc functions** that replicate POST /sales and POST
   /purchases line-for-line (stock locks ascending, FEFO lots, business-dated
   stock_ledger, settlement, avg cost). **Why:** any shortcut diverges from the

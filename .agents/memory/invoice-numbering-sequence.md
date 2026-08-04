@@ -35,3 +35,31 @@ happily while the write path is completely broken.
 **The general lesson:** a read-only audit cannot certify a system. It exercises
 queries, not writes. Any migration that changes stored keys needs at least one
 real create/update afterwards to prove the write path still works.
+
+## B2B/B2C sales series (SB2B / SB2C)
+
+Sales bills use TWO independent FY-scoped counters in `voucher_sequences`
+(`sales_invoice_counter_b2b` / `_b2c`), format `SB2B/2026-27/000001`, series
+chosen from the customer's `gst_number` (`NULLIF(TRIM(...),'')` — non-blank =
+B2B; walk-in = B2C). `company_settings.invoice_sequence` no longer issues sale
+numbers (it still exists for quotations' `computeInvoiceNumber`).
+
+- **Every producer of sales rows must draw from this allocator** — POS create
+  AND the transaction importer. The importer once wrote the file's source
+  number into `invoice_number` verbatim; an imported SB2x-shaped number can
+  collide with or outrun the counter and brick the next POS sale until a
+  restart reconciles. Source numbers belong ONLY in `legacy_invoice_number`
+  (raw-migration column — raw SQL only), which every search/dedupe predicate
+  also matches.
+- **Renumbering sales must pair-rename their receipts in the same txn.** Sale
+  receipts carry `voucher_number = invoice_number`, and derived postings
+  EXCLUDE receipts whose voucher matches a sale — rename one side only and
+  revenue double-counts. Verify with the orphan-receipt count, not just a
+  balanced TB.
+- **Proving a rename books-neutral needs identical builds on both sides.** A
+  TB hash change after restart can come from previously-edited-but-unbuilt
+  code finally compiling in; also, statement JSON can differ by unstable
+  sort-tie order of equal rows, not money. Diff values, not hashes, before
+  concluding a regression.
+- Regression suite: `tests/import-sales-numbering.test.mjs` (import → series,
+  legacy search, POS continuation, rollback).
