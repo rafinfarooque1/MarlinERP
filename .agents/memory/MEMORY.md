@@ -103,6 +103,6 @@
 - [HO location convention](ho-location-convention.md) — HO sells like a branch but its placeholder id differs per table (vouchers 0, sales/stock 1): match on TYPE alone; dashboard/bi hand-rolls predicates — add new types explicitly.
 - [Ghost transfer documents](ghost-transfer-documents.md) — deleting a transfer nulls its twins' branch_transfer_id: ghost BTR invoices leak into lists/books, reservations stick; detect via BTR/% + NULL FK.
 - [Party advances & bill settlement](party-advances.md) — CADV/VADV ledgers (prefix dodges FROM-6 parsers); explicit-first vs FIFO; allocation vouchers locked+unwindable; advance-only parties need seed AND filter hooks in reports.
-- [Data import framework](data-import-framework.md) — commits MUST reuse manual-creation libs; rollback deletes own OBs before the usage check, all-or-nothing; hand-written hooks, raw-body upload.
+- [Data import framework](data-import-framework.md) — commits MUST reuse manual-creation libs; txn imports: file-order commits (avg cost), consecutive-row grouping, needs_party resolve step, one-txn rollback.
 - [Sale MRP floor](sale-mrp-floor.md) — line price ≥ master MRP (create+edit, grandfathered via stored lines); NOT in buildSaleLines (quotes exempt); test fixtures must price ≥ fixture mrp.
 - [Org role restructure](org-role-restructure.md) — root = Administrator, Management is view-only level 2; hierarchy migrations must fail closed (no marker) on name clashes/multi-root; reset rebuilds the tree via shared helper.

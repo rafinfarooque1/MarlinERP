@@ -35,7 +35,7 @@ type Queryable = { query: (text: string, params?: any[]) => Promise<any> };
  *
  *  Stock-ledger branch id. Head Office has always ledgered materials at 0 and
  *  finished items at 1; every other location uses its own id for both. */
-const ledgerBranchId = (loc: ProdLocation, materialType: string) =>
+export const ledgerBranchId = (loc: ProdLocation, materialType: string) =>
   loc.type === "headoffice" ? (materialType === "item" ? 1 : 0) : loc.id;
 
 /** Parent product identity (barcode + MRP) stamped onto the batch a line creates. */
@@ -250,7 +250,7 @@ async function manualBatchConflict(
  * so a five-line bill gets five distinct lots (the old `PUR-<id>` fallback gave
  * every line on a bill the SAME number and merged them into one lot).
  */
-async function allocateBatchNumbers(q: Queryable, purchaseDate: string, count: number): Promise<string[]> {
+export async function allocateBatchNumbers(q: Queryable, purchaseDate: string, count: number): Promise<string[]> {
   if (count <= 0) return [];
   const { rows } = await q.query(
     `SELECT 'PUR-' || to_char($1::date, 'YYYYMMDD') || '-'
@@ -277,7 +277,7 @@ const normState = (s: unknown) => String(s ?? "").trim().toLowerCase().replace(/
  * state names are the fallback. `null` means the server genuinely cannot tell
  * (one side has neither), in which case the caller's value stands.
  */
-async function resolveSupplyTaxType(
+export async function resolveSupplyTaxType(
   vendorId: number, loc: ProdLocation,
 ): Promise<{ taxType: TaxType | null; why: string }> {
   const { rows: [v] } = await pool.query(`SELECT state, gst_number FROM vendors WHERE id = $1`, [vendorId]);
@@ -320,7 +320,7 @@ async function resolveSupplyTaxType(
  * app imports too — the preview in the browser and the figures written here are
  * produced by the same code, so they cannot drift apart.
  */
-function priceBill(
+export function priceBill(
   rawLineItems: any[], billMode: PriceMode, maps: NameMaps, derivedTaxType: TaxType | null,
 ) {
   const prepared = rawLineItems.map((li: any) => {
@@ -371,14 +371,14 @@ function priceBill(
 }
 
 // ── Item Master snapshot (names, HSN, GST% and unit for every product kind) ──
-type ProductMaster = { name: string; hsnCode: string; taxRate: number; unit: string };
-type NameMaps = {
+export type ProductMaster = { name: string; hsnCode: string; taxRate: number; unit: string };
+export type NameMaps = {
   material: Map<number, ProductMaster>;
   raw_material: Map<number, ProductMaster>;
   item: Map<number, ProductMaster>;
 };
 
-async function buildNameMaps(): Promise<NameMaps> {
+export async function buildNameMaps(): Promise<NameMaps> {
   // Raw SQL rather than drizzle: hsn_code and tax_rate are startup-migration
   // columns on materials/raw_materials and so are invisible to the schema.
   const load = async (table: "materials" | "raw_materials" | "items") => {

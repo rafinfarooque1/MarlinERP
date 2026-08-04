@@ -58,20 +58,20 @@
 **Sales:** Returns · Outstanding · Coupons · (Quotations — **in development**, task #202 in progress)
 **HR:** Employees · Attendance (multi-punch) · Payroll · Advances · Leave · Rent Management · Hierarchy
 **Accounts:** Chart of Accounts · Ledger Statement · Cash & Bank · Vouchers · Journal · Contra · Credit/Debit Notes · Day Book · Cash Book · Bank Book · Trial Balance · P&L · Balance Sheet · GST Summary · GST Returns (GSTR-1/3B/HSN) · Reconciliation · Financial Reports
-**Company:** Settings · Company Profile · Permissions · Audit Log · Login History · Backup & Restore · Company Reset
+**Company:** Settings · Company Profile · Permissions · Audit Log · Login History · Backup & Restore · Company Reset · Import Data (`/company/import`) — Excel imports for masters (customers, vendors, items with opening stock, ledgers with opening balances) **and, since Aug 2026, sales & purchase invoices** (task #225): required target-location picker (HO/warehouse/outlet), multi-row invoice grouping (consecutive rows, same invoice+date+party), missing-party resolution step (inline bulk create via the standard party paths → ledgers auto-provisioned, then in-place re-validation), invoice/bill numbers preserved as-supplied (never renumbered, allocator untouched; uniqueness validated in-file and against the DB — sales globally, purchases per-vendor). Commits route through logic identical to POST /sales & /purchases (`api-server/src/lib/importTransactions.ts`): FEFO lot consumption, business-dated stock_ledger, weighted-avg cost, settlement model (cash/UPI/bank settle at creation; credit carries dues, paid-amount becomes a sale_payments collection / payment allocation voucher), GST via `lineTaxHeads()`. Batch rollback is all-or-nothing in one transaction via reversal-equivalent logic (stock restored, avg cost unwound with qty, settlements deleted) and refuses per-document when downstream activity exists (payments, returns, consumed lots, transfer links).
 
 One unified sidebar for all users (no per-role nav forks); links are permission-filtered.
 
-## 3. Database (62 tables, no triggers, 4 business sequences)
+## 3. Database (69 tables, no triggers, 4 business sequences)
 
 All DDL ships via boot migrations in `api-server/src/index.ts` + `src/migrations/` (logged in `migration_log`/`boot_status`). Business sequences: `purchase_batch_seq`, `item_code_seq_item`, `item_code_seq_material`, `item_code_seq_raw_material`. Voucher/invoice numbering uses `voucher_sequences` (PK `voucher_type, fy_label`) — never COUNT(*).
 
 | Category | Tables |
 |---|---|
 | **Master** | items, materials, raw_materials, customers, vendors, employees, warehouses, outlets, account_ledgers, asset_categories, assets, hierarchies, cash_bank_accounts, bom_templates, item_prices, coupons, pay_components |
-| **Transactional** | sales, sale_payments, sales_returns, purchases, purchase_returns, productions, stock_transfers, stock_entries, stock_batches, stock_reservations, journal_vouchers, journal_voucher_lines, receipts, payments, expenses, cash_deposits, reconciliation_batches(+items), asset_purchases, asset_transfers, asset_disposals, attendance, attendance_punches, leaves, payroll, employee_advances, salary_accruals, rent_accruals, rent_periods, rent_payments, opening_balances, invoice_share_links, stock_verifications |
+| **Transactional** | sales, sale_payments, sales_returns, purchases, purchase_returns, productions, stock_transfers, stock_entries, stock_batches, stock_reservations, journal_vouchers, journal_voucher_lines, receipts, payments, expenses, cash_deposits, reconciliation_batches(+items), asset_purchases, asset_transfers, asset_disposals, attendance, attendance_punches, leaves, payroll, employee_advances, salary_accruals, rent_accruals, rent_periods, rent_payments, opening_balances, invoice_share_links, quotations, quotation_share_links, stock_verifications |
 | **Configuration** | company_settings (47 cols), permissions, voucher_sequences, salary_accrual_config, warehouse_rent_agreements, location_migration_map |
-| **Audit / infra** | activity_log, login_attempts, stock_ledger (append-only), migration_log, boot_status |
+| **Audit / infra** | activity_log, login_attempts, login_lockouts, stock_ledger (append-only), migration_log, boot_status, import_batches, import_rows (Import Data module: batch/row state, per-row raw+normalized payloads, created-record links for rollback) |
 
 Key relationships & constraints:
 - Declared FKs are sparse (25) and concentrated on document→master links (sales_returns→sales, purchases→vendors, permissions→hierarchies…). Many links are **conventional** (ledger codes `CUST-<id>`/`VEND-<id>`/`SAL-EMP-<id>`, `location_type`+`location_id` pairs) — enforced by application logic and boot-time healing sweeps, not the database.

@@ -11,12 +11,12 @@ import { customFetch } from "./custom-fetch";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-export type ImportModule = "customers" | "vendors" | "ledgers";
+export type ImportModule = "customers" | "vendors" | "ledgers" | "sales" | "purchases";
 
 export type ImportBatchStatus = "validated" | "committing" | "committed" | "rolled_back";
 
 export type ImportRowStatus =
-  | "valid" | "warning" | "error"
+  | "valid" | "warning" | "error" | "needs_party"
   | "imported" | "updated" | "skipped" | "failed" | "rolled_back";
 
 export interface ImportBatch {
@@ -32,6 +32,9 @@ export interface ImportBatch {
   updatedRows: number;
   skippedRows: number;
   failedRows: number;
+  /** Target location (sales/purchase imports) — where documents are stamped. */
+  locationType: string | null;
+  locationId: number | null;
   createdBy: string;
   createdAt: string;
   committedAt: string | null;
@@ -49,9 +52,31 @@ export interface ImportRow {
   suggestion: string | null;
   duplicateOfId: number | null;
   values: Record<string, string>;
+  /** Party name that must be created/resolved before commit (needs_party rows). */
+  missingParty: string | null;
+  /** Document group index — rows of one invoice share it (sales/purchases). */
+  docIndex: number | null;
   createdRecordType: string | null;
   createdRecordId: number | null;
   createdLedgerId: number | null;
+}
+
+/** Inline party creation during a sales/purchase import (resolve step). */
+export interface ImportPartyInput {
+  name: string;
+  gstNumber?: string;
+  phone?: string;
+  state?: string;
+  address?: string;
+  creditLimit?: number;
+}
+
+export interface ImportResolvePartiesResponse {
+  batch: ImportBatch;
+  rows: ImportRow[];
+  created: string[];
+  skipped: string[];
+  errors: Array<{ name: string; reason: string }>;
 }
 
 export interface ImportParseResponse {
@@ -105,13 +130,42 @@ export const useImportBatch = (id: number | null) =>
  */
 export const useParseImportFile = () => {
   const qc = useQueryClient();
-  return useMutation<ImportParseResponse, Error, { module: ImportModule; file: File }>({
-    mutationFn: ({ module, file }) =>
-      customFetch<ImportParseResponse>(
-        `/api/imports/parse?module=${module}&filename=${encodeURIComponent(file.name)}`,
+  return useMutation<ImportParseResponse, Error, {
+    module: ImportModule; file: File;
+    /** Required for sales/purchase imports: where the documents land. */
+    locationType?: string; locationId?: number;
+  }>({
+    mutationFn: ({ module, file, locationType, locationId }) => {
+      let url = `/api/imports/parse?module=${module}&filename=${encodeURIComponent(file.name)}`;
+      if (locationType) url += `&locationType=${encodeURIComponent(locationType)}&locationId=${locationId ?? 0}`;
+      return customFetch<ImportParseResponse>(
+        url,
         { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file },
-      ),
+      );
+    },
     onSuccess: () => { qc.invalidateQueries({ queryKey: importKeys.batches }); },
+  });
+};
+
+/**
+ * Create the missing customers/vendors reported by a sales/purchase import,
+ * through the standard party-creation path (ledgers auto-provisioned), then
+ * re-validate the whole batch server-side. Answer includes the re-validated
+ * rows — no re-upload needed.
+ */
+export const useResolveImportParties = () => {
+  const qc = useQueryClient();
+  return useMutation<ImportResolvePartiesResponse, Error, { id: number; parties: ImportPartyInput[] }>({
+    mutationFn: ({ id, parties }) =>
+      customFetch<ImportResolvePartiesResponse>(`/api/imports/batches/${id}/resolve-parties`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parties }),
+      }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: importKeys.batches });
+      qc.invalidateQueries({ queryKey: importKeys.batch(vars.id) });
+    },
   });
 };
 

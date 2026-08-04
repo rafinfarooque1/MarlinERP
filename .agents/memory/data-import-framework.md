@@ -32,3 +32,35 @@ Rules that must hold for every import type, and why:
   strips fields); upload is a raw body to the parse endpoint.
 - **Opening-balance FY** derives from the company's FY start month setting,
   never the stale financial-year text column.
+
+## Transaction imports (sales & purchase invoices)
+
+- **Commit via extracted doc functions** that replicate POST /sales and POST
+  /purchases line-for-line (stock locks ascending, FEFO lots, business-dated
+  stock_ledger, settlement, avg cost). **Why:** any shortcut diverges from the
+  books; the routes are too entangled to call directly, so the shared pieces
+  were exported and reassembled in one lib.
+- **Process documents in FILE order, never re-sorted.** Weighted-average cost
+  depends on entry order; the preview warns that backdated bills affect avg
+  cost in the order they appear.
+- **Grouping is consecutive-rows-only** (same invoice+date+party); the same
+  key reappearing later in the file is an error, not a merge — silent merging
+  would hide row-ordering mistakes in the source export.
+- **`needs_party` is its own row status** (counted as error for commit
+  gating); resolve-parties creates missing customers/vendors through the
+  standard creation path (ledgers auto-provision) and then re-runs the whole
+  validation over stored rows — no re-upload, and re-validation must rewrite
+  batch counters too.
+- **Target location is an explicit 400-guarded choice** — defaulting to the
+  uploader's branch would stamp an entire migration onto the wrong location.
+- **Rollback is all-or-nothing in ONE transaction** (unlike per-record masters
+  rollback): settlement ids live on the head row's `raw.created`; purchase
+  unwind runs `updateAvgCostOnReversal` BEFORE qty removal and blocks when the
+  lot has been consumed; expect avg_cost to legitimately stay non-zero once
+  remaining qty hits 0 (standard unwind semantics — inert, next inbound
+  recomputes).
+- **Settlement facts that trip test expectations:** purchases round-off to
+  whole rupees (`round_off` col); sales status value is `partially_paid` (not
+  "partial"); cash/UPI/bank sales settle at creation with NO sale_payments
+  row — only credit collections write one; interstate detection reads
+  `company_settings.state`, which can be blank (→ intrastate fallback).

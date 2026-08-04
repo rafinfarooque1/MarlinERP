@@ -8,11 +8,13 @@
  * whose real eligibility is decided server-side at click time — a batch whose
  * records have since been used refuses with per-record reasons.
  */
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   useImportBatches, useImportBatch, useParseImportFile, useCommitImportBatch,
-  useRollbackImportBatch, downloadImportTemplate,
+  useRollbackImportBatch, useResolveImportParties, downloadImportTemplate,
+  useListWarehouses, useListOutlets,
   type ImportModule, type ImportBatch, type ImportRow, type ImportRollbackBlocked,
+  type ImportPartyInput,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
@@ -20,6 +22,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -28,6 +31,7 @@ import { toast } from 'sonner';
 import {
   ShieldOff, Upload, Download, FileSpreadsheet, Users, Truck, BookOpen,
   CheckCircle2, AlertTriangle, XCircle, RotateCcw, Loader2, History, Eye,
+  ShoppingCart, Package, MapPin, UserPlus,
 } from 'lucide-react';
 
 // ── Module metadata ─────────────────────────────────────────────────────────
@@ -45,7 +49,24 @@ const MODULE_META: Record<ImportModule, { label: string; icon: typeof Users; blu
     label: 'Ledgers', icon: BookOpen,
     blurb: 'Creates chart-of-accounts ledgers under a valid group, with opening balances.',
   },
+  sales: {
+    label: 'Sales', icon: ShoppingCart,
+    blurb: 'Records old-ERP sales invoices with full stock, GST and settlement effects at a chosen location.',
+  },
+  purchases: {
+    label: 'Purchases', icon: Package,
+    blurb: 'Records old-ERP purchase bills with stock, average cost, GST and vendor settlement effects.',
+  },
 };
+
+/** Transaction imports: need a target location and a party-resolution step. */
+const isTxn = (m: ImportModule) => m === 'sales' || m === 'purchases';
+
+/** What to show in the "Name" column — masters have a name, documents don't. */
+const rowLabel = (m: ImportModule, r: ImportRow) =>
+  isTxn(m)
+    ? [r.values.invoiceNo, r.values.party, r.values.item].filter(Boolean).join(' · ') || '—'
+    : r.values.name ?? '—';
 
 const fmtTime = (iso: string) =>
   new Date(iso).toLocaleString('en-IN', {
@@ -60,6 +81,7 @@ function RowStatusBadge({ status }: { status: ImportRow['status'] }) {
   switch (status) {
     case 'valid':       return <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">Valid</Badge>;
     case 'warning':     return <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">Warning</Badge>;
+    case 'needs_party': return <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-100">Needs party</Badge>;
     case 'error':       return <Badge variant="destructive">Error</Badge>;
     case 'imported':    return <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">Imported</Badge>;
     case 'updated':     return <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-100">Updated</Badge>;
@@ -93,15 +115,68 @@ export default function ImportData() {
   const [detailBatchId, setDetailBatchId] = useState<number | null>(null);
   const [rollbackTarget, setRollbackTarget] = useState<ImportBatch | null>(null);
   const [rollbackBlocked, setRollbackBlocked] = useState<ImportRollbackBlocked | null>(null);
+  /** Target location for sales/purchase imports, as "type|id". */
+  const [location, setLocation] = useState<string>('');
+  /** Editable mini-forms for the resolve-missing-parties step, keyed by name. */
+  const [partyForms, setPartyForms] = useState<Record<string, ImportPartyInput>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: historyData, isLoading: loadingHistory } = useImportBatches();
   const { data: detailData } = useImportBatch(detailBatchId);
+  const { data: warehouses } = useListWarehouses();
+  const { data: outlets } = useListOutlets();
   const parseFile = useParseImportFile();
   const commitBatch = useCommitImportBatch();
   const rollbackBatch = useRollbackImportBatch();
+  const resolveParties = useResolveImportParties();
 
   const batches = historyData?.batches ?? [];
+  const txn = isTxn(module);
+
+  /** Unique missing parties in the current preview, with prefills from the file. */
+  const missingParties = useMemo(() => {
+    if (!preview) return [] as Array<{ name: string; gstNumber: string }>;
+    const seen = new Map<string, { name: string; gstNumber: string }>();
+    for (const r of preview.rows) {
+      if (r.status !== 'needs_party' || !r.missingParty) continue;
+      const key = r.missingParty.toLowerCase();
+      const existing = seen.get(key);
+      if (!existing) seen.set(key, { name: r.missingParty, gstNumber: (r.values.gstNumber ?? '').trim() });
+      else if (!existing.gstNumber && (r.values.gstNumber ?? '').trim()) existing.gstNumber = r.values.gstNumber.trim();
+    }
+    return [...seen.values()];
+  }, [preview]);
+
+  const partyForm = (name: string, gst: string): ImportPartyInput =>
+    partyForms[name] ?? { name, gstNumber: gst };
+  const setPartyField = (name: string, gst: string, field: keyof ImportPartyInput, value: string) => {
+    setPartyForms((prev) => ({
+      ...prev,
+      [name]: {
+        ...partyForm(name, gst),
+        [field]: field === 'creditLimit' ? (value === '' ? undefined : Number(value)) : value,
+      },
+    }));
+  };
+
+  const handleResolveParties = async () => {
+    if (!preview || missingParties.length === 0) return;
+    try {
+      const r = await resolveParties.mutateAsync({
+        id: preview.batch.id,
+        parties: missingParties.map((p) => partyForm(p.name, p.gstNumber)),
+      });
+      setPreview({ batch: r.batch, rows: r.rows });
+      setPartyForms({});
+      if (r.errors.length > 0) {
+        toast.warning(`${r.created.length} created, ${r.errors.length} failed: ${r.errors.map((e) => `${e.name} — ${e.reason}`).join('; ')}`);
+      } else {
+        toast.success(`${r.created.length} ${module === 'sales' ? 'customer' : 'vendor'}${r.created.length === 1 ? '' : 's'} created with ledgers${r.skipped.length ? ` (${r.skipped.length} already existed)` : ''} — rows re-validated.`);
+      }
+    } catch (e: any) {
+      toast.error(e?.message ?? 'The parties could not be created.');
+    }
+  };
 
   const handleDownloadSample = async () => {
     try {
@@ -114,12 +189,19 @@ export default function ImportData() {
 
   const handleFilePicked = async (file: File) => {
     try {
-      const r = await parseFile.mutateAsync({ module, file });
+      const [locType, locId] = location.split('|');
+      const r = await parseFile.mutateAsync({
+        module, file,
+        ...(txn ? { locationType: locType, locationId: Number(locId) } : {}),
+      });
       setPreview(r);
       setSkippedRowIds(new Set());
       setDuplicateAction('skip');
+      setPartyForms({});
       const { validRows, warningRows, errorRows } = r.batch;
-      if (errorRows > 0) toast.warning(`${errorRows} row${errorRows === 1 ? '' : 's'} have errors and will not be imported. Fix and re-upload, or commit the rest.`);
+      const needsParty = r.rows.filter((row) => row.status === 'needs_party').length;
+      if (needsParty > 0) toast.info(`${needsParty} row${needsParty === 1 ? '' : 's'} reference ${module === 'sales' ? 'customers' : 'vendors'} that don't exist yet — create them in the resolve step below.`);
+      else if (errorRows > 0) toast.warning(`${errorRows} row${errorRows === 1 ? '' : 's'} have errors and will not be imported. Fix and re-upload, or commit the rest.`);
       else toast.success(`File validated — ${validRows} valid, ${warningRows} warning${warningRows === 1 ? '' : 's'}.`);
     } catch (e: any) {
       toast.error(e?.message ?? 'That file could not be read.');
@@ -135,9 +217,10 @@ export default function ImportData() {
   };
 
   const committableRows = preview
-    ? preview.rows.filter((r) => r.status !== 'error' && !skippedRowIds.has(r.id))
+    ? preview.rows.filter((r) => r.status !== 'error' && r.status !== 'needs_party' && !skippedRowIds.has(r.id))
     : [];
-  const hasDuplicates = preview ? preview.rows.some((r) => r.duplicateOfId != null && r.status !== 'error') : false;
+  const hasDuplicates = !txn && preview ? preview.rows.some((r) => r.duplicateOfId != null && r.status !== 'error') : false;
+  const needsPartyCount = preview ? preview.rows.filter((r) => r.status === 'needs_party').length : 0;
 
   const handleCommit = async () => {
     if (!preview) return;
@@ -215,7 +298,7 @@ export default function ImportData() {
 
           {/* ── Import tab ─────────────────────────────────────────────── */}
           <TabsContent value="import" className="space-y-4 mt-4">
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-5">
               {(Object.keys(MODULE_META) as ImportModule[]).map((m) => {
                 const meta = MODULE_META[m];
                 const Icon = meta.icon;
@@ -224,7 +307,7 @@ export default function ImportData() {
                   <Card
                     key={m}
                     className={`cursor-pointer transition-colors ${active ? 'border-primary ring-1 ring-primary' : 'hover:border-muted-foreground/40'}`}
-                    onClick={() => { setModule(m); setPreview(null); }}
+                    onClick={() => { setModule(m); setPreview(null); setPartyForms({}); }}
                   >
                     <CardHeader className="pb-2">
                       <CardTitle className="text-base flex items-center gap-2">
@@ -240,11 +323,41 @@ export default function ImportData() {
               })}
             </div>
 
+            {txn && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <MapPin className="w-4 h-4 text-primary" />
+                    Target location
+                  </CardTitle>
+                  <CardDescription>
+                    Every {module === 'sales' ? 'invoice' : 'bill'} in the file is recorded at this location — its stock, ledgers and reports carry the effects. Pick it before uploading.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Select value={location} onValueChange={(v) => { setLocation(v); setPreview(null); }}>
+                    <SelectTrigger className="w-72"><SelectValue placeholder="Choose a location…" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="headoffice|1">Head Office</SelectItem>
+                      {(warehouses ?? []).map((w: any) => (
+                        <SelectItem key={`w${w.id}`} value={`warehouse|${w.id}`}>{w.name} (Warehouse)</SelectItem>
+                      ))}
+                      {(outlets ?? []).map((o: any) => (
+                        <SelectItem key={`o${o.id}`} value={`outlet|${o.id}`}>{o.name} (Outlet)</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </CardContent>
+              </Card>
+            )}
+
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-base">Step 1 — Get the sample, fill it, upload it</CardTitle>
+                <CardTitle className="text-base">{txn ? 'Get the sample, fill it, upload it' : 'Step 1 — Get the sample, fill it, upload it'}</CardTitle>
                 <CardDescription>
-                  Columns marked * are required. Duplicate names are flagged — you decide at commit whether to skip or update them.
+                  {txn
+                    ? `Columns marked * are required. One row per invoice line — rows of one invoice must sit together with the same invoice number, date and ${module === 'sales' ? 'customer' : 'vendor'}. Prices are GST-exclusive; GST comes from the product master.`
+                    : 'Columns marked * are required. Duplicate names are flagged — you decide at commit whether to skip or update them.'}
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-wrap items-center gap-3">
@@ -254,7 +367,7 @@ export default function ImportData() {
                 </Button>
                 <Button
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={!perm.canAdd || parseFile.isPending}
+                  disabled={!perm.canAdd || parseFile.isPending || (txn && !location)}
                 >
                   {parseFile.isPending
                     ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
@@ -285,7 +398,7 @@ export default function ImportData() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className={`grid grid-cols-2 gap-3 ${txn ? 'sm:grid-cols-5' : 'sm:grid-cols-4'}`}>
                     <div className="rounded-lg border p-3">
                       <div className="text-2xl font-bold">{preview.batch.totalRows}</div>
                       <div className="text-xs text-muted-foreground">Total rows</div>
@@ -298,11 +411,59 @@ export default function ImportData() {
                       <div className="text-2xl font-bold text-amber-600 flex items-center gap-1"><AlertTriangle className="w-5 h-5" />{preview.batch.warningRows}</div>
                       <div className="text-xs text-muted-foreground">Warnings</div>
                     </div>
+                    {txn && (
+                      <div className="rounded-lg border p-3">
+                        <div className="text-2xl font-bold text-blue-600 flex items-center gap-1"><UserPlus className="w-5 h-5" />{needsPartyCount}</div>
+                        <div className="text-xs text-muted-foreground">Need {module === 'sales' ? 'customer' : 'vendor'}</div>
+                      </div>
+                    )}
                     <div className="rounded-lg border p-3">
-                      <div className="text-2xl font-bold text-destructive flex items-center gap-1"><XCircle className="w-5 h-5" />{preview.batch.errorRows}</div>
+                      <div className="text-2xl font-bold text-destructive flex items-center gap-1"><XCircle className="w-5 h-5" />{txn ? preview.batch.errorRows - needsPartyCount : preview.batch.errorRows}</div>
                       <div className="text-xs text-muted-foreground">Errors</div>
                     </div>
                   </div>
+
+                  {txn && missingParties.length > 0 && (
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-3">
+                      <div className="flex items-center gap-2 text-sm font-medium">
+                        <UserPlus className="w-4 h-4 text-blue-600" />
+                        {missingParties.length} {module === 'sales' ? 'customer' : 'vendor'}{missingParties.length === 1 ? '' : 's'} in the file
+                        {missingParties.length === 1 ? ' does' : ' do'} not exist yet
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Fill in what you know and create them — each gets its {module === 'sales' ? 'debtor' : 'creditor'} ledger automatically,
+                        exactly like manual creation, and the rows re-validate without re-uploading. Or fix the spelling in the file and upload again.
+                      </p>
+                      <div className="space-y-2 max-h-[22rem] overflow-y-auto pr-1">
+                        {missingParties.map((p) => {
+                          const f = partyForm(p.name, p.gstNumber);
+                          return (
+                            <div key={p.name} className="grid gap-2 sm:grid-cols-6 items-center rounded-md border bg-white p-2">
+                              <div className="sm:col-span-1 text-sm font-medium truncate" title={p.name}>{p.name}</div>
+                              <Input className="h-8 text-xs" placeholder="GSTIN (optional)" value={f.gstNumber ?? ''}
+                                onChange={(e) => setPartyField(p.name, p.gstNumber, 'gstNumber', e.target.value)} />
+                              <Input className="h-8 text-xs" placeholder="Phone" value={f.phone ?? ''}
+                                onChange={(e) => setPartyField(p.name, p.gstNumber, 'phone', e.target.value)} />
+                              <Input className="h-8 text-xs" placeholder="State" value={f.state ?? ''}
+                                onChange={(e) => setPartyField(p.name, p.gstNumber, 'state', e.target.value)} />
+                              <Input className="h-8 text-xs" placeholder="Address" value={f.address ?? ''}
+                                onChange={(e) => setPartyField(p.name, p.gstNumber, 'address', e.target.value)} />
+                              {module === 'sales' ? (
+                                <Input className="h-8 text-xs" type="number" placeholder="Credit limit" value={f.creditLimit ?? ''}
+                                  onChange={(e) => setPartyField(p.name, p.gstNumber, 'creditLimit', e.target.value)} />
+                              ) : <div />}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <Button size="sm" onClick={handleResolveParties} disabled={!perm.canAdd || resolveParties.isPending}>
+                        {resolveParties.isPending
+                          ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                          : <UserPlus className="w-4 h-4 mr-1.5" />}
+                        Create {missingParties.length === 1 ? 'this' : `all ${missingParties.length}`} &amp; re-validate
+                      </Button>
+                    </div>
+                  )}
 
                   {hasDuplicates && (
                     <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
@@ -335,13 +496,13 @@ export default function ImportData() {
                           <TableRow key={r.id} className={r.status === 'error' ? 'opacity-60' : ''}>
                             <TableCell>
                               <Checkbox
-                                checked={r.status !== 'error' && !skippedRowIds.has(r.id)}
-                                disabled={r.status === 'error'}
+                                checked={r.status !== 'error' && r.status !== 'needs_party' && !skippedRowIds.has(r.id)}
+                                disabled={r.status === 'error' || r.status === 'needs_party'}
                                 onCheckedChange={() => toggleSkip(r.id)}
                               />
                             </TableCell>
                             <TableCell className="text-muted-foreground">{r.rowNumber}</TableCell>
-                            <TableCell className="font-medium">{r.values.name ?? '—'}</TableCell>
+                            <TableCell className="font-medium">{rowLabel(module, r)}</TableCell>
                             <TableCell><RowStatusBadge status={r.status} /></TableCell>
                             <TableCell className="text-sm text-muted-foreground max-w-[22rem]">{r.reason ?? '—'}</TableCell>
                             <TableCell className="text-sm text-muted-foreground max-w-[22rem]">{r.suggestion ?? '—'}</TableCell>
@@ -443,10 +604,21 @@ export default function ImportData() {
           <DialogHeader>
             <DialogTitle>Commit this import?</DialogTitle>
             <DialogDescription>
-              {committableRows.length} {MODULE_LABEL(module).toLowerCase()} row{committableRows.length === 1 ? '' : 's'} will be created
-              {hasDuplicates ? ` — duplicates will be ${duplicateAction === 'skip' ? 'skipped' : 'updated'}` : ''}.
-              Records are created exactly as if entered manually (ledgers auto-provisioned, opening balances recorded),
-              and the whole batch can be rolled back from Import History while its records are unused.
+              {txn ? (
+                <>
+                  {committableRows.length} row{committableRows.length === 1 ? '' : 's'} will be recorded as {module === 'sales' ? 'sales invoices' : 'purchase bills'} —
+                  with real stock, GST, ledger and settlement effects, exactly as if entered manually.
+                  {needsPartyCount > 0 && ` ${needsPartyCount} row${needsPartyCount === 1 ? '' : 's'} with unresolved ${module === 'sales' ? 'customers' : 'vendors'} will be SKIPPED.`}
+                  {' '}The whole batch can be rolled back from Import History while its documents have no later activity.
+                </>
+              ) : (
+                <>
+                  {committableRows.length} {MODULE_LABEL(module).toLowerCase()} row{committableRows.length === 1 ? '' : 's'} will be created
+                  {hasDuplicates ? ` — duplicates will be ${duplicateAction === 'skip' ? 'skipped' : 'updated'}` : ''}.
+                  Records are created exactly as if entered manually (ledgers auto-provisioned, opening balances recorded),
+                  and the whole batch can be rolled back from Import History while its records are unused.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -487,7 +659,7 @@ export default function ImportData() {
                   {detailData.rows.map((r) => (
                     <TableRow key={r.id}>
                       <TableCell className="text-muted-foreground">{r.rowNumber}</TableCell>
-                      <TableCell className="font-medium">{r.values.name ?? '—'}</TableCell>
+                      <TableCell className="font-medium">{detailData ? rowLabel(detailData.batch.module, r) : '—'}</TableCell>
                       <TableCell><RowStatusBadge status={r.status} /></TableCell>
                       <TableCell className="text-sm text-muted-foreground">{r.reason ?? '—'}</TableCell>
                     </TableRow>
@@ -505,11 +677,15 @@ export default function ImportData() {
           <DialogHeader>
             <DialogTitle>Roll back this import?</DialogTitle>
             <DialogDescription>
-              {rollbackTarget && (
+              {rollbackTarget && (isTxn(rollbackTarget.module) ? (
+                <>Every document created by "{rollbackTarget.filename}" ({rollbackTarget.importedRows} row{rollbackTarget.importedRows === 1 ? '' : 's'}) will be
+                reversed — stock restored, settlements unwound{rollbackTarget.module === 'purchases' ? ', average cost unwound' : ''}, books cleaned.
+                Documents that have since gained payments, returns or other activity block the whole rollback with per-document reasons.</>
+              ) : (
                 <>Every record created by "{rollbackTarget.filename}" ({rollbackTarget.importedRows} record{rollbackTarget.importedRows === 1 ? '' : 's'}) will be
                 deleted — opening balances first, then ledgers, then parties. Records that have since been used block the
                 rollback with a per-record explanation. Updates made to pre-existing records are not reverted.</>
-              )}
+              ))}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

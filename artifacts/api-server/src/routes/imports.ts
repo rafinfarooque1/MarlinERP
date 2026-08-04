@@ -30,13 +30,27 @@ import {
 } from "../lib/partyCreate";
 import { insertChartAccount, loadLedgerUsage } from "../lib/chartGroups";
 import { upsertOpeningBalance, currentFinancialYear } from "../lib/openingBalances";
+import { resolveActingLocation } from "../lib/productionCosting";
+import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE } from "../lib/featureFlags";
+import { isValidGstSlab } from "../lib/gst";
+import { buildSaleLines } from "./sales";
+import { priceBill, buildNameMaps, resolveSupplyTaxType, type NameMaps } from "./purchases";
+import {
+  importSaleDoc, importPurchaseDoc,
+  rollbackImportedSale, rollbackImportedPurchase,
+} from "../lib/importTransactions";
 
 const router: IRouter = Router();
 
 const PERM = "page:/company/import";
 
-type ImportModule = "customers" | "vendors" | "ledgers";
-const MODULES: ImportModule[] = ["customers", "vendors", "ledgers"];
+type ImportModule = "customers" | "vendors" | "ledgers" | "sales" | "purchases";
+const MODULES: ImportModule[] = ["customers", "vendors", "ledgers", "sales", "purchases"];
+
+/** Sales & purchases import whole DOCUMENTS (with stock + books effects), not
+ *  master records — they get their own validation, commit and rollback paths. */
+type TxnModule = "sales" | "purchases";
+const isTxnModule = (m: ImportModule): m is TxnModule => m === "sales" || m === "purchases";
 
 function asModule(v: unknown): ImportModule | null {
   const s = String(v ?? "").toLowerCase();
@@ -104,6 +118,48 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
       NOTES_COL,
     ],
   },
+  sales: {
+    title: "Sales Invoices",
+    columns: [
+      { key: "invoiceNo", header: "Invoice No", example: "INV/25-26/0412", hint: "Old ERP invoice number — kept exactly as supplied. Repeat it on every row of a multi-item invoice; blank rows get a placeholder", aliases: ["invoiceno", "invoicenumber", "invno", "invoice", "billno", "billnumber", "vchno", "voucherno", "vouchernumber"] },
+      { key: "date", header: "Date", required: true, example: "2025-04-12", hint: "Invoice date — YYYY-MM-DD or DD/MM/YYYY", aliases: ["date", "invoicedate", "billdate", "saledate", "vchdate", "voucherdate"] },
+      { key: "party", header: "Customer", required: true, example: "Fresh Mart Traders", hint: "Customer name — unknown names can be created in the resolve step before commit", aliases: ["customer", "customername", "party", "partyname", "buyer", "buyername", "client", "clientname"] },
+      { key: "gstNumber", header: "GSTIN", example: "33AAACM1234F1Z5", hint: "Customer GSTIN — used to pre-fill missing customers and cross-checked against the master", aliases: ["gstin", "gstno", "gstnumber", "gstinno", "customergstin"] },
+      { key: "item", header: "Item", required: true, example: "Frozen Mango Chunks 1kg", hint: "Must already exist in the Item Master — this import never creates items", aliases: ["item", "itemname", "product", "productname", "description", "particulars", "goods"] },
+      { key: "quantity", header: "Qty", required: true, example: 10, hint: "Quantity sold (decimals allowed)", aliases: ["qty", "quantity", "nos", "pcs", "qtysold"] },
+      { key: "unit", header: "Unit", required: true, example: "pcs", hint: "Cross-checked against the Item Master unit", aliases: ["unit", "uom", "units"] },
+      { key: "price", header: "Price", required: true, example: 250, hint: "Per-unit selling price EXCLUDING GST — tax is added from the Item Master rate", aliases: ["price", "rate", "unitprice", "saleprice", "priceperunit", "sellingprice"] },
+      { key: "discount", header: "Discount", example: 0, hint: "₹ discount on this LINE's total (not per unit)", aliases: ["discount", "discountamount", "less", "itemdiscount", "linediscount"] },
+      { key: "gstRate", header: "GST %", example: 5, hint: "Cross-check only — the recorded GST always comes from the Item Master rate", aliases: ["gst", "gstrate", "gstpercent", "gstpercentage", "taxrate", "tax"] },
+      { key: "cgst", header: "CGST", example: 125, hint: "Cross-check only", aliases: ["cgst", "cgstamount"] },
+      { key: "sgst", header: "SGST", example: 125, hint: "Cross-check only", aliases: ["sgst", "sgstamount"] },
+      { key: "igst", header: "IGST", example: 0, hint: "Cross-check only", aliases: ["igst", "igstamount"] },
+      { key: "billDiscount", header: "Bill Discount", example: 0, hint: "Pre-tax ₹ discount on the whole invoice — put it on the invoice's FIRST row", aliases: ["billdiscount", "invoicediscount", "totaldiscount", "overalldiscount"] },
+      { key: "paymentStatus", header: "Payment Status", example: "Paid", hint: "Paid / Unpaid / Partial", aliases: ["paymentstatus", "paystatus", "status"] },
+      { key: "paidAmount", header: "Paid Amount", example: 2750, hint: "Amount received. Cash/UPI/Bank sales are always recorded fully paid; use Credit mode + Paid Amount for partly-paid invoices", aliases: ["paidamount", "amountpaid", "paid", "received", "amountreceived", "receivedamount"] },
+      { key: "paymentMode", header: "Payment Mode", example: "Cash", hint: "Cash / UPI / Bank / Credit (card, NEFT, RTGS, cheque count as Bank)", aliases: ["paymentmode", "mode", "paymenttype", "method", "paymentmethod", "modeofpayment"] },
+      { key: "reference", header: "Reference", example: "", hint: "Cheque / UTR / reference number", aliases: ["reference", "referenceno", "refno", "ref", "chequeno", "utr", "utrno", "txnid"] },
+      { key: "narration", header: "Narration", example: "Migrated from old ERP", hint: "Free text (informational)", aliases: ["narration", "notes", "remarks", "note", "comment", "comments"] },
+    ],
+  },
+  purchases: {
+    title: "Purchase Bills",
+    columns: [
+      { key: "invoiceNo", header: "Invoice No", example: "GF/2025/118", hint: "Vendor's bill number — kept exactly as supplied (unique per vendor). Repeat it on every row of a multi-item bill", aliases: ["invoiceno", "invoicenumber", "invno", "invoice", "billno", "billnumber", "vchno", "voucherno", "vouchernumber"] },
+      { key: "date", header: "Date", required: true, example: "2025-04-10", hint: "Bill date — YYYY-MM-DD or DD/MM/YYYY", aliases: ["date", "billdate", "invoicedate", "purchasedate", "vchdate", "voucherdate"] },
+      { key: "party", header: "Vendor", required: true, example: "Global Fruits Supply Co", hint: "Vendor name — unknown names can be created in the resolve step before commit", aliases: ["vendor", "vendorname", "supplier", "suppliername", "party", "partyname"] },
+      { key: "gstNumber", header: "GSTIN", example: "29AAACG5678K1Z3", hint: "Vendor GSTIN — used to pre-fill missing vendors and cross-checked against the master", aliases: ["gstin", "gstno", "gstnumber", "gstinno", "vendorgstin"] },
+      { key: "item", header: "Item", required: true, example: "Raw Mango", hint: "Finished product, raw material or packing material — must already exist in the masters", aliases: ["item", "itemname", "material", "materialname", "product", "productname", "particulars", "description", "goods"] },
+      { key: "quantity", header: "Qty", required: true, example: 100, hint: "Quantity purchased (decimals allowed)", aliases: ["qty", "quantity", "nos", "pcs", "kgs"] },
+      { key: "rate", header: "Rate", required: true, example: 45, hint: "Per-unit cost EXCLUDING GST — tax is added from the product master rate", aliases: ["rate", "price", "unitcost", "cost", "purchaseprice", "unitprice", "costperunit"] },
+      { key: "gstRate", header: "GST %", example: 5, hint: "Cross-check only — the recorded GST always comes from the product master rate", aliases: ["gst", "gstrate", "gstpercent", "gstpercentage", "taxrate", "tax"] },
+      { key: "discount", header: "Discount %", example: 0, hint: "PERCENT discount on this line (0–100) — the purchase module's convention", aliases: ["discount", "discountpercent", "disc", "discountpct"] },
+      { key: "paymentStatus", header: "Payment Status", example: "Unpaid", hint: "Paid / Unpaid / Partial", aliases: ["paymentstatus", "paystatus", "status"] },
+      { key: "paidAmount", header: "Paid Amount", example: 0, hint: "Amount already paid — recorded as a settlement from the selected location's cash", aliases: ["paidamount", "amountpaid", "paid", "advancepaid"] },
+      { key: "reference", header: "Reference", example: "", hint: "Cheque / UTR / reference number", aliases: ["reference", "referenceno", "refno", "ref", "chequeno", "utr", "utrno", "txnid"] },
+      { key: "narration", header: "Narration", example: "Migrated from old ERP", hint: "Stored on the bill", aliases: ["narration", "notes", "remarks", "note", "comment", "comments"] },
+    ],
+  },
 };
 
 // ── Cell / value normalisation ───────────────────────────────────────────────
@@ -162,6 +218,54 @@ function parsePhone(s: string): string | null | "invalid" {
   if (digits.length === 11 && digits.startsWith("0")) return digits.slice(1);
   if (digits.length === 12 && digits.startsWith("91")) return digits.slice(2);
   return "invalid";
+}
+
+/** YYYY-MM-DD (what cellText produces for real Date cells) or DD/MM/YYYY —
+ *  also with - or . separators. Returns the ISO string or null. Rejects
+ *  impossible calendar dates (31/02/2025). */
+function parseDateFlexible(s: string): string | null {
+  const t = (s ?? "").trim();
+  if (!t) return null;
+  let y: number, m: number, d: number;
+  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(t);
+  if (iso) { y = +iso[1]; m = +iso[2]; d = +iso[3]; }
+  else {
+    const dmy = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/.exec(t);
+    if (!dmy) return null;
+    d = +dmy[1]; m = +dmy[2]; y = +dmy[3];
+    if (y < 100) y += 2000;
+  }
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+/** Old-ERP mode spellings → this system's four modes (card/NEFT/cheque → bank). */
+function parsePaymentMode(s: string): "cash" | "bank" | "upi" | "credit" | null | "invalid" {
+  const t = s.toLowerCase().replace(/[^a-z]/g, "");
+  if (!t) return null;
+  if (t === "cash") return "cash";
+  if (["bank", "card", "creditcard", "debitcard", "neft", "rtgs", "imps", "cheque", "chq", "check", "dd", "banktransfer", "transfer", "online", "netbanking"].includes(t)) return "bank";
+  if (["upi", "gpay", "googlepay", "phonepe", "paytm", "bhim", "qr"].includes(t)) return "upi";
+  if (["credit", "udhaar", "udhar", "onaccount", "account", "due", "later"].includes(t)) return "credit";
+  return "invalid";
+}
+
+function parsePaymentStatus(s: string): "paid" | "unpaid" | "partial" | null | "invalid" {
+  const t = s.toLowerCase().replace(/[^a-z]/g, "");
+  if (!t) return null;
+  if (["paid", "settled", "full", "fullypaid", "fullpaid", "done", "yes", "closed", "cleared"].includes(t)) return "paid";
+  if (["unpaid", "credit", "due", "pending", "no", "open", "outstanding", "notpaid"].includes(t)) return "unpaid";
+  if (["partial", "partlypaid", "partiallypaid", "part", "partpaid", "partly"].includes(t)) return "partial";
+  return "invalid";
+}
+
+/** Plain positive number with comma/space slack (quantities). */
+function parseQty(s: string): number | null {
+  const t = (s ?? "").replace(/[,\s]/g, "");
+  if (!t) return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : (NaN as unknown as number);
 }
 
 // ── Ledger group resolution ──────────────────────────────────────────────────
@@ -228,7 +332,9 @@ const groupSuggestion = (candidates: ParentCandidate[]) =>
 // ── Validation ───────────────────────────────────────────────────────────────
 
 interface RowVerdict {
-  status: "valid" | "warning" | "error";
+  /** needs_party: valid row whose customer/vendor doesn't exist yet — resolved
+   *  via POST /imports/batches/:id/resolve-parties before commit. */
+  status: "valid" | "warning" | "error" | "needs_party";
   reason: string | null;
   suggestion: string | null;
   duplicateOfId: number | null;
@@ -394,6 +500,450 @@ function validateRow(
   return { status: "valid", reason: null, suggestion: null, duplicateOfId, norm };
 }
 
+// ── Transaction validation (sales & purchases) ──────────────────────────────
+
+interface TxnProduct {
+  kind: "item" | "material" | "raw_material";
+  id: number;
+  name: string;
+  taxRate: number;
+  unit: string;
+  mrp: number;
+}
+
+const KIND_LABEL: Record<TxnProduct["kind"], string> = {
+  item: "a finished product", material: "a packing material", raw_material: "a raw material",
+};
+
+interface TxnParty { id: number; name: string; gst: string; state: string }
+
+interface TxnContext {
+  products: Map<string, TxnProduct[]>; // lower(name) → candidates (>1 = ambiguous)
+  nameMaps: NameMaps;                  // priceBill's id-keyed master maps (purchases)
+  parties: Map<string, TxnParty>;      // lower(name) → customer/vendor
+  existingInvoices: Set<string>;       // sales: lower(inv); purchases: `${vendorId}|${lower(inv)}`
+  companyState: string;
+  stockAvail: Map<number, number>;     // sales: item id → qty at the target location
+}
+
+async function loadTxnContext(module: TxnModule, loc: { type: string; id: number }): Promise<TxnContext> {
+  const products = new Map<string, TxnProduct[]>();
+  const push = (kind: TxnProduct["kind"]) => (r: any) => {
+    const key = String(r.name ?? "").trim().toLowerCase();
+    if (!key) return;
+    const list = products.get(key) ?? [];
+    list.push({ kind, id: Number(r.id), name: String(r.name), taxRate: Number(r.tax_rate ?? 0), unit: String(r.unit ?? ""), mrp: Number(r.mrp ?? 0) });
+    products.set(key, list);
+  };
+  const { rows: items } = await pool.query(
+    `SELECT id, name, COALESCE(tax_rate, 0)::float8 AS tax_rate, COALESCE(unit, '') AS unit, COALESCE(mrp, 0)::float8 AS mrp FROM items`,
+  );
+  items.forEach(push("item"));
+  if (module === "purchases") {
+    const { rows: mats } = await pool.query(
+      `SELECT id, name, COALESCE(tax_rate, 0)::float8 AS tax_rate, COALESCE(unit, '') AS unit, 0 AS mrp FROM materials`,
+    );
+    mats.forEach(push("material"));
+    const { rows: raws } = await pool.query(
+      `SELECT id, name, COALESCE(tax_rate, 0)::float8 AS tax_rate, COALESCE(unit, '') AS unit, 0 AS mrp FROM raw_materials`,
+    );
+    raws.forEach(push("raw_material"));
+  }
+
+  const parties = new Map<string, TxnParty>();
+  const partyTable = module === "sales" ? "customers" : "vendors";
+  const { rows: partyRows } = await pool.query(
+    `SELECT id, name, COALESCE(gst_number, '') AS gst, COALESCE(state, '') AS state FROM ${partyTable}`,
+  );
+  for (const r of partyRows) {
+    const key = String(r.name ?? "").trim().toLowerCase();
+    if (key && !parties.has(key)) parties.set(key, { id: Number(r.id), name: String(r.name), gst: String(r.gst), state: String(r.state) });
+  }
+
+  const existingInvoices = new Set<string>();
+  if (module === "sales") {
+    const { rows } = await pool.query(`SELECT lower(invoice_number) AS inv FROM sales WHERE invoice_number IS NOT NULL`);
+    for (const r of rows) existingInvoices.add(String(r.inv));
+  } else {
+    const { rows } = await pool.query(`SELECT vendor_id, lower(invoice_number) AS inv FROM purchases WHERE invoice_number IS NOT NULL`);
+    for (const r of rows) existingInvoices.add(`${Number(r.vendor_id)}|${String(r.inv)}`);
+  }
+
+  const { rows: [comp] } = await pool.query(`SELECT COALESCE(state, '') AS state FROM company_settings LIMIT 1`);
+
+  const stockAvail = new Map<number, number>();
+  if (module === "sales") {
+    const branchId = loc.type === "headoffice" ? 1 : loc.id;
+    const { rows } = await pool.query(
+      `SELECT item_id, quantity::float8 AS qty FROM stock_entries
+        WHERE material_type = 'item' AND branch_type = $1 AND branch_id = $2`,
+      [loc.type, branchId],
+    );
+    for (const r of rows) stockAvail.set(Number(r.item_id), Number(r.qty));
+  }
+
+  return {
+    products,
+    nameMaps: module === "purchases" ? await buildNameMaps() : ({ material: new Map(), raw_material: new Map(), item: new Map() } as unknown as NameMaps),
+    parties, existingInvoices,
+    companyState: String(comp?.state ?? "").trim().toLowerCase(),
+    stockAvail,
+  };
+}
+
+interface TxnRowInput { rowNumber: number; values: Record<string, string> }
+
+interface TxnDocAcc {
+  key: string | null;
+  headIdx: number;
+  rowIdxs: number[];
+  inv: string;
+  dateIso: string | null;
+  party: TxnParty | null;
+  partyName: string;
+  billDiscount: number;
+  status: "paid" | "unpaid" | "partial" | null;
+  paidGiven: number | null;
+  modeGiven: "cash" | "bank" | "upi" | "credit" | null;
+  reference: string | null;
+  narration: string | null;
+}
+
+/**
+ * Two-pass validation for transaction imports.
+ *
+ * Pass 1 walks rows in FILE ORDER, normalising each line and grouping
+ * consecutive rows with the same invoice + date + party into one document
+ * (blank invoice numbers = single-row documents). Pass 2 prices each complete
+ * document through the SAME arithmetic commit will use (buildSaleLines /
+ * priceBill) so paid-amount checks and GST cross-checks can never disagree
+ * with what actually gets recorded.
+ */
+async function validateTransactionRows(
+  module: TxnModule,
+  rowsIn: TxnRowInput[],
+  loc: { type: string; id: number },
+): Promise<{
+  results: RowVerdict[];
+  counts: { valid: number; warning: number; error: number; needsParty: number };
+}> {
+  const ctx = await loadTxnContext(module, loc);
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const partyLabel = module === "sales" ? "Customer" : "Vendor";
+
+  type Slot = { errors: string[]; warnings: string[]; suggestions: string[]; norm: Record<string, any> };
+  const slots: Slot[] = rowsIn.map(() => ({ errors: [], warnings: [], suggestions: [], norm: {} }));
+
+  const docs: TxnDocAcc[] = [];
+  const seenDocKeys = new Map<string, number>(); // key → head row number (non-consecutive dup detection)
+  let last: TxnDocAcc | null = null;
+  const stockNeeded = new Map<number, number>(); // running requirement across the whole file (sales)
+
+  // ── Pass 1: per-row normalisation + grouping ──
+  for (let i = 0; i < rowsIn.length; i++) {
+    const { rowNumber, values } = rowsIn[i];
+    const s = slots[i];
+
+    // Date
+    const dateRaw = (values.date ?? "").trim();
+    const dateIso = parseDateFlexible(dateRaw);
+    if (!dateRaw) s.errors.push("Date is required");
+    else if (!dateIso) {
+      s.errors.push(`Date "${dateRaw}" not understood`);
+      s.suggestions.push("Use YYYY-MM-DD or DD/MM/YYYY");
+    } else if (dateIso > todayIso) {
+      s.warnings.push(`Date ${dateIso} is in the future`);
+    }
+    if (dateIso) s.norm.dateIso = dateIso;
+
+    // Party
+    const partyName = (values.party ?? "").trim();
+    if (!partyName) s.errors.push(`${partyLabel} is required`);
+    const party = partyName ? ctx.parties.get(partyName.toLowerCase()) ?? null : null;
+    if (partyName && !party) {
+      s.norm.missingParty = partyName;
+      s.suggestions.push(`Create "${partyName}" in the resolve step below, or fix the spelling to match an existing ${partyLabel.toLowerCase()}`);
+    }
+
+    // GSTIN cross-check
+    const gst = (values.gstNumber ?? "").trim().toUpperCase();
+    if (gst) {
+      if (!GSTIN_RE.test(gst)) {
+        s.errors.push(`GSTIN "${gst}" is not a valid 15-character GSTIN`);
+        s.suggestions.push("Format: 2-digit state code + PAN + entity digit + Z + check digit, e.g. 33AAACM1234F1Z5");
+      } else if (party?.gst && party.gst.toUpperCase() !== gst) {
+        s.warnings.push(`GSTIN differs from the ${partyLabel.toLowerCase()} master (${party.gst}) — the master's GSTIN is used`);
+      }
+    }
+
+    // Product
+    const itemName = (values.item ?? "").trim();
+    let product: TxnProduct | null = null;
+    if (!itemName) {
+      s.errors.push("Item is required");
+    } else {
+      const candidates = ctx.products.get(itemName.toLowerCase()) ?? [];
+      if (candidates.length === 0) {
+        s.errors.push(`Item "${itemName}" not found in the ${module === "sales" ? "Item Master" : "product masters"}`);
+        s.suggestions.push("Create the item first — this import never creates items");
+      } else if (candidates.length > 1) {
+        s.errors.push(`"${itemName}" exists as ${candidates.map((c) => KIND_LABEL[c.kind]).join(" AND ")} — the name is ambiguous`);
+        s.suggestions.push("Rename one of the products so the name is unique, then re-upload");
+      } else {
+        product = candidates[0];
+      }
+    }
+
+    // Quantity
+    const qty = parseQty(values.quantity ?? "");
+    if (qty === null) s.errors.push("Qty is required");
+    else if (!Number.isFinite(qty) || qty <= 0) s.errors.push(`Qty "${values.quantity}" must be a number greater than 0`);
+
+    // Price / rate
+    const priceKey = module === "sales" ? "price" : "rate";
+    const price = parseMoney((values[priceKey] ?? "").trim());
+    if (price === null) s.errors.push(`${module === "sales" ? "Price" : "Rate"} is required`);
+    else if (!Number.isFinite(price) || price < 0) s.errors.push(`${module === "sales" ? "Price" : "Rate"} "${values[priceKey]}" must be a number ≥ 0`);
+
+    // Discount
+    let discount = 0;
+    const discRaw = (values.discount ?? "").trim();
+    if (module === "sales") {
+      const d = parseMoney(discRaw);
+      if (d !== null) {
+        if (!Number.isFinite(d) || d < 0) s.errors.push(`Discount "${discRaw}" must be a number ≥ 0`);
+        else {
+          discount = d;
+          if (price !== null && Number.isFinite(price) && qty !== null && Number.isFinite(qty) && d > price * qty + 0.004) {
+            s.errors.push(`Discount ₹${d} exceeds the line total ₹${(price * qty).toFixed(2)}`);
+          }
+        }
+      }
+    } else {
+      const d = discRaw ? Number(discRaw.replace(/%/g, "").replace(/,/g, "")) : null;
+      if (d !== null) {
+        if (!Number.isFinite(d) || d < 0 || d > 100) s.errors.push(`Discount % "${discRaw}" must be between 0 and 100`);
+        else discount = d;
+      }
+    }
+
+    // Unit + GST% cross-checks against the master
+    if (product) {
+      const unitGiven = (values.unit ?? "").trim();
+      if (unitGiven && product.unit && unitGiven.toLowerCase() !== product.unit.toLowerCase()) {
+        s.warnings.push(`Unit "${unitGiven}" differs from the master ("${product.unit}") — quantities are taken as ${product.unit}`);
+      }
+      const gstGiven = (values.gstRate ?? "").trim();
+      if (gstGiven && Number.isFinite(Number(gstGiven)) && Math.abs(Number(gstGiven) - product.taxRate) > 0.004) {
+        s.warnings.push(`GST% ${gstGiven} differs from the master rate ${product.taxRate}% — the master rate is recorded`);
+      }
+      if (module === "purchases" && !isValidGstSlab(product.taxRate)) {
+        s.errors.push(`"${product.name}" has GST rate ${product.taxRate}% in the master, which is not a valid slab`);
+        s.suggestions.push("Fix the product master's GST rate (0, 5, 12, 18 or 28), then re-upload");
+      }
+      if (module === "sales" && product.mrp > 0 && price !== null && Number.isFinite(price) && price < product.mrp - 0.004) {
+        s.warnings.push(`Price ₹${price} is below the master MRP ₹${product.mrp}`);
+      }
+      if (product && qty !== null && Number.isFinite(qty) && qty > 0) {
+        s.norm.line = module === "sales"
+          ? { kind: "item", id: product.id, name: product.name, quantity: qty, price: price ?? 0, discount }
+          : { kind: product.kind, id: product.id, name: product.name, quantity: qty, rate: price ?? 0, discountPct: discount };
+      }
+
+      // Stock snapshot warning (sales) — cumulative across the file
+      if (module === "sales" && qty !== null && Number.isFinite(qty) && qty > 0) {
+        const needed = (stockNeeded.get(product.id) ?? 0) + qty;
+        stockNeeded.set(product.id, needed);
+        const have = ctx.stockAvail.get(product.id) ?? 0;
+        if (needed > have + 0.001) {
+          s.warnings.push(`Stock check: this file needs ${needed} of "${product.name}" but the location holds ${have} right now — the document will fail at commit if stock is still short`);
+        }
+      }
+    }
+
+    // ── Grouping ──
+    const invRaw = (values.invoiceNo ?? "").trim();
+    const key = invRaw ? `${invRaw.toLowerCase()}|${dateIso ?? dateRaw}|${partyName.toLowerCase()}` : null;
+
+    if (key && last && last.key === key) {
+      last.rowIdxs.push(i);
+      // Document-level fields live on the FIRST row; conflicting later values are ignored with a warning.
+      for (const [k, label] of [["billDiscount", "Bill Discount"], ["paymentStatus", "Payment Status"], ["paidAmount", "Paid Amount"], ["paymentMode", "Payment Mode"], ["reference", "Reference"]] as const) {
+        const v = (values[k] ?? "").trim();
+        const headV = (rowsIn[last.headIdx].values[k] ?? "").trim();
+        if (v && v !== headV) s.warnings.push(`${label} "${v}" differs from the invoice's first row — the first row's value is used`);
+      }
+      s.norm.doc = docs.length - 1;
+    } else {
+      if (key && seenDocKeys.has(key)) {
+        s.errors.push(`Invoice "${invRaw}" already appeared at row ${seenDocKeys.get(key)} — rows of one invoice must be consecutive`);
+        s.suggestions.push("Sort the file so all rows of an invoice sit together, or renumber one of them");
+      }
+      // Head-row / document-level parsing
+      const doc: TxnDocAcc = {
+        key, headIdx: i, rowIdxs: [i], inv: invRaw, dateIso,
+        party, partyName,
+        billDiscount: 0, status: null, paidGiven: null, modeGiven: null,
+        reference: (values.reference ?? "").trim() || null,
+        narration: (values.narration ?? "").trim() || null,
+      };
+      if (module === "sales") {
+        const bd = parseMoney((values.billDiscount ?? "").trim());
+        if (bd !== null) {
+          if (!Number.isFinite(bd) || bd < 0) s.errors.push(`Bill Discount "${values.billDiscount}" must be a number ≥ 0`);
+          else doc.billDiscount = bd;
+        }
+        const pm = parsePaymentMode((values.paymentMode ?? "").trim());
+        if (pm === "invalid") s.warnings.push(`Payment Mode "${values.paymentMode}" not understood — treating the sale as Credit (use Cash / UPI / Bank / Credit)`);
+        else doc.modeGiven = pm;
+      }
+      const st = parsePaymentStatus((values.paymentStatus ?? "").trim());
+      if (st === "invalid") s.warnings.push(`Payment Status "${values.paymentStatus}" not understood — treating as Unpaid (use Paid / Unpaid / Partial)`);
+      else doc.status = st;
+      const pa = parseMoney((values.paidAmount ?? "").trim());
+      if (pa !== null) {
+        if (!Number.isFinite(pa) || pa < 0) s.errors.push(`Paid Amount "${values.paidAmount}" must be a number ≥ 0`);
+        else doc.paidGiven = pa;
+      }
+      if (invRaw) {
+        if (module === "sales" && ctx.existingInvoices.has(invRaw.toLowerCase())) {
+          s.errors.push(`Invoice "${invRaw}" is already recorded in this system`);
+          s.suggestions.push("Already-migrated or manually entered — remove the row, or renumber if it is genuinely a different invoice");
+        }
+        if (module === "purchases" && party && ctx.existingInvoices.has(`${party.id}|${invRaw.toLowerCase()}`)) {
+          s.errors.push(`Invoice "${invRaw}" is already recorded for ${party.name}`);
+          s.suggestions.push("Already-migrated or manually entered — remove the row, or renumber if it is genuinely a different bill");
+        }
+      } else if (module === "sales") {
+        s.warnings.push("No invoice number — a placeholder (IMP-<batch>-<n>) will be assigned at commit");
+      }
+      if (key) seenDocKeys.set(key, rowNumber);
+      docs.push(doc);
+      last = doc;
+      s.norm.doc = docs.length - 1;
+      s.norm.head = true;
+    }
+  }
+
+  // ── Pass 2: document-level pricing + settlement resolution ──
+  const supplyCache = new Map<number, Awaited<ReturnType<typeof resolveSupplyTaxType>>>();
+  for (let dIdx = 0; dIdx < docs.length; dIdx++) {
+    const doc = docs[dIdx];
+    const head = slots[doc.headIdx];
+    const anyError = doc.rowIdxs.some((i) => slots[i].errors.length > 0);
+    const anyMissingLine = doc.rowIdxs.some((i) => !slots[i].norm.line);
+    if (anyError || anyMissingLine || !doc.party || !doc.dateIso) continue;
+
+    let total = 0;
+    let computedTax = 0;
+    if (module === "sales") {
+      const itemTaxMap = new Map<number, { taxRate: number; name: string; hsnCode: string | null; unit: string | null }>();
+      for (const i of doc.rowIdxs) {
+        const l = slots[i].norm.line;
+        const p = (ctx.products.get(String(l.name).toLowerCase()) ?? [])[0];
+        itemTaxMap.set(Number(l.id), { taxRate: p?.taxRate ?? 0, name: l.name, hsnCode: null, unit: p?.unit ?? null });
+      }
+      const custState = String(doc.party.state ?? "").trim().toLowerCase();
+      const isInterState = !!(ctx.companyState && custState && ctx.companyState !== custState);
+      const built = buildSaleLines(
+        doc.rowIdxs.map((i) => {
+          const l = slots[i].norm.line;
+          return { itemId: l.id, quantity: l.quantity, unitPrice: l.price, discount: l.discount, priceMode: "exclusive" };
+        }),
+        itemTaxMap, isInterState, doc.billDiscount,
+      );
+      if (!built.ok) { head.errors.push(built.error); continue; }
+      const subtotal = built.lineItems.reduce((t: number, li: any) => t + li.lineSubtotal, 0);
+      computedTax = built.lineItems.reduce((t: number, li: any) => t + li.taxAmount, 0);
+      total = Math.round((subtotal + computedTax) * 100) / 100;
+    } else {
+      let supply = supplyCache.get(doc.party.id);
+      if (!supply) { supply = await resolveSupplyTaxType(doc.party.id, { type: loc.type, id: loc.id }); supplyCache.set(doc.party.id, supply); }
+      const priced = priceBill(
+        doc.rowIdxs.map((i) => {
+          const l = slots[i].norm.line;
+          return { materialType: l.kind, materialId: l.id, quantity: l.quantity, unitCost: l.rate, discount: l.discountPct };
+        }),
+        "exclusive", ctx.nameMaps, supply.taxType,
+      );
+      total = Math.round(Number(priced.totalAmount) * 100) / 100;
+      computedTax = Number(priced.taxTotal);
+      if (doc.dateIso < todayIso) {
+        head.warnings.push("Backdated bill — average cost updates in the ORDER bills are entered, not by bill date; import oldest bills first");
+      }
+    }
+
+    // File-GST cross-check (sum of CGST/SGST/IGST cells vs computed tax)
+    const fileTax = doc.rowIdxs.reduce((t, i) => {
+      const v = rowsIn[i].values;
+      return t + (parseMoney((v.cgst ?? "").trim()) || 0) + (parseMoney((v.sgst ?? "").trim()) || 0) + (parseMoney((v.igst ?? "").trim()) || 0);
+    }, 0);
+    if (fileTax > 0.004 && Math.abs(fileTax - computedTax) > 1) {
+      head.warnings.push(`GST in the file (₹${fileTax.toFixed(2)}) differs from the computed GST (₹${computedTax.toFixed(2)}) — the computed figure is recorded`);
+    }
+
+    // Settlement resolution
+    let paid = 0;
+    let mode: "cash" | "bank" | "upi" | "credit" = "credit";
+    if (module === "sales") {
+      mode = doc.modeGiven ?? (doc.status === "paid" ? "cash" : "credit");
+      if (mode !== "credit") {
+        paid = total;
+        if (doc.status === "partial" || (doc.paidGiven !== null && Math.abs(doc.paidGiven - total) > 0.01 && doc.status !== "paid")) {
+          head.warnings.push(`${mode.toUpperCase()} sales settle in full at creation — recorded as fully paid ₹${total.toFixed(2)}`);
+        }
+      } else {
+        paid = doc.paidGiven ?? (doc.status === "paid" ? total : 0);
+        if (paid > total + 0.01) {
+          head.warnings.push(`Paid Amount ₹${paid.toFixed(2)} exceeds the computed total ₹${total.toFixed(2)} — capped at the total`);
+          paid = total;
+        }
+        if (doc.status === "paid" && doc.paidGiven === null) paid = total;
+      }
+    } else {
+      paid = doc.paidGiven ?? (doc.status === "paid" ? total : 0);
+      if (paid > total + 0.01) {
+        head.warnings.push(`Paid Amount ₹${paid.toFixed(2)} exceeds the computed total ₹${total.toFixed(2)} — capped at the total`);
+        paid = total;
+      }
+      if (doc.status === "paid" && doc.paidGiven !== null && doc.paidGiven < total - 0.01) {
+        head.warnings.push(`Marked Paid but Paid Amount is ₹${doc.paidGiven.toFixed(2)} of ₹${total.toFixed(2)} — recorded as partly paid`);
+      }
+    }
+
+    head.norm.invoiceNumber = doc.inv;
+    head.norm.dateIso = doc.dateIso;
+    head.norm.partyName = doc.party.name;
+    head.norm.partyId = doc.party.id;
+    head.norm.billDiscount = doc.billDiscount;
+    head.norm.paymentMode = mode;
+    head.norm.paymentStatus = doc.status;
+    head.norm.paidAmount = Math.round(paid * 100) / 100;
+    head.norm.reference = doc.reference;
+    head.norm.narration = doc.narration;
+    head.norm.computedTotal = total;
+  }
+
+  // ── Verdicts ──
+  const counts = { valid: 0, warning: 0, error: 0, needsParty: 0 };
+  const results: RowVerdict[] = slots.map((s) => {
+    const status: RowVerdict["status"] =
+      s.errors.length > 0 ? "error"
+      : s.norm.missingParty ? "needs_party"
+      : s.warnings.length > 0 ? "warning" : "valid";
+    if (status === "valid") counts.valid++;
+    else if (status === "warning") counts.warning++;
+    else if (status === "needs_party") counts.needsParty++;
+    else counts.error++;
+    const reason = status === "needs_party"
+      ? [`${partyLabel} "${s.norm.missingParty}" not found — create it below or fix the name`, ...s.warnings].join("; ")
+      : [...s.errors, ...s.warnings].join("; ") || null;
+    return { status, reason, suggestion: s.suggestions[0] ?? null, duplicateOfId: null, norm: s.norm };
+  });
+
+  return { results, counts };
+}
+
 // ── Serialisation ────────────────────────────────────────────────────────────
 
 function batchJson(b: any) {
@@ -410,6 +960,8 @@ function batchJson(b: any) {
     updatedRows: Number(b.updated_rows),
     skippedRows: Number(b.skipped_rows),
     failedRows: Number(b.failed_rows),
+    locationType: b.location_type ?? null,
+    locationId: b.location_id == null ? null : Number(b.location_id),
     createdBy: b.created_by,
     createdAt: b.created_at,
     committedAt: b.committed_at,
@@ -434,6 +986,8 @@ function rowJson(r: any) {
     suggestion: r.suggestion ?? null,
     duplicateOfId: r.duplicate_of_id == null ? null : Number(r.duplicate_of_id),
     values: raw.values ?? {},
+    missingParty: raw.norm?.missingParty ?? null,
+    docIndex: raw.norm?.doc ?? null,
     createdRecordType: r.created_record_type ?? null,
     createdRecordId: r.created_record_id == null ? null : Number(r.created_record_id),
     createdLedgerId: r.created_ledger_id == null ? null : Number(r.created_ledger_id),
@@ -473,14 +1027,30 @@ router.get("/imports/templates/:module", requireModuleAction(PERM, "download"), 
   help.addRow(["How to use this template"]).font = { bold: true };
   help.addRow(["• Columns marked * (red) are required. Keep the header row unchanged."]);
   help.addRow(["• Replace the example row with your data — one record per row."]);
-  help.addRow(["• Opening Type is Dr or Cr. Opening Balance is the amount as on migration date."]);
-  help.addRow([""]);
-  if (module === "ledgers") {
-    help.addRow(["Valid Ledger Group values (current chart of accounts):"]).font = { bold: true };
-    for (const c of await loadParentCandidates()) help.addRow([c.name]);
+  if (isTxnModule(module)) {
+    const party = module === "sales" ? "Customer" : "Vendor";
+    help.addRow([`• One row per invoice LINE. Rows of one invoice must sit together (consecutive) with the same Invoice No + Date + ${party} — they become one document with multiple lines.`]);
+    help.addRow(["• Prices/rates are EXCLUSIVE of GST. GST is added from the product master's rate; the GST columns in the file are cross-checked and warned on, never recorded."]);
+    help.addRow(["• Dates: YYYY-MM-DD or DD/MM/YYYY."]);
+    help.addRow([`• Items must already exist in the masters — unknown items are errors. Unknown ${party.toLowerCase()}s can be created during the import (resolve step).`]);
+    if (module === "sales") {
+      help.addRow(["• Payment Mode: Cash / UPI / Bank / Credit. Cash, UPI and Bank sales are recorded as fully paid at creation; use Credit + Paid Amount for partly-paid invoices."]);
+      help.addRow(["• Invoice numbers are kept exactly as supplied and must not already exist in this system."]);
+      help.addRow(["• Stock: each sale deducts stock at the chosen location — import purchases/opening stock first."]);
+    } else {
+      help.addRow(["• Paid Amount settles the bill from the selected location's cash ledger."]);
+      help.addRow(["• Backdated bills: average cost updates in the ORDER bills are entered, not by bill date — import oldest bills first."]);
+    }
   } else {
-    help.addRow(["Names must be unique — a name that already exists is flagged as a duplicate,"]);
-    help.addRow(["and you choose at commit time whether to skip it or update the existing record."]);
+    help.addRow(["• Opening Type is Dr or Cr. Opening Balance is the amount as on migration date."]);
+    help.addRow([""]);
+    if (module === "ledgers") {
+      help.addRow(["Valid Ledger Group values (current chart of accounts):"]).font = { bold: true };
+      for (const c of await loadParentCandidates()) help.addRow([c.name]);
+    } else {
+      help.addRow(["Names must be unique — a name that already exists is flagged as a duplicate,"]);
+      help.addRow(["and you choose at commit time whether to skip it or update the existing record."]);
+    }
   }
 
   const buf = await wb.xlsx.writeBuffer();
@@ -539,7 +1109,29 @@ router.post(
       return;
     }
 
-    // Existing-name index for duplicate detection.
+    // Transaction imports must know WHERE the documents land before anything
+    // is validated — stock checks, ledgers and duplicates are all per-location.
+    // The location is a request, resolveActingLocation is the authority.
+    let txnLoc: { type: string; id: number } | null = null;
+    if (isTxnModule(module)) {
+      // Explicit choice required — defaulting to the uploader's own branch
+      // would silently stamp a whole migration onto the wrong location.
+      if (!req.query.locationType) {
+        res.status(400).json({ error: "Pick the target location first — every document in the file is recorded there." });
+        return;
+      }
+      const resolved = await resolveActingLocation(pool, {
+        employee: (req as any).employee,
+        requested: { type: req.query.locationType, id: req.query.locationId },
+      });
+      if ("error" in resolved) { res.status(400).json({ error: resolved.error }); return; }
+      if (resolved.loc.type === "outlet" && await outletWritesBlocked(pool)) {
+        res.status(400).json({ error: OUTLETS_DISABLED_MESSAGE }); return;
+      }
+      txnLoc = resolved.loc;
+    }
+
+    // Existing-name index for duplicate detection (master modules only).
     const existingByName = new Map<string, number>();
     const existingLedgerMeta = new Map<string, { id: number; system: boolean }>();
     if (module === "ledgers") {
@@ -553,7 +1145,7 @@ router.post(
           existingLedgerMeta.set(r.lname, { id: Number(r.id), system: Boolean(r.system) });
         }
       }
-    } else {
+    } else if (!isTxnModule(module)) {
       const { rows } = await pool.query<any>(`SELECT id, lower(name) AS lname FROM ${module}`);
       for (const r of rows) if (!existingByName.has(r.lname)) existingByName.set(r.lname, Number(r.id));
     }
@@ -581,14 +1173,27 @@ router.post(
         res.status(400).json({ error: `That file has more than ${MAX_ROWS} rows — split it into smaller files.` });
         return;
       }
-      parsed.push({ rowNumber: rn, values, verdict: validateRow(module, rn, values, ctx) });
+      parsed.push({
+        rowNumber: rn, values,
+        // Txn rows are validated as a whole file below (grouping needs order).
+        verdict: isTxnModule(module)
+          ? { status: "valid", reason: null, suggestion: null, duplicateOfId: null, norm: {} }
+          : validateRow(module, rn, values, ctx),
+      });
     }
     if (parsed.length === 0) {
       res.status(400).json({ error: "No data rows found below the header." }); return;
     }
 
+    if (isTxnModule(module) && txnLoc) {
+      const { results } = await validateTransactionRows(
+        module, parsed.map((p) => ({ rowNumber: p.rowNumber, values: p.values })), txnLoc,
+      );
+      parsed.forEach((p, i) => { p.verdict = results[i]; });
+    }
+
     const counts = { valid: 0, warning: 0, error: 0 };
-    for (const p of parsed) counts[p.verdict.status]++;
+    for (const p of parsed) counts[p.verdict.status === "needs_party" ? "error" : p.verdict.status]++;
 
     const emp = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
     const { rows: [batch] } = await pool.query(
@@ -596,7 +1201,9 @@ router.post(
        VALUES ($1, $2, 'validated', $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
       [module, filename, parsed.length, counts.valid, counts.warning, counts.error,
-       username(req), emp?.branchType ?? "headoffice", emp?.branchId ?? 0],
+       username(req),
+       txnLoc?.type ?? emp?.branchType ?? "headoffice",
+       txnLoc?.id ?? emp?.branchId ?? 0],
     );
 
     const rowsOut: any[] = [];
@@ -619,6 +1226,100 @@ router.post(
     res.status(201).json({ batch: batchJson(batch), rows: rowsOut.map(rowJson) });
   },
 );
+
+// ── 2b. Resolve missing parties (sales & purchases) ─────────────────────────
+// Creates the missing customers/vendors through the SAME code path as manual
+// creation (ledgers auto-provisioned, location stamped), then re-validates the
+// whole batch from the stored raw values — no re-upload needed.
+
+router.post("/imports/batches/:id/resolve-parties", requireModuleAction(PERM, "add"), async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  const { rows: [batch] } = await pool.query(`SELECT * FROM import_batches WHERE id = $1`, [id]);
+  if (!batch) { res.status(404).json({ error: "Import batch not found" }); return; }
+  const module = asModule(batch.module);
+  if (!module || !isTxnModule(module)) {
+    res.status(400).json({ error: "Only sales and purchase imports have a party-resolution step." }); return;
+  }
+  if (batch.status !== "validated") {
+    res.status(409).json({ error: "Parties can only be created while the batch is awaiting commit." }); return;
+  }
+
+  const body = (req.body ?? {}) as { parties?: unknown };
+  const partiesIn = Array.isArray(body.parties) ? body.parties : [];
+  if (partiesIn.length === 0) { res.status(400).json({ error: "Pass parties: [{ name, gstNumber?, phone?, state?, address?, creditLimit? }]" }); return; }
+  if (partiesIn.length > 500) { res.status(400).json({ error: "Too many parties in one request." }); return; }
+
+  const stamp = { type: String(batch.location_type ?? "headoffice"), id: Number(batch.location_id ?? 0) };
+  const user = username(req);
+  const table = module === "sales" ? "customers" : "vendors";
+  const created: string[] = [];
+  const skipped: string[] = [];
+  const errors: Array<{ name: string; reason: string }> = [];
+
+  for (const p of partiesIn as any[]) {
+    const name = String(p?.name ?? "").trim();
+    if (!name || name.length < 2) { errors.push({ name: name || "(blank)", reason: "Name must be at least 2 characters" }); continue; }
+    const gst = String(p?.gstNumber ?? "").trim().toUpperCase();
+    if (gst && !GSTIN_RE.test(gst)) { errors.push({ name, reason: `GSTIN "${gst}" is not a valid 15-character GSTIN` }); continue; }
+    const phone = parsePhone(String(p?.phone ?? "").trim());
+    if (phone === "invalid") { errors.push({ name, reason: `Phone "${p?.phone}" is not a 10-digit number` }); continue; }
+    const state = String(p?.state ?? "").trim();
+    const address = String(p?.address ?? "").trim();
+
+    // Someone may have created it since the preview rendered — that is fine,
+    // the re-validation below will pick the existing record up.
+    const { rows: [dupe] } = await pool.query(`SELECT id FROM ${table} WHERE lower(name) = lower($1) LIMIT 1`, [name]);
+    if (dupe) { skipped.push(name); continue; }
+
+    try {
+      const input: any = {
+        name,
+        ...(gst ? { gstNumber: gst } : {}),
+        ...(phone ? { phone } : {}),
+        ...(state ? { state } : {}),
+        ...(address ? { address } : {}),
+        notes: `Created during import batch #${id}`,
+      };
+      const { row } = module === "sales"
+        ? await createCustomerWithLedger(input, stamp)
+        : await createVendorWithLedger(input, stamp);
+      const cl = Number(p?.creditLimit ?? NaN);
+      if (module === "sales" && Number.isFinite(cl) && cl > 0) {
+        await pool.query(`UPDATE customers SET credit_limit = $1 WHERE id = $2`, [Math.round(cl * 100) / 100, row.id]);
+      }
+      created.push(name);
+    } catch (e: any) {
+      errors.push({ name, reason: String(e?.message ?? e).slice(0, 300) });
+    }
+  }
+
+  // Full re-validation from the stored raw values — grouping, duplicates and
+  // totals are all order-dependent, so the whole file runs again.
+  const { rows: importRows } = await pool.query(`SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [id]);
+  const rowsIn = importRows.map((r: any) => ({ rowNumber: Number(r.row_number), values: (r.raw?.values ?? {}) as Record<string, string> }));
+  const { results, counts } = await validateTransactionRows(module, rowsIn, stamp);
+  for (let i = 0; i < importRows.length; i++) {
+    const v = results[i];
+    await pool.query(
+      `UPDATE import_rows SET status = $2, reason = $3, suggestion = $4, raw = $5 WHERE id = $1`,
+      [importRows[i].id, v.status, v.reason, v.suggestion,
+       JSON.stringify({ values: rowsIn[i].values, norm: v.norm })],
+    );
+  }
+  const { rows: [updated] } = await pool.query(
+    `UPDATE import_batches SET valid_rows = $2, warning_rows = $3, error_rows = $4 WHERE id = $1 RETURNING *`,
+    [id, counts.valid, counts.warning, counts.error + counts.needsParty],
+  );
+  const { rows: outRows } = await pool.query(`SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [id]);
+
+  logActivity({
+    action: "CREATE", module: "imports", entityType: "import_batch", entityId: id,
+    description: `Resolved parties for ${module} import "${batch.filename}" — ${created.length} created, ${skipped.length} already existed${errors.length ? `, ${errors.length} failed` : ""}`,
+    user,
+  }).catch(() => {});
+
+  res.json({ batch: batchJson(updated), rows: outRows.map(rowJson), created, skipped, errors });
+});
 
 // ── 3. History + detail ──────────────────────────────────────────────────────
 
@@ -688,6 +1389,107 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
     return pool.query(`UPDATE import_rows SET ${sets} WHERE id = $1`, [rowId, ...keys.map((k) => fields[k])]);
   };
 
+  if (isTxnModule(module)) {
+    // ── Transaction commit: whole DOCUMENTS, not rows ──
+    // Each document commits in its own transaction through the same logic as
+    // manual entry (lib/importTransactions). A failed document marks only its
+    // own rows failed; the rest of the batch continues — same per-record
+    // semantics as the masters loop.
+    const loc = {
+      type: String(batch.location_type ?? "headoffice"),
+      id: Number(batch.location_id ?? 0) || (String(batch.location_type ?? "headoffice") === "headoffice" ? 1 : 0),
+    };
+
+    const docsMap = new Map<number, any[]>();
+    for (const r of importRows) {
+      const d = Number(r.raw?.norm?.doc ?? -1);
+      if (!docsMap.has(d)) docsMap.set(d, []);
+      docsMap.get(d)!.push(r);
+    }
+
+    // FILE ORDER, deliberately: average cost and stock consequences follow
+    // entry order, and the preview warned about backdating. Never re-sort.
+    for (const dIdx of [...docsMap.keys()].sort((a, b) => a - b)) {
+      const docRows = docsMap.get(dIdx)!;
+      const head = docRows.find((r) => r.raw?.norm?.head) ?? docRows[0];
+      const hn = (head.raw?.norm ?? {}) as Record<string, any>;
+      const label = String(hn.invoiceNumber || "") || `rows ${docRows[0].row_number}–${docRows[docRows.length - 1].row_number}`;
+
+      const hasBad = docRows.some((r) => r.status === "error" || r.status === "needs_party");
+      const userSkip = docRows.some((r) => skipSet.has(Number(r.id)));
+      if (dIdx < 0 || hasBad || userSkip || hn.partyId == null) {
+        counts.skipped += docRows.length;
+        for (const r of docRows) {
+          if (r.status === "error" || r.status === "needs_party") continue; // keep the verdict text
+          await setRow(r.id, {
+            status: "skipped",
+            reason: userSkip ? "Skipped by user at commit"
+              : hn.partyId == null ? "Skipped — the document's party was never resolved"
+              : "Skipped — another row of this invoice has errors",
+          });
+        }
+        continue;
+      }
+
+      try {
+        if (module === "sales") {
+          const invoiceNumber = String(hn.invoiceNumber || "") || `IMP-${id}-${dIdx + 1}`;
+          const result = await importSaleDoc({
+            invoiceNumber,
+            saleDate: String(hn.dateIso),
+            customerId: Number(hn.partyId),
+            lines: docRows.map((r) => {
+              const l = r.raw?.norm?.line ?? {};
+              return { itemId: Number(l.id), quantity: Number(l.quantity), unitPrice: Number(l.price ?? 0), discount: Number(l.discount ?? 0) };
+            }),
+            billDiscount: Number(hn.billDiscount ?? 0),
+            paymentMode: (hn.paymentMode ?? "credit") as "cash" | "bank" | "upi" | "credit",
+            paidAmount: Number(hn.paidAmount ?? 0),
+            reference: hn.reference ?? null,
+            loc, user,
+          });
+          counts.imported += docRows.length;
+          for (const r of docRows) {
+            await setRow(r.id, { status: "imported", reason: null, created_record_type: "sale", created_record_id: result.saleId });
+          }
+          // Settlement ids ride on the head row so rollback can tell OUR
+          // payments/receipts from any collected later.
+          await pool.query(`UPDATE import_rows SET raw = raw || $2::jsonb WHERE id = $1`, [head.id, JSON.stringify({
+            created: {
+              invoiceNumber: result.invoiceNumber, totalAmount: result.totalAmount,
+              salePaymentIds: result.salePaymentIds, clearingReceiptIds: result.clearingReceiptIds,
+            },
+          })]);
+        } else {
+          const result = await importPurchaseDoc({
+            invoiceNumber: String(hn.invoiceNumber || "") || null,
+            purchaseDate: String(hn.dateIso),
+            vendorId: Number(hn.partyId),
+            lines: docRows.map((r) => {
+              const l = r.raw?.norm?.line ?? {};
+              return { kind: (l.kind ?? "item") as "item" | "material" | "raw_material", id: Number(l.id), quantity: Number(l.quantity), rate: Number(l.rate ?? 0), discountPct: Number(l.discountPct ?? 0) };
+            }),
+            paidAmount: Number(hn.paidAmount ?? 0),
+            narration: hn.narration ?? null,
+            reference: hn.reference ?? null,
+            loc, user,
+          });
+          counts.imported += docRows.length;
+          for (const r of docRows) {
+            await setRow(r.id, { status: "imported", reason: null, created_record_type: "purchase", created_record_id: result.purchaseId });
+          }
+          await pool.query(`UPDATE import_rows SET raw = raw || $2::jsonb WHERE id = $1`, [head.id, JSON.stringify({
+            created: { totalAmount: result.totalAmount, paymentId: result.paymentId },
+          })]);
+        }
+      } catch (e: any) {
+        counts.failed += docRows.length;
+        const reason = String(e?.message ?? e).slice(0, 400);
+        failures.push({ rowNumber: Number(head.row_number), name: label, reason });
+        for (const r of docRows) await setRow(r.id, { status: "failed", reason }).catch(() => {});
+      }
+    }
+  } else {
   for (const r of importRows) {
     const values = (r.raw?.values ?? {}) as Record<string, string>;
     const norm = (r.raw?.norm ?? {}) as Record<string, any>;
@@ -868,6 +1670,7 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
       await setRow(r.id, { status: "failed", reason }).catch(() => {});
     }
   }
+  } // end masters loop
 
   // Conditional on the state this commit claimed — never overwrite whatever
   // another actor may have written (defence in depth; the advisory lock
@@ -926,6 +1729,68 @@ router.post("/imports/batches/:id/rollback", requireModuleAction(PERM, "delete")
     // a half-committed batch needs eyes, not an automatic delete.
     if (batch.status !== "committed") {
       await client.query("ROLLBACK"); res.status(409).json({ error: "Only committed batches can be rolled back." }); return;
+    }
+
+    // ── Transaction batches: reverse whole documents, all-or-nothing ──
+    // Runs INSIDE this transaction: if any document is blocked by downstream
+    // activity, everything reversed so far is rolled back with it.
+    if (batch.module === "sales" || batch.module === "purchases") {
+      const { rows: docRowsAll } = await client.query(
+        `SELECT * FROM import_rows
+          WHERE batch_id = $1 AND status = 'imported' AND created_record_id IS NOT NULL
+          ORDER BY row_number`,
+        [id],
+      );
+      if (docRowsAll.length === 0) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: "This batch created no documents, so there is nothing to roll back." });
+        return;
+      }
+
+      const blocked: Array<{ rowNumber: number; name: string; reason: string }> = [];
+      const seenDocs = new Set<number>();
+      let removed = 0;
+      for (const r of docRowsAll) {
+        const recId = Number(r.created_record_id);
+        if (seenDocs.has(recId)) continue;
+        seenDocs.add(recId);
+        // The head row carries the settlement ids this import created.
+        const headRow = docRowsAll.find((x: any) => Number(x.created_record_id) === recId && x.raw?.created) ?? r;
+        const createdInfo = (headRow.raw?.created ?? {}) as Record<string, any>;
+        const label = String(createdInfo.invoiceNumber ?? headRow.raw?.norm?.invoiceNumber ?? "") || `row ${r.row_number}`;
+        const reason = batch.module === "sales"
+          ? await rollbackImportedSale(client as any, recId, {
+              salePaymentIds: createdInfo.salePaymentIds, clearingReceiptIds: createdInfo.clearingReceiptIds,
+            })
+          : await rollbackImportedPurchase(client as any, recId, { paymentId: createdInfo.paymentId ?? null });
+        if (reason) blocked.push({ rowNumber: Number(r.row_number), name: label, reason });
+        else removed++;
+      }
+
+      if (blocked.length > 0) {
+        await client.query("ROLLBACK");
+        res.status(409).json({
+          error: `Cannot roll back: ${blocked.length} imported document${blocked.length === 1 ? " has" : "s have"} since gained payments, returns or other activity. Remove that activity first, or leave the batch in place.`,
+          blocked,
+        });
+        return;
+      }
+
+      await client.query(`UPDATE import_rows SET status = 'rolled_back' WHERE batch_id = $1 AND status = 'imported'`, [id]);
+      const { rows: [finishedTxn] } = await client.query(
+        `UPDATE import_batches SET status = 'rolled_back', rolled_back_at = NOW(), rolled_back_by = $2 WHERE id = $1 RETURNING *`,
+        [id, user],
+      );
+      await client.query("COMMIT");
+
+      logActivity({
+        action: "DELETE", module: "imports", entityType: "import_batch", entityId: id,
+        description: `Rolled back ${batch.module} import "${batch.filename}" — reversed ${removed} document${removed === 1 ? "" : "s"} (stock, settlements and books restored)`,
+        user,
+      }).catch(() => {});
+
+      res.json({ batch: batchJson(finishedTxn), removed });
+      return;
     }
 
     const { rows: created } = await client.query(
