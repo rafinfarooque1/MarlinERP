@@ -405,7 +405,7 @@ export default function ImportData() {
                   {voucher
                     ? `Columns marked * are required. One row per voucher. ${module === 'receipts' ? 'Against Invoice' : 'Against Bill'} settles only that ${module === 'receipts' ? 'invoice' : 'bill'}; blank auto-allocates oldest-first, excess becomes a ${partyWord} advance. ${module === 'receipts' ? 'Received In' : 'Paid From'} is Cash, Bank or an exact bank ledger name.`
                     : txn
-                      ? `Columns marked * are required. One row per invoice line — rows of one invoice must sit together with the same invoice number, date and ${partyWord}. Prices are GST-exclusive; GST comes from the product master.`
+                      ? `Columns marked * are required. One row per invoice line — rows of one invoice must sit together with the same invoice number, date and ${partyWord}. ${module === 'sales' ? 'Prices INCLUDE GST (the selling price), and Discount is ₹ per unit — exactly like manual sale entry.' : 'Purchase rates are GST-exclusive, like manual purchase entry.'} GST is worked out from the product master — you never enter tax amounts.`
                       : 'Columns marked * are required. Location determines which branch/warehouse owns the imported record — use "Head Office" or an exact warehouse/outlet name. Duplicate names are flagged — you decide at commit whether to skip or update them.'}
                 </CardDescription>
               </CardHeader>

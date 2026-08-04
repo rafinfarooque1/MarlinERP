@@ -23,7 +23,7 @@
  * leave the valuation as if the batch had never been imported.
  */
 import { pool, type PgPoolClient as PoolClient } from "@workspace/db";
-import { buildSaleLines } from "../routes/sales";
+import { buildSaleLines, checkMrpFloor } from "../routes/sales";
 import { buildBranchMaps } from "../routes/stock";
 import {
   priceBill, buildNameMaps, allocateBatchNumbers, resolveSupplyTaxType,
@@ -43,6 +43,7 @@ import { productBatchIdentity, type ProductKind } from "./productIdentity";
 import { isValidGstSlab, gstSlabErrorMessage } from "./gst";
 import { locationLabel, type ProdLocation } from "./productionCosting";
 import { ensureVendorLedger } from "./partyCreate";
+import { importAccountOptions } from "./importVouchers";
 
 const r2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -77,10 +78,16 @@ async function locationCashLedgerId(q: { query: Function }, loc: ProdLocation): 
 export interface ImportSaleLine {
   itemId: number;
   quantity: number;
-  /** GST-EXCLUSIVE unit price (taxable base) — tax is added from the item master rate. */
+  /** Unit price. New batches send GST-INCLUSIVE prices (priceMode
+   *  "inclusive", the manual-entry convention); batches validated before
+   *  that convention send GST-exclusive prices with priceMode "exclusive". */
   unitPrice: number;
-  /** Line-TOTAL discount amount (legacy semantics — deducted once, never per-unit). */
-  discount: number;
+  /** Legacy line-TOTAL discount amount (deducted once, never per-unit). */
+  discount?: number;
+  /** Per-UNIT ₹ discount — the manual sale entry convention (new batches). */
+  unitDiscount?: number;
+  /** How unitPrice relates to GST. Defaults to "exclusive" (legacy batches). */
+  priceMode?: "inclusive" | "exclusive";
 }
 
 export interface ImportSaleDocInput {
@@ -136,11 +143,26 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
     if (!itemTaxMap.has(iid)) throw new Error(`Item #${iid} no longer exists — re-validate the batch.`);
   }
 
-  // ── One canonical computation: prices are GST-exclusive for imports ──
+  // ── Same MRP floor as POST /sales — but only for lines validated under the
+  // manual-entry convention (inclusive price + unitDiscount). Legacy batches
+  // carried GST-exclusive prices, which the floor cannot compare against an
+  // inclusive MRP; they were previewed and stay grandfathered. ──
+  const newConventionLines = doc.lines.filter((l) => l.unitDiscount !== undefined);
+  if (newConventionLines.length > 0) {
+    const mrpCheck = await checkMrpFloor(pool, newConventionLines.map((l) => ({ itemId: l.itemId, unitPrice: l.unitPrice })));
+    if (!mrpCheck.ok) throw new Error(mrpCheck.error);
+  }
+
+  // ── One canonical computation, same builder as POST /sales. Each line
+  // declares its own price semantics so batches validated under the old
+  // convention (exclusive price + line-total discount) commit with the math
+  // their preview showed, while new batches use the manual-entry semantics
+  // (inclusive price + per-unit discount). ──
   const built = buildSaleLines(
     doc.lines.map((l) => ({
       itemId: l.itemId, quantity: l.quantity, unitPrice: l.unitPrice,
-      discount: l.discount, priceMode: "exclusive",
+      discount: l.discount, unitDiscount: l.unitDiscount,
+      priceMode: l.priceMode ?? "exclusive",
     })),
     itemTaxMap, isInterState, doc.billDiscount,
   );
@@ -357,6 +379,9 @@ export interface ImportPurchaseDocInput {
   vendorId: number;
   lines: ImportPurchaseLine[];
   paidAmount: number;
+  /** Money account the paid amount was settled from (cash till or bank
+   *  leaf, resolved at validation). Null/absent = the location's cash. */
+  paidFromLedgerId?: number | null;
   narration: string | null;
   reference: string | null;
   loc: ProdLocation;
@@ -509,7 +534,20 @@ export async function importPurchaseDoc(doc: ImportPurchaseDocInput): Promise<Im
       if (!vendLedgerId) {
         throw new Error(`Creditor ledger for ${vend.name} could not be provisioned — the paid amount was not recorded.`);
       }
-      const tillId = await locationCashLedgerId(client, loc);
+      // Pay from the resolved Payment Account when the file named one;
+      // otherwise default to the location's cash till. Re-resolve at commit
+      // against the SAME option set validation used — a ledger deleted,
+      // deactivated or moved out of the cash/bank tree since validation must
+      // fail here, not silently settle from an arbitrary ledger.
+      let tillId: number | null = null;
+      if (doc.paidFromLedgerId != null) {
+        const options = await importAccountOptions(client, loc);
+        const match = options.find((o) => Number(o.id) === Number(doc.paidFromLedgerId));
+        if (!match) throw new Error("The Payment Account chosen at validation is no longer a valid cash/bank account for this location — re-validate the batch.");
+        tillId = Number(match.id);
+      } else {
+        tillId = await locationCashLedgerId(client, loc);
+      }
       if (!tillId) {
         throw new Error(`Cash ledger not provisioned for ${locName} — go to Accounts → Warehouses/Outlets and provision ledgers, then commit again.`);
       }

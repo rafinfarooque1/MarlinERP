@@ -45,6 +45,7 @@ import {
   importReceiptVoucher, importPaymentVoucher,
   rollbackImportedReceiptVoucher, rollbackImportedPaymentVoucher,
 } from "../lib/importVouchers";
+import { type ProdLocation } from "../lib/productionCosting";
 import { outstandingExpr } from "../lib/salePaymentPosition";
 import { purchaseSettlementIndex } from "../lib/vendorBillSettlement";
 
@@ -80,6 +81,10 @@ interface ColSpec {
   hint: string;
   /** normalized header aliases that map onto this column */
   aliases: string[];
+  /** Not in the downloadable template, but still mapped when a file carries
+   *  the column (old-ERP exports) — used for cross-check-only columns like
+   *  GST amounts, which are computed from the masters, never recorded. */
+  hidden?: boolean;
 }
 
 /** lower-case and strip everything that is not a letter or digit. */
@@ -158,17 +163,17 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
       { key: "gstNumber", header: "GSTIN", example: "33AAACM1234F1Z5", hint: "Customer GSTIN — used to pre-fill missing customers and cross-checked against the master", aliases: ["gstin", "gstno", "gstnumber", "gstinno", "customergstin"] },
       { key: "item", header: "Item", required: true, example: "Frozen Mango Chunks 1kg", hint: "Must already exist in the Item Master — this import never creates items", aliases: ["item", "itemname", "product", "productname", "description", "particulars", "goods"] },
       { key: "quantity", header: "Qty", required: true, example: 10, hint: "Quantity sold (decimals allowed)", aliases: ["qty", "quantity", "nos", "pcs", "qtysold"] },
-      { key: "unit", header: "Unit", required: true, example: "pcs", hint: "Cross-checked against the Item Master unit", aliases: ["unit", "uom", "units"] },
-      { key: "price", header: "Price", required: true, example: 250, hint: "Per-unit selling price EXCLUDING GST — tax is added from the Item Master rate", aliases: ["price", "rate", "unitprice", "saleprice", "priceperunit", "sellingprice"] },
-      { key: "discount", header: "Discount", example: 0, hint: "₹ discount on this LINE's total (not per unit)", aliases: ["discount", "discountamount", "less", "itemdiscount", "linediscount"] },
-      { key: "gstRate", header: "GST %", example: 5, hint: "Cross-check only — the recorded GST always comes from the Item Master rate", aliases: ["gst", "gstrate", "gstpercent", "gstpercentage", "taxrate", "tax"] },
-      { key: "cgst", header: "CGST", example: 125, hint: "Cross-check only", aliases: ["cgst", "cgstamount"] },
-      { key: "sgst", header: "SGST", example: 125, hint: "Cross-check only", aliases: ["sgst", "sgstamount"] },
-      { key: "igst", header: "IGST", example: 0, hint: "Cross-check only", aliases: ["igst", "igstamount"] },
-      { key: "billDiscount", header: "Bill Discount", example: 0, hint: "Pre-tax ₹ discount on the whole invoice — put it on the invoice's FIRST row", aliases: ["billdiscount", "invoicediscount", "totaldiscount", "overalldiscount"] },
-      { key: "paymentStatus", header: "Payment Status", example: "Paid", hint: "Paid / Unpaid / Partial", aliases: ["paymentstatus", "paystatus", "status"] },
-      { key: "paidAmount", header: "Paid Amount", example: 2750, hint: "Amount received. Cash/UPI/Bank sales are always recorded fully paid; use Credit mode + Paid Amount for partly-paid invoices", aliases: ["paidamount", "amountpaid", "paid", "received", "amountreceived", "receivedamount"] },
-      { key: "paymentMode", header: "Payment Mode", example: "Cash", hint: "Cash / UPI / Bank / Credit (card, NEFT, RTGS, cheque count as Bank)", aliases: ["paymentmode", "mode", "paymenttype", "method", "paymentmethod", "modeofpayment"] },
+      { key: "unit", header: "Unit", example: "pcs", hint: "Optional — blank uses the Item Master unit; a different unit is warned on", aliases: ["unit", "uom", "units"] },
+      { key: "price", header: "Price", required: true, example: 250, hint: "Per-unit selling price INCLUDING GST (the MRP / selling price), exactly like manual sale entry — GST is worked out from the Item Master rate", aliases: ["price", "rate", "unitprice", "saleprice", "priceperunit", "sellingprice", "mrp"] },
+      { key: "discount", header: "Discount", example: 0, hint: "₹ discount PER UNIT (blank = 0), like manual sale entry", aliases: ["discount", "discountamount", "less", "itemdiscount", "linediscount", "unitdiscount", "discountperunit"] },
+      { key: "gstRate", header: "GST %", hidden: true, example: 5, hint: "Cross-check only — the recorded GST always comes from the Item Master rate", aliases: ["gst", "gstrate", "gstpercent", "gstpercentage", "taxrate", "tax"] },
+      { key: "cgst", header: "CGST", hidden: true, example: 125, hint: "Cross-check only", aliases: ["cgst", "cgstamount"] },
+      { key: "sgst", header: "SGST", hidden: true, example: 125, hint: "Cross-check only", aliases: ["sgst", "sgstamount"] },
+      { key: "igst", header: "IGST", hidden: true, example: 0, hint: "Cross-check only", aliases: ["igst", "igstamount"] },
+      { key: "billDiscount", header: "Bill Discount", example: 0, hint: "Pre-tax ₹ discount on the whole invoice (blank = 0) — put it on the invoice's FIRST row", aliases: ["billdiscount", "invoicediscount", "totaldiscount", "overalldiscount"] },
+      { key: "paymentStatus", header: "Payment Status", example: "Paid", hint: "Paid / Unpaid / Partial. Paid with a blank Paid Amount = fully paid; Partial REQUIRES a Paid Amount; blank = Unpaid (or partly paid when a Paid Amount is given)", aliases: ["paymentstatus", "paystatus", "status"] },
+      { key: "paidAmount", header: "Paid Amount", example: 2750, hint: "Amount received. Cash/UPI/Bank sales are always recorded fully paid; use Customer Credit + Paid Amount for partly-paid invoices", aliases: ["paidamount", "amountpaid", "paid", "received", "amountreceived", "receivedamount"] },
+      { key: "paymentMode", header: "Payment Account", example: "Cash", hint: "Cash / Bank / UPI / Customer Credit (card, NEFT, RTGS, cheque count as Bank; blank = Customer Credit)", aliases: ["paymentaccount", "account", "paymentmode", "mode", "paymenttype", "method", "paymentmethod", "modeofpayment"] },
       { key: "reference", header: "Reference", example: "", hint: "Cheque / UTR / reference number", aliases: ["reference", "referenceno", "refno", "ref", "chequeno", "utr", "utrno", "txnid"] },
       { key: "narration", header: "Narration", example: "Migrated from old ERP", hint: "Free text (informational)", aliases: ["narration", "notes", "remarks", "note", "comment", "comments"] },
       TXN_LOCATION_COL,
@@ -177,17 +182,20 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
   purchases: {
     title: "Purchase Bills",
     columns: [
-      { key: "invoiceNo", header: "Invoice No", example: "GF/2025/118", hint: "Vendor's bill number — kept exactly as supplied (unique per vendor). Repeat it on every row of a multi-item bill", aliases: ["invoiceno", "invoicenumber", "invno", "invoice", "billno", "billnumber", "vchno", "voucherno", "vouchernumber"] },
+      { key: "invoiceNo", header: "Vendor Invoice No", example: "GF/2025/118", hint: "Vendor's bill number — kept exactly as supplied (unique per vendor); blank is allowed. Repeat it on every row of a multi-item bill", aliases: ["vendorinvoiceno", "invoiceno", "invoicenumber", "invno", "invoice", "billno", "billnumber", "purchasebillno", "vendorbillno", "vchno", "voucherno", "vouchernumber"] },
       { key: "date", header: "Date", required: true, example: "2025-04-10", hint: "Bill date — YYYY-MM-DD or DD/MM/YYYY", aliases: ["date", "billdate", "invoicedate", "purchasedate", "vchdate", "voucherdate"] },
       { key: "party", header: "Vendor", required: true, example: "Global Fruits Supply Co", hint: "Vendor name — unknown names can be created in the resolve step before commit", aliases: ["vendor", "vendorname", "supplier", "suppliername", "party", "partyname"] },
       { key: "gstNumber", header: "GSTIN", example: "29AAACG5678K1Z3", hint: "Vendor GSTIN — used to pre-fill missing vendors and cross-checked against the master", aliases: ["gstin", "gstno", "gstnumber", "gstinno", "vendorgstin"] },
       { key: "item", header: "Item", required: true, example: "Raw Mango", hint: "Finished product, raw material or packing material — must already exist in the masters", aliases: ["item", "itemname", "material", "materialname", "product", "productname", "particulars", "description", "goods"] },
       { key: "quantity", header: "Qty", required: true, example: 100, hint: "Quantity purchased (decimals allowed)", aliases: ["qty", "quantity", "nos", "pcs", "kgs"] },
-      { key: "rate", header: "Rate", required: true, example: 45, hint: "Per-unit cost EXCLUDING GST — tax is added from the product master rate", aliases: ["rate", "price", "unitcost", "cost", "purchaseprice", "unitprice", "costperunit"] },
-      { key: "gstRate", header: "GST %", example: 5, hint: "Cross-check only — the recorded GST always comes from the product master rate", aliases: ["gst", "gstrate", "gstpercent", "gstpercentage", "taxrate", "tax"] },
-      { key: "discount", header: "Discount %", example: 0, hint: "PERCENT discount on this line (0–100) — the purchase module's convention", aliases: ["discount", "discountpercent", "disc", "discountpct"] },
-      { key: "paymentStatus", header: "Payment Status", example: "Unpaid", hint: "Paid / Unpaid / Partial", aliases: ["paymentstatus", "paystatus", "status"] },
-      { key: "paidAmount", header: "Paid Amount", example: 0, hint: "Amount already paid — recorded as a settlement from the selected location's cash", aliases: ["paidamount", "amountpaid", "paid", "advancepaid"] },
+      { key: "unit", header: "Unit", example: "kg", hint: "Optional — blank uses the product master unit; a different unit is warned on", aliases: ["unit", "uom", "units"] },
+      { key: "rate", header: "Purchase Rate", required: true, example: 45, hint: "Per-unit cost EXCLUDING GST, like manual purchase entry — GST is added from the product master rate", aliases: ["purchaserate", "rate", "price", "unitcost", "cost", "purchaseprice", "unitprice", "costperunit"] },
+      { key: "gstRate", header: "GST %", hidden: true, example: 5, hint: "Cross-check only — the recorded GST always comes from the product master rate", aliases: ["gst", "gstrate", "gstpercent", "gstpercentage", "taxrate", "tax"] },
+      { key: "discount", header: "Discount %", example: 0, hint: "PERCENT discount on this line (0–100, blank = 0) — the purchase module's convention", aliases: ["discount", "discountpercent", "disc", "discountpct"] },
+      { key: "billDiscount", header: "Bill Discount", hidden: true, example: 0, hint: "Not supported for purchases — spread it into the line Discount % instead", aliases: ["billdiscount", "invoicediscount", "totaldiscount", "overalldiscount"] },
+      { key: "paymentStatus", header: "Payment Status", example: "Unpaid", hint: "Paid / Unpaid / Partial. Paid with a blank Paid Amount = fully paid; Partial REQUIRES a Paid Amount; blank = Unpaid (or partly paid when a Paid Amount is given)", aliases: ["paymentstatus", "paystatus", "status"] },
+      { key: "paidAmount", header: "Paid Amount", example: 0, hint: "Amount already paid — recorded as a settlement from the Payment Account (blank account = the location's cash)", aliases: ["paidamount", "amountpaid", "paid", "advancepaid"] },
+      { key: "account", header: "Payment Account", example: "Cash", hint: "Where the Paid Amount was paid from: Cash, Bank, or the exact bank ledger name (blank = the location's cash)", aliases: ["paymentaccount", "account", "accountname", "paidfrom", "paidfromaccount", "paymentmode", "mode", "modeofpayment", "cashbank"] },
       { key: "reference", header: "Reference", example: "", hint: "Cheque / UTR / reference number", aliases: ["reference", "referenceno", "refno", "ref", "chequeno", "utr", "utrno", "txnid"] },
       { key: "narration", header: "Narration", example: "Migrated from old ERP", hint: "Stored on the bill", aliases: ["narration", "notes", "remarks", "note", "comment", "comments"] },
       TXN_LOCATION_COL,
@@ -310,7 +318,7 @@ function parsePaymentMode(s: string): "cash" | "bank" | "upi" | "credit" | null 
   if (t === "cash") return "cash";
   if (["bank", "card", "creditcard", "debitcard", "neft", "rtgs", "imps", "cheque", "chq", "check", "dd", "banktransfer", "transfer", "online", "netbanking"].includes(t)) return "bank";
   if (["upi", "gpay", "googlepay", "phonepe", "paytm", "bhim", "qr"].includes(t)) return "upi";
-  if (["credit", "udhaar", "udhar", "onaccount", "account", "due", "later"].includes(t)) return "credit";
+  if (["credit", "customercredit", "udhaar", "udhar", "onaccount", "account", "due", "later"].includes(t)) return "credit";
   return "invalid";
 }
 
@@ -624,6 +632,9 @@ interface TxnContext {
   existingInvoices: Set<string>;       // sales: lower(inv); purchases: `${vendorId}|${lower(inv)}`
   companyState: string;
   stockAvail: Map<number, number>;     // sales: item id → qty at the target location
+  /** Purchases: the location's valid money accounts (cash till + bank leaves)
+   *  for resolving the Payment Account cell — same options as voucher imports. */
+  accounts: Awaited<ReturnType<typeof importAccountOptions>>;
 }
 
 async function loadTxnContext(module: TxnModule, loc: { type: string; id: number }): Promise<TxnContext> {
@@ -697,6 +708,9 @@ async function loadTxnContext(module: TxnModule, loc: { type: string; id: number
     parties, existingInvoices,
     companyState: String(comp?.state ?? "").trim().toLowerCase(),
     stockAvail,
+    accounts: module === "purchases"
+      ? await importAccountOptions(pool, loc as ProdLocation)
+      : [],
   };
 }
 
@@ -714,6 +728,8 @@ interface TxnDocAcc {
   status: "paid" | "unpaid" | "partial" | null;
   paidGiven: number | null;
   modeGiven: "cash" | "bank" | "upi" | "credit" | null;
+  /** Purchases only: the Payment Account cell (Cash / Bank / exact ledger name). */
+  accountRaw: string;
   reference: string | null;
   narration: string | null;
 }
@@ -855,13 +871,14 @@ async function validateTransactionRows(
     let discount = 0;
     const discRaw = (values.discount ?? "").trim();
     if (module === "sales") {
+      // Per-UNIT ₹ discount — the manual sale entry convention.
       const d = parseMoney(discRaw);
       if (d !== null) {
         if (!Number.isFinite(d) || d < 0) s.errors.push(`Discount "${discRaw}" must be a number ≥ 0`);
         else {
           discount = d;
-          if (price !== null && Number.isFinite(price) && qty !== null && Number.isFinite(qty) && d > price * qty + 0.004) {
-            s.errors.push(`Discount ₹${d} exceeds the line total ₹${(price * qty).toFixed(2)}`);
+          if (price !== null && Number.isFinite(price) && d > price + 0.004) {
+            s.errors.push(`Discount ₹${d} per unit exceeds the Price ₹${Number(price).toFixed(2)} — Discount is per UNIT, not for the whole line`);
           }
         }
       }
@@ -887,12 +904,18 @@ async function validateTransactionRows(
         s.errors.push(`"${product.name}" has GST rate ${product.taxRate}% in the master, which is not a valid slab`);
         s.suggestions.push("Fix the product master's GST rate (0, 5, 12, 18 or 28), then re-upload");
       }
-      if (module === "sales" && product.mrp > 0 && price !== null && Number.isFinite(price) && price < product.mrp - 0.004) {
-        s.warnings.push(`Price ₹${price} is below the master MRP ₹${product.mrp}`);
+      // Same floor manual entry enforces (checkMrpFloor in routes/sales.ts):
+      // an import must never create a below-MRP sale that POST /sales rejects.
+      if (module === "sales" && product.mrp > 0 && price !== null && Number.isFinite(price) && price < product.mrp) {
+        s.errors.push(`Price ₹${price} is below the Item Master MRP ₹${product.mrp} for ${product.name} — use Discount to reduce the selling price (same rule as manual sale entry)`);
       }
       if (product && qty !== null && Number.isFinite(qty) && qty > 0) {
+        // Sales lines carry the manual-entry semantics: GST-INCLUSIVE price
+        // and a per-UNIT discount (`unitDiscount`). Rows validated before this
+        // convention keep their legacy `discount` (line-total, exclusive
+        // price) shape — the commit path honours whichever key is present.
         s.norm.line = module === "sales"
-          ? { kind: "item", id: product.id, name: product.name, quantity: qty, price: price ?? 0, discount }
+          ? { kind: "item", id: product.id, name: product.name, quantity: qty, price: price ?? 0, unitDiscount: discount }
           : { kind: product.kind, id: product.id, name: product.name, quantity: qty, rate: price ?? 0, discountPct: discount };
       }
 
@@ -914,7 +937,7 @@ async function validateTransactionRows(
     if (key && last && last.key === key) {
       last.rowIdxs.push(i);
       // Document-level fields live on the FIRST row; conflicting later values are ignored with a warning.
-      for (const [k, label] of [["billDiscount", "Bill Discount"], ["paymentStatus", "Payment Status"], ["paidAmount", "Paid Amount"], ["paymentMode", "Payment Mode"], ["reference", "Reference"]] as const) {
+      for (const [k, label] of [["billDiscount", "Bill Discount"], ["paymentStatus", "Payment Status"], ["paidAmount", "Paid Amount"], ["paymentMode", "Payment Account"], ["account", "Payment Account"], ["reference", "Reference"]] as const) {
         const v = (values[k] ?? "").trim();
         const headV = (rowsIn[last.headIdx].values[k] ?? "").trim();
         if (v && v !== headV) s.warnings.push(`${label} "${v}" differs from the invoice's first row — the first row's value is used`);
@@ -930,6 +953,7 @@ async function validateTransactionRows(
         key, headIdx: i, rowIdxs: [i], inv: invRaw, dateIso,
         party, partyName,
         billDiscount: 0, status: null, paidGiven: null, modeGiven: null,
+        accountRaw: (values.account ?? "").trim(),
         reference: (values.reference ?? "").trim() || null,
         narration: (values.narration ?? "").trim() || null,
       };
@@ -940,8 +964,17 @@ async function validateTransactionRows(
           else doc.billDiscount = bd;
         }
         const pm = parsePaymentMode((values.paymentMode ?? "").trim());
-        if (pm === "invalid") s.warnings.push(`Payment Mode "${values.paymentMode}" not understood — treating the sale as Credit (use Cash / UPI / Bank / Credit)`);
+        if (pm === "invalid") s.warnings.push(`Payment Account "${values.paymentMode}" not understood — treating the sale as Customer Credit (use Cash / Bank / UPI / Customer Credit)`);
         else doc.modeGiven = pm;
+      } else {
+        // Purchases have no bill-level discount — the manual purchase module
+        // works in per-line Discount %, and an import must never produce a
+        // bill that manual entry could not.
+        const bd = parseMoney((values.billDiscount ?? "").trim());
+        if (bd !== null && bd > 0.004) {
+          s.errors.push(`Bill Discount ₹${bd} is not supported for purchase bills`);
+          s.suggestions.push("Spread the bill discount into each line's Discount % (the purchase module has no bill-level discount)");
+        }
       }
       const st = parsePaymentStatus((values.paymentStatus ?? "").trim());
       if (st === "invalid") s.warnings.push(`Payment Status "${values.paymentStatus}" not understood — treating as Unpaid (use Paid / Unpaid / Partial)`);
@@ -991,10 +1024,11 @@ async function validateTransactionRows(
       }
       const custState = String(doc.party.state ?? "").trim().toLowerCase();
       const isInterState = !!(ctx.companyState && custState && ctx.companyState !== custState);
+      // Manual-entry semantics: prices INCLUDE GST, discount is per unit.
       const built = buildSaleLines(
         doc.rowIdxs.map((i) => {
           const l = slots[i].norm.line;
-          return { itemId: l.id, quantity: l.quantity, unitPrice: l.price, discount: l.discount, priceMode: "exclusive" };
+          return { itemId: l.id, quantity: l.quantity, unitPrice: l.price, unitDiscount: l.unitDiscount ?? 0, priceMode: "inclusive" };
         }),
         itemTaxMap, isInterState, doc.billDiscount,
       );
@@ -1028,15 +1062,23 @@ async function validateTransactionRows(
       head.warnings.push(`GST in the file (₹${fileTax.toFixed(2)}) differs from the computed GST (₹${computedTax.toFixed(2)}) — the computed figure is recorded`);
     }
 
-    // Settlement resolution
+    // Settlement resolution. Blank Paid Amount follows the Payment Status:
+    // Paid → the computed grand total, Partial → an error (the amount is the
+    // whole point of Partial), Unpaid/blank → 0. A supplied Paid Amount is
+    // always honoured — a blank status with an amount records a part-payment
+    // (the template hints document this).
+    if (doc.status === "partial" && doc.paidGiven === null) {
+      head.errors.push("Payment Status is Partial but Paid Amount is blank — enter the amount actually received");
+    }
     let paid = 0;
     let mode: "cash" | "bank" | "upi" | "credit" = "credit";
+    let paidFromLedgerId: number | null = null;
     if (module === "sales") {
       mode = doc.modeGiven ?? (doc.status === "paid" ? "cash" : "credit");
       if (mode !== "credit") {
         paid = total;
         if (doc.status === "partial" || (doc.paidGiven !== null && Math.abs(doc.paidGiven - total) > 0.01 && doc.status !== "paid")) {
-          head.warnings.push(`${mode.toUpperCase()} sales settle in full at creation — recorded as fully paid ₹${total.toFixed(2)}`);
+          head.warnings.push(`${mode.toUpperCase()} sales settle in full at creation — recorded as fully paid ₹${total.toFixed(2)}; use Customer Credit for partly-paid invoices`);
         }
       } else {
         paid = doc.paidGiven ?? (doc.status === "paid" ? total : 0);
@@ -1055,6 +1097,13 @@ async function validateTransactionRows(
       if (doc.status === "paid" && doc.paidGiven !== null && doc.paidGiven < total - 0.01) {
         head.warnings.push(`Marked Paid but Paid Amount is ₹${doc.paidGiven.toFixed(2)} of ₹${total.toFixed(2)} — recorded as partly paid`);
       }
+      // Payment Account: which money account settles the paid amount —
+      // resolved exactly like voucher imports (Cash / Bank / exact ledger name).
+      if (paid > 0.004 || doc.accountRaw) {
+        const acct = resolveAccountValue(doc.accountRaw, ctx.accounts);
+        if (!acct.ok) head.errors.push(`Payment Account: ${acct.error}`);
+        else paidFromLedgerId = acct.account.id;
+      }
     }
 
     head.norm.invoiceNumber = doc.inv;
@@ -1065,6 +1114,7 @@ async function validateTransactionRows(
     head.norm.paymentMode = mode;
     head.norm.paymentStatus = doc.status;
     head.norm.paidAmount = Math.round(paid * 100) / 100;
+    if (module === "purchases") head.norm.paidFromLedgerId = paidFromLedgerId;
     head.norm.reference = doc.reference;
     head.norm.narration = doc.narration;
     head.norm.computedTotal = total;
@@ -1455,19 +1505,22 @@ router.get("/imports/templates/:module", requireModuleAction(PERM, "download"), 
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet(spec.title);
 
-  ws.columns = spec.columns.map((c) => ({
+  // Hidden columns (cross-check-only, e.g. GST amounts) never appear in the
+  // template — the user supplies business data only; the ERP computes the rest.
+  const visibleCols = spec.columns.filter((c) => !c.hidden);
+  ws.columns = visibleCols.map((c) => ({
     header: c.required ? `${c.header} *` : c.header,
     key: c.key,
     width: Math.max(16, c.header.length + 6),
   }));
   const headerRow = ws.getRow(1);
   headerRow.font = { bold: true };
-  spec.columns.forEach((c, i) => {
+  visibleCols.forEach((c, i) => {
     const cell = headerRow.getCell(i + 1);
     if (c.required) cell.font = { bold: true, color: { argb: "FFC00000" } };
     cell.note = c.hint + (c.required ? " — REQUIRED" : "");
   });
-  ws.addRow(spec.columns.map((c) => c.example));
+  ws.addRow(visibleCols.map((c) => c.example));
   ws.views = [{ state: "frozen", ySplit: 1 }];
 
   // Second sheet: how to fill + (for ledgers) the live list of valid groups.
@@ -1479,15 +1532,22 @@ router.get("/imports/templates/:module", requireModuleAction(PERM, "download"), 
   if (isTxnModule(module)) {
     const party = module === "sales" ? "Customer" : "Vendor";
     help.addRow([`• One row per invoice LINE. Rows of one invoice must sit together (consecutive) with the same Invoice No + Date + ${party} — they become one document with multiple lines.`]);
-    help.addRow(["• Prices/rates are EXCLUSIVE of GST. GST is added from the product master's rate; the GST columns in the file are cross-checked and warned on, never recorded."]);
+    if (module === "sales") {
+      help.addRow(["• Price INCLUDES GST — it is the selling price / MRP, exactly as in manual sale entry. The ERP works the GST out from the Item Master rate; you never enter GST amounts."]);
+      help.addRow(["• Discount is ₹ per UNIT. Bill Discount is a pre-tax ₹ off the whole invoice — put it on the invoice's first row."]);
+    } else {
+      help.addRow(["• Purchase Rate EXCLUDES GST, exactly as in manual purchase entry. The ERP adds GST from the product master rate; you never enter GST amounts."]);
+      help.addRow(["• Discount % is a percent off that line. There is no bill-level discount on purchases — spread it into the lines."]);
+    }
     help.addRow(["• Dates: YYYY-MM-DD or DD/MM/YYYY."]);
     help.addRow([`• Items must already exist in the masters — unknown items are errors. Unknown ${party.toLowerCase()}s can be created during the import (resolve step).`]);
+    help.addRow(["• Payment Status: Paid / Unpaid / Partial. Paid with a blank Paid Amount = fully paid; Partial REQUIRES a Paid Amount; blank = Unpaid (or partly paid when a Paid Amount is given)."]);
     if (module === "sales") {
-      help.addRow(["• Payment Mode: Cash / UPI / Bank / Credit. Cash, UPI and Bank sales are recorded as fully paid at creation; use Credit + Paid Amount for partly-paid invoices."]);
+      help.addRow(["• Payment Account: Cash / Bank / UPI / Customer Credit. Cash, Bank and UPI sales are recorded as fully paid at creation; use Customer Credit + Paid Amount for partly-paid invoices."]);
       help.addRow(["• Each imported sale is given the next SB2B/SB2C bill number automatically (B2B when the customer has a GST number). The invoice number from your file is kept as the old reference — bills stay searchable by it."]);
       help.addRow(["• Stock: each sale deducts stock at the chosen location — import purchases/opening stock first."]);
     } else {
-      help.addRow(["• Paid Amount settles the bill from the selected location's cash ledger."]);
+      help.addRow(["• Payment Account: where the Paid Amount was paid from — Cash, Bank, or the exact bank ledger name. Blank = the selected location's cash."]);
       help.addRow(["• Backdated bills: average cost updates in the ORDER bills are entered, not by bill date — import oldest bills first."]);
     }
   } else if (isVoucherModule(module)) {
@@ -1969,7 +2029,13 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
             customerId: Number(hn.partyId),
             lines: docRows.map((r) => {
               const l = r.raw?.norm?.line ?? {};
-              return { itemId: Number(l.id), quantity: Number(l.quantity), unitPrice: Number(l.price ?? 0), discount: Number(l.discount ?? 0) };
+              // New batches carry `unitDiscount` (per-unit ₹, GST-inclusive
+              // price). Batches validated before that convention carry the
+              // legacy `discount` (line-total ₹, GST-exclusive price) — they
+              // must commit with the math their preview showed.
+              return l.unitDiscount !== undefined
+                ? { itemId: Number(l.id), quantity: Number(l.quantity), unitPrice: Number(l.price ?? 0), unitDiscount: Number(l.unitDiscount ?? 0), priceMode: "inclusive" as const }
+                : { itemId: Number(l.id), quantity: Number(l.quantity), unitPrice: Number(l.price ?? 0), discount: Number(l.discount ?? 0), priceMode: "exclusive" as const };
             }),
             billDiscount: Number(hn.billDiscount ?? 0),
             paymentMode: (hn.paymentMode ?? "credit") as "cash" | "bank" | "upi" | "credit",
@@ -2007,6 +2073,7 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
               return { kind: (l.kind ?? "item") as "item" | "material" | "raw_material", id: Number(l.id), quantity: Number(l.quantity), rate: Number(l.rate ?? 0), discountPct: Number(l.discountPct ?? 0) };
             }),
             paidAmount: Number(hn.paidAmount ?? 0),
+            paidFromLedgerId: hn.paidFromLedgerId != null ? Number(hn.paidFromLedgerId) : null,
             narration: hn.narration ?? null,
             reference: hn.reference ?? null,
             loc, user,

@@ -100,6 +100,34 @@ Rules that must hold for every import type, and why:
   lot has been consumed; expect avg_cost to legitimately stay non-zero once
   remaining qty hits 0 (standard unwind semantics — inert, next inbound
   recomputes).
+- **Template semantics (simplified Aug 2026): sales files are GST-INCLUSIVE
+  with a PER-UNIT ₹ discount** — the manual sale entry convention; purchases
+  stay GST-exclusive with % line discounts and NO bill discount (a non-zero
+  Bill Discount cell errors with a spread-into-lines suggestion). GST/CGST/
+  SGST/IGST columns are `hidden: true` ColSpecs: absent from the downloadable
+  template but still alias-mapped for old files (cross-check warning only).
+  **Why:** users enter business fields only; the ERP computes all tax, and an
+  import must never create a document manual entry couldn't.
+- **Legacy-batch commit compatibility:** sale line norms distinguish eras by
+  key — `unitDiscount` present ⇒ inclusive/per-unit; legacy `discount` ⇒
+  exclusive/line-total. The commit path honours whichever the stored norm
+  carries so a batch previews and commits with the SAME math forever.
+- **MRP floor parity:** validation errors below-MRP sale prices (same rule as
+  `checkMrpFloor` in manual entry), and `importSaleDoc` re-checks at commit —
+  but only for new-convention lines (legacy exclusive prices can't be compared
+  to an inclusive MRP; they stay grandfathered).
+- **Purchases have a Payment Account column** resolved through the voucher
+  imports' `importAccountOptions`/`resolveAccountValue` (blank/cash → till,
+  bank → unique STD-BANK leaf, else exact name). Commit RE-RESOLVES the stored
+  ledger id against the same option set — a bare "ledger still exists" check
+  would settle from a deactivated/moved ledger.
+- **Paid Amount blank rules:** Paid → full total; Partial → ERROR (both
+  modules); blank status → unpaid, but a supplied Paid Amount is always
+  honoured as a part-payment (documented in hints — don't "fix" one without
+  the other).
+- **The parse response strips `raw`** — assertions about norm fields
+  (paidAmount, line shapes) must read `import_rows.raw` from the DB, not the
+  HTTP response.
 - **Settlement facts that trip test expectations:** purchases round-off to
   whole rupees (`round_off` col); sales status value is `partially_paid` (not
   "partial"); cash/UPI/bank sales settle at creation with NO sale_payments
