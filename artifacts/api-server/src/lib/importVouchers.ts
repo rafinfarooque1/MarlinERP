@@ -151,6 +151,17 @@ function voucherStamp(loc: ProdLocation): { type: string; id: number } {
 async function assertVoucherNumberFree(
   client: PoolClient, table: "receipts" | "payments", voucherNumber: string,
 ): Promise<void> {
+  // The sales bill series (SB2B/SB2C) is reserved for the sale flows: every
+  // accounting predicate that separates sale-trail receipts from manual ones
+  // matches on that number shape, so a manual/imported voucher wearing it
+  // would silently vanish from the books the day a sale draws the same
+  // number. Invoice numbers run per location now, which makes that collision
+  // reachable — refuse the number instead of importing a time bomb.
+  if (/^SB2[BC]\//i.test(voucherNumber.trim())) {
+    throw new Error(
+      `Voucher number ${voucherNumber} uses the sales bill series (SB2B/SB2C), which is reserved for sales invoices — leave the voucher number blank to draw the next receipt/payment number.`
+    );
+  }
   const { rows } = await client.query(
     `SELECT 1 FROM ${table} WHERE LOWER(voucher_number) = LOWER($1) LIMIT 1`,
     [voucherNumber],

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import {
   useListJournalVouchers, useCreateJournalVoucher, useDeleteJournalVoucher,
   useListAccountsFlat, useListCustomers, useListVendors, type JournalVoucher,
@@ -20,6 +20,7 @@ import { downloadCSV } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
+import { entryScopeKeyDown, autoFocusFirst, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 
 const schema = z.object({
   voucherDate: z.string().min(1, 'Date required'),
@@ -46,6 +47,7 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<JournalVoucher | null>(null);
+  const scopeRef = useRef<HTMLFormElement>(null);
 
   const parties = (isCN ? (customers as any[]) : (vendors as any[])).map(p => ({ id: p.id, name: p.name }));
   const counterOptions = (allAccounts as any[]).filter(a => !a.isSystemGroup && !a.isGroup);
@@ -69,6 +71,16 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
   };
+
+  // ── Keyboard Entry Mode ──
+  const save = () => {
+    if (createMutation.isPending) return;
+    form.handleSubmit(onSubmit, (errors) => {
+      const first = ['voucherDate', 'partyId', 'amount'].find(f => (errors as any)[f]);
+      if (first) focusField(first, scopeRef.current);
+    })();
+  };
+  useEntryShortcuts(isOpen, { onSave: save });
 
   const handleDelete = () => {
     if (!deleteTarget) return;
@@ -165,13 +177,19 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
 
       {/* ── New Note Dialog ── */}
       <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) form.reset(); }}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-lg" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader><DialogTitle>New {isCN ? 'Credit' : 'Debit'} Note</DialogTitle></DialogHeader>
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
+            <form
+              ref={scopeRef}
+              data-kbd-scope
+              onKeyDown={entryScopeKeyDown({ onSave: save })}
+              onSubmit={form.handleSubmit(onSubmit)}
+              className="space-y-4 pt-2"
+            >
               <FormField control={form.control} name="voucherDate" render={({ field }) => (
                 <FormItem><FormLabel>Date <span className="text-destructive">*</span></FormLabel>
-                  <Input type="date" {...field} />
+                  <Input type="date" data-field="voucherDate" {...field} />
                   <FormMessage />
                 </FormItem>
               )} />
@@ -179,14 +197,14 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
               <FormField control={form.control} name="partyId" render={({ field }) => (
                 <FormItem>
                   <FormLabel>{isCN ? 'Customer' : 'Vendor'} <span className="text-destructive">*</span></FormLabel>
-                  <AccountCombobox options={parties} value={field.value} onChange={field.onChange} placeholder={`Select ${isCN ? 'customer' : 'vendor'}`} />
+                  <AccountCombobox options={parties} value={field.value} onChange={field.onChange} placeholder={`Select ${isCN ? 'customer' : 'vendor'}`} advanceOnSelect data-field="partyId" />
                   <FormMessage />
                 </FormItem>
               )} />
 
               <FormField control={form.control} name="amount" render={({ field }) => (
                 <FormItem><FormLabel>Amount ₹ <span className="text-destructive">*</span></FormLabel>
-                  <Input type="number" min={0} step="0.01" {...field} />
+                  <Input type="number" min={0} step="0.01" data-field="amount" {...field} />
                   <FormMessage />
                 </FormItem>
               )} />
@@ -194,7 +212,7 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
               <FormField control={form.control} name="counterLedgerId" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Adjust against <span className="text-muted-foreground font-normal">(default: {isCN ? 'Sales' : 'Purchases'})</span></FormLabel>
-                  <AccountCombobox options={counterOptions} value={field.value ?? 0} onChange={field.onChange} placeholder={`Default — ${isCN ? 'Sales' : 'Purchases'} account`} />
+                  <AccountCombobox options={counterOptions} value={field.value ?? 0} onChange={field.onChange} placeholder={`Default — ${isCN ? 'Sales' : 'Purchases'} account`} advanceOnSelect />
                   <FormMessage />
                 </FormItem>
               )} />

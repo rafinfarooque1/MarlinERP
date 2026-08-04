@@ -149,7 +149,7 @@ function CollectPaymentPanel({ sale, onClose, onDone }: { sale: any; onClose: ()
         <div>
           <p className="text-sm font-semibold mb-3">Collect Payment</p>
           <div className="space-y-3 bg-muted/20 rounded-lg p-3 border border-border">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <p className="text-xs text-muted-foreground mb-1">Method</p>
                 <Select value={method} onValueChange={setMethod}>

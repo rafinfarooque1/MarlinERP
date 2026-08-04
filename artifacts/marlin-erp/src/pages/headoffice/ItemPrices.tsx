@@ -356,7 +356,7 @@ export default function ItemPrices() {
               {/* Validity period */}
               <div className="border-t border-border pt-3 space-y-3">
                 <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Validity Period (optional)</p>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <FormField control={form.control} name="validFrom" render={({ field }) => (
                     <FormItem>
                       <FormLabel className="text-xs">Valid From</FormLabel>

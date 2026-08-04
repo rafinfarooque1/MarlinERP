@@ -104,7 +104,7 @@ function LedgerStatementSheet({ ledgerNode, fromDate, toDate, onClose }: {
         ) : (
           <div className="space-y-4 mt-2">
             {/* Summary cards */}
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <div className="bg-muted/20 rounded-lg p-3">
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Total Debit</p>
                 <p className="font-bold font-mono text-sm text-foreground mt-0.5">

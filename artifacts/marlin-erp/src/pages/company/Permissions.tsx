@@ -300,7 +300,8 @@ export default function Permissions() {
             </div>
 
             {/* ── Permission table — one flat row per sidebar link ───────────── */}
-            <div className="bg-card border border-border rounded-xl overflow-hidden">
+            <div className="bg-card border border-border rounded-xl overflow-x-auto">
+              <div className="min-w-[560px]">
 
               {/* Column headers — click one to set that action on every listed page */}
               <div className={`${GRID} items-center px-4 py-2.5 border-b border-border bg-muted/20 sticky top-0 z-10`}>
@@ -389,6 +390,7 @@ export default function Permissions() {
                     No page matches “{filter}”.
                   </div>
                 )}
+              </div>
               </div>
             </div>
 

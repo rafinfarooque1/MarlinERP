@@ -89,7 +89,7 @@ function CollectPaymentDialog({ item, onOpenChange }: { item: any | null; onOpen
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 pt-1">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Amount (₹)</label>
               <Input type="number" min={0} step="0.01" className="font-mono" value={amount} onChange={e => setAmount(e.target.value)} />
@@ -99,7 +99,7 @@ function CollectPaymentDialog({ item, onOpenChange }: { item: any | null; onOpen
               <Input type="date" value={paymentDate} onChange={e => setPaymentDate(e.target.value)} />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Method</label>
               <Select value={method} onValueChange={setMethod}>

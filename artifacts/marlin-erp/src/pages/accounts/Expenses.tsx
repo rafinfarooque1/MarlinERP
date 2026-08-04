@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useFilteredExpenses, useCreateExpense, useListCashBankAccounts, useLocationExpensesSummary, useLocationExpenses, LocationExpenseSummary, useListWarehouses, useListOutlets, attachmentViewUrl, customFetch } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -24,6 +24,7 @@ import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { useDateRange, RangeBar } from '@/pages/reports/shared';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
+import { entryScopeKeyDown, autoFocusFirst, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 
 const schema = z.object({
   description: z.string().min(1, 'Description required'),
@@ -362,6 +363,7 @@ export default function Expenses() {
   const [viewItem, setViewItem] = useState<any>(null);
   const queryClient = useQueryClient();
   const createMutation = useCreateExpense();
+  const scopeRef = useRef<HTMLFormElement>(null);
 
   const blankForm = {
     description: '', amount: 0, expenseDate: new Date().toISOString().split('T')[0],
@@ -398,6 +400,17 @@ export default function Expenses() {
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
   };
+
+  // ── Keyboard Entry Mode ──
+  const save = () => {
+    if (createMutation.isPending) return;
+    form.handleSubmit(onSubmit, (errors) => {
+      const first = ['description', 'amount', 'expenseDate', 'ledgerAccountId', 'paymentAccountId']
+        .find(f => (errors as any)[f]);
+      if (first) focusField(first, scopeRef.current);
+    })();
+  };
+  useEntryShortcuts(isOpen, { onSave: save });
 
   const filtered = (expenses as any[]).filter(e => {
     const q = search.toLowerCase();
@@ -597,29 +610,35 @@ export default function Expenses() {
 
       {/* Add Expense Dialog */}
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
-        <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader><DialogTitle>Record Expense</DialogTitle></DialogHeader>
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
+            <form
+              ref={scopeRef}
+              data-kbd-scope
+              onKeyDown={entryScopeKeyDown({ onSave: save })}
+              onSubmit={form.handleSubmit(onSubmit)}
+              className="space-y-4 pt-2"
+            >
               <FormField control={form.control} name="description" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Description <span className="text-destructive">*</span></FormLabel>
-                  <FormControl><Input placeholder="e.g. Office rent - July" {...field} /></FormControl>
+                  <FormControl><Input placeholder="e.g. Office rent - July" data-field="description" {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
               )} />
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={form.control} name="amount" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Amount ₹ <span className="text-destructive">*</span></FormLabel>
-                    <FormControl><Input type="number" step="0.01" min={0} {...field} /></FormControl>
+                    <FormControl><Input type="number" step="0.01" min={0} data-field="amount" {...field} /></FormControl>
                     <FormMessage />
                   </FormItem>
                 )} />
                 <FormField control={form.control} name="expenseDate" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Date</FormLabel>
-                    <FormControl><Input type="date" {...field} /></FormControl>
+                    <FormControl><Input type="date" data-field="expenseDate" {...field} /></FormControl>
                   </FormItem>
                 )} />
               </div>
@@ -635,6 +654,8 @@ export default function Expenses() {
                       onChange={id => field.onChange(id)}
                       placeholder={(expenseAccounts as any[]).length === 0 ? 'No expense ledgers found' : 'Select account'}
                       disabled={(expenseAccounts as any[]).length === 0}
+                      advanceOnSelect
+                      data-field="ledgerAccountId"
                     />
                   </FormControl>
                   <FormMessage />
@@ -644,7 +665,7 @@ export default function Expenses() {
                 <FormItem>
                   <FormLabel>Paid From <span className="text-destructive">*</span></FormLabel>
                   <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
-                    <FormControl><SelectTrigger><SelectValue placeholder="Select cash/bank account" /></SelectTrigger></FormControl>
+                    <FormControl><SelectTrigger data-field="paymentAccountId"><SelectValue placeholder="Select cash/bank account" /></SelectTrigger></FormControl>
                     <SelectContent>
                       {(cashBanks as any[]).map((cb: any) => <SelectItem key={cb.id} value={String(cb.id)}>{cb.name}</SelectItem>)}
                     </SelectContent>

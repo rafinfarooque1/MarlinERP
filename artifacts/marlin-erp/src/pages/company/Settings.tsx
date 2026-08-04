@@ -9,7 +9,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Store, ScanBarcode, Trash2, TriangleAlert, CalendarRange, FileText, ShieldCheck, ShieldOff } from 'lucide-react';
+import { Settings2, Save, Loader2, Bell, Receipt, DollarSign, Globe, Store, ScanBarcode, Trash2, TriangleAlert, CalendarRange, FileText, ShieldCheck, ShieldOff, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { customFetch } from '@workspace/api-client-react';
@@ -124,6 +124,53 @@ const SETTING_GROUPS: SettingGroup[] = [
         defaultValue: false,
         description:
           'Off by default: the business runs on Head Office and Warehouses only. Existing outlets stay fully visible in reports, audits and past transactions, but no outlet can be created, edited, deleted, sold from or transferred to. Turning this on reactivates outlets immediately — nothing in your data is changed either way.',
+      },
+    ],
+  },
+  {
+    icon: Upload,
+    title: 'Data Import',
+    description: 'How Excel imports handle messy legacy data (Company → Import Data)',
+    settings: [
+      {
+        key: 'importAutoCreateCustomers',
+        label: 'Auto-create Unknown Customers',
+        type: 'toggle',
+        defaultValue: true,
+        description:
+          'A customer name in a sales import that is not in your masters is created automatically (with its ledger) when you press Import. Turn off to review and create such names by hand in the resolve step instead.',
+      },
+      {
+        key: 'importAutoCreateVendors',
+        label: 'Auto-create Unknown Vendors',
+        type: 'toggle',
+        defaultValue: true,
+        description:
+          'Same as above, for vendor names in purchase imports.',
+      },
+      {
+        key: 'importAutoWalkInCustomer',
+        label: 'Blank Customer = Walk-in Sale',
+        type: 'toggle',
+        defaultValue: true,
+        description:
+          'A sales row with no customer name and a Cash/Bank/UPI payment is recorded as a walk-in counter sale (no customer on the bill), like a POS cash sale. Credit sales always need a customer. Turn off to make a blank customer an error.',
+      },
+      {
+        key: 'importMrpToDiscount',
+        label: 'Record Below-MRP Prices as Discounts',
+        type: 'toggle',
+        defaultValue: true,
+        description:
+          'A sale price below the Item Master MRP is recorded like the POS: MRP stays and the difference becomes a per-unit discount — the customer\'s net price is unchanged. Turn off to make below-MRP prices an error.',
+      },
+      {
+        key: 'importDetectLineTotal',
+        label: 'Work Out Price from Line Total',
+        type: 'toggle',
+        defaultValue: true,
+        description:
+          'When a row has a Line Total but no unit price, the price is worked out as Line Total ÷ Qty. When both are given they are cross-checked and mismatches flagged. Turn off to ignore Line Total columns.',
       },
     ],
   },

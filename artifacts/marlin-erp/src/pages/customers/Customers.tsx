@@ -232,6 +232,7 @@ export default function Customers() {
               </SelectContent>
             </Select>
           </div>
+          <div className="hidden md:block">
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -274,6 +275,42 @@ export default function Customers() {
               ))}
             </TableBody>
           </Table>
+          </div>
+
+          {/* Mobile cards */}
+          <div className="md:hidden p-3 space-y-2">
+            {isLoading ? [...Array(3)].map((_, i) => (
+              <div key={i} className="h-20 bg-muted/30 rounded-lg animate-pulse" />
+            )) : filtered.length === 0 ? (
+              <div className="text-center py-16 text-muted-foreground">
+                <UserCheck className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>{customers.length === 0 ? 'No customers yet' : 'No customers match this search or location'}</p>
+              </div>
+            ) : filtered.map(c => (
+              <div key={c.id} className="border border-border rounded-lg p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-sm truncate">{c.name}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{c.phone || '—'}</p>
+                  </div>
+                  <PartyBalance kind="customer" balance={(c as any).outstandingBalance} className="text-sm shrink-0" />
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                  <span>State: <span className="text-foreground">{(c as any).state || '—'}</span></span>
+                  <span className="truncate">GST: <span className="text-foreground font-mono">{c.gstNumber || '—'}</span></span>
+                  <span className="col-span-2 truncate">Location: <span className="text-foreground">{loc.nameOf((c as any).locationType ?? (c as any).location_type, (c as any).locationId ?? (c as any).location_id)}</span></span>
+                </div>
+                <div className="mt-2 flex items-center justify-end gap-1">
+                  {perm.canAdd && Number((c as any).outstandingBalance ?? 0) > 0.009 && (
+                  <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" title="Collect payment" onClick={() => setCollectFor({ id: c.id, name: c.name })}><HandCoins className="w-4 h-4" /></Button>
+                  )}
+                  {perm.canEdit && (
+                  <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(c)}><Pencil className="w-4 h-4" /></Button>
+                  )}
+                  <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => { setViewItem(c); setActiveTab('details'); }}><Eye className="w-4 h-4" /></Button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -286,7 +323,7 @@ export default function Customers() {
               <FormField control={form.control} name="name" render={({ field }) => (
                 <FormItem><FormLabel>Name <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="Full name / company name" {...field} /></FormControl><FormMessage /></FormItem>
               )} />
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={form.control} name="phone" render={({ field }) => (
                   <FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
                 )} />
@@ -302,7 +339,7 @@ export default function Customers() {
                   </FormItem>
                 )} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={form.control} name="creditLimit" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Credit Limit (₹)</FormLabel>

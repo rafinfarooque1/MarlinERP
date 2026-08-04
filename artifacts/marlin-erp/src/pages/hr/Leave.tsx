@@ -439,7 +439,7 @@ export default function Leave() {
                     </SelectContent>
                   </Select></FormItem>
               )} />
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={form.control} name="startDate" render={({ field }) => (
                   <FormItem><FormLabel>From <span className="text-destructive">*</span></FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />

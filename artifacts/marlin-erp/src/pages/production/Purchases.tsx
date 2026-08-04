@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { SearchableItemSelect } from '@/components/ui/searchable-item-select';
 import {
   usePaginatedPurchases, useCreatePurchase, useListVendors, useListMaterials, useListRawMaterials, useListItems,
@@ -33,6 +33,7 @@ import { Separator } from '@/components/ui/separator';
 // the preview in this form and the figures written to the books cannot drift.
 import { calcPurchaseBill, calcPurchaseLine, type PriceMode } from '@workspace/purchase-pricing';
 import { useQueryClient } from '@tanstack/react-query';
+import { autoFocusFirst, useEntryShortcuts } from '@/lib/keyboard-entry';
 
 const GST_RATES = [0, 5, 12, 18, 28] as const;
 
@@ -265,18 +266,48 @@ export default function Purchases() {
 
   const resetForm = () => form.reset({ vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', location: locations.defaultValue, priceMode: 'exclusive', lineItems: [defaultLine], notes: '' });
 
-  /** Add Line for the keyboard workflow: append the row, then land focus on the
-   *  new row's Item picker and open it, so the next item name can be typed
-   *  immediately — no mouse. setTimeout(0) lets React commit the new row first. */
+  /** data-testid of the ONE category trigger auto-opened by Add Line (null =
+   *  none): when THAT select closes (Enter pick, re-pick of the default, or
+   *  Escape), focus hops on to its row's Item picker. Row-scoped and set only
+   *  after a VERIFIED open, so a failed open or a manual mouse edit of another
+   *  row's category can never hijack focus. Cleared when the dialog closes. */
+  const autoAdvanceCatRef = useRef<string | null>(null);
+  useEffect(() => { if (!isOpen) autoAdvanceCatRef.current = null; }, [isOpen]);
+
+  /** Radix triggers open on different gestures: the category <Select> listens
+   *  for pointerdown, the item picker's Popover for click. Each helper sends
+   *  exactly the one its target reacts to — sending both would toggle twice. */
+  const openCategorySelect = (el?: HTMLButtonElement | null): boolean => {
+    if (!el) return false;
+    el.focus();
+    // Radix versions differ in which gesture opens a Select trigger, so try
+    // pointerdown → ArrowDown → click, checking aria-expanded between attempts
+    // (discrete events flush synchronously) so nothing toggles twice.
+    const isOpen = () => el.getAttribute('aria-expanded') === 'true';
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, pointerType: 'mouse' }));
+    if (isOpen()) return true;
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+    if (isOpen()) return true;
+    el.click();
+    return isOpen();
+  };
+  const openItemPicker = (el?: HTMLButtonElement | null) => {
+    if (!el) return;
+    el.focus();
+    el.click(); // opens the picker; its search box takes focus on open
+  };
+
+  /** Add Line for the keyboard workflow: append the row, then land focus on
+   *  the new row's Item Category dropdown and open it — arrow keys + Enter
+   *  pick the category, then focus flows on to the Item picker (see
+   *  autoAdvanceCatRef). setTimeout(0) lets React commit the new row first;
+   *  the appended row is always the LAST trigger in the dialog. */
   const addLine = () => {
     append({ ...defaultLine, taxType: billTaxType, taxTypeOverride: billTaxTypeOverridden });
     setTimeout(() => {
-      // The appended row is always the LAST picker in the dialog — resolved
-      // after the DOM update, so it stays correct even if indices shifted.
-      const triggers = document.querySelectorAll<HTMLButtonElement>('[data-testid^="purchase-line-item-"]');
+      const triggers = document.querySelectorAll<HTMLButtonElement>('[data-testid^="purchase-line-cat-"]');
       const el = triggers[triggers.length - 1];
-      el?.focus();
-      el?.click(); // opens the picker; its search box takes focus on open
+      autoAdvanceCatRef.current = el && openCategorySelect(el) ? el.getAttribute('data-testid') : null;
     }, 0);
   };
 
@@ -285,7 +316,29 @@ export default function Purchases() {
    *  On the row's LAST field (Expiry) Enter acts as Add Line; on every other
    *  input it walks to the next field in the row's tab order, like Tab. Radix
    *  selects and the item picker handle Enter themselves and are left alone. */
+  /** Delete a line for the keyboard workflow — mirrors the row X button, which
+   *  is disabled while only one line remains, so the minimum-row rule holds. */
+  const deleteLine = (index: number) => {
+    if (fields.length <= 1) return;
+    remove(index);
+  };
+
   const handleLineKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    // Delete / Ctrl+Delete inside a [data-kbd-row] removes that line — the same
+    // rule the shared machinery applies (plain Delete in a text field still
+    // edits characters). Handled here so the container keeps its one keydown.
+    if (e.key === 'Delete') {
+      const t0 = e.target as HTMLElement;
+      const inTextField = t0 instanceof HTMLInputElement || t0 instanceof HTMLTextAreaElement;
+      if (!inTextField || e.ctrlKey) {
+        const row = t0.closest<HTMLElement>('[data-kbd-row]');
+        if (row) {
+          e.preventDefault();
+          deleteLine(Number(row.getAttribute('data-kbd-row')));
+        }
+      }
+      return;
+    }
     if (e.key !== 'Enter' || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
     const t = e.target as HTMLElement;
     if (!(t instanceof HTMLInputElement)) return;
@@ -298,6 +351,16 @@ export default function Purchases() {
     const i = focusables.indexOf(t);
     if (i >= 0) focusables[i + 1]?.focus();
   };
+
+  // Document-level Ctrl+S / Ctrl+Enter (save) and F4 (Add Line) while the entry
+  // dialog is open — same guarded submit/addLine used everywhere else.
+  useEntryShortcuts(isOpen, {
+    onSave: () => {
+      if (createMutation.isPending || updateMutation.isPending) return;
+      form.handleSubmit(onSubmit)();
+    },
+    onAddLine: addLine,
+  });
 
   /** The server may correct the GST type or report anything else it changed —
    *  surfaced rather than swallowed, so a corrected bill is never a surprise. */
@@ -345,6 +408,38 @@ export default function Purchases() {
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
       });
     }
+  };
+
+  const openEdit = (p: any) => {
+    setEditingId(p.id);
+    form.reset({
+      vendorId: p.vendorId,
+      purchaseDate: (p.purchaseDate ?? '').substring(0, 10) || new Date().toISOString().split('T')[0],
+      invoiceNumber: p.invoiceNumber || '',
+      location: encodeLocation((p as any).locationType ?? 'headoffice', Number((p as any).locationId ?? 1)),
+      // The bill's own rate mode, not a fresh default:
+      // re-opening an inclusive bill as exclusive would
+      // restate every figure on it.
+      priceMode: ((p as any).priceMode === 'inclusive' ? 'inclusive' : 'exclusive'),
+      notes: (p as any).notes || '',
+      lineItems: ((p.lineItems as any[]) || []).map((li: any) => ({
+        materialType: li.materialType || 'raw_material',
+        materialId: li.materialId,
+        hsnCode: li.hsnCode || '',
+        quantity: Number(li.quantity),
+        unitCost: Number(li.unitCost),
+        discount: Number(li.discount || 0),
+        gstRate: Number(li.gstRate || 0),
+        taxType: li.taxType || 'intra',
+        // An existing line keeps the GST type it was saved
+        // with unless the user changes it again.
+        taxTypeOverride: li.taxTypeSource === 'override',
+        batchNumber: li.batchNumber || '',
+        mfgDate: (li.mfgDate ?? '').substring(0, 10),
+        expiryDate: (li.expiryDate ?? '').substring(0, 10),
+      })),
+    });
+    setIsOpen(true);
   };
 
   const handleDelete = () => {
@@ -405,6 +500,7 @@ export default function Purchases() {
             <Input placeholder="Search vendor or invoice..." value={search} onChange={e => setSearch(e.target.value)} className="border-transparent bg-transparent focus-visible:ring-0 max-w-sm" />
             <div className="ml-auto"><RangeBar range={range} /></div>
           </div>
+          <div className="hidden md:block">
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -446,37 +542,7 @@ export default function Purchases() {
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(p)}><Eye className="w-4 h-4" /></Button>
                       {perm.canEdit && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => {
-                          setEditingId(p.id);
-                          form.reset({
-                            vendorId: p.vendorId,
-                            purchaseDate: (p.purchaseDate ?? '').substring(0, 10) || new Date().toISOString().split('T')[0],
-                            invoiceNumber: p.invoiceNumber || '',
-                            location: encodeLocation((p as any).locationType ?? 'headoffice', Number((p as any).locationId ?? 1)),
-                            // The bill's own rate mode, not a fresh default:
-                            // re-opening an inclusive bill as exclusive would
-                            // restate every figure on it.
-                            priceMode: ((p as any).priceMode === 'inclusive' ? 'inclusive' : 'exclusive'),
-                            notes: (p as any).notes || '',
-                            lineItems: ((p.lineItems as any[]) || []).map((li: any) => ({
-                              materialType: li.materialType || 'raw_material',
-                              materialId: li.materialId,
-                              hsnCode: li.hsnCode || '',
-                              quantity: Number(li.quantity),
-                              unitCost: Number(li.unitCost),
-                              discount: Number(li.discount || 0),
-                              gstRate: Number(li.gstRate || 0),
-                              taxType: li.taxType || 'intra',
-                              // An existing line keeps the GST type it was saved
-                              // with unless the user changes it again.
-                              taxTypeOverride: li.taxTypeSource === 'override',
-                              batchNumber: li.batchNumber || '',
-                              mfgDate: (li.mfgDate ?? '').substring(0, 10),
-                              expiryDate: (li.expiryDate ?? '').substring(0, 10),
-                            })),
-                          });
-                          setIsOpen(true);
-                        }}>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(p)}>
                           <Edit2 className="w-4 h-4" />
                         </Button>
                       )}
@@ -491,6 +557,59 @@ export default function Purchases() {
               ))}
             </TableBody>
           </Table>
+          </div>
+
+          {/* Mobile cards — same data, same handlers */}
+          <div className="md:hidden">
+            {isLoading ? (
+              <div className="p-4 space-y-2">
+                {[...Array(3)].map((_, i) => <div key={i} className="h-24 bg-muted/30 rounded-lg animate-pulse" />)}
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="text-center py-16 text-muted-foreground">
+                <ShoppingCart className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No purchase bills yet</p>
+              </div>
+            ) : (
+              <div className="p-3 space-y-2">
+                {filtered.map(p => (
+                  <div key={p.id} className="border border-border rounded-lg p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="font-mono text-primary font-bold text-sm">#{String(p.id).padStart(4, '0')}</p>
+                        <p className="font-medium text-sm truncate">{p.vendorName}</p>
+                      </div>
+                      <Badge variant="secondary" className="shrink-0">{(p.lineItems as any[])?.length || 0} items</Badge>
+                    </div>
+                    <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                      <div className="flex items-center gap-1 text-muted-foreground">
+                        <Calendar className="w-3 h-3" />{new Date(p.purchaseDate).toLocaleDateString('en-IN')}
+                      </div>
+                      <div className="text-muted-foreground truncate">Ref: {p.invoiceNumber || '—'}</div>
+                      {locations.isHeadOffice && (
+                        <div className="text-muted-foreground truncate">Loc: {(p as any).locationName ?? 'Head Office'}</div>
+                      )}
+                      <div className="text-muted-foreground">
+                        Tax: {Number((p as any).taxTotal || 0) > 0 ? `₹${fmt(Number((p as any).taxTotal || 0))}` : '—'}
+                      </div>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      <span className="font-mono font-bold text-primary text-sm">₹{fmt(Number(p.totalAmount))}</span>
+                      <div className="flex gap-1">
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(p)}><Eye className="w-4 h-4" /></Button>
+                        {perm.canEdit && (
+                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(p)}><Edit2 className="w-4 h-4" /></Button>
+                        )}
+                        {perm.canDelete && (
+                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => setDeleteTarget(p)}><Trash2 className="w-4 h-4" /></Button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {totalPurchases > 0 && (
             <div className="p-3 border-t border-border flex flex-wrap items-center justify-between gap-2">
               <span className="text-muted-foreground text-xs">
@@ -510,7 +629,7 @@ export default function Purchases() {
 
       {/* ── New / Edit Purchase Bill Dialog ── */}
       <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditingId(null); resetForm(); } }}>
-        <DialogContent className="sm:max-w-6xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-6xl max-h-[90vh] overflow-y-auto" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader>
             <DialogTitle>
               {editingId !== null ? `Edit Purchase Bill #${String(editingId).padStart(4, '0')}` : 'New Purchase Bill'}
@@ -637,7 +756,7 @@ export default function Purchases() {
                 <div className="border border-border rounded-lg overflow-x-auto">
                   {/* One Enter handler for every line input: next field, or Add
                       Line from the row's last field. See handleLineKeyDown. */}
-                  <div className="min-w-[890px]" onKeyDown={handleLineKeyDown}>
+                  <div className="min-w-[890px]" data-kbd-scope onKeyDown={handleLineKeyDown}>
                   <div className="grid gap-2 bg-muted/30 text-xs font-medium text-muted-foreground uppercase tracking-wide px-3 py-2.5" style={{ gridTemplateColumns: PURCHASE_GRID }}>
                     <span>Item Name</span>
                     <span>HSN Code</span>
@@ -656,12 +775,34 @@ export default function Purchases() {
                     );
                     return (
                       <Fragment key={field.id}>
-                      <div className="grid items-center gap-2 px-3 py-2.5 border-t border-border" style={{ gridTemplateColumns: PURCHASE_GRID }}>
+                      <div data-kbd-row={index} className="grid items-center gap-2 px-3 py-2.5 border-t border-border" style={{ gridTemplateColumns: PURCHASE_GRID }}>
                         {/* Item type + item selector combined */}
                         <div className="flex gap-1 min-w-0">
-                          <Select onValueChange={v => form.setValue(`lineItems.${index}.materialType`, v as any)} value={form.watch(`lineItems.${index}.materialType`)}>
-                            <SelectTrigger className="w-[92px] shrink-0 text-xs h-9"><SelectValue /></SelectTrigger>
-                            <SelectContent>
+                          <Select
+                            onValueChange={v => form.setValue(`lineItems.${index}.materialType`, v as any)}
+                            value={form.watch(`lineItems.${index}.materialType`)}
+                          >
+                            <SelectTrigger data-testid={`purchase-line-cat-${index}`} className="w-[92px] shrink-0 text-xs h-9"><SelectValue /></SelectTrigger>
+                            {/* Closing an auto-opened category dropdown moves the
+                                user on to this row's Item picker. Intercepted at
+                                onCloseAutoFocus — Radix's own focus restoration —
+                                because letting it refocus the trigger AFTER we
+                                opened the picker made the picker dismiss itself
+                                (focus-outside). Not onValueChange: re-picking the
+                                already selected category fires no value change. */}
+                            <SelectContent
+                              onCloseAutoFocus={e => {
+                                if (autoAdvanceCatRef.current === `purchase-line-cat-${index}`) {
+                                  autoAdvanceCatRef.current = null;
+                                  e.preventDefault();
+                                  // Deferred one tick: when the close came from
+                                  // Escape, opening the picker synchronously let
+                                  // that same Escape reach the picker's dismiss
+                                  // layer and shut it again.
+                                  setTimeout(() => openItemPicker(document.querySelector<HTMLButtonElement>(`[data-testid="purchase-line-item-${index}"]`)), 0);
+                                }
+                              }}
+                            >
                               <SelectItem value="raw_material">Packing Material</SelectItem>
                               <SelectItem value="material">Raw Material</SelectItem>
                               <SelectItem value="item">Item Name (SKU)</SelectItem>
@@ -674,6 +815,7 @@ export default function Purchases() {
                           <SearchableItemSelect
                             className="h-8 text-xs flex-1 min-w-0"
                             placeholder="Select"
+                            advanceOnSelect
                             data-testid={`purchase-line-item-${index}`}
                             columns={['hsn', 'gst']}
                             items={activeProductsWithSelection(
@@ -716,7 +858,7 @@ export default function Purchases() {
                           expiry-checked without dates, so those stay required;
                           the number is issued by the server when left blank.
                           Fixed columns keep every row's batch fields lined up. */}
-                      <div className="grid items-center gap-2 px-3 py-1.5 bg-emerald-500/[0.03]" style={{ gridTemplateColumns: '44px 220px 36px 150px 50px 150px minmax(0,1fr)' }}>
+                      <div data-kbd-row={index} className="grid items-center gap-2 px-3 py-1.5 bg-emerald-500/[0.03]" style={{ gridTemplateColumns: '44px 220px 36px 150px 50px 150px minmax(0,1fr)' }}>
                         <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Batch</span>
                         <Input className="h-8 text-xs font-mono" placeholder="Auto on save (or vendor lot no.)" {...form.register(`lineItems.${index}.batchNumber`)} />
                         <span className="text-[10px] uppercase tracking-wide text-muted-foreground text-right">

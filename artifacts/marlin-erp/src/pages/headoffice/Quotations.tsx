@@ -8,9 +8,10 @@
  * shows up in GST or the dashboard. "Convert to Sale" opens the Sales Entry
  * form prefilled — only completing THAT sale deducts stock and posts books.
  */
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useLocation } from 'wouter';
 import { SearchableItemSelect, type ItemOption } from '@/components/ui/searchable-item-select';
+import { entryScopeKeyDown, autoFocusFirst, focusAndOpen, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
   usePaginatedQuotations, useCreateQuotation, useUpdateQuotation, useDeleteQuotation,
@@ -282,6 +283,27 @@ export default function Quotations() {
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: defaultFormValues });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
+
+  // ── Keyboard Entry Mode ──
+  const scopeRef = useRef<HTMLFormElement>(null);
+  // Blocks a second submit fired before React Query flips isPending (Ctrl+S race).
+  const submitLockRef = useRef(false);
+  /** Append a line and drop the cursor straight into the new row's item picker. */
+  const kbdAddLine = () => {
+    const nextIndex = fields.length;
+    append({ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false });
+    window.setTimeout(() => {
+      focusAndOpen(scopeRef.current?.querySelector<HTMLElement>(`[data-testid="input-line-item-${nextIndex}"]`));
+    }, 0);
+  };
+  const kbdDeleteLine = (i: number) => { if (fields.length > 1) remove(i); };
+  /** Ctrl+S / Ctrl+Enter → the existing submit, guarded by isPending. */
+  const kbdSave = () => {
+    if (editItem ? updateMutation.isPending : createMutation.isPending) return;
+    form.handleSubmit(onSubmit)();
+  };
+  useEntryShortcuts(isOpen, { onSave: kbdSave, onComplete: kbdSave, onAddLine: kbdAddLine });
+
   const watchLocationType = form.watch('locationType');
   const watchLocationId = form.watch('locationId');
   const watchCustomerId = form.watch('customerId');
@@ -457,6 +479,11 @@ export default function Quotations() {
   const hasItems = fields.some((_, i) => (form.watch(`lineItems.${i}.itemId`) ?? 0) > 0);
 
   const onSubmit = (data: FormValues) => {
+    // Synchronous re-entrancy lock: two rapid Ctrl+S / Enter submits can both
+    // pass an isPending check before React Query publishes the pending state.
+    // Released in onSettled (success or error).
+    if (submitLockRef.current) return;
+    submitLockRef.current = true;
     const enrichedItems = data.lineItems.map(li => ({
       itemId: li.itemId,
       quantity: li.quantity,
@@ -504,6 +531,7 @@ export default function Quotations() {
           }
           toast.error(e?.data?.error || e.message || 'Could not update quotation');
         },
+        onSettled: () => { submitLockRef.current = false; },
       });
     } else {
       createMutation.mutate({ data: payload }, {
@@ -514,6 +542,7 @@ export default function Quotations() {
           form.reset(defaultFormValues);
         },
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Could not save quotation'),
+        onSettled: () => { submitLockRef.current = false; },
       });
     }
   };
@@ -839,11 +868,17 @@ export default function Quotations() {
 
       {/* Quotation Dialog */}
       <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditItem(null); form.reset(defaultFormValues); } }}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader><DialogTitle>{editItem ? `Edit Quotation — ${editItem.quotationNumber}` : 'New Quotation'}</DialogTitle></DialogHeader>
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
-              <div className="grid grid-cols-2 gap-4">
+            <form
+              ref={scopeRef}
+              data-kbd-scope
+              onKeyDown={entryScopeKeyDown({ onSave: kbdSave, onComplete: kbdSave, onAddLine: kbdAddLine, onDeleteLine: kbdDeleteLine })}
+              onSubmit={form.handleSubmit(onSubmit)}
+              className="space-y-5"
+            >
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <FormField control={form.control} name="locationId" render={({ field }) => (
                   <FormItem><FormLabel>Selling Location <span className="text-destructive">*</span></FormLabel>
                     <Select
@@ -898,7 +933,7 @@ export default function Quotations() {
                             <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent align="start" className="p-0" style={{ width: 'var(--radix-popover-trigger-width)', minWidth: '240px' }}>
+                        <PopoverContent align="start" className="p-0" style={{ width: 'var(--radix-popover-trigger-width)', minWidth: '240px' }} data-kbd-ignore>
                           <Command shouldFilter={false}>
                             <CommandInput placeholder="Search customer…" value={customerSearch} onValueChange={setCustomerSearch} />
                             <CommandEmpty>No customers found. <button type="button" className="text-primary underline ml-1" onClick={() => { setCustomerOpen(false); custForm.reset(); custForm.setValue('name', customerSearch); setCustomerSearch(''); setShowNewCustomer(true); }}>Create "{customerSearch}"?</button></CommandEmpty>
@@ -1026,7 +1061,7 @@ export default function Quotations() {
                         <Plus className="w-3 h-3 mr-1" /> Add Item
                       </Button>
                     </div>
-                    <div className="space-y-2">
+                    <div className="overflow-x-auto"><div className="min-w-[720px] space-y-2">
                       {fields.map((field, index) => {
                         const itemId   = form.watch(`lineItems.${index}.itemId`);
                         const qty      = form.watch(`lineItems.${index}.quantity`);
@@ -1040,13 +1075,15 @@ export default function Quotations() {
                         const available = stockMap.get(Number(itemId)) ?? 0;
 
                         return (
-                          <div key={field.id} className="p-3 bg-muted/20 rounded-lg border border-border space-y-2">
+                          <div key={field.id} data-kbd-row={index} className="p-3 bg-muted/20 rounded-lg border border-border space-y-2">
                             <FormField control={form.control} name={`lineItems.${index}.itemId`} render={({ field: f }) => (
                               <FormItem>
                                 <FormLabel className="text-xs">Item</FormLabel>
                                 <FormControl><SearchableItemSelect
                                   className="h-8 text-xs"
                                   columns={['available', 'mrp', 'gst']}
+                                  advanceOnSelect
+                                  data-testid={`input-line-item-${index}`}
                                   items={lineItemOptions(Number(f.value))}
                                   value={f.value}
                                   onChange={id => {
@@ -1062,7 +1099,7 @@ export default function Quotations() {
                                 <FormField control={form.control} name={`lineItems.${index}.quantity`} render={({ field: f }) => (
                                   <FormItem>
                                     <FormLabel className="text-xs">Qty</FormLabel>
-                                    <FormControl><Input type="number" min={1} className="h-8 text-xs" {...f} /></FormControl>
+                                    <FormControl><Input type="number" min={1} className="h-8 text-xs" data-last-field={!discountsEnabled && index === fields.length - 1 ? "1" : undefined} {...f} /></FormControl>
                                   </FormItem>
                                 )} />
                                 {itemId > 0 && qty > available && (
@@ -1125,6 +1162,7 @@ export default function Quotations() {
                                         disabled={!itemId || unitPrice <= 0}
                                         placeholder="0"
                                         className="h-8 text-xs"
+                                        data-last-field={index === fields.length - 1 ? '1' : undefined}
                                         {...f}
                                         value={(f.value as any) ?? ''}
                                       />
@@ -1164,13 +1202,13 @@ export default function Quotations() {
                                 )}
                               </div>
                               <div className="col-span-1 pb-0.5 flex justify-end">
-                                <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
+                                <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-7 w-7 text-destructive" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
                               </div>
                             </div>
                           </div>
                         );
                       })}
-                    </div>
+                    </div></div>
                   </>
                 )}
               </div>
@@ -1312,7 +1350,7 @@ export default function Quotations() {
               <FormField control={custForm.control} name="name" render={({ field }) => (
                 <FormItem><FormLabel>Name <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="Full name / company name" {...field} /></FormControl><FormMessage /></FormItem>
               )} />
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={custForm.control} name="phone" render={({ field }) => (
                   <FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
                 )} />
@@ -1400,7 +1438,7 @@ export default function Quotations() {
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {[
                   ['Customer', viewItem.customerName || 'Walk-in'],
                   ['Valid Till', fmtDay(viewItem.validTill)],
@@ -1417,7 +1455,7 @@ export default function Quotations() {
               </div>
 
               {(viewItem.billingAddress || viewItem.shippingAddress) && (
-                <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                   {viewItem.billingAddress && (
                     <div>
                       <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Billing Address</p>
@@ -1542,7 +1580,7 @@ export default function Quotations() {
                   onShareWhatsApp={() => handleWhatsApp(viewItem)}
                 />
                 {perm.canDownload && (
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     <Button variant="outline" onClick={() => void handlePreviewPDF(viewItem)}>
                       <Eye className="w-4 h-4 mr-2" /> Preview
                     </Button>

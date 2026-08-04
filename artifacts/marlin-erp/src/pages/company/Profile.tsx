@@ -318,7 +318,7 @@ export default function Profile() {
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
               <Section title="Basic Information">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <FormField control={form.control} name="name" render={({ field }) => (
                     <FormItem className="col-span-2"><FormLabel>Company Name <span className="text-destructive">*</span></FormLabel><FormControl><Input {...field} className="text-base font-semibold" /></FormControl><FormMessage /></FormItem>
                   )} />
@@ -332,7 +332,7 @@ export default function Profile() {
               </Section>
 
               <Section title="Contact &amp; Location">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <FormField control={form.control} name="phone" render={({ field }) => (
                     <FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
                   )} />
@@ -364,7 +364,7 @@ export default function Profile() {
                 <p className="text-xs text-muted-foreground -mt-1 mb-3">
                   Printed on invoices that still carry a balance, so a customer can pay by transfer.
                 </p>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <FormField control={form.control} name="bankAccountHolder" render={({ field }) => (
                     <FormItem><FormLabel>Account Holder</FormLabel><FormControl><Input placeholder="As per bank records" {...field} value={field.value ?? ''} /></FormControl></FormItem>
                   )} />
@@ -451,7 +451,7 @@ export default function Profile() {
               </Section>
 
               <Section title="Invoice & Financial Settings">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <FormField control={form.control} name="invoicePrefix" render={({ field }) => (
                     <FormItem>
                       <FormLabel>Invoice Prefix</FormLabel>

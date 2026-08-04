@@ -1,0 +1,350 @@
+TASK: Upgrade the ERP Import Module to support real-world historical data migration from legacy ERP systems.
+
+The current Import module is too strict and requires unnecessary manual corrections before importing. The import process should behave exactly like manual entry in the ERP and intelligently handle common data formats exported from legacy ERP systems.
+
+====================================================================
+1. INVOICE GROUPING
+====================================================================
+
+Currently, if rows belonging to the same invoice are not consecutive, the import fails.
+
+Example:
+
+Invoice 001
+Item A
+
+Invoice 002
+Item A
+
+Invoice 001
+Item B
+
+The importer reports:
+
+"Invoice already appeared earlier."
+
+This should be changed.
+
+Required:
+
+• Group rows by Invoice Number internally before validation.
+• The order of rows in Excel should not matter.
+• All rows having the same Invoice Number should be treated as one invoice.
+• Preserve the original invoice date and customer.
+• Show a warning only if conflicting information exists (different customer, different date, different location for the same invoice).
+
+====================================================================
+2. PRICE BELOW MRP
+====================================================================
+
+The import should follow the same logic as the POS.
+
+Business Rule:
+
+MRP can never decrease.
+
+If imported selling price is lower than Item Master MRP:
+
+Example
+
+Item Master MRP = ₹280
+
+Imported Price = ₹250
+
+Automatically convert to:
+
+MRP = ₹280
+
+Discount = ₹30 per unit
+
+Effective Selling Price = ₹250
+
+Do NOT reject the invoice.
+
+If imported price is higher than MRP:
+
+Example
+
+MRP = ₹280
+
+Imported Price = ₹300
+
+Update selling price to ₹300
+
+Discount = ₹0
+
+This should behave exactly like manual Sales Entry.
+
+====================================================================
+3. CUSTOMER HANDLING
+====================================================================
+
+Currently blank customers generate validation errors.
+
+Instead:
+
+If Customer Name is blank
+
+Use the configured default Walk-in Customer.
+
+If Walk-in Customer does not exist
+
+Ask user:
+
+Create Walk-in Customer?
+
+YES / NO
+
+If NO
+
+Show validation error.
+
+If Customer does not exist
+
+Ask
+
+Create Customer?
+
+Map Existing Customer?
+
+Continue Import.
+
+====================================================================
+4. UNIT PRICE VS LINE TOTAL
+====================================================================
+
+Many old ERP exports store:
+
+Qty
+
+Line Total
+
+instead of
+
+Qty
+
+Unit Price
+
+Importer should automatically detect this.
+
+Example
+
+Qty = 2
+
+Price Column = ₹760
+
+If Unit Price × Qty does not match
+
+Assume this is Line Total.
+
+Automatically calculate:
+
+Unit Price = 760 / 2 = 380
+
+Use ₹380 for calculations.
+
+Add a preview warning:
+
+"Line Total detected. Unit Price calculated automatically."
+
+====================================================================
+5. GST CALCULATION
+====================================================================
+
+Never ask user to enter:
+
+CGST
+
+SGST
+
+IGST
+
+Taxable Value
+
+GST Amount
+
+Tax Ledger
+
+Read everything from Item Master.
+
+Use the same GST calculation engine used by manual Sales and Purchase.
+
+Imported invoices and manually created invoices must produce identical accounting entries.
+
+====================================================================
+6. IMPORT PREVIEW
+====================================================================
+
+Before importing show:
+
+Invoices
+
+Rows
+
+Customers
+
+Items
+
+Total Quantity
+
+Taxable Value
+
+GST
+
+Grand Total
+
+Warnings
+
+Errors
+
+Also show:
+
+Customers to Create
+
+Vendors to Create
+
+Ledgers to Create
+
+====================================================================
+7. SMART VALIDATIONS
+====================================================================
+
+Warnings should NOT stop import.
+
+Examples:
+
+Customer created automatically.
+
+Price below MRP converted into Discount.
+
+Line Total converted into Unit Price.
+
+Blank Narration.
+
+Blank Reference.
+
+Errors should stop import.
+
+Examples:
+
+Item not found.
+
+Negative Quantity.
+
+Invalid Date.
+
+Invalid Location.
+
+Duplicate Invoice with conflicting customer/date/location.
+
+====================================================================
+8. ERROR FILE
+====================================================================
+
+Generate an Excel containing only failed rows.
+
+Add columns:
+
+Error Reason
+
+Suggested Fix
+
+Validation Type
+
+====================================================================
+9. IMPORT SETTINGS
+====================================================================
+
+Company → Import Settings
+
+Add options:
+
+✓ Automatically create missing Customers
+
+✓ Automatically create missing Vendors
+
+✓ Automatically create missing Ledgers
+
+✓ Automatically use Walk-in Customer when Customer is blank
+
+✓ Automatically convert Selling Price below MRP into Discount
+
+✓ Automatically detect Line Total and calculate Unit Price
+
+These options should be configurable.
+
+====================================================================
+10. IDENTICAL TO MANUAL ENTRY
+====================================================================
+
+The import module must use the exact same services used by:
+
+Sales Entry
+
+Purchase Entry
+
+Receipt Entry
+
+Payment Entry
+
+Do not create a separate accounting engine.
+
+The resulting:
+
+Stock
+
+GST
+
+Journal
+
+Customer Ledger
+
+Vendor Ledger
+
+Receivable
+
+Payable
+
+Trial Balance
+
+Balance Sheet
+
+Profit & Loss
+
+Dashboard
+
+must be identical to manual ERP entry.
+
+====================================================================
+11. FINAL VALIDATION
+====================================================================
+
+Test using historical data exported from another ERP.
+
+Verify:
+
+✓ Rows with same invoice grouped correctly.
+
+✓ Price below MRP converted into Discount.
+
+✓ Blank customer mapped to Walk-in Customer.
+
+✓ Line Total converted into Unit Price.
+
+✓ GST calculated automatically.
+
+✓ Accounting entries match manual sales.
+
+✓ Inventory matches manual sales.
+
+✓ Trial Balance remains balanced.
+
+✓ Balance Sheet remains balanced.
+
+✓ Profit & Loss remains identical.
+
+✓ Customer Outstanding is correct.
+
+✓ Dashboard updates correctly.
+
+The goal is to make the Import module production-grade, user-friendly, and capable of importing historical data from legacy ERP systems with minimal manual correction while preserving complete accounting integrity.

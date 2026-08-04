@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -7,6 +7,7 @@ import { customFetch, useListOutlets, useListWarehouses, useDeleteLocationExpens
 import { usePermission } from '@/lib/usePermission';
 import { useOutletsEnabled } from '@/lib/useFeatureFlags';
 import { AccountCombobox } from '@/components/ui/account-combobox';
+import { entryScopeKeyDown, autoFocusFirst, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { downloadPDFFromEndpoint } from '@/lib/download';
 import { Receipt, Plus, Calendar, Wallet, AlertCircle, Layers, Trash2, Loader2, ShieldOff, AlertTriangle, Printer, Paperclip, Landmark, Clock } from 'lucide-react';
 import {
@@ -95,6 +96,7 @@ export default function SalesExpenses() {
   const queryClient = useQueryClient();
   const [isOpen, setIsOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const scopeRef = useRef<HTMLFormElement>(null);
   const perm = usePermission('page:/sales/expenses');
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
   const deleteMutation = useDeleteLocationExpense();
@@ -263,6 +265,17 @@ export default function SalesExpenses() {
     form.reset({ ...blankForm, location: defaultLocationKey });
     setIsOpen(true);
   };
+
+  // ── Keyboard Entry Mode ──
+  const save = () => {
+    if (submitting || overBalance || (watchMode === 'cash' && hasKnownCash && formAvailableCash <= 0)) return;
+    form.handleSubmit(onSubmit, (errors) => {
+      const first = ['location', 'paymentMode', 'paymentAccountId', 'expenseLedgerId', 'description', 'amount', 'expenseDate']
+        .find(f => (errors as any)[f]);
+      if (first) focusField(first, scopeRef.current);
+    })();
+  };
+  useEntryShortcuts(isOpen, { onSave: save });
 
   const onSubmit = async (data: FormValues) => {
     const [locType, locIdRaw] = data.location.split(':');
@@ -639,7 +652,7 @@ export default function SalesExpenses() {
       {/* Add Expense — reachable from any view; the form picks the location. */}
       {locationOptions.length > 0 && (
         <Dialog open={isOpen} onOpenChange={setIsOpen}>
-          <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
+          <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto" onOpenAutoFocus={autoFocusFirst}>
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <Receipt className="w-5 h-5 text-primary" /> Record Expense
@@ -650,7 +663,13 @@ export default function SalesExpenses() {
             </DialogHeader>
 
             <Form {...form}>
-              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
+              <form
+                ref={scopeRef}
+                data-kbd-scope
+                onKeyDown={entryScopeKeyDown({ onSave: save })}
+                onSubmit={form.handleSubmit(onSubmit)}
+                className="space-y-4 pt-2"
+              >
 
                 {/* Location — defaults to the page's location, but editable so
                     the All-locations view can record an expense too. */}
@@ -658,7 +677,7 @@ export default function SalesExpenses() {
                   <FormItem>
                     <FormLabel>Location <span className="text-destructive">*</span></FormLabel>
                     <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger></FormControl>
+                      <FormControl><SelectTrigger data-field="location"><SelectValue placeholder="Select location" /></SelectTrigger></FormControl>
                       <SelectContent>
                         {locationOptions.map(o => (
                           <SelectItem key={o.key} value={o.key}>
@@ -773,13 +792,13 @@ export default function SalesExpenses() {
                   <FormItem>
                     <FormLabel>Description <span className="text-destructive">*</span></FormLabel>
                     <FormControl>
-                      <Textarea rows={2} placeholder="e.g. Electricity bill July, Freight charges" {...field} />
+                      <Textarea rows={2} placeholder="e.g. Electricity bill July, Freight charges" data-field="description" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
                 )} />
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <FormField control={form.control} name="amount" render={({ field }) => (
                     <FormItem>
                       <FormLabel>Amount ₹ <span className="text-destructive">*</span></FormLabel>
@@ -788,6 +807,7 @@ export default function SalesExpenses() {
                           type="number" step="0.01" min={0.01}
                           max={watchMode === 'cash' && formAvailableCash > 0 ? formAvailableCash : undefined}
                           className={overBalance ? 'border-destructive focus-visible:ring-destructive' : ''}
+                          data-field="amount"
                           {...field}
                         />
                       </FormControl>
@@ -807,7 +827,7 @@ export default function SalesExpenses() {
                   <FormField control={form.control} name="expenseDate" render={({ field }) => (
                     <FormItem>
                       <FormLabel>Date</FormLabel>
-                      <FormControl><Input type="date" {...field} /></FormControl>
+                      <FormControl><Input type="date" data-field="expenseDate" {...field} /></FormControl>
                       <FormMessage />
                     </FormItem>
                   )} />

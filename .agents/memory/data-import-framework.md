@@ -84,9 +84,39 @@ Rules that must hold for every import type, and why:
 - **Process documents in FILE order, never re-sorted.** Weighted-average cost
   depends on entry order; the preview warns that backdated bills affect avg
   cost in the order they appear.
-- **Grouping is consecutive-rows-only** (same invoice+date+party); the same
-  key reappearing later in the file is an error, not a merge — silent merging
-  would hide row-ordering mistakes in the source export.
+- **Grouping is ORDER-INDEPENDENT by invoice number alone** (owner REVERSED
+  the earlier consecutive-rows rule, Aug 2026 — legacy exports scatter an
+  invoice's rows). Key = lowercased invoice number; blank invoice = singleton
+  doc; doc order = first appearance (preserves file-order avg cost). Blank
+  Date/Customer on repeat rows INHERIT the group's first non-blank value;
+  a CONFLICTING non-blank date or party on one invoice errors the offending
+  row; other doc-level cells = first non-blank, later differing non-blank =
+  warning (narration: silent).
+- **Five forgiving-import settings in `company_settings.general_settings`**,
+  read `!== false` (default ON), surfaced under Company Settings → Data
+  Import: `importAutoCreateCustomers`, `importAutoCreateVendors`,
+  `importAutoWalkInCustomer`, `importMrpToDiscount`, `importDetectLineTotal`.
+  MRP gate: toggle OFF turns the POS-style conversion into a row ERROR.
+- **Walk-in sales:** blank customer + effective mode ≠ credit + toggle ON →
+  `norm.walkIn`, commits with `customer_id NULL` and a B2C number (POS
+  convention — there is NO "Walk-in" customer master). Blank + credit is
+  always an error; vendors are always required.
+- **Auto-create at commit (sales/purchases only):** unknown named party +
+  toggle ON → validation stamps `head.norm.createParty {name,gst}` (warning);
+  commit's `ensureParty` creates once per distinct lower(name) via the
+  createXWithLedger path under a **pg_advisory_lock on the normalised name**
+  (bare check-then-create duplicated masters across concurrent batches).
+  Like resolve-step parties they are PERMANENT masters — notes-marked
+  `Created automatically during import batch #<id>`, never batch-stamped,
+  never rolled back. Voucher imports still resolve-step only.
+- **Line Total column (toggle-gated):** blank price → derived from lt÷qty,
+  BUT with a row discount the derived figure must be the GROSS one (sales:
+  lt/qty + unitDiscount; purchases: (lt/qty)/(1−pct)) — the pricing engine
+  applies the discount again, so deriving net and re-discounting understates
+  money (review catch). Price≈lt with qty>1 unpacks to lt/qty ONLY when
+  discount = 0 (ambiguous otherwise); mismatches warn and the Price column
+  wins. Summary adds distinctParties/distinctItems/walkInInvoices/
+  partiesToCreate; rows carry willCreateParty/walkIn.
 - **`needs_party` is its own row status** (counted as error for commit
   gating); resolve-parties creates missing customers/vendors through the
   standard creation path (ledgers auto-provision) and then re-runs the whole

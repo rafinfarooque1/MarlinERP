@@ -185,7 +185,7 @@ export default function Items() {
               <FormField control={form.control} name="name" render={({ field }) => (
                 <FormItem><FormLabel>Product Name <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="e.g. Frozen Alphonso Mango 250g" {...field} /></FormControl><FormMessage /></FormItem>
               )} />
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <FormField control={form.control} name="hsnCode" render={({ field }) => (
                   <FormItem><FormLabel>HSN Code <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="08119000" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />

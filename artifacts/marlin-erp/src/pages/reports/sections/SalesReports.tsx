@@ -117,7 +117,8 @@ function HierarchicalLocationTable({
   const hdrCls = 'text-xs font-medium text-muted-foreground uppercase tracking-wide';
 
   return (
-    <div className="border border-border rounded-lg overflow-hidden text-sm">
+    <div className="border border-border rounded-lg overflow-x-auto text-sm">
+      <div className="min-w-[720px]">
       {/* ── Column headers ── */}
       <div className={`grid ${compact ? 'grid-cols-12' : 'grid-cols-12'} bg-muted/50 px-3 py-2 border-b border-border ${hdrCls}`}>
         <span className="col-span-4">Location</span>
@@ -230,6 +231,7 @@ function HierarchicalLocationTable({
           )}
         </div>
       ))}
+      </div>
     </div>
   );
 }
@@ -591,13 +593,15 @@ function ByLocationReport({ range, canDownload }: { range: RangeState; canDownlo
 
       {/* Grand total footer */}
       {!isLoading && rows.length > 0 && (
-        <div className="grid grid-cols-12 px-3 py-2.5 bg-muted/60 border border-border rounded-lg text-sm font-bold">
-          <span className="col-span-4">GRAND TOTAL</span>
-          <span className="col-span-2" />
-          <span className="col-span-2 text-center">{t?.invoices ?? 0}</span>
-          <span className="col-span-2 text-right">{fmt(t?.taxable)}</span>
-          <span className="col-span-1 text-right">{fmt(t?.tax)}</span>
-          <span className="col-span-1 text-right text-primary">{fmt(t?.total)}</span>
+        <div className="overflow-x-auto">
+          <div className="grid grid-cols-12 min-w-[720px] px-3 py-2.5 bg-muted/60 border border-border rounded-lg text-sm font-bold">
+            <span className="col-span-4">GRAND TOTAL</span>
+            <span className="col-span-2" />
+            <span className="col-span-2 text-center">{t?.invoices ?? 0}</span>
+            <span className="col-span-2 text-right">{fmt(t?.taxable)}</span>
+            <span className="col-span-1 text-right">{fmt(t?.tax)}</span>
+            <span className="col-span-1 text-right text-primary">{fmt(t?.total)}</span>
+          </div>
         </div>
       )}
     </div>

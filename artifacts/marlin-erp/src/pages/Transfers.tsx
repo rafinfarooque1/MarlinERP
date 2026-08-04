@@ -8,7 +8,7 @@
  * Branch employees (warehouse / outlet) — server already scopes the list to
  *   their branch; "From" is locked to their location in the create form.
  */
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { SearchableItemSelect } from '@/components/ui/searchable-item-select';
 import {
   useListStockTransfers, useCreateStockTransfer,
@@ -48,6 +48,7 @@ import { downloadCSV, downloadPDFFromEndpoint } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LocationFilter, parseLocationFilter } from '@/components/ui/LocationFilter';
+import { autoFocusFirst, entryScopeKeyDown, useEntryShortcuts } from '@/lib/keyboard-entry';
 
 // ── Form schema ───────────────────────────────────────────────────────────────
 const schema = z.object({
@@ -248,7 +249,7 @@ function ApproveDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid grid-cols-2 gap-3 p-4 bg-muted/20 rounded-lg border border-border text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 bg-muted/20 rounded-lg border border-border text-sm">
             <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Challan</p>
               <p className="font-mono font-bold text-primary">{transfer.challanNumber}</p></div>
             <div><p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Date</p>
@@ -571,6 +572,55 @@ export default function Transfers() {
     setIsOpen(true);
   };
 
+  // ── Keyboard Entry Mode ──
+  const scopeRef = useRef<HTMLFormElement>(null);
+
+  /** Radix <Select> triggers open on pointerdown, not click (copied from
+   *  Purchases.openCategorySelect). Popover pickers open with a plain click. */
+  const openCategorySelect = (el?: HTMLButtonElement | null): boolean => {
+    if (!el) return false;
+    el.focus();
+    const isOpen = () => el.getAttribute('aria-expanded') === 'true';
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, pointerType: 'mouse' }));
+    if (isOpen()) return true;
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+    if (isOpen()) return true;
+    el.click();
+    return isOpen();
+  };
+
+  /** Append a line, then drop focus on the new row's first picker: the Category
+   *  <Select> (Head Office source, where the type column shows) or, when it is
+   *  hidden, the Item picker. setTimeout(0) lets React commit the new row. */
+  const addLineKbd = () => {
+    append({ materialType: 'item' as const, itemId: 0, quantity: 1 });
+    setTimeout(() => {
+      const scope = scopeRef.current;
+      if (!scope) return;
+      if (isFromHO) {
+        const cats = scope.querySelectorAll<HTMLButtonElement>('[data-testid^="transfer-line-cat-"]');
+        openCategorySelect(cats[cats.length - 1]);
+      } else {
+        const items = scope.querySelectorAll<HTMLButtonElement>('[data-testid^="transfer-line-item-"]');
+        const el = items[items.length - 1];
+        if (el) { el.focus(); el.click(); }
+      }
+    }, 0);
+  };
+
+  const deleteLine = (i: number) => {
+    if (fields.length <= 1) return; // a transfer needs at least one line
+    removeLine(i);
+  };
+
+  const submitCreate = () => {
+    if (createMutation.isPending) return;
+    form.handleSubmit(onSubmit)();
+  };
+
+  // Catch Ctrl+S / Ctrl+Enter / F4 even when focus wandered outside the form.
+  useEntryShortcuts(isOpen, { onSave: submitCreate, onAddLine: addLineKbd });
+
   const onSubmit = (data: FormValues) => {
     const lineItems = data.lineItems.map((li, i) => {
       const ov = (overrides[i] ?? []).filter(o => Number(o.quantity) > 0);
@@ -833,7 +883,7 @@ export default function Transfers() {
             <div className="mt-6 space-y-4 text-sm">
               <div className="flex justify-center"><StatusBadge status={viewItem.status} /></div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {[
                   ['Date',  new Date(viewItem.transferDate).toLocaleDateString('en-IN')],
                   ['From',  `${viewItem.fromName} (${viewItem.fromType})`],
@@ -936,7 +986,7 @@ export default function Transfers() {
 
       {/* ── New Transfer dialog ── */}
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader>
             <DialogTitle>Create Transfer</DialogTitle>
             <DialogDescription>
@@ -945,9 +995,15 @@ export default function Transfers() {
           </DialogHeader>
 
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
+            <form
+              ref={scopeRef}
+              data-kbd-scope
+              onKeyDown={entryScopeKeyDown({ onSave: submitCreate, onAddLine: addLineKbd, onDeleteLine: deleteLine })}
+              onSubmit={form.handleSubmit(onSubmit)}
+              className="space-y-5"
+            >
               {/* From / To */}
-              <div className="grid grid-cols-2 gap-4 p-4 bg-muted/20 rounded-lg border border-border">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-muted/20 rounded-lg border border-border">
                 {/* ── FROM ── */}
                 <div className="space-y-3">
                   <p className="text-xs font-semibold uppercase text-muted-foreground tracking-wider">From</p>
@@ -1059,7 +1115,7 @@ export default function Transfers() {
                         <Plus className="w-3 h-3 mr-1" /> Add Line
                       </Button>
                     </div>
-                    <div className="space-y-2">
+                    <div className="overflow-x-auto"><div className="min-w-[560px] space-y-2">
                       {fields.map((field, i) => {
                         const selMatType  = (form.watch(`lineItems.${i}.materialType`) ?? 'item') as 'item' | 'material' | 'raw_material';
                         const selItemId   = form.watch(`lineItems.${i}.itemId`);
@@ -1070,7 +1126,7 @@ export default function Transfers() {
 
                         return (
                           <div key={field.id}>
-                            <div className={`grid gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border ${isFromHO ? 'grid-cols-11' : 'grid-cols-8'}`}>
+                            <div data-kbd-row={i} className={`grid gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border ${isFromHO ? 'grid-cols-11' : 'grid-cols-8'}`}>
                               {isFromHO && (
                                 <div className="col-span-3">
                                   <FormField control={form.control} name={`lineItems.${i}.materialType`} render={({ field: f }) => (
@@ -1081,7 +1137,7 @@ export default function Transfers() {
                                         form.setValue(`lineItems.${i}.itemId`, 0 as any);
                                         setOverrides(prev => ({ ...prev, [i]: undefined }));
                                       }}>
-                                        <FormControl><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger></FormControl>
+                                        <FormControl><SelectTrigger data-testid={`transfer-line-cat-${i}`} className="h-8 text-xs"><SelectValue /></SelectTrigger></FormControl>
                                         <SelectContent>
                                           <SelectItem value="item">Item (SKU)</SelectItem>
                                           <SelectItem value="material">Raw Material</SelectItem>
@@ -1102,6 +1158,8 @@ export default function Transfers() {
                                     <FormControl><SearchableItemSelect
                                       className="h-8 text-xs"
                                       placeholder="Select"
+                                      advanceOnSelect
+                                      data-testid={`transfer-line-item-${i}`}
                                       columns={['available']}
                                       items={typeFiltered.map(it => ({
                                         id: it.id,
@@ -1125,32 +1183,36 @@ export default function Transfers() {
                                       Qty {selItemId > 0 && <span className="text-muted-foreground">(max {availQty})</span>}
                                     </FormLabel>
                                     <FormControl>
-                                      <Input type="number" min={1} max={selItemId > 0 ? availQty : undefined} className="h-8 text-xs" {...f} />
+                                      <Input type="number" min={1} max={selItemId > 0 ? availQty : undefined} className="h-8 text-xs"
+                                        data-last-field={i === fields.length - 1 ? '1' : undefined} {...f} />
                                     </FormControl>
                                   </FormItem>
                                 )} />
                               </div>
                               <div className="col-span-1 pb-1 flex justify-end">
-                                <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive"
+                                <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-7 w-7 text-destructive"
                                   onClick={() => removeLine(i)} disabled={fields.length === 1}>
                                   <Trash2 className="w-3 h-3" />
                                 </Button>
                               </div>
-                              {/* FEFO batch picker — HO source, SKU items only */}
+                              {/* FEFO batch picker — HO source, SKU items only. Left out of the
+                                  Enter-walk / Delete-line machinery entirely. */}
                               {isFromHO && selMatType === 'item' && selItemId > 0 && selQty > 0 && (
-                                <BatchPicker
-                                  itemId={selItemId} quantity={selQty}
-                                  unit={allItemsMap.get(`item:${selItemId}`)?.unit}
-                                  fromType="headoffice" fromId={1}
-                                  override={overrides[i]}
-                                  onChange={v => setOverrides(prev => ({ ...prev, [i]: v }))}
-                                />
+                                <div data-kbd-ignore className="contents">
+                                  <BatchPicker
+                                    itemId={selItemId} quantity={selQty}
+                                    unit={allItemsMap.get(`item:${selItemId}`)?.unit}
+                                    fromType="headoffice" fromId={1}
+                                    override={overrides[i]}
+                                    onChange={v => setOverrides(prev => ({ ...prev, [i]: v }))}
+                                  />
+                                </div>
                               )}
                             </div>
                           </div>
                         );
                       })}
-                    </div>
+                    </div></div>
                   </>
                 )}
               </div>

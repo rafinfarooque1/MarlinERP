@@ -336,7 +336,7 @@ export default function AssetRegister() {
             <DialogTitle>Edit Asset — {editTarget?.assetCode}</DialogTitle>
             <DialogDescription>Money figures are fixed at purchase time (a voucher was posted from them); descriptive details can change.</DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-4 pt-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Category</label>
               <Select value={edit.categoryId} onValueChange={v => setEdit(s => ({ ...s, categoryId: v }))}>

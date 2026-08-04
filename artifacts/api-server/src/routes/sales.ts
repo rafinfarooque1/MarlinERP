@@ -997,7 +997,10 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
       );
       saleIsB2B = cgst?.gstin != null;
     }
-    invoiceNumber = await nextSalesInvoiceNumber(txClient, saleIsB2B ? 'b2b' : 'b2c', parsed.data.saleDate);
+    invoiceNumber = await nextSalesInvoiceNumber(
+      txClient, saleIsB2B ? 'b2b' : 'b2c', parsed.data.saleDate,
+      { type: locationType, id: locationId }
+    );
 
     // ── Insert sale with location columns via raw SQL (location_type/location_id not in Drizzle schema) ──
     // Counter-settled modes are recorded fully paid; credit sales start unpaid.
@@ -1669,8 +1672,19 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
     //    so the cash and bank books drifted away from the sales register with
     //    nothing to show why. The old receipt for this invoice is withdrawn and
     //    the current one written in its place, in the same transaction.
+    //    Numbers are only unique PER LOCATION, so the delete may not key on the
+    //    text alone — the same number at another location would lose its
+    //    receipt too. When the number is shared, require the receipt to carry
+    //    this sale's stored location; when it is unique (all legacy rows,
+    //    whose receipts may predate location stamping), the number suffices.
     await editTx.query(
-      `DELETE FROM receipts WHERE voucher_number = $1`, [existingRaw.invoice_number]
+      `DELETE FROM receipts r
+        WHERE r.voucher_number = $1
+          AND (NOT EXISTS (SELECT 1 FROM sales s2 WHERE s2.invoice_number = $1 AND s2.id <> $2)
+               OR (r.location_type = $3 AND COALESCE(r.location_id, 0) = $4))`,
+      [existingRaw.invoice_number, id,
+       existingRaw.location_type ?? 'outlet',
+       Number(existingRaw.location_id ?? existingRaw.outlet_id ?? 0)]
     );
     if (editSalesLedgerId) {
       let debitLedgerId = editCashLedgerId;
@@ -1892,7 +1906,17 @@ router.post("/sales/:id/cancel", requireModuleAction("page:/sales/pos", "delete"
 
     // Withdraw the cash-book side. The derived postings drop the revenue, the
     // output GST and the debtor leg on their own once `cancelled_at` is set.
-    await tx.query(`DELETE FROM receipts WHERE voucher_number = $1`, [sale.invoice_number]);
+    // Numbers are unique per location only — when another location shares this
+    // number, the delete must also match this sale's location or it would
+    // withdraw the twin's receipt. Unique numbers (all legacy rows) keep the
+    // plain text match, since their receipts may predate location stamping.
+    await tx.query(
+      `DELETE FROM receipts r
+        WHERE r.voucher_number = $1
+          AND (NOT EXISTS (SELECT 1 FROM sales s2 WHERE s2.invoice_number = $1 AND s2.id <> $2)
+               OR (r.location_type = $3 AND COALESCE(r.location_id, 0) = $4))`,
+      [sale.invoice_number, id, locType, Number(locId ?? 0)]
+    );
 
     await tx.query(`UPDATE sales SET cancelled_at = now() WHERE id = $1`, [id]);
 

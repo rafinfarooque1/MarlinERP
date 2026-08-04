@@ -164,7 +164,8 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
       { key: "item", header: "Item", required: true, example: "Frozen Mango Chunks 1kg", hint: "Must already exist in the Item Master — this import never creates items", aliases: ["item", "itemname", "product", "productname", "description", "particulars", "goods"] },
       { key: "quantity", header: "Qty", required: true, example: 10, hint: "Quantity sold (decimals allowed)", aliases: ["qty", "quantity", "nos", "pcs", "qtysold"] },
       { key: "unit", header: "Unit", example: "pcs", hint: "Optional — blank uses the Item Master unit; a different unit is warned on", aliases: ["unit", "uom", "units"] },
-      { key: "price", header: "Price", required: true, example: 250, hint: "Per-unit selling price INCLUDING GST (the MRP / selling price), exactly like manual sale entry — GST is worked out from the Item Master rate", aliases: ["price", "rate", "unitprice", "saleprice", "priceperunit", "sellingprice", "mrp"] },
+      { key: "price", header: "Price", required: true, example: 250, hint: "Per-unit selling price INCLUDING GST (the MRP / selling price), exactly like manual sale entry — GST is worked out from the Item Master rate. May be left blank when a Line Total is given", aliases: ["price", "rate", "unitprice", "saleprice", "priceperunit", "sellingprice", "mrp"] },
+      { key: "lineTotal", header: "Line Total", example: "", hint: "Optional — the line's total ₹ (Qty × Price). When Price is blank the unit price is worked out as Line Total ÷ Qty; when both are given they are cross-checked", aliases: ["linetotal", "lineamount", "amount", "total", "totalamount", "netamount", "grossamount", "value", "linevalue", "rowtotal", "itemtotal", "amountrs"] },
       { key: "discount", header: "Discount", example: 0, hint: "₹ discount PER UNIT (blank = 0), like manual sale entry", aliases: ["discount", "discountamount", "less", "itemdiscount", "linediscount", "unitdiscount", "discountperunit"] },
       { key: "gstRate", header: "GST %", hidden: true, example: 5, hint: "Cross-check only — the recorded GST always comes from the Item Master rate", aliases: ["gst", "gstrate", "gstpercent", "gstpercentage", "taxrate", "tax"] },
       { key: "cgst", header: "CGST", hidden: true, example: 125, hint: "Cross-check only", aliases: ["cgst", "cgstamount"] },
@@ -189,7 +190,8 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
       { key: "item", header: "Item", required: true, example: "Raw Mango", hint: "Finished product, raw material or packing material — must already exist in the masters", aliases: ["item", "itemname", "material", "materialname", "product", "productname", "particulars", "description", "goods"] },
       { key: "quantity", header: "Qty", required: true, example: 100, hint: "Quantity purchased (decimals allowed)", aliases: ["qty", "quantity", "nos", "pcs", "kgs"] },
       { key: "unit", header: "Unit", example: "kg", hint: "Optional — blank uses the product master unit; a different unit is warned on", aliases: ["unit", "uom", "units"] },
-      { key: "rate", header: "Purchase Rate", required: true, example: 45, hint: "Per-unit cost EXCLUDING GST, like manual purchase entry — GST is added from the product master rate", aliases: ["purchaserate", "rate", "price", "unitcost", "cost", "purchaseprice", "unitprice", "costperunit"] },
+      { key: "rate", header: "Purchase Rate", required: true, example: 45, hint: "Per-unit cost EXCLUDING GST, like manual purchase entry — GST is added from the product master rate. May be left blank when a Line Total is given", aliases: ["purchaserate", "rate", "price", "unitcost", "cost", "purchaseprice", "unitprice", "costperunit"] },
+      { key: "lineTotal", header: "Line Total", example: "", hint: "Optional — the line's total ₹ (Qty × Rate, before GST). When Rate is blank the unit rate is worked out as Line Total ÷ Qty; when both are given they are cross-checked", aliases: ["linetotal", "lineamount", "amount", "total", "totalamount", "netamount", "grossamount", "value", "linevalue", "rowtotal", "itemtotal", "amountrs"] },
       { key: "gstRate", header: "GST %", hidden: true, example: 5, hint: "Cross-check only — the recorded GST always comes from the product master rate", aliases: ["gst", "gstrate", "gstpercent", "gstpercentage", "taxrate", "tax"] },
       { key: "discount", header: "Discount %", example: 0, hint: "PERCENT discount on this line (0–100, blank = 0) — the purchase module's convention", aliases: ["discount", "discountpercent", "disc", "discountpct"] },
       { key: "billDiscount", header: "Bill Discount", hidden: true, example: 0, hint: "Not supported for purchases — spread it into the line Discount % instead", aliases: ["billdiscount", "invoicediscount", "totaldiscount", "overalldiscount"] },
@@ -635,6 +637,35 @@ interface TxnContext {
   /** Purchases: the location's valid money accounts (cash till + bank leaves)
    *  for resolving the Payment Account cell — same options as voucher imports. */
   accounts: Awaited<ReturnType<typeof importAccountOptions>>;
+  settings: ImportSettings;
+}
+
+/** Legacy-migration behaviour toggles (Company Settings → Data Import).
+ *  Everything defaults ON — a fresh company gets the forgiving behaviour;
+ *  each can be switched off to force strict review instead. */
+interface ImportSettings {
+  /** Sales/receipts: unknown customer names are created automatically at commit. */
+  autoCreateCustomers: boolean;
+  /** Purchases/payments: unknown vendor names are created automatically at commit. */
+  autoCreateVendors: boolean;
+  /** Sales: a blank Customer on a cash/bank/UPI sale = walk-in counter sale (no customer). */
+  autoWalkInCustomer: boolean;
+  /** Sales: a price below the Item Master MRP is folded into a per-unit discount (POS rule). */
+  mrpToDiscount: boolean;
+  /** A "Line Total" column can stand in for a blank Price/Rate (unit = total ÷ qty). */
+  detectLineTotal: boolean;
+}
+
+async function loadImportSettings(): Promise<ImportSettings> {
+  const { rows: [r] } = await pool.query<any>(`SELECT general_settings FROM company_settings LIMIT 1`);
+  const gs = (r?.general_settings ?? {}) as Record<string, any>;
+  return {
+    autoCreateCustomers: gs.importAutoCreateCustomers !== false,
+    autoCreateVendors: gs.importAutoCreateVendors !== false,
+    autoWalkInCustomer: gs.importAutoWalkInCustomer !== false,
+    mrpToDiscount: gs.importMrpToDiscount !== false,
+    detectLineTotal: gs.importDetectLineTotal !== false,
+  };
 }
 
 async function loadTxnContext(module: TxnModule, loc: { type: string; id: number }): Promise<TxnContext> {
@@ -711,6 +742,7 @@ async function loadTxnContext(module: TxnModule, loc: { type: string; id: number
     accounts: module === "purchases"
       ? await importAccountOptions(pool, loc as ProdLocation)
       : [],
+    settings: await loadImportSettings(),
   };
 }
 
@@ -732,17 +764,26 @@ interface TxnDocAcc {
   accountRaw: string;
   reference: string | null;
   narration: string | null;
+  /** Sales: blank Customer on a settled (cash/bank/upi) sale → POS-style
+   *  walk-in bill with NO customer (Company Settings → Data Import toggle). */
+  walkIn?: boolean;
+  /** Unknown party name to be created automatically at commit (toggle). */
+  createParty?: { name: string; gst: string } | null;
 }
 
 /**
- * Two-pass validation for transaction imports.
+ * Multi-pass validation for transaction imports.
  *
- * Pass 1 walks rows in FILE ORDER, normalising each line and grouping
- * consecutive rows with the same invoice + date + party into one document
- * (blank invoice numbers = single-row documents). Pass 2 prices each complete
- * document through the SAME arithmetic commit will use (buildSaleLines /
- * priceBill) so paid-amount checks and GST cross-checks can never disagree
- * with what actually gets recorded.
+ * Pass 0 groups rows into documents by INVOICE NUMBER alone — rows of one
+ * invoice may sit anywhere in the file (legacy exports are rarely sorted
+ * bill-by-bill). Blank invoice numbers = single-row documents. Blank
+ * Date/Customer cells inherit the invoice's values; conflicting non-blank
+ * values are hard errors. Document order = first-appearance order, so the
+ * file's entry order still drives average-cost/stock sequencing at commit.
+ * Pass 1 normalises each line (product, qty, price — optionally derived from
+ * a Line Total cell). Pass 2 prices each complete document through the SAME
+ * arithmetic commit will use (buildSaleLines / priceBill) so paid-amount
+ * checks and GST cross-checks can never disagree with what gets recorded.
  */
 /**
  * Optional per-row Location cross-check for transaction/voucher files.
@@ -789,27 +830,188 @@ async function validateTransactionRows(
   type Slot = { errors: string[]; warnings: string[]; suggestions: string[]; norm: Record<string, any> };
   const slots: Slot[] = rowsIn.map(() => ({ errors: [], warnings: [], suggestions: [], norm: {} }));
 
+  // ── Pass 0: order-independent grouping by Invoice No ──
+  // Every row carrying the same (non-blank) invoice number belongs to ONE
+  // document no matter where it sits in the file. Blank invoice numbers =
+  // single-row documents. Document order = FIRST-APPEARANCE order, so entry
+  // order still drives average-cost/stock sequencing at commit.
   const docs: TxnDocAcc[] = [];
-  const seenDocKeys = new Map<string, number>(); // key → head row number (non-consecutive dup detection)
-  let last: TxnDocAcc | null = null;
+  const docOf: number[] = new Array(rowsIn.length).fill(-1);
+  {
+    const docByInv = new Map<string, number>();
+    for (let i = 0; i < rowsIn.length; i++) {
+      const invRaw = (rowsIn[i].values.invoiceNo ?? "").trim();
+      const invKey = invRaw.toLowerCase();
+      const existing = invRaw ? docByInv.get(invKey) : undefined;
+      if (existing !== undefined) {
+        docs[existing].rowIdxs.push(i);
+        docOf[i] = existing;
+        continue;
+      }
+      docs.push({
+        key: invRaw ? invKey : null, headIdx: i, rowIdxs: [i], inv: invRaw,
+        dateIso: null, party: null, partyName: "",
+        billDiscount: 0, status: null, paidGiven: null, modeGiven: null,
+        accountRaw: "", reference: null, narration: null,
+      });
+      docOf[i] = docs.length - 1;
+      if (invRaw) docByInv.set(invKey, docs.length - 1);
+    }
+  }
+
+  // ── Document-level cells: date, party, settlement fields ──
+  // Blank cells on repeat rows inherit the invoice's value (first non-blank
+  // wins); CONFLICTING non-blank values are errors for date/party (one bill
+  // cannot carry two dates or two parties) and warnings for the rest.
+  for (const doc of docs) {
+    const head = slots[doc.headIdx];
+    const docLabel = doc.inv ? `Invoice "${doc.inv}"` : `Row ${rowsIn[doc.headIdx].rowNumber}`;
+
+    const docCell = (k: string, label: string, warnOnConflict = true): string => {
+      let v = ""; let fromRow = 0;
+      for (const i of doc.rowIdxs) {
+        const c = (rowsIn[i].values[k] ?? "").trim();
+        if (!c) continue;
+        if (!v) { v = c; fromRow = rowsIn[i].rowNumber; }
+        else if (warnOnConflict && c !== v) {
+          slots[i].warnings.push(`${label} "${c}" differs from "${v}" (row ${fromRow}) — the invoice's first value is used`);
+        }
+      }
+      return v;
+    };
+
+    // Date — conflicting parseable dates are errors; blanks inherit.
+    let dateFromRow = 0;
+    for (const i of doc.rowIdxs) {
+      const raw = (rowsIn[i].values.date ?? "").trim();
+      if (!raw) continue;
+      const iso = parseDateFlexible(raw);
+      if (!iso) {
+        slots[i].errors.push(`Date "${raw}" not understood`);
+        slots[i].suggestions.push("Use YYYY-MM-DD or DD/MM/YYYY");
+        continue;
+      }
+      if (doc.dateIso === null) { doc.dateIso = iso; dateFromRow = rowsIn[i].rowNumber; }
+      else if (iso !== doc.dateIso) {
+        slots[i].errors.push(`${docLabel} has two different dates — ${doc.dateIso} (row ${dateFromRow}) vs ${iso} here; one invoice must carry ONE date`);
+        slots[i].suggestions.push("Fix the date, or renumber the row if it is genuinely a different invoice");
+      }
+    }
+    if (!doc.dateIso) head.errors.push("Date is required");
+    else if (doc.dateIso > todayIso) head.warnings.push(`Date ${doc.dateIso} is in the future`);
+
+    // Party — conflicting non-blank names are errors; blanks inherit.
+    let partyFromRow = 0;
+    for (const i of doc.rowIdxs) {
+      const raw = (rowsIn[i].values.party ?? "").trim();
+      if (!raw) continue;
+      if (!doc.partyName) { doc.partyName = raw; partyFromRow = rowsIn[i].rowNumber; }
+      else if (raw.toLowerCase() !== doc.partyName.toLowerCase()) {
+        slots[i].errors.push(`${docLabel} names two different ${partyLabel.toLowerCase()}s — "${doc.partyName}" (row ${partyFromRow}) vs "${raw}" here; one invoice belongs to ONE ${partyLabel.toLowerCase()}`);
+        slots[i].suggestions.push("Fix the name, or renumber the row if it is genuinely a different invoice");
+      }
+    }
+    doc.party = doc.partyName ? ctx.parties.get(doc.partyName.toLowerCase()) ?? null : null;
+
+    // Settlement / other document-level fields.
+    doc.accountRaw = docCell("account", "Payment Account");
+    doc.reference = docCell("reference", "Reference") || null;
+    doc.narration = docCell("narration", "Narration", false) || null;
+    if (module === "sales") {
+      const bdRaw = docCell("billDiscount", "Bill Discount");
+      const bd = parseMoney(bdRaw);
+      if (bd !== null) {
+        if (!Number.isFinite(bd) || bd < 0) head.errors.push(`Bill Discount "${bdRaw}" must be a number ≥ 0`);
+        else doc.billDiscount = bd;
+      }
+      const pmRaw = docCell("paymentMode", "Payment Account");
+      const pm = parsePaymentMode(pmRaw);
+      if (pm === "invalid") head.warnings.push(`Payment Account "${pmRaw}" not understood — treating the sale as Customer Credit (use Cash / Bank / UPI / Customer Credit)`);
+      else doc.modeGiven = pm;
+    } else {
+      // Purchases have no bill-level discount — the manual purchase module
+      // works in per-line Discount %, and an import must never produce a
+      // bill that manual entry could not.
+      const bdRaw = docCell("billDiscount", "Bill Discount");
+      const bd = parseMoney(bdRaw);
+      if (bd !== null && bd > 0.004) {
+        head.errors.push(`Bill Discount ₹${bd} is not supported for purchase bills`);
+        head.suggestions.push("Spread the bill discount into each line's Discount % (the purchase module has no bill-level discount)");
+      }
+    }
+    const stRaw = docCell("paymentStatus", "Payment Status");
+    const st = parsePaymentStatus(stRaw);
+    if (st === "invalid") head.warnings.push(`Payment Status "${stRaw}" not understood — treating as Unpaid (use Paid / Unpaid / Partial)`);
+    else doc.status = st;
+    const paRaw = docCell("paidAmount", "Paid Amount");
+    const pa = parseMoney(paRaw);
+    if (pa !== null) {
+      if (!Number.isFinite(pa) || pa < 0) head.errors.push(`Paid Amount "${paRaw}" must be a number ≥ 0`);
+      else doc.paidGiven = pa;
+    }
+
+    // Blank customer → walk-in (sales only; the POS rule: settled modes may
+    // omit the customer, credit cannot — someone has to owe the money).
+    if (!doc.partyName) {
+      if (module !== "sales") {
+        head.errors.push("Vendor is required");
+      } else {
+        const effMode = doc.modeGiven ?? (doc.status === "paid" ? "cash" : "credit");
+        if (effMode === "credit") {
+          head.errors.push("Customer is required for a credit sale — a bill with no customer (walk-in) must be Cash, Bank or UPI");
+          head.suggestions.push("Fill the Customer column, or set Payment Account to Cash/Bank/UPI if it was a settled counter sale");
+        } else if (!ctx.settings.autoWalkInCustomer) {
+          head.errors.push("Customer is required");
+          head.suggestions.push("Fill the Customer column, or switch on \u201cBlank customer = walk-in sale\u201d under Company Settings → Data Import");
+        } else {
+          doc.walkIn = true;
+          head.warnings.push("No customer name — recorded as a walk-in counter sale (no customer on the bill), like a POS cash sale");
+        }
+      }
+    } else if (!doc.party) {
+      // Unknown named party → created automatically at commit (toggle ON,
+      // same create-with-ledger path as the resolve step) or flagged for the
+      // resolve step (toggle OFF).
+      const auto = module === "sales" ? ctx.settings.autoCreateCustomers : ctx.settings.autoCreateVendors;
+      if (auto) {
+        let gst = "";
+        for (const i of doc.rowIdxs) {
+          const g = (rowsIn[i].values.gstNumber ?? "").trim().toUpperCase();
+          if (g && GSTIN_RE.test(g)) { gst = g; break; }
+        }
+        doc.createParty = { name: doc.partyName, gst };
+        head.warnings.push(`${partyLabel} "${doc.partyName}" is not in the masters — it will be created automatically (with its ledger) when you press Import. Switch off auto-create under Company Settings → Data Import to review such names instead`);
+      } else {
+        for (const i of doc.rowIdxs) slots[i].norm.missingParty = doc.partyName;
+        head.suggestions.push(`Create "${doc.partyName}" in the resolve step below, or fix the spelling to match an existing ${partyLabel.toLowerCase()}`);
+      }
+    }
+
+    // Already-recorded invoices / placeholder-number note (head row).
+    if (doc.inv) {
+      if (module === "sales" && ctx.existingInvoices.has(doc.inv.toLowerCase())) {
+        head.errors.push(`Invoice "${doc.inv}" is already recorded in this system`);
+        head.suggestions.push("Already-migrated or manually entered — remove the row, or renumber if it is genuinely a different invoice");
+      }
+      if (module === "purchases" && doc.party && ctx.existingInvoices.has(`${doc.party.id}|${doc.inv.toLowerCase()}`)) {
+        head.errors.push(`Invoice "${doc.inv}" is already recorded for ${doc.party.name}`);
+        head.suggestions.push("Already-migrated or manually entered — remove the row, or renumber if it is genuinely a different bill");
+      }
+    } else if (module === "sales") {
+      head.warnings.push("No invoice number — a placeholder (IMP-<batch>-<n>) will be assigned at commit");
+    }
+  }
+
   const stockNeeded = new Map<number, number>(); // running requirement across the whole file (sales)
 
-  // ── Pass 1: per-row normalisation + grouping ──
+  // ── Pass 1: per-row line normalisation ──
   for (let i = 0; i < rowsIn.length; i++) {
-    const { rowNumber, values } = rowsIn[i];
+    const { values } = rowsIn[i];
     const s = slots[i];
-
-    // Date
-    const dateRaw = (values.date ?? "").trim();
-    const dateIso = parseDateFlexible(dateRaw);
-    if (!dateRaw) s.errors.push("Date is required");
-    else if (!dateIso) {
-      s.errors.push(`Date "${dateRaw}" not understood`);
-      s.suggestions.push("Use YYYY-MM-DD or DD/MM/YYYY");
-    } else if (dateIso > todayIso) {
-      s.warnings.push(`Date ${dateIso} is in the future`);
-    }
-    if (dateIso) s.norm.dateIso = dateIso;
+    const doc = docs[docOf[i]];
+    s.norm.doc = docOf[i];
+    if (doc.headIdx === i) s.norm.head = true;
+    if (doc.dateIso) s.norm.dateIso = doc.dateIso;
 
     // Location cross-check (optional column)
     const rowLocRaw = (values.location ?? "").trim();
@@ -818,23 +1020,14 @@ async function validateTransactionRows(
       if (locErr) s.errors.push(locErr);
     }
 
-    // Party
-    const partyName = (values.party ?? "").trim();
-    if (!partyName) s.errors.push(`${partyLabel} is required`);
-    const party = partyName ? ctx.parties.get(partyName.toLowerCase()) ?? null : null;
-    if (partyName && !party) {
-      s.norm.missingParty = partyName;
-      s.suggestions.push(`Create "${partyName}" in the resolve step below, or fix the spelling to match an existing ${partyLabel.toLowerCase()}`);
-    }
-
-    // GSTIN cross-check
+    // GSTIN cross-check (against the document's party)
     const gst = (values.gstNumber ?? "").trim().toUpperCase();
     if (gst) {
       if (!GSTIN_RE.test(gst)) {
         s.errors.push(`GSTIN "${gst}" is not a valid 15-character GSTIN`);
         s.suggestions.push("Format: 2-digit state code + PAN + entity digit + Z + check digit, e.g. 33AAACM1234F1Z5");
-      } else if (party?.gst && party.gst.toUpperCase() !== gst) {
-        s.warnings.push(`GSTIN differs from the ${partyLabel.toLowerCase()} master (${party.gst}) — the master's GSTIN is used`);
+      } else if (doc.party?.gst && doc.party.gst.toUpperCase() !== gst) {
+        s.warnings.push(`GSTIN differs from the ${partyLabel.toLowerCase()} master (${doc.party.gst}) — the master's GSTIN is used`);
       }
     }
 
@@ -861,26 +1054,15 @@ async function validateTransactionRows(
     if (qty === null) s.errors.push("Qty is required");
     else if (!Number.isFinite(qty) || qty <= 0) s.errors.push(`Qty "${values.quantity}" must be a number greater than 0`);
 
-    // Price / rate
-    const priceKey = module === "sales" ? "price" : "rate";
-    const price = parseMoney((values[priceKey] ?? "").trim());
-    if (price === null) s.errors.push(`${module === "sales" ? "Price" : "Rate"} is required`);
-    else if (!Number.isFinite(price) || price < 0) s.errors.push(`${module === "sales" ? "Price" : "Rate"} "${values[priceKey]}" must be a number ≥ 0`);
-
-    // Discount
+    // Discount (parsed before the price so Line Total cross-checks can
+    // account for it). Sales: ₹ per UNIT; purchases: % per line.
     let discount = 0;
     const discRaw = (values.discount ?? "").trim();
     if (module === "sales") {
-      // Per-UNIT ₹ discount — the manual sale entry convention.
       const d = parseMoney(discRaw);
       if (d !== null) {
         if (!Number.isFinite(d) || d < 0) s.errors.push(`Discount "${discRaw}" must be a number ≥ 0`);
-        else {
-          discount = d;
-          if (price !== null && Number.isFinite(price) && d > price + 0.004) {
-            s.errors.push(`Discount ₹${d} per unit exceeds the Price ₹${Number(price).toFixed(2)} — Discount is per UNIT, not for the whole line`);
-          }
-        }
+        else discount = d;
       }
     } else {
       const d = discRaw ? Number(discRaw.replace(/%/g, "").replace(/,/g, "")) : null;
@@ -888,6 +1070,59 @@ async function validateTransactionRows(
         if (!Number.isFinite(d) || d < 0 || d > 100) s.errors.push(`Discount % "${discRaw}" must be between 0 and 100`);
         else discount = d;
       }
+    }
+
+    // Price / rate — a Line Total cell can stand in for a blank price
+    // (legacy exports often carry amount-only lines). Toggle-gated.
+    const priceKey = module === "sales" ? "price" : "rate";
+    const priceLabel = module === "sales" ? "Price" : "Rate";
+    let price = parseMoney((values[priceKey] ?? "").trim());
+    const ltRaw = (values.lineTotal ?? "").trim();
+    const lt = ctx.settings.detectLineTotal && ltRaw ? parseMoney(ltRaw) : null;
+    if (lt !== null && (!Number.isFinite(lt) || lt < 0)) {
+      s.errors.push(`Line Total "${ltRaw}" must be a number ≥ 0`);
+    } else if (lt !== null && qty !== null && Number.isFinite(qty) && qty > 0) {
+      const round2 = (n: number) => Math.round(n * 100) / 100;
+      if (price === null) {
+        // The Line Total is what the row PAID, i.e. net of any discount on
+        // the row. The pricing engine applies the discount again, so the
+        // derived unit figure must be the GROSS one (discount added back) —
+        // deriving lt÷qty and then discounting again would understate money.
+        if (discount > 0 && module !== "sales" && discount >= 99.995) {
+          s.errors.push(`Cannot work out the ${priceLabel} from the Line Total with a 100% discount — give the ${priceLabel} explicitly`);
+        } else {
+          price = module === "sales"
+            ? round2(lt / qty + discount)
+            : round2(lt / qty / (1 - discount / 100));
+          const discNote = discount > 0
+            ? (module === "sales"
+              ? ` (Line Total taken as AFTER the ₹${discount.toFixed(2)}/unit discount)`
+              : ` (Line Total taken as AFTER the ${discount}% discount)`)
+            : "";
+          s.warnings.push(`${priceLabel} was blank — unit ${priceLabel.toLowerCase()} ₹${price.toFixed(2)} worked out as Line Total ₹${lt.toFixed(2)} ÷ Qty ${qty}${discNote}`);
+        }
+      } else if (Number.isFinite(price) && price >= 0) {
+        const gross = price * qty;
+        const net = module === "sales" ? (price - discount) * qty : gross * (1 - discount / 100);
+        const tol = Math.max(0.05, lt * 0.001);
+        if (Math.abs(gross - lt) <= tol || Math.abs(net - lt) <= tol) {
+          // consistent — nothing to flag
+        } else if (discount === 0 && qty > 1.0001 && Math.abs(price - lt) <= 0.01) {
+          // Price column holds the line total. Only unpacked when there is
+          // NO discount — with one, gross vs net is ambiguous, so the row
+          // falls through to the mismatch warning and the Price column wins.
+          price = round2(lt / qty);
+          s.warnings.push(`The ${priceLabel} column holds the LINE TOTAL (₹${lt.toFixed(2)} for ${qty} units) — unit ${priceLabel.toLowerCase()} ₹${price.toFixed(2)} recorded instead`);
+        } else {
+          s.warnings.push(`Check this row: Line Total ₹${lt.toFixed(2)} does not match ${priceLabel} × Qty = ₹${round2(gross).toFixed(2)} — the ${priceLabel} column is used`);
+        }
+      }
+    }
+    if (price === null) s.errors.push(`${priceLabel} is required${ctx.settings.detectLineTotal ? " (or give a Line Total to work it out from)" : ""}`);
+    else if (!Number.isFinite(price) || price < 0) s.errors.push(`${priceLabel} "${values[priceKey]}" must be a number ≥ 0`);
+
+    if (module === "sales" && price !== null && Number.isFinite(price) && discount > price + 0.004) {
+      s.errors.push(`Discount ₹${discount} per unit exceeds the Price ₹${Number(price).toFixed(2)} — Discount is per UNIT, not for the whole line`);
     }
 
     // Unit + GST% cross-checks against the master
@@ -913,11 +1148,16 @@ async function validateTransactionRows(
       let linePrice = (price !== null && Number.isFinite(price)) ? price : 0;
       let lineUnitDiscount = discount;
       if (module === "sales" && product.mrp > 0 && linePrice < product.mrp - 0.004) {
-        lineUnitDiscount = Math.round((discount + (product.mrp - linePrice)) * 100) / 100;
-        s.warnings.push(
-          `Price ₹${linePrice.toFixed(2)} is below the Item Master MRP ₹${product.mrp.toFixed(2)} for ${product.name} — recorded like the POS: MRP ₹${product.mrp.toFixed(2)} with ₹${lineUnitDiscount.toFixed(2)}/unit discount (net price unchanged)`,
-        );
-        linePrice = product.mrp;
+        if (ctx.settings.mrpToDiscount) {
+          lineUnitDiscount = Math.round((discount + (product.mrp - linePrice)) * 100) / 100;
+          s.warnings.push(
+            `Price ₹${linePrice.toFixed(2)} is below the Item Master MRP ₹${product.mrp.toFixed(2)} for ${product.name} — recorded like the POS: MRP ₹${product.mrp.toFixed(2)} with ₹${lineUnitDiscount.toFixed(2)}/unit discount (net price unchanged)`,
+          );
+          linePrice = product.mrp;
+        } else {
+          s.errors.push(`Price ₹${linePrice.toFixed(2)} is below the Item Master MRP ₹${product.mrp.toFixed(2)} for ${product.name}`);
+          s.suggestions.push("Fix the price, or switch on \u201cRecord below-MRP prices as discounts\u201d under Company Settings → Data Import");
+        }
       }
       if (product && qty !== null && Number.isFinite(qty) && qty > 0) {
         // Sales lines carry the manual-entry semantics: GST-INCLUSIVE price
@@ -940,78 +1180,6 @@ async function validateTransactionRows(
       }
     }
 
-    // ── Grouping ──
-    const invRaw = (values.invoiceNo ?? "").trim();
-    const key = invRaw ? `${invRaw.toLowerCase()}|${dateIso ?? dateRaw}|${partyName.toLowerCase()}` : null;
-
-    if (key && last && last.key === key) {
-      last.rowIdxs.push(i);
-      // Document-level fields live on the FIRST row; conflicting later values are ignored with a warning.
-      for (const [k, label] of [["billDiscount", "Bill Discount"], ["paymentStatus", "Payment Status"], ["paidAmount", "Paid Amount"], ["paymentMode", "Payment Account"], ["account", "Payment Account"], ["reference", "Reference"]] as const) {
-        const v = (values[k] ?? "").trim();
-        const headV = (rowsIn[last.headIdx].values[k] ?? "").trim();
-        if (v && v !== headV) s.warnings.push(`${label} "${v}" differs from the invoice's first row — the first row's value is used`);
-      }
-      s.norm.doc = docs.length - 1;
-    } else {
-      if (key && seenDocKeys.has(key)) {
-        s.errors.push(`Invoice "${invRaw}" already appeared at row ${seenDocKeys.get(key)} — rows of one invoice must be consecutive`);
-        s.suggestions.push("Sort the file so all rows of an invoice sit together, or renumber one of them");
-      }
-      // Head-row / document-level parsing
-      const doc: TxnDocAcc = {
-        key, headIdx: i, rowIdxs: [i], inv: invRaw, dateIso,
-        party, partyName,
-        billDiscount: 0, status: null, paidGiven: null, modeGiven: null,
-        accountRaw: (values.account ?? "").trim(),
-        reference: (values.reference ?? "").trim() || null,
-        narration: (values.narration ?? "").trim() || null,
-      };
-      if (module === "sales") {
-        const bd = parseMoney((values.billDiscount ?? "").trim());
-        if (bd !== null) {
-          if (!Number.isFinite(bd) || bd < 0) s.errors.push(`Bill Discount "${values.billDiscount}" must be a number ≥ 0`);
-          else doc.billDiscount = bd;
-        }
-        const pm = parsePaymentMode((values.paymentMode ?? "").trim());
-        if (pm === "invalid") s.warnings.push(`Payment Account "${values.paymentMode}" not understood — treating the sale as Customer Credit (use Cash / Bank / UPI / Customer Credit)`);
-        else doc.modeGiven = pm;
-      } else {
-        // Purchases have no bill-level discount — the manual purchase module
-        // works in per-line Discount %, and an import must never produce a
-        // bill that manual entry could not.
-        const bd = parseMoney((values.billDiscount ?? "").trim());
-        if (bd !== null && bd > 0.004) {
-          s.errors.push(`Bill Discount ₹${bd} is not supported for purchase bills`);
-          s.suggestions.push("Spread the bill discount into each line's Discount % (the purchase module has no bill-level discount)");
-        }
-      }
-      const st = parsePaymentStatus((values.paymentStatus ?? "").trim());
-      if (st === "invalid") s.warnings.push(`Payment Status "${values.paymentStatus}" not understood — treating as Unpaid (use Paid / Unpaid / Partial)`);
-      else doc.status = st;
-      const pa = parseMoney((values.paidAmount ?? "").trim());
-      if (pa !== null) {
-        if (!Number.isFinite(pa) || pa < 0) s.errors.push(`Paid Amount "${values.paidAmount}" must be a number ≥ 0`);
-        else doc.paidGiven = pa;
-      }
-      if (invRaw) {
-        if (module === "sales" && ctx.existingInvoices.has(invRaw.toLowerCase())) {
-          s.errors.push(`Invoice "${invRaw}" is already recorded in this system`);
-          s.suggestions.push("Already-migrated or manually entered — remove the row, or renumber if it is genuinely a different invoice");
-        }
-        if (module === "purchases" && party && ctx.existingInvoices.has(`${party.id}|${invRaw.toLowerCase()}`)) {
-          s.errors.push(`Invoice "${invRaw}" is already recorded for ${party.name}`);
-          s.suggestions.push("Already-migrated or manually entered — remove the row, or renumber if it is genuinely a different bill");
-        }
-      } else if (module === "sales") {
-        s.warnings.push("No invoice number — a placeholder (IMP-<batch>-<n>) will be assigned at commit");
-      }
-      if (key) seenDocKeys.set(key, rowNumber);
-      docs.push(doc);
-      last = doc;
-      s.norm.doc = docs.length - 1;
-      s.norm.head = true;
-    }
   }
 
   // ── Pass 2: document-level pricing + settlement resolution ──
@@ -1021,7 +1189,11 @@ async function validateTransactionRows(
     const head = slots[doc.headIdx];
     const anyError = doc.rowIdxs.some((i) => slots[i].errors.length > 0);
     const anyMissingLine = doc.rowIdxs.some((i) => !slots[i].norm.line);
-    if (anyError || anyMissingLine || !doc.party || !doc.dateIso) continue;
+    if (anyError || anyMissingLine || !doc.dateIso) continue;
+    // Walk-in and to-be-created parties still get priced — the preview totals
+    // must cover every document that will actually commit. Only unresolved
+    // names (auto-create OFF → resolve step) stay unpriced here.
+    if (!doc.party && !doc.walkIn && !doc.createParty) continue;
 
     let total = 0;
     let computedTax = 0;
@@ -1035,7 +1207,9 @@ async function validateTransactionRows(
         const p = (ctx.products.get(String(l.name).toLowerCase()) ?? [])[0];
         itemTaxMap.set(Number(l.id), { taxRate: p?.taxRate ?? 0, name: l.name, hsnCode: null, unit: p?.unit ?? null });
       }
-      const custState = String(doc.party.state ?? "").trim().toLowerCase();
+      // Walk-in / to-be-created customers have no state on record →
+      // intra-state, the same default manual entry lands on.
+      const custState = String(doc.party?.state ?? "").trim().toLowerCase();
       const isInterState = !!(ctx.companyState && custState && ctx.companyState !== custState);
       // Manual-entry semantics: prices INCLUDE GST, discount is per unit.
       const built = buildSaleLines(
@@ -1059,8 +1233,17 @@ async function validateTransactionRows(
         computedDiscount += Number(li.discount ?? 0);
       }
     } else {
-      let supply = supplyCache.get(doc.party.id);
-      if (!supply) { supply = await resolveSupplyTaxType(doc.party.id, { type: loc.type, id: loc.id }); supplyCache.set(doc.party.id, supply); }
+      let supply: Awaited<ReturnType<typeof resolveSupplyTaxType>>;
+      if (doc.party) {
+        const cached = supplyCache.get(doc.party.id);
+        supply = cached ?? await resolveSupplyTaxType(doc.party.id, { type: loc.type, id: loc.id });
+        if (!supplyCache.has(doc.party.id)) supplyCache.set(doc.party.id, supply);
+      } else {
+        // Vendor doesn't exist yet (created at commit) — price intra-state.
+        // Inter vs intra only changes the CGST/SGST↔IGST split, never the
+        // bill total, so the preview total still matches what commit records.
+        supply = { taxType: "intra", why: "new vendor — priced intra-state" };
+      }
       const priced = priceBill(
         doc.rowIdxs.map((i) => {
           const l = slots[i].norm.line;
@@ -1134,8 +1317,10 @@ async function validateTransactionRows(
 
     head.norm.invoiceNumber = doc.inv;
     head.norm.dateIso = doc.dateIso;
-    head.norm.partyName = doc.party.name;
-    head.norm.partyId = doc.party.id;
+    head.norm.partyName = doc.party ? doc.party.name : doc.walkIn ? "Walk-in customer" : doc.partyName;
+    if (doc.party) head.norm.partyId = doc.party.id;
+    if (doc.walkIn) head.norm.walkIn = true;
+    if (doc.createParty) head.norm.createParty = doc.createParty;
     head.norm.billDiscount = doc.billDiscount;
     head.norm.paymentMode = mode;
     head.norm.paymentStatus = doc.status;
@@ -1513,6 +1698,10 @@ function rowJson(r: any) {
     values: raw.values ?? {},
     missingParty: raw.norm?.missingParty ?? null,
     docIndex: raw.norm?.doc ?? null,
+    /** txn imports: this document's party will be auto-created at commit */
+    willCreateParty: raw.norm?.createParty?.name ?? null,
+    /** txn imports: walk-in counter sale (no customer on the bill) */
+    walkIn: raw.norm?.walkIn === true,
     /** voucher imports: planned allocation shown in the preview */
     plan: raw.norm?.plan ?? null,
     /** voucher imports: what commit actually recorded */
@@ -1534,11 +1723,17 @@ const username = (req: Request) => (req as any).employee?.username ?? "system";
 function txnBatchSummary(dbRows: Array<{ raw?: any }>): {
   invoices: number; totalQuantity: number; totalTaxable: number;
   totalGst: number; totalDiscount: number; totalAmount: number;
+  distinctParties: number; distinctItems: number;
+  walkInInvoices: number; partiesToCreate: string[];
 } {
   const r2 = (n: number) => Math.round(n * 100) / 100;
-  let invoices = 0, qty = 0, taxable = 0, gst = 0, discount = 0, amount = 0;
+  let invoices = 0, qty = 0, taxable = 0, gst = 0, discount = 0, amount = 0, walkIns = 0;
+  const partyKeys = new Set<string>();
+  const itemKeys = new Set<string>();
+  const toCreate = new Map<string, string>(); // lower(name) → display name
   for (const r of dbRows) {
     const n = r.raw?.norm ?? {};
+    if (n.line?.name) itemKeys.add(String(n.line.name).toLowerCase());
     if (!n.head || n.computedTotal == null) continue;
     invoices++;
     amount += Number(n.computedTotal ?? 0);
@@ -1546,11 +1741,20 @@ function txnBatchSummary(dbRows: Array<{ raw?: any }>): {
     taxable += Number(n.computedTaxable ?? 0);
     qty += Number(n.computedQty ?? 0);
     discount += Number(n.computedDiscount ?? 0);
+    if (n.walkIn === true) walkIns++;
+    else if (n.partyId != null) partyKeys.add(`#${n.partyId}`);
+    if (n.createParty?.name) {
+      const nm = String(n.createParty.name);
+      partyKeys.add(nm.toLowerCase());
+      toCreate.set(nm.toLowerCase(), nm);
+    }
   }
   return {
     invoices, totalQuantity: Math.round(qty * 1000) / 1000,
     totalTaxable: r2(taxable), totalGst: r2(gst),
     totalDiscount: r2(discount), totalAmount: r2(amount),
+    distinctParties: partyKeys.size, distinctItems: itemKeys.size,
+    walkInInvoices: walkIns, partiesToCreate: [...toCreate.values()].sort((a, b) => a.localeCompare(b)),
   };
 }
 
@@ -1590,17 +1794,20 @@ router.get("/imports/templates/:module", requireModuleAction(PERM, "download"), 
   help.addRow(["• Replace the example row with your data — one record per row."]);
   if (isTxnModule(module)) {
     const party = module === "sales" ? "Customer" : "Vendor";
-    help.addRow([`• One row per invoice LINE. Rows of one invoice must sit together (consecutive) with the same Invoice No + Date + ${party} — they become one document with multiple lines.`]);
+    help.addRow([`• One row per invoice LINE. Every row carrying the same Invoice No belongs to that invoice — rows may sit anywhere in the file. Repeat rows may leave Date and ${party} blank (they inherit the invoice's values); a DIFFERENT date or ${party.toLowerCase()} on the same invoice number is an error.`]);
     if (module === "sales") {
       help.addRow(["• Price INCLUDES GST — it is the selling price / MRP, exactly as in manual sale entry. The ERP works the GST out from the Item Master rate; you never enter GST amounts."]);
-      help.addRow(["• Discount is ₹ per UNIT. Bill Discount is a pre-tax ₹ off the whole invoice — put it on the invoice's first row."]);
+      help.addRow(["• Line Total is optional: leave Price blank and the unit price is worked out as Line Total ÷ Qty. When both are given they are cross-checked."]);
+      help.addRow(["• Discount is ₹ per UNIT. Bill Discount is a pre-tax ₹ off the whole invoice — put it on any one row of the invoice."]);
       help.addRow(["• A price BELOW the Item Master MRP is recorded like the POS: MRP stays at the master value and the difference becomes a per-unit discount — the customer's net price is unchanged. A price above MRP is used as-is."]);
+      help.addRow(["• A blank Customer on a Cash/Bank/UPI sale is recorded as a walk-in counter sale (no customer on the bill), like a POS cash sale. Credit sales always need a customer."]);
     } else {
       help.addRow(["• Purchase Rate EXCLUDES GST, exactly as in manual purchase entry. The ERP adds GST from the product master rate; you never enter GST amounts."]);
+      help.addRow(["• Line Total is optional: leave Purchase Rate blank and the unit rate is worked out as Line Total ÷ Qty (before GST). When both are given they are cross-checked."]);
       help.addRow(["• Discount % is a percent off that line. There is no bill-level discount on purchases — spread it into the lines."]);
     }
     help.addRow(["• Dates: YYYY-MM-DD or DD/MM/YYYY."]);
-    help.addRow([`• Items must already exist in the masters — unknown items are errors. Unknown ${party.toLowerCase()}s can be created during the import (resolve step).`]);
+    help.addRow([`• Items must already exist in the masters — unknown items are errors. Unknown ${party.toLowerCase()}s are created automatically at import (with their ledgers), or via the resolve step when auto-create is switched off in Company Settings → Data Import.`]);
     help.addRow(["• Payment Status: Paid / Unpaid / Partial. Paid with a blank Paid Amount = fully paid; Partial REQUIRES a Paid Amount; blank = Unpaid (or partly paid when a Paid Amount is given)."]);
     if (module === "sales") {
       help.addRow(["• Payment Account: Cash / Bank / UPI / Customer Credit. Cash, Bank and UPI sales are recorded as fully paid at creation; use Customer Credit + Paid Amount for partly-paid invoices."]);
@@ -2083,6 +2290,9 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
 
   const counts = { imported: 0, updated: 0, skipped: 0, failed: 0 };
   const failures: Array<{ rowNumber: number; name: string; reason: string }> = [];
+  // Parties auto-created during a txn commit (auto-create toggle) — reported
+  // back so the UI can say exactly which masters appeared.
+  const partiesCreated: Array<{ id: number; name: string }> = [];
 
   const setRow = (rowId: number, fields: Record<string, unknown>) => {
     const keys = Object.keys(fields);
@@ -2108,6 +2318,44 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
       docsMap.get(d)!.push(r);
     }
 
+    // Parties stamped `createParty` at validation (auto-create toggle) are
+    // created here, once per distinct name, through the SAME create-with-
+    // ledger path as the resolve step. Existence is re-checked at commit —
+    // someone may have created the party since validation.
+    const partyTable = module === "sales" ? "customers" : "vendors";
+    const createdPartyIds = new Map<string, number>(); // lower(name) → id
+    const ensureParty = async (cp: { name?: string; gst?: string }): Promise<number> => {
+      const name = String(cp?.name ?? "").trim();
+      if (name.length < 2) throw new Error(`Cannot create ${module === "sales" ? "customer" : "vendor"} "${name || "(blank)"}" — name too short`);
+      const key = name.toLowerCase();
+      const cached = createdPartyIds.get(key);
+      if (cached !== undefined) return cached;
+      // Advisory lock on the normalised name: two batches committing the
+      // same unknown party concurrently would both pass a bare check-then-
+      // create and make duplicate masters. The lock serialises the check.
+      const lockClient = await pool.connect();
+      try {
+        await lockClient.query(`SELECT pg_advisory_lock(hashtext($1))`, [`import-party:${partyTable}:${key}`]);
+        const { rows: [dupe] } = await pool.query(`SELECT id FROM ${partyTable} WHERE lower(name) = lower($1) LIMIT 1`, [name]);
+        if (dupe) { createdPartyIds.set(key, Number(dupe.id)); return Number(dupe.id); }
+        const gst = String(cp?.gst ?? "").trim().toUpperCase();
+        const input: any = {
+          name,
+          ...(gst && GSTIN_RE.test(gst) ? { gstNumber: gst } : {}),
+          notes: `Created automatically during import batch #${id}`,
+        };
+        const { row } = module === "sales"
+          ? await createCustomerWithLedger(input, stamp)
+          : await createVendorWithLedger(input, stamp);
+        createdPartyIds.set(key, Number(row.id));
+        partiesCreated.push({ id: Number(row.id), name });
+        return Number(row.id);
+      } finally {
+        await lockClient.query(`SELECT pg_advisory_unlock(hashtext($1))`, [`import-party:${partyTable}:${key}`]).catch(() => {});
+        lockClient.release();
+      }
+    };
+
     // FILE ORDER, deliberately: average cost and stock consequences follow
     // entry order, and the preview warned about backdating. Never re-sort.
     for (const dIdx of [...docsMap.keys()].sort((a, b) => a - b)) {
@@ -2116,16 +2364,20 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
       const hn = (head.raw?.norm ?? {}) as Record<string, any>;
       const label = String(hn.invoiceNumber || "") || `rows ${docRows[0].row_number}–${docRows[docRows.length - 1].row_number}`;
 
+      // A document may commit with: a resolved party id, a walk-in flag
+      // (sales, no customer), or a validation-stamped party to create now.
+      const walkIn = module === "sales" && hn.walkIn === true;
+      const willCreate = hn.partyId == null && !walkIn && !!hn.createParty?.name;
       const hasBad = docRows.some((r) => r.status === "error" || r.status === "needs_party");
       const userSkip = docRows.some((r) => skipSet.has(Number(r.id)));
-      if (dIdx < 0 || hasBad || userSkip || hn.partyId == null) {
+      if (dIdx < 0 || hasBad || userSkip || (hn.partyId == null && !walkIn && !willCreate)) {
         counts.skipped += docRows.length;
         for (const r of docRows) {
           if (r.status === "error" || r.status === "needs_party") continue; // keep the verdict text
           await setRow(r.id, {
             status: "skipped",
             reason: userSkip ? "Skipped by user at commit"
-              : hn.partyId == null ? "Skipped — the document's party was never resolved"
+              : (hn.partyId == null && !walkIn && !willCreate) ? "Skipped — the document's party was never resolved"
               : "Skipped — another row of this invoice has errors",
           });
         }
@@ -2133,12 +2385,18 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
       }
 
       try {
+        // Auto-create the party first (throws → the whole document fails,
+        // same per-document semantics as any other commit error).
+        const resolvedPartyId: number | null = hn.partyId != null
+          ? Number(hn.partyId)
+          : willCreate ? await ensureParty(hn.createParty) : null;
+
         if (module === "sales") {
           const invoiceNumber = String(hn.invoiceNumber || "") || `IMP-${id}-${dIdx + 1}`;
           const result = await importSaleDoc({
             invoiceNumber,
             saleDate: String(hn.dateIso),
-            customerId: Number(hn.partyId),
+            customerId: resolvedPartyId, // null = walk-in counter sale
             lines: docRows.map((r) => {
               const l = r.raw?.norm?.line ?? {};
               // New batches carry `unitDiscount` (per-unit ₹, GST-inclusive
@@ -2176,10 +2434,11 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
             },
           })]);
         } else {
+          if (resolvedPartyId == null) throw new Error("Purchase bills always need a vendor"); // unreachable — validation guarantees it
           const result = await importPurchaseDoc({
             invoiceNumber: String(hn.invoiceNumber || "") || null,
             purchaseDate: String(hn.dateIso),
-            vendorId: Number(hn.partyId),
+            vendorId: resolvedPartyId,
             lines: docRows.map((r) => {
               const l = r.raw?.norm?.line ?? {};
               return { kind: (l.kind ?? "item") as "item" | "material" | "raw_material", id: Number(l.id), quantity: Number(l.quantity), rate: Number(l.rate ?? 0), discountPct: Number(l.discountPct ?? 0) };
@@ -2536,15 +2795,18 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
   // masters (rollback never touches them, exactly like manual creation), so
   // they are deliberately NOT stamped with import_batch_id — the resolve step
   // marks them via the notes trail instead, and the report counts that.
+  // Auto-created parties (commit-time toggle) carry their own notes mark —
+  // counted the same provable way.
   const resolveMark = `Created during import batch #${id}`;
+  const autoMark = `Created automatically during import batch #${id}`;
   const { rows: [resolved] } = await pool.query(
     `SELECT
-       (SELECT COUNT(*) FROM customers WHERE notes = $1)::int AS custs,
-       (SELECT COUNT(*) FROM vendors   WHERE notes = $1)::int AS vends,
+       (SELECT COUNT(*) FROM customers WHERE notes IN ($1, $2))::int AS custs,
+       (SELECT COUNT(*) FROM vendors   WHERE notes IN ($1, $2))::int AS vends,
        (SELECT COUNT(*) FROM account_ledgers al
-         WHERE al.code IN (SELECT 'CUST-' || id FROM customers WHERE notes = $1)
-            OR al.code IN (SELECT 'VEND-' || id FROM vendors   WHERE notes = $1))::int AS ledgs`,
-    [resolveMark],
+         WHERE al.code IN (SELECT 'CUST-' || id FROM customers WHERE notes IN ($1, $2))
+            OR al.code IN (SELECT 'VEND-' || id FROM vendors   WHERE notes IN ($1, $2)))::int AS ledgs`,
+    [resolveMark, autoMark],
   );
   const details = {
     invoicesImported: rc.sales + rc.purchases,
@@ -2563,7 +2825,7 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
     timeTakenMs: Date.now() - commitStartedAt,
   };
 
-  res.json({ batch: batchJson(finished), summary: counts, failures, details });
+  res.json({ batch: batchJson(finished), summary: counts, failures, details, partiesCreated });
   } finally {
     if (locked) await lockClient.query(`SELECT pg_advisory_unlock(hashtext($1))`, [`import_batch_${id}`]).catch(() => {});
     lockClient.release();

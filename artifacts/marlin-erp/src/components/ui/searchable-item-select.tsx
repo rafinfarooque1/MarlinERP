@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Check, ChevronsUpDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -6,6 +6,7 @@ import {
 } from '@/components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
+import { advanceFrom } from '@/lib/keyboard-entry';
 
 /**
  * One searchable, scrollable item picker for every Item Master selector.
@@ -70,6 +71,11 @@ interface Props {
   emptyLabel?: string;
   disabled?: boolean;
   className?: string;
+  /**
+   * Keyboard Entry Mode: after picking an item, move focus to the next field of
+   * the enclosing [data-kbd-scope] instead of returning it to this trigger.
+   */
+  advanceOnSelect?: boolean;
   /** Set on the trigger so tests and callers can target a specific row. */
   'data-testid'?: string;
   /**
@@ -92,6 +98,7 @@ export function SearchableItemSelect({
   emptyLabel = 'No items found',
   disabled,
   className,
+  advanceOnSelect,
   'data-testid': testId,
   id,
   'aria-describedby': ariaDescribedBy,
@@ -99,6 +106,8 @@ export function SearchableItemSelect({
 }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const pickedRef = useRef(false);
 
   const selected = useMemo(
     () => items.find(i => i.id === Number(value)),
@@ -144,6 +153,7 @@ export function SearchableItemSelect({
     <Popover open={open} onOpenChange={v => { setOpen(v); if (!v) setQuery(''); }}>
       <PopoverTrigger asChild>
         <Button
+          ref={triggerRef}
           type="button"
           variant="outline"
           role="combobox"
@@ -171,6 +181,15 @@ export function SearchableItemSelect({
         // table overflowing on a phone.
         style={{
           width: `min(calc(100vw - 2rem), max(var(--radix-popover-trigger-width), ${columns.length ? 560 : 280}px))`,
+        }}
+        onCloseAutoFocus={e => {
+          // After a selection, hop to the next field instead of back to the
+          // trigger — Esc/outside-click still return focus to the trigger.
+          if (advanceOnSelect && pickedRef.current) {
+            pickedRef.current = false;
+            e.preventDefault();
+            advanceFrom(triggerRef.current);
+          }
         }}
       >
         {/* Escape is closed explicitly rather than left to the dismiss layer: cmdk
@@ -215,7 +234,7 @@ export function SearchableItemSelect({
                     <CommandItem
                       key={item.id}
                       value={String(item.id)}
-                      onSelect={() => { onChange(item.id); setOpen(false); setQuery(''); }}
+                      onSelect={() => { onChange(item.id); pickedRef.current = true; setOpen(false); setQuery(''); }}
                       className="cursor-pointer"
                     >
                       {/* Desktop: aligned columns. */}

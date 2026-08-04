@@ -82,8 +82,12 @@ router.get("/search", async (req, res): Promise<void> => {
       : Promise.resolve({ rows: [] as any[] }),
     canView("sales")
       ? pool.query(
-          `SELECT s.id, s.invoice_number, s.total_amount, s.sale_date::text AS sale_date, c.name AS customer_name
+          `SELECT s.id, s.invoice_number, s.total_amount, s.sale_date::text AS sale_date, c.name AS customer_name,
+                  CASE WHEN s.location_type = 'headoffice' THEN 'Head Office'
+                       ELSE COALESCE(o.name, w.name) END AS location_name
            FROM sales s LEFT JOIN customers c ON c.id = s.customer_id
+           LEFT JOIN outlets    o ON s.location_type = 'outlet'    AND o.id = s.location_id
+           LEFT JOIN warehouses w ON s.location_type = 'warehouse' AND w.id = s.location_id
            WHERE (s.invoice_number ILIKE $1 OR s.legacy_invoice_number ILIKE $1 OR c.name ILIKE $1)
              AND s.branch_transfer_id IS NULL AND ${salesScope}
            ORDER BY s.id DESC LIMIT 8`,
@@ -114,10 +118,12 @@ router.get("/search", async (req, res): Promise<void> => {
     items: items.rows.map((r: any) => ({ id: r.id, title: r.name, subtitle: r.unit ?? "" })),
     customers: customers.rows.map((r: any) => ({ id: r.id, title: r.name, subtitle: r.phone ?? "" })),
     vendors: vendors.rows.map((r: any) => ({ id: r.id, title: r.name, subtitle: r.phone ?? "" })),
+    // Numbers run per location, so the same invoice number can exist at two
+    // places — the location name is what tells the results apart.
     sales: sales.rows.map((r: any) => ({
       id: r.id,
       title: r.invoice_number,
-      subtitle: `${r.customer_name ?? "Walk-in"} · ₹${Number(r.total_amount).toLocaleString("en-IN")} · ${r.sale_date}`,
+      subtitle: `${r.customer_name ?? "Walk-in"} · ₹${Number(r.total_amount).toLocaleString("en-IN")} · ${r.sale_date}${r.location_name ? ` · ${r.location_name}` : ""}`,
     })),
     quotations: quotations.rows.map((r: any) => ({
       id: r.id,

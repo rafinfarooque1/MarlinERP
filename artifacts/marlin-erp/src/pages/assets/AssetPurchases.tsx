@@ -290,7 +290,7 @@ export default function AssetPurchases() {
           </DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={form.control} name="assetName" render={({ field }) => (
                   <FormItem><FormLabel>Asset Name <span className="text-destructive">*</span></FormLabel>
                     <FormControl><Input placeholder="e.g. Blast Freezer 500L" {...field} /></FormControl><FormMessage /></FormItem>
@@ -406,7 +406,7 @@ export default function AssetPurchases() {
               </div>
 
               {/* Totals preview */}
-              <div className="rounded-lg border border-border bg-muted/20 p-3 grid grid-cols-3 gap-2 text-sm">
+              <div className="rounded-lg border border-border bg-muted/20 p-3 grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
                 <div><p className="text-xs text-muted-foreground">Taxable ({wQty || 0} × {fmt(wCost)})</p><p className="font-mono font-semibold">{fmt(taxable)}</p></div>
                 <div><p className="text-xs text-muted-foreground">GST ({wRate}%)</p><p className="font-mono font-semibold">{fmt(wGst)}</p></div>
                 <div><p className="text-xs text-muted-foreground">Total Cost (capitalised)</p><p className="font-mono font-bold text-primary">{fmt(total)}</p></div>

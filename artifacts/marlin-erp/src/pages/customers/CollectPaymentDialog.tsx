@@ -153,7 +153,7 @@ export function CollectPaymentDialog({
                   Collecting against <span className="font-mono">{activeInv.invoiceNumber || `Sale #${activeInv.saleId}`}</span>
                   <span className="text-muted-foreground font-normal"> · outstanding ₹{fmt(activeInv.balance)}</span>
                 </p>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium">Amount (₹)</label>
                     <Input type="number" min={0} step="0.01" className="font-mono" value={amount} onChange={(e) => setAmount(e.target.value)} />

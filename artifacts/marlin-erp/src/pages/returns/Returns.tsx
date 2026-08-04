@@ -107,7 +107,7 @@ function NewSalesReturnDialog({ open, onOpenChange }: { open: boolean; onOpenCha
           <DialogDescription>Pick the original invoice, then enter how many units are coming back.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4 pt-1">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Invoice</label>
               <Select value={saleId ? String(saleId) : ''} onValueChange={v => { setSaleId(Number(v)); setQty({}); }}>
@@ -264,7 +264,7 @@ function NewPurchaseReturnDialog({ open, onOpenChange }: { open: boolean; onOpen
           <DialogDescription>Pick the original purchase bill, then enter the quantities going back to the vendor.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4 pt-1">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Purchase bill</label>
               <Select value={purchaseId ? String(purchaseId) : ''} onValueChange={v => { setPurchaseId(Number(v)); setQty({}); }}>

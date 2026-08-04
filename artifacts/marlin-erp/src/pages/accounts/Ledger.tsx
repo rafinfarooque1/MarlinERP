@@ -85,7 +85,7 @@ export default function Ledger() {
         </div>
 
         {statement && (
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             {[['Opening Balance', `₹${Number(statement.openingBalance || 0).toLocaleString('en-IN')}`], ['Closing Balance', `₹${Number(statement.closingBalance || 0).toLocaleString('en-IN')}`], ['Entries', String(entries.length)]].map(([k, v]) => (
               <div key={k} className="bg-card border border-border rounded-xl p-4">
                 <p className="text-xs text-muted-foreground uppercase tracking-wider">{k}</p>

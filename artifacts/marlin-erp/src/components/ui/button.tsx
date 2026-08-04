@@ -28,10 +28,13 @@ const buttonVariants = cva(
       },
       size: {
         // @replit changed sizes
-        default: 'min-h-9 px-4 py-2',
-        sm: 'min-h-8 rounded-md px-3 text-xs',
-        lg: 'min-h-10 rounded-md px-8',
-        icon: 'h-9 w-9',
+        // max-md: bumps give comfortable touch targets on phones/small tablets
+        // without changing desktop at all; explicit h-*/w-* classNames from
+        // call sites still win (tailwind-merge), so dense grids stay dense.
+        default: 'min-h-9 px-4 py-2 max-md:min-h-11',
+        sm: 'min-h-8 rounded-md px-3 text-xs max-md:min-h-10',
+        lg: 'min-h-10 rounded-md px-8 max-md:min-h-11',
+        icon: 'h-9 w-9 max-md:h-10 max-md:w-10',
       },
     },
     defaultVariants: {

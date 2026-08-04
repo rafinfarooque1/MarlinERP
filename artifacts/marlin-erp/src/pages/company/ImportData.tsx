@@ -483,6 +483,11 @@ export default function ImportData() {
                       {commitResult.summary.imported} imported, {commitResult.summary.skipped} skipped, {commitResult.summary.failed} failed.
                     </p>
                   )}
+                  {(commitResult.partiesCreated?.length ?? 0) > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      Created automatically: {commitResult.partiesCreated!.map((p) => p.name).join(', ')}
+                    </p>
+                  )}
                   {(commitResult.summary.failed > 0 || commitResult.batch.errorRows > 0 || commitResult.batch.failedRows > 0) && (
                     <div className="flex items-center gap-2">
                       <Button variant="outline" size="sm" disabled={!perm.canDownload}
@@ -566,6 +571,21 @@ export default function ImportData() {
                           <div className="text-xs text-muted-foreground">Total amount</div>
                         </div>
                       </div>
+                      {((preview.summary.distinctParties ?? 0) > 0 || (preview.summary.distinctItems ?? 0) > 0 || (preview.summary.walkInInvoices ?? 0) > 0) && (
+                        <div className="mt-2 pt-2 border-t text-xs text-muted-foreground flex flex-wrap gap-x-4 gap-y-1">
+                          <span><span className="font-semibold text-foreground">{preview.summary.distinctItems ?? 0}</span> different item{(preview.summary.distinctItems ?? 0) === 1 ? '' : 's'}</span>
+                          <span><span className="font-semibold text-foreground">{preview.summary.distinctParties ?? 0}</span> {module === 'sales' ? 'customer' : 'vendor'}{(preview.summary.distinctParties ?? 0) === 1 ? '' : 's'}</span>
+                          {(preview.summary.walkInInvoices ?? 0) > 0 && (
+                            <span><span className="font-semibold text-foreground">{preview.summary.walkInInvoices}</span> walk-in sale{preview.summary.walkInInvoices === 1 ? '' : 's'} (no customer on the bill)</span>
+                          )}
+                        </div>
+                      )}
+                      {(preview.summary.partiesToCreate?.length ?? 0) > 0 && (
+                        <div className="mt-2 pt-2 border-t text-xs">
+                          <span className="text-muted-foreground">Will be created automatically (with ledgers) at commit: </span>
+                          <span className="font-medium">{preview.summary.partiesToCreate.join(', ')}</span>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -660,7 +680,11 @@ export default function ImportData() {
                               />
                             </TableCell>
                             <TableCell className="text-muted-foreground">{r.rowNumber}</TableCell>
-                            <TableCell className="font-medium">{rowLabel(module, r)}</TableCell>
+                            <TableCell className="font-medium">
+                              {rowLabel(module, r)}
+                              {r.walkIn && <Badge variant="outline" className="ml-1.5 text-[10px] px-1 py-0 align-middle">Walk-in</Badge>}
+                              {r.willCreateParty && <Badge variant="outline" className="ml-1.5 text-[10px] px-1 py-0 align-middle text-blue-700 border-blue-300">New {partyWord}</Badge>}
+                            </TableCell>
                             <TableCell><RowStatusBadge status={r.status} /></TableCell>
                             {voucher && <TableCell><AllocationCell r={r} /></TableCell>}
                             <TableCell className="text-sm text-muted-foreground max-w-[22rem]">{r.reason ?? '—'}</TableCell>

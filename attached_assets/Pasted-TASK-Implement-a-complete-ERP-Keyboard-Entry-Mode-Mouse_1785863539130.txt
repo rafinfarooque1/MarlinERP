@@ -1,0 +1,303 @@
+TASK: Implement a complete ERP Keyboard Entry Mode (Mouse-Free Data Entry)
+
+The objective is to allow a trained data entry operator to perform all daily ERP transactions using only the keyboard, without touching the mouse.
+
+This should work consistently across the entire ERP and behave like professional ERP software such as Tally Prime, BUSY, Marg ERP, and Focus.
+
+=========================================================
+MODULES TO SUPPORT
+=========================================================
+
+Implement keyboard navigation for:
+
+• Sales (POS)
+• Purchase Bills
+• Receipt Voucher
+• Payment Voucher
+• Journal Voucher
+• Contra Voucher
+• Credit Note
+• Debit Note
+• Stock Transfer
+• Production Entry
+• Expenses
+• Quotations
+
+=========================================================
+GENERAL KEYBOARD BEHAVIOUR
+=========================================================
+
+Every entry form should behave consistently.
+
+When a new form opens:
+
+• Cursor automatically focuses on the first editable field.
+• No mouse click should be required.
+
+TAB
+
+Moves to next logical field.
+
+SHIFT + TAB
+
+Moves to previous field.
+
+ENTER
+
+Acts like TAB.
+
+This is the default ERP behaviour.
+
+=========================================================
+SEARCHABLE DROPDOWNS
+=========================================================
+
+Customer
+
+Vendor
+
+Item
+
+Ledger
+
+Warehouse
+
+Employee
+
+Bank
+
+Cash Account
+
+Voucher Account
+
+All searchable dropdowns should support:
+
+• Start typing immediately.
+• Search while typing.
+• Arrow Up / Down to navigate.
+• Enter to select.
+• Esc to close.
+
+No mouse interaction required.
+
+=========================================================
+LINE ITEM ENTRY
+=========================================================
+
+Sales
+
+Purchase
+
+Stock Transfer
+
+Production
+
+After selecting an Item:
+
+Tab order should be:
+
+Item
+
+↓
+
+Quantity
+
+↓
+
+Rate / MRP
+
+↓
+
+Discount
+
+↓
+
+GST (if editable)
+
+↓
+
+Batch
+
+↓
+
+Manufacture Date
+
+↓
+
+Expiry Date
+
+↓
+
+Next Line
+
+When the last editable field is completed:
+
+Pressing Enter should automatically create the next line.
+
+Focus returns to the Item field.
+
+Never place focus on HSN.
+
+HSN should always auto-populate from Item Master.
+
+=========================================================
+SHORTCUT KEYS
+=========================================================
+
+Ctrl + S
+
+Save
+
+Ctrl + P
+
+Save & Print
+
+Esc
+
+Close dialog
+
+F2
+
+Edit selected document
+
+F4
+
+Add Line
+
+Delete
+
+Delete current line
+
+Ctrl + Enter
+
+Complete Sale / Complete Purchase
+
+=========================================================
+SALES SCREEN
+=========================================================
+
+Opening Sales should automatically focus:
+
+Customer
+
+or
+
+Item (depending on current ERP workflow)
+
+After Add Line
+
+Focus returns to Item.
+
+Payment Mode should remain the configured default.
+
+=========================================================
+PURCHASE SCREEN
+=========================================================
+
+After clicking Add Line
+
+Focus must go directly to Item Name.
+
+Never HSN.
+
+=========================================================
+RECEIPT / PAYMENT / JOURNAL / CONTRA
+=========================================================
+
+Ledger selection should be completely keyboard driven.
+
+After completing one line:
+
+Press Enter
+
+↓
+
+Next line created
+
+↓
+
+Focus on Ledger.
+
+=========================================================
+STOCK TRANSFER
+=========================================================
+
+After finishing one item:
+
+Press Enter
+
+↓
+
+New row
+
+↓
+
+Focus Item.
+
+=========================================================
+VALIDATION
+=========================================================
+
+Validation errors should automatically move focus to the first invalid field.
+
+Example:
+
+Quantity missing
+
+↓
+
+Cursor jumps back to Quantity.
+
+=========================================================
+SAVE BEHAVIOUR
+=========================================================
+
+After Save:
+
+Return to first field of a new document.
+
+Ready for next entry.
+
+No mouse click required.
+
+=========================================================
+ACCESSIBILITY
+=========================================================
+
+Visible focus indicator.
+
+Current active field should always be obvious.
+
+=========================================================
+DO NOT CHANGE
+=========================================================
+
+Do not change any accounting logic.
+
+Do not change GST calculations.
+
+Do not change stock postings.
+
+Do not change voucher postings.
+
+This task is only about improving keyboard navigation and operator productivity.
+
+=========================================================
+TESTING
+=========================================================
+
+Verify that an operator can create:
+
+• Sales Invoice
+• Purchase Bill
+• Receipt Voucher
+• Payment Voucher
+• Journal Voucher
+• Contra Voucher
+• Stock Transfer
+
+using only the keyboard from start to finish.
+
+No mouse interaction should be required except opening the module.
+
+This feature should make the ERP suitable for high-speed data entry in production environments.

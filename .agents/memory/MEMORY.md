@@ -43,6 +43,7 @@
 - [Sale location resolution](sale-location-resolution.md) — resolve via location_type+location_id; sale_payments.outlet_id is legacy+NULL for warehouse sales so joining it silently deletes rows; warehouses holds outlet rows too
 - [Attachment ACL](attachment-acl.md) — "signed in" is not authorisation in a location-scoped app; readable only if you uploaded it (id in path) or may see the record; 404 not 403; presigned PUT can't bind content-type.
 - [Invoice numbering vs sequence](invoice-numbering-sequence.md) — renumbering strands allocators; SB2B/SB2C sales series rules: EVERY sales producer (POS + importer) must use the allocator, renames pair-rename receipts.
+- [Per-location invoice numbering](per-location-invoice-numbering.md) — SB2x serials run per location (counter@scope in voucher_type text, mirror fold); receipt deletes need the location guard; SB2x shape reserved for sales.
 - [Scratch-DB experiments](scratch-db-experiments.md) — `A && B &` backgrounds the WHOLE chain (vars lost) and `psql ""` silently hits dev; print current_database() before any scratch write.
 - [Sale cancellation](sale-cancellation.md) — a terminal state obliges EVERY write path (payments, returns) to refuse it after the row lock; filtering it from reports is not enough.
 - [Opt-in list paging](list-paging.md) — never default-cap a list endpoint the UI reads wholesale; in-memory slicing after a full fetch is pure downside.
@@ -108,4 +109,7 @@
 - [Sale MRP floor](sale-mrp-floor.md) — line price ≥ master MRP (create+edit, grandfathered via stored lines); NOT in buildSaleLines (quotes exempt); test fixtures must price ≥ fixture mrp.
 - [Party location assignment](party-location-assignment.md) — ONE validated resolver for create+edit stamps; /:id routes need their own scope gate; located ledger filters totals too; import blank rows = batch stamp.
 - [Bill-level control over per-line fields](bill-level-over-per-line.md) — one control fronting a per-row stored field must surface mixed legacy rows (warn + apply-on-pick), never let row 0 silently speak for the bill.
+- [Radix programmatic focus](radix-programmatic-focus.md) — Select opens on pointerdown, Popover on click; chain closes via onCloseAutoFocus+preventDefault, defer one tick for Escape; scope+verify auto-advance flags.
+- [Responsive design conventions](responsive-design.md) — desktop pixel-identical: touch bumps live in ui/ primitives (max-md:), md:hidden card lists beside hidden md:block tables, entry grids scroll (never restructure).
 - [Org role restructure](org-role-restructure.md) — root = Administrator, Management is view-only level 2; hierarchy migrations must fail closed (no marker) on name clashes/multi-root; reset rebuilds the tree via shared helper.
+- [Keyboard Entry Mode](keyboard-entry-mode.md) — all entry forms share keyboard-entry.tsx conventions; cmdk needs CommandList for arrow-nav; isPending is not a double-submit guard — sync submitLockRef.

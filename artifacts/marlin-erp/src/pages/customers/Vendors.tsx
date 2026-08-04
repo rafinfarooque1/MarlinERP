@@ -239,7 +239,7 @@ function PaymentDialog({ vendor, onClose }: { vendor: any; onClose: () => void }
               Outstanding balance: <PartyBalance kind="vendor" balance={vendor.outstandingBalance} className="font-bold" />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <FormField control={form.control} name="date" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Payment Date <span className="text-destructive">*</span></FormLabel>
@@ -413,6 +413,7 @@ export default function Vendors() {
               </SelectContent>
             </Select>
           </div>
+          <div className="hidden md:block">
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/10">
@@ -463,6 +464,48 @@ export default function Vendors() {
               ))}
             </TableBody>
           </Table>
+          </div>
+
+          {/* Mobile cards */}
+          <div className="md:hidden p-3 space-y-2">
+            {isLoading ? [...Array(3)].map((_, i) => (
+              <div key={i} className="h-20 bg-muted/30 rounded-lg animate-pulse" />
+            )) : filtered.length === 0 ? (
+              <div className="text-center py-16 text-muted-foreground">
+                <Truck className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>{vendors.length === 0 ? 'No vendors yet' : 'No vendors match this search or location'}</p>
+              </div>
+            ) : filtered.map(v => (
+              <div key={v.id} className="border border-border rounded-lg p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-sm truncate">{v.name}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{v.phone || '—'}</p>
+                  </div>
+                  <PartyBalance kind="vendor" balance={(v as any).outstandingBalance} className="text-sm shrink-0" />
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                  <span>State: <span className="text-foreground">{(v as any).state || '—'}</span></span>
+                  <span className="truncate">GST: <span className="text-foreground font-mono">{v.gstNumber || '—'}</span></span>
+                  <span className="col-span-2 truncate">Location: <span className="text-foreground">{loc.nameOf((v as any).locationType ?? (v as any).location_type, (v as any).locationId ?? (v as any).location_id)}</span></span>
+                </div>
+                <div className="mt-2 flex items-center justify-end gap-1">
+                  {perm.canAdd && (
+                  <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-600" title="Record payment" onClick={() => setPayItem(v)}>
+                    <IndianRupee className="w-4 h-4" />
+                  </Button>
+                  )}
+                  {perm.canEdit && (
+                  <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(v)}>
+                    <Pencil className="w-4 h-4" />
+                  </Button>
+                  )}
+                  <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(v)}>
+                    <Eye className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -475,7 +518,7 @@ export default function Vendors() {
               <FormField control={form.control} name="name" render={({ field }) => (
                 <FormItem><FormLabel>Name <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="Company / individual name" {...field} /></FormControl><FormMessage /></FormItem>
               )} />
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={form.control} name="phone" render={({ field }) => (
                   <FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
                 )} />
@@ -516,7 +559,7 @@ export default function Vendors() {
               <FormField control={form.control} name="address" render={({ field }) => (
                 <FormItem><FormLabel>Address</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
               )} />
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={form.control} name="bankName" render={({ field }) => (
                   <FormItem><FormLabel>Bank Name</FormLabel><FormControl><Input placeholder="e.g. HDFC Bank" {...field} /></FormControl></FormItem>
                 )} />

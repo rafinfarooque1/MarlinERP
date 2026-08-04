@@ -683,7 +683,7 @@ export default function RentManagement() {
           </SheetHeader>
 
           <div className="space-y-4 mt-6">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Monthly Rent (₹)"><Input type="number" min="0" step="0.01" value={form.monthlyRent ?? ''} onChange={e => setForm({ ...form, monthlyRent: e.target.value })} /></Field>
               <Field label="Security Deposit (₹)"><Input type="number" min="0" step="0.01" value={form.securityDeposit ?? ''} onChange={e => setForm({ ...form, securityDeposit: e.target.value })} /></Field>
             </div>
@@ -692,7 +692,7 @@ export default function RentManagement() {
             <Separator />
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Landlord</p>
             <Field label="Name"><Input value={form.landlordName ?? ''} onChange={e => setForm({ ...form, landlordName: e.target.value })} /></Field>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Phone"><Input value={form.landlordPhone ?? ''} onChange={e => setForm({ ...form, landlordPhone: e.target.value })} /></Field>
               <Field label="Email"><Input type="email" value={form.landlordEmail ?? ''} onChange={e => setForm({ ...form, landlordEmail: e.target.value })} /></Field>
             </div>
@@ -700,11 +700,11 @@ export default function RentManagement() {
 
             <Separator />
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Term</p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Start Date"><Input type="date" value={form.startDate ?? ''} onChange={e => setForm({ ...form, startDate: e.target.value })} /></Field>
               <Field label="End Date"><Input type="date" value={form.endDate ?? ''} onChange={e => setForm({ ...form, endDate: e.target.value })} /></Field>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Due Day of Month">
                 <Input type="number" min="1" max="31" value={form.dueDay ?? ''} onChange={e => setForm({ ...form, dueDay: e.target.value })} />
               </Field>
@@ -755,7 +755,7 @@ export default function RentManagement() {
           </DialogHeader>
 
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Amount (₹)">
                 <Input type="number" min="0" step="0.01" value={payForm.amount} onChange={e => setPayForm({ ...payForm, amount: e.target.value })} />
               </Field>

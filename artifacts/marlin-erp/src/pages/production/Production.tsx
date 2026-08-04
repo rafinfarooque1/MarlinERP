@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { SearchableItemSelect } from '@/components/ui/searchable-item-select';
 import {
   useFilteredProductions, useCreateProduction, useListItems, useListRawMaterials,
@@ -28,6 +28,7 @@ import { activeProducts } from '@/lib/productStatus';
 import { useActingLocations, decodeLocation } from '@/lib/useActingLocation';
 import { useDateRange, RangeBar } from '@/pages/reports/shared';
 import { useLocationContext, locationFilterParams } from '@/lib/locationContext';
+import { autoFocusFirst, entryScopeKeyDown, focusAndOpen, useEntryShortcuts } from '@/lib/keyboard-entry';
 
 const schema = z.object({
   itemId: z.coerce.number().min(1, 'Item required'),
@@ -209,6 +210,33 @@ export default function ProductionList() {
     });
     setIsOpen(true);
   };
+
+  // ── Keyboard Entry Mode ──
+  const scopeRef = useRef<HTMLFormElement>(null);
+
+  /** Append a raw-material line, then open the new row's material picker so the
+   *  operator keeps typing without reaching for the mouse. setTimeout(0) lets
+   *  React commit the appended row (its picker is production-mat-${newIndex}). */
+  const addLineKbd = () => {
+    const newIndex = fields.length;
+    append(defaultRawLine);
+    setTimeout(() => {
+      focusAndOpen(scopeRef.current?.querySelector<HTMLElement>(`[data-testid="production-mat-${newIndex}"]`));
+    }, 0);
+  };
+
+  const deleteLine = (i: number) => {
+    if (fields.length <= 1) return; // at least one material line is required
+    remove(i);
+  };
+
+  const submitCreate = () => {
+    if (createMutation.isPending) return;
+    form.handleSubmit(onSubmit)();
+  };
+
+  // Catch Ctrl+S / Ctrl+Enter / F4 even when focus wandered outside the form.
+  useEntryShortcuts(isOpen, { onSave: submitCreate, onAddLine: addLineKbd });
 
   // Production changes stock levels and dashboard charts — refresh them so the
   // dashboard stays accurate without a manual reload.
@@ -414,16 +442,26 @@ export default function ProductionList() {
 
       {/* Create Dialog */}
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader><DialogTitle>Record Production Batch</DialogTitle></DialogHeader>
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
-              <div className="grid grid-cols-2 gap-4">
+            <form
+              ref={scopeRef}
+              data-kbd-scope
+              onKeyDown={entryScopeKeyDown({ onSave: submitCreate, onAddLine: addLineKbd, onDeleteLine: deleteLine })}
+              onSubmit={form.handleSubmit(onSubmit)}
+              className="space-y-5"
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={form.control} name="itemId" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Item Name (SKU) <span className="text-destructive">*</span></FormLabel>
                     {/* Active only: a discontinued SKU can't be produced again */}
+                    {/* First field: autoFocusFirst lands here (it is the first
+                        combobox in the dialog). advanceOnSelect then walks on to
+                        Quantity Produced after a pick. */}
                     <FormControl><SearchableItemSelect
+                      advanceOnSelect
                       items={activeProducts(items).map((i: any) => ({
                         id: i.id, name: i.name, code: i.itemCode || null, uom: i.unit || null,
                       }))}
@@ -485,17 +523,19 @@ export default function ProductionList() {
                     <p className="text-sm font-medium text-muted-foreground">Raw Material Consumed</p>
                     <Button type="button" variant="outline" size="sm" onClick={() => append(defaultRawLine)}><Plus className="w-3 h-3 mr-1" /> Add</Button>
                   </div>
-                  <div className="space-y-2">
+                  <div className="overflow-x-auto"><div className="min-w-[420px] space-y-2">
                     {fields.map((field, i) => {
                       if ((wMaterials[i]?.materialType ?? 'material') !== 'material') return null;
                       return (
-                        <div key={field.id} className="grid grid-cols-8 gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border">
+                        <div key={field.id} data-kbd-row={i} className="grid grid-cols-8 gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border">
                           <div className="col-span-5">
                             <FormField control={form.control} name={`materialUsed.${i}.materialId`} render={({ field: f }) => (
                               <FormItem><FormLabel className="text-xs">Raw Material</FormLabel>
                                 <FormControl><SearchableItemSelect
                                   className="h-8 text-xs"
                                   placeholder="Select"
+                                  advanceOnSelect
+                                  data-testid={`production-mat-${i}`}
                                   items={activeProducts(materials as any[]).map((o: any) => ({
                                     id: o.id, name: o.name, code: o.itemCode || null, uom: o.unit || null,
                                   }))}
@@ -506,11 +546,11 @@ export default function ProductionList() {
                           </div>
                           <div className="col-span-2">
                             <FormField control={form.control} name={`materialUsed.${i}.usedQuantity`} render={({ field: f }) => (
-                              <FormItem><FormLabel className="text-xs">Qty</FormLabel><FormControl><Input type="number" step="0.01" className="h-8 text-xs" {...f} /></FormControl></FormItem>
+                              <FormItem><FormLabel className="text-xs">Qty</FormLabel><FormControl><Input type="number" step="0.01" className="h-8 text-xs" data-last-field={i === fields.length - 1 ? '1' : undefined} {...f} /></FormControl></FormItem>
                             )} />
                           </div>
                           <div className="col-span-1 pb-1 flex justify-end">
-                            <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(i)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
+                            <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-7 w-7 text-destructive" onClick={() => remove(i)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
                           </div>
                         </div>
                       );
@@ -518,7 +558,7 @@ export default function ProductionList() {
                     {fields.every((_, i) => (wMaterials[i]?.materialType ?? 'material') !== 'material') && (
                       <p className="text-xs text-muted-foreground text-center py-2 border border-dashed rounded-lg">No raw materials — click Add above</p>
                     )}
-                  </div>
+                  </div></div>
                 </div>
 
                 {/* ── Packing Material Consumed ── */}
@@ -527,17 +567,19 @@ export default function ProductionList() {
                     <p className="text-sm font-medium text-muted-foreground">Packing Material Consumed</p>
                     <Button type="button" variant="outline" size="sm" onClick={() => append(defaultPackLine)}><Plus className="w-3 h-3 mr-1" /> Add</Button>
                   </div>
-                  <div className="space-y-2">
+                  <div className="overflow-x-auto"><div className="min-w-[420px] space-y-2">
                     {fields.map((field, i) => {
                       if ((wMaterials[i]?.materialType ?? 'material') !== 'raw_material') return null;
                       return (
-                        <div key={field.id} className="grid grid-cols-8 gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border">
+                        <div key={field.id} data-kbd-row={i} className="grid grid-cols-8 gap-2 items-end p-3 bg-muted/20 rounded-lg border border-border">
                           <div className="col-span-5">
                             <FormField control={form.control} name={`materialUsed.${i}.materialId`} render={({ field: f }) => (
                               <FormItem><FormLabel className="text-xs">Packing Material</FormLabel>
                                 <FormControl><SearchableItemSelect
                                   className="h-8 text-xs"
                                   placeholder="Select"
+                                  advanceOnSelect
+                                  data-testid={`production-mat-${i}`}
                                   items={activeProducts(rawMaterials as any[]).map((o: any) => ({
                                     id: o.id, name: o.name, code: o.itemCode || null, uom: o.unit || null,
                                   }))}
@@ -548,11 +590,11 @@ export default function ProductionList() {
                           </div>
                           <div className="col-span-2">
                             <FormField control={form.control} name={`materialUsed.${i}.usedQuantity`} render={({ field: f }) => (
-                              <FormItem><FormLabel className="text-xs">Qty</FormLabel><FormControl><Input type="number" step="0.01" className="h-8 text-xs" {...f} /></FormControl></FormItem>
+                              <FormItem><FormLabel className="text-xs">Qty</FormLabel><FormControl><Input type="number" step="0.01" className="h-8 text-xs" data-last-field={i === fields.length - 1 ? '1' : undefined} {...f} /></FormControl></FormItem>
                             )} />
                           </div>
                           <div className="col-span-1 pb-1 flex justify-end">
-                            <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(i)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
+                            <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-7 w-7 text-destructive" onClick={() => remove(i)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
                           </div>
                         </div>
                       );
@@ -560,7 +602,7 @@ export default function ProductionList() {
                     {fields.every((_, i) => (wMaterials[i]?.materialType ?? 'material') !== 'raw_material') && (
                       <p className="text-xs text-muted-foreground text-center py-2 border border-dashed rounded-lg">No packing materials — click Add above</p>
                     )}
-                  </div>
+                  </div></div>
                 </div>
 
                 {/* BOM over-consumption warning (non-blocking) */}
@@ -593,7 +635,7 @@ export default function ProductionList() {
                   <Button type="button" variant="outline" size="sm" onClick={() => appendWastage({ quantity: 1, reason: '' })}><Plus className="w-3 h-3 mr-1" /> Add</Button>
                 </div>
                 {wastageFields.length > 0 && (
-                  <div className="space-y-2">
+                  <div className="overflow-x-auto"><div className="min-w-[420px] space-y-2">
                     {wastageFields.map((field, i) => (
                       <div key={field.id} className="grid grid-cols-11 gap-2 items-end p-3 bg-destructive/5 rounded-lg border border-destructive/20">
                         <div className="col-span-3">
@@ -611,12 +653,12 @@ export default function ProductionList() {
                         </div>
                       </div>
                     ))}
-                  </div>
+                  </div></div>
                 )}
               </div>
 
               {/* Labour, overhead + live cost estimate */}
-              <div className="grid grid-cols-2 gap-4 items-start">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
                 <div className="space-y-4">
                   <FormField control={form.control} name="overheadPercent" render={({ field }) => (
                     <FormItem>
@@ -735,7 +777,7 @@ export default function ProductionList() {
           </SheetHeader>
           {viewItem && (
             <div className="mt-6 space-y-5">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {[
                   ['Item', viewItem.itemName],
                   ['Date', new Date(viewItem.productionDate).toLocaleDateString('en-IN')],

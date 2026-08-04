@@ -228,7 +228,7 @@ export default function CashBank() {
                   </Select><FormMessage /></FormItem>
               )} />
               {watchType === 'bank' && (
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <FormField control={form.control} name="bankName" render={({ field }) => (
                     <FormItem><FormLabel>Bank Name</FormLabel><FormControl><Input placeholder="HDFC, SBI..." {...field} /></FormControl><FormMessage /></FormItem>
                   )} />

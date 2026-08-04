@@ -533,7 +533,7 @@ export default function ItemMaster() {
                 </FormItem>
               )} />
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={form.control} name="name" render={({ field }) => (
                   <FormItem className="col-span-2">
                     <FormLabel>Name <span className="text-destructive">*</span></FormLabel>
@@ -599,7 +599,7 @@ export default function ItemMaster() {
                 )}
               </div>
               {/* Identification — left blank, the server issues both */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={form.control} name="itemCode" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Item Code</FormLabel>
@@ -665,7 +665,7 @@ export default function ItemMaster() {
                   <p className="font-semibold text-sm">Materials per unit produced</p>
                   <Button type="button" variant="outline" size="sm" onClick={() => appendBomLine(defaultBomLine)}><Plus className="w-3 h-3 mr-1" /> Add</Button>
                 </div>
-                <div className="space-y-2">
+                <div className="overflow-x-auto"><div className="min-w-[460px] space-y-2">
                   {bomFields.map((field, i) => {
                     const matType = bomForm.watch(`lines.${i}.materialType`);
                     const opts = matType === 'raw_material' ? rawMaterials : materials;
@@ -700,7 +700,7 @@ export default function ItemMaster() {
                       </div>
                     );
                   })}
-                </div>
+                </div></div>
               </div>
 
               <FormField control={bomForm.control} name="notes" render={({ field }) => (

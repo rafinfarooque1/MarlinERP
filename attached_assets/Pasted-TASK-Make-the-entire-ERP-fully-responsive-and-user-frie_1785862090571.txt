@@ -1,0 +1,330 @@
+TASK: Make the entire ERP fully responsive and user-friendly across Desktop, Tablet, and Mobile devices.
+
+IMPORTANT:
+Do NOT change or break the existing Desktop UI.
+Desktop users should continue to have the exact same experience.
+
+The responsive improvements should only optimize Tablet and Mobile views.
+
+=========================================================
+OBJECTIVE
+=========================================================
+
+The ERP should automatically adapt to the user's screen size.
+
+There should be three optimized layouts:
+
+• Desktop
+• Tablet
+• Mobile
+
+Each layout should be designed specifically for that screen size instead of simply shrinking the desktop UI.
+
+=========================================================
+1. DESKTOP (1200px and above)
+=========================================================
+
+Keep the existing UI exactly as it is.
+
+Do not modify:
+
+• Sidebar
+• Tables
+• Forms
+• Dashboard
+• Reports
+• Dialogs
+
+Desktop must remain unchanged.
+
+=========================================================
+2. TABLET VIEW (768px–1199px)
+=========================================================
+
+Optimize the layout.
+
+Examples:
+
+• Sidebar collapses by default.
+• Forms become two-column where appropriate.
+• Buttons resize properly.
+• Tables become horizontally scrollable.
+• Dashboard cards resize to fit the screen.
+• Charts resize automatically.
+• Popups fit within the screen.
+• No content should overflow.
+
+=========================================================
+3. MOBILE VIEW (<768px)
+=========================================================
+
+Design a proper mobile ERP experience.
+
+Do NOT simply shrink the desktop.
+
+Instead:
+
+Navigation
+
+• Collapsible hamburger menu.
+• Sidebar hidden by default.
+• Tap to open.
+• Auto-close after selecting a menu.
+
+Dashboard
+
+• KPI cards become full-width.
+• Charts resize.
+• Cards stack vertically.
+• No horizontal scrolling.
+
+Forms
+
+Every form should become a single-column layout.
+
+Examples:
+
+Sales
+
+Purchase
+
+Receipt
+
+Payment
+
+Customer
+
+Vendor
+
+Employee
+
+Expense
+
+Payroll
+
+Settings
+
+Buttons should become full width where appropriate.
+
+Inputs should resize automatically.
+
+Tables
+
+Large tables should become mobile-friendly.
+
+Example:
+
+Desktop
+
+Invoice | Customer | Date | Total | Status
+
+Mobile
+
+Invoice Card
+
+Invoice No
+
+Customer
+
+Date
+
+Amount
+
+Status
+
+Actions
+
+Instead of squeezing many columns.
+
+Dialogs
+
+Every popup should:
+
+Fit inside the screen.
+
+Never overflow.
+
+Be scrollable.
+
+Have large touch targets.
+
+Buttons
+
+Minimum touch size 44px.
+
+Enough spacing between buttons.
+
+Search
+
+Search bars should resize automatically.
+
+Dropdowns
+
+Dropdowns should:
+
+Fit inside the screen.
+
+Support searching.
+
+Not extend outside the viewport.
+
+Cards
+
+Convert dense desktop tables into clean mobile cards where appropriate.
+
+=========================================================
+4. RESPONSIVE TABLES
+=========================================================
+
+Modules including:
+
+Sales
+
+Purchase
+
+Customers
+
+Vendors
+
+Stock
+
+Ledger
+
+Payroll
+
+Attendance
+
+Cash Book
+
+Bank Book
+
+Trial Balance
+
+Day Book
+
+Voucher Lists
+
+should become responsive.
+
+Desktop:
+
+Keep tables.
+
+Mobile:
+
+Convert to card layout where appropriate.
+
+=========================================================
+5. DASHBOARD
+=========================================================
+
+Dashboard should automatically rearrange cards.
+
+Desktop
+
+4 cards per row.
+
+Tablet
+
+2 cards per row.
+
+Mobile
+
+1 card per row.
+
+Charts should resize.
+
+No clipping.
+
+=========================================================
+6. TOUCH OPTIMIZATION
+=========================================================
+
+Increase spacing.
+
+Larger buttons.
+
+Larger dropdown arrows.
+
+Larger checkboxes.
+
+Comfortable scrolling.
+
+No accidental taps.
+
+=========================================================
+7. PERFORMANCE
+=========================================================
+
+Responsive changes must not slow down the ERP.
+
+Avoid unnecessary re-renders.
+
+Lazy load heavy charts where applicable.
+
+=========================================================
+8. NO DESKTOP REGRESSION
+=========================================================
+
+Desktop layout must remain pixel-perfect.
+
+Do not alter widths, spacing, or workflows for desktop users.
+
+Only Tablet and Mobile layouts should change.
+
+=========================================================
+9. TESTING
+=========================================================
+
+Test on:
+
+Desktop
+1920×1080
+
+Laptop
+1366×768
+
+Tablet
+1024×768
+
+iPad
+
+Android Tablet
+
+iPhone SE
+
+iPhone 14/15
+
+Android 6.5"
+
+Verify:
+
+No horizontal scrolling.
+
+No clipped text.
+
+No overflowing dialogs.
+
+No hidden buttons.
+
+All forms usable with one hand.
+
+Dashboard readable.
+
+Tables usable.
+
+Menus accessible.
+
+=========================================================
+10. GOAL
+=========================================================
+
+The ERP should feel like a professionally built modern ERP application on every device.
+
+Desktop users should see no change.
+
+Tablet users should get an optimized layout.
+
+Mobile users should get a clean, touch-friendly interface that is easy to operate without zooming or horizontal scrolling.
+
+The experience should be comparable to modern ERP systems such as SAP Business One Web, Zoho Books, Odoo, and Oracle NetSuite.

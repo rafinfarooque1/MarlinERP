@@ -616,7 +616,7 @@ export default function Reconciliation() {
                 className="h-9"
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label className="text-sm mb-1.5 block">Bank</Label>
                 <Input

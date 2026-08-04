@@ -225,9 +225,20 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const { data: hierarchies = [] } = useListHierarchies();
   const { theme, toggleTheme } = useTheme();
   const { outletsEnabled } = useOutletsEnabled();
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [collapsed, setCollapsed] = useState(false);
+  // Mobile drawer starts CLOSED (on md+ the sidebar is always visible via
+  // md:translate-x-0, so this only governs phones). Tablets (768–1199px)
+  // start with the rail collapsed to give content room; desktop keeps the
+  // full sidebar exactly as before.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth >= 768 && window.innerWidth < 1200,
+  );
   const [logo, setLogo] = useState<string | null>(() => localStorage.getItem(LOGO_KEY));
+
+  // Picking a menu item on a phone should show the page, not leave the drawer
+  // covering it — close the drawer whenever the route changes. Desktop/tablet
+  // ignore sidebarOpen entirely, so this is mobile-only by construction.
+  useEffect(() => { setSidebarOpen(false); }, [location]);
   const { locationState, setLocation: setLocContext } = useLocationContext();
 
   // ── User branch info ────────────────────────────────────────────────────────

@@ -335,7 +335,7 @@ export default function AuditLog() {
           </SheetHeader>
           {viewEntry && (
             <div className="mt-6 space-y-5">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {[
                   ['Action',  <ActionBadge action={viewEntry.action} />],
                   ['Module',  <ModuleBadge module={viewEntry.module} />],

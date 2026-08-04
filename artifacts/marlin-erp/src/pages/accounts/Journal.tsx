@@ -1,4 +1,4 @@
-import { useState, Fragment } from 'react';
+import { useState, useRef, Fragment } from 'react';
 import {
   useListJournalVouchers, useCreateJournalVoucher, useDeleteJournalVoucher,
   useListAccountsFlat, type JournalVoucher,
@@ -17,6 +17,7 @@ import { toast } from 'sonner';
 import { downloadCSV } from '@/lib/download';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
+import { entryScopeKeyDown, autoFocusFirst, focusField, focusAndOpen, useEntryShortcuts } from '@/lib/keyboard-entry';
 
 interface LineDraft { ledgerId: number; debit: string; credit: string }
 
@@ -63,12 +64,52 @@ export default function Journal() {
     setLines([{ ...EMPTY_LINE }, { ...EMPTY_LINE }]);
   };
 
+  // ── Keyboard Entry Mode ──
+  const scopeRef = useRef<HTMLDivElement>(null);
+
+  /** Append a row and drop the operator straight into its ledger search. */
+  const addLine = () => {
+    setLines(prev => {
+      const nextIndex = prev.length;
+      window.setTimeout(() => {
+        focusAndOpen(scopeRef.current?.querySelector<HTMLElement>(
+          `[data-testid="journal-line-ledger-${nextIndex}"]`,
+        ));
+      }, 0);
+      return [...prev, { ...EMPTY_LINE }];
+    });
+  };
+
+  const deleteLine = (i: number) => {
+    if (lines.length <= 2) return; // a journal needs two legs
+    setLines(prev => prev.filter((_, idx) => idx !== i));
+  };
+
+  // Catch Ctrl+S / Ctrl+Enter / F4 even when focus has wandered outside the form
+  useEntryShortcuts(isOpen, {
+    onSave: () => { if (!createMutation.isPending) submit(); },
+    onAddLine: addLine,
+  });
+
   const submit = () => {
-    if (!voucherDate) { toast.error('Date is required'); return; }
+    if (!voucherDate) { toast.error('Date is required'); focusField('voucherDate', scopeRef.current); return; }
     const clean = lines.filter(l => l.ledgerId > 0 || Number(l.debit) > 0 || Number(l.credit) > 0);
-    if (clean.length < 2) { toast.error('Add at least two lines'); return; }
-    if (clean.some(l => !l.ledgerId)) { toast.error('Every line needs a ledger'); return; }
-    if (!balanced) { toast.error('Debits must equal credits'); return; }
+    if (clean.length < 2) {
+      toast.error('Add at least two lines');
+      focusField('journal-line-ledger-0', scopeRef.current);
+      return;
+    }
+    const missingLedger = lines.findIndex(l => (Number(l.debit) > 0 || Number(l.credit) > 0) && !l.ledgerId);
+    if (clean.some(l => !l.ledgerId)) {
+      toast.error('Every line needs a ledger');
+      focusField(`journal-line-ledger-${Math.max(missingLedger, 0)}`, scopeRef.current);
+      return;
+    }
+    if (!balanced) {
+      toast.error('Debits must equal credits');
+      focusField('journal-line-debit-0', scopeRef.current);
+      return;
+    }
     createMutation.mutate({
       voucherType: 'journal',
       voucherDate,
@@ -210,20 +251,29 @@ export default function Journal() {
 
       {/* ── New Journal Dialog ── */}
       <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) resetForm(); }}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="sm:max-w-2xl" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader><DialogTitle>New Journal Voucher</DialogTitle></DialogHeader>
-          <div className="space-y-4 pt-2">
-            <div className="grid grid-cols-2 gap-4">
+          <div
+            ref={scopeRef}
+            data-kbd-scope
+            onKeyDown={entryScopeKeyDown({
+              onSave: () => { if (!createMutation.isPending) submit(); },
+              onAddLine: addLine,
+              onDeleteLine: deleteLine,
+            })}
+            className="space-y-4 pt-2"
+          >
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Date <span className="text-destructive">*</span></label>
-                <Input type="date" value={voucherDate} onChange={e => setVoucherDate(e.target.value)} />
+                <Input type="date" data-field="voucherDate" value={voucherDate} onChange={e => setVoucherDate(e.target.value)} />
               </div>
             </div>
 
             <div className="space-y-2">
               <label className="text-sm font-medium">Entries <span className="text-destructive">*</span></label>
-              <div className="border border-border rounded-lg overflow-hidden">
-                <table className="w-full text-sm">
+              <div className="border border-border rounded-lg overflow-x-auto">
+                <table className="w-full text-sm min-w-[480px]">
                   <thead className="bg-muted/20 text-muted-foreground">
                     <tr>
                       <th className="text-left px-2 py-1.5 font-medium">Ledger</th>
@@ -234,7 +284,7 @@ export default function Journal() {
                   </thead>
                   <tbody className="divide-y divide-border">
                     {lines.map((l, i) => (
-                      <tr key={i}>
+                      <tr key={i} data-kbd-row={i}>
                         <td className="px-2 py-1.5">
                           <AccountCombobox
                             options={ledgerOptions}
@@ -242,20 +292,25 @@ export default function Journal() {
                             onChange={id => setLine(i, { ledgerId: id })}
                             placeholder="Select ledger"
                             className="h-9"
+                            advanceOnSelect
+                            data-testid={`journal-line-ledger-${i}`}
+                            data-field={`journal-line-ledger-${i}`}
                           />
                         </td>
                         <td className="px-2 py-1.5">
                           <Input type="number" min={0} step="0.01" className="h-9 text-right font-mono" value={l.debit}
+                            data-field={`journal-line-debit-${i}`}
                             onChange={e => setLine(i, { debit: e.target.value })} />
                         </td>
                         <td className="px-2 py-1.5">
                           <Input type="number" min={0} step="0.01" className="h-9 text-right font-mono" value={l.credit}
+                            data-last-field={i === lines.length - 1 ? '1' : undefined}
                             onChange={e => setLine(i, { credit: e.target.value })} />
                         </td>
                         <td className="px-1">
                           {lines.length > 2 && (
-                            <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                              onClick={() => setLines(prev => prev.filter((_, idx) => idx !== i))}>
+                            <Button variant="ghost" size="icon" tabIndex={-1} className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                              onClick={() => deleteLine(i)}>
                               <X className="w-3.5 h-3.5" />
                             </Button>
                           )}
@@ -274,7 +329,7 @@ export default function Journal() {
                 </table>
               </div>
               <div className="flex items-center justify-between">
-                <Button variant="outline" size="sm" type="button" onClick={() => setLines(prev => [...prev, { ...EMPTY_LINE }])}>
+                <Button variant="outline" size="sm" type="button" onClick={addLine} title="F4">
                   <Plus className="w-3.5 h-3.5 mr-1.5" /> Add Line
                 </Button>
                 {totalDr > 0 || totalCr > 0 ? (

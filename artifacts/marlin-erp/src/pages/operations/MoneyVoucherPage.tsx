@@ -39,6 +39,7 @@ import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { isSystemLedger } from '@/lib/systemLedgers';
 import { BillSettlementPanel, type SettlementSelection } from '@/components/settlement/BillSettlementPanel';
+import { entryScopeKeyDown, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 
 // ── Per-kind wiring ───────────────────────────────────────────────────────────
 
@@ -161,6 +162,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
   const [lastSaved, setLastSaved] = useState<{ id: number; voucherNumber: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const printTabRef = useRef<Window | null>(null);
+  const scopeRef = useRef<HTMLFormElement>(null);
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: EMPTY });
 
@@ -259,6 +261,30 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     void form.handleSubmit(submit, () => { printTabRef.current?.close(); printTabRef.current = null; })();
   };
 
+  // ── Keyboard Entry Mode ──
+  // Focus the Date field once the entry form is available (inline, not a dialog).
+  const canEnter = perm.canAdd || !!editing;
+  useEffect(() => {
+    if (!canEnter) return;
+    const t = window.setTimeout(() => {
+      const el = scopeRef.current?.querySelector<HTMLElement>('[data-field="voucherDate"]');
+      el?.focus();
+    }, 0);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canEnter]);
+
+  const focusFirstError = (errors: any) => {
+    const first = ['voucherDate', 'cashBankLedgerId', 'partyLedgerId', 'amount']
+      .find(f => errors[f]);
+    if (first) focusField(first, scopeRef.current);
+  };
+  const save = () => {
+    if (busy) return;
+    void form.handleSubmit(submit, focusFirstError)();
+  };
+  useEntryShortcuts(canEnter, { onSave: save, onSaveAndPrint: perm.canDownload ? saveAndPrint : undefined });
+
   // ── Register filters ────────────────────────────────────────────────────────
   const [search, setSearch] = useState('');
   const [fromDate, setFromDate] = useState('');
@@ -353,11 +379,17 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
               </span>
             </div>
             <Form {...form}>
-              <form onSubmit={form.handleSubmit(submit)} className="p-5 space-y-4">
+              <form
+                ref={scopeRef}
+                data-kbd-scope
+                onKeyDown={entryScopeKeyDown({ onSave: save, onSaveAndPrint: perm.canDownload ? saveAndPrint : undefined })}
+                onSubmit={form.handleSubmit(submit)}
+                className="p-5 space-y-4"
+              >
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   <FormField control={form.control} name="voucherDate" render={({ field }) => (
                     <FormItem><FormLabel>Date <span className="text-destructive">*</span></FormLabel>
-                      <Input type="date" {...field} />
+                      <Input type="date" data-field="voucherDate" {...field} />
                       <FormMessage />
                     </FormItem>
                   )} />
@@ -365,7 +397,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                     <FormItem className="lg:col-span-2">
                       <FormLabel>{C.cashLabel} <span className="text-destructive">*</span></FormLabel>
                       <AccountCombobox options={cashBankAccounts as any[]} value={field.value}
-                        onChange={field.onChange} placeholder="Head Office / branch cash or bank account" />
+                        onChange={field.onChange} placeholder="Head Office / branch cash or bank account" advanceOnSelect data-field="cashBankLedgerId" />
                       <FormMessage />
                     </FormItem>
                   )} />
@@ -385,14 +417,14 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                     <FormItem className="lg:col-span-2">
                       <FormLabel>{C.partyLabel} <span className="text-destructive">*</span></FormLabel>
                       <AccountCombobox options={partyOptions} value={field.value}
-                        onChange={field.onChange} placeholder={`Select ${partyTypeDef.label.toLowerCase()} account`} />
+                        onChange={field.onChange} placeholder={`Select ${partyTypeDef.label.toLowerCase()} account`} advanceOnSelect data-field="partyLedgerId" />
                       <FormMessage />
                     </FormItem>
                   )} />
 
                   <FormField control={form.control} name="amount" render={({ field }) => (
                     <FormItem><FormLabel>Amount ₹ <span className="text-destructive">*</span></FormLabel>
-                      <Input type="number" min={0} step="0.01" {...field} />
+                      <Input type="number" min={0} step="0.01" data-field="amount" {...field} />
                       <FormMessage />
                     </FormItem>
                   )} />
@@ -408,11 +440,13 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                     vendor (payment) ledger is picked. Create only: settlement
                     vouchers are locked for edit server-side. */}
                 {!editing && (
-                  <BillSettlementPanel
-                    ledgerId={Number(form.watch('partyLedgerId')) || 0}
-                    amount={Number(form.watch('amount')) || 0}
-                    onSelection={setSettlement}
-                  />
+                  <div data-kbd-ignore>
+                    <BillSettlementPanel
+                      ledgerId={Number(form.watch('partyLedgerId')) || 0}
+                      amount={Number(form.watch('amount')) || 0}
+                      onSelection={setSettlement}
+                    />
+                  </div>
                 )}
 
                 <FormField control={form.control} name="narration" render={({ field }) => (

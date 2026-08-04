@@ -553,7 +553,7 @@ export default function Employees() {
           <DialogHeader><DialogTitle>Edit Employee — {editItem?.name}</DialogTitle></DialogHeader>
           <Form {...editForm}>
             <form onSubmit={editForm.handleSubmit(onEditSubmit)} className="space-y-4 pt-2">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={editForm.control} name="name" render={({ field }) => (
                   <FormItem><FormLabel>Full Name <span className="text-destructive">*</span></FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
@@ -578,7 +578,7 @@ export default function Employees() {
                   </p>
                 </FormItem>
               )} />
-              <div className="border-t border-border pt-4 grid grid-cols-2 gap-4">
+              <div className="border-t border-border pt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={editForm.control} name="hierarchyId" render={({ field }) => (
                   <FormItem><FormLabel>Role <span className="text-destructive">*</span></FormLabel>
                     <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
@@ -722,7 +722,7 @@ export default function Employees() {
           <DialogHeader><DialogTitle>Add Employee</DialogTitle></DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={form.control} name="name" render={({ field }) => (
                   <FormItem><FormLabel>Full Name <span className="text-destructive">*</span></FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
@@ -737,7 +737,7 @@ export default function Employees() {
                 )} />
               </div>
 
-              <div className="border-t border-border pt-4 grid grid-cols-2 gap-4">
+              <div className="border-t border-border pt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={form.control} name="hierarchyId" render={({ field }) => (
                   <FormItem><FormLabel>Role <span className="text-destructive">*</span></FormLabel>
                     <Select onValueChange={v => field.onChange(Number(v))} value={field.value ? String(field.value) : ''}>
@@ -753,7 +753,7 @@ export default function Employees() {
                 )} />
               </div>
 
-              <div className="border-t border-border pt-4 grid grid-cols-2 gap-4">
+              <div className="border-t border-border pt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={form.control} name="branchType" render={({ field }) => (
                   <FormItem><FormLabel>Location Type</FormLabel>
                     <Select onValueChange={v => { field.onChange(v); form.setValue('branchId', 0); }} value={field.value}>

@@ -1,0 +1,96 @@
+TASK: Improve the keyboard focus flow in the Purchase Bill screen.
+
+Currently, after clicking **Add Line**, the focus moves directly to the Item Name field.
+
+This is not the desired workflow.
+
+=========================================================
+REQUIRED BEHAVIOUR
+=========================================================
+
+After clicking **Add Line**:
+
+1. Create a new empty line.
+2. Automatically place the keyboard focus on the **Item Category / Item Type** dropdown (the first dropdown in the row).
+3. Automatically open the dropdown so the available options are immediately visible.
+
+Example:
+
+Packing Material
+Raw Material
+Item Name (SKU)
+
+The user should be able to:
+
+• Use the Arrow keys to choose the category.
+• Press Enter to select it.
+• After selecting the category, the focus should automatically move to the **Item Name** field.
+• The Item Name search should immediately become active so the user can start typing without using the mouse.
+
+=========================================================
+KEYBOARD FLOW
+=========================================================
+
+The complete keyboard flow should be:
+
+Add Line
+↓
+
+Item Category (auto-focused & dropdown opened)
+↓
+
+Select category (Enter)
+↓
+
+Item Name (search active)
+↓
+
+Quantity
+↓
+
+Rate
+↓
+
+Discount
+↓
+
+GST %
+↓
+
+Batch (if applicable)
+↓
+
+MFG Date
+↓
+
+EXP Date
+↓
+
+Press Enter on the last editable field
+↓
+
+Automatically create the next row
+↓
+
+Focus returns to the **Item Category** dropdown of the new row.
+
+=========================================================
+DO NOT CHANGE
+=========================================================
+
+Do not focus on:
+
+❌ HSN Code
+❌ Batch
+❌ GST Mode
+❌ GST Type
+
+HSN should continue to populate automatically after the item is selected.
+
+=========================================================
+EXPECTED RESULT
+=========================================================
+
+The user should be able to enter an entire Purchase Bill using only the keyboard, without touching the mouse.
+
+Every new line should always begin from the **Item Category** dropdown, then move naturally to Item Name and the remaining fields.

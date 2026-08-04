@@ -114,12 +114,60 @@ export function salesInvoiceNumber(series: SalesSeries, fyLabel: string, seq: nu
   return `${SALES_SERIES[series].prefix}/${fyLabel}/${String(seq).padStart(6, "0")}`;
 }
 
+/** The location a sale is billed from, as stamped on the sales row. */
+export type SaleLocation = { type: string; id: number | null | undefined };
+
+/**
+ * Resolve the counter SCOPE for a sale location. Every location runs its own
+ * independent numbering, so the counter row is keyed on this scope string.
+ *
+ * Rules (each guards a known trap):
+ *  - Head office is ONE scope regardless of its placeholder id — HO's id
+ *    convention differs per table (0 in vouchers, 1 in sales), so keying on
+ *    the id would silently split HO into two sequences.
+ *  - A mirror pair (an outlet row and a warehouse row for the SAME physical
+ *    place, recognisable only by the shared cash_ledger_id) must draw from
+ *    ONE counter, keyed on the warehouse identity. Otherwise the same shop
+ *    would print two invoices carrying the same number, one entered under
+ *    each identity, and the printed location name could not tell them apart.
+ */
+export async function salesCounterScope(
+  q: Queryable,
+  location: SaleLocation,
+): Promise<string> {
+  if (location.type === "headoffice") return "headoffice";
+  const id = Number(location.id ?? 0);
+  if (location.type === "outlet") {
+    try {
+      const { rows: [twin] } = await q.query(
+        `SELECT w.id
+           FROM outlets o
+           JOIN warehouses w ON w.cash_ledger_id = o.cash_ledger_id
+          WHERE o.id = $1 AND o.cash_ledger_id IS NOT NULL
+          ORDER BY w.id LIMIT 1`,
+        [id]
+      );
+      if (twin) return `warehouse:${Number(twin.id)}`;
+    } catch {
+      /* cash_ledger_id not migrated yet — fall through to the plain identity */
+    }
+  }
+  return `${location.type}:${id}`;
+}
+
 /**
  * Allocate the next sales bill number for a series, scoped to the financial
- * year of the sale date. The atomic upsert row-locks the (series, FY) counter
- * row for the rest of the transaction, so two tills billing concurrently can
- * never draw the same number — and a rolled-back sale rolls its number back
- * with it.
+ * year of the sale date AND the billing location — every location keeps an
+ * independent running serial (Head Office numbering never advances a
+ * warehouse's, and a new location starts at 000001 automatically because its
+ * counter row simply doesn't exist yet). The printed format stays clean
+ * (SB2C/2026-27/000001, no location code); the location is identity the ERP
+ * tracks internally via the sale row's location columns.
+ *
+ * The atomic upsert row-locks the (series@scope, FY) counter row for the rest
+ * of the transaction, so two tills billing concurrently at the same location
+ * can never draw the same number — and a rolled-back sale rolls its number
+ * back with it.
  *
  * MUST be called with the sale-creation transaction client so the counter
  * bump commits/rolls back atomically with the sale row itself.
@@ -127,7 +175,8 @@ export function salesInvoiceNumber(series: SalesSeries, fyLabel: string, seq: nu
 export async function nextSalesInvoiceNumber(
   q: Queryable,
   series: SalesSeries,
-  saleDate?: string,
+  saleDate: string | undefined,
+  location: SaleLocation,
 ): Promise<string> {
   let fyStartMonth = 4;
   try {
@@ -137,13 +186,14 @@ export async function nextSalesInvoiceNumber(
     /* company_settings not migrated yet — Indian FY default */
   }
   const fyLabel = financialYearLabel(saleDate, fyStartMonth);
+  const scope = await salesCounterScope(q, location);
   const { rows: [seq] } = await q.query(
     `INSERT INTO voucher_sequences (voucher_type, fy_label, last_number)
      VALUES ($1, $2, 1)
      ON CONFLICT (voucher_type, fy_label)
      DO UPDATE SET last_number = voucher_sequences.last_number + 1
      RETURNING last_number`,
-    [SALES_SERIES[series].counter, fyLabel]
+    [`${SALES_SERIES[series].counter}@${scope}`, fyLabel]
   );
   return salesInvoiceNumber(series, fyLabel, Number(seq.last_number));
 }

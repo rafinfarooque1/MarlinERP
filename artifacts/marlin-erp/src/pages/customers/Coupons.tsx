@@ -157,7 +157,7 @@ export default function Coupons() {
               <FormField control={form.control} name="code" render={({ field }) => (
                 <FormItem><FormLabel>Coupon Code <span className="text-destructive">*</span></FormLabel><FormControl><Input className="uppercase font-mono font-bold tracking-widest" placeholder="SUMMER20" {...field} onChange={e => field.onChange(e.target.value.toUpperCase())} /></FormControl><FormMessage /></FormItem>
               )} />
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={form.control} name="discountType" render={({ field }) => (
                   <FormItem><FormLabel>Type</FormLabel>
                     <Select onValueChange={field.onChange} value={field.value}>

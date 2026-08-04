@@ -2172,21 +2172,105 @@ async function runMigrations() {
     }
   }
 
-  // Forward-only reconcile for the SB2B/SB2C counters, every boot: anything
-  // that rewrites invoice numbers (manual fixes, restores) can strand the
-  // allocator behind numbers already in use, which bricks all new sales. Same
-  // rationale as the invoice_sequence reconcile above — re-heal, never rewind.
+  // ── (9) Per-location sales invoice numbering ───────────────────────────────
+  // Every location runs its own independent SB2B/SB2C serial (Head Office
+  // numbering never advances a warehouse's), so the same invoice number may
+  // legitimately exist at two locations. The identity that must stay unique is
+  // (location, number) — invoice_number already embeds series + FY.
+  //
+  // Order matters: the per-location index is created FIRST (a strict subset of
+  // the global one, so it can never fail while the global index still holds),
+  // and only then is the global index dropped. If creation ever failed, the
+  // global protection would remain in place rather than leaving sales
+  // unguarded. Head office normalises to one key regardless of its
+  // placeholder id (0 in vouchers, 1 in sales — match on TYPE alone).
+  // Boundary note: this index keys the RAW stored identity. It cannot fold a
+  // mirror outlet onto its warehouse twin (index expressions must be
+  // immutable — no joins), so for a mirrored place the shared allocator
+  // counter — salesCounterScope() folds both identities onto one scope — is
+  // what guarantees the two identities never print the same number. Direct
+  // SQL inserts that bypass the allocator sit outside that guarantee, as they
+  // sit outside every other invariant here.
+  try {
+    await pool.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_invoice_number_per_location
+         ON sales ((CASE WHEN location_type = 'headoffice' THEN 'headoffice'
+                         ELSE location_type || ':' || COALESCE(location_id, 0)::text END),
+                   invoice_number)`
+    );
+    await pool.query(`DROP INDEX IF EXISTS uq_sales_invoice_number`);
+  } catch (e) {
+    console.error('[migration] sales_per_location_unique_index FAILED:', (e as Error).message);
+  }
+
+  // One-time: stamp every sale-trail receipt with its sale's location. Legacy
+  // trail receipts predate location stamping (default headoffice/0), which
+  // was harmless while numbers were globally unique — but the per-location
+  // guards on the edit/cancel receipt deletes match on location once a number
+  // is shared, and an unstamped legacy receipt would be stranded. Backfilled
+  // NOW, while every number still identifies exactly one sale; rows whose
+  // number matches more than one sale (none exist at this moment) are left
+  // untouched rather than guessed at.
+  {
+    const { rows: [done] } = await pool.query(
+      `SELECT 1 FROM migration_log WHERE name = 'sale_trail_receipt_location_backfill_v1'`
+    );
+    if (!done) {
+      try {
+        const { rowCount } = await pool.query(
+          `UPDATE receipts r
+              SET location_type = s.location_type,
+                  location_id = COALESCE(s.location_id, 0)
+             FROM sales s
+            WHERE r.voucher_number = s.invoice_number
+              AND (SELECT count(*) FROM sales s2 WHERE s2.invoice_number = s.invoice_number) = 1
+              AND (r.location_type IS DISTINCT FROM s.location_type
+                   OR COALESCE(r.location_id, 0) IS DISTINCT FROM COALESCE(s.location_id, 0))`
+        );
+        await pool.query(`INSERT INTO migration_log (name) VALUES ('sale_trail_receipt_location_backfill_v1')`);
+        console.error(`[migration] sale_trail_receipt_location_backfill_v1: restamped ${rowCount ?? 0} receipt(s)`);
+      } catch (e) {
+        console.error('[migration] sale_trail_receipt_location_backfill_v1 FAILED:', (e as Error).message);
+      }
+    }
+  }
+
+  // Forward-only reconcile for the per-location SB2B/SB2C counters, every
+  // boot: anything that rewrites invoice numbers (manual fixes, restores) can
+  // strand an allocator behind numbers already in use, which bricks new sales
+  // at that location. Re-heal, never rewind.
+  //
+  // Each location's counter seeds from the highest suffix ALREADY USED at that
+  // location, so existing numbers are never re-issued (a location that shared
+  // the old global sequence continues past its own maximum; a brand-new
+  // location has no rows here and starts at 000001 on first sale). The scope
+  // expression must mirror salesCounterScope(): HO by type alone, and an
+  // outlet folded onto its warehouse twin when both share one cash ledger.
   try {
     for (const series of Object.keys(SALES_SERIES) as SalesSeries[]) {
       const { prefix, counter } = SALES_SERIES[series];
       await pool.query(
         `INSERT INTO voucher_sequences (voucher_type, fy_label, last_number)
-         SELECT $1, split_part(s.invoice_number, '/', 2),
-                MAX((split_part(s.invoice_number, '/', 3))::int)
-           FROM sales s
-          WHERE s.invoice_number LIKE $2 || '/%'
-            AND split_part(s.invoice_number, '/', 3) ~ '^[0-9]+$'
-          GROUP BY split_part(s.invoice_number, '/', 2)
+         SELECT $1 || '@' || x.scope, x.fy, MAX(x.suffix)
+           FROM (
+             SELECT CASE
+                      WHEN s.location_type = 'headoffice' THEN 'headoffice'
+                      WHEN s.location_type = 'outlet' AND tw.id IS NOT NULL THEN 'warehouse:' || tw.id::text
+                      ELSE s.location_type || ':' || COALESCE(s.location_id, 0)::text
+                    END AS scope,
+                    split_part(s.invoice_number, '/', 2) AS fy,
+                    (split_part(s.invoice_number, '/', 3))::int AS suffix
+               FROM sales s
+               LEFT JOIN outlets o ON s.location_type = 'outlet' AND o.id = s.location_id
+               LEFT JOIN LATERAL (
+                 SELECT w.id FROM warehouses w
+                  WHERE o.cash_ledger_id IS NOT NULL AND w.cash_ledger_id = o.cash_ledger_id
+                  ORDER BY w.id LIMIT 1
+               ) tw ON true
+              WHERE s.invoice_number LIKE $2 || '/%'
+                AND split_part(s.invoice_number, '/', 3) ~ '^[0-9]+$'
+           ) x
+          GROUP BY x.scope, x.fy
          ON CONFLICT (voucher_type, fy_label)
          DO UPDATE SET last_number = GREATEST(voucher_sequences.last_number, EXCLUDED.last_number)`,
         [counter, prefix]

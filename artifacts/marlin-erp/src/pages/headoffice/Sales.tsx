@@ -1,5 +1,6 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { SearchableItemSelect, type ItemOption } from '@/components/ui/searchable-item-select';
+import { entryScopeKeyDown, autoFocusFirst, focusAndOpen, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
   usePaginatedSales, useCreateSale, useListCustomers, useCreateCustomer, useGetMe,
@@ -464,6 +465,26 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: effectiveDefaultValues });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
 
+  // ── Keyboard Entry Mode ──
+  const scopeRef = useRef<HTMLFormElement>(null);
+  // Blocks a second submit fired before React Query flips isPending (Ctrl+S race).
+  const submitLockRef = useRef(false);
+  /** Append a line and drop the cursor straight into the new row's item picker. */
+  const kbdAddLine = () => {
+    const nextIndex = fields.length;
+    append({ itemId: 0, quantity: 1, unitPrice: 0, unitDiscount: 0, taxable: customerHasGstin, taxableTouched: false });
+    window.setTimeout(() => {
+      focusAndOpen(scopeRef.current?.querySelector<HTMLElement>(`[data-testid="input-line-item-${nextIndex}"]`));
+    }, 0);
+  };
+  const kbdDeleteLine = (i: number) => { if (fields.length > 1) remove(i); };
+  /** Ctrl+S / Ctrl+Enter → the existing "Complete Sale" submit, guarded by isPending. */
+  const kbdSave = () => {
+    if (editItem ? updateMutation.isPending : createMutation.isPending) return;
+    form.handleSubmit(onSubmit)();
+  };
+  useEntryShortcuts(isOpen, { onSave: kbdSave, onComplete: kbdSave, onAddLine: kbdAddLine });
+
   // Cold-load guard: a create form opened (or a quotation converted) before the
   // company settings arrived captured the fallback opening mode. Once the
   // settings resolve, correct the field — but only on a CREATE form the cashier
@@ -788,14 +809,17 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const onSubmit = (data: FormValues) => {
     if (data.paymentMode === 'credit' && !data.customerId) {
       toast.error('Credit sales need a registered customer — pick one or change the payment mode.');
+      focusField('customerId', scopeRef.current);
       return;
     }
     // MRP floor — catches an Enter-key submit that skipped the field's blur
     // reset. The server enforces the same rule authoritatively.
-    for (const li of data.lineItems) {
+    for (let i = 0; i < data.lineItems.length; i++) {
+      const li = data.lineItems[i];
       const floor = getMrpFloor(li.itemId);
       if (floor > 0 && Number(li.unitPrice) < floor) {
         toast.error(MRP_FLOOR_MESSAGE);
+        focusField(`line-mrp-${i}`, scopeRef.current);
         return;
       }
     }
@@ -809,6 +833,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
       priceMode: (li.taxable ? 'exclusive' : 'inclusive') as 'exclusive' | 'inclusive',
       taxAmount: 0, // backend recomputes authoritatively
     }));
+    // Synchronous re-entrancy lock: two rapid Ctrl+S / Enter submits can both
+    // pass an isPending check before React Query publishes the pending state.
+    // The ref flips immediately, so only the first ever reaches mutate().
+    // Placed AFTER the validation early-returns so a failed validation never
+    // leaves the lock stuck. Released in onSettled (success or error).
+    if (submitLockRef.current) return;
+    submitLockRef.current = true;
     const { discountAmount, billDiscount } = computeCartTotals();
     const payload = {
       ...data,
@@ -840,6 +871,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           form.reset(effectiveDefaultValues);
         },
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Could not update sale'),
+        onSettled: () => { submitLockRef.current = false; },
       });
     } else {
       // Create mode — POST new sale
@@ -887,6 +919,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
           }
           toast.error(e?.data?.error || e.message || 'Could not record sale');
         },
+        onSettled: () => { submitLockRef.current = false; },
       });
     }
   };
@@ -1106,7 +1139,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               </button>
             ))}
           </div>
-          <Table>
+          <Table className="hidden md:table">
             <TableHeader>
               <TableRow className="bg-muted/10">
                 <TableHead>Invoice</TableHead>
@@ -1186,6 +1219,75 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               ))}
             </TableBody>
           </Table>
+          {/* Mobile card list — mirrors the desktop table above */}
+          <div className="md:hidden">
+            {isLoading ? (
+              <div className="space-y-2 p-3">
+                {[...Array(4)].map((_, i) => <div key={i} className="h-24 bg-muted/30 rounded-lg animate-pulse" />)}
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="text-center py-16 text-muted-foreground">
+                <Receipt className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No sales recorded yet</p>
+              </div>
+            ) : (
+              <div className="space-y-2 p-3">
+                {filtered.map(sale => {
+                  const ps = (sale as any).paymentStatus ?? 'paid';
+                  const statusBadge = ps === 'cancelled'
+                    ? <Badge variant="outline" className="text-[10px] text-muted-foreground">Cancelled</Badge>
+                    : ps === 'paid'
+                      ? <Badge className="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20">Paid</Badge>
+                      : ps === 'partially_paid'
+                        ? <Badge className="text-[10px] bg-amber-500/10 text-amber-600 border-amber-500/20">Partial</Badge>
+                        : <Badge className="text-[10px] bg-red-500/10 text-red-600 border-red-500/20">Unpaid</Badge>;
+                  const balanceDue = Number((sale as any).balanceDue ?? 0);
+                  return (
+                    <div key={sale.id} className="border border-border rounded-lg p-3 space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="font-mono text-primary font-bold text-sm">{sale.invoiceNumber}</p>
+                          <p className="text-xs text-muted-foreground flex items-center gap-1">
+                            <Calendar className="w-3 h-3" />{new Date(sale.saleDate).toLocaleDateString('en-IN')}
+                          </p>
+                        </div>
+                        {statusBadge}
+                      </div>
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                        <p className="text-muted-foreground">Location: <span className="text-foreground">{sale.outletName}</span></p>
+                        <p className="text-muted-foreground">Customer: <span className="text-foreground">{sale.customerName || 'Walk-in'}</span></p>
+                      </div>
+                      <div className="flex items-end justify-between gap-2 pt-1">
+                        <div>
+                          <p className="font-mono font-bold text-emerald-500 text-sm">₹{Number(sale.totalAmount).toLocaleString('en-IN')}</p>
+                          {balanceDue > 0.004 && (
+                            <p className="text-[10px] text-red-500 font-mono">Due: ₹{balanceDue.toLocaleString('en-IN')}</p>
+                          )}
+                        </div>
+                        <div className="flex gap-1">
+                          <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(sale)} title="View"><Eye className="w-4 h-4" /></Button>
+                          {perm.canEdit && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500" onClick={() => openEdit(sale)} title="Edit sale"><Pencil className="w-4 h-4" /></Button>}
+                          {perm.canDownload && <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-600" onClick={() => void handleDownloadPDF(sale)} title="Download PDF"><FileDown className="w-4 h-4" /></Button>}
+                          {perm.canDownload && (
+                            <Button
+                              variant="ghost" size="icon"
+                              className="h-8 w-8 text-[#25D366] hover:text-[#128C7E] hover:bg-[#25D366]/10"
+                              disabled={!(sale as any).customerPhone}
+                              onClick={() => void handleWhatsApp(sale)}
+                              title={(sale as any).customerPhone
+                                ? `Send invoice to ${(sale as any).customerPhone} via WhatsApp`
+                                : NO_PHONE_MESSAGE}
+                            >
+                              <WhatsAppIcon className="w-4 h-4" />
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
           {totalSales > 0 && (
             <div className="p-3 border-t border-border flex flex-wrap items-center justify-between gap-3 text-sm">
               <span className="text-muted-foreground">
@@ -1209,7 +1311,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
 
       {/* Sale Dialog */}
       <Dialog open={isOpen} onOpenChange={v => { setIsOpen(v); if (!v) { setEditItem(null); setConvertFrom(null); form.reset(effectiveDefaultValues); } }}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto" onOpenAutoFocus={autoFocusFirst}>
           <DialogHeader><DialogTitle>{editItem
             ? `Edit Sale — ${editItem.invoiceNumber}`
             : convertFrom
@@ -1222,8 +1324,14 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
             </div>
           )}
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
-              <div className="grid grid-cols-2 gap-4">
+            <form
+              ref={scopeRef}
+              data-kbd-scope
+              onKeyDown={entryScopeKeyDown({ onSave: kbdSave, onComplete: kbdSave, onAddLine: kbdAddLine, onDeleteLine: kbdDeleteLine })}
+              onSubmit={form.handleSubmit(onSubmit)}
+              className="space-y-5"
+            >
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <FormField control={form.control} name="locationId" render={({ field }) => (
                   <FormItem><FormLabel>Selling Location <span className="text-destructive">*</span></FormLabel>
                     <Select
@@ -1262,7 +1370,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                     </Select><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="saleDate" render={({ field }) => (
-                  <FormItem><FormLabel>Date <span className="text-destructive">*</span></FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
+                  <FormItem><FormLabel>Date <span className="text-destructive">*</span></FormLabel><FormControl><Input type="date" {...field} {...(forceLocationId ? { 'data-kbd-first': '1' } : {})} /></FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="customerId" render={({ field }) => {
                   const filteredCustomers = customers.filter(c =>
@@ -1281,13 +1389,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       </div>
                       <Popover open={customerOpen} onOpenChange={v => { setCustomerOpen(v); if (!v) setCustomerSearch(''); }}>
                         <PopoverTrigger asChild>
-                          <Button type="button" variant="outline" role="combobox"
+                          <Button type="button" variant="outline" role="combobox" data-field="customerId"
                             className={cn('w-full justify-between font-normal h-10 px-3', !selected && 'text-muted-foreground')}>
                             <span className="truncate">{selected ? `${selected.name}${(selected as any).state ? ` (${(selected as any).state})` : ''}` : 'Walk-in Customer'}</span>
                             <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent align="start" className="p-0" style={{ width: 'var(--radix-popover-trigger-width)', minWidth: '240px' }}>
+                        <PopoverContent align="start" className="p-0" style={{ width: 'var(--radix-popover-trigger-width)', minWidth: '240px' }} data-kbd-ignore>
                           <Command shouldFilter={false}>
                             <CommandInput placeholder="Search customer…" value={customerSearch} onValueChange={setCustomerSearch} />
                             <CommandEmpty>No customers found. <button type="button" className="text-primary underline ml-1" onClick={() => { setCustomerOpen(false); custForm.reset(); custForm.setValue('name', customerSearch); setCustomerSearch(''); setShowNewCustomer(true); }}>Create "{customerSearch}"?</button></CommandEmpty>
@@ -1419,7 +1527,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         <Plus className="w-3 h-3 mr-1" /> Add Item
                       </Button>
                     </div>
-                    <div className="space-y-2">
+                    <div className="overflow-x-auto"><div className="min-w-[720px] space-y-2">
                       {fields.map((field, index) => {
                         const itemId   = form.watch(`lineItems.${index}.itemId`);
                         const qty      = form.watch(`lineItems.${index}.quantity`);
@@ -1447,7 +1555,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         const lineTotal = gst.lineGross; // final line total (GST-inclusive, either mode)
 
                         return (
-                          <div key={field.id} className="p-3 bg-muted/20 rounded-lg border border-border space-y-2">
+                          <div key={field.id} data-kbd-row={index} className="p-3 bg-muted/20 rounded-lg border border-border space-y-2">
                             {/* Row 1: Item selector */}
                             <FormField control={form.control} name={`lineItems.${index}.itemId`} render={({ field: f }) => (
                               <FormItem>
@@ -1455,6 +1563,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                 <FormControl><SearchableItemSelect
                                   className="h-8 text-xs"
                                   columns={['available', 'mrp', 'gst']}
+                                  advanceOnSelect
+                                  data-testid={`input-line-item-${index}`}
                                   items={lineItemOptions(Number(f.value))}
                                   value={f.value}
                                   onChange={id => {
@@ -1497,6 +1607,8 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                           min={floor > 0 ? floor : 0}
                                           className="h-8 text-xs font-mono"
                                           data-testid={`input-line-mrp-${index}`}
+                                          data-field={`line-mrp-${index}`}
+                                          data-last-field={!discountsEnabled && index === fields.length - 1 ? '1' : undefined}
                                           {...f}
                                           onBlur={e => {
                                             f.onBlur();
@@ -1563,6 +1675,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                         disabled={!itemId || unitPrice <= 0}
                                         placeholder="0"
                                         className="h-8 text-xs"
+                                        data-last-field={index === fields.length - 1 ? '1' : undefined}
                                         {...f}
                                         value={(f.value as any) ?? ''}
                                       />
@@ -1602,13 +1715,13 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                 )}
                               </div>
                               <div className="col-span-1 pb-0.5 flex justify-end">
-                                <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
+                                <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-7 w-7 text-destructive" onClick={() => remove(index)} disabled={fields.length === 1}><Trash2 className="w-3 h-3" /></Button>
                               </div>
                             </div>
                           </div>
                         );
                       })}
-                    </div>
+                    </div></div>
                   </>
                 )}
               </div>
@@ -1771,7 +1884,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
               <FormField control={custForm.control} name="name" render={({ field }) => (
                 <FormItem><FormLabel>Name <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="Full name / company name" {...field} /></FormControl><FormMessage /></FormItem>
               )} />
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={custForm.control} name="phone" render={({ field }) => (
                   <FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
                 )} />
@@ -2217,7 +2330,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                   onShareWhatsApp={() => handleWhatsApp(viewItem)}
                 />
                 {perm.canDownload && (
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     {perm.canDownload && (
                       <Button variant="outline" onClick={() => void handlePreviewPDF(viewItem)}>
                         <Eye className="w-4 h-4 mr-2" /> Preview

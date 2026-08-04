@@ -308,7 +308,7 @@ export default function ProfileMe() {
           {editing ? (
             <div className="space-y-3">
               {education.map((edu, i) => (
-                <div key={i} className="grid grid-cols-2 gap-2 p-3 rounded-lg border border-border bg-muted/20 relative">
+                <div key={i} className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-3 rounded-lg border border-border bg-muted/20 relative">
                   <button
                     type="button"
                     onClick={() => removeEdu(i)}
@@ -364,7 +364,7 @@ export default function ProfileMe() {
           {editing ? (
             <div className="space-y-3">
               {workExp.map((exp, i) => (
-                <div key={i} className="grid grid-cols-2 gap-2 p-3 rounded-lg border border-border bg-muted/20 relative">
+                <div key={i} className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-3 rounded-lg border border-border bg-muted/20 relative">
                   <button
                     type="button"
                     onClick={() => removeExp(i)}

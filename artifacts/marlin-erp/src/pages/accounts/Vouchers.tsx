@@ -408,7 +408,7 @@ function NewVoucherDialog({ onClose, defaultType }: { onClose: () => void; defau
         {type === 'journal' && (
           <div className="space-y-3">
             <Label>Ledger Lines</Label>
-            <div className="space-y-2">
+            <div className="overflow-x-auto"><div className="space-y-2 min-w-[360px]">
               {lines.map((l, i) => (
                 <div key={i} className="grid grid-cols-[1fr_100px_100px_24px] gap-2 items-center">
                   <AccountCombobox options={allLedgers} value={l.ledgerId} onChange={v => setLine(i, { ledgerId: v })} placeholder="Ledger" />
@@ -417,7 +417,7 @@ function NewVoucherDialog({ onClose, defaultType }: { onClose: () => void; defau
                   <button type="button" onClick={() => setLines(prev => prev.filter((_, idx) => idx !== i))} className="text-muted-foreground hover:text-destructive">×</button>
                 </div>
               ))}
-            </div>
+            </div></div>
             <Button type="button" variant="outline" size="sm" onClick={() => setLines(p => [...p, { ledgerId: 0, debit: '', credit: '' }])}>
               <Plus className="h-3 w-3 mr-1" />Add Line
             </Button>
@@ -647,7 +647,7 @@ function EditVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: () => v
         {type === 'journal' && (
           <div className="space-y-3">
             <Label>Ledger Lines</Label>
-            <div className="space-y-2">
+            <div className="overflow-x-auto"><div className="space-y-2 min-w-[360px]">
               {lines.map((l, i) => (
                 <div key={i} className="grid grid-cols-[1fr_100px_100px_24px] gap-2 items-center">
                   <AccountCombobox options={allLedgers} value={l.ledgerId} onChange={val => setLine(i, { ledgerId: val })} placeholder="Ledger" />
@@ -656,7 +656,7 @@ function EditVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: () => v
                   <button type="button" onClick={() => setLines(prev => prev.filter((_, idx) => idx !== i))} className="text-muted-foreground hover:text-destructive">×</button>
                 </div>
               ))}
-            </div>
+            </div></div>
             <Button type="button" variant="outline" size="sm" onClick={() => setLines(p => [...p, { ledgerId: 0, debit: '', credit: '' }])}>
               <Plus className="h-3 w-3 mr-1" />Add Line
             </Button>

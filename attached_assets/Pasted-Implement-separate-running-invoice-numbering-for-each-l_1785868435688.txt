@@ -1,0 +1,103 @@
+Implement separate running invoice numbering for each location while keeping the invoice format clean and professional.
+
+Objective:
+Do NOT include the warehouse/location code in the invoice number. Instead, maintain an independent running serial number for each location.
+
+Example:
+
+Head Office
+SB2C/2026-27/000001
+SB2C/2026-27/000002
+SB2B/2026-27/000001
+SB2B/2026-27/000002
+
+Frozen Hub - Ragiguda
+SB2C/2026-27/000001
+SB2C/2026-27/000002
+SB2B/2026-27/000001
+
+Frozen Hub - Calicut
+SB2C/2026-27/000001
+SB2C/2026-27/000002
+SB2B/2026-27/000001
+
+Requirements
+
+1. Maintain separate running counters for every location.
+   - Each location should have its own independent numbering sequence.
+   - Head Office numbering must not affect warehouse numbering.
+   - Ragiguda numbering must not affect Calicut numbering.
+   - Future warehouses/outlets should automatically get their own numbering sequence.
+
+2. Continue using the existing invoice format.
+   Sales B2C:
+   SB2C/2026-27/000001
+
+   Sales B2B:
+   SB2B/2026-27/000001
+
+   Do NOT append warehouse codes like:
+   RAG/SB2C/...
+   CAL/SB2C/...
+   HO/SB2C/...
+
+   Keep the printed invoice number clean.
+
+3. The Location Name is already printed on the invoice.
+   That is sufficient to identify where the invoice belongs.
+   No warehouse abbreviation should appear in the invoice number.
+
+4. Internally, the ERP must identify invoices using:
+   - Location ID
+   - Financial Year
+   - Invoice Series (SB2B/SB2C)
+   - Running Number
+
+   The unique key should effectively be:
+   (Location + Financial Year + Series + Running Number)
+
+5. Searching invoices
+   - Existing searches must continue to work.
+   - Searching by invoice number should return the correct invoice.
+   - If duplicate invoice numbers exist across locations, the ERP should distinguish them using the Location internally.
+   - Global search should display the Location Name beside the invoice.
+
+6. Dashboard and reports
+   All reports must continue working correctly:
+   - Sales Register
+   - GST Reports
+   - Customer Ledger
+   - Trial Balance
+   - P&L
+   - Day Book
+   - Dashboard
+   - Invoice Print
+   - PDF Export
+
+7. Existing invoices
+   Keep all existing invoice numbers unchanged.
+   Do NOT renumber old invoices.
+   Only ensure they are associated with the correct location sequence internally.
+
+8. Future-proof design
+   When a new warehouse or outlet is created, the ERP should automatically initialize:
+   - SB2B counter
+   - SB2C counter
+   - and any future sales series if introduced.
+
+9. Concurrency
+   Invoice numbering must be transaction-safe.
+   Two users creating invoices simultaneously in the same location must never receive the same invoice number.
+
+10. Verification
+   Test with:
+   - Head Office creating 5 B2C invoices.
+   - Ragiguda creating 5 B2C invoices.
+   - Calicut creating 5 B2C invoices.
+   - Head Office creating B2B invoices.
+   - Ragiguda creating B2B invoices.
+
+   Expected result:
+   Each location starts from 000001 independently while maintaining unique records internally.
+
+Do not change the printed invoice format. Only change how serial numbers are generated and managed internally.

@@ -60,6 +60,10 @@ export interface ImportRow {
   missingParty: string | null;
   /** Document group index — rows of one invoice share it (sales/purchases). */
   docIndex: number | null;
+  /** Txn imports: this document's party will be auto-created at commit. */
+  willCreateParty: string | null;
+  /** Txn imports: walk-in counter sale (no customer on the bill). */
+  walkIn: boolean;
   /** Voucher imports: planned allocation shown in the preview. */
   plan: ImportVoucherPlan | null;
   /** Voucher imports: what commit actually recorded. */
@@ -118,6 +122,14 @@ export interface ImportTxnSummary {
   totalGst: number;
   totalDiscount: number;
   totalAmount: number;
+  /** Distinct customers/vendors across fully-validated documents. */
+  distinctParties: number;
+  /** Distinct product names across all parsed lines. */
+  distinctItems: number;
+  /** Documents that will be recorded as walk-in counter sales. */
+  walkInInvoices: number;
+  /** Party names that will be created automatically at commit. */
+  partiesToCreate: string[];
 }
 
 export interface ImportParseResponse {
@@ -147,6 +159,8 @@ export interface ImportCommitResponse {
   summary: { imported: number; updated: number; skipped: number; failed: number };
   failures: Array<{ rowNumber: number; name: string; reason: string }>;
   details?: ImportCommitDetails;
+  /** Parties auto-created during a sales/purchase commit (auto-create toggle). */
+  partiesCreated?: Array<{ id: number; name: string }>;
 }
 
 export interface ImportRollbackResponse {

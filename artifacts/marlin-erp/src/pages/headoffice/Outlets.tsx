@@ -191,7 +191,7 @@ export default function Outlets() {
                     <SelectContent>{warehouses.map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}</SelectContent>
                   </Select><FormMessage /></FormItem>
               )} />
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={form.control} name="state" render={({ field }) => (
                   <FormItem><FormLabel>State</FormLabel><FormControl><StateCombobox value={field.value || ''} onChange={field.onChange} data-testid="select-outlet-state" /></FormControl></FormItem>
                 )} />
@@ -202,7 +202,7 @@ export default function Outlets() {
               <FormField control={form.control} name="gstin" render={({ field }) => (
                 <FormItem><FormLabel>GSTIN <span className="text-xs text-muted-foreground font-normal">(required for taxable branch transfers)</span></FormLabel><FormControl><Input placeholder="29AAAAA0000A1ZZ" className="font-mono uppercase" {...field} /></FormControl><FormMessage /></FormItem>
               )} />
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField control={form.control} name="contactPerson" render={({ field }) => (
                   <FormItem><FormLabel>Contact Person</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
                 )} />

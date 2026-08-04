@@ -93,7 +93,9 @@ export interface ImportSaleLine {
 export interface ImportSaleDocInput {
   invoiceNumber: string;
   saleDate: string; // ISO YYYY-MM-DD
-  customerId: number;
+  /** Null = walk-in counter sale (no customer on the bill), exactly like the
+   *  POS: allowed only for settled modes (cash/bank/upi), never for credit. */
+  customerId: number | null;
   lines: ImportSaleLine[];
   /** Pre-tax bill discount, allocated paise-exactly across lines. */
   billDiscount: number;
@@ -120,11 +122,19 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
   const locationId = loc.type === "headoffice" ? 1 : loc.id;
 
   // ── Company + customer state → inter/intra (identical to POST /sales) ──
+  // Walk-in sales (null customer) are POS counter sales: no customer state,
+  // so intra-state GST — and credit is impossible without someone to owe it.
+  if (doc.customerId == null && doc.paymentMode === "credit") {
+    throw new Error("A credit sale needs a customer — walk-in (no-customer) sales must be Cash, Bank or UPI.");
+  }
   const { rows: [comp] } = await pool.query(`SELECT state FROM company_settings LIMIT 1`);
   const companyState = String(comp?.state ?? "").trim().toLowerCase();
-  const { rows: [cust] } = await pool.query(`SELECT state, name FROM customers WHERE id = $1`, [doc.customerId]);
-  if (!cust) throw new Error(`Customer #${doc.customerId} no longer exists — re-validate the batch.`);
-  const customerState = String(cust.state ?? "").trim().toLowerCase();
+  let customerState = "";
+  if (doc.customerId != null) {
+    const { rows: [cust] } = await pool.query(`SELECT state, name FROM customers WHERE id = $1`, [doc.customerId]);
+    if (!cust) throw new Error(`Customer #${doc.customerId} no longer exists — re-validate the batch.`);
+    customerState = String(cust.state ?? "").trim().toLowerCase();
+  }
   const isInterState = !!(companyState && customerState && companyState !== customerState);
 
   // ── Item master snapshot (tax_rate/mrp are raw-migration columns → raw SQL) ──
@@ -196,7 +206,7 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
   }
   const elecClrLedgerId = clearsThroughBank(doc.paymentMode)
     ? await ledgerIdByCode(pool, "STD-ELEC-CLR") : null;
-  const custLedgerId = doc.paymentMode === "credit"
+  const custLedgerId = doc.paymentMode === "credit" && doc.customerId != null
     ? await ledgerIdByCode(pool, `CUST-${doc.customerId}`) : null;
 
   const [ledgerMeta, branchNameOf] = await Promise.all([
@@ -248,12 +258,17 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
     // would put imported bills outside the two-series numbering — and an
     // imported number shaped like SB2x/FY/n could collide with (or sit ahead
     // of) the allocator and brick the next POS sale until a restart reconciles.
-    const { rows: [custGst] } = await client.query(
-      `SELECT NULLIF(TRIM(COALESCE(gst_number, '')), '') AS gstin FROM customers WHERE id = $1`,
-      [doc.customerId],
-    );
+    let custGstin: string | null = null;
+    if (doc.customerId != null) {
+      const { rows: [custGst] } = await client.query(
+        `SELECT NULLIF(TRIM(COALESCE(gst_number, '')), '') AS gstin FROM customers WHERE id = $1`,
+        [doc.customerId],
+      );
+      custGstin = custGst?.gstin ?? null;
+    }
     newInvoiceNumber = await nextSalesInvoiceNumber(
-      client, custGst?.gstin != null ? "b2b" : "b2c", doc.saleDate,
+      client, custGstin != null ? "b2b" : "b2c", doc.saleDate,
+      { type: loc.type, id: locationId },
     );
     const outletIdForInsert = loc.type === "outlet" ? loc.id : null;
     const { rows: [row] } = await client.query(
@@ -286,10 +301,12 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
       };
     }));
 
-    await client.query(
-      `UPDATE customers SET total_purchases = COALESCE(total_purchases, 0)::numeric + $1 WHERE id = $2`,
-      [totalAmount, doc.customerId],
-    );
+    if (doc.customerId != null) {
+      await client.query(
+        `UPDATE customers SET total_purchases = COALESCE(total_purchases, 0)::numeric + $1 WHERE id = $2`,
+        [totalAmount, doc.customerId],
+      );
+    }
 
     // ── Legacy cash-book trail (branch sales only — HO writes no receipts) ──
     if (salesLedgerId) {
@@ -685,8 +702,16 @@ export async function rollbackImportedSale(
     );
   }
   // Cash-book trail rows keyed on the invoice number (sale-source only —
-  // never someone's manual receipt that happens to share the text).
-  await client.query(`DELETE FROM receipts WHERE voucher_number = $1 AND source = 'sale'`, [sale.invoice_number]);
+  // never someone's manual receipt that happens to share the text). Numbers
+  // are unique per location only, so a shared number must also match this
+  // sale's location or the twin location's receipt would vanish with it.
+  await client.query(
+    `DELETE FROM receipts r
+      WHERE r.voucher_number = $1 AND r.source = 'sale'
+        AND (NOT EXISTS (SELECT 1 FROM sales s2 WHERE s2.invoice_number = $1 AND s2.id <> $2)
+             OR (r.location_type = $3 AND COALESCE(r.location_id, 0) = $4))`,
+    [sale.invoice_number, saleId, locType, Number(locId ?? 0)]
+  );
   await client.query(`DELETE FROM sales WHERE id = $1`, [saleId]);
   return null;
 }
