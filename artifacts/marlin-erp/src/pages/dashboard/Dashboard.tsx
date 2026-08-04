@@ -127,19 +127,6 @@ export default function Dashboard() {
   const locMax = Math.max(0, ...(s?.byLocation.map(l => l.total) ?? [0]));
   const topItemMax = Math.max(0, ...(bi?.topItems.map(i => i.revenue) ?? [0]));
 
-  // Money movement for the SELECTED range — same posting stream as the
-  // balance tiles, following the date filter and location like every other
-  // KPI. The generated response type predates the field, hence the cast.
-  // (`todayMoney` is the legacy key the server still mirrors.)
-  const tm = ((bi as any)?.moneyFlows ?? (bi as any)?.todayMoney) as {
-    cashIn: number; cashOut: number; bankIn: number; bankOut: number;
-    totalIn: number; totalOut: number;
-  } | null | undefined;
-  // Tile label follows the picked preset: "Today"/"Yesterday" read naturally
-  // on a one-day range; longer ranges drop the suffix (the period is already
-  // shown in the header).
-  const moneySuffix = range.preset === 'today' ? ' Today' : range.preset === 'yesterday' ? ' Yesterday' : '';
-
   // GP / NP for the selected period — served off the SAME P&L build as the
   // Expenses tile, so they always equal the Profit & Loss report for the same
   // range and location. The generated type predates the field, hence the cast.
@@ -148,9 +135,9 @@ export default function Dashboard() {
   const [, navigate] = useLocation();
   const drill = (anchor: string) => () => navigate(`/reports/financial#${anchor}`);
 
-  // Fixed row layout (3 / 3 / 2 / 2 / 2) on md+: a 6-column grid where the
-  // first two rows' cards span 2 columns and the rest span 3. On mobile the
-  // grid falls back to two columns and the rows simply stack.
+  // Fixed row layout (3 / 3 / 3 / 1) on md+: a 6-column grid where the first
+  // three rows' cards span 2 columns and NP takes the last row full-width. On
+  // mobile the grid falls back to two columns and the rows simply stack.
   const SPAN2 = 'md:col-span-2';
   const SPAN3 = 'md:col-span-3';
   // Inventory Value is hidden entirely for employees without the valuation
@@ -195,14 +182,14 @@ export default function Dashboard() {
       tone: bi?.bank?.balance == null ? 'default' : bi.bank.balance >= 0 ? 'pos' : 'neg',
       className: rowTwoSpan,
     },
-    // ── Row 3: Receivables · Payables ───────────────────────────────────────
+    // ── Row 3: Receivables · Payables · GP ──────────────────────────────────
     // Balance Sheet positions taken from the accounting ledgers, so they carry
     // no location and read '—' for a single-location login, like Expenses.
     {
       label: 'Receivables',
       value: bi?.receivables?.total == null ? '—' : fmt(bi.receivables.total),
       tone: bi?.receivables?.total == null ? 'default' : (bi?.receivables?.overdue ?? 0) > 0 ? 'warn' : 'info',
-      className: SPAN3,
+      className: SPAN2,
     },
     // Everything the company owes, not just its trade creditors. Salary accrues
     // to a payable that sits outside Sundry Creditors, so the old tile read the
@@ -218,42 +205,26 @@ export default function Dashboard() {
       hint: (bi?.payables as any)?.salaryPayable != null
         ? `Suppliers ${fmt(bi!.payables.total ?? 0)} · Salary ${fmt((bi!.payables as any).salaryPayable)} · Rent ${fmt((bi!.payables as any).rentPayable ?? 0)}`
         : undefined,
-      className: SPAN3,
+      className: SPAN2,
     },
-    // ── Row 4: Money In · Money Out (for the selected period) ───────────────
-    // Across all tills and bank accounts — read off the same books as the
-    // balances, so a till sale, a voucher or a journal all move it. '—'
-    // exactly when the balance tiles read '—'.
-    {
-      label: `Money In${moneySuffix}`,
-      value: tm == null ? '—' : fmt(tm.totalIn),
-      tone: (tm?.totalIn ?? 0) > 0 ? 'pos' : 'default',
-      hint: tm ? `Cash ${fmt(tm.cashIn)} · Bank ${fmt(tm.bankIn)}` : undefined,
-      className: SPAN3,
-    },
-    {
-      label: `Money Out${moneySuffix}`,
-      value: tm == null ? '—' : fmt(tm.totalOut),
-      tone: (tm?.totalOut ?? 0) > 0 ? 'neg' : 'default',
-      hint: tm ? `Cash ${fmt(tm.cashOut)} · Bank ${fmt(tm.bankOut)}` : undefined,
-      className: SPAN3,
-    },
-    // ── Row 5: GP · NP — click either to open the Profit & Loss report ──────
+    // GP closes row 3; NP takes row 4 full-width. Click either to open the
+    // Profit & Loss report.
     {
       label: 'GP',
       value: pf?.gross == null ? '—' : fmt(pf.gross),
       tone: pf?.gross == null ? 'default' : pf.gross >= 0 ? 'pos' : 'neg',
       hint: 'Gross Profit · tap for P&L',
       onClick: drill('pl-gross-profit'),
-      className: SPAN3,
+      className: SPAN2,
     },
+    // ── Row 4: NP ───────────────────────────────────────────────────────────
     {
       label: 'NP',
       value: pf?.net == null ? '—' : fmt(pf.net),
       tone: pf?.net == null ? 'default' : pf.net >= 0 ? 'pos' : 'neg',
       hint: 'Net Profit · tap for P&L',
       onClick: drill('pl-net-profit'),
-      className: SPAN3,
+      className: 'md:col-span-6',
     },
   ];
 
@@ -290,7 +261,7 @@ export default function Dashboard() {
         {/* ── Summary cards ──────────────────────────────────────────────── */}
         {isLoading ? (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {[...Array(12)].map((_, i) => <Skeleton key={i} className="h-[68px] rounded-lg" />)}
+            {[...Array(10)].map((_, i) => <Skeleton key={i} className="h-[68px] rounded-lg" />)}
           </div>
         ) : (
           <>
