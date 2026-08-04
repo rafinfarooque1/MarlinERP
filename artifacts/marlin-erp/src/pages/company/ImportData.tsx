@@ -12,9 +12,9 @@ import { useMemo, useRef, useState } from 'react';
 import {
   useImportBatches, useImportBatch, useParseImportFile, useCommitImportBatch,
   useRollbackImportBatch, useResolveImportParties, downloadImportTemplate,
-  useListWarehouses, useListOutlets,
+  downloadImportErrorFile, useListWarehouses, useListOutlets,
   type ImportModule, type ImportBatch, type ImportRow, type ImportRollbackBlocked,
-  type ImportPartyInput,
+  type ImportPartyInput, type ImportTxnSummary, type ImportCommitResponse,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
@@ -144,7 +144,9 @@ export default function ImportData() {
   const perm = usePermission('page:/company/import');
 
   const [module, setModule] = useState<ImportModule>('customers');
-  const [preview, setPreview] = useState<{ batch: ImportBatch; rows: ImportRow[] } | null>(null);
+  const [preview, setPreview] = useState<{ batch: ImportBatch; rows: ImportRow[]; summary?: ImportTxnSummary } | null>(null);
+  /** Result panel shown after a commit finishes. */
+  const [commitResult, setCommitResult] = useState<ImportCommitResponse | null>(null);
   const [skippedRowIds, setSkippedRowIds] = useState<Set<number>>(new Set());
   const [duplicateAction, setDuplicateAction] = useState<'skip' | 'update'>('skip');
   const [commitOpen, setCommitOpen] = useState(false);
@@ -205,7 +207,7 @@ export default function ImportData() {
         id: preview.batch.id,
         parties: missingParties.map((p) => partyForm(p.name, p.gstNumber)),
       });
-      setPreview({ batch: r.batch, rows: r.rows });
+      setPreview({ batch: r.batch, rows: r.rows, summary: r.summary });
       setPartyForms({});
       if (r.errors.length > 0) {
         toast.warning(`${r.created.length} created, ${r.errors.length} failed: ${r.errors.map((e) => `${e.name} — ${e.reason}`).join('; ')}`);
@@ -234,6 +236,7 @@ export default function ImportData() {
         ...(locationRequired ? { locationType: locType, locationId: Number(locId) } : {}),
       });
       setPreview(r);
+      setCommitResult(null);
       setSkippedRowIds(new Set());
       setDuplicateAction('skip');
       setPartyForms({});
@@ -271,6 +274,7 @@ export default function ImportData() {
       });
       setCommitOpen(false);
       setPreview(null);
+      setCommitResult(r);
       const { imported, updated, skipped, failed } = r.summary;
       const msg = `${imported} imported${updated ? `, ${updated} updated` : ''}${skipped ? `, ${skipped} skipped` : ''}${failed ? `, ${failed} FAILED` : ''}`;
       if (failed > 0) toast.warning(`Import finished with problems — ${msg}. See the batch in History for per-row reasons.`);
@@ -351,7 +355,7 @@ export default function ImportData() {
                   <Card
                     key={m}
                     className={`cursor-pointer transition-colors ${active ? 'border-primary ring-1 ring-primary' : 'hover:border-muted-foreground/40'}`}
-                    onClick={() => { setModule(m); setPreview(null); setPartyForms({}); }}
+                    onClick={() => { setModule(m); setPreview(null); setCommitResult(null); setPartyForms({}); }}
                   >
                     <CardHeader className="pb-2">
                       <CardTitle className="text-base flex items-center gap-2">
@@ -437,6 +441,65 @@ export default function ImportData() {
               </CardContent>
             </Card>
 
+            {commitResult && !preview && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                    Import summary — {commitResult.batch.filename}
+                  </CardTitle>
+                  <CardDescription>
+                    Counted from the records this batch actually created in the books.
+                    {commitResult.details ? ` Finished in ${(commitResult.details.timeTakenMs / 1000).toFixed(1)}s.` : ''}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {commitResult.details ? (
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                      {([
+                        ...(isTxn(commitResult.batch.module) ? [
+                          [commitResult.batch.module === 'sales' ? 'Invoices imported' : 'Bills imported', commitResult.details.invoicesImported],
+                          [commitResult.batch.module === 'sales' ? 'Invoices failed' : 'Bills failed', commitResult.details.invoicesFailed],
+                          ['Stock movements', commitResult.details.stockMovements],
+                          ['Invoices with GST', commitResult.details.gstInvoices],
+                        ] : [
+                          ['Records imported', commitResult.summary.imported],
+                          ['Failed', commitResult.summary.failed],
+                        ]),
+                        ['Customers created', commitResult.details.customersCreated],
+                        ['Vendors created', commitResult.details.vendorsCreated],
+                        ['Ledgers created', commitResult.details.ledgersCreated],
+                        ['Receipt entries', commitResult.details.receiptsCreated],
+                        ['Payment entries', commitResult.details.paymentsCreated],
+                      ] as Array<[string, number]>).map(([label, value]) => (
+                        <div key={label} className="rounded-lg border p-3">
+                          <div className={`text-xl font-bold ${label.includes('failed') || label === 'Failed' ? (value > 0 ? 'text-destructive' : 'text-muted-foreground') : ''}`}>{value}</div>
+                          <div className="text-xs text-muted-foreground">{label}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      {commitResult.summary.imported} imported, {commitResult.summary.skipped} skipped, {commitResult.summary.failed} failed.
+                    </p>
+                  )}
+                  {(commitResult.summary.failed > 0 || commitResult.batch.errorRows > 0 || commitResult.batch.failedRows > 0) && (
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" disabled={!perm.canDownload}
+                        onClick={() => downloadImportErrorFile(commitResult.batch.id, commitResult.batch.module).catch((e: any) => toast.error(e?.message ?? 'The error file could not be downloaded.'))}>
+                        <Download className="w-4 h-4 mr-1.5" />
+                        Download failed rows (Excel)
+                      </Button>
+                      <span className="text-muted-foreground text-xs">Each row carries the reason it failed — fix and re-upload just those.</span>
+                    </div>
+                  )}
+                  <div>
+                    <Button variant="ghost" size="sm" onClick={() => setCommitResult(null)}>Dismiss</Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             {preview && (
               <Card>
                 <CardHeader className="pb-3">
@@ -471,6 +534,51 @@ export default function ImportData() {
                       <div className="text-xs text-muted-foreground">Errors</div>
                     </div>
                   </div>
+
+                  {preview.summary && (
+                    <div className="rounded-lg border bg-muted/40 p-3">
+                      <div className="text-xs font-medium text-muted-foreground mb-2">
+                        What will be recorded — computed by the ERP exactly as manual entry would:
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                        <div>
+                          <div className="text-lg font-bold">{preview.summary.invoices}</div>
+                          <div className="text-xs text-muted-foreground">{module === 'sales' ? 'Invoices' : 'Bills'}</div>
+                        </div>
+                        <div>
+                          <div className="text-lg font-bold">{preview.summary.totalQuantity}</div>
+                          <div className="text-xs text-muted-foreground">Total quantity</div>
+                        </div>
+                        <div>
+                          <div className="text-lg font-bold">₹{preview.summary.totalTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+                          <div className="text-xs text-muted-foreground">Taxable value</div>
+                        </div>
+                        <div>
+                          <div className="text-lg font-bold">₹{preview.summary.totalGst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+                          <div className="text-xs text-muted-foreground">Total GST</div>
+                        </div>
+                        <div>
+                          <div className="text-lg font-bold">₹{preview.summary.totalDiscount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+                          <div className="text-xs text-muted-foreground">Total discount</div>
+                        </div>
+                        <div>
+                          <div className="text-lg font-bold text-primary">₹{preview.summary.totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+                          <div className="text-xs text-muted-foreground">Total amount</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {preview.batch.errorRows > 0 && (
+                    <div className="flex items-center gap-2 text-sm">
+                      <Button variant="outline" size="sm" disabled={!perm.canDownload}
+                        onClick={() => downloadImportErrorFile(preview.batch.id, module).catch((e: any) => toast.error(e?.message ?? 'The error file could not be downloaded.'))}>
+                        <Download className="w-4 h-4 mr-1.5" />
+                        Download failed rows (Excel)
+                      </Button>
+                      <span className="text-muted-foreground text-xs">Only the problem rows, with the reason on each — fix in Excel and re-upload just those.</span>
+                    </div>
+                  )}
 
                   {locationRequired && missingParties.length > 0 && (
                     <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-3">
@@ -707,6 +815,15 @@ export default function ImportData() {
                 : 'Loading…'}
             </DialogDescription>
           </DialogHeader>
+          {detailData && (detailData.batch.errorRows > 0 || detailData.batch.failedRows > 0) && (
+            <div>
+              <Button variant="outline" size="sm" disabled={!perm.canDownload}
+                onClick={() => downloadImportErrorFile(detailData.batch.id, detailData.batch.module).catch((e: any) => toast.error(e?.message ?? 'The error file could not be downloaded.'))}>
+                <Download className="w-4 h-4 mr-1.5" />
+                Download failed rows (Excel)
+              </Button>
+            </div>
+          )}
           {detailData && (
             <div className="rounded-lg border overflow-x-auto max-h-[24rem] overflow-y-auto">
               <Table>

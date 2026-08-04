@@ -112,10 +112,35 @@ Rules that must hold for every import type, and why:
   key — `unitDiscount` present ⇒ inclusive/per-unit; legacy `discount` ⇒
   exclusive/line-total. The commit path honours whichever the stored norm
   carries so a batch previews and commits with the SAME math forever.
-- **MRP floor parity:** validation errors below-MRP sale prices (same rule as
-  `checkMrpFloor` in manual entry), and `importSaleDoc` re-checks at commit —
-  but only for new-convention lines (legacy exclusive prices can't be compared
-  to an inclusive MRP; they stay grandfathered).
+- **MRP handling is POS-style CONVERSION, not rejection:** a file price below
+  the Item Master MRP converts at parse time — line price = master MRP, the
+  difference folds into the per-unit discount (net unchanged) — with a per-row
+  warning; a price ≥ MRP is used as-is. The recorded price never sits below
+  the master MRP; `importSaleDoc` keeps `checkMrpFloor` at commit as a safety
+  net (converted lines always pass; legacy exclusive-price lines stay
+  grandfathered). **Why:** owner spec — imports must behave exactly like the
+  POS, and old-ERP files legitimately carry net prices below today's MRP.
+- **Preview/commit summary figures must come from the pricing-engine OUTPUTS,
+  never re-derived from file values:** sales discount = Σ built line
+  `discount` (item + paise-exact bill-discount share); purchase taxable/
+  discount = `priceBill`'s `taxableTotal`/`discountTotal`. Hand-recalculated
+  aggregates drift from what commit records on fractional qty/rounding
+  (review finding). Head rows carry computedTax/Taxable/Qty/Discount in norm;
+  `txnBatchSummary()` sums them for parse, batch-GET AND resolve-parties
+  responses (resolve replaces the preview — dropping summary there blanks the
+  totals strip right after the mandatory resolve step).
+- **Resolve-created parties are deliberately NOT stamped with
+  import_batch_id** — they are permanent masters that survive txn rollback
+  (like manual creation), and stamping them would trip
+  `verifyAfterRollback`'s leftover-stamps check. The post-commit report
+  counts them via the exact notes marker `Created during import batch #<id>`
+  instead of the stamp tables.
+- **Error file route** (`GET /imports/batches/:id/error-file`, download
+  right): xlsx of only error/needs_party/failed rows = template VISIBLE
+  columns + Error Reason + How To Fix, values from `raw.values`; 404 when no
+  failed rows. Post-commit UI gating must look at batch error+failed row
+  counts, not the commit summary's `failed` (pre-commit error rows commit as
+  skipped, not failed).
 - **Purchases have a Payment Account column** resolved through the voucher
   imports' `importAccountOptions`/`resolveAccountValue` (blank/cash → till,
   bank → unique STD-BANK leaf, else exact name). Commit RE-RESOLVES the stored

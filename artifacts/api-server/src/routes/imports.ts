@@ -904,10 +904,20 @@ async function validateTransactionRows(
         s.errors.push(`"${product.name}" has GST rate ${product.taxRate}% in the master, which is not a valid slab`);
         s.suggestions.push("Fix the product master's GST rate (0, 5, 12, 18 or 28), then re-upload");
       }
-      // Same floor manual entry enforces (checkMrpFloor in routes/sales.ts):
-      // an import must never create a below-MRP sale that POST /sales rejects.
-      if (module === "sales" && product.mrp > 0 && price !== null && Number.isFinite(price) && price < product.mrp) {
-        s.errors.push(`Price ₹${price} is below the Item Master MRP ₹${product.mrp} for ${product.name} — use Discount to reduce the selling price (same rule as manual sale entry)`);
+      // POS convention (checkMrpFloor in routes/sales.ts): the recorded MRP
+      // can never sit below the Item Master MRP — MRP is only ever raised.
+      // A file price below MRP is recorded exactly like the POS would: price
+      // = master MRP, with the difference folded into the per-unit discount
+      // (the customer's net price is unchanged). A price above MRP becomes
+      // the line's MRP as-is with the file's discount kept.
+      let linePrice = (price !== null && Number.isFinite(price)) ? price : 0;
+      let lineUnitDiscount = discount;
+      if (module === "sales" && product.mrp > 0 && linePrice < product.mrp - 0.004) {
+        lineUnitDiscount = Math.round((discount + (product.mrp - linePrice)) * 100) / 100;
+        s.warnings.push(
+          `Price ₹${linePrice.toFixed(2)} is below the Item Master MRP ₹${product.mrp.toFixed(2)} for ${product.name} — recorded like the POS: MRP ₹${product.mrp.toFixed(2)} with ₹${lineUnitDiscount.toFixed(2)}/unit discount (net price unchanged)`,
+        );
+        linePrice = product.mrp;
       }
       if (product && qty !== null && Number.isFinite(qty) && qty > 0) {
         // Sales lines carry the manual-entry semantics: GST-INCLUSIVE price
@@ -915,7 +925,7 @@ async function validateTransactionRows(
         // convention keep their legacy `discount` (line-total, exclusive
         // price) shape — the commit path honours whichever key is present.
         s.norm.line = module === "sales"
-          ? { kind: "item", id: product.id, name: product.name, quantity: qty, price: price ?? 0, unitDiscount: discount }
+          ? { kind: "item", id: product.id, name: product.name, quantity: qty, price: linePrice, unitDiscount: lineUnitDiscount }
           : { kind: product.kind, id: product.id, name: product.name, quantity: qty, rate: price ?? 0, discountPct: discount };
       }
 
@@ -1015,6 +1025,9 @@ async function validateTransactionRows(
 
     let total = 0;
     let computedTax = 0;
+    let computedTaxable = 0;
+    let computedQty = 0;
+    let computedDiscount = 0;
     if (module === "sales") {
       const itemTaxMap = new Map<number, { taxRate: number; name: string; hsnCode: string | null; unit: string | null }>();
       for (const i of doc.rowIdxs) {
@@ -1036,6 +1049,15 @@ async function validateTransactionRows(
       const subtotal = built.lineItems.reduce((t: number, li: any) => t + li.lineSubtotal, 0);
       computedTax = built.lineItems.reduce((t: number, li: any) => t + li.taxAmount, 0);
       total = Math.round((subtotal + computedTax) * 100) / 100;
+      // Summary figures come from the BUILT lines, never re-derived from the
+      // file values: li.discount is the engine's paise-exact per-line total
+      // (item discount + allocated bill-discount share), so the preview can
+      // never disagree with what the commit records.
+      computedTaxable = subtotal;
+      for (const li of built.lineItems as any[]) {
+        computedQty += Number(li.quantity ?? 0);
+        computedDiscount += Number(li.discount ?? 0);
+      }
     } else {
       let supply = supplyCache.get(doc.party.id);
       if (!supply) { supply = await resolveSupplyTaxType(doc.party.id, { type: loc.type, id: loc.id }); supplyCache.set(doc.party.id, supply); }
@@ -1048,6 +1070,10 @@ async function validateTransactionRows(
       );
       total = Math.round(Number(priced.totalAmount) * 100) / 100;
       computedTax = Number(priced.taxTotal);
+      // Straight from the pricing engine — the same totals the bill records.
+      computedTaxable = Number(priced.taxableTotal);
+      computedDiscount = Number(priced.discountTotal);
+      for (const i of doc.rowIdxs) computedQty += Number(slots[i].norm.line.quantity ?? 0);
       if (doc.dateIso < todayIso) {
         head.warnings.push("Backdated bill — average cost updates in the ORDER bills are entered, not by bill date; import oldest bills first");
       }
@@ -1118,6 +1144,10 @@ async function validateTransactionRows(
     head.norm.reference = doc.reference;
     head.norm.narration = doc.narration;
     head.norm.computedTotal = total;
+    head.norm.computedTax = Math.round(computedTax * 100) / 100;
+    head.norm.computedTaxable = Math.round(computedTaxable * 100) / 100;
+    head.norm.computedQty = Math.round(computedQty * 1000) / 1000;
+    head.norm.computedDiscount = Math.round(computedDiscount * 100) / 100;
   }
 
   // ── Verdicts ──
@@ -1495,6 +1525,35 @@ function rowJson(r: any) {
 
 const username = (req: Request) => (req as any).employee?.username ?? "system";
 
+/**
+ * Batch-level money totals for a sales/purchase preview — summed over the
+ * documents that validated fully (head rows carrying computedTotal). All
+ * figures come from the SAME pricing pass the commit will use; nothing is
+ * recomputed here.
+ */
+function txnBatchSummary(dbRows: Array<{ raw?: any }>): {
+  invoices: number; totalQuantity: number; totalTaxable: number;
+  totalGst: number; totalDiscount: number; totalAmount: number;
+} {
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  let invoices = 0, qty = 0, taxable = 0, gst = 0, discount = 0, amount = 0;
+  for (const r of dbRows) {
+    const n = r.raw?.norm ?? {};
+    if (!n.head || n.computedTotal == null) continue;
+    invoices++;
+    amount += Number(n.computedTotal ?? 0);
+    gst += Number(n.computedTax ?? 0);
+    taxable += Number(n.computedTaxable ?? 0);
+    qty += Number(n.computedQty ?? 0);
+    discount += Number(n.computedDiscount ?? 0);
+  }
+  return {
+    invoices, totalQuantity: Math.round(qty * 1000) / 1000,
+    totalTaxable: r2(taxable), totalGst: r2(gst),
+    totalDiscount: r2(discount), totalAmount: r2(amount),
+  };
+}
+
 // ── 1. Sample templates ──────────────────────────────────────────────────────
 
 router.get("/imports/templates/:module", requireModuleAction(PERM, "download"), async (req: Request, res: Response): Promise<void> => {
@@ -1535,6 +1594,7 @@ router.get("/imports/templates/:module", requireModuleAction(PERM, "download"), 
     if (module === "sales") {
       help.addRow(["• Price INCLUDES GST — it is the selling price / MRP, exactly as in manual sale entry. The ERP works the GST out from the Item Master rate; you never enter GST amounts."]);
       help.addRow(["• Discount is ₹ per UNIT. Bill Discount is a pre-tax ₹ off the whole invoice — put it on the invoice's first row."]);
+      help.addRow(["• A price BELOW the Item Master MRP is recorded like the POS: MRP stays at the master value and the difference becomes a per-unit discount — the customer's net price is unchanged. A price above MRP is used as-is."]);
     } else {
       help.addRow(["• Purchase Rate EXCLUDES GST, exactly as in manual purchase entry. The ERP adds GST from the product master rate; you never enter GST amounts."]);
       help.addRow(["• Discount % is a percent off that line. There is no bill-level discount on purchases — spread it into the lines."]);
@@ -1778,7 +1838,10 @@ router.post(
       user: username(req),
     }).catch(() => {});
 
-    res.status(201).json({ batch: batchJson(batch), rows: rowsOut.map(rowJson) });
+    res.status(201).json({
+      batch: batchJson(batch), rows: rowsOut.map(rowJson),
+      ...(isTxnModule(module) ? { summary: txnBatchSummary(rowsOut) } : {}),
+    });
   },
 );
 
@@ -1876,7 +1939,10 @@ router.post("/imports/batches/:id/resolve-parties", requireModuleAction(PERM, "a
     user,
   }).catch(() => {});
 
-  res.json({ batch: batchJson(updated), rows: outRows.map(rowJson), created, skipped, errors });
+  res.json({
+    batch: batchJson(updated), rows: outRows.map(rowJson), created, skipped, errors,
+    ...(isTxnModule(module) ? { summary: txnBatchSummary(outRows) } : {}),
+  });
 });
 
 // ── 3. History + detail ──────────────────────────────────────────────────────
@@ -1915,12 +1981,58 @@ router.get("/imports/batches/:id", requireModuleView(PERM), async (req: Request,
     pool.query(`SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [id]),
     locationNameResolver(),
   ]);
-  res.json({ batch: { ...batchJson(batch), locationName: nameOf(batch) }, rows: rows.map(rowJson) });
+  res.json({
+    batch: { ...batchJson(batch), locationName: nameOf(batch) },
+    rows: rows.map(rowJson),
+    ...(isTxnModule(batch.module) ? { summary: txnBatchSummary(rows) } : {}),
+  });
+});
+
+// ── 3b. Error file — only the problem rows, with the reason on each ─────────
+// Original (visible) template columns + Error Reason + How To Fix, so the user
+// corrects the rows in Excel and re-uploads just those.
+router.get("/imports/batches/:id/error-file", requireModuleAction(PERM, "download"), async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  const { rows: [batch] } = await pool.query(`SELECT * FROM import_batches WHERE id = $1`, [id]);
+  if (!batch) { res.status(404).json({ error: "Import batch not found" }); return; }
+  const module = asModule(batch.module);
+  if (!module) { res.status(400).json({ error: "Unknown module on this batch" }); return; }
+  const { rows } = await pool.query(
+    `SELECT * FROM import_rows WHERE batch_id = $1 AND status IN ('error', 'needs_party', 'failed') ORDER BY row_number`,
+    [id],
+  );
+  if (rows.length === 0) { res.status(404).json({ error: "This batch has no failed rows — nothing to download." }); return; }
+
+  const spec = TEMPLATES[module];
+  const visibleCols = spec.columns.filter((c) => !c.hidden);
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Failed Rows");
+  ws.columns = [
+    ...visibleCols.map((c) => ({ header: c.header, key: c.key, width: Math.max(16, c.header.length + 6) })),
+    { header: "Error Reason", key: "__reason", width: 60 },
+    { header: "How To Fix", key: "__fix", width: 50 },
+  ];
+  ws.getRow(1).font = { bold: true };
+  for (const r of rows) {
+    const values = (r.raw?.values ?? {}) as Record<string, string>;
+    ws.addRow([
+      ...visibleCols.map((c) => values[c.key] ?? ""),
+      r.reason ?? "",
+      r.suggestion ?? "",
+    ]);
+  }
+  ws.views = [{ state: "frozen", ySplit: 1 }];
+
+  const buf = await wb.xlsx.writeBuffer();
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="${module}-import-errors-${batchDisplayId(id)}.xlsx"`);
+  res.send(Buffer.from(buf as ArrayBuffer));
 });
 
 // ── 4. Commit ────────────────────────────────────────────────────────────────
 
 router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), async (req: Request, res: Response): Promise<void> => {
+  const commitStartedAt = Date.now();
   const id = parseInt(String(req.params.id), 10);
   if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid batch id" }); return; }
   const body = (req.body ?? {}) as { skipRowIds?: unknown; duplicateAction?: unknown };
@@ -2408,7 +2520,50 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
     user,
   }).catch(() => {});
 
-  res.json({ batch: batchJson(finished), summary: counts, failures });
+  // ── Post-commit report: what this batch actually put into the books ──
+  // Counts come from the provenance stamps (the same source rollback trusts),
+  // never from in-loop tallies — a claim like "3 receipts created" must be
+  // provable against the database.
+  const rc = await batchRecordCounts(pool, id);
+  const { rows: [gstRow] } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM import_rows
+      WHERE batch_id = $1 AND status = 'imported'
+        AND (raw->'norm'->>'head')::boolean IS TRUE
+        AND COALESCE((raw->'norm'->>'computedTax')::float8, 0) > 0.004`,
+    [id],
+  );
+  // Parties created during the resolve-missing-parties step are PERMANENT
+  // masters (rollback never touches them, exactly like manual creation), so
+  // they are deliberately NOT stamped with import_batch_id — the resolve step
+  // marks them via the notes trail instead, and the report counts that.
+  const resolveMark = `Created during import batch #${id}`;
+  const { rows: [resolved] } = await pool.query(
+    `SELECT
+       (SELECT COUNT(*) FROM customers WHERE notes = $1)::int AS custs,
+       (SELECT COUNT(*) FROM vendors   WHERE notes = $1)::int AS vends,
+       (SELECT COUNT(*) FROM account_ledgers al
+         WHERE al.code IN (SELECT 'CUST-' || id FROM customers WHERE notes = $1)
+            OR al.code IN (SELECT 'VEND-' || id FROM vendors   WHERE notes = $1))::int AS ledgs`,
+    [resolveMark],
+  );
+  const details = {
+    invoicesImported: rc.sales + rc.purchases,
+    invoicesFailed: failures.length,
+    customersCreated: rc.customers + Number(resolved?.custs ?? 0),
+    vendorsCreated: rc.vendors + Number(resolved?.vends ?? 0),
+    ledgersCreated: rc.ledgers + Number(resolved?.ledgs ?? 0),
+    // One stock movement per imported invoice LINE (sales/purchase imports).
+    stockMovements: isTxnModule(module) ? counts.imported : 0,
+    // Books are DERIVED from the documents themselves — imports create no
+    // separate journal vouchers. Reported explicitly so the figure is honest.
+    journalEntriesCreated: 0,
+    receiptsCreated: rc.receipts,
+    paymentsCreated: rc.payments,
+    gstInvoices: Number(gstRow?.n ?? 0),
+    timeTakenMs: Date.now() - commitStartedAt,
+  };
+
+  res.json({ batch: batchJson(finished), summary: counts, failures, details });
   } finally {
     if (locked) await lockClient.query(`SELECT pg_advisory_unlock(hashtext($1))`, [`import_batch_${id}`]).catch(() => {});
     lockClient.release();

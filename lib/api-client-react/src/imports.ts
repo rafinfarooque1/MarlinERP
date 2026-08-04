@@ -105,17 +105,48 @@ export interface ImportResolvePartiesResponse {
   created: string[];
   skipped: string[];
   errors: Array<{ name: string; reason: string }>;
+  /** Present for sales/purchase imports — refreshed batch totals. */
+  summary?: ImportTxnSummary;
+}
+
+/** Batch-level money totals for a sales/purchase preview — computed by the
+ *  same server-side pricing pass the commit uses. */
+export interface ImportTxnSummary {
+  invoices: number;
+  totalQuantity: number;
+  totalTaxable: number;
+  totalGst: number;
+  totalDiscount: number;
+  totalAmount: number;
 }
 
 export interface ImportParseResponse {
   batch: ImportBatch;
   rows: ImportRow[];
+  /** Present for sales/purchase imports. */
+  summary?: ImportTxnSummary;
+}
+
+/** What the commit actually put into the books (counted from provenance stamps). */
+export interface ImportCommitDetails {
+  invoicesImported: number;
+  invoicesFailed: number;
+  customersCreated: number;
+  vendorsCreated: number;
+  ledgersCreated: number;
+  stockMovements: number;
+  journalEntriesCreated: number;
+  receiptsCreated: number;
+  paymentsCreated: number;
+  gstInvoices: number;
+  timeTakenMs: number;
 }
 
 export interface ImportCommitResponse {
   batch: ImportBatch;
   summary: { imported: number; updated: number; skipped: number; failed: number };
   failures: Array<{ rowNumber: number; name: string; reason: string }>;
+  details?: ImportCommitDetails;
 }
 
 export interface ImportRollbackResponse {
@@ -154,9 +185,9 @@ export const useImportBatches = () =>
   });
 
 export const useImportBatch = (id: number | null) =>
-  useQuery<{ batch: ImportBatch; rows: ImportRow[] }, Error>({
+  useQuery<{ batch: ImportBatch; rows: ImportRow[]; summary?: ImportTxnSummary }, Error>({
     queryKey: importKeys.batch(id ?? 0),
-    queryFn: () => customFetch<{ batch: ImportBatch; rows: ImportRow[] }>(`/api/imports/batches/${id}`, { method: "GET" }),
+    queryFn: () => customFetch<{ batch: ImportBatch; rows: ImportRow[]; summary?: ImportTxnSummary }>(`/api/imports/batches/${id}`, { method: "GET" }),
     enabled: id != null,
   });
 
@@ -247,6 +278,25 @@ export async function downloadImportTemplate(module: ImportModule): Promise<void
   const a = document.createElement("a");
   a.href = url;
   a.download = `${module}-import-sample.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/**
+ * Download ONLY the failed rows of a batch as an Excel file, with an
+ * "Error Reason" column on each row — fix in Excel and re-upload just those.
+ */
+export async function downloadImportErrorFile(batchId: number, module: ImportModule): Promise<void> {
+  const blob = await customFetch<Blob>(`/api/imports/batches/${batchId}/error-file`, {
+    method: "GET",
+    responseType: "blob",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${module}-import-errors.xlsx`;
   document.body.appendChild(a);
   a.click();
   a.remove();

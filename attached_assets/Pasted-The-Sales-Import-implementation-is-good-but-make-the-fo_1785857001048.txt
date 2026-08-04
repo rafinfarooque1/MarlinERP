@@ -1,0 +1,119 @@
+The Sales Import implementation is good, but make the following corrections and improvements.
+
+1. PRICE VALIDATION
+
+Do not reject selling prices below MRP.
+
+Instead follow the same logic used in the POS.
+
+Example:
+
+MRP = ₹280
+Imported Selling Price = ₹250
+
+Automatically convert to:
+
+MRP = ₹280
+Per Unit Discount = ₹30
+
+This way imported invoices behave exactly like manually created invoices.
+
+The import should never create an invoice with an MRP lower than the Item Master MRP.
+
+MRP can only be increased, never reduced.
+
+If imported price is greater than MRP:
+
+Example
+
+MRP = ₹280
+Imported Price = ₹300
+
+Use MRP = ₹300
+Discount = ₹0
+
+This matches the ERP behaviour.
+
+-------------------------------------------------------
+
+2. IDENTICAL TO MANUAL SALES
+
+Imported sales must use the same pricing engine used by the POS.
+
+There must never be different GST or discount calculations between imported invoices and manually created invoices.
+
+-------------------------------------------------------
+
+3. PURCHASE IMPORT
+
+Purchase import should use the same calculation engine as the Purchase Bill screen.
+
+No duplicate calculation logic.
+
+-------------------------------------------------------
+
+4. PREVIEW SCREEN
+
+Before committing imports, show:
+
+• Total Invoices
+• Total Amount
+• Total GST
+• Total Taxable Value
+• Total Quantity
+• Total Discount
+
+Any warnings should be displayed per row.
+
+-------------------------------------------------------
+
+5. ERROR FILE
+
+Allow downloading only failed rows in Excel format.
+
+Add an "Error Reason" column explaining why each row failed.
+
+-------------------------------------------------------
+
+6. SUMMARY AFTER IMPORT
+
+Display:
+
+Invoices Imported
+
+Invoices Failed
+
+Customers Created
+
+Vendors Created
+
+Ledgers Created
+
+Stock Updated
+
+Journal Entries Created
+
+Receipt Entries Created
+
+Payment Entries Created
+
+GST Entries Created
+
+Time Taken
+
+-------------------------------------------------------
+
+7. VERIFY
+
+Import one invoice manually and import the same invoice through Excel.
+
+Verify both generate:
+
+• identical invoice totals
+• identical GST
+• identical ledger postings
+• identical journal entries
+• identical inventory movement
+• identical receivable/payable balances
+
+The accounting entries must match exactly.

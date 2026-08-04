@@ -7,6 +7,12 @@
  *     downloadable templates (but old files carrying them still cross-check).
  *   Sales prices are GST-INCLUSIVE and Discount is ₹ PER UNIT — an imported
  *     sale's books math is IDENTICAL to the same sale entered manually.
+ *   POS-style MRP handling: a price BELOW the Item Master MRP converts to
+ *     MRP + the difference as per-unit discount (net unchanged, warning);
+ *     the recorded price never sits below the master MRP.
+ *   Preview answers batch totals (invoices/qty/taxable/GST/discount/amount)
+ *     and commit answers a stamped-record summary; failed rows download as an
+ *     Excel error file with an Error Reason column.
  *   Purchase rates stay GST-exclusive with % line discounts; a bill-level
  *     discount in a purchase file is an ERROR (manual entry has none).
  *   Payment Status blank rules: Paid+blank Paid Amount = full; Partial+blank
@@ -202,8 +208,23 @@ let importedSaleTotals = null;
   if (batchId) batches.push(batchId);
   assert('Sales file validates', up.data?.batch?.status === 'validated' && up.data?.batch?.validRows === 1,
     JSON.stringify((up.data?.rows ?? []).map((x) => x.reason)).slice(0, 300));
+
+  // Preview totals — computed by the same engine that will commit.
+  const sum = up.data?.summary;
+  assert('Preview summary shows the batch totals',
+    sum && sum.invoices === 1 && r2(sum.totalAmount) === 380 && r2(sum.totalGst) === 18.1
+    && r2(sum.totalTaxable) === 361.9 && sum.totalQuantity === 2 && r2(sum.totalDiscount) === 20,
+    JSON.stringify(sum));
+
   const commit = await post(`/imports/batches/${batchId}/commit`, {});
   assert('Sales batch commits', commit.status === 200 && commit.data?.batch?.importedRows === 1, JSON.stringify(commit.data).slice(0, 250));
+
+  // Post-commit report — counted from provenance stamps, not loop tallies.
+  const det = commit.data?.details;
+  assert('Commit answers a stamped-record summary',
+    det && det.invoicesImported === 1 && det.invoicesFailed === 0 && det.stockMovements === 1
+    && det.gstInvoices === 1 && Number(det.timeTakenMs) > 0,
+    JSON.stringify(det));
 
   const { rows: [sale] } = await sql(
     `SELECT id, subtotal::float8 AS subtotal, tax_total::float8 AS tax, total_amount::float8 AS total
@@ -249,10 +270,29 @@ console.log('\n[3] Sales validation guardrails');
     e1?.status === 'error' && /Partial/i.test(String(e1?.reason ?? '')), JSON.stringify(e1?.reason));
   assert('Per-unit discount above the price is an error',
     e2?.status === 'error' && /per unit|per UNIT/i.test(String(e2?.reason ?? '')), JSON.stringify(e2?.reason));
+
+  // Error file: only the failed rows, with the reason on each.
+  const ef = await fetch(`${BASE}/imports/batches/${up.data.batch.id}/error-file`, {
+    headers: { Authorization: `Bearer ${authToken}` },
+  });
+  assert('Error file downloads as xlsx', ef.status === 200 && /spreadsheetml/.test(ef.headers.get('content-type') ?? ''),
+    `status=${ef.status} type=${ef.headers.get('content-type')}`);
+  const efwb = new ExcelJS.Workbook();
+  await efwb.xlsx.load(Buffer.from(await ef.arrayBuffer()));
+  const efws = efwb.worksheets[0];
+  const efHeaders = [];
+  efws.getRow(1).eachCell((cell) => efHeaders.push(String(cell.value ?? '')));
+  assert('Error file has the template columns + Error Reason',
+    efHeaders.includes('Error Reason') && efHeaders.includes('Invoice No') && efws.rowCount === 3,
+    `headers=${JSON.stringify(efHeaders)} rows=${efws.rowCount}`);
+  const reasonCol = efHeaders.indexOf('Error Reason') + 1;
+  assert('Each failed row carries its reason', /Partial/i.test(String(efws.getRow(2).getCell(reasonCol).value ?? '')),
+    JSON.stringify(efws.getRow(2).getCell(reasonCol).value));
 }
 {
-  // Same MRP floor as manual entry: a below-MRP price is an ERROR, and a
-  // blank Payment Status with a Paid Amount records a part-payment.
+  // POS-style MRP handling: a below-MRP price CONVERTS (never errors) — the
+  // line records MRP with the difference as per-unit discount, net unchanged.
+  // And a blank Payment Status with a Paid Amount records a part-payment.
   const up = await uploadXlsx('sales', [
     ['Invoice No', 'Date', 'Customer', 'Item', 'Qty', 'Price', 'Payment Status', 'Paid Amount', 'Payment Account'],
     [`${TAG}/S/E3`, '2026-08-04', `${TAG} Buyer`, `${TAG} Item`, 1, 50, 'Unpaid', '', 'Customer Credit'],
@@ -262,14 +302,49 @@ console.log('\n[3] Sales validation guardrails');
   if (bId) batches.push(bId);
   const rows = up.data?.rows ?? [];
   const e3 = rows[0]; const e4 = rows[1];
-  assert('Below-MRP price is an error (same floor as manual entry)',
-    e3?.status === 'error' && /MRP/i.test(String(e3?.reason ?? '')), JSON.stringify(e3?.reason));
-  // The parse response strips raw.norm — read the settled amount from the DB row.
+  assert('Below-MRP price converts like the POS (warning, not error)',
+    e3?.status === 'warning' && /MRP/i.test(String(e3?.reason ?? '')), `status=${e3?.status} reason=${JSON.stringify(e3?.reason)}`);
+  // The parse response strips raw.norm — read the stored line from the DB row.
+  const { rows: [e3db] } = await sql(
+    `SELECT (raw->'norm'->'line'->>'price')::float8 AS price,
+            (raw->'norm'->'line'->>'unitDiscount')::float8 AS disc
+       FROM import_rows WHERE batch_id = $1 AND row_number = 2`, [bId]);
+  assert('Converted line = MRP ₹100 with ₹50/unit discount (net ₹50 unchanged)',
+    e3db && r2(e3db.price) === 100 && r2(e3db.disc) === 50, JSON.stringify(e3db));
   const { rows: [e4db] } = await sql(
     `SELECT (raw->'norm'->>'paidAmount')::float8 AS paid FROM import_rows WHERE batch_id = $1 AND row_number = 3`, [bId]);
   assert('Blank status with a Paid Amount validates as a part-payment',
     e4?.status === 'valid' && Number(e4db?.paid ?? 0) === 120,
     `status=${e4?.status} paid=${JSON.stringify(e4db?.paid)} reason=${JSON.stringify(e4?.reason)}`);
+}
+{
+  // The converted sale must land in the books IDENTICAL to the manual twin
+  // (manual entry: price ₹100 = MRP, ₹20/unit discount ⇒ import price ₹80).
+  const up = await uploadXlsx('sales', [
+    ['Invoice No', 'Date', 'Customer', 'Item', 'Qty', 'Price', 'Payment Status', 'Payment Account'],
+    [`${TAG}/S/M1`, '2026-08-04', `${TAG} Buyer`, `${TAG} Item`, 1, 80, 'Paid', 'Cash'],
+  ]);
+  const bId = up.data?.batch?.id ?? 0;
+  if (bId) batches.push(bId);
+  const commit = await post(`/imports/batches/${bId}/commit`, {});
+  assert('Below-MRP sale commits after conversion', commit.status === 200 && commit.data?.batch?.importedRows === 1,
+    JSON.stringify(commit.data).slice(0, 250));
+  const { rows: [conv] } = await sql(
+    `SELECT subtotal::float8 AS subtotal, tax_total::float8 AS tax, total_amount::float8 AS total
+       FROM sales WHERE legacy_invoice_number = $1`, [`${TAG}/S/M1`]);
+  const manual = await post('/sales', {
+    outletId: WH, locationType: 'warehouse', locationId: WH,
+    saleDate: '2026-08-04', paymentMode: 'cash', customerId: fixtures.custId,
+    lineItems: [{ itemId: fixtures.itemId, quantity: 1, unitPrice: 100, unitDiscount: 20 }],
+  });
+  if (manual.status === 201 && manual.data?.id) createdSales.push(manual.data.id);
+  const { rows: [mtw] } = await sql(
+    `SELECT subtotal::float8 AS subtotal, tax_total::float8 AS tax, total_amount::float8 AS total FROM sales WHERE id = $1`,
+    [manual.data?.id ?? 0]);
+  assert('Converted import == manual sale at MRP with the discount (identical books math)',
+    conv && mtw && r2(conv.subtotal) === r2(mtw.subtotal) && r2(conv.tax) === r2(mtw.tax) && r2(conv.total) === r2(mtw.total)
+    && r2(conv.total) === 80,
+    `imported=${JSON.stringify(conv)} manual=${JSON.stringify(mtw)}`);
 }
 {
   // Old-ERP file with a GST % column: still mapped, cross-checked, warned — never recorded.
