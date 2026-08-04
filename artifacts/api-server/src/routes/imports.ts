@@ -39,18 +39,30 @@ import {
   importSaleDoc, importPurchaseDoc,
   rollbackImportedSale, rollbackImportedPurchase,
 } from "../lib/importTransactions";
+import {
+  importAccountOptions, resolveAccountValue,
+  importReceiptVoucher, importPaymentVoucher,
+  rollbackImportedReceiptVoucher, rollbackImportedPaymentVoucher,
+} from "../lib/importVouchers";
+import { outstandingExpr } from "../lib/salePaymentPosition";
+import { purchaseSettlementIndex } from "../lib/vendorBillSettlement";
 
 const router: IRouter = Router();
 
 const PERM = "page:/company/import";
 
-type ImportModule = "customers" | "vendors" | "ledgers" | "sales" | "purchases";
-const MODULES: ImportModule[] = ["customers", "vendors", "ledgers", "sales", "purchases"];
+type ImportModule = "customers" | "vendors" | "ledgers" | "sales" | "purchases" | "receipts" | "payments";
+const MODULES: ImportModule[] = ["customers", "vendors", "ledgers", "sales", "purchases", "receipts", "payments"];
 
 /** Sales & purchases import whole DOCUMENTS (with stock + books effects), not
  *  master records — they get their own validation, commit and rollback paths. */
 type TxnModule = "sales" | "purchases";
 const isTxnModule = (m: ImportModule): m is TxnModule => m === "sales" || m === "purchases";
+
+/** Receipt & payment VOUCHERS: one row = one voucher, allocated against the
+ *  party's outstanding invoices with any excess parked as an advance. */
+type VoucherModule = "receipts" | "payments";
+const isVoucherModule = (m: ImportModule): m is VoucherModule => m === "receipts" || m === "payments";
 
 function asModule(v: unknown): ImportModule | null {
   const s = String(v ?? "").toLowerCase();
@@ -158,6 +170,34 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
       { key: "paidAmount", header: "Paid Amount", example: 0, hint: "Amount already paid — recorded as a settlement from the selected location's cash", aliases: ["paidamount", "amountpaid", "paid", "advancepaid"] },
       { key: "reference", header: "Reference", example: "", hint: "Cheque / UTR / reference number", aliases: ["reference", "referenceno", "refno", "ref", "chequeno", "utr", "utrno", "txnid"] },
       { key: "narration", header: "Narration", example: "Migrated from old ERP", hint: "Stored on the bill", aliases: ["narration", "notes", "remarks", "note", "comment", "comments"] },
+    ],
+  },
+  receipts: {
+    title: "Receipt Vouchers",
+    columns: [
+      { key: "voucherNo", header: "Voucher No", example: "RV/25-26/0087", hint: "Old ERP voucher number — kept exactly as supplied and must be unique; blank rows draw the next number from the voucher sequence", aliases: ["voucherno", "vouchernumber", "vchno", "vchnumber", "receiptno", "receiptnumber", "rcptno", "no", "number"] },
+      { key: "date", header: "Date", required: true, example: "2025-04-15", hint: "Receipt date — YYYY-MM-DD or DD/MM/YYYY", aliases: ["date", "receiptdate", "voucherdate", "vchdate", "txndate", "transactiondate"] },
+      { key: "party", header: "Customer", required: true, example: "Fresh Mart Traders", hint: "Customer the money came from — unknown names can be created in the resolve step before commit", aliases: ["customer", "customername", "party", "partyname", "receivedfrom", "client", "clientname", "buyer"] },
+      { key: "partyType", header: "Party Type", example: "Customer", hint: "Customer (receipts always settle customer invoices — cross-checked)", aliases: ["partytype", "type", "partykind"] },
+      { key: "amount", header: "Amount", required: true, example: 5000, hint: "₹ amount received (must be greater than 0)", aliases: ["amount", "amountreceived", "received", "receivedamount", "total", "value", "amountrs"] },
+      { key: "account", header: "Received In", example: "Cash", hint: "Cash, Bank, or the exact bank ledger name — decides whether the money lands in the cash book or bank book", aliases: ["receivedin", "receivedinaccount", "account", "accountname", "cashbank", "cashorbank", "depositto", "mode", "paymentmode", "modeofreceipt"] },
+      { key: "againstInvoice", header: "Against Invoice", example: "", hint: "Optional invoice number — the amount settles ONLY that invoice; blank auto-allocates against the customer's oldest unpaid invoices", aliases: ["againstinvoice", "against", "againstbill", "invoiceno", "invoicenumber", "invoice", "billno", "billnumber", "againstinvoiceno"] },
+      { key: "reference", header: "Reference", example: "", hint: "Cheque / UTR / reference number", aliases: ["reference", "referenceno", "refno", "ref", "chequeno", "utr", "utrno", "txnid"] },
+      { key: "narration", header: "Narration", example: "Migrated from old ERP", hint: "Stored on the voucher", aliases: ["narration", "notes", "remarks", "note", "comment", "comments", "description"] },
+    ],
+  },
+  payments: {
+    title: "Payment Vouchers",
+    columns: [
+      { key: "voucherNo", header: "Voucher No", example: "PV/25-26/0042", hint: "Old ERP voucher number — kept exactly as supplied and must be unique; blank rows draw the next number from the voucher sequence", aliases: ["voucherno", "vouchernumber", "vchno", "vchnumber", "paymentno", "paymentnumber", "no", "number"] },
+      { key: "date", header: "Date", required: true, example: "2025-04-15", hint: "Payment date — YYYY-MM-DD or DD/MM/YYYY", aliases: ["date", "paymentdate", "voucherdate", "vchdate", "txndate", "transactiondate"] },
+      { key: "party", header: "Vendor", required: true, example: "Global Fruits Supply Co", hint: "Vendor the money went to — unknown names can be created in the resolve step before commit", aliases: ["vendor", "vendorname", "supplier", "suppliername", "party", "partyname", "paidto"] },
+      { key: "partyType", header: "Party Type", example: "Vendor", hint: "Vendor (payments always settle vendor bills — cross-checked)", aliases: ["partytype", "type", "partykind"] },
+      { key: "amount", header: "Amount", required: true, example: 12000, hint: "₹ amount paid (must be greater than 0)", aliases: ["amount", "amountpaid", "paid", "paidamount", "total", "value", "amountrs"] },
+      { key: "account", header: "Paid From", example: "Cash", hint: "Cash, Bank, or the exact bank ledger name — decides whether the money leaves the cash book or bank book", aliases: ["paidfrom", "paidfromaccount", "account", "accountname", "cashbank", "cashorbank", "paidoutof", "mode", "paymentmode", "modeofpayment"] },
+      { key: "againstInvoice", header: "Against Bill", example: "", hint: "Optional bill number — the amount settles ONLY that bill; blank auto-allocates against the vendor's oldest unpaid bills", aliases: ["againstbill", "against", "againstinvoice", "billno", "billnumber", "invoiceno", "invoicenumber", "invoice", "againstbillno"] },
+      { key: "reference", header: "Reference", example: "", hint: "Cheque / UTR / reference number", aliases: ["reference", "referenceno", "refno", "ref", "chequeno", "utr", "utrno", "txnid"] },
+      { key: "narration", header: "Narration", example: "Migrated from old ERP", hint: "Stored on the voucher", aliases: ["narration", "notes", "remarks", "note", "comment", "comments", "description"] },
     ],
   },
 };
@@ -944,6 +984,291 @@ async function validateTransactionRows(
   return { results, counts };
 }
 
+// ── Voucher validation (receipts & payments) ─────────────────────────────────
+
+/** One outstanding document a voucher can allocate against. The `outstanding`
+ *  field is a RUNNING figure shared across the whole file: earlier rows'
+ *  planned allocations reduce what later rows see, so the preview matches
+ *  what commit will actually do. */
+interface VoucherOpenDoc {
+  id: number;
+  partyId: number;
+  invoiceNumber: string | null;
+  date: string;
+  outstanding: number;
+  cancelled: boolean;
+  branchTransfer: boolean;
+  inScope: boolean;
+}
+
+interface VoucherContext {
+  parties: Map<string, { id: number; name: string }>; // lower(name) → party
+  existingVoucherNos: Set<string>;                    // lower(voucher_number)
+  accounts: Awaited<ReturnType<typeof importAccountOptions>>;
+  /** party id → open, in-scope docs in FIFO (oldest-first) order */
+  docsByParty: Map<number, VoucherOpenDoc[]>;
+  /** `${partyId}|${lower(invoiceNumber)}` → doc (ALL docs, incl. settled/cancelled — for explicit-reference errors) */
+  docByRef: Map<string, VoucherOpenDoc>;
+}
+
+async function loadVoucherContext(module: VoucherModule, loc: { type: string; id: number }): Promise<VoucherContext> {
+  const parties = new Map<string, { id: number; name: string }>();
+  const partyTable = module === "receipts" ? "customers" : "vendors";
+  const { rows: partyRows } = await pool.query(`SELECT id, name FROM ${partyTable}`);
+  for (const r of partyRows) {
+    const key = String(r.name ?? "").trim().toLowerCase();
+    if (key && !parties.has(key)) parties.set(key, { id: Number(r.id), name: String(r.name) });
+  }
+
+  const existingVoucherNos = new Set<string>();
+  const vTable = module === "receipts" ? "receipts" : "payments";
+  const { rows: vnos } = await pool.query(`SELECT lower(voucher_number) AS v FROM ${vTable} WHERE voucher_number IS NOT NULL`);
+  for (const r of vnos) existingVoucherNos.add(String(r.v));
+
+  const accounts = await importAccountOptions(pool, loc as any);
+
+  const docsByParty = new Map<number, VoucherOpenDoc[]>();
+  const docByRef = new Map<string, VoucherOpenDoc>();
+  const pushDoc = (doc: VoucherOpenDoc) => {
+    if (doc.invoiceNumber) {
+      const key = `${doc.partyId}|${doc.invoiceNumber.toLowerCase()}`;
+      if (!docByRef.has(key)) docByRef.set(key, doc);
+    }
+    if (!doc.cancelled && !doc.branchTransfer && doc.inScope && doc.outstanding > 0.004) {
+      const list = docsByParty.get(doc.partyId) ?? [];
+      list.push(doc);
+      docsByParty.set(doc.partyId, list);
+    }
+  };
+
+  if (module === "receipts") {
+    const { rows } = await pool.query(
+      `SELECT s.id, s.customer_id, s.invoice_number,
+              to_char(s.sale_date, 'YYYY-MM-DD') AS d,
+              ${outstandingExpr("s")}::float8 AS outstanding,
+              (s.cancelled_at IS NOT NULL) AS cancelled,
+              (s.branch_transfer_id IS NOT NULL) AS btr,
+              COALESCE(s.location_type, 'outlet') AS ltype,
+              COALESCE(s.location_id, s.outlet_id, 0) AS lid
+         FROM sales s
+        ORDER BY s.sale_date ASC, s.id ASC`,
+    );
+    for (const r of rows) {
+      pushDoc({
+        id: Number(r.id), partyId: Number(r.customer_id),
+        invoiceNumber: r.invoice_number ? String(r.invoice_number) : null,
+        date: String(r.d), outstanding: Math.max(0, Number(r.outstanding)),
+        cancelled: Boolean(r.cancelled), branchTransfer: Boolean(r.btr),
+        inScope: loc.type === "headoffice" || (String(r.ltype) === loc.type && Number(r.lid) === loc.id),
+      });
+    }
+  } else {
+    // Dues the way every report computes them — the shared settlement index
+    // (explicit allocations + advance applications + the FIFO pool).
+    const idx = await purchaseSettlementIndex();
+    const { rows } = await pool.query(
+      `SELECT p.id, p.vendor_id, p.invoice_number,
+              to_char(p.purchase_date, 'YYYY-MM-DD') AS d,
+              (p.branch_transfer_id IS NOT NULL) AS btr,
+              COALESCE(p.location_type, 'headoffice') AS ltype,
+              COALESCE(p.location_id, 0) AS lid
+         FROM purchases p
+        ORDER BY p.purchase_date ASC, p.id ASC`,
+    );
+    for (const r of rows) {
+      pushDoc({
+        id: Number(r.id), partyId: Number(r.vendor_id),
+        invoiceNumber: r.invoice_number ? String(r.invoice_number) : null,
+        date: String(r.d), outstanding: Math.max(0, Number(idx.get(Number(r.id))?.due ?? 0)),
+        cancelled: false, branchTransfer: Boolean(r.btr),
+        inScope: loc.type === "headoffice" || (String(r.ltype) === loc.type && Number(r.lid) === loc.id),
+      });
+    }
+  }
+
+  return { parties, existingVoucherNos, accounts, docsByParty, docByRef };
+}
+
+/**
+ * Validation for voucher imports: one row = one voucher. Every row also gets
+ * a PLANNED allocation (norm.plan) computed with the same explicit-first /
+ * FIFO-oldest rules commit uses, over a running outstanding shared across the
+ * file — so the preview shows exactly where each rupee will land. Commit
+ * recomputes the allocation on LOCKED rows; the plan is preview-grade.
+ */
+async function validateVoucherRows(
+  module: VoucherModule,
+  rowsIn: TxnRowInput[],
+  loc: { type: string; id: number },
+): Promise<{
+  results: RowVerdict[];
+  counts: { valid: number; warning: number; error: number; needsParty: number };
+}> {
+  const ctx = await loadVoucherContext(module, loc);
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const partyLabel = module === "receipts" ? "Customer" : "Vendor";
+  const docLabel = module === "receipts" ? "Invoice" : "Bill";
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  type Slot = { errors: string[]; warnings: string[]; suggestions: string[]; norm: Record<string, any> };
+  const slots: Slot[] = rowsIn.map(() => ({ errors: [], warnings: [], suggestions: [], norm: {} }));
+  const seenVouchers = new Map<string, number>(); // lower(voucher no) → first row number
+
+  for (let i = 0; i < rowsIn.length; i++) {
+    const { rowNumber, values } = rowsIn[i];
+    const s = slots[i];
+
+    // Voucher number — kept verbatim; unique in-file AND against the system.
+    const vno = (values.voucherNo ?? "").trim();
+    if (vno) {
+      const key = vno.toLowerCase();
+      const first = seenVouchers.get(key);
+      if (first !== undefined) {
+        s.errors.push(`Voucher number "${vno}" already appeared at row ${first} in this file`);
+        s.suggestions.push("Every voucher needs its own number — renumber or remove the duplicate");
+      } else {
+        seenVouchers.set(key, rowNumber);
+        if (ctx.existingVoucherNos.has(key)) {
+          s.errors.push(`Voucher number "${vno}" is already recorded in this system`);
+          s.suggestions.push("Already migrated or manually entered — remove the row, or renumber if it is genuinely a different voucher");
+        }
+      }
+      s.norm.voucherNo = vno;
+    } else {
+      s.warnings.push("No voucher number — the next number from the voucher sequence will be assigned at commit");
+    }
+
+    // Date
+    const dateRaw = (values.date ?? "").trim();
+    const dateIso = parseDateFlexible(dateRaw);
+    if (!dateRaw) s.errors.push("Date is required");
+    else if (!dateIso) {
+      s.errors.push(`Date "${dateRaw}" not understood`);
+      s.suggestions.push("Use YYYY-MM-DD or DD/MM/YYYY");
+    } else if (dateIso > todayIso) {
+      s.warnings.push(`Date ${dateIso} is in the future`);
+    }
+    if (dateIso) s.norm.dateIso = dateIso;
+
+    // Party
+    const partyName = (values.party ?? "").trim();
+    if (!partyName) s.errors.push(`${partyLabel} is required`);
+    const party = partyName ? ctx.parties.get(partyName.toLowerCase()) ?? null : null;
+    if (partyName && !party) {
+      s.norm.missingParty = partyName;
+      s.suggestions.push(`Create "${partyName}" in the resolve step below, or fix the spelling to match an existing ${partyLabel.toLowerCase()}`);
+    }
+    if (party) { s.norm.partyId = party.id; s.norm.partyName = party.name; }
+
+    // Party type — cross-check only; the module decides the side.
+    const ptNorm = (values.partyType ?? "").toLowerCase().replace(/[^a-z]/g, "");
+    if (ptNorm) {
+      const isCust = ["customer", "debtor", "buyer", "client", "cust"].includes(ptNorm);
+      const isVend = ["vendor", "supplier", "creditor", "vend"].includes(ptNorm);
+      if (module === "receipts" && isVend) {
+        s.errors.push(`Party Type "${values.partyType}" — receipts settle CUSTOMER invoices; import money paid to vendors through the Payment Vouchers module`);
+      } else if (module === "payments" && isCust) {
+        s.errors.push(`Party Type "${values.partyType}" — payments settle VENDOR bills; import money received from customers through the Receipt Vouchers module`);
+      } else if (!isCust && !isVend) {
+        s.warnings.push(`Party Type "${values.partyType}" not understood — treated as ${partyLabel}`);
+      }
+    }
+
+    // Amount
+    const amt = parseMoney((values.amount ?? "").trim());
+    if (amt === null) s.errors.push("Amount is required");
+    else if (!Number.isFinite(amt) || amt <= 0) s.errors.push(`Amount "${values.amount}" must be a number greater than 0`);
+    else s.norm.amount = amt;
+
+    // Received-in / paid-from account
+    const acc = resolveAccountValue(values.account ?? "", ctx.accounts);
+    if (!acc.ok) {
+      s.errors.push(acc.error);
+    } else {
+      s.norm.accountLedgerId = acc.account.id;
+      s.norm.accountName = acc.account.name;
+      s.norm.accountKind = acc.account.kind;
+    }
+
+    if ((values.reference ?? "").trim()) s.norm.reference = values.reference.trim();
+    if ((values.narration ?? "").trim()) s.norm.narration = values.narration.trim();
+
+    // Against-invoice reference (explicit allocation target)
+    const refRaw = (values.againstInvoice ?? "").trim();
+    let explicitDoc: VoucherOpenDoc | null = null;
+    if (refRaw) s.norm.againstInvoice = refRaw;
+    if (refRaw && party) {
+      const doc = ctx.docByRef.get(`${party.id}|${refRaw.toLowerCase()}`) ?? null;
+      if (!doc) {
+        s.errors.push(`${docLabel} "${refRaw}" not found for ${party.name}`);
+        s.suggestions.push(`Import the ${module === "receipts" ? "sales invoices" : "purchase bills"} first, fix the reference, or leave it blank to auto-allocate oldest-first`);
+      } else if (doc.cancelled) {
+        s.errors.push(`${docLabel} "${refRaw}" is cancelled — nothing can be settled against it`);
+      } else if (doc.branchTransfer) {
+        s.errors.push(`${docLabel} "${refRaw}" is a branch transfer document and is settled by the transfer flow`);
+      } else if (!doc.inScope) {
+        s.errors.push(`${docLabel} "${refRaw}" was raised at another location — record its ${module === "receipts" ? "collection" : "payment"} there`);
+      } else if (doc.outstanding <= 0.004) {
+        s.errors.push(`${docLabel} "${refRaw}" is already fully settled${doc.outstanding <= 0.004 ? " (counting earlier rows of this file)" : ""} — remove the reference or point it at an open ${docLabel.toLowerCase()}`);
+      } else {
+        explicitDoc = doc;
+      }
+    }
+
+    // Planned allocation — explicit-first, else FIFO oldest-first; excess → advance.
+    const amountOk = amt !== null && Number.isFinite(amt) && amt > 0;
+    if (s.errors.length === 0 && party && amountOk && acc.ok) {
+      const allocations: Array<{ id: number; invoiceNumber: string | null; amount: number }> = [];
+      let remaining = round2(amt as number);
+      if (explicitDoc) {
+        const take = round2(Math.min(remaining, explicitDoc.outstanding));
+        allocations.push({ id: explicitDoc.id, invoiceNumber: explicitDoc.invoiceNumber, amount: take });
+        explicitDoc.outstanding = round2(explicitDoc.outstanding - take);
+        remaining = round2(remaining - take);
+        s.norm[module === "receipts" ? "explicitSaleId" : "explicitPurchaseId"] = explicitDoc.id;
+      } else {
+        for (const d of ctx.docsByParty.get(party.id) ?? []) {
+          if (remaining <= 0.004) break;
+          if (d.outstanding <= 0.004) continue;
+          const take = round2(Math.min(remaining, d.outstanding));
+          allocations.push({ id: d.id, invoiceNumber: d.invoiceNumber, amount: take });
+          d.outstanding = round2(d.outstanding - take);
+          remaining = round2(remaining - take);
+        }
+      }
+      const advance = remaining > 0.004 ? remaining : 0;
+      if (advance > 0) {
+        const ledger = module === "receipts" ? "customer advance (CADV)" : "vendor advance (VADV)";
+        s.warnings.push(
+          allocations.length > 0
+            ? `₹${advance.toFixed(2)} exceeds the open balance — the excess will be parked as a ${ledger}, adjustable against future ${module === "receipts" ? "invoices" : "bills"}`
+            : `${party.name} has no open ${docLabel.toLowerCase()}s${explicitDoc ? "" : " at this location"} — the full ₹${advance.toFixed(2)} will be parked as a ${ledger}`,
+        );
+      }
+      s.norm.plan = { allocations, advance, accountName: acc.account.name };
+    }
+  }
+
+  // ── Verdicts ──
+  const counts = { valid: 0, warning: 0, error: 0, needsParty: 0 };
+  const results: RowVerdict[] = slots.map((s) => {
+    const status: RowVerdict["status"] =
+      s.errors.length > 0 ? "error"
+      : s.norm.missingParty ? "needs_party"
+      : s.warnings.length > 0 ? "warning" : "valid";
+    if (status === "valid") counts.valid++;
+    else if (status === "warning") counts.warning++;
+    else if (status === "needs_party") counts.needsParty++;
+    else counts.error++;
+    const reason = status === "needs_party"
+      ? [`${partyLabel} "${s.norm.missingParty}" not found — create it below or fix the name`, ...s.warnings].join("; ")
+      : [...s.errors, ...s.warnings].join("; ") || null;
+    return { status, reason, suggestion: s.suggestions[0] ?? null, duplicateOfId: null, norm: s.norm };
+  });
+
+  return { results, counts };
+}
+
 // ── Serialisation ────────────────────────────────────────────────────────────
 
 function batchJson(b: any) {
@@ -988,6 +1313,10 @@ function rowJson(r: any) {
     values: raw.values ?? {},
     missingParty: raw.norm?.missingParty ?? null,
     docIndex: raw.norm?.doc ?? null,
+    /** voucher imports: planned allocation shown in the preview */
+    plan: raw.norm?.plan ?? null,
+    /** voucher imports: what commit actually recorded */
+    created: raw.created ?? null,
     createdRecordType: r.created_record_type ?? null,
     createdRecordId: r.created_record_id == null ? null : Number(r.created_record_id),
     createdLedgerId: r.created_ledger_id == null ? null : Number(r.created_ledger_id),
@@ -1041,6 +1370,16 @@ router.get("/imports/templates/:module", requireModuleAction(PERM, "download"), 
       help.addRow(["• Paid Amount settles the bill from the selected location's cash ledger."]);
       help.addRow(["• Backdated bills: average cost updates in the ORDER bills are entered, not by bill date — import oldest bills first."]);
     }
+  } else if (isVoucherModule(module)) {
+    const party = module === "receipts" ? "Customer" : "Vendor";
+    const docWord = module === "receipts" ? "invoice" : "bill";
+    help.addRow(["• One row per voucher."]);
+    help.addRow([`• ${module === "receipts" ? "Against Invoice" : "Against Bill"} is optional: fill it to settle ONLY that ${docWord}; leave it blank to auto-allocate against the ${party.toLowerCase()}'s oldest unpaid ${docWord}s (FIFO).`]);
+    help.addRow([`• Any amount beyond the open balance is parked as a ${party.toLowerCase()} advance, adjustable against future ${docWord}s.`]);
+    help.addRow([`• ${module === "receipts" ? "Received In" : "Paid From"}: write Cash, Bank, or the exact bank ledger name — it decides whether the money ${module === "receipts" ? "lands in" : "leaves"} the cash book or bank book.`]);
+    help.addRow(["• Voucher numbers are kept exactly as supplied and must be unique; blank rows draw the next number from the voucher sequence."]);
+    help.addRow(["• Dates: YYYY-MM-DD or DD/MM/YYYY."]);
+    help.addRow([`• Unknown ${party.toLowerCase()}s can be created during the import (resolve step). Import the ${docWord}s FIRST so allocation finds them.`]);
   } else {
     help.addRow(["• Opening Type is Dr or Cr. Opening Balance is the amount as on migration date."]);
     help.addRow([""]);
@@ -1109,11 +1448,12 @@ router.post(
       return;
     }
 
-    // Transaction imports must know WHERE the documents land before anything
-    // is validated — stock checks, ledgers and duplicates are all per-location.
-    // The location is a request, resolveActingLocation is the authority.
+    // Transaction AND voucher imports must know WHERE the documents land
+    // before anything is validated — stock checks, ledgers, allocation scope
+    // and duplicates are all per-location. The location is a request,
+    // resolveActingLocation is the authority.
     let txnLoc: { type: string; id: number } | null = null;
-    if (isTxnModule(module)) {
+    if (isTxnModule(module) || isVoucherModule(module)) {
       // Explicit choice required — defaulting to the uploader's own branch
       // would silently stamp a whole migration onto the wrong location.
       if (!req.query.locationType) {
@@ -1145,7 +1485,7 @@ router.post(
           existingLedgerMeta.set(r.lname, { id: Number(r.id), system: Boolean(r.system) });
         }
       }
-    } else if (!isTxnModule(module)) {
+    } else if (module === "customers" || module === "vendors") {
       const { rows } = await pool.query<any>(`SELECT id, lower(name) AS lname FROM ${module}`);
       for (const r of rows) if (!existingByName.has(r.lname)) existingByName.set(r.lname, Number(r.id));
     }
@@ -1175,8 +1515,9 @@ router.post(
       }
       parsed.push({
         rowNumber: rn, values,
-        // Txn rows are validated as a whole file below (grouping needs order).
-        verdict: isTxnModule(module)
+        // Txn/voucher rows are validated as a whole file below (grouping and
+        // running allocation both need order).
+        verdict: isTxnModule(module) || isVoucherModule(module)
           ? { status: "valid", reason: null, suggestion: null, duplicateOfId: null, norm: {} }
           : validateRow(module, rn, values, ctx),
       });
@@ -1187,6 +1528,12 @@ router.post(
 
     if (isTxnModule(module) && txnLoc) {
       const { results } = await validateTransactionRows(
+        module, parsed.map((p) => ({ rowNumber: p.rowNumber, values: p.values })), txnLoc,
+      );
+      parsed.forEach((p, i) => { p.verdict = results[i]; });
+    }
+    if (isVoucherModule(module) && txnLoc) {
+      const { results } = await validateVoucherRows(
         module, parsed.map((p) => ({ rowNumber: p.rowNumber, values: p.values })), txnLoc,
       );
       parsed.forEach((p, i) => { p.verdict = results[i]; });
@@ -1237,8 +1584,8 @@ router.post("/imports/batches/:id/resolve-parties", requireModuleAction(PERM, "a
   const { rows: [batch] } = await pool.query(`SELECT * FROM import_batches WHERE id = $1`, [id]);
   if (!batch) { res.status(404).json({ error: "Import batch not found" }); return; }
   const module = asModule(batch.module);
-  if (!module || !isTxnModule(module)) {
-    res.status(400).json({ error: "Only sales and purchase imports have a party-resolution step." }); return;
+  if (!module || (!isTxnModule(module) && !isVoucherModule(module))) {
+    res.status(400).json({ error: "Only sales, purchase, receipt and payment imports have a party-resolution step." }); return;
   }
   if (batch.status !== "validated") {
     res.status(409).json({ error: "Parties can only be created while the batch is awaiting commit." }); return;
@@ -1251,7 +1598,8 @@ router.post("/imports/batches/:id/resolve-parties", requireModuleAction(PERM, "a
 
   const stamp = { type: String(batch.location_type ?? "headoffice"), id: Number(batch.location_id ?? 0) };
   const user = username(req);
-  const table = module === "sales" ? "customers" : "vendors";
+  const partyIsCustomer = module === "sales" || module === "receipts";
+  const table = partyIsCustomer ? "customers" : "vendors";
   const created: string[] = [];
   const skipped: string[] = [];
   const errors: Array<{ name: string; reason: string }> = [];
@@ -1280,11 +1628,11 @@ router.post("/imports/batches/:id/resolve-parties", requireModuleAction(PERM, "a
         ...(address ? { address } : {}),
         notes: `Created during import batch #${id}`,
       };
-      const { row } = module === "sales"
+      const { row } = partyIsCustomer
         ? await createCustomerWithLedger(input, stamp)
         : await createVendorWithLedger(input, stamp);
       const cl = Number(p?.creditLimit ?? NaN);
-      if (module === "sales" && Number.isFinite(cl) && cl > 0) {
+      if (partyIsCustomer && Number.isFinite(cl) && cl > 0) {
         await pool.query(`UPDATE customers SET credit_limit = $1 WHERE id = $2`, [Math.round(cl * 100) / 100, row.id]);
       }
       created.push(name);
@@ -1297,7 +1645,9 @@ router.post("/imports/batches/:id/resolve-parties", requireModuleAction(PERM, "a
   // totals are all order-dependent, so the whole file runs again.
   const { rows: importRows } = await pool.query(`SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [id]);
   const rowsIn = importRows.map((r: any) => ({ rowNumber: Number(r.row_number), values: (r.raw?.values ?? {}) as Record<string, string> }));
-  const { results, counts } = await validateTransactionRows(module, rowsIn, stamp);
+  const { results, counts } = isVoucherModule(module)
+    ? await validateVoucherRows(module, rowsIn, stamp)
+    : await validateTransactionRows(module, rowsIn, stamp);
   for (let i = 0; i < importRows.length; i++) {
     const v = results[i];
     await pool.query(
@@ -1487,6 +1837,78 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
         const reason = String(e?.message ?? e).slice(0, 400);
         failures.push({ rowNumber: Number(head.row_number), name: label, reason });
         for (const r of docRows) await setRow(r.id, { status: "failed", reason }).catch(() => {});
+      }
+    }
+  } else if (isVoucherModule(module)) {
+    // ── Voucher commit: one row = one voucher ──
+    // Each voucher commits in its own transaction through the same settlement
+    // primitives as the manual allocation routes (lib/importVouchers).
+    // Allocation is RECOMPUTED on locked rows at commit time with the same
+    // explicit-first / FIFO rules — the preview's plan was a snapshot, and
+    // outstanding figures may have moved since validation.
+    const loc = {
+      type: String(batch.location_type ?? "headoffice"),
+      id: Number(batch.location_id ?? 0),
+    };
+
+    for (const r of importRows) {
+      const norm = (r.raw?.norm ?? {}) as Record<string, any>;
+      const label = String(norm.voucherNo || "") || `row ${r.row_number}`;
+      if (r.status === "error" || r.status === "needs_party") {
+        counts.skipped++; // keep the verdict text
+        continue;
+      }
+      if (skipSet.has(Number(r.id))) {
+        counts.skipped++;
+        await setRow(r.id, { status: "skipped", reason: "Skipped by user at commit" });
+        continue;
+      }
+      if (norm.partyId == null || norm.accountLedgerId == null || !norm.dateIso || !(Number(norm.amount) > 0)) {
+        counts.skipped++;
+        await setRow(r.id, { status: "skipped", reason: "Skipped — the row was never fully validated" });
+        continue;
+      }
+      try {
+        const common = {
+          voucherNumber: norm.voucherNo ? String(norm.voucherNo) : null,
+          date: String(norm.dateIso),
+          amount: Number(norm.amount),
+          accountLedgerId: Number(norm.accountLedgerId),
+          narration: norm.narration != null ? String(norm.narration) : null,
+          reference: norm.reference != null ? String(norm.reference) : null,
+          loc: loc as any, user,
+        };
+        const result = module === "receipts"
+          ? await importReceiptVoucher({
+              ...common,
+              customerId: Number(norm.partyId), customerName: String(norm.partyName ?? ""),
+              explicitSaleId: norm.explicitSaleId != null ? Number(norm.explicitSaleId) : null,
+            })
+          : await importPaymentVoucher({
+              ...common,
+              vendorId: Number(norm.partyId), vendorName: String(norm.partyName ?? ""),
+              explicitPurchaseId: norm.explicitPurchaseId != null ? Number(norm.explicitPurchaseId) : null,
+            });
+        counts.imported++;
+        await setRow(r.id, {
+          status: "imported", reason: null,
+          created_record_type: module === "receipts" ? "receipt" : "payment",
+          created_record_id: result.id,
+        });
+        // What commit ACTUALLY recorded — the preview plan stays in norm.plan
+        // for comparison; rollback needs only created_record_id.
+        await pool.query(`UPDATE import_rows SET raw = raw || $2::jsonb WHERE id = $1`, [r.id, JSON.stringify({
+          created: {
+            voucherNumber: result.voucherNumber,
+            allocations: result.allocations,
+            advanceAmount: result.advanceAmount,
+          },
+        })]);
+      } catch (e: any) {
+        counts.failed++;
+        const reason = String(e?.message ?? e).slice(0, 400);
+        failures.push({ rowNumber: Number(r.row_number), name: label, reason });
+        await setRow(r.id, { status: "failed", reason }).catch(() => {});
       }
     }
   } else {
@@ -1790,6 +2212,61 @@ router.post("/imports/batches/:id/rollback", requireModuleAction(PERM, "delete")
       }).catch(() => {});
 
       res.json({ batch: batchJson(finishedTxn), removed });
+      return;
+    }
+
+    // ── Voucher batches: unwind each voucher, all-or-nothing ──
+    // Mirrors the manual DELETE of an allocation voucher: settlement legs
+    // removed (invoice dues restored), advances withdrawn — refusing per
+    // voucher when its advance has since been adjusted against documents.
+    if (batch.module === "receipts" || batch.module === "payments") {
+      const { rows: vRows } = await client.query(
+        `SELECT * FROM import_rows
+          WHERE batch_id = $1 AND status = 'imported' AND created_record_id IS NOT NULL
+          ORDER BY row_number`,
+        [id],
+      );
+      if (vRows.length === 0) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: "This batch created no vouchers, so there is nothing to roll back." });
+        return;
+      }
+
+      const blocked: Array<{ rowNumber: number; name: string; reason: string }> = [];
+      let removed = 0;
+      for (const r of vRows) {
+        const recId = Number(r.created_record_id);
+        const label = String(r.raw?.created?.voucherNumber ?? r.raw?.norm?.voucherNo ?? "") || `row ${r.row_number}`;
+        const reason = batch.module === "receipts"
+          ? await rollbackImportedReceiptVoucher(client as any, recId)
+          : await rollbackImportedPaymentVoucher(client as any, recId);
+        if (reason) blocked.push({ rowNumber: Number(r.row_number), name: label, reason });
+        else removed++;
+      }
+
+      if (blocked.length > 0) {
+        await client.query("ROLLBACK");
+        res.status(409).json({
+          error: `Cannot roll back: ${blocked.length} imported voucher${blocked.length === 1 ? " has" : "s have"} since been built upon. Remove that activity first, or leave the batch in place.`,
+          blocked,
+        });
+        return;
+      }
+
+      await client.query(`UPDATE import_rows SET status = 'rolled_back' WHERE batch_id = $1 AND status = 'imported'`, [id]);
+      const { rows: [finishedV] } = await client.query(
+        `UPDATE import_batches SET status = 'rolled_back', rolled_back_at = NOW(), rolled_back_by = $2 WHERE id = $1 RETURNING *`,
+        [id, user],
+      );
+      await client.query("COMMIT");
+
+      logActivity({
+        action: "DELETE", module: "imports", entityType: "import_batch", entityId: id,
+        description: `Rolled back ${batch.module} import "${batch.filename}" — removed ${removed} voucher${removed === 1 ? "" : "s"} (allocations unwound, dues and advances restored)`,
+        user,
+      }).catch(() => {});
+
+      res.json({ batch: batchJson(finishedV), removed });
       return;
     }
 

@@ -11,7 +11,7 @@ import { customFetch } from "./custom-fetch";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-export type ImportModule = "customers" | "vendors" | "ledgers" | "sales" | "purchases";
+export type ImportModule = "customers" | "vendors" | "ledgers" | "sales" | "purchases" | "receipts" | "payments";
 
 export type ImportBatchStatus = "validated" | "committing" | "committed" | "rolled_back";
 
@@ -56,9 +56,33 @@ export interface ImportRow {
   missingParty: string | null;
   /** Document group index — rows of one invoice share it (sales/purchases). */
   docIndex: number | null;
+  /** Voucher imports: planned allocation shown in the preview. */
+  plan: ImportVoucherPlan | null;
+  /** Voucher imports: what commit actually recorded. */
+  created: ImportVoucherCreated | null;
   createdRecordType: string | null;
   createdRecordId: number | null;
   createdLedgerId: number | null;
+}
+
+export interface ImportVoucherAllocation {
+  id: number;
+  invoiceNumber: string | null;
+  amount: number;
+}
+
+/** Planned allocation for a receipt/payment voucher row (preview). */
+export interface ImportVoucherPlan {
+  allocations: ImportVoucherAllocation[];
+  advance: number;
+  accountName: string;
+}
+
+/** What commit actually recorded for a voucher row. */
+export interface ImportVoucherCreated {
+  voucherNumber: string;
+  allocations: ImportVoucherAllocation[];
+  advanceAmount: number;
 }
 
 /** Inline party creation during a sales/purchase import (resolve step). */

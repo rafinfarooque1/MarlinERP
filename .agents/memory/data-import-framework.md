@@ -64,3 +64,28 @@ Rules that must hold for every import type, and why:
   "partial"); cash/UPI/bank sales settle at creation with NO sale_payments
   row — only credit collections write one; interstate detection reads
   `company_settings.state`, which can be blank (→ intrastate fallback).
+
+## Voucher imports (receipts & payments)
+
+- **The validation-time allocation plan is preview-only.** Commit RECOMPUTES
+  allocation inside each voucher's transaction on row-locked documents.
+  **Why:** dues can change between parse and commit; trusting the stored plan
+  would over- or double-settle.
+- **The preview plan runs over a RUNNING outstanding shared across the file**
+  (earlier rows decrement what later rows see) so multi-row files preview the
+  same way they commit. Explicit against-invoice refs settle ONLY that doc
+  (detailed error classes: not found / cancelled / branch-transfer / other
+  location / already settled); blank refs go FIFO oldest-first; excess parks
+  in CADV/VADV via the standard advance path.
+- **Provenance is `source='allocation'`** — edit-locked like allocation
+  vouchers, books derive with zero journal changes, never NULL (NULL fails
+  closed for edit rights).
+- **Account cell mapping:** blank/"cash" → the location's cash till
+  (mirror-aware); "bank" → the unique STD-BANK leaf; anything else = exact
+  case-insensitive ledger-name match, error otherwise.
+- **Rollback refusal reads `advance_consumptions`** (attribution to the
+  parking voucher's id) — a consumed advance blocks the WHOLE batch with a
+  per-voucher reason; freeing the consumption unblocks it.
+- **Dues include GST:** sale outstanding is MRP-inclusive but purchase-bill
+  dues = taxable + GST (unitCost is pre-tax) — FIFO expectations in tests must
+  use bill TOTALS, not qty×unitCost.

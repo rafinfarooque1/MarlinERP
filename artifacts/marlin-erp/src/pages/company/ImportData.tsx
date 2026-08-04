@@ -31,7 +31,7 @@ import { toast } from 'sonner';
 import {
   ShieldOff, Upload, Download, FileSpreadsheet, Users, Truck, BookOpen,
   CheckCircle2, AlertTriangle, XCircle, RotateCcw, Loader2, History, Eye,
-  ShoppingCart, Package, MapPin, UserPlus,
+  ShoppingCart, Package, MapPin, UserPlus, Receipt, Banknote,
 } from 'lucide-react';
 
 // ── Module metadata ─────────────────────────────────────────────────────────
@@ -57,16 +57,52 @@ const MODULE_META: Record<ImportModule, { label: string; icon: typeof Users; blu
     label: 'Purchases', icon: Package,
     blurb: 'Records old-ERP purchase bills with stock, average cost, GST and vendor settlement effects.',
   },
+  receipts: {
+    label: 'Receipts', icon: Receipt,
+    blurb: 'Records money received from customers — allocated against outstanding invoices, excess parked as advances.',
+  },
+  payments: {
+    label: 'Payments', icon: Banknote,
+    blurb: 'Records money paid to vendors — allocated against outstanding bills, excess parked as advances.',
+  },
 };
 
-/** Transaction imports: need a target location and a party-resolution step. */
+/** Transaction imports: whole documents with stock effects. */
 const isTxn = (m: ImportModule) => m === 'sales' || m === 'purchases';
+/** Voucher imports: receipts & payments with invoice allocation. */
+const isVoucher = (m: ImportModule) => m === 'receipts' || m === 'payments';
+/** Which imports need a target location and a party-resolution step. */
+const needsLocation = (m: ImportModule) => isTxn(m) || isVoucher(m);
+/** Whose party master the import references. */
+const partyIsCustomer = (m: ImportModule) => m === 'sales' || m === 'receipts';
 
 /** What to show in the "Name" column — masters have a name, documents don't. */
 const rowLabel = (m: ImportModule, r: ImportRow) =>
-  isTxn(m)
-    ? [r.values.invoiceNo, r.values.party, r.values.item].filter(Boolean).join(' · ') || '—'
-    : r.values.name ?? '—';
+  isVoucher(m)
+    ? [r.values.voucherNo, r.values.party, r.values.amount && `₹${r.values.amount}`].filter(Boolean).join(' · ') || '—'
+    : isTxn(m)
+      ? [r.values.invoiceNo, r.values.party, r.values.item].filter(Boolean).join(' · ') || '—'
+      : r.values.name ?? '—';
+
+/** Planned (preview) or recorded (post-commit) allocation for a voucher row. */
+function AllocationCell({ r }: { r: ImportRow }) {
+  const allocations = r.created?.allocations ?? r.plan?.allocations ?? null;
+  const advance = r.created?.advanceAmount ?? r.plan?.advance ?? 0;
+  if (!allocations) return <span className="text-muted-foreground">—</span>;
+  return (
+    <div className="space-y-0.5 text-xs">
+      {allocations.map((a) => (
+        <div key={a.id} className="whitespace-nowrap">
+          {a.invoiceNumber ?? `#${a.id}`} — ₹{a.amount.toFixed(2)}
+        </div>
+      ))}
+      {advance > 0 && (
+        <div className="whitespace-nowrap font-medium text-amber-700">Advance ₹{advance.toFixed(2)}</div>
+      )}
+      {allocations.length === 0 && advance <= 0 && <span className="text-muted-foreground">—</span>}
+    </div>
+  );
+}
 
 const fmtTime = (iso: string) =>
   new Date(iso).toLocaleString('en-IN', {
@@ -132,6 +168,9 @@ export default function ImportData() {
 
   const batches = historyData?.batches ?? [];
   const txn = isTxn(module);
+  const voucher = isVoucher(module);
+  const locationRequired = needsLocation(module);
+  const partyWord = partyIsCustomer(module) ? 'customer' : 'vendor';
 
   /** Unique missing parties in the current preview, with prefills from the file. */
   const missingParties = useMemo(() => {
@@ -171,7 +210,7 @@ export default function ImportData() {
       if (r.errors.length > 0) {
         toast.warning(`${r.created.length} created, ${r.errors.length} failed: ${r.errors.map((e) => `${e.name} — ${e.reason}`).join('; ')}`);
       } else {
-        toast.success(`${r.created.length} ${module === 'sales' ? 'customer' : 'vendor'}${r.created.length === 1 ? '' : 's'} created with ledgers${r.skipped.length ? ` (${r.skipped.length} already existed)` : ''} — rows re-validated.`);
+        toast.success(`${r.created.length} ${partyWord}${r.created.length === 1 ? '' : 's'} created with ledgers${r.skipped.length ? ` (${r.skipped.length} already existed)` : ''} — rows re-validated.`);
       }
     } catch (e: any) {
       toast.error(e?.message ?? 'The parties could not be created.');
@@ -192,7 +231,7 @@ export default function ImportData() {
       const [locType, locId] = location.split('|');
       const r = await parseFile.mutateAsync({
         module, file,
-        ...(txn ? { locationType: locType, locationId: Number(locId) } : {}),
+        ...(locationRequired ? { locationType: locType, locationId: Number(locId) } : {}),
       });
       setPreview(r);
       setSkippedRowIds(new Set());
@@ -200,7 +239,7 @@ export default function ImportData() {
       setPartyForms({});
       const { validRows, warningRows, errorRows } = r.batch;
       const needsParty = r.rows.filter((row) => row.status === 'needs_party').length;
-      if (needsParty > 0) toast.info(`${needsParty} row${needsParty === 1 ? '' : 's'} reference ${module === 'sales' ? 'customers' : 'vendors'} that don't exist yet — create them in the resolve step below.`);
+      if (needsParty > 0) toast.info(`${needsParty} row${needsParty === 1 ? '' : 's'} reference ${partyWord}s that don't exist yet — create them in the resolve step below.`);
       else if (errorRows > 0) toast.warning(`${errorRows} row${errorRows === 1 ? '' : 's'} have errors and will not be imported. Fix and re-upload, or commit the rest.`);
       else toast.success(`File validated — ${validRows} valid, ${warningRows} warning${warningRows === 1 ? '' : 's'}.`);
     } catch (e: any) {
@@ -298,7 +337,7 @@ export default function ImportData() {
 
           {/* ── Import tab ─────────────────────────────────────────────── */}
           <TabsContent value="import" className="space-y-4 mt-4">
-            <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
               {(Object.keys(MODULE_META) as ImportModule[]).map((m) => {
                 const meta = MODULE_META[m];
                 const Icon = meta.icon;
@@ -323,7 +362,7 @@ export default function ImportData() {
               })}
             </div>
 
-            {txn && (
+            {locationRequired && (
               <Card>
                 <CardHeader className="pb-3">
                   <CardTitle className="text-base flex items-center gap-2">
@@ -331,7 +370,9 @@ export default function ImportData() {
                     Target location
                   </CardTitle>
                   <CardDescription>
-                    Every {module === 'sales' ? 'invoice' : 'bill'} in the file is recorded at this location — its stock, ledgers and reports carry the effects. Pick it before uploading.
+                    {voucher
+                      ? `Every voucher in the file is stamped to this location and its cash/bank ledgers — collections allocate against ${partyWord} ${module === 'receipts' ? 'invoices' : 'bills'} raised here (Head Office sees all locations). Pick it before uploading.`
+                      : `Every ${module === 'sales' ? 'invoice' : 'bill'} in the file is recorded at this location — its stock, ledgers and reports carry the effects. Pick it before uploading.`}
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -353,11 +394,13 @@ export default function ImportData() {
 
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-base">{txn ? 'Get the sample, fill it, upload it' : 'Step 1 — Get the sample, fill it, upload it'}</CardTitle>
+                <CardTitle className="text-base">{locationRequired ? 'Get the sample, fill it, upload it' : 'Step 1 — Get the sample, fill it, upload it'}</CardTitle>
                 <CardDescription>
-                  {txn
-                    ? `Columns marked * are required. One row per invoice line — rows of one invoice must sit together with the same invoice number, date and ${module === 'sales' ? 'customer' : 'vendor'}. Prices are GST-exclusive; GST comes from the product master.`
-                    : 'Columns marked * are required. Duplicate names are flagged — you decide at commit whether to skip or update them.'}
+                  {voucher
+                    ? `Columns marked * are required. One row per voucher. ${module === 'receipts' ? 'Against Invoice' : 'Against Bill'} settles only that ${module === 'receipts' ? 'invoice' : 'bill'}; blank auto-allocates oldest-first, excess becomes a ${partyWord} advance. ${module === 'receipts' ? 'Received In' : 'Paid From'} is Cash, Bank or an exact bank ledger name.`
+                    : txn
+                      ? `Columns marked * are required. One row per invoice line — rows of one invoice must sit together with the same invoice number, date and ${partyWord}. Prices are GST-exclusive; GST comes from the product master.`
+                      : 'Columns marked * are required. Duplicate names are flagged — you decide at commit whether to skip or update them.'}
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-wrap items-center gap-3">
@@ -367,7 +410,7 @@ export default function ImportData() {
                 </Button>
                 <Button
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={!perm.canAdd || parseFile.isPending || (txn && !location)}
+                  disabled={!perm.canAdd || parseFile.isPending || (locationRequired && !location)}
                 >
                   {parseFile.isPending
                     ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
@@ -398,7 +441,7 @@ export default function ImportData() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className={`grid grid-cols-2 gap-3 ${txn ? 'sm:grid-cols-5' : 'sm:grid-cols-4'}`}>
+                  <div className={`grid grid-cols-2 gap-3 ${locationRequired ? 'sm:grid-cols-5' : 'sm:grid-cols-4'}`}>
                     <div className="rounded-lg border p-3">
                       <div className="text-2xl font-bold">{preview.batch.totalRows}</div>
                       <div className="text-xs text-muted-foreground">Total rows</div>
@@ -411,27 +454,27 @@ export default function ImportData() {
                       <div className="text-2xl font-bold text-amber-600 flex items-center gap-1"><AlertTriangle className="w-5 h-5" />{preview.batch.warningRows}</div>
                       <div className="text-xs text-muted-foreground">Warnings</div>
                     </div>
-                    {txn && (
+                    {locationRequired && (
                       <div className="rounded-lg border p-3">
                         <div className="text-2xl font-bold text-blue-600 flex items-center gap-1"><UserPlus className="w-5 h-5" />{needsPartyCount}</div>
-                        <div className="text-xs text-muted-foreground">Need {module === 'sales' ? 'customer' : 'vendor'}</div>
+                        <div className="text-xs text-muted-foreground">Need {partyWord}</div>
                       </div>
                     )}
                     <div className="rounded-lg border p-3">
-                      <div className="text-2xl font-bold text-destructive flex items-center gap-1"><XCircle className="w-5 h-5" />{txn ? preview.batch.errorRows - needsPartyCount : preview.batch.errorRows}</div>
+                      <div className="text-2xl font-bold text-destructive flex items-center gap-1"><XCircle className="w-5 h-5" />{locationRequired ? preview.batch.errorRows - needsPartyCount : preview.batch.errorRows}</div>
                       <div className="text-xs text-muted-foreground">Errors</div>
                     </div>
                   </div>
 
-                  {txn && missingParties.length > 0 && (
+                  {locationRequired && missingParties.length > 0 && (
                     <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-3">
                       <div className="flex items-center gap-2 text-sm font-medium">
                         <UserPlus className="w-4 h-4 text-blue-600" />
-                        {missingParties.length} {module === 'sales' ? 'customer' : 'vendor'}{missingParties.length === 1 ? '' : 's'} in the file
+                        {missingParties.length} {partyWord}{missingParties.length === 1 ? '' : 's'} in the file
                         {missingParties.length === 1 ? ' does' : ' do'} not exist yet
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        Fill in what you know and create them — each gets its {module === 'sales' ? 'debtor' : 'creditor'} ledger automatically,
+                        Fill in what you know and create them — each gets its {partyIsCustomer(module) ? 'debtor' : 'creditor'} ledger automatically,
                         exactly like manual creation, and the rows re-validate without re-uploading. Or fix the spelling in the file and upload again.
                       </p>
                       <div className="space-y-2 max-h-[22rem] overflow-y-auto pr-1">
@@ -448,7 +491,7 @@ export default function ImportData() {
                                 onChange={(e) => setPartyField(p.name, p.gstNumber, 'state', e.target.value)} />
                               <Input className="h-8 text-xs" placeholder="Address" value={f.address ?? ''}
                                 onChange={(e) => setPartyField(p.name, p.gstNumber, 'address', e.target.value)} />
-                              {module === 'sales' ? (
+                              {partyIsCustomer(module) ? (
                                 <Input className="h-8 text-xs" type="number" placeholder="Credit limit" value={f.creditLimit ?? ''}
                                   onChange={(e) => setPartyField(p.name, p.gstNumber, 'creditLimit', e.target.value)} />
                               ) : <div />}
@@ -487,6 +530,7 @@ export default function ImportData() {
                           <TableHead className="w-14">Row</TableHead>
                           <TableHead>Name</TableHead>
                           <TableHead className="w-24">Status</TableHead>
+                          {voucher && <TableHead>Will settle</TableHead>}
                           <TableHead>Reason</TableHead>
                           <TableHead>Suggestion</TableHead>
                         </TableRow>
@@ -504,6 +548,7 @@ export default function ImportData() {
                             <TableCell className="text-muted-foreground">{r.rowNumber}</TableCell>
                             <TableCell className="font-medium">{rowLabel(module, r)}</TableCell>
                             <TableCell><RowStatusBadge status={r.status} /></TableCell>
+                            {voucher && <TableCell><AllocationCell r={r} /></TableCell>}
                             <TableCell className="text-sm text-muted-foreground max-w-[22rem]">{r.reason ?? '—'}</TableCell>
                             <TableCell className="text-sm text-muted-foreground max-w-[22rem]">{r.suggestion ?? '—'}</TableCell>
                           </TableRow>
@@ -604,11 +649,19 @@ export default function ImportData() {
           <DialogHeader>
             <DialogTitle>Commit this import?</DialogTitle>
             <DialogDescription>
-              {txn ? (
+              {voucher ? (
+                <>
+                  {committableRows.length} row{committableRows.length === 1 ? '' : 's'} will be recorded as {module === 'receipts' ? 'receipt' : 'payment'} vouchers —
+                  allocated against outstanding {module === 'receipts' ? 'invoices' : 'bills'} exactly as previewed (re-checked against live balances at commit),
+                  with any excess parked as {partyWord} advances. Cash, bank and all books update immediately.
+                  {needsPartyCount > 0 && ` ${needsPartyCount} row${needsPartyCount === 1 ? '' : 's'} with unresolved ${partyWord}s will be SKIPPED.`}
+                  {' '}The whole batch can be rolled back from Import History while its vouchers and advances are untouched.
+                </>
+              ) : txn ? (
                 <>
                   {committableRows.length} row{committableRows.length === 1 ? '' : 's'} will be recorded as {module === 'sales' ? 'sales invoices' : 'purchase bills'} —
                   with real stock, GST, ledger and settlement effects, exactly as if entered manually.
-                  {needsPartyCount > 0 && ` ${needsPartyCount} row${needsPartyCount === 1 ? '' : 's'} with unresolved ${module === 'sales' ? 'customers' : 'vendors'} will be SKIPPED.`}
+                  {needsPartyCount > 0 && ` ${needsPartyCount} row${needsPartyCount === 1 ? '' : 's'} with unresolved ${partyWord}s will be SKIPPED.`}
                   {' '}The whole batch can be rolled back from Import History while its documents have no later activity.
                 </>
               ) : (
@@ -677,7 +730,11 @@ export default function ImportData() {
           <DialogHeader>
             <DialogTitle>Roll back this import?</DialogTitle>
             <DialogDescription>
-              {rollbackTarget && (isTxn(rollbackTarget.module) ? (
+              {rollbackTarget && (isVoucher(rollbackTarget.module) ? (
+                <>Every voucher created by "{rollbackTarget.filename}" ({rollbackTarget.importedRows} voucher{rollbackTarget.importedRows === 1 ? '' : 's'}) will be
+                removed — allocations unwound so {rollbackTarget.module === 'receipts' ? 'invoice' : 'bill'} dues are restored, and any advances they created withdrawn.
+                A voucher whose advance has since been adjusted against other documents blocks the whole rollback with per-voucher reasons.</>
+              ) : isTxn(rollbackTarget.module) ? (
                 <>Every document created by "{rollbackTarget.filename}" ({rollbackTarget.importedRows} row{rollbackTarget.importedRows === 1 ? '' : 's'}) will be
                 reversed — stock restored, settlements unwound{rollbackTarget.module === 'purchases' ? ', average cost unwound' : ''}, books cleaned.
                 Documents that have since gained payments, returns or other activity block the whole rollback with per-document reasons.</>
