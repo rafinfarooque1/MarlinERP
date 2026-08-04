@@ -217,6 +217,59 @@ export function buildSaleLines(
   return { ok: true, lineItems, billDiscount };
 }
 
+// ── MRP floor ─────────────────────────────────────────────────────────────────
+// A sale line may be priced AT or ABOVE the item's master MRP, never below —
+// price reductions must go through the discount fields so MRP, selling price
+// and discount stay separate figures in reports and margin analysis. Items
+// without a master MRP (0/unset) have no floor.
+//
+// `savedFloors` (edit only) grandfathers lines saved before a later master-MRP
+// increase: the effective floor is min(master MRP, the line's previously saved
+// price), so an old invoice stays editable as long as the price is not reduced
+// further. It must be built from the sale's STORED lines, never the request.
+//
+// items.mrp is a startup-migration column invisible to drizzle — a drizzle
+// select would silently read it as undefined, so the master MRP is fetched via
+// raw SQL here.
+//
+// The comparison is deliberately strict (no epsilon): both sides come from
+// parsing decimal strings (JSON body / NUMERIC-as-text), so equal decimals are
+// identical doubles and any value even a fraction of a paisa below the floor
+// (e.g. 99.996 vs ₹100) is rejected. No arithmetic is performed on either side.
+//
+// DELIBERATE EXCEPTION: createTransferSaleInvoice (lib/gstTransfer.ts) writes
+// system-generated sales rows for cross-GSTIN branch transfers priced at COST,
+// which is normally below MRP. Those are internal GST documents, excluded from
+// revenue via branch_transfer_id, and are NOT subject to this floor.
+export async function checkMrpFloor(
+  pgPool: { query: (sql: string, params?: any[]) => Promise<{ rows: any[] }> },
+  rawLineItems: Array<{ itemId: number; unitPrice: number }>,
+  savedFloors?: Map<number, number>,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const itemIds = [...new Set(rawLineItems.map(li => Number(li.itemId)))]
+    .filter(n => Number.isFinite(n) && n > 0);
+  if (itemIds.length === 0) return { ok: true };
+  const { rows } = await pgPool.query(
+    `SELECT id, name, mrp FROM items WHERE id = ANY($1::int[])`, [itemIds],
+  );
+  const byId = new Map<number, { name: string; mrp: number }>(
+    rows.map((r: any) => [Number(r.id), { name: String(r.name ?? ''), mrp: Number(r.mrp ?? 0) }]),
+  );
+  for (const li of rawLineItems) {
+    const item = byId.get(Number(li.itemId));
+    if (!item || item.mrp <= 0) continue;
+    const saved = savedFloors?.get(Number(li.itemId));
+    const floor = saved !== undefined && saved > 0 ? Math.min(item.mrp, saved) : item.mrp;
+    if (Number(li.unitPrice ?? 0) < floor) {
+      return {
+        ok: false,
+        error: `MRP cannot be lower than the Item Master MRP. Use Discount if you want to reduce the selling price. (${item.name}: minimum allowed ₹${floor.toFixed(2)})`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
 // ── Item Prices ───────────────────────────────────────────────────────────────
 
 // Serves Item Prices and HO Sales (POS) pages.
@@ -610,6 +663,16 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
         .where(inArray(itemsTable.id, itemIds))
     : [];
   const itemTaxMap = new Map(itemsData.map(i => [i.id, { taxRate: Number(i.taxRate), name: i.name, hsnCode: i.hsnCode, unit: i.unit }]));
+
+  // ── MRP floor ─────────────────────────────────────────────────────────────
+  // Line price must be AT or ABOVE the item's master MRP; reductions go
+  // through the discount fields. Enforced here so a direct API call cannot
+  // bypass the POS rule.
+  const mrpCheck = await checkMrpFloor(pgPool, rawLineItems);
+  if (!mrpCheck.ok) {
+    res.status(400).json({ error: mrpCheck.error, code: 'MRP_BELOW_MASTER' });
+    return;
+  }
 
   // ── Build enriched line items with GST ────────────────────────────────────
   // Item discounts, then the pre-tax bill discount allocation, then tax — the
@@ -1229,6 +1292,29 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
         .from(itemsTable).where(inArray(itemsTable.id, itemIds))
     : [];
   const itemTaxMap = new Map(itemsData.map(i => [i.id, { taxRate: Number(i.taxRate), name: i.name, hsnCode: i.hsnCode, unit: i.unit }]));
+
+  // ── MRP floor (edit) ──────────────────────────────────────────────────────
+  // Same rule as creation, with grandfathering: a line saved before a later
+  // master-MRP increase keeps its saved price as the floor (min(master,
+  // saved)), so old invoices stay editable as long as no price is reduced
+  // further. Floors come from the sale's STORED lines, never the request.
+  const savedFloors = new Map<number, number>();
+  {
+    const storedLines: any[] = typeof existingRaw.line_items === 'string'
+      ? (() => { try { return JSON.parse(existingRaw.line_items); } catch { return []; } })()
+      : (existingRaw.line_items ?? []);
+    for (const li of storedLines) {
+      const iid = Number(li?.itemId); const p = Number(li?.unitPrice);
+      if (!iid || !Number.isFinite(p) || p <= 0) continue;
+      const prev = savedFloors.get(iid);
+      savedFloors.set(iid, prev === undefined ? p : Math.min(prev, p));
+    }
+  }
+  const mrpCheck = await checkMrpFloor(pgPool, rawLineItems, savedFloors);
+  if (!mrpCheck.ok) {
+    res.status(400).json({ error: mrpCheck.error, code: 'MRP_BELOW_MASTER' });
+    return;
+  }
 
   // Build enriched line items — the SAME canonical computation as creation
   // (per-unit item discounts, pre-tax bill discount allocation, then tax).

@@ -12,7 +12,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Building2, Save, Loader2, Upload, X, ImageIcon, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
-import { INDIAN_STATES } from '@/lib/indianStates';
+import { StateCombobox } from '@/components/ui/state-combobox';
 import { usePermission } from '@/lib/usePermission';
 
 const LOGO_KEY = 'marlin_company_logo';
@@ -351,12 +351,7 @@ export default function Profile() {
                   <FormField control={form.control} name="state" render={({ field }) => (
                     <FormItem>
                       <FormLabel>State <span className="text-xs text-muted-foreground">(used for GST)</span></FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value || ''}>
-                        <FormControl><SelectTrigger><SelectValue placeholder="Select state" /></SelectTrigger></FormControl>
-                        <SelectContent>
-                          {INDIAN_STATES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
+                      <FormControl><StateCombobox value={field.value || ''} onChange={field.onChange} data-testid="select-company-state" /></FormControl>
                     </FormItem>
                   )} />
                   <FormField control={form.control} name="pincode" render={({ field }) => (

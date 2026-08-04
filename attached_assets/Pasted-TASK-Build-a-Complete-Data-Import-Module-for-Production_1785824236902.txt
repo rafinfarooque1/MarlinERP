@@ -1,0 +1,677 @@
+TASK: Build a Complete Data Import Module for Production ERP
+
+I need a complete Import Module inside the ERP.
+
+Location:
+
+Company
+ ├── Import Data
+
+This is for migrating data from an old ERP into a fresh production database.
+
+The import must be professional like Tally, Zoho Books, Busy, Marg, SAP Business One, etc.
+
+====================================================
+IMPORT MODULES
+====================================================
+
+Create separate import screens for:
+
+1. Customers
+2. Vendors
+3. Chart of Accounts (Ledgers)
+4. Items (optional, if required later)
+5. Sales
+6. Purchase
+7. Receipt Voucher
+8. Payment Voucher
+9. Opening Balances (future ready)
+
+Each module should have:
+
+• Download Sample Excel
+• Upload Excel
+• Validate Data
+• Preview
+• Import
+• Import History
+• Error Log
+• Rollback (last import)
+
+====================================================
+STEP 1
+DOWNLOAD SAMPLE FORMAT
+====================================================
+
+Every module must have a Download Sample button.
+
+The sample should contain:
+
+• Correct column names
+• Sample data
+• Required fields highlighted
+• Optional fields explained
+
+Example:
+
+Sales Sample.xlsx
+
+Purchase Sample.xlsx
+
+Receipt Sample.xlsx
+
+Payment Sample.xlsx
+
+Customer Sample.xlsx
+
+Vendor Sample.xlsx
+
+Ledger Sample.xlsx
+
+====================================================
+CUSTOMER IMPORT FORMAT
+====================================================
+
+Columns:
+
+Customer Name *
+Phone
+Email
+GST Number
+PAN
+State
+Address
+Credit Limit
+Opening Balance
+Opening Type (Dr/Cr)
+Notes
+
+====================================================
+VENDOR IMPORT FORMAT
+====================================================
+
+Columns
+
+Vendor Name *
+Phone
+Email
+GST Number
+PAN
+State
+Address
+Opening Balance
+Opening Type
+Notes
+
+====================================================
+LEDGER IMPORT FORMAT
+====================================================
+
+Columns
+
+Ledger Name *
+Ledger Group *
+Opening Balance
+Opening Type
+GST Applicable
+Notes
+
+The Ledger Group should support:
+
+Assets
+
+Current Assets
+
+Bank Accounts
+
+Cash in Hand
+
+Loans & Advances
+
+Fixed Assets
+
+Liabilities
+
+Current Liabilities
+
+Sundry Creditors
+
+Duties & Taxes
+
+Loans
+
+Capital
+
+Income
+
+Sales
+
+Direct Income
+
+Indirect Income
+
+Expense
+
+Purchase
+
+Direct Expense
+
+Indirect Expense
+
+Salary
+
+Rent
+
+Electricity
+
+Fuel
+
+Bank Charges
+
+etc.
+
+====================================================
+SALES IMPORT
+====================================================
+
+The production database is EMPTY.
+
+There are NO customers.
+
+NO ledgers.
+
+NO vendors.
+
+NO opening balances.
+
+Only Item Master already exists.
+
+While importing Sales:
+
+If Customer does not exist:
+
+Ask:
+
+Customer "ABC Traders" not found.
+
+Create?
+
+YES
+
+If YES
+
+Open mini customer creation popup
+
+Name
+
+GST
+
+Phone
+
+State
+
+Address
+
+Credit Limit
+
+Save
+
+Continue Import
+
+Automatically create:
+
+Customer
+
+Customer Ledger
+
+Receivable Ledger
+
+Continue import.
+
+====================================================
+LEDGER CREATION
+====================================================
+
+If a Ledger is missing
+
+Show
+
+Ledger not found
+
+Create?
+
+Ask user to choose Ledger Group.
+
+Example
+
+ABC Transport
+
+↓
+
+Group
+
+Indirect Expense
+
+Save
+
+Continue
+
+====================================================
+VENDOR CREATION
+====================================================
+
+If Vendor not found
+
+Create Vendor popup.
+
+Create
+
+Vendor
+
+Vendor Ledger
+
+Payable Ledger
+
+Continue Import.
+
+====================================================
+WAREHOUSE SELECTION
+====================================================
+
+This is very important.
+
+Sales Import
+
+Purchase Import
+
+Receipt
+
+Payment
+
+must first ask
+
+IMPORT INTO WHICH LOCATION?
+
+Dropdown
+
+Head Office
+
+Warehouse 1
+
+Warehouse 2
+
+Outlet 1
+
+Outlet 2
+
+etc.
+
+Every imported transaction belongs to that selected location.
+
+====================================================
+SALES IMPORT FORMAT
+====================================================
+
+Columns
+
+Invoice No
+
+Date *
+
+Customer Name *
+
+GST Number
+
+Item Name *
+
+Quantity *
+
+Unit *
+
+MRP *
+
+Discount
+
+Taxable Checkbox
+
+GST %
+
+CGST
+
+SGST
+
+IGST
+
+Bill Discount
+
+Payment Status
+
+Paid Amount
+
+Payment Mode
+
+Reference
+
+Narration
+
+====================================================
+PURCHASE FORMAT
+====================================================
+
+Invoice No
+
+Date
+
+Vendor
+
+GST
+
+Item
+
+Qty
+
+Rate
+
+GST
+
+Discount
+
+Payment Status
+
+Paid Amount
+
+Reference
+
+Narration
+
+====================================================
+RECEIPT IMPORT
+====================================================
+
+Columns
+
+Voucher No
+
+Date
+
+Location
+
+Received From
+
+Party Type
+
+Amount
+
+Against Invoice (optional)
+
+Narration
+
+====================================================
+PAYMENT IMPORT
+====================================================
+
+Columns
+
+Voucher No
+
+Date
+
+Location
+
+Paid To
+
+Party Type
+
+Amount
+
+Against Invoice (optional)
+
+Narration
+
+====================================================
+INVOICE MATCHING
+====================================================
+
+Receipt and Payment imports should automatically try to match invoices.
+
+Example
+
+Customer
+
+ABC Traders
+
+Outstanding
+
+₹50,000
+
+Receipt imported
+
+₹20,000
+
+System should allocate against oldest unpaid invoices automatically.
+
+If user imported a specific Invoice Number
+
+Allocate only there.
+
+====================================================
+ADVANCE AUTOMATION
+====================================================
+
+If Receipt
+
+₹60,000
+
+Outstanding
+
+₹50,000
+
+Automatically
+
+₹50,000
+
+Adjust invoice
+
+₹10,000
+
+Customer Advance
+
+Next Sale
+
+Automatically consume Advance.
+
+Same for Vendors.
+
+====================================================
+VALIDATION
+====================================================
+
+Before importing
+
+Show Preview.
+
+Example
+
+Rows
+
+500
+
+Valid
+
+490
+
+Errors
+
+10
+
+Warnings
+
+2
+
+====================================================
+ERROR REPORT
+====================================================
+
+Invalid rows should show
+
+Row
+
+Reason
+
+Suggestion
+
+Example
+
+Row 18
+
+Item not found
+
+Create item first
+
+Row 20
+
+GST Invalid
+
+Must be 15 characters
+
+Row 25
+
+Customer missing
+
+Create customer
+
+====================================================
+IMPORT HISTORY
+====================================================
+
+Maintain
+
+Imported By
+
+Imported On
+
+Rows
+
+Success
+
+Failed
+
+Rollback Available
+
+====================================================
+ROLLBACK
+====================================================
+
+If an import is incorrect
+
+Rollback should remove ONLY that imported batch.
+
+====================================================
+ACCOUNTING
+====================================================
+
+Every imported transaction must generate complete accounting entries.
+
+Sales
+
+Purchase
+
+Receipt
+
+Payment
+
+Inventory
+
+GST
+
+Customer Ledger
+
+Vendor Ledger
+
+Cash Book
+
+Bank Book
+
+Journal
+
+Day Book
+
+Trial Balance
+
+Profit & Loss
+
+Balance Sheet
+
+Dashboard
+
+All reports must update automatically.
+
+====================================================
+IMPORT SAFETY
+====================================================
+
+Prevent
+
+Duplicate Invoice Numbers
+
+Duplicate Voucher Numbers
+
+Duplicate Receipts
+
+Duplicate Payments
+
+Invalid GST
+
+Invalid Dates
+
+Negative Qty
+
+Negative Amount
+
+Invalid Ledger Groups
+
+====================================================
+USER EXPERIENCE
+====================================================
+
+Import flow should be:
+
+Download Sample
+
+↓
+
+Fill Excel
+
+↓
+
+Upload
+
+↓
+
+Validate
+
+↓
+
+Preview
+
+↓
+
+Resolve Missing Customers/Vendors/Ledgers
+
+↓
+
+Confirm
+
+↓
+
+Import
+
+↓
+
+Success Report
+
+====================================================
+FINAL REQUIREMENT
+====================================================
+
+This module must be production-grade and suitable for importing historical data into a completely fresh ERP database where only the Item Master exists. During import, the system should intelligently create missing Customers, Vendors, and Ledgers by prompting the user, assign them to the correct ledger groups, post all accounting entries automatically, allocate receipts/payments against invoices, create advances when required, and ensure that every imported transaction is reflected correctly in Inventory, Customer/Vendor Ledgers, Cash Book, Bank Book, Journal, Day Book, Trial Balance, Profit & Loss, Balance Sheet, Dashboard, GST Reports, and all financial reports. The import process must include sample templates, validation, preview, error reporting, import history, and rollback to make migration from the old ERP safe and reliable.

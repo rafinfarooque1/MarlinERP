@@ -153,7 +153,7 @@ fixtures.vendorId = (await sql(
   [`${TAG} Vendor`])).rows[0].id;
 fixtures.itemA = (await sql(
   `INSERT INTO items (name, unit, hsn_code, tax_rate, mrp, item_code, barcode, status)
-   VALUES ($1,'KG','08119010',5,380,'FG-ZZPDF-A','2900000000311','active') RETURNING id`,
+   VALUES ($1,'KG','08119010',5,100,'FG-ZZPDF-A','2900000000311','active') RETURNING id`,
   [`${TAG} Jack Fruit Red`])).rows[0].id;
 
 preLots = (await sql(`SELECT id, quantity::text AS q FROM stock_batches WHERE item_id = $1 AND material_type='item'`, [fixtures.itemA])).rows;

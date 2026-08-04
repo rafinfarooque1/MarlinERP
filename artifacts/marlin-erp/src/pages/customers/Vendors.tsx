@@ -20,7 +20,7 @@ import { Plus, Search, Truck, Download, Eye, BookOpen, Pencil, IndianRupee, Arro
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
-import { INDIAN_STATES } from '@/lib/indianStates';
+import { StateCombobox } from '@/components/ui/state-combobox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { usePermission } from '@/lib/usePermission';
 import { PartyBalance } from '@/lib/partyBalance';
@@ -457,10 +457,7 @@ export default function Vendors() {
                 )} />
                 <FormField control={form.control} name="state" render={({ field }) => (
                   <FormItem><FormLabel>State</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value || ''}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select state" /></SelectTrigger></FormControl>
-                      <SelectContent>{INDIAN_STATES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
-                    </Select>
+                    <FormControl><StateCombobox value={field.value || ''} onChange={field.onChange} data-testid="select-vendor-state" /></FormControl>
                   </FormItem>
                 )} />
               </div>

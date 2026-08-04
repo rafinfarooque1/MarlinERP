@@ -30,7 +30,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { INDIAN_STATES } from '@/lib/indianStates';
+import { StateCombobox } from '@/components/ui/state-combobox';
 import {
   STORED_SALE_MODES, PAYMENT_MODE_OPTIONS, CREATE_PAYMENT_MODE_OPTIONS, COLLECTION_METHODS,
   paymentModeLabel, storedSaleMode,
@@ -105,6 +105,10 @@ function computeLineGst(
   const rest = Math.round((rawTax - half) * 100) / 100;
   return { taxRate, taxType: 'cgst_sgst', lineGross, lineSubtotal, cgst: half, sgst: rest, igst: 0, taxAmount: rawTax };
 }
+
+// Shown whenever a typed sale-line MRP falls below the enforced floor. The
+// server rejects the same case with the same message.
+const MRP_FLOOR_MESSAGE = 'MRP cannot be lower than the Item Master MRP. Use Discount if you want to reduce the selling price.';
 
 // ── Form Schema ─────────────────────────────────────────────────────────────────
 
@@ -585,6 +589,29 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const getPrice = (itemId: number) => Number((items.find(i => i.id === itemId) as any)?.mrp ?? 0);
   const getAvailableQty = (itemId: number) => stockMap.get(itemId) ?? 0;
 
+  // ── MRP floor ───────────────────────────────────────────────────────────────
+  // A sale line's price may EQUAL or EXCEED the Item Master MRP, never go
+  // below it — reductions go through the Discount field so reports keep MRP,
+  // selling price and discount separate. On EDIT, a line saved before a later
+  // master-MRP increase stays editable at its saved price (but may not be
+  // reduced further): floor = min(master MRP, lowest saved price for the item).
+  // The server enforces the same rule; this is the immediate-feedback copy.
+  const savedPriceByItem = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const li of ((editItem?.lineItems ?? []) as any[])) {
+      const iid = Number(li?.itemId); const p = Number(li?.unitPrice);
+      if (!iid || !Number.isFinite(p) || p <= 0) continue;
+      const prev = m.get(iid);
+      m.set(iid, prev === undefined ? p : Math.min(prev, p));
+    }
+    return m;
+  }, [editItem]);
+  const getMrpFloor = (itemId: number) => {
+    const master = getPrice(itemId);
+    const saved = savedPriceByItem.get(Number(itemId));
+    return saved !== undefined ? Math.min(master, saved) : master;
+  };
+
   // Quantities on the sale being EDITED were already taken out of stock when
   // the sale was first saved. The server credits them back before validating an
   // edit, so the true ceiling for an edited line is (available now + what this
@@ -743,6 +770,15 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     if (data.paymentMode === 'credit' && !data.customerId) {
       toast.error('Credit sales need a registered customer — pick one or change the payment mode.');
       return;
+    }
+    // MRP floor — catches an Enter-key submit that skipped the field's blur
+    // reset. The server enforces the same rule authoritatively.
+    for (const li of data.lineItems) {
+      const floor = getMrpFloor(li.itemId);
+      if (floor > 0 && Number(li.unitPrice) < floor) {
+        toast.error(MRP_FLOOR_MESSAGE);
+        return;
+      }
     }
     const enrichedItems = data.lineItems.map(li => ({
       itemId: li.itemId,
@@ -1422,20 +1458,43 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                                 )} />
                               </div>
 
-                              {/* MRP — read-only, set in Item Master */}
+                              {/* MRP — editable UPWARD only. Floor = Item Master
+                                  MRP (or, on an old invoice, the line's saved
+                                  price if the master rose since). Anything below
+                                  is rejected and snapped back; reductions go
+                                  through Discount. */}
                               <div className="col-span-3">
-                                <p className="text-xs font-medium mb-1.5 text-foreground/80">
-                                  MRP (₹) <span className="text-[10px] text-muted-foreground font-normal">from Item Master</span>
-                                </p>
-                                <div className={`h-8 flex items-center px-3 rounded-md border text-xs font-mono select-none cursor-default ${
-                                  unitPrice > 0
-                                    ? 'border-border bg-muted/40 text-foreground'
-                                    : 'border-amber-500/40 bg-amber-500/5 text-amber-500 text-[10px]'
-                                }`}>
-                                  {unitPrice > 0
-                                    ? `₹${unitPrice.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
-                                    : 'Set MRP in Item Master'}
-                                </div>
+                                <FormField control={form.control} name={`lineItems.${index}.unitPrice`} render={({ field: f }) => {
+                                  const floor = getMrpFloor(itemId);
+                                  return (
+                                    <FormItem>
+                                      <FormLabel className="text-xs">
+                                        MRP (₹) {floor > 0 && <span className="text-[10px] text-muted-foreground font-normal">min ₹{floor.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>}
+                                      </FormLabel>
+                                      <FormControl>
+                                        <Input
+                                          type="number"
+                                          step="0.01"
+                                          min={floor > 0 ? floor : 0}
+                                          className="h-8 text-xs font-mono"
+                                          data-testid={`input-line-mrp-${index}`}
+                                          {...f}
+                                          onBlur={e => {
+                                            f.onBlur();
+                                            const v = Number(e.target.value);
+                                            if (floor > 0 && (!Number.isFinite(v) || v < floor)) {
+                                              toast.error(MRP_FLOOR_MESSAGE);
+                                              form.setValue(`lineItems.${index}.unitPrice`, floor);
+                                            }
+                                          }}
+                                        />
+                                      </FormControl>
+                                    </FormItem>
+                                  );
+                                }} />
+                                {itemId > 0 && getPrice(itemId) <= 0 && (
+                                  <p className="mt-1 text-[10px] text-amber-500">Set MRP in Item Master</p>
+                                )}
                                 {/* Taxable: checked → price is the taxable base, GST added on top;
                                     unchecked → price is final, GST extracted from it. */}
                                 <FormField control={form.control} name={`lineItems.${index}.taxable`} render={({ field: f }) => (
@@ -1705,10 +1764,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                 )} />
                 <FormField control={custForm.control} name="state" render={({ field }) => (
                   <FormItem><FormLabel>State</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value || ''}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select state" /></SelectTrigger></FormControl>
-                      <SelectContent>{INDIAN_STATES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
-                    </Select>
+                    <FormControl><StateCombobox value={field.value || ''} onChange={field.onChange} data-testid="select-quick-customer-state" /></FormControl>
                   </FormItem>
                 )} />
               </div>

@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Textarea } from '@/components/ui/textarea';
+import { StateCombobox } from '@/components/ui/state-combobox';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -339,7 +340,7 @@ export default function Warehouses() {
                   <FormItem><FormLabel>District</FormLabel><FormControl><Input placeholder="Bengaluru Urban" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
                 <FormField control={form.control} name="state" render={({ field }) => (
-                  <FormItem><FormLabel>State {req}</FormLabel><FormControl><Input placeholder="Karnataka" {...field} /></FormControl><FormMessage /></FormItem>
+                  <FormItem><FormLabel>State {req}</FormLabel><FormControl><StateCombobox value={field.value || ''} onChange={field.onChange} data-testid="select-warehouse-state" /></FormControl><FormMessage /></FormItem>
                 )} />
                 {/* Derived, not entered: the server takes this from the GSTIN's
                     first two digits on every save, so an edit here would be

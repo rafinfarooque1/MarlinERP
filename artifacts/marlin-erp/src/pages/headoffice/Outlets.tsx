@@ -10,6 +10,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useForm } from 'react-hook-form';
+import { StateCombobox } from '@/components/ui/state-combobox';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Plus, Search, Edit2, Trash2, Store, Download, Eye, ShieldOff } from 'lucide-react';
@@ -192,7 +193,7 @@ export default function Outlets() {
               )} />
               <div className="grid grid-cols-2 gap-4">
                 <FormField control={form.control} name="state" render={({ field }) => (
-                  <FormItem><FormLabel>State</FormLabel><FormControl><Input placeholder="Karnataka" {...field} /></FormControl></FormItem>
+                  <FormItem><FormLabel>State</FormLabel><FormControl><StateCombobox value={field.value || ''} onChange={field.onChange} data-testid="select-outlet-state" /></FormControl></FormItem>
                 )} />
                 <FormField control={form.control} name="stateCode" render={({ field }) => (
                   <FormItem><FormLabel>State Code</FormLabel><FormControl><Input placeholder="29" maxLength={2} className="font-mono" {...field} /></FormControl></FormItem>

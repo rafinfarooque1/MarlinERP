@@ -177,6 +177,7 @@ Sales POS requires a location context (fresh sessions render blank at `/sales/*`
 - Slab-locked rates (0/5/12/18/28 — enforcement task #14 open), item-level HSN, price modes inclusive/exclusive.
 - `lineTaxHeads()` is the ONLY tax-math path (server and client agree); CGST/SGST = half + exact paise remainder (never two independent rounds); IGST on inter-state by place of supply.
 - Line discounts net into taxable value pre-tax; bill-level coupon is post-tax only (`discount_total`).
+- **Sale MRP floor (Aug 2026):** line `unitPrice` ≥ item master MRP on create AND edit (server `checkMrpFloor` + POS field validation; 400 `MRP_BELOW_MASTER`); reductions only via discounts. Edits grandfathered: floor = min(master, lowest stored line price). Items with mrp 0 have no floor; quotations exempt (check sits outside `buildSaleLines`).
 - Head-wise Output/Input CGST/SGST/IGST ledgers; GSTR-1 B2B/B2C split; GSTR-3B with ITC set-off; HSN summary; reconciliation report ledger-vs-register.
 - **Known gap (task #54):** credit/debit notes do not yet reduce GST returns.
 

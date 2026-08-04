@@ -121,9 +121,12 @@ const tbBefore = await snapshotTB();
 fixtures.vendorId = (await sql(
   `INSERT INTO vendors (name, state, gst_number) VALUES ($1,'Karnataka','29ZZTES1234F1Z5') RETURNING id`,
   [`${TAG} Discount Vendor`])).rows[0].id;
+// MRP 99.99, not 100: the sale API enforces price ≥ master MRP, and the
+// fractional-quantity section below sells this item at exactly ₹99.99 to
+// exercise sub-paisa rounding. Every other section sells it at ₹100+.
 fixtures.itemA = (await sql(
   `INSERT INTO items (name, unit, hsn_code, tax_rate, mrp, item_code, barcode, status)
-   VALUES ($1,'KG','08119010',5,100,'FG-ZZTEST-DA','2900000000111','active') RETURNING id`,
+   VALUES ($1,'KG','08119010',5,99.99,'FG-ZZTEST-DA','2900000000111','active') RETURNING id`,
   [`${TAG} Disc Item A5`])).rows[0].id;
 fixtures.itemB = (await sql(
   `INSERT INTO items (name, unit, hsn_code, tax_rate, mrp, item_code, barcode, status)

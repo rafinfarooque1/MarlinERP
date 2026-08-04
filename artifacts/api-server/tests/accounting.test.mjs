@@ -125,8 +125,10 @@ if (!warehouse || !taxableItem) {
   assert('Trial balance balanced before sale', tbBefore.balanced,
     `totalDr=${tbBefore.totalDr} totalCr=${tbBefore.totalCr}`);
 
-  // Create a warehouse sale (warehouse 1 has stock for taxable items)
-  const unitPrice = 100;
+  // Create a warehouse sale (warehouse 1 has stock for taxable items).
+  // Price at the item's master MRP (min ₹100): the sale API enforces
+  // unitPrice ≥ master MRP. All assertions below scale off the response.
+  const unitPrice = Math.max(100, Number(taxableItem.mrp ?? 0));
   const saleRes = await post('/sales', {
     outletId:     warehouse.id,
     locationType: 'warehouse',

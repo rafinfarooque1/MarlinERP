@@ -39,7 +39,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { INDIAN_STATES } from '@/lib/indianStates';
+import { StateCombobox } from '@/components/ui/state-combobox';
 import {
   normaliseWhatsAppNumber, composeQuotationMessage, activeInvoiceShareChannel,
 } from '@/lib/invoiceShare';
@@ -946,10 +946,7 @@ export default function Quotations() {
                 )} />
                 <FormField control={form.control} name="placeOfSupply" render={({ field }) => (
                   <FormItem><FormLabel>Place of Supply</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value || ''}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select state" /></SelectTrigger></FormControl>
-                      <SelectContent>{INDIAN_STATES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
-                    </Select>
+                    <FormControl><StateCombobox value={field.value || ''} onChange={field.onChange} data-testid="select-place-of-supply" /></FormControl>
                   </FormItem>
                 )} />
                 <FormField control={form.control} name="status" render={({ field }) => (
@@ -1327,10 +1324,7 @@ export default function Quotations() {
                 )} />
                 <FormField control={custForm.control} name="state" render={({ field }) => (
                   <FormItem><FormLabel>State</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value || ''}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select state" /></SelectTrigger></FormControl>
-                      <SelectContent>{INDIAN_STATES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
-                    </Select>
+                    <FormControl><StateCombobox value={field.value || ''} onChange={field.onChange} data-testid="select-quick-customer-state" /></FormControl>
                   </FormItem>
                 )} />
               </div>
