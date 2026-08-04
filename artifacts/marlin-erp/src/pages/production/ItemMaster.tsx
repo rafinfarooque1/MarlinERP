@@ -304,6 +304,7 @@ export default function ItemMaster() {
             <Button variant="outline" size="sm" onClick={() => downloadCSV('items.csv', filtered.map(i => ({
               Code: (i as any).itemCode || '', Barcode: (i as any).barcode || '',
               Type: (TYPE_LABELS as any)[i._type] ?? i._type, Name: i.name, Unit: i.unit,
+              MRP: Number((i as any).mrp ?? 0),
               HSN: (i as any).hsnCode || '', 'Tax%': (i as any).taxRate || '',
               Stock: i.stock, Status: isActiveProduct(i) ? 'Active' : 'Inactive',
               Description: i.description || '',
