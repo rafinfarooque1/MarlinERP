@@ -1,0 +1,217 @@
+TASK: Restructure Organization Hierarchy and Permissions
+
+The current hierarchy is:
+
+- Management (currently has full system access)
+- Manager
+- Owner
+
+This is not correct.
+
+====================================================
+NEW HIERARCHY
+====================================================
+
+Rename the current "Management" role to:
+
+Administrator (System Admin)
+
+This role is the ERP Super Admin.
+
+Administrator should have FULL ACCESS to everything.
+
+This role should never be restricted.
+
+====================================================
+
+Create a NEW role called:
+
+Management
+
+This represents the company's management team, not the ERP administrator.
+
+Management should NOT have system administration rights.
+
+Management is mainly for monitoring and approvals.
+
+====================================================
+NEW HIERARCHY
+====================================================
+
+Administrator (Top Level)
+        │
+        └── Management
+                │
+                ├── Owner
+                ├── Warehouse Manager
+                ├── Outlet Manager
+                ├── Accounts Manager
+                ├── HR Manager
+                ├── Sales Manager
+                └── Purchase Manager
+
+Employees report to their respective managers.
+
+====================================================
+ADMINISTRATOR PERMISSIONS
+====================================================
+
+Administrator has unrestricted access.
+
+Can:
+
+• Company Settings
+• Company Profile
+• Permissions
+• Login History
+• Backup & Restore
+• Audit Logs
+• All Warehouses
+• All Outlets
+• All Accounts
+• All Reports
+• Employee Management
+• Payroll
+• Inventory
+• Production
+• Sales
+• Purchases
+• Customers
+• Vendors
+• Journals
+• Receipts
+• Payments
+• Chart of Accounts
+• GST
+• Import
+• Export
+• System Reset
+• Delete Records
+• Restore Backup
+
+Administrator can do EVERYTHING.
+
+====================================================
+MANAGEMENT PERMISSIONS
+====================================================
+
+Management is NOT an ERP administrator.
+
+Management should mainly monitor the business.
+
+Allow:
+
+✓ Dashboard
+✓ Business Dashboard
+✓ Sales Reports
+✓ Purchase Reports
+✓ Inventory Reports
+✓ Production Reports
+✓ Customer Reports
+✓ Vendor Reports
+✓ Employee Reports
+✓ Payroll Reports
+✓ Trial Balance
+✓ Profit & Loss
+✓ Balance Sheet
+✓ Ledger Statements
+✓ Cash Book
+✓ Bank Book
+✓ Day Book
+✓ GST Reports
+✓ Audit Reports
+
+====================================================
+
+Management can VIEW:
+
+• Sales
+• Purchases
+• Inventory
+• Production
+• Accounts
+• HR
+
+====================================================
+
+Management CANNOT:
+
+✗ Change Company Settings
+✗ Manage Permissions
+✗ Create Users
+✗ Delete Users
+✗ Restore Backup
+✗ Reset Database
+✗ Change Financial Year
+✗ Delete Transactions
+✗ Delete Masters
+✗ Modify System Configuration
+
+====================================================
+
+Management MAY optionally approve:
+
+• Purchase Orders
+• Expenses
+• Salary
+• Stock Adjustments
+• Price Changes
+
+if approval workflow is enabled.
+
+====================================================
+ROLE MIGRATION
+====================================================
+
+Current "Management" users should automatically become:
+
+Administrator
+
+Create the new "Management" role.
+
+Do NOT lose existing permissions.
+
+Do NOT affect employee mappings.
+
+====================================================
+ROLE UI
+====================================================
+
+Hierarchy page should display:
+
+Administrator
+    ↓
+Management
+    ↓
+Owner
+    ↓
+Warehouse Manager
+Outlet Manager
+Accounts Manager
+HR Manager
+Sales Manager
+Purchase Manager
+
+Employees will report to the appropriate manager.
+
+====================================================
+PERMISSION SCREEN
+====================================================
+
+Update the Permissions page so Administrator and Management have different permission sets.
+
+Administrator = Full Access
+
+Management = Monitoring + Reporting + Approval (optional), without any system administration privileges.
+
+====================================================
+VALIDATION
+====================================================
+
+After implementation verify:
+
+✓ Existing Administrator users retain full access.
+✓ New Management users can log in and view all reports.
+✓ Management cannot access Company Settings, Backup & Restore, Permissions, or System Administration.
+✓ Existing employee-role mappings continue to work.
+✓ No financial or operational data is affected by this hierarchy change.
