@@ -26,7 +26,7 @@ import {
   loadInvoicePaymentSettings, buildUpiRequest,
 } from "../lib/salePaymentPosition";
 import { advanceAvailable, takeAdvanceLock, attributeAdvanceConsumption, releaseAdvanceConsumption } from "../lib/advanceLedgers";
-import { nextSalesInvoiceNumber } from "../lib/voucherNumber";
+import { allocateSalesInvoiceNumber, salesCounterScope } from "../lib/voucherNumber";
 
 const router = Router();
 
@@ -997,17 +997,23 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
       );
       saleIsB2B = cgst?.gstin != null;
     }
-    invoiceNumber = await nextSalesInvoiceNumber(
+    const numberAlloc = await allocateSalesInvoiceNumber(
       txClient, saleIsB2B ? 'b2b' : 'b2c', parsed.data.saleDate,
       { type: locationType, id: locationId }
     );
+    invoiceNumber = numberAlloc.invoiceNumber;
 
     // ── Insert sale with location columns via raw SQL (location_type/location_id not in Drizzle schema) ──
     // Counter-settled modes are recorded fully paid; credit sales start unpaid.
+    // The number identity columns (number_scope/series/fy/serial) are the
+    // row's INTERNAL identity — plain columns the unique indexes key on, so
+    // the DB itself forbids a duplicate number within one location while the
+    // same printed number may exist at two different locations.
     const outletIdForInsert = locationType === 'outlet' ? locationId : null;
     ({ rows: [row] } = await txClient.query<any>(
-      `INSERT INTO sales (invoice_number, outlet_id, location_type, location_id, customer_id, sale_date, line_items, subtotal, tax_total, discount_total, bill_discount, total_amount, payment_mode, coupon_code, amount_paid, payment_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
+      `INSERT INTO sales (invoice_number, outlet_id, location_type, location_id, customer_id, sale_date, line_items, subtotal, tax_total, discount_total, bill_discount, total_amount, payment_mode, coupon_code, amount_paid, payment_status,
+                          number_scope, invoice_series, invoice_fy, invoice_serial)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) RETURNING *`,
       [invoiceNumber, outletIdForInsert, locationType, locationId,
        parsed.data.customerId ?? null, parsed.data.saleDate,
        // Stored WITH the batch trail already resolved above, so the served lots
@@ -1019,7 +1025,8 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
        settledAtSale ? totalAmount : appliedAdvance,
        settledAtSale
          ? 'paid'
-         : computePaymentPosition({ totalAmount, amountReceived: appliedAdvance, cancelledAt: null }).status]
+         : computePaymentPosition({ totalAmount, amountReceived: appliedAdvance, cancelledAt: null }).status,
+       numberAlloc.numberScope, numberAlloc.seriesPrefix, numberAlloc.fyLabel, numberAlloc.serial]
     ));
 
     // The adjusted advance is a collection like any other: a sale_payments row
@@ -1609,15 +1616,20 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
       newLineItemsWithBatches.push({ ...lineItems[i], batchBreakdown: editBreakdowns[i] ?? [] });
     }
 
-    // 3. The sale row, carrying the lots that now serve it.
+    // 3. The sale row, carrying the lots that now serve it. An edit may move
+    //    the sale to another location, so the folded number scope is
+    //    recomputed with it — if the kept invoice number already exists at
+    //    the destination, the unique index refuses the move loudly instead of
+    //    leaving a stale identity behind.
+    const editedNumberScope = await salesCounterScope(editTx, { type: newLocationType, id: newLocationId });
     ({ rows: [updated] } = await editTx.query<any>(
       `UPDATE sales SET outlet_id=$1, location_type=$2, location_id=$3, customer_id=$4, sale_date=$5,
        line_items=$6::jsonb, subtotal=$7, tax_total=$8, discount_total=$9, bill_discount=$10, total_amount=$11,
-       payment_mode=$12, coupon_code=$13, amount_paid=$14, payment_status=$15
+       payment_mode=$12, coupon_code=$13, amount_paid=$14, payment_status=$15, number_scope=$17
        WHERE id=$16 RETURNING *`,
       [newOutletId, newLocationType, newLocationId, parsed.data.customerId ?? null,
        parsed.data.saleDate, JSON.stringify(newLineItemsWithBatches), subtotal, taxTotal, discountTotal, billDiscount, totalAmount,
-       newPaymentMode, parsed.data.couponCode ?? null, newAmountPaid, newPaymentStatus, id]
+       newPaymentMode, parsed.data.couponCode ?? null, newAmountPaid, newPaymentStatus, id, editedNumberScope]
     ));
 
     // 4. Ledger the reversal before the re-apply so the trail reads

@@ -11,6 +11,8 @@
  * or from the first two digits of the GSTIN (per GST registration format).
  */
 
+import { salesCounterScope, parseDocNumberIdentity } from "./voucherNumber";
+
 type PoolLike = { query: (sql: string, params?: any[]) => Promise<{ rows: any[] }> };
 
 // ── Indian state → 2-digit numeric state code ─────────────────────────────────
@@ -581,20 +583,31 @@ export async function createTransferSaleInvoice(args: TransferInvoiceArgs): Prom
   const { client, transferId, invoiceNumber, transferDate, fromLocation, toLocation, lines, totals } = args;
   if (!(totals.taxableValue > 0)) return null;
 
+  // BTR numbers come from their own GLOBAL statutory sequence, but the row
+  // still carries the same internal number identity as ordinary sales so the
+  // per-location unique indexes cover it (a stricter global partial unique on
+  // BTR numbers remains in force on top).
+  const numberScope = await salesCounterScope(client, {
+    type: fromLocation.locationType, id: fromLocation.locationId,
+  });
+  const ident = parseDocNumberIdentity(invoiceNumber);
   const { rows: [s] } = await client.query(
     `INSERT INTO sales
        (invoice_number, outlet_id, customer_id, sale_date, line_items,
         subtotal, tax_total, discount_total, total_amount,
         payment_mode, payment_status, amount_paid,
         location_type, location_id,
-        branch_transfer_id, party_name, party_gstin, party_state)
-     VALUES ($1, NULL, NULL, $2, $3, $4, $5, 0, $6, 'credit', 'unpaid', 0, $7, $8, $9, $10, $11, $12)
+        branch_transfer_id, party_name, party_gstin, party_state,
+        number_scope, invoice_series, invoice_fy, invoice_serial)
+     VALUES ($1, NULL, NULL, $2, $3, $4, $5, 0, $6, 'credit', 'unpaid', 0, $7, $8, $9, $10, $11, $12,
+             $13, $14, $15, $16)
      RETURNING id`,
     [
       invoiceNumber, transferDate, JSON.stringify(lines),
       totals.taxableValue, totals.totalGst, totals.totalWithGst,
       fromLocation.locationType, fromLocation.locationId,
       transferId, toLocation.name, toLocation.gstin, toLocation.state,
+      numberScope, ident?.series ?? null, ident?.fyLabel ?? null, ident?.serial ?? null,
     ],
   );
   return s?.id ?? null;

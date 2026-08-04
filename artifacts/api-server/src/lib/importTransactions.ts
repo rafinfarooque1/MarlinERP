@@ -37,7 +37,7 @@ import { writeStockLedger, batchResolveMeta } from "./stockLedger";
 import { availabilityAt, insufficientStockMessage } from "./reservations";
 import { isSettledAtSale, clearsThroughBank } from "./paymentModes";
 import { computePaymentPosition } from "./salePaymentPosition";
-import { nextVoucherNumber, nextSalesInvoiceNumber } from "./voucherNumber";
+import { nextVoucherNumber, allocateSalesInvoiceNumber } from "./voucherNumber";
 import { creditMaterialAt, deductMaterialAt } from "./materialStock";
 import { productBatchIdentity, type ProductKind } from "./productIdentity";
 import { isValidGstSlab, gstSlabErrorMessage } from "./gst";
@@ -266,22 +266,25 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
       );
       custGstin = custGst?.gstin ?? null;
     }
-    newInvoiceNumber = await nextSalesInvoiceNumber(
+    const numberAlloc = await allocateSalesInvoiceNumber(
       client, custGstin != null ? "b2b" : "b2c", doc.saleDate,
       { type: loc.type, id: locationId },
     );
+    newInvoiceNumber = numberAlloc.invoiceNumber;
     const outletIdForInsert = loc.type === "outlet" ? loc.id : null;
     const { rows: [row] } = await client.query(
       `INSERT INTO sales (invoice_number, legacy_invoice_number, outlet_id, location_type, location_id, customer_id, sale_date,
                           line_items, subtotal, tax_total, discount_total, bill_discount, total_amount,
-                          payment_mode, coupon_code, amount_paid, payment_status)
-       VALUES ($1, $17, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
+                          payment_mode, coupon_code, amount_paid, payment_status,
+                          number_scope, invoice_series, invoice_fy, invoice_serial)
+       VALUES ($1, $17, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $18, $19, $20, $21) RETURNING id`,
       [newInvoiceNumber, outletIdForInsert, loc.type, locationId, doc.customerId, doc.saleDate,
        JSON.stringify(lineItemsWithBatches), subtotal, taxTotal, 0, billDiscount, totalAmount,
        doc.paymentMode, null,
        settledAtSale ? totalAmount : 0,
        settledAtSale ? "paid" : "unpaid",
-       doc.invoiceNumber],
+       doc.invoiceNumber,
+       numberAlloc.numberScope, numberAlloc.seriesPrefix, numberAlloc.fyLabel, numberAlloc.serial],
     );
     saleId = Number(row.id);
 

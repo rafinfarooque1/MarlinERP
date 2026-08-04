@@ -43,7 +43,7 @@
 - [Sale location resolution](sale-location-resolution.md) — resolve via location_type+location_id; sale_payments.outlet_id is legacy+NULL for warehouse sales so joining it silently deletes rows; warehouses holds outlet rows too
 - [Attachment ACL](attachment-acl.md) — "signed in" is not authorisation in a location-scoped app; readable only if you uploaded it (id in path) or may see the record; 404 not 403; presigned PUT can't bind content-type.
 - [Invoice numbering vs sequence](invoice-numbering-sequence.md) — renumbering strands allocators; SB2B/SB2C sales series rules: EVERY sales producer (POS + importer) must use the allocator, renames pair-rename receipts.
-- [Per-location invoice numbering](per-location-invoice-numbering.md) — SB2x serials run per location (counter@scope in voucher_type text, mirror fold); receipt deletes need the location guard; SB2x shape reserved for sales.
+- [Per-location invoice numbering](per-location-invoice-numbering.md) — identity = 4 stamped columns + plain unique indexes (CASE index broke publish); every producer stamps; receipt deletes need the location guard.
 - [Scratch-DB experiments](scratch-db-experiments.md) — `A && B &` backgrounds the WHOLE chain (vars lost) and `psql ""` silently hits dev; print current_database() before any scratch write.
 - [Sale cancellation](sale-cancellation.md) — a terminal state obliges EVERY write path (payments, returns) to refuse it after the row lock; filtering it from reports is not enough.
 - [Opt-in list paging](list-paging.md) — never default-cap a list endpoint the UI reads wholesale; in-memory slicing after a full fetch is pure downside.
@@ -55,7 +55,7 @@
 - [Chart of accounts presentation](chart-of-accounts.md) — statements are signed to each section's natural side (sign ≠ Dr/Cr); postable parents (Cash/Bank) ≠ sum of children; `code` must never be client-writable.
 - [Partial-apply failure contracts](partial-apply-contracts.md) — "nothing was changed" must be computed from what actually ran, never asserted in the catch; absent info means assume the worst; only fault injection tests it.
 - [Daily expense accrual](daily-expense-accrual.md) — rent+salary hit the P&L daily; approval is a delta true-up that can flip sides, locks the month; revision deletes+regenerates the whole unapproved month
-- [Publish schema diff](publish-schema-diff.md) — publish diffs the two live DBs (not schema.ts); bare text→date can NEVER apply, date→text applies silently; hold dev at prod's type, publish, then converge.
+- [Publish schema diff](publish-schema-diff.md) — publish diffs the two live DBs (not schema.ts); CASE-expression indexes break the differ; text→date can NEVER apply, date→text applies silently; converge types.
 - [One outstanding figure](single-outstanding-figure.md) — the owning module must export BOTH the in-process calc and SQL builders; reports and UIs hand-roll `total−paid` and silently drop credit notes.
 - [Orphaned ledger postings](orphaned-ledger-postings.md) — a balanced trial balance proves nothing: deleted ledgers leave postings that classify into neither statement, and the BS gap equals their net exactly.
 - [Dashboard KPI sources](dashboard-kpi-sources.md) — never re-sum expense subtrees for a tile (the capitalisation overlay makes it disagree with the P&L); located tiles read the located posting slice.

@@ -1,12 +1,36 @@
 ---
 name: Per-location invoice numbering
-description: Sales SB2B/SB2C serials run per location; counter scoping, index swap ordering, receipt-delete guard, and the reserved-series invariant.
+description: Sales SB2B/SB2C serials run per location; stamped identity columns, counter scoping, publish-safe index rules, receipt-delete guard, reserved-series invariant.
 ---
 
 # Per-location sales invoice numbering
 
 Every location (HO, each warehouse, each outlet) runs its own SB2B/SB2C serial.
 Printed format unchanged — internal identity is (location, number).
+
+## Identity is STAMPED COLUMNS, not an index expression
+`sales` carries 4 nullable raw-migration columns stamped at creation:
+`number_scope` (folded scope text), `invoice_series`, `invoice_fy`,
+`invoice_serial`. Two PLAIN unique indexes enforce identity:
+`uq_sales_scope_invoice_number (number_scope, invoice_number)` and
+`uq_sales_scope_series_fy_serial (scope, series, fy, serial)`.
+**Why:** the earlier CASE-expression unique index could not be reproduced by
+the publish-time schema differ (it generated invalid SQL — "unterminated
+quoted string" — and the deploy failed). NEVER put a CASE/expression in an
+index here; plain columns only. Stamping also CLOSES the old mirror-fold gap:
+the index now keys the folded scope, so even direct SQL can't print twins at
+one physical place.
+- Every producer must stamp all 4 columns: POS create, importer, BTR transfer
+  invoices (parse via `parseDocNumberIdentity`, NULL identity for non-3-part
+  numbers is fine). Sale EDIT recomputes `number_scope` (edits can move the
+  sale; the index then arbitrates the kept number at the new location).
+- Legacy odd-shaped numbers keep NULL series/fy/serial forever — never
+  renumbered; NULLs never collide in a unique btree, so no partial predicate.
+- Boot backfill is shape-driven (`WHERE number_scope IS NULL`), re-runs every
+  boot, reuses the same mirror-fold LATERAL SQL as the counter reconcile, and
+  on 23505 logs the duplicate (scope, number) groups before rethrowing.
+- `allocateSalesInvoiceNumber()` returns the full identity; generic per-scope
+  primitive `nextScopedSerial()` is the seam for future doc types.
 
 ## Counter scoping (voucherNumber.ts `salesCounterScope`)
 - Counter rows live in `voucher_sequences` with the location encoded in the
@@ -16,15 +40,14 @@ Printed format unchanged — internal identity is (location, number).
   else `type:id` — but an outlet sharing `cash_ledger_id` with a warehouse
   (mirror pair) FOLDS onto `warehouse:<twinId>` so one physical place never
   prints duplicates under its two identities.
-- The unique index (`uq_sales_invoice_number_per_location`) keys the RAW
-  identity — index expressions can't join, so mirror folding is enforced only
-  by the shared counter, not by the DB. Direct SQL inserts bypass it.
 - Boot reconcile groups per (scope, fy) with SQL mirroring the TS resolver
   (LATERAL twin lookup), forward-only. Old global counter rows left in place.
 
 ## Ordering rule for the index swap
-Create the per-location unique index FIRST, then drop the global one — never
-a window without duplicate protection.
+Create the replacement unique index FIRST, then drop the old one. Note the
+publish diff applies columns+indexes BEFORE the new build boots: prod rows sit
+NULL-scoped (unguarded by the new indexes) until boot backfills — safe only
+because the still-running old build allocates from one global counter.
 
 ## Consequences of shared numbers
 - Existing locations continue past their own historical max (never reset to

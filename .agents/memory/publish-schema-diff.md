@@ -5,6 +5,17 @@ description: Why publishing fails on text→date columns, and the only sequence 
 
 # Publishing diffs the two live databases, not the schema source
 
+## Expression indexes break the differ outright
+The differ cannot reproduce a unique index containing a CASE expression — it
+emitted `unterminated quoted string near THEN '...'` and the whole publish
+failed. **The rule:** dev-side DDL must stay within what the differ can
+re-generate: plain column indexes (partial WHERE predicates and simple
+function expressions like btrim have replicated fine; CASE has not), nullable
+ADD COLUMNs, widening casts. Never `ADD COLUMN ... NOT NULL` on a table with
+prod rows, and never an index expression the differ would have to quote. If an
+identity needs computing, stamp it into a real column and index that (see
+per-location-invoice-numbering.md).
+
 The Publish flow introspects the development and production databases, diffs
 them, and applies the difference to production. It does **not** read
 `schema.ts`, and it does **not** run the app's boot migrations first. So the

@@ -2172,35 +2172,118 @@ async function runMigrations() {
     }
   }
 
-  // ── (9) Per-location sales invoice numbering ───────────────────────────────
+  // ── (9) Per-location sales invoice numbering — identity COLUMNS ───────────
   // Every location runs its own independent SB2B/SB2C serial (Head Office
-  // numbering never advances a warehouse's), so the same invoice number may
-  // legitimately exist at two locations. The identity that must stay unique is
-  // (location, number) — invoice_number already embeds series + FY.
+  // numbering never advances a warehouse's), so the same printed number may
+  // legitimately exist at two locations. The identity that must stay unique
+  // lives in PLAIN columns stamped at creation:
+  //   number_scope   — folded location scope ('headoffice' | 'warehouse:2' …)
+  //   invoice_series / invoice_fy / invoice_serial — parsed number identity
   //
-  // Order matters: the per-location index is created FIRST (a strict subset of
-  // the global one, so it can never fail while the global index still holds),
-  // and only then is the global index dropped. If creation ever failed, the
-  // global protection would remain in place rather than leaving sales
-  // unguarded. Head office normalises to one key regardless of its
-  // placeholder id (0 in vouchers, 1 in sales — match on TYPE alone).
-  // Boundary note: this index keys the RAW stored identity. It cannot fold a
-  // mirror outlet onto its warehouse twin (index expressions must be
-  // immutable — no joins), so for a mirrored place the shared allocator
-  // counter — salesCounterScope() folds both identities onto one scope — is
-  // what guarantees the two identities never print the same number. Direct
-  // SQL inserts that bypass the allocator sit outside that guarantee, as they
-  // sit outside every other invariant here.
+  // Why columns and not an index expression: the earlier CASE-expression
+  // unique index could not be reproduced by the publish-time schema diff (it
+  // generated invalid SQL — "unterminated quoted string" — and the deploy
+  // failed). Plain btree indexes on real columns replicate cleanly. Columns
+  // are also STRONGER: the scope is computed by salesCounterScope() with the
+  // mirror fold (outlet sharing a cash ledger with a warehouse folds onto the
+  // warehouse identity), which an immutable index expression could never do.
+  //
+  // Order matters, and it holds on BOTH databases: columns → backfill →
+  // create the new unique indexes → only then drop the old guards. If any
+  // step fails, the throw skips the drops and the previous protection stays.
+  // The backfill is shape-driven (WHERE ... IS NULL), so it re-heals rows
+  // from any producer that slipped past the stamping on every boot.
   try {
-    await pool.query(
-      `CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_invoice_number_per_location
-         ON sales ((CASE WHEN location_type = 'headoffice' THEN 'headoffice'
-                         ELSE location_type || ':' || COALESCE(location_id, 0)::text END),
-                   invoice_number)`
+    await pool.query(`ALTER TABLE sales ADD COLUMN IF NOT EXISTS number_scope TEXT`);
+    await pool.query(`ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_series TEXT`);
+    await pool.query(`ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_fy TEXT`);
+    await pool.query(`ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_serial INTEGER`);
+
+    // Backfill the folded scope. Mirrors salesCounterScope(): HO by TYPE
+    // alone (its placeholder id differs per table), an outlet folds onto its
+    // warehouse twin when both share one cash ledger.
+    //
+    // Publish-window note: on the first production deploy the schema diff
+    // adds these columns AND the unique indexes while every prod row is
+    // still NULL-scoped (NULLs never conflict), and drops the old global
+    // index before this backfill runs. That window is safe in practice —
+    // the still-running old build allocates every number from ONE global
+    // counter, so it cannot mint a duplicate — but if a duplicate ever DID
+    // land there, this UPDATE would trip the new unique index. Diagnose it
+    // loudly instead of leaving a cryptic boot log.
+    let scoped = 0;
+    const scopeExpr = `CASE
+                    WHEN s2.location_type = 'headoffice' THEN 'headoffice'
+                    WHEN s2.location_type = 'outlet' AND tw.id IS NOT NULL THEN 'warehouse:' || tw.id::text
+                    ELSE s2.location_type || ':' || COALESCE(s2.location_id, 0)::text
+                  END`;
+    const scopeFrom = `FROM sales s2
+             LEFT JOIN outlets o ON s2.location_type = 'outlet' AND o.id = s2.location_id
+             LEFT JOIN LATERAL (
+               SELECT w.id FROM warehouses w
+                WHERE o.cash_ledger_id IS NOT NULL AND w.cash_ledger_id = o.cash_ledger_id
+                ORDER BY w.id LIMIT 1
+             ) tw ON true`;
+    try {
+      ({ rowCount: scoped } = await pool.query(
+        `UPDATE sales s
+            SET number_scope = x.scope
+           FROM (
+             SELECT s2.id, ${scopeExpr} AS scope
+               ${scopeFrom}
+              WHERE s2.number_scope IS NULL
+           ) x
+          WHERE s.id = x.id`
+      ) as any);
+    } catch (e) {
+      if ((e as any).code === '23505') {
+        const { rows: dups } = await pool.query(
+          `SELECT ${scopeExpr} AS scope, s2.invoice_number, count(*)::int AS n,
+                  array_agg(s2.id ORDER BY s2.id) AS ids
+             ${scopeFrom}
+            GROUP BY 1, 2 HAVING count(*) > 1 LIMIT 20`
+        );
+        console.error('[migration] sales_number_identity: scope backfill hit duplicate (location, number) pairs — these rows must be resolved by hand:', JSON.stringify(dups));
+      }
+      throw e;
+    }
+    // Parse series/FY/serial out of allocator-shaped numbers. Historical or
+    // hand-shaped numbers that don't match stay NULL — they are NEVER
+    // renumbered, and NULL identity rows simply sit outside the serial
+    // uniqueness (their full number is still guarded by the scope+number
+    // index below).
+    const { rowCount: parsed } = await pool.query(
+      `UPDATE sales
+          SET invoice_series = split_part(invoice_number, '/', 1),
+              invoice_fy     = split_part(invoice_number, '/', 2),
+              invoice_serial = split_part(invoice_number, '/', 3)::int
+        WHERE invoice_serial IS NULL
+          AND invoice_number ~ '^[A-Z0-9]+/[^/]+/[0-9]+$'`
     );
+    if ((scoped ?? 0) > 0 || (parsed ?? 0) > 0) {
+      console.error(`[migration] sales_number_identity: scoped ${scoped ?? 0}, parsed ${parsed ?? 0} sale(s)`);
+    }
+
+    // The printed number is unique WITHIN a location…
+    await pool.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_scope_invoice_number
+         ON sales (number_scope, invoice_number)`
+    );
+    // …and so is the internal key (LocationScope, Series, FY, RunningNumber).
+    // Rows with NULL identity parts never collide in a btree unique index, so
+    // no partial predicate is needed — legacy-shaped numbers are simply
+    // outside this constraint by construction.
+    await pool.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_scope_series_fy_serial
+         ON sales (number_scope, invoice_series, invoice_fy, invoice_serial)`
+    );
+    // Old guards go LAST: the CASE-expression index (the publish breaker) and
+    // the original global unique index (production still carries it until the
+    // first boot of this build).
+    await pool.query(`DROP INDEX IF EXISTS uq_sales_invoice_number_per_location`);
     await pool.query(`DROP INDEX IF EXISTS uq_sales_invoice_number`);
   } catch (e) {
-    console.error('[migration] sales_per_location_unique_index FAILED:', (e as Error).message);
+    console.error('[migration] sales_number_identity FAILED:', (e as Error).message);
   }
 
   // One-time: stamp every sale-trail receipt with its sale's location. Legacy

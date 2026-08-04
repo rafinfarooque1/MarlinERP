@@ -156,28 +156,75 @@ export async function salesCounterScope(
 }
 
 /**
+ * The generic per-location numbering primitive (the "sequence framework").
+ *
+ * Counter rows live in voucher_sequences with the location scope encoded in
+ * the TEXT key — `<counterName>@<scope>` — because widening the table's
+ * natural PK would strand every older ON CONFLICT target (see
+ * migration-ddl-drift). The atomic upsert row-locks the (counter@scope, FY)
+ * row for the rest of the transaction, so two users drawing concurrently at
+ * the same location can never get the same serial — and a rolled-back
+ * document rolls its serial back with it. A scope's FIRST draw starts at 1
+ * (no counter row until first use), which is also how new locations
+ * auto-initialise.
+ *
+ * Any future document type (purchase bills, receipts, payments, notes,
+ * challans, quotations …) gets independent per-location numbering by calling
+ * this with its own counter name and the location scope from
+ * salesCounterScope() — no redesign needed.
+ *
+ * MUST be called with the document-creation transaction client so the counter
+ * bump commits/rolls back atomically with the document row itself.
+ */
+export async function nextScopedSerial(
+  q: Queryable,
+  counterName: string,
+  scope: string,
+  fyLabel: string,
+): Promise<number> {
+  const { rows: [seq] } = await q.query(
+    `INSERT INTO voucher_sequences (voucher_type, fy_label, last_number)
+     VALUES ($1, $2, 1)
+     ON CONFLICT (voucher_type, fy_label)
+     DO UPDATE SET last_number = voucher_sequences.last_number + 1
+     RETURNING last_number`,
+    [`${counterName}@${scope}`, fyLabel]
+  );
+  return Number(seq.last_number);
+}
+
+/**
+ * The internal identity of a numbered sale, stored on the row alongside the
+ * printed number: (number_scope, invoice_series, invoice_fy, invoice_serial).
+ * The DB enforces uniqueness on these PLAIN columns — no CASE expressions in
+ * indexes (an expression index broke the publish-time schema diff, which
+ * cannot reproduce CASE SQL faithfully).
+ */
+export type SalesNumberAllocation = {
+  invoiceNumber: string;
+  /** Folded location scope — 'headoffice' | 'warehouse:2' | 'outlet:5' … */
+  numberScope: string;
+  /** Printed series prefix — 'SB2B' | 'SB2C'. */
+  seriesPrefix: string;
+  fyLabel: string;
+  serial: number;
+};
+
+/**
  * Allocate the next sales bill number for a series, scoped to the financial
  * year of the sale date AND the billing location — every location keeps an
  * independent running serial (Head Office numbering never advances a
  * warehouse's, and a new location starts at 000001 automatically because its
  * counter row simply doesn't exist yet). The printed format stays clean
- * (SB2C/2026-27/000001, no location code); the location is identity the ERP
- * tracks internally via the sale row's location columns.
- *
- * The atomic upsert row-locks the (series@scope, FY) counter row for the rest
- * of the transaction, so two tills billing concurrently at the same location
- * can never draw the same number — and a rolled-back sale rolls its number
- * back with it.
- *
- * MUST be called with the sale-creation transaction client so the counter
- * bump commits/rolls back atomically with the sale row itself.
+ * (SB2C/2026-27/000001, no location code); the location identity is what the
+ * ERP tracks internally via the columns stamped from this allocation.
  */
-export async function nextSalesInvoiceNumber(
+export async function allocateSalesInvoiceNumber(
   q: Queryable,
   series: SalesSeries,
   saleDate: string | undefined,
   location: SaleLocation,
-): Promise<string> {
+): Promise<SalesNumberAllocation> {
   let fyStartMonth = 4;
   try {
     const { rows } = await q.query(`SELECT fy_start_month FROM company_settings LIMIT 1`);
@@ -187,13 +234,53 @@ export async function nextSalesInvoiceNumber(
   }
   const fyLabel = financialYearLabel(saleDate, fyStartMonth);
   const scope = await salesCounterScope(q, location);
-  const { rows: [seq] } = await q.query(
-    `INSERT INTO voucher_sequences (voucher_type, fy_label, last_number)
-     VALUES ($1, $2, 1)
-     ON CONFLICT (voucher_type, fy_label)
-     DO UPDATE SET last_number = voucher_sequences.last_number + 1
-     RETURNING last_number`,
-    [`${SALES_SERIES[series].counter}@${scope}`, fyLabel]
+  const serial = await nextScopedSerial(q, SALES_SERIES[series].counter, scope, fyLabel);
+  return {
+    invoiceNumber: salesInvoiceNumber(series, fyLabel, serial),
+    numberScope: scope,
+    seriesPrefix: SALES_SERIES[series].prefix,
+    fyLabel,
+    serial,
+  };
+}
+
+/** Back-compat wrapper — prefer allocateSalesInvoiceNumber + stampSaleNumberIdentity. */
+export async function nextSalesInvoiceNumber(
+  q: Queryable,
+  series: SalesSeries,
+  saleDate: string | undefined,
+  location: SaleLocation,
+): Promise<string> {
+  return (await allocateSalesInvoiceNumber(q, series, saleDate, location)).invoiceNumber;
+}
+
+/**
+ * Parse "PREFIX/FY/SERIAL" (e.g. SB2C/2026-27/000013, BTR/2026-27/0004) into
+ * its identity parts. Returns null for anything that doesn't match — legacy
+ * hand-shaped numbers keep NULL identity columns, they are never renumbered.
+ */
+export function parseDocNumberIdentity(
+  invoiceNumber: string | null | undefined,
+): { series: string; fyLabel: string; serial: number } | null {
+  const m = /^([A-Z0-9]+)\/([^/]+)\/(\d+)$/.exec(String(invoiceNumber ?? "").trim());
+  if (!m) return null;
+  return { series: m[1], fyLabel: m[2], serial: Number(m[3]) };
+}
+
+/**
+ * Stamp a sale row's internal number identity. Raw SQL on purpose: these are
+ * raw-migration columns invisible to the drizzle schema, so they must be
+ * written (and read) outside it. Same transaction as the INSERT, always.
+ */
+export async function stampSaleNumberIdentity(
+  q: Queryable,
+  saleId: number,
+  ident: { numberScope: string; seriesPrefix?: string | null; fyLabel?: string | null; serial?: number | null },
+): Promise<void> {
+  await q.query(
+    `UPDATE sales
+        SET number_scope = $2, invoice_series = $3, invoice_fy = $4, invoice_serial = $5
+      WHERE id = $1`,
+    [saleId, ident.numberScope, ident.seriesPrefix ?? null, ident.fyLabel ?? null, ident.serial ?? null]
   );
-  return salesInvoiceNumber(series, fyLabel, Number(seq.last_number));
 }

@@ -1,0 +1,289 @@
+The current production deployment failed because the generated PostgreSQL migration is invalid, and I also want to improve the invoice numbering architecture before deploying.
+
+=====================================================================
+PART 1 - FIX THE FAILED MIGRATION
+=====================================================================
+
+Production deployment failed with:
+
+ERROR:
+
+unterminated quoted string near
+
+THEN 'head_invoice_number');
+
+The generated migration is treating a column name as a string literal.
+
+Example (Wrong)
+
+THEN 'head_invoice_number'
+
+It should reference the column:
+
+THEN head_invoice_number
+
+or
+
+THEN "head_invoice_number"
+
+depending on the schema.
+
+Review the generated migration completely.
+
+Requirements:
+
+• Fix the SQL syntax.
+• Ensure every CREATE INDEX statement is valid PostgreSQL.
+• Validate the migration against both Development and Production databases before deployment.
+• The migration must be idempotent.
+• Existing production data must remain untouched.
+• Do not require copying the development database into production.
+
+=====================================================================
+PART 2 - REDESIGN THE INVOICE NUMBERING
+=====================================================================
+
+Instead of maintaining different CASE statements for Head Office and Warehouses, redesign the numbering system using a proper multi-location architecture.
+
+Each location should maintain its own independent running sequence.
+
+Example
+
+Head Office
+
+SB2C/2026-27/000001
+SB2C/2026-27/000002
+SB2B/2026-27/000001
+
+Frozen Hub - Ragiguda
+
+SB2C/2026-27/000001
+SB2C/2026-27/000002
+SB2B/2026-27/000001
+
+Frozen Hub - Calicut
+
+SB2C/2026-27/000001
+SB2C/2026-27/000002
+
+The invoice format should remain clean.
+
+DO NOT add warehouse abbreviations like
+
+RAG/
+CAL/
+HO/
+
+The printed invoice should stay exactly as
+
+SB2C/2026-27/000001
+
+The Location Name already appears on the invoice and identifies where it belongs.
+
+=====================================================================
+PART 3 - INTERNAL UNIQUE KEY
+=====================================================================
+
+Internally the ERP should identify invoices using
+
+Location ID
+Financial Year
+Series
+Running Number
+
+Instead of relying on invoice text.
+
+The unique constraint should effectively be
+
+(LocationId, FinancialYear, InvoiceSeries, RunningNumber)
+
+rather than using CASE expressions inside indexes.
+
+This is cleaner, scalable and production-safe.
+
+=====================================================================
+PART 4 - DATABASE DESIGN
+=====================================================================
+
+Create or use dedicated sequence/counter records for every location.
+
+Each location should maintain independent counters.
+
+Example
+
+Head Office
+
+SB2B
+SB2C
+
+Warehouse A
+
+SB2B
+SB2C
+
+Warehouse B
+
+SB2B
+SB2C
+
+When a new warehouse or outlet is created, initialize its counters automatically.
+
+=====================================================================
+PART 5 - CONCURRENCY
+=====================================================================
+
+Invoice numbering must be transaction-safe.
+
+If two users create invoices simultaneously in the same location, duplicate invoice numbers must never occur.
+
+Use row locking or transactional sequences.
+
+=====================================================================
+PART 6 - SEARCH
+=====================================================================
+
+Searching by invoice number must continue to work.
+
+If duplicate printed invoice numbers exist across different locations,
+
+Global Search should display
+
+Invoice Number
+
+Location
+
+Customer
+
+Date
+
+so users can distinguish them.
+
+=====================================================================
+PART 7 - EXISTING DATA
+=====================================================================
+
+Do NOT renumber existing invoices.
+
+Keep every historical invoice unchanged.
+
+Only ensure every existing invoice has the correct
+
+Location
+Series
+Running Number
+
+internally.
+
+=====================================================================
+PART 8 - REPORTS
+=====================================================================
+
+Verify all reports continue working.
+
+Sales Register
+
+Customer Ledger
+
+GST Reports
+
+Trial Balance
+
+Profit & Loss
+
+Balance Sheet
+
+Dashboard
+
+Day Book
+
+Invoice Print
+
+PDF Export
+
+No report should rely solely on the printed invoice number.
+
+=====================================================================
+PART 9 - MIGRATION SAFETY
+=====================================================================
+
+Before generating migrations,
+
+compare
+
+Development Schema
+
+Production Schema
+
+and generate only the required ALTER statements.
+
+Never generate SQL that depends on Development-only columns.
+
+The migration must pass validation before publishing.
+
+=====================================================================
+PART 10 - VERIFICATION
+=====================================================================
+
+Run full verification.
+
+Create invoices simultaneously from
+
+Head Office
+
+Frozen Hub - Ragiguda
+
+Frozen Hub - Calicut
+
+Verify
+
+✓ Independent numbering
+
+✓ No duplicate keys
+
+✓ Reports work
+
+✓ Search works
+
+✓ Invoice print works
+
+✓ GST works
+
+✓ Dashboard works
+
+✓ Trial Balance balances
+
+✓ No migration errors
+
+=====================================================================
+PART 11 - FUTURE PROOFING
+=====================================================================
+
+Design the numbering engine so that future document types can use the same architecture.
+
+Examples
+
+Sales Invoice
+
+Purchase Bill
+
+Receipt Voucher
+
+Payment Voucher
+
+Journal Voucher
+
+Contra Voucher
+
+Debit Note
+
+Credit Note
+
+Delivery Challan
+
+Quotation
+
+without redesigning the numbering system again.
+
+Every document type should support independent numbering per location using the same underlying sequence framework.
+
+The objective is to eliminate the current migration issue and implement a clean, scalable, enterprise-grade numbering system suitable for unlimited warehouses, outlets, and future document types while keeping printed document numbers clean and professional.
