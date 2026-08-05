@@ -193,6 +193,9 @@ importers:
       cors:
         specifier: ^2.8.6
         version: 2.8.6
+      dbffile:
+        specifier: ^1.12.0
+        version: 1.12.0
       drizzle-orm:
         specifier: 'catalog:'
         version: 0.45.2(@types/pg@8.20.0)(pg@8.22.0)
@@ -3491,6 +3494,9 @@ packages:
   dayjs@1.11.21:
     resolution: {integrity: sha512-98IT+HOahAisibz/yjKbzuOBwYcjJ7BCLPzARyHiyEBmRz4fatF+KPJszEHXsGYjUG234aH/cOjW1wwTbKUZlA==}
 
+  dbffile@1.12.0:
+    resolution: {integrity: sha512-repLNtp1jyODRyAbqSaCiComsLi9/2w+ljYC760TXf69ExFVoJzdDr5STBx21gunM59RipYK5zHeDIuGf1LA8w==}
+
   debug@2.6.9:
     resolution: {integrity: sha512-bC7ElrdJaJnPbAP+1EotYvqZsb3ecl5wi6Bfi6BJTUcNowp6cvspg0jXznRTKDjm/E7AdgFBVeAPVMNcKGsHMA==}
     peerDependencies:
@@ -4407,6 +4413,10 @@ packages:
 
   hyphenate-style-name@1.1.0:
     resolution: {integrity: sha512-WDC/ui2VVRrz3jOVi+XtjqkDjiVjTtFaAGiW37k6b+ohyQ5wYDOGkvCZa8+H0nx3gyvv0+BST9xuOgIyGQ00gw==}
+
+  iconv-lite@0.4.24:
+    resolution: {integrity: sha512-v3MXnZAcvnywkTUEZomIActle7RXXeedOR31wwl7VlyoXO4Qi9arvSenNQWne1TcRwhCL1HwLI21bEqdpj8/rA==}
+    engines: {node: '>=0.10.0'}
 
   iconv-lite@0.7.3:
     resolution: {integrity: sha512-IKXpvIzjnC9XTAUbVBcMfGS0EPaIXtW6v+zr+RRp+hqULEpo0owZax6wyRwPOJbWbzjYspQwusTsfVr0ifh4uQ==}
@@ -9976,6 +9986,10 @@ snapshots:
 
   dayjs@1.11.21: {}
 
+  dbffile@1.12.0:
+    dependencies:
+      iconv-lite: 0.4.24
+
   debug@2.6.9:
     dependencies:
       ms: 2.0.0
@@ -10906,6 +10920,10 @@ snapshots:
   human-signals@8.0.1: {}
 
   hyphenate-style-name@1.1.0: {}
+
+  iconv-lite@0.4.24:
+    dependencies:
+      safer-buffer: 2.1.2
 
   iconv-lite@0.7.3:
     dependencies:

@@ -66,6 +66,7 @@ export const PAGE_PERM_KEYS: readonly string[] = [
   "page:/company/login-history",       // Company › Login History
   "page:/company/backup",              // Company › Backup & Restore
   "page:/company/import",              // Company › Import Data
+  "page:/company/legacy-import",       // Company › Legacy ERP Import
 ];
 
 /**
@@ -122,6 +123,7 @@ export const LEGACY_MODULE_TO_PAGES: Readonly<Record<string, readonly string[]>>
   "Login History": ["page:/company/login-history"],
   "Backup & Restore": ["page:/company/backup"],
   "Import Data": ["page:/company/import"],
+  "Legacy ERP Import": ["page:/company/legacy-import"],
   "Location Stock": ["page:/headoffice/stock"],
   "Leave": ["page:/hr/attendance"],
   "Payments": ["page:/accounts/vouchers"],

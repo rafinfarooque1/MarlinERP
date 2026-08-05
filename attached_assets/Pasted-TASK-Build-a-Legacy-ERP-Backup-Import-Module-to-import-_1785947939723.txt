@@ -1,0 +1,358 @@
+TASK: Build a Legacy ERP Backup Import Module to import an old ERP backup (ZIP containing DBF files) into the selected location in the current ERP.
+
+This is a migration tool for one-time historical data import.
+
+==========================================================
+1. NEW MODULE
+==========================================================
+
+Create a new module:
+
+Company
+→ Data Migration
+→ Legacy ERP Import
+
+Only Management and Admin users should have access.
+
+==========================================================
+2. FILE UPLOAD
+==========================================================
+
+Allow uploading:
+
+• ZIP backup files
+• DBF files
+• Multiple DBF files
+• Legacy ERP backup folders
+
+Supported format:
+
+ZIP containing DBF tables.
+
+==========================================================
+3. LOCATION SELECTION
+==========================================================
+
+Before importing, ask:
+
+Import Into Location *
+
+Options
+
+• Head Office
+• Warehouse
+• Outlet
+
+If Warehouse or Outlet is selected:
+
+Choose the exact location.
+
+Example:
+
+Frozen Hub - Ragiguda
+
+Frozen Hub - Calicut
+
+Head Office
+
+All imported accounting, inventory and transactions must belong ONLY to the selected location.
+
+==========================================================
+4. PASSWORD HANDLING
+==========================================================
+
+When a ZIP is uploaded:
+
+• Try extracting with a blank password first.
+• If successful, continue automatically.
+• If extraction fails, ask the user for the password.
+• Retry extraction.
+• If it still fails, show a proper error message.
+
+==========================================================
+5. BACKUP ANALYSIS
+==========================================================
+
+After upload:
+
+Automatically detect:
+
+Company Name
+
+Backup Date
+
+Available Tables
+
+Number of Sales
+
+Number of Purchases
+
+Customers
+
+Vendors
+
+Items
+
+Ledgers
+
+Stock
+
+Receipts
+
+Payments
+
+Journal Entries
+
+Opening Balances
+
+Show a summary before importing.
+
+==========================================================
+6. IMPORT OPTIONS
+==========================================================
+
+Allow importing individually:
+
+☐ Customers
+
+☐ Vendors
+
+☐ Ledgers
+
+☐ Item Master
+
+☐ Opening Stock
+
+☐ Sales
+
+☐ Purchases
+
+☐ Sales Returns
+
+☐ Purchase Returns
+
+☐ Receipt Vouchers
+
+☐ Payment Vouchers
+
+☐ Journal Vouchers
+
+☐ Contra Vouchers
+
+☐ Opening Balances
+
+☐ Stock Adjustments
+
+☐ Production
+
+Or
+
+☐ Import Everything
+
+==========================================================
+7. LOCATION MAPPING
+==========================================================
+
+Every imported transaction must belong to the selected location.
+
+Example:
+
+Import into
+
+Frozen Hub - Ragiguda
+
+Then
+
+Sales
+
+Purchases
+
+Stock
+
+Ledgers
+
+Receipts
+
+Payments
+
+Inventory
+
+Dashboard
+
+Reports
+
+must all belong to Ragiguda.
+
+Do NOT import them into Head Office.
+
+==========================================================
+8. MASTER CREATION
+==========================================================
+
+If Customer does not exist
+
+Create Customer
+
+If Vendor does not exist
+
+Create Vendor
+
+If Ledger does not exist
+
+Create Ledger under the selected group
+
+If Item does not exist
+
+Ask whether to create automatically.
+
+==========================================================
+9. PREVIEW
+==========================================================
+
+Before importing show:
+
+Customers to Create
+
+Vendors to Create
+
+Ledgers to Create
+
+Items to Create
+
+Sales
+
+Purchases
+
+Receipts
+
+Payments
+
+Warnings
+
+Errors
+
+==========================================================
+10. IMPORT
+==========================================================
+
+Import using the SAME business logic used by manual ERP entry.
+
+Do NOT insert records directly.
+
+Use the existing services for:
+
+Sales
+
+Purchases
+
+Receipts
+
+Payments
+
+Inventory
+
+Accounting
+
+GST
+
+Ledger Posting
+
+Stock Movement
+
+==========================================================
+11. ACCOUNTING
+==========================================================
+
+After import verify:
+
+Trial Balance
+
+Balance Sheet
+
+Profit & Loss
+
+Cash Book
+
+Bank Book
+
+Receivables
+
+Payables
+
+Inventory
+
+Dashboard
+
+All reports must reconcile.
+
+==========================================================
+12. IMPORT HISTORY
+==========================================================
+
+Save:
+
+Import Date
+
+Imported By
+
+File Name
+
+Location
+
+Records Imported
+
+Warnings
+
+Errors
+
+Allow viewing Import History.
+
+==========================================================
+13. ROLLBACK
+==========================================================
+
+If import fails,
+
+rollback the entire import.
+
+Do not leave partial data.
+
+==========================================================
+14. VERIFICATION
+==========================================================
+
+After importing, verify:
+
+✓ Sales imported correctly.
+
+✓ Purchases imported correctly.
+
+✓ Customer balances correct.
+
+✓ Vendor balances correct.
+
+✓ Ledger balances correct.
+
+✓ Inventory correct.
+
+✓ GST correct.
+
+✓ Dashboard correct.
+
+✓ Trial Balance balanced.
+
+✓ Balance Sheet balanced.
+
+✓ Profit & Loss correct.
+
+✓ Cash Book correct.
+
+✓ Bank Book correct.
+
+==========================================================
+15. ACCEPTANCE CRITERIA
+==========================================================
+
+The user should be able to upload a legacy ERP backup ZIP, select the destination location, preview the contents, import the required data, and have all accounting, inventory, and reports generated exactly as if the transactions had been entered manually into the ERP.
+
+The importer must preserve accounting integrity, support historical data migration, and assign every imported record to the selected location.

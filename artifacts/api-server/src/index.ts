@@ -3315,6 +3315,32 @@ await pool.query(`
   }
 }
 
+// ── Legacy ERP Import page permission (ONE TIME) ─────────────────────────────
+// Unlike the module seedings above (grant to everyone pre-existing), Data
+// Migration is Management-and-Admin-only BY SPEC: seed only level-2 roles.
+// Level-1 admins bypass permission checks; everyone else stays default-denied
+// until an admin grants the page explicitly on the Permissions screen.
+{
+  const { rows: seeded } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'legacy_import_page_perm_v1'`,
+  );
+  if (seeded.length === 0) {
+    const { rows: hRows } = await pool.query(
+      `SELECT id FROM hierarchies WHERE level = 2`,
+    );
+    for (const h of hRows) {
+      await pool.query(
+        `INSERT INTO permissions (hierarchy_id, module, can_view, can_add, can_edit, can_delete, can_download, can_print, can_approve, can_share)
+         VALUES ($1, 'page:/company/legacy-import', true, true, true, true, true, true, true, true)
+         ON CONFLICT (hierarchy_id, module) DO NOTHING`,
+        [h.id],
+      );
+    }
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('legacy_import_page_perm_v1') ON CONFLICT (name) DO NOTHING`);
+    console.log(`[migration] legacy_import_page_perm_v1 — granted Legacy ERP Import to ${hRows.length} level-2 (Management) role(s)`);
+  }
+}
+
 // ── Manual journal-voucher location backfill (ONE TIME) ─────────────────────
 // Manual journal/contra/credit-note/debit-note vouchers used to carry no
 // location stamp, so any location-sliced view (including the sidebar's
