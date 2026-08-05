@@ -1,0 +1,113 @@
+Implement the following two UI/UX improvements in the ERP. Do not make any backend shortcuts. Keep accounting logic unchanged.
+
+====================================================
+1. REMOVE PAGINATION FROM POINT OF SALE
+====================================================
+
+Currently the Point of Sale list uses page numbers (Page 1/11, Next, Previous).
+
+I do NOT want numbered pagination.
+
+Replace it with one of these:
+
+Preferred:
+- Infinite scrolling (load more automatically while scrolling)
+
+OR
+
+Acceptable:
+- "Load More" button at the bottom.
+
+Requirements:
+
+- Continue loading invoices without refreshing.
+- Existing filters must continue working:
+  - Date filters
+  - Customer search
+  - Status (Paid/Partial/Unpaid)
+  - Location
+- Sorting must continue working.
+- Performance must remain good by fetching data in batches from the backend (25/50 records at a time).
+- Do NOT fetch thousands of records in one API call.
+- Backend APIs should support cursor/offset loading.
+
+Remove:
+- Page numbers
+- Previous button
+- Next button
+
+====================================================
+2. FIX "NEW CUSTOMER" FROM POINT OF SALE
+====================================================
+
+Currently when clicking:
+
+Point of Sale
+→ New Customer
+
+the popup behaves differently from the Customer module and shows errors (assignment/location issue).
+
+I want BOTH customer creation screens to be IDENTICAL.
+
+The POS "New Customer" must reuse the exact same component and validation used in:
+
+Customers
+→ Add Customer
+
+Everything must be identical:
+
+✓ Name
+✓ Phone
+✓ Email
+✓ GST Number
+✓ State (searchable dropdown)
+✓ Address
+✓ Credit Limit
+✓ Notes
+✓ Location assignment
+✓ Default ledger creation
+✓ Validation rules
+✓ Required fields
+✓ Duplicate checking
+✓ Auto-created debtor ledger
+✓ Permissions
+
+Do NOT maintain two separate customer forms.
+
+There must be only ONE reusable Customer Form component used by:
+- Customer Module
+- Point of Sale
+- Quotations
+- Receipt Voucher
+- Anywhere else customer creation is available.
+
+====================================================
+3. AFTER CUSTOMER IS CREATED FROM POS
+====================================================
+
+After saving:
+
+- Automatically close the popup.
+- Refresh the customer dropdown.
+- Automatically select the newly created customer.
+- Do NOT require reopening the sale screen.
+- User should continue entering the sale immediately.
+
+====================================================
+4. VERIFY
+====================================================
+
+Test:
+
+- Create customer from Customer module.
+- Create customer from POS.
+- Compare every field.
+- Compare generated ledgers.
+- Compare assigned location.
+- Compare validation.
+- Compare permissions.
+
+Both creation methods must produce identical database records.
+
+No accounting behaviour should change.
+No existing sales should be affected.

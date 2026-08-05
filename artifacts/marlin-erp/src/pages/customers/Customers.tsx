@@ -1,43 +1,21 @@
 import { useState, useMemo } from 'react';
-import { useListCustomers, useCreateCustomer, useUpdateCustomer, getListCustomersQueryKey, useGetCustomerLedger } from '@workspace/api-client-react';
+import { useListCustomers, useGetCustomerLedger } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
-import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import * as z from 'zod';
 import { Plus, Search, UserCheck, Download, Eye, BookOpen, Pencil, ShieldOff, HandCoins } from 'lucide-react';
-import { toast } from 'sonner';
-import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
-import { StateCombobox } from '@/components/ui/state-combobox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { PartyBalance } from '@/lib/partyBalance';
 import { CollectPaymentDialog } from './CollectPaymentDialog';
-import { usePartyLocations, rowMatchesLocation, locationValueOf, HEAD_OFFICE_VALUE } from '@/lib/usePartyLocations';
-
-const schema = z.object({
-  name: z.string().min(1, 'Name required'),
-  phone: z.string().optional(),
-  email: z.string().email().optional().or(z.literal('')),
-  address: z.string().optional(),
-  gstNumber: z.string().optional(),
-  state: z.string().optional(),
-  notes: z.string().optional(),
-  creditLimit: z.coerce.number().min(0, 'Must be ≥ 0').optional(),
-  creditDays: z.coerce.number().int('Whole days').min(0, 'Must be ≥ 0').optional(),
-  location: z.string().optional(),
-});
-type FormValues = z.infer<typeof schema>;
+import { CustomerFormDialog } from '@/components/customers/CustomerFormDialog';
+import { usePartyLocations, rowMatchesLocation } from '@/lib/usePartyLocations';
 
 function CustomerLedger({ customerId }: { customerId: number }) {
   const { data, isLoading } = useGetCustomerLedger(customerId);
@@ -132,42 +110,8 @@ export default function Customers() {
   const [viewItem, setViewItem] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'details' | 'ledger'>('details');
   const [collectFor, setCollectFor] = useState<{ id: number; name: string } | null>(null);
-  const queryClient = useQueryClient();
-  const createMutation = useCreateCustomer();
-  const updateMutation = useUpdateCustomer();
 
-  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '', phone: '', email: '', address: '', gstNumber: '', state: '', notes: '', creditLimit: 0, creditDays: 0, location: HEAD_OFFICE_VALUE } });
-
-  const openEdit = (c: any) => {
-    setEditItem(c);
-    form.reset({ name: c.name, phone: c.phone ?? '', email: c.email ?? '', address: c.address ?? '', gstNumber: c.gstNumber ?? '', state: (c as any).state ?? '', notes: c.notes ?? '', creditLimit: Number(c.creditLimit ?? 0), creditDays: Number(c.creditDays ?? 0), location: locationValueOf((c as any).locationType ?? (c as any).location_type, (c as any).locationId ?? (c as any).location_id) });
-    setIsOpen(true);
-  };
-
-  const closeDialog = () => { setIsOpen(false); setEditItem(null); form.reset(); };
-
-  const onSubmit = (data: FormValues) => {
-    // Only Head Office may assign a location; branch users are stamped by
-    // their session on the server, so their payload carries no location.
-    const { location, ...rest } = data;
-    const payload: any = { ...rest };
-    if (loc.isHeadOffice && location) {
-      const [locationType, locationId] = location.split(':');
-      payload.locationType = locationType;
-      payload.locationId = Number(locationId) || 0;
-    }
-    if (editItem) {
-      updateMutation.mutate({ id: editItem.id, data: payload as any }, {
-        onSuccess: () => { toast.success('Customer updated'); queryClient.invalidateQueries({ queryKey: getListCustomersQueryKey() }); closeDialog(); },
-        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
-      });
-    } else {
-      createMutation.mutate({ data: payload as any }, {
-        onSuccess: () => { toast.success('Customer added'); queryClient.invalidateQueries({ queryKey: getListCustomersQueryKey() }); closeDialog(); },
-        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
-      });
-    }
-  };
+  const openEdit = (c: any) => { setEditItem(c); setIsOpen(true); };
 
   const filtered = useMemo(() => customers.filter(c =>
     (c.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -222,7 +166,7 @@ export default function Customers() {
             </Button>
             )}
             {perm.canAdd && (
-            <Button onClick={() => { form.reset(); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Customer</Button>
+            <Button onClick={() => { setEditItem(null); setIsOpen(true); }}><Plus className="w-4 h-4 mr-2" /> Add Customer</Button>
             )}
           </div>
         </div>
@@ -327,87 +271,12 @@ export default function Customers() {
         </div>
       </div>
 
-      {/* Add Customer Dialog */}
-      <Dialog open={isOpen} onOpenChange={v => { if (!v) closeDialog(); }}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader><DialogTitle>{editItem ? 'Edit Customer' : 'Add Customer'}</DialogTitle></DialogHeader>
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
-              <FormField control={form.control} name="name" render={({ field }) => (
-                <FormItem><FormLabel>Name <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="Full name / company name" {...field} /></FormControl><FormMessage /></FormItem>
-              )} />
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <FormField control={form.control} name="phone" render={({ field }) => (
-                  <FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-                )} />
-                <FormField control={form.control} name="email" render={({ field }) => (
-                  <FormItem><FormLabel>Email</FormLabel><FormControl><Input type="email" {...field} /></FormControl><FormMessage /></FormItem>
-                )} />
-                <FormField control={form.control} name="gstNumber" render={({ field }) => (
-                  <FormItem><FormLabel>GST Number (GSTIN)</FormLabel><FormControl><Input placeholder="15-char GSTIN" className="font-mono" {...field} /></FormControl></FormItem>
-                )} />
-                <FormField control={form.control} name="state" render={({ field }) => (
-                  <FormItem><FormLabel>State</FormLabel>
-                    <FormControl><StateCombobox value={field.value || ''} onChange={field.onChange} data-testid="select-customer-state" /></FormControl>
-                  </FormItem>
-                )} />
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <FormField control={form.control} name="creditLimit" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Credit Limit (₹)</FormLabel>
-                    <FormControl><Input type="number" min={0} step="0.01" className="font-mono" {...field} /></FormControl>
-                    <p className="text-[11px] text-muted-foreground">0 = no limit enforced</p>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-                <FormField control={form.control} name="creditDays" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Credit Days</FormLabel>
-                    <FormControl><Input type="number" min={0} step="1" className="font-mono" {...field} /></FormControl>
-                    <p className="text-[11px] text-muted-foreground">Days until an invoice falls due</p>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-              </div>
-              {loc.isHeadOffice ? (
-                <FormField control={form.control} name="location" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Assigned Location</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value || HEAD_OFFICE_VALUE}>
-                      <FormControl><SelectTrigger data-testid="select-customer-location"><SelectValue placeholder="Head Office" /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        {loc.assignOptions.map(o => (
-                          <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-[11px] text-muted-foreground">Which location this customer belongs to</p>
-                  </FormItem>
-                )} />
-              ) : (
-                <div className="space-y-1">
-                  <p className="text-sm font-medium">Assigned Location</p>
-                  <div className="h-9 px-3 rounded-md border border-border bg-muted/40 flex items-center text-sm text-muted-foreground">{loc.myLocationLabel}</div>
-                  <p className="text-[11px] text-muted-foreground">Set by your login location</p>
-                </div>
-              )}
-              <FormField control={form.control} name="address" render={({ field }) => (
-                <FormItem><FormLabel>Address</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="notes" render={({ field }) => (
-                <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
-              )} />
-              <DialogFooter>
-                <Button variant="outline" type="button" onClick={closeDialog}>Cancel</Button>
-                <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
-                  {createMutation.isPending || updateMutation.isPending ? 'Saving…' : editItem ? 'Save Changes' : 'Save'}
-                </Button>
-              </DialogFooter>
-            </form>
-          </Form>
-        </DialogContent>
-      </Dialog>
+      {/* Add / Edit Customer — THE shared form (also used by POS & Quotations) */}
+      <CustomerFormDialog
+        open={isOpen}
+        onOpenChange={v => { setIsOpen(v); if (!v) setEditItem(null); }}
+        editItem={editItem}
+      />
 
       {/* View Sheet */}
       <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>

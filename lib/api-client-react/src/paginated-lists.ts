@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery } from '@tanstack/react-query';
 import { customFetch } from './custom-fetch';
 import type { Sale } from './generated/api.schemas';
 
@@ -156,6 +156,46 @@ export function usePaginatedSales(params?: PaginatedSalesParams) {
     queryKey: ['/api/sales', 'paginated', key] as const,
     queryFn: ({ signal }) =>
       customFetch<Paginated<PaginatedSaleRow>>(`/api/sales?${key}`, { signal }),
+    placeholderData: (prev) => prev,
+  });
+}
+
+/** Serialize the sales-list filters (everything except `page`). Shared by the
+ * one-page and infinite variants so the two can never drift. */
+function salesFilterQuery(params?: Omit<PaginatedSalesParams, 'page'>): URLSearchParams {
+  const qs = new URLSearchParams();
+  qs.set('limit', String(params?.limit ?? 25));
+  if (params?.q) qs.set('q', params.q);
+  if (params?.from) qs.set('from', params.from);
+  if (params?.to) qs.set('to', params.to);
+  if (params?.locationType === 'headoffice') {
+    // Head Office is singular — the server matches on type alone.
+    qs.set('locationType', 'headoffice');
+  } else if (params?.locationType && params?.locationId) {
+    qs.set('locationType', params.locationType);
+    qs.set('locationId', String(params.locationId));
+  }
+  if (params?.warehouseScope) qs.set('warehouseScope', String(params.warehouseScope));
+  if (params?.outletId) qs.set('outletId', String(params.outletId));
+  return qs;
+}
+
+/**
+ * Infinite (load-more) sales list: same rows and filters as usePaginatedSales,
+ * fetched in server-side batches of `limit` and accumulated across pages.
+ * Changing any filter changes the query key, which resets the accumulation to
+ * page 1 automatically. The key starts with '/api/sales' so the existing
+ * predicate-based invalidations (create/edit/delete sale) refetch it too.
+ */
+export function useInfiniteSales(params?: Omit<PaginatedSalesParams, 'page'>) {
+  const key = salesFilterQuery(params).toString();
+  return useInfiniteQuery({
+    queryKey: ['/api/sales', 'infinite', key] as const,
+    queryFn: ({ pageParam, signal }) =>
+      customFetch<Paginated<PaginatedSaleRow>>(`/api/sales?page=${pageParam}&${key}`, { signal }),
+    initialPageParam: 1,
+    getNextPageParam: (last) =>
+      last.page * last.limit < last.total ? last.page + 1 : undefined,
     placeholderData: (prev) => prev,
   });
 }

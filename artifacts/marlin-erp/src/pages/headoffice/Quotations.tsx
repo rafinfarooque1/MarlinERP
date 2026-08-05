@@ -15,8 +15,8 @@ import { entryScopeKeyDown, autoFocusFirst, focusAndOpen, useEntryShortcuts } fr
 import { Checkbox } from '@/components/ui/checkbox';
 import {
   usePaginatedQuotations, useCreateQuotation, useUpdateQuotation, useDeleteQuotation,
-  useSetQuotationStatus, useCreateCustomer, useListItems, useListStock,
-  useGetCompanySettings, getListCustomersQueryKey, useListCoupons, customFetch,
+  useSetQuotationStatus, useListItems, useListStock,
+  useGetCompanySettings, useListCoupons, customFetch,
   ensureQuotationShareLink, absoluteShareUrl, checkQuotationStock, requestQuotationPdfUrl,
   type QuotationListRow, type QuotationStockShortfall,
 } from '@workspace/api-client-react';
@@ -41,6 +41,7 @@ import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { StateCombobox } from '@/components/ui/state-combobox';
+import { CustomerFormDialog } from '@/components/customers/CustomerFormDialog';
 import {
   normaliseWhatsAppNumber, composeQuotationMessage, activeInvoiceShareChannel,
 } from '@/lib/invoiceShare';
@@ -137,16 +138,6 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
-const custSchema = z.object({
-  name:      z.string().min(1, 'Name is required'),
-  phone:     z.string().optional(),
-  email:     z.string().email().optional().or(z.literal('')),
-  gstNumber: z.string().optional(),
-  state:     z.string().optional(),
-  address:   z.string().optional(),
-  notes:     z.string().optional(),
-});
-type CustForm = z.infer<typeof custSchema>;
 
 /** Default validity: 30 days out — editable, and blank is allowed. */
 const defaultValidTill = () => {
@@ -281,16 +272,12 @@ export default function Quotations() {
   const updateMutation = useUpdateQuotation();
   const deleteMutation = useDeleteQuotation();
   const statusMutation = useSetQuotationStatus();
-  const createCustomerMutation = useCreateCustomer();
-
-  // Customer combobox + quick-create state
+  // Customer combobox + quick-create state (the form itself is the shared
+  // CustomerFormDialog — identical to the Customers module by construction)
   const [customerOpen, setCustomerOpen] = useState(false);
   const [customerSearch, setCustomerSearch] = useState('');
   const [showNewCustomer, setShowNewCustomer] = useState(false);
-  const custForm = useForm<CustForm>({
-    resolver: zodResolver(custSchema),
-    defaultValues: { name: '', phone: '', email: '', gstNumber: '', state: '', address: '', notes: '' },
-  });
+  const [newCustomerName, setNewCustomerName] = useState('');
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: defaultFormValues });
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
@@ -932,7 +919,7 @@ export default function Quotations() {
                       <div className="flex items-center justify-between">
                         <FormLabel>Customer</FormLabel>
                         <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs text-primary gap-1"
-                          onClick={() => { custForm.reset(); setShowNewCustomer(true); }}>
+                          onClick={() => { setNewCustomerName(''); setShowNewCustomer(true); }}>
                           <UserPlus className="w-3 h-3" /> New
                         </Button>
                       </div>
@@ -947,7 +934,7 @@ export default function Quotations() {
                         <PopoverContent align="start" className="p-0" style={{ width: 'var(--radix-popover-trigger-width)', minWidth: '240px' }} data-kbd-ignore>
                           <Command shouldFilter={false}>
                             <CommandInput placeholder="Search customer…" value={customerSearch} onValueChange={setCustomerSearch} />
-                            <CommandEmpty>No customers found. <button type="button" className="text-primary underline ml-1" onClick={() => { setCustomerOpen(false); custForm.reset(); custForm.setValue('name', customerSearch); setCustomerSearch(''); setShowNewCustomer(true); }}>Create "{customerSearch}"?</button></CommandEmpty>
+                            <CommandEmpty>No customers found. <button type="button" className="text-primary underline ml-1" onClick={() => { setCustomerOpen(false); setNewCustomerName(customerSearch); setCustomerSearch(''); setShowNewCustomer(true); }}>Create "{customerSearch}"?</button></CommandEmpty>
                             <CommandGroup className="max-h-52 overflow-auto">
                               <CommandItem value="0" onSelect={() => { field.onChange(undefined); setCustomerOpen(false); setCustomerSearch(''); }}>
                                 <Check className={cn('mr-2 h-4 w-4 shrink-0', !field.value ? 'opacity-100' : 'opacity-0')} />
@@ -1345,60 +1332,17 @@ export default function Quotations() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Quick Create Customer Dialog (mirrors Sales) ── */}
-      <Dialog open={showNewCustomer} onOpenChange={v => { setShowNewCustomer(v); if (!v) custForm.reset(); }}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader><DialogTitle>Add Customer</DialogTitle></DialogHeader>
-          <Form {...custForm}>
-            <form onSubmit={custForm.handleSubmit((data: any) => {
-              createCustomerMutation.mutate(
-                { data: { name: data.name, phone: data.phone || undefined, email: data.email || undefined, gstNumber: data.gstNumber || undefined, state: data.state || undefined, address: data.address || undefined, notes: data.notes || undefined } as any },
-                {
-                  onSuccess: (created: any) => {
-                    queryClient.invalidateQueries({ queryKey: getListCustomersQueryKey() });
-                    queryClient.invalidateQueries({ queryKey: ['customers'] });
-                    form.setValue('customerId', created.id);
-                    toast.success(`Customer "${created.name}" created`);
-                    setShowNewCustomer(false);
-                    custForm.reset();
-                  },
-                  onError: (e: any) => toast.error(e?.data?.error || 'Could not create customer'),
-                }
-              );
-            })} className="space-y-4 pt-2">
-              <FormField control={custForm.control} name="name" render={({ field }) => (
-                <FormItem><FormLabel>Name <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="Full name / company name" {...field} /></FormControl><FormMessage /></FormItem>
-              )} />
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <FormField control={custForm.control} name="phone" render={({ field }) => (
-                  <FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-                )} />
-                <FormField control={custForm.control} name="email" render={({ field }) => (
-                  <FormItem><FormLabel>Email</FormLabel><FormControl><Input type="email" {...field} /></FormControl><FormMessage /></FormItem>
-                )} />
-                <FormField control={custForm.control} name="gstNumber" render={({ field }) => (
-                  <FormItem><FormLabel>GST Number (GSTIN)</FormLabel><FormControl><Input placeholder="15-char GSTIN" className="font-mono" {...field} /></FormControl></FormItem>
-                )} />
-                <FormField control={custForm.control} name="state" render={({ field }) => (
-                  <FormItem><FormLabel>State</FormLabel>
-                    <FormControl><StateCombobox value={field.value || ''} onChange={field.onChange} data-testid="select-quick-customer-state" /></FormControl>
-                  </FormItem>
-                )} />
-              </div>
-              <FormField control={custForm.control} name="address" render={({ field }) => (
-                <FormItem><FormLabel>Address</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={custForm.control} name="notes" render={({ field }) => (
-                <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
-              )} />
-              <DialogFooter>
-                <Button variant="outline" type="button" onClick={() => { setShowNewCustomer(false); custForm.reset(); }}>Cancel</Button>
-                <Button type="submit" disabled={createCustomerMutation.isPending}>{createCustomerMutation.isPending ? 'Saving…' : 'Save'}</Button>
-              </DialogFooter>
-            </form>
-          </Form>
-        </DialogContent>
-      </Dialog>
+      {/* ── Quick Create Customer — THE shared form (identical to Customers page) ── */}
+      <CustomerFormDialog
+        open={showNewCustomer}
+        onOpenChange={setShowNewCustomer}
+        prefillName={newCustomerName}
+        onSaved={created => {
+          // Select the new customer and keep the quotation entry flowing — the
+          // shared dialog already closed itself and refreshed customer lists.
+          if (created?.id) form.setValue('customerId', created.id);
+        }}
+      />
 
       {/* Quotation View Sheet */}
       <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>

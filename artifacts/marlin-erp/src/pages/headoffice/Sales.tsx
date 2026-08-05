@@ -3,9 +3,9 @@ import { SearchableItemSelect, type ItemOption } from '@/components/ui/searchabl
 import { entryScopeKeyDown, autoFocusFirst, focusAndOpen, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
-  usePaginatedSales, useCreateSale, useListCustomers, useCreateCustomer, useGetMe,
+  useInfiniteSales, useCreateSale, useListCustomers, useGetMe,
   useListItems, useListItemPrices, useListStock, useGetCompanySettings,
-  getListCustomersQueryKey, useListCoupons,
+  useListCoupons,
   customFetch,
   useGetSalePayments, useCreateSalePayment, useUpdateSale,
   ensureInvoiceShareLink, absoluteShareUrl,
@@ -31,7 +31,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { StateCombobox } from '@/components/ui/state-combobox';
+import { CustomerFormDialog } from '@/components/customers/CustomerFormDialog';
+import { locationValueOf } from '@/lib/usePartyLocations';
 import {
   STORED_SALE_MODES, PAYMENT_MODE_OPTIONS, CREATE_PAYMENT_MODE_OPTIONS, COLLECTION_METHODS,
   paymentModeLabel, storedSaleMode,
@@ -146,18 +147,6 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
-// ── Customer quick-create schema (mirrors Customers page) ─────────────────────
-const custSchema = z.object({
-  name:      z.string().min(1, 'Name is required'),
-  phone:     z.string().optional(),
-  email:     z.string().email().optional().or(z.literal('')),
-  gstNumber: z.string().optional(),
-  state:     z.string().optional(),
-  address:   z.string().optional(),
-  notes:     z.string().optional(),
-});
-type CustForm = z.infer<typeof custSchema>;
-
 const defaultFormValues: FormValues = {
   locationType: 'outlet',
   locationId: 0,
@@ -217,27 +206,24 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
   const range = useDateRange('all');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [page, setPage] = useState(1);
   const PAGE_SIZE = 25;
 
   // Debounce the search box — invoice/customer search runs server-side
   useEffect(() => {
-    const t = setTimeout(() => { setDebouncedSearch(search.trim()); setPage(1); }, 300);
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
     return () => clearTimeout(t);
   }, [search]);
 
-  // Reset to page 1 whenever the date range changes — the result set shifts.
-  useEffect(() => { setPage(1); }, [range.from, range.to]);
-
-  // Reset to page 1 when the header location selection changes — the result
-  // set shifts under the pager.
-  useEffect(() => { setPage(1); }, [locationState.locationType, locationState.locationId]);
-
-  // Server-paginated list. A forced warehouse passes warehouseScope so the
-  // server returns the warehouse plus its child outlets (replaces the old
-  // client-side forceChildOutletIds filtering).
-  const { data: salesPage, isLoading, isFetching } = usePaginatedSales({
-    page,
+  // Infinite (load-more) list, fetched in server-side batches of PAGE_SIZE.
+  // Changing any filter (search, dates, location) changes the query key, which
+  // resets the accumulation to the first batch automatically. A forced
+  // warehouse passes warehouseScope so the server returns the warehouse plus
+  // its child outlets (replaces the old client-side forceChildOutletIds
+  // filtering).
+  const {
+    data: salesPages, isLoading, isFetching,
+    fetchNextPage, hasNextPage, isFetchingNextPage,
+  } = useInfiniteSales({
     limit: PAGE_SIZE,
     q: debouncedSearch || undefined,
     from: range.from || undefined,
@@ -256,14 +242,26 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
             ? { locationType: 'outlet' as const, locationId: locFilterId }
             : {}),
   });
-  const sales = salesPage?.rows ?? [];
-  const totalSales = salesPage?.total ?? 0;
-  const totalPages = Math.max(1, Math.ceil(totalSales / PAGE_SIZE));
+  const sales = useMemo(
+    () => (salesPages?.pages ?? []).flatMap(p => p.rows),
+    [salesPages],
+  );
+  // The freshest page's total — the count shifts under concurrent deletes.
+  const totalSales = salesPages?.pages[salesPages.pages.length - 1]?.total ?? 0;
 
-  // Clamp page when the result set shrinks (deletes, concurrent changes)
+  // Auto-load the next batch while the list's footer is in view — infinite
+  // scrolling, with the Load More button kept as an explicit fallback.
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-  }, [page, totalPages]);
+    const el = loadMoreRef.current;
+    if (!el || !hasNextPage) return;
+    const obs = new IntersectionObserver(
+      entries => { if (entries[0]?.isIntersecting && !isFetchingNextPage) void fetchNextPage(); },
+      { rootMargin: '300px' },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
   // When operating inside a specific location (Sales segment), scope customers to that location only
   const { data: customers = [] } = useQuery<any[]>({
     queryKey: ['customers', forceLocationType, forceLocationId],
@@ -343,7 +341,6 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
 
   const createMutation = useCreateSale();
   const updateMutation = useUpdateSale();
-  const createCustomerMutation = useCreateCustomer();
 
   // editItem holds the sale being edited; null means "create" mode
   const [editItem, setEditItem] = useState<any>(null);
@@ -435,16 +432,12 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     }
   };
 
-  // Customer combobox + quick-create state
+  // Customer combobox + quick-create state (the form itself is the shared
+  // CustomerFormDialog — identical to the Customers module by construction)
   const [customerOpen, setCustomerOpen] = useState(false);
   const [customerSearch, setCustomerSearch] = useState('');
   const [showNewCustomer, setShowNewCustomer] = useState(false);
-
-  // Quick-create customer form (schema defined at module level)
-  const custForm = useForm<CustForm>({
-    resolver: zodResolver(custSchema),
-    defaultValues: { name: '', phone: '', email: '', gstNumber: '', state: '', address: '', notes: '' },
-  });
+  const [newCustomerName, setNewCustomerName] = useState('');
 
   // Fetch warehouses (for combined location picker)
   const { data: warehouses = [] } = useQuery<any[]>({
@@ -1061,7 +1054,9 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
     }
   };
 
-  // Search runs server-side; the status pills filter the current page locally.
+  // Search runs server-side; the status pills filter the loaded rows locally
+  // (scrolling keeps loading further batches, so a narrow filter simply fills
+  // in as more arrive).
   // Merge the computed discount total into each row so sorting can key on it.
   const filtered = useMemo(
     () => sales
@@ -1311,20 +1306,20 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
             )}
           </div>
           {totalSales > 0 && (
-            <div className="p-3 border-t border-border flex flex-wrap items-center justify-between gap-3 text-sm">
+            <div ref={loadMoreRef} className="p-3 border-t border-border flex flex-wrap items-center justify-between gap-3 text-sm">
               <span className="text-muted-foreground">
-                Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, totalSales)} of {totalSales} sales
-                {isFetching ? ' · refreshing…' : ''}
+                Showing {Math.min(sales.length, totalSales)} of {totalSales} sales
+                {isFetching && !isFetchingNextPage ? ' · refreshing…' : ''}
               </span>
               <div className="flex items-center gap-3">
                 <span className="font-bold text-emerald-500">
-                  Page total: ₹{filtered.reduce((s, r) => s + Number(r.totalAmount || 0), 0).toLocaleString('en-IN')}
+                  Loaded total: ₹{filtered.reduce((s, r) => s + Number(r.totalAmount || 0), 0).toLocaleString('en-IN')}
                 </span>
-                <div className="flex items-center gap-1">
-                  <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Prev</Button>
-                  <span className="px-1 text-xs text-muted-foreground">Page {page}/{totalPages}</span>
-                  <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next</Button>
-                </div>
+                {hasNextPage && (
+                  <Button variant="outline" size="sm" className="h-7 px-3 text-xs" disabled={isFetchingNextPage} onClick={() => void fetchNextPage()}>
+                    {isFetchingNextPage ? 'Loading…' : 'Load More'}
+                  </Button>
+                )}
               </div>
             </div>
           )}
@@ -1405,7 +1400,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                       <div className="flex items-center justify-between">
                         <FormLabel>Customer</FormLabel>
                         <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs text-primary gap-1"
-                          onClick={() => { custForm.reset(); setShowNewCustomer(true); }}>
+                          onClick={() => { setNewCustomerName(''); setShowNewCustomer(true); }}>
                           <UserPlus className="w-3 h-3" /> New
                         </Button>
                       </div>
@@ -1420,7 +1415,7 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
                         <PopoverContent align="start" className="p-0" style={{ width: 'var(--radix-popover-trigger-width)', minWidth: '240px' }} data-kbd-ignore>
                           <Command shouldFilter={false}>
                             <CommandInput placeholder="Search customer…" value={customerSearch} onValueChange={setCustomerSearch} />
-                            <CommandEmpty>No customers found. <button type="button" className="text-primary underline ml-1" onClick={() => { setCustomerOpen(false); custForm.reset(); custForm.setValue('name', customerSearch); setCustomerSearch(''); setShowNewCustomer(true); }}>Create "{customerSearch}"?</button></CommandEmpty>
+                            <CommandEmpty>No customers found. <button type="button" className="text-primary underline ml-1" onClick={() => { setCustomerOpen(false); setNewCustomerName(customerSearch); setCustomerSearch(''); setShowNewCustomer(true); }}>Create "{customerSearch}"?</button></CommandEmpty>
                             <CommandGroup className="max-h-52 overflow-auto">
                               <CommandItem value="0" onSelect={() => { field.onChange(undefined); setCustomerOpen(false); setCustomerSearch(''); }}>
                                 <Check className={cn('mr-2 h-4 w-4 shrink-0', !field.value ? 'opacity-100' : 'opacity-0')} />
@@ -1883,59 +1878,18 @@ export default function Sales({ forceLocationType, forceLocationId, forceLocatio
         </DialogContent>
       </Dialog>
 
-      {/* ── Quick Create Customer Dialog (full form, mirrors Customers page) ── */}
-      <Dialog open={showNewCustomer} onOpenChange={v => { setShowNewCustomer(v); if (!v) custForm.reset(); }}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader><DialogTitle>Add Customer</DialogTitle></DialogHeader>
-          <Form {...custForm}>
-            <form onSubmit={custForm.handleSubmit((data: any) => {
-              createCustomerMutation.mutate(
-                { data: { name: data.name, phone: data.phone || undefined, email: data.email || undefined, gstNumber: data.gstNumber || undefined, state: data.state || undefined, address: data.address || undefined, notes: data.notes || undefined, ...(forceLocationType && forceLocationId ? { locationType: forceLocationType, locationId: forceLocationId } : {}) } as any },
-                {
-                  onSuccess: (created: any) => {
-                    queryClient.invalidateQueries({ queryKey: getListCustomersQueryKey() });
-                    form.setValue('customerId', created.id);
-                    toast.success(`Customer "${created.name}" created`);
-                    setShowNewCustomer(false);
-                    custForm.reset();
-                  },
-                  onError: (e: any) => toast.error(e?.data?.error || 'Could not create customer'),
-                }
-              );
-            })} className="space-y-4 pt-2">
-              <FormField control={custForm.control} name="name" render={({ field }) => (
-                <FormItem><FormLabel>Name <span className="text-destructive">*</span></FormLabel><FormControl><Input placeholder="Full name / company name" {...field} /></FormControl><FormMessage /></FormItem>
-              )} />
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <FormField control={custForm.control} name="phone" render={({ field }) => (
-                  <FormItem><FormLabel>Phone</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-                )} />
-                <FormField control={custForm.control} name="email" render={({ field }) => (
-                  <FormItem><FormLabel>Email</FormLabel><FormControl><Input type="email" {...field} /></FormControl><FormMessage /></FormItem>
-                )} />
-                <FormField control={custForm.control} name="gstNumber" render={({ field }) => (
-                  <FormItem><FormLabel>GST Number (GSTIN)</FormLabel><FormControl><Input placeholder="15-char GSTIN" className="font-mono" {...field} /></FormControl></FormItem>
-                )} />
-                <FormField control={custForm.control} name="state" render={({ field }) => (
-                  <FormItem><FormLabel>State</FormLabel>
-                    <FormControl><StateCombobox value={field.value || ''} onChange={field.onChange} data-testid="select-quick-customer-state" /></FormControl>
-                  </FormItem>
-                )} />
-              </div>
-              <FormField control={custForm.control} name="address" render={({ field }) => (
-                <FormItem><FormLabel>Address</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={custForm.control} name="notes" render={({ field }) => (
-                <FormItem><FormLabel>Notes</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
-              )} />
-              <DialogFooter>
-                <Button variant="outline" type="button" onClick={() => { setShowNewCustomer(false); custForm.reset(); }}>Cancel</Button>
-                <Button type="submit" disabled={createCustomerMutation.isPending}>{createCustomerMutation.isPending ? 'Saving…' : 'Save'}</Button>
-              </DialogFooter>
-            </form>
-          </Form>
-        </DialogContent>
-      </Dialog>
+      {/* ── Quick Create Customer — THE shared form (identical to Customers page) ── */}
+      <CustomerFormDialog
+        open={showNewCustomer}
+        onOpenChange={setShowNewCustomer}
+        prefillName={newCustomerName}
+        defaultLocationValue={forceLocationType ? locationValueOf(forceLocationType, forceLocationId) : undefined}
+        onSaved={created => {
+          // Select the new customer and keep the sale entry flowing — the
+          // shared dialog already closed itself and refreshed customer lists.
+          if (created?.id) form.setValue('customerId', created.id);
+        }}
+      />
 
       {/* Invoice View Sheet */}
       <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
