@@ -3541,6 +3541,14 @@ await pool.query(`
   -- column existed to receive it and the API body schema did not declare it,
   -- so every value entered was silently discarded on the way in.
   ALTER TABLE cash_bank_accounts ADD COLUMN IF NOT EXISTS ifsc_code TEXT;
+
+  -- Cash & Bank <-> Chart of Accounts link. Raw-migration columns: drizzle never
+  -- sees them, so every reader/writer uses raw SQL. ledger_id points at the
+  -- CBA-coded ledger under STD-CASH / STD-BANK; the location pair says which
+  -- location owns the account (headoffice / warehouse / outlet).
+  ALTER TABLE cash_bank_accounts ADD COLUMN IF NOT EXISTS ledger_id INTEGER;
+  ALTER TABLE cash_bank_accounts ADD COLUMN IF NOT EXISTS location_type TEXT NOT NULL DEFAULT 'headoffice';
+  ALTER TABLE cash_bank_accounts ADD COLUMN IF NOT EXISTS location_id INTEGER;
 `);
 
 // One-time: give every pre-existing expense an audit number in date order and
@@ -3611,6 +3619,20 @@ try {
     ADD CONSTRAINT opening_balances_ledger_year_unique UNIQUE (ledger_id, financial_year)
   `);
 } catch { /* constraint already exists */ }
+
+// One-time: back every Cash & Bank account with a real ledger under the Cash /
+// Bank Accounts heads, adopt hand-made ledgers already sitting there, and carry
+// the stored balances into opening balances (see lib/cashBankLedgers.ts).
+// MUST run after the opening_balances table above exists — the migration seeds
+// openings and the rebalance reads them, so on a fresh database an earlier
+// position would crash the boot.
+{
+  const { migrateCashBankLedgerLinks, rebalanceCashBankOpeningEquity } = await import("./lib/cashBankLedgers");
+  await migrateCashBankLedgerLinks(pool);
+  // Every boot, not one-time: recomputes the equity counterweight to whatever
+  // openings the CBA ledgers carry right now (idempotent, self-healing).
+  await rebalanceCashBankOpeningEquity(pool);
+}
 
 // ── Outlets become warehouses ─────────────────────────────────────────────────
 // Runs last: it depends on every column and ledger table created above.

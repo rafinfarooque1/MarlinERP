@@ -29,6 +29,7 @@ import type {
   AuthResponse,
   CashBankAccount,
   CashBankInput,
+  CashBankUpdate,
   ChangePasswordInput,
   CompanySettings,
   CompanySettingsUpdate,
@@ -39,6 +40,7 @@ import type {
   CustomerInput,
   CustomerUpdate,
   DashboardSummary,
+  DeleteCashBankAccount200,
   DeleteQuotation200,
   Employee,
   EmployeeInput,
@@ -6641,7 +6643,7 @@ export const getCreateCashBankAccountUrl = () => {
 }
 
 /**
- * @summary Create cash or bank account
+ * @summary Create cash or bank account (provisions its ledger under Cash / Bank Accounts)
  */
 export const createCashBankAccount = async (cashBankInput: CashBankInput, options?: RequestInit): Promise<CashBankAccount> => {
 
@@ -6690,7 +6692,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type CreateCashBankAccountMutationError = ErrorType<unknown>
 
     /**
- * @summary Create cash or bank account
+ * @summary Create cash or bank account (provisions its ledger under Cash / Bank Accounts)
  */
 export const useCreateCashBankAccount = <TError = ErrorType<unknown>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createCashBankAccount>>, TError,{data: BodyType<CashBankInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
@@ -6701,6 +6703,149 @@ export const useCreateCashBankAccount = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getCreateCashBankAccountMutationOptions(options));
+    }
+
+export const getUpdateCashBankAccountUrl = (id: number,) => {
+
+
+
+
+  return `/api/accounts/cash-bank/${id}`
+}
+
+/**
+ * @summary Update a cash/bank account (name changes mirror onto its ledger)
+ */
+export const updateCashBankAccount = async (id: number,
+    cashBankUpdate: CashBankUpdate, options?: RequestInit): Promise<CashBankAccount> => {
+
+  return customFetch<CashBankAccount>(getUpdateCashBankAccountUrl(id),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(cashBankUpdate)
+  }
+);}
+
+
+
+
+
+export const getUpdateCashBankAccountMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateCashBankAccount>>, TError,{id: number;data: BodyType<CashBankUpdate>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateCashBankAccount>>, TError,{id: number;data: BodyType<CashBankUpdate>}, TContext> => {
+
+const mutationKey = ['updateCashBankAccount'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateCashBankAccount>>, {id: number;data: BodyType<CashBankUpdate>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  updateCashBankAccount(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateCashBankAccountMutationResult = NonNullable<Awaited<ReturnType<typeof updateCashBankAccount>>>
+    export type UpdateCashBankAccountMutationBody = BodyType<CashBankUpdate>
+    export type UpdateCashBankAccountMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Update a cash/bank account (name changes mirror onto its ledger)
+ */
+export const useUpdateCashBankAccount = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateCashBankAccount>>, TError,{id: number;data: BodyType<CashBankUpdate>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateCashBankAccount>>,
+        TError,
+        {id: number;data: BodyType<CashBankUpdate>},
+        TContext
+      > => {
+      return useMutation(getUpdateCashBankAccountMutationOptions(options));
+    }
+
+export const getDeleteCashBankAccountUrl = (id: number,) => {
+
+
+
+
+  return `/api/accounts/cash-bank/${id}`
+}
+
+/**
+ * @summary Delete a cash/bank account (blocked while its ledger carries transactions)
+ */
+export const deleteCashBankAccount = async (id: number, options?: RequestInit): Promise<DeleteCashBankAccount200> => {
+
+  return customFetch<DeleteCashBankAccount200>(getDeleteCashBankAccountUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+
+export const getDeleteCashBankAccountMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteCashBankAccount>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteCashBankAccount>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['deleteCashBankAccount'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteCashBankAccount>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  deleteCashBankAccount(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteCashBankAccountMutationResult = NonNullable<Awaited<ReturnType<typeof deleteCashBankAccount>>>
+
+    export type DeleteCashBankAccountMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Delete a cash/bank account (blocked while its ledger carries transactions)
+ */
+export const useDeleteCashBankAccount = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteCashBankAccount>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof deleteCashBankAccount>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getDeleteCashBankAccountMutationOptions(options));
     }
 
 export const getListExpensesUrl = () => {

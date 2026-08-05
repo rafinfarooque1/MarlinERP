@@ -1188,6 +1188,19 @@ export const CashBankAccountBalanceSource = {
   ledger: 'ledger',
 } as const;
 
+/**
+ * module = managed on this screen; location = a branch till owned by the Locations module (read-only here); system = the Cash / Bank Accounts head itself; ledger = another ledger in the subtree.
+ */
+export type CashBankAccountSource = typeof CashBankAccountSource[keyof typeof CashBankAccountSource];
+
+
+export const CashBankAccountSource = {
+  module: 'module',
+  location: 'location',
+  system: 'system',
+  ledger: 'ledger',
+} as const;
+
 export interface CashBankAccount {
   id: number;
   name: string;
@@ -1201,9 +1214,9 @@ export interface CashBankAccount {
   accountNumber?: string | null;
   /** @nullable */
   ifscCode?: string | null;
-  /** Deprecated alias of storedBalance, kept for existing consumers. */
+  /** The account's reconciled balance, derived from the posting stream plus opening balances — the same figure the Cash/Bank Book, Trial Balance and Balance Sheet show. */
   balance?: number;
-  /** The figure held in the row's balance column, seeded from the opening balance at creation. No accounting entry maintains it, so it is reported under its own name and never as the account's balance. */
+  /** Legacy stored column, no longer maintained. Kept for existing consumers only. */
   storedBalance?: number;
   /**
      * Reconciled balance from the posting stream, or null when no ledger backs this account. Null renders as an explicit gap rather than a confident number.
@@ -1213,6 +1226,18 @@ export interface CashBankAccount {
   balanceSource?: CashBankAccountBalanceSource;
   /** @nullable */
   ledgerId?: number | null;
+  /**
+     * headoffice, warehouse or outlet — the ONE location this account belongs to.
+     * @nullable
+     */
+  locationType?: string | null;
+  /** @nullable */
+  locationId?: number | null;
+  /** @nullable */
+  locationName?: string | null;
+  /** module = managed on this screen; location = a branch till owned by the Locations module (read-only here); system = the Cash / Bank Accounts head itself; ledger = another ledger in the subtree. */
+  source?: CashBankAccountSource;
+  readOnly?: boolean;
 }
 
 export type CashBankInputAccountType = typeof CashBankInputAccountType[keyof typeof CashBankInputAccountType];
@@ -1225,13 +1250,49 @@ export const CashBankInputAccountType = {
   other: 'other',
 } as const;
 
+/**
+ * Defaults to headoffice.
+ */
+export type CashBankInputLocationType = typeof CashBankInputLocationType[keyof typeof CashBankInputLocationType];
+
+
+export const CashBankInputLocationType = {
+  headoffice: 'headoffice',
+  warehouse: 'warehouse',
+  outlet: 'outlet',
+} as const;
+
 export interface CashBankInput {
   name: string;
   accountType: CashBankInputAccountType;
   bankName?: string;
   accountNumber?: string;
   ifscCode?: string;
-  /** Seeds the stored balance at creation. Absent or blank means 0. This account type is not linked to the chart of accounts, so no ledger posting is created from it. */
+  /** Defaults to headoffice. */
+  locationType?: CashBankInputLocationType;
+  /** Required when locationType is warehouse or outlet. */
+  locationId?: number;
+  /** Recorded as the backing ledger's opening balance (debit) through the opening-balances store — never a stored column. Absent or blank means 0. */
+  openingBalance?: number;
+}
+
+export type CashBankUpdateLocationType = typeof CashBankUpdateLocationType[keyof typeof CashBankUpdateLocationType];
+
+
+export const CashBankUpdateLocationType = {
+  headoffice: 'headoffice',
+  warehouse: 'warehouse',
+  outlet: 'outlet',
+} as const;
+
+export interface CashBankUpdate {
+  name?: string;
+  bankName?: string;
+  accountNumber?: string;
+  ifscCode?: string;
+  locationType?: CashBankUpdateLocationType;
+  locationId?: number;
+  /** Replaces the ledger's opening balance for the current financial year. */
   openingBalance?: number;
 }
 
@@ -1428,6 +1489,10 @@ export type GetLedgerStatementParams = {
 accountId: number;
 fromDate?: string;
 toDate?: string;
+};
+
+export type DeleteCashBankAccount200 = {
+  success?: boolean;
 };
 
 export type GetGstSummaryParams = {

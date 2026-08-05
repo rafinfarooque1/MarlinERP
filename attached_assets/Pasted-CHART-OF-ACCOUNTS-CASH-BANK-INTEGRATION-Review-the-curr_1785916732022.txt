@@ -1,0 +1,246 @@
+CHART OF ACCOUNTS & CASH/BANK INTEGRATION
+
+Review the current Cash & Bank module and Chart of Accounts architecture. Refactor it to follow standard ERP accounting practices. Do not create duplicate logic or manual workarounds.
+
+====================================================
+1. LOCK THE "BANK ACCOUNTS" GROUP
+====================================================
+
+The Chart of Accounts currently contains:
+
+Assets
+→ Current Assets
+→ Bank Accounts
+
+This "Bank Accounts" group must become a SYSTEM GROUP.
+
+Requirements:
+
+• Lock the parent group.
+• Users cannot rename it.
+• Users cannot delete it.
+• Users cannot move it.
+• Users cannot create manual ledgers directly inside it.
+• Show a "SYSTEM" badge beside the group.
+• Only the Cash & Bank module can create ledgers inside this group.
+
+====================================================
+2. CASH GROUP
+====================================================
+
+Likewise, the Cash group under Current Assets should also be system-controlled.
+
+Assets
+→ Current Assets
+→ Cash
+
+Every cash account created from the Cash & Bank module must automatically appear under the Cash group.
+
+Example
+
+Cash
+    Head Office Cash
+    Ragiguda Cash
+    Calicut Cash
+
+Bank Accounts
+    HDFC Head Office
+    HDFC Ragiguda
+    ICICI Calicut
+    SBI Calicut
+
+====================================================
+3. AUTOMATIC LEDGER CREATION
+====================================================
+
+Whenever a Cash or Bank account is created from:
+
+Accounts → Cash & Bank
+
+the system must automatically:
+
+• Create the corresponding ledger.
+• Place it under the correct parent.
+
+Cash account
+→ Assets
+→ Current Assets
+→ Cash
+
+Bank account
+→ Assets
+→ Current Assets
+→ Bank Accounts
+
+No manual ledger creation should be required.
+
+====================================================
+4. SYNCHRONIZATION
+====================================================
+
+Cash & Bank and Chart of Accounts must always stay synchronized.
+
+Create Cash Account
+→ Ledger automatically created
+
+Edit Cash Account
+→ Ledger name updates
+
+Delete Cash Account
+→ Ledger removed only if no accounting transactions exist
+
+If transactions exist
+
+Prevent deletion.
+
+====================================================
+5. LOCATION SUPPORT
+====================================================
+
+Each Cash/Bank account belongs to exactly one location.
+
+Examples
+
+Head Office HDFC
+
+Head Office Cash
+
+Frozen Hub - Ragiguda Cash
+
+Frozen Hub - Ragiguda HDFC
+
+Frozen Hub - Calicut Cash
+
+Frozen Hub - Calicut ICICI
+
+The ledger should inherit the assigned location.
+
+====================================================
+6. ACCOUNT TYPE
+====================================================
+
+Cash account
+
+Parent:
+Assets
+→ Current Assets
+→ Cash
+
+Bank account
+
+Parent:
+Assets
+→ Current Assets
+→ Bank Accounts
+
+No exceptions.
+
+====================================================
+7. BALANCES
+====================================================
+
+Ledger balance
+
+Cash Book
+
+Bank Book
+
+Trial Balance
+
+Balance Sheet
+
+Cash & Bank screen
+
+must always display exactly the same balance.
+
+No stored balance.
+
+Everything must come from ledger postings.
+
+====================================================
+8. PERMISSIONS
+====================================================
+
+Only authorized users may create Cash/Bank accounts.
+
+No one can manually add ledgers inside:
+
+Cash
+
+Bank Accounts
+
+Only the Cash & Bank module may create them.
+
+====================================================
+9. EXISTING DATA
+====================================================
+
+Run a migration.
+
+Find every existing Cash/Bank account.
+
+Verify a corresponding ledger exists.
+
+If missing
+
+Create it automatically.
+
+Move all existing bank ledgers into:
+
+Assets
+→ Current Assets
+→ Bank Accounts
+
+Move all existing cash ledgers into:
+
+Assets
+→ Current Assets
+→ Cash
+
+Do not lose balances or journal references.
+
+====================================================
+10. UI
+====================================================
+
+In Chart of Accounts
+
+Cash
+
+▼ Head Office Cash
+
+▼ Ragiguda Cash
+
+▼ Calicut Cash
+
+Bank Accounts
+
+▼ HDFC Head Office
+
+▼ HDFC Ragiguda
+
+▼ ICICI Calicut
+
+Display a SYSTEM badge beside the parent groups.
+
+====================================================
+11. ACCEPTANCE CRITERIA
+====================================================
+
+✓ Bank Accounts parent is locked.
+
+✓ Cash parent is locked.
+
+✓ Manual ledger creation inside these groups is blocked.
+
+✓ Every Cash & Bank account automatically creates its ledger.
+
+✓ Editing Cash & Bank updates the ledger.
+
+✓ Existing data is migrated safely.
+
+✓ Cash Book, Bank Book, Trial Balance, Balance Sheet and Cash & Bank all reconcile.
+
+✓ All accounting entries continue to use the same ledger IDs without breaking historical transactions.
+
+Before implementation, review the current Chart of Accounts and Cash & Bank architecture and integrate with the existing system instead of creating duplicate functionality.

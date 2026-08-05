@@ -7,6 +7,7 @@
  */
 import type { CashBankAccountAccountType } from './cashBankAccountAccountType';
 import type { CashBankAccountBalanceSource } from './cashBankAccountBalanceSource';
+import type { CashBankAccountSource } from './cashBankAccountSource';
 
 export interface CashBankAccount {
   id: number;
@@ -21,9 +22,9 @@ export interface CashBankAccount {
   accountNumber?: string | null;
   /** @nullable */
   ifscCode?: string | null;
-  /** Deprecated alias of storedBalance, kept for existing consumers. */
+  /** The account's reconciled balance, derived from the posting stream plus opening balances — the same figure the Cash/Bank Book, Trial Balance and Balance Sheet show. */
   balance?: number;
-  /** The figure held in the row's balance column, seeded from the opening balance at creation. No accounting entry maintains it, so it is reported under its own name and never as the account's balance. */
+  /** Legacy stored column, no longer maintained. Kept for existing consumers only. */
   storedBalance?: number;
   /**
      * Reconciled balance from the posting stream, or null when no ledger backs this account. Null renders as an explicit gap rather than a confident number.
@@ -33,4 +34,16 @@ export interface CashBankAccount {
   balanceSource?: CashBankAccountBalanceSource;
   /** @nullable */
   ledgerId?: number | null;
+  /**
+     * headoffice, warehouse or outlet — the ONE location this account belongs to.
+     * @nullable
+     */
+  locationType?: string | null;
+  /** @nullable */
+  locationId?: number | null;
+  /** @nullable */
+  locationName?: string | null;
+  /** module = managed on this screen; location = a branch till owned by the Locations module (read-only here); system = the Cash / Bank Accounts head itself; ledger = another ledger in the subtree. */
+  source?: CashBankAccountSource;
+  readOnly?: boolean;
 }

@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { CashBankInputAccountType } from './cashBankInputAccountType';
+import type { CashBankInputLocationType } from './cashBankInputLocationType';
 
 export interface CashBankInput {
   name: string;
@@ -13,6 +14,10 @@ export interface CashBankInput {
   bankName?: string;
   accountNumber?: string;
   ifscCode?: string;
-  /** Seeds the stored balance at creation. Absent or blank means 0. This account type is not linked to the chart of accounts, so no ledger posting is created from it. */
+  /** Defaults to headoffice. */
+  locationType?: CashBankInputLocationType;
+  /** Required when locationType is warehouse or outlet. */
+  locationId?: number;
+  /** Recorded as the backing ledger's opening balance (debit) through the opening-balances store — never a stored column. Absent or blank means 0. */
   openingBalance?: number;
 }

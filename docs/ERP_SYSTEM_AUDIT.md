@@ -90,7 +90,7 @@ Key relationships & constraints:
 | Chart of Accounts | Everything financial; `SYS-*` roots → `STD-*` containers → auto party/branch/rent/salary ledgers; `code` never client-writable |
 | Warehouses / Outlets | LBAC scope, stock location, GSTIN for transfer classification, seller identity on invoices (seller = location, never company), rent agreements; a place can exist as BOTH warehouse and outlet sharing one cash ledger (mirror locations) |
 | GST config | Slab rates on items; company + per-location GSTINs; `lineTaxHeads()` is the single tax-math authority |
-| Bank accounts | cash_bank_accounts + STD-BANK ledger children; contra/deposits/reconciliation |
+| Bank accounts | cash_bank_accounts each backed by a `CBA-{id}` ledger under STD-CASH / STD-BANK ("Bank Accounts"); balances fully DERIVED from postings + openings (stored balance column is dead); the two heads are module-managed (chart refuses child-create/move/rename/deactivate, UI shows a "Cash & Bank" badge); Cash & Bank screen shows the whole subtree incl. read-only branch tills so Σ rows = books' cash+bank position; opening balances seeded per account are counterweighted by ONE auto-maintained credit row on "Opening Balance Adjustment" (STD-OB-ADJ under SYS-CAP), recomputed under an advisory lock at boot and after every module write; manual opening-balance routes refuse CBA-/STD-OB-ADJ ledgers; HO-only writes |
 | Permissions/Hierarchy | Single-root role tree, per-page rights (§9) |
 
 ## 5. Inventory Flow

@@ -17,6 +17,7 @@ import { pool } from "@workspace/db";
 import { requireModuleView } from "../middleware/permissions";
 import { buildDerivedPostings, type Posting } from "./journal";
 import { loadChart, previousDay } from "../lib/books";
+import { openingBalancePostings } from "../lib/openingBalances";
 import { isIsoDate } from "../lib/dateInput";
 import {
   postingMatchesLocation, companyLevelSummary,
@@ -53,7 +54,15 @@ function headOfficeOnly(req: any): boolean {
  * instead of silently dropping it.
  */
 async function splitPostings(from: string | null, to: string | null, loc: PostingLocationFilter | null = null) {
-  const all = await buildDerivedPostings({ toDate: to ?? undefined });
+  // Opening balances join the stream as company-level postings dated at their
+  // as-of date, so every report here (TB, ledgers, cash/bank books, day book)
+  // brings them forward with the same window and location rules as real
+  // postings — matching the Balance Sheet, which folds them separately.
+  const [derived, openings] = await Promise.all([
+    buildDerivedPostings({ toDate: to ?? undefined }),
+    openingBalancePostings({ toDate: to ?? undefined }),
+  ]);
+  const all = derived.concat(openings as Posting[]);
   const before: Posting[] = [];
   const inRange: Posting[] = [];
   const windowAll: Posting[] = [];

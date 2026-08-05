@@ -180,6 +180,21 @@ router.get("/accounts/chart", requireModuleView(["page:/accounts/chart", "page:/
       u,
     );
   }
+
+  // The Cash / Bank Accounts heads and everything under them are owned by the
+  // Cash & Bank module: the UI shows a SYSTEM badge on the heads, disables
+  // add/move inside, and points edits at Accounts → Cash & Bank. (The heads
+  // are deliberately NOT `is_system_group` — they are postable parents whose
+  // own history the statements must keep counting.)
+  {
+    const markManaged = (node: any) => {
+      node.moduleManaged = true;
+      for (const child of node.children) markManaged(child);
+    };
+    for (const node of map.values()) {
+      if (node.code === "STD-CASH" || node.code === "STD-BANK") markManaged(node);
+    }
+  }
   res.json(roots);
 });
 
@@ -301,6 +316,19 @@ router.post("/accounts/chart", requireModuleAction("page:/accounts/chart", "add"
   );
   if (!parent) { res.status(404).json({ error: "That parent no longer exists — reload the page." }); return; }
 
+  // The Cash / Bank Accounts heads and everything under them belong to the
+  // Cash & Bank module — the ONLY writer of ledgers in those subtrees. A
+  // hand-made ledger there would have no account behind it, which is exactly
+  // the unlinked drift the module migration cleaned up.
+  {
+    const { cashBankSubtreeIds } = await import("../lib/cashBankLedgers");
+    const cbTree = await cashBankSubtreeIds(pool);
+    if (cbTree.has(parentId)) {
+      res.status(400).json({ error: "Cash and bank ledgers are managed from Accounts → Cash & Bank. Add the account there and its ledger appears here automatically." });
+      return;
+    }
+  }
+
   const parentIsGroup = parent.is_group || parent.is_system_group;
 
   // Parent validity — the backend decides this, never the client.
@@ -374,6 +402,17 @@ router.patch("/accounts/chart/:id", requireModuleAction("page:/accounts/chart", 
       res.status(400).json({ error: "System groups cannot be deactivated — the statements are built from them." });
       return;
     }
+    {
+      const { rows: [t] } = await pool.query(`SELECT code FROM account_ledgers WHERE id = $1`, [id]);
+      if (t?.code === "STD-CASH" || t?.code === "STD-BANK") {
+        res.status(400).json({ error: "The Cash and Bank Accounts heads are system accounts — they cannot be deactivated." });
+        return;
+      }
+      if (typeof t?.code === "string" && t.code.startsWith("CBA-")) {
+        res.status(400).json({ error: "This ledger mirrors a Cash & Bank account. Manage it from Accounts → Cash & Bank." });
+        return;
+      }
+    }
     const active = raw.isActive === true;
     await pool.query(`UPDATE account_ledgers SET is_active = $1 WHERE id = $2`, [active, id]);
     await logActivity({
@@ -441,6 +480,18 @@ router.patch("/accounts/chart/:id/move", requireModuleAction("page:/accounts/cha
   );
   if (!node) { res.status(404).json({ error: "Account not found" }); return; }
   if (node.is_system_group) { res.status(400).json({ error: "System groups cannot be moved" }); return; }
+
+  // The Cash / Bank Accounts subtrees are module territory: their ledgers may
+  // not be dragged out (each mirrors a Cash & Bank account under its head),
+  // and nothing may be dragged in (only the module creates ledgers there).
+  {
+    const { cashBankSubtreeIds } = await import("../lib/cashBankLedgers");
+    const cbTree = await cashBankSubtreeIds(pool);
+    if (cbTree.has(id) || cbTree.has(Number(parentId))) {
+      res.status(400).json({ error: "Cash and bank ledgers are managed from Accounts → Cash & Bank and cannot be moved in the chart." });
+      return;
+    }
+  }
 
   // Target parent must exist and must be a group (container)
   const { rows: [parent] } = await pool.query(
@@ -1739,35 +1790,136 @@ router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledge
 });
 
 /**
- * ── Cash & Bank (legacy) ──────────────────────────────────────────────────
+ * ── Cash & Bank ───────────────────────────────────────────────────────────
  *
- * `cash_bank_accounts` predates the chart of accounts and has no link to it —
- * no ledger id, and no naming convention that resolves to one. Its `balance`
- * column is a stored running total that no accounting entry maintains (one
- * ad-hoc decrement on expense creation aside), so it is not a balance in the
- * accounting sense and nothing in the books agrees with it.
+ * Every account here is backed by exactly one postable ledger under the system
+ * heads Cash (STD-CASH) / Bank Accounts (STD-BANK) — see lib/cashBankLedgers.ts.
+ * Balances are NEVER stored: every figure below is derived from the posting
+ * stream plus opening balances, so this screen, the Cash/Bank Book, the Trial
+ * Balance and the Balance Sheet are the same number by construction.
  *
- * It is therefore reported as `storedBalance` and never as the account's
- * current balance. `currentBalance` stays null while a row has no ledger behind
- * it, because the honest answer here is "this figure is not backed by the
- * books", and a null renders as an explicit gap instead of a confident number.
- * The real cash and bank positions live on the Cash & Bank Book, the Trial
- * Balance and the Balance Sheet, which all read the posting stream.
+ * The list is the WHOLE Cash/Bank subtree, not just module rows: branch tills
+ * (owned by the Locations module) and the two heads themselves (which carry
+ * legacy Head-Office history) appear as read-only rows, so the sum of the
+ * screen equals the books' cash+bank position exactly.
  *
- * The rows themselves are left untouched: `expenses.payment_account_id` still
- * points at them.
+ * `cash_bank_accounts.ledger_id/location_type/location_id` are raw-migration
+ * columns — invisible to drizzle, so this section uses raw SQL throughout.
  */
 router.get("/accounts/cash-bank", requireModuleView("page:/accounts/cash-bank"), async (_req, res): Promise<void> => {
-  const rows = await db.select().from(cashBankAccountsTable).orderBy(cashBankAccountsTable.id);
-  res.json(rows.map(r => ({
-    ...r,
-    balance: Number(r.balance),
-    storedBalance: Number(r.balance),
-    currentBalance: null,
-    balanceSource: "unlinked" as const,
-    ledgerId: null,
-  })));
+  const { currentBalanceIndex } = await import("../lib/ledgerBalances");
+  const idx = await currentBalanceIndex();
+
+  const [{ rows: accounts }, { rows: whs }, { rows: outs }, { rows: tree }] = await Promise.all([
+    pool.query(`SELECT * FROM cash_bank_accounts ORDER BY id`),
+    pool.query(`SELECT id, name, cash_ledger_id FROM warehouses`),
+    pool.query(`SELECT id, name, cash_ledger_id FROM outlets`),
+    pool.query(`
+      WITH RECURSIVE tree AS (
+        SELECT id, name, code, is_active, code AS root_code FROM account_ledgers WHERE code IN ('STD-CASH','STD-BANK')
+        UNION ALL
+        SELECT al.id, al.name, al.code, al.is_active, t.root_code FROM account_ledgers al JOIN tree t ON al.parent_id = t.id
+      ) SELECT * FROM tree ORDER BY id
+    `),
+  ]);
+
+  const locName = (lt: string | null, lid: number | null): string => {
+    if (lt === "warehouse") return whs.find((w: any) => Number(w.id) === lid)?.name ?? "Warehouse";
+    if (lt === "outlet") return outs.find((o: any) => Number(o.id) === lid)?.name ?? "Outlet";
+    return "Head Office";
+  };
+
+  const out: any[] = [];
+  const listed = new Set<number>();
+
+  // 1. Module-managed accounts (editable).
+  for (const c of accounts) {
+    const lid = c.ledger_id != null ? Number(c.ledger_id) : null;
+    if (lid) listed.add(lid);
+    const bal = lid ? idx.net(lid) : null;
+    const lt = c.location_type ?? "headoffice";
+    const locId = c.location_id != null ? Number(c.location_id) : null;
+    out.push({
+      id: Number(c.id), name: c.name, accountType: c.account_type,
+      bankName: c.bank_name ?? null, accountNumber: c.account_number ?? null, ifscCode: c.ifsc_code ?? null,
+      balance: bal ?? Number(c.balance), storedBalance: Number(c.balance),
+      currentBalance: bal, balanceSource: lid ? ("ledger" as const) : ("unlinked" as const),
+      ledgerId: lid, locationType: lt, locationId: locId, locationName: locName(lt, locId),
+      source: "module", readOnly: false,
+    });
+  }
+
+  // 2. Branch tills — created by the Locations module, shown read-only. A
+  //    mirror location can exist as BOTH warehouse and outlet sharing ONE cash
+  //    ledger, so rows are deduped by ledger id (warehouse identity wins).
+  const outletsHidden = await outletWritesBlocked(pool);
+  const tills = [
+    ...whs.filter((w: any) => w.cash_ledger_id).map((w: any) => ({ lt: "warehouse", locId: Number(w.id), locNm: w.name, lid: Number(w.cash_ledger_id) })),
+    ...(outletsHidden ? [] : outs.filter((o: any) => o.cash_ledger_id).map((o: any) => ({ lt: "outlet", locId: Number(o.id), locNm: o.name, lid: Number(o.cash_ledger_id) }))),
+  ];
+  const ledgerMeta = new Map<number, any>(tree.map((t: any) => [Number(t.id), t]));
+  for (const t of tills) {
+    if (listed.has(t.lid)) continue;
+    listed.add(t.lid);
+    const meta = ledgerMeta.get(t.lid);
+    out.push({
+      id: -t.lid, name: meta?.name ?? `${t.locNm} Cash`, accountType: "cash",
+      bankName: null, accountNumber: null, ifscCode: null,
+      balance: idx.net(t.lid), storedBalance: 0,
+      currentBalance: idx.net(t.lid), balanceSource: "ledger" as const,
+      ledgerId: t.lid, locationType: t.lt, locationId: t.locId, locationName: t.locNm,
+      source: "location", readOnly: true,
+    });
+  }
+
+  // 3. The heads themselves plus anything else left in the subtree (deep
+  //    sub-ledgers etc.), so Σ(rows) = the books' cash + bank position.
+  for (const t of tree) {
+    const lid = Number(t.id);
+    if (listed.has(lid)) continue;
+    listed.add(lid);
+    const isRoot = t.code === "STD-CASH" || t.code === "STD-BANK";
+    out.push({
+      id: -lid, name: t.name, accountType: t.root_code === "STD-CASH" ? "cash" : "bank",
+      bankName: null, accountNumber: null, ifscCode: null,
+      balance: idx.net(lid), storedBalance: 0,
+      currentBalance: idx.net(lid), balanceSource: "ledger" as const,
+      ledgerId: lid, locationType: "headoffice", locationId: null, locationName: "Head Office",
+      source: isRoot ? "system" : "ledger", readOnly: true,
+    });
+  }
+
+  res.json(out);
 });
+
+/** Validate + resolve the location fields on a Cash & Bank write. */
+async function resolveCashBankLocation(body: any): Promise<
+  { ok: true; locationType: string; locationId: number | null }
+  | { ok: false; status: number; error: string; code?: string }
+> {
+  let locationType = "headoffice";
+  let locationId: number | null = null;
+  const rawLt = body?.locationType;
+  if (rawLt !== undefined && rawLt !== null && String(rawLt).trim() !== "") {
+    locationType = String(rawLt).trim();
+    if (!["headoffice", "warehouse", "outlet"].includes(locationType)) {
+      return { ok: false, status: 400, error: "locationType must be headoffice, warehouse or outlet" };
+    }
+    if (locationType !== "headoffice") {
+      locationId = Number(body?.locationId);
+      if (!Number.isInteger(locationId) || locationId <= 0) {
+        return { ok: false, status: 400, error: "Pick the location this account belongs to." };
+      }
+      const table = locationType === "warehouse" ? "warehouses" : "outlets";
+      const { rows: [loc] } = await pool.query(`SELECT id FROM ${table} WHERE id = $1`, [locationId]);
+      if (!loc) return { ok: false, status: 400, error: `No such ${locationType}` };
+      if (locationType === "outlet" && await outletWritesBlocked(pool)) {
+        return { ok: false, status: 409, error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE };
+      }
+    }
+  }
+  return { ok: true, locationType, locationId };
+}
 
 /** Form wording for validation messages, so a 400 names the field the user
  *  filled in rather than the JSON key behind it. */
@@ -1781,6 +1933,11 @@ const CASH_BANK_LABELS: Record<string, string> = {
 };
 
 router.post("/accounts/cash-bank", requireModuleAction("page:/accounts/cash-bank", "add"), async (req, res): Promise<void> => {
+  // Company money accounts are a Head Office concern: page rights alone must
+  // not let a branch user create accounts or assign them to other branches.
+  if ((req as any).employee?.branchType !== "headoffice") {
+    res.status(403).json({ error: "Only Head Office can manage cash and bank accounts." }); return;
+  }
   // `<input type="number">` submits its value as a string, so the money field
   // is normalised before the generated schema — which rightly demands a
   // number — ever sees it. Invalid text is refused here, never coerced to 0.
@@ -1803,23 +1960,235 @@ router.post("/accounts/cash-bank", requireModuleAction("page:/accounts/cash-bank
     return;
   }
 
-  // The opening balance seeds the stored figure and nothing else. This table
-  // has no link to the chart of accounts (see the block comment above), so
-  // creating a posting from it here would invent an entry no other module
-  // knows about and unbalance the trial balance.
-  // `money.text` rather than the parsed number: it is the caller's exact digits
-  // in canonical form, so the value reaches NUMERIC(12,2) without a float in
-  // the path to round a half-cent off it.
-  const { openingBalance: _seed, ...rest } = parsed.data as typeof parsed.data & { openingBalance?: number };
-  const [row] = await db.insert(cashBankAccountsTable).values({ ...rest, balance: money.text }).returning();
-  res.status(201).json({
-    ...row,
-    balance: Number(row.balance),
-    storedBalance: Number(row.balance),
-    currentBalance: null,
-    balanceSource: "unlinked" as const,
-    ledgerId: null,
+  const loc = await resolveCashBankLocation(req.body);
+  if (!loc.ok) { res.status(loc.status).json({ error: loc.error, ...(loc.code ? { code: loc.code } : {}) }); return; }
+
+  // One name per account, checked against both the module and the subtree the
+  // ledger will join — a duplicate ledger name under the same head would make
+  // the Cash Book ambiguous.
+  const name = parsed.data.name.trim();
+  const { rows: [dupe] } = await pool.query(
+    `SELECT id FROM cash_bank_accounts WHERE lower(name) = lower($1) LIMIT 1`, [name],
+  );
+  if (dupe) { res.status(409).json({ error: `An account named "${name}" already exists.` }); return; }
+
+  // Account row + backing ledger are one atomic unit: a row without a ledger
+  // would be exactly the unlinked legacy state this module just migrated off.
+  const { provisionCashBankLedger } = await import("../lib/cashBankLedgers");
+  const client = await pool.connect();
+  let accountId: number; let ledgerId: number;
+  try {
+    await client.query("BEGIN");
+    const { rows: [row] } = await client.query(
+      `INSERT INTO cash_bank_accounts (name, account_type, bank_name, account_number, ifsc_code, balance, location_type, location_id)
+       VALUES ($1, $2, $3, $4, $5, 0, $6, $7) RETURNING id`,
+      [name, parsed.data.accountType, parsed.data.bankName ?? null, parsed.data.accountNumber ?? null,
+       ifsc ?? null, loc.locationType, loc.locationId],
+    );
+    accountId = Number(row.id);
+    ledgerId = await provisionCashBankLedger(client, { accountId, name, accountType: parsed.data.accountType });
+    await client.query(`UPDATE cash_bank_accounts SET ledger_id = $1 WHERE id = $2`, [ledgerId, accountId]);
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+
+  // The opening figure goes through the ONE opening-balance write path — a
+  // ledger-level record the books fold in — never a stored column. The equity
+  // counterweight keeps the trial balance balanced against the one-sided seed.
+  if (money.value > 0) {
+    const { upsertOpeningBalance, currentFinancialYear } = await import("../lib/openingBalances");
+    const { rebalanceCashBankOpeningEquity } = await import("../lib/cashBankLedgers");
+    const fy = await currentFinancialYear();
+    await upsertOpeningBalance({
+      ledgerId, balance: money.value, balanceType: "debit",
+      asOfDate: new Date().toISOString().slice(0, 10), financialYear: fy.label,
+      notes: "Opening balance from Cash & Bank account creation",
+      user: (req as any).employee?.username ?? "system", ledgerName: name,
+    });
+    await rebalanceCashBankOpeningEquity(pool);
+  }
+
+  await logActivity({
+    action: "CREATE", module: "accounts", entityType: "cash_bank_account", entityId: accountId,
+    description: `Created ${parsed.data.accountType} account "${name}" (ledger #${ledgerId})`,
+    user: (req as any).employee?.username ?? "system",
   });
+
+  res.status(201).json({
+    id: accountId, name, accountType: parsed.data.accountType,
+    bankName: parsed.data.bankName ?? null, accountNumber: parsed.data.accountNumber ?? null, ifscCode: ifsc ?? null,
+    balance: money.value, storedBalance: 0,
+    currentBalance: money.value, balanceSource: "ledger" as const, ledgerId,
+    locationType: loc.locationType, locationId: loc.locationId,
+    source: "module", readOnly: false,
+  });
+});
+
+router.patch("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash-bank", "edit"), async (req, res): Promise<void> => {
+  if ((req as any).employee?.branchType !== "headoffice") {
+    res.status(403).json({ error: "Only Head Office can manage cash and bank accounts." }); return;
+  }
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const { rows: [acc] } = await pool.query(`SELECT * FROM cash_bank_accounts WHERE id = $1`, [id]);
+  if (!acc) { res.status(404).json({ error: "Account not found" }); return; }
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+
+  // The account type decides which head the ledger lives under; changing it
+  // would mean moving history between Cash and Bank Accounts. Delete-and-
+  // recreate (only possible while empty) is the honest path.
+  if (body.accountType !== undefined && String(body.accountType) !== String(acc.account_type)) {
+    res.status(400).json({ error: "The account type cannot be changed — it decides whether the ledger sits under Cash or Bank Accounts. Create a new account of the right type instead." });
+    return;
+  }
+
+  const text = (v: unknown) => (typeof v === "string" ? v.trim() : undefined);
+  const sets: string[] = [];
+  const vals: any[] = [];
+  const push = (col: string, v: any) => { vals.push(v); sets.push(`${col} = $${vals.length}`); };
+
+  let newName: string | undefined;
+  if (body.name !== undefined) {
+    newName = String(body.name ?? "").trim();
+    if (newName.length < 2) { res.status(400).json({ error: "Give the account a name of at least 2 characters." }); return; }
+    const { rows: [dupe] } = await pool.query(
+      `SELECT id FROM cash_bank_accounts WHERE lower(name) = lower($1) AND id <> $2 LIMIT 1`, [newName, id],
+    );
+    if (dupe) { res.status(409).json({ error: `An account named "${newName}" already exists.` }); return; }
+    push("name", newName);
+  }
+  if (body.bankName !== undefined) push("bank_name", text(body.bankName) || null);
+  if (body.accountNumber !== undefined) push("account_number", text(body.accountNumber) || null);
+  if (body.ifscCode !== undefined) push("ifsc_code", text(body.ifscCode)?.toUpperCase() || null);
+
+  if (body.locationType !== undefined || body.locationId !== undefined) {
+    const loc = await resolveCashBankLocation({
+      locationType: body.locationType ?? acc.location_type ?? "headoffice",
+      locationId: body.locationId ?? acc.location_id,
+    });
+    if (!loc.ok) { res.status(loc.status).json({ error: loc.error, ...(loc.code ? { code: loc.code } : {}) }); return; }
+    push("location_type", loc.locationType);
+    push("location_id", loc.locationId);
+  }
+
+  if (sets.length > 0) {
+    vals.push(id);
+    await pool.query(`UPDATE cash_bank_accounts SET ${sets.join(", ")} WHERE id = $${vals.length}`, vals);
+  }
+  // The ledger mirrors the account name — the two screens must never disagree.
+  if (newName !== undefined && acc.ledger_id != null) {
+    await pool.query(`UPDATE account_ledgers SET name = $1 WHERE id = $2`, [newName, Number(acc.ledger_id)]);
+  }
+
+  // Opening balance correction goes through the same single write path.
+  if (body.openingBalance !== undefined && acc.ledger_id != null) {
+    const money = optionalMoney(body.openingBalance);
+    if (!money.ok) { res.status(400).json({ error: `Opening Balance ${money.reason}.` }); return; }
+    if (money.value < 0) { res.status(400).json({ error: "Opening Balance cannot be negative." }); return; }
+    const { upsertOpeningBalance, currentFinancialYear } = await import("../lib/openingBalances");
+    const { rebalanceCashBankOpeningEquity } = await import("../lib/cashBankLedgers");
+    const fy = await currentFinancialYear();
+    await upsertOpeningBalance({
+      ledgerId: Number(acc.ledger_id), balance: money.value, balanceType: "debit",
+      asOfDate: fy.startDate, financialYear: fy.label,
+      notes: "Opening balance edited from Cash & Bank",
+      user: (req as any).employee?.username ?? "system", ledgerName: newName ?? acc.name,
+    });
+    await rebalanceCashBankOpeningEquity(pool);
+  }
+
+  await logActivity({
+    action: "UPDATE", module: "accounts", entityType: "cash_bank_account", entityId: id,
+    description: `Updated cash/bank account "${newName ?? acc.name}"`,
+    user: (req as any).employee?.username ?? "system",
+  });
+
+  const { rows: [fresh] } = await pool.query(`SELECT * FROM cash_bank_accounts WHERE id = $1`, [id]);
+  // The response carries the DERIVED balance (postings + openings), same as the
+  // list — a stale zero here would flash a wrong figure onto the screen.
+  let derived: number | null = null;
+  if (fresh.ledger_id != null) {
+    const { currentBalanceIndex } = await import("../lib/ledgerBalances");
+    derived = (await currentBalanceIndex()).net(Number(fresh.ledger_id));
+  }
+  res.json({
+    id, name: fresh.name, accountType: fresh.account_type,
+    bankName: fresh.bank_name ?? null, accountNumber: fresh.account_number ?? null, ifscCode: fresh.ifsc_code ?? null,
+    balance: derived ?? 0, storedBalance: Number(fresh.balance),
+    currentBalance: derived, balanceSource: fresh.ledger_id ? ("ledger" as const) : ("unlinked" as const),
+    ledgerId: fresh.ledger_id != null ? Number(fresh.ledger_id) : null,
+    locationType: fresh.location_type ?? "headoffice",
+    locationId: fresh.location_id != null ? Number(fresh.location_id) : null,
+    source: "module", readOnly: false,
+  });
+});
+
+router.delete("/accounts/cash-bank/:id", requireModuleAction("page:/accounts/cash-bank", "delete"), async (req, res): Promise<void> => {
+  if ((req as any).employee?.branchType !== "headoffice") {
+    res.status(403).json({ error: "Only Head Office can manage cash and bank accounts." }); return;
+  }
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const { rows: [acc] } = await pool.query(`SELECT * FROM cash_bank_accounts WHERE id = $1`, [id]);
+  if (!acc) { res.status(404).json({ error: "Account not found" }); return; }
+  const ledgerId = acc.ledger_id != null ? Number(acc.ledger_id) : null;
+
+  if (ledgerId != null) {
+    // Transactions block deletion — removing the ledger would break the audit
+    // trail. Opening balances do NOT block: they are part of the account's own
+    // identity and are removed with it.
+    const usage = await loadLedgerUsage(pool);
+    const u = usage.get(ledgerId);
+    const { rows: [ob] } = await pool.query(`SELECT COUNT(*)::int AS n FROM opening_balances WHERE ledger_id = $1`, [ledgerId]);
+    const { rows: [ex] } = await pool.query(`SELECT COUNT(*)::int AS n FROM expenses WHERE payment_account_id = $1`, [id]);
+    const txns = Math.max(0, (u?.transactions ?? 0) - Number(ob?.n ?? 0)) + Number(ex?.n ?? 0);
+    if (txns > 0) {
+      res.status(409).json({ error: `This account carries ${txns} transaction${txns === 1 ? "" : "s"}. Deleting it would break the books — it must stay.` });
+      return;
+    }
+    if ((u?.references.length ?? 0) > 0) {
+      res.status(409).json({ error: `This account's ledger is wired to ${u!.references.join(", ")}. Unlink it there first.` });
+      return;
+    }
+    const { rows: [kid] } = await pool.query(`SELECT COUNT(*)::int AS n FROM account_ledgers WHERE parent_id = $1`, [ledgerId]);
+    if (Number(kid?.n ?? 0) > 0) {
+      res.status(409).json({ error: "This account's ledger has sub-ledgers under it. Remove those first." });
+      return;
+    }
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    if (ledgerId != null) {
+      await client.query(`DELETE FROM opening_balances WHERE ledger_id = $1`, [ledgerId]);
+      await client.query(`DELETE FROM account_ledgers WHERE id = $1`, [ledgerId]);
+    }
+    await client.query(`DELETE FROM cash_bank_accounts WHERE id = $1`, [id]);
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+  // The account's opening rows are gone; shrink the equity counterweight to match.
+  {
+    const { rebalanceCashBankOpeningEquity } = await import("../lib/cashBankLedgers");
+    await rebalanceCashBankOpeningEquity(pool);
+  }
+
+  await logActivity({
+    action: "DELETE", module: "accounts", entityType: "cash_bank_account", entityId: id,
+    description: `Deleted cash/bank account "${acc.name}"${ledgerId != null ? ` (ledger #${ledgerId})` : ""}`,
+    user: (req as any).employee?.username ?? "system",
+  });
+  res.json({ success: true });
 });
 
 // ── Expenses (merged: expenses table + location expense payments) ──────────
@@ -2090,7 +2459,9 @@ router.post("/expenses", requireModuleAction("page:/accounts/expenses", "add"), 
      WHERE id = $7`,
     [expenseNumber, extras.category, extras.attachmentUrl, locationType, locationId, emp?.id ?? null, row.id]
   );
-  await db.execute(sql`UPDATE cash_bank_accounts SET balance = balance::numeric - ${parsed.data.amount} WHERE id = ${parsed.data.paymentAccountId}`);
+  // No stored balance to maintain: the account's balance is derived from the
+  // posting stream, and this expense's credit leg lands on the account's own
+  // ledger (see buildDerivedPostings), so every screen moves together.
   const [ledger] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, row.ledgerAccountId)).limit(1);
   const [cashBank] = await db.select().from(cashBankAccountsTable).where(eq(cashBankAccountsTable.id, row.paymentAccountId)).limit(1);
   res.status(201).json({
@@ -3070,11 +3441,20 @@ router.post("/accounts/opening-balances", requireModuleAction("page:/accounts/ch
 
   // Verify ledger exists and is postable (not a group)
   const { rows: [ledger] } = await pool.query(
-    `SELECT id, name, is_group, is_system_group FROM account_ledgers WHERE id = $1`, [ledgerId]
+    `SELECT id, name, code, is_group, is_system_group FROM account_ledgers WHERE id = $1`, [ledgerId]
   );
   if (!ledger) { res.status(404).json({ error: "Ledger not found" }); return; }
   if (ledger.is_group || ledger.is_system_group) {
     res.status(400).json({ error: `"${ledger.name}" is a group ledger — post opening balances to specific ledgers under it` }); return;
+  }
+  // Module-owned openings are off limits here: a manual edit would bypass the
+  // equity counterweight and unbalance the books.
+  const code = String(ledger.code ?? "");
+  if (code.startsWith("CBA-")) {
+    res.status(400).json({ error: `"${ledger.name}" is managed from Accounts → Cash & Bank — set its opening balance there.` }); return;
+  }
+  if (code === "STD-OB-ADJ") {
+    res.status(400).json({ error: "Opening Balance Adjustment is maintained automatically — it cannot be edited by hand." }); return;
   }
 
   // Upsert: one opening balance record per ledger per financial year. Shared
@@ -3231,6 +3611,18 @@ router.get("/accounts/party-advance", requireModuleView(["page:/sales/pos", "pag
 
 router.delete("/accounts/opening-balances/:id", requireModuleAction("page:/accounts/chart", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
+  // Module-owned openings are off limits here — deleting one by hand would
+  // bypass the equity counterweight and unbalance the books.
+  const { rows: [owner] } = await pool.query(
+    `SELECT al.name, al.code FROM opening_balances ob JOIN account_ledgers al ON al.id = ob.ledger_id WHERE ob.id = $1`, [id]
+  );
+  const ownerCode = String(owner?.code ?? "");
+  if (ownerCode.startsWith("CBA-")) {
+    res.status(400).json({ error: `"${owner.name}" is managed from Accounts → Cash & Bank — delete the account there instead.` }); return;
+  }
+  if (ownerCode === "STD-OB-ADJ") {
+    res.status(400).json({ error: "Opening Balance Adjustment is maintained automatically — it cannot be deleted by hand." }); return;
+  }
   const { rows: [deleted] } = await pool.query(
     `DELETE FROM opening_balances WHERE id = $1 RETURNING ledger_id`, [id]
   );

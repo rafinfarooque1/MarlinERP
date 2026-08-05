@@ -360,6 +360,18 @@ async function locationOwnedLedgerMap(): Promise<Map<number, LedgerOwner[]>> {
     SELECT 'warehouse' AS lt, id, name, cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses
     UNION ALL
     SELECT 'outlet' AS lt, id, name, cash_ledger_id, sales_ledger_id, NULL::integer AS purchase_ledger_id FROM outlets
+    UNION ALL
+    -- Cash & Bank accounts assigned to a branch: the branch owns that ledger
+    -- exactly like its till, so vouchers through it must be stamped to the
+    -- owner and its money stays inside the location's own books.
+    SELECT cba.location_type AS lt, cba.location_id AS id,
+           COALESCE(w.name, o.name, 'branch') AS name,
+           cba.ledger_id AS cash_ledger_id, NULL::integer AS sales_ledger_id, NULL::integer AS purchase_ledger_id
+    FROM cash_bank_accounts cba
+    LEFT JOIN warehouses w ON cba.location_type = 'warehouse' AND w.id = cba.location_id
+    LEFT JOIN outlets    o ON cba.location_type = 'outlet'    AND o.id = cba.location_id
+    WHERE cba.ledger_id IS NOT NULL AND cba.location_id IS NOT NULL
+      AND cba.location_type IN ('warehouse', 'outlet')
   `);
   for (const r of rows) {
     const owner: LedgerOwner = { locationType: r.lt, locationId: Number(r.id), name: r.name };
@@ -510,15 +522,30 @@ router.get("/accounts/voucher-locations", requireModuleView("page:/accounts/vouc
   const hoCashBank = await ledgerIdsUnderCodes(["STD-CASH", "STD-BANK"]);
   for (const id of ownedMap.keys()) hoCashBank.delete(id);
 
+  // Branch-assigned Cash & Bank accounts join the branch's till in its picker.
+  const { rows: cbaRows } = await pool.query(
+    `SELECT ledger_id, location_type, location_id FROM cash_bank_accounts
+     WHERE ledger_id IS NOT NULL AND location_id IS NOT NULL AND location_type IN ('warehouse','outlet')`,
+  );
+  const branchCba = (lt: string, id: number) => cbaRows
+    .filter((r: any) => r.location_type === lt && Number(r.location_id) === id)
+    .map((r: any) => Number(r.ledger_id));
+
   const all = [
     { locationType: "headoffice", locationId: 0, name: "Head Office", cashBankLedgerIds: [...hoCashBank] },
     ...whs.map((w: any) => ({
       locationType: "warehouse", locationId: Number(w.id), name: w.name,
-      cashBankLedgerIds: w.cash_ledger_id ? [Number(w.cash_ledger_id)] : [],
+      cashBankLedgerIds: [...new Set([
+        ...(w.cash_ledger_id ? [Number(w.cash_ledger_id)] : []),
+        ...branchCba("warehouse", Number(w.id)),
+      ])],
     })),
     ...outs.map((o: any) => ({
       locationType: "outlet", locationId: Number(o.id), name: o.name,
-      cashBankLedgerIds: o.cash_ledger_id ? [Number(o.cash_ledger_id)] : [],
+      cashBankLedgerIds: [...new Set([
+        ...(o.cash_ledger_id ? [Number(o.cash_ledger_id)] : []),
+        ...branchCba("outlet", Number(o.id)),
+      ])],
     })),
   ];
 
@@ -1096,19 +1123,28 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     });
   }
 
-  // 4. Legacy direct expenses: Dr expense ledger / Cr Cash or Bank root
+  // 4. Direct expenses: Dr expense ledger / Cr the paying account's own ledger.
+  //    Since the Cash & Bank ↔ chart link, each payment account is backed by a
+  //    CBA ledger under the Cash / Bank Accounts heads, and the credit leg goes
+  //    there — which is what makes the account's ledger balance equal
+  //    opening − its expenses (the migration seeded opening = stored + spent).
+  //    Rows whose account predates the link (or was hand-deleted) fall back to
+  //    the head itself, exactly as before.
   const ep: any[] = [];
   const { rows: exps } = await pool.query(
     `SELECT e.id, e.expense_number, e.expense_date AS date, e.ledger_account_id AS lid, e.amount, e.description,
             e.location_type, e.location_id,
-            cb.account_type AS cb_type
+            cb.account_type AS cb_type, cb.ledger_id AS cb_ledger
      FROM expenses e
      LEFT JOIN cash_bank_accounts cb ON cb.id = e.payment_account_id
      WHERE 1=1${upTo("e.expense_date", ep)}`, ep
   );
   for (const r of exps) {
     const amt = Number(r.amount);
-    const creditLedger = String(r.cb_type ?? "").toLowerCase().includes("bank") ? stdBank : stdCash;
+    const linked = Number(r.cb_ledger);
+    const creditLedger = Number.isFinite(linked) && linked > 0
+      ? linked
+      : (String(r.cb_type ?? "").toLowerCase().includes("bank") ? stdBank : stdCash);
     const desc = r.description || "Expense";
     const eid = `expense:${r.id}`;
     const loc = locOf(r.location_type ?? "headoffice", r.location_id ?? 0);
@@ -1592,6 +1628,11 @@ router.get("/accounts/trial-balance", requireModuleView("page:/accounts/trial-ba
   const locFilter = getPostingLocationFilter(req);
 
   let postings = await buildDerivedPostings({ toDate: isDate(toDate) ? toDate : undefined });
+  // Opening balances fold in as company-level postings dated at their as-of
+  // date, so the TB agrees with the Balance Sheet, the Cash/Bank Books and the
+  // Cash & Bank screen — all of which already count them.
+  const { openingBalancePostings } = await import("../lib/openingBalances");
+  postings = postings.concat(await openingBalancePostings({ toDate: isDate(toDate) ? toDate : undefined }) as Posting[]);
   if (isDate(fromDate)) postings = postings.filter(p => p.date >= fromDate);
   // Bucket totals are computed over the SAME window the rows use, so a
   // location's TB plus its siblings plus this bucket reproduces the

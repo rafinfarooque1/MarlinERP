@@ -48,6 +48,51 @@ export async function upsertOpeningBalance(input: OpeningBalanceInput): Promise<
 }
 
 /**
+ * Opening balances shaped as postings, so period-windowed statements (trial
+ * balance, cash/bank books, ledger reports) can fold them with the SAME date
+ * and location partition rules as real postings:
+ *  · dated at as_of_date — a period that starts later treats them as
+ *    brought-forward exactly like any earlier posting;
+ *  · company-level (locationType null) — an opening balance predates the
+ *    posting stream, so no location can honestly claim it. Location slices
+ *    exclude it and the company bucket picks it up, keeping slices + bucket
+ *    equal to the consolidated view.
+ * books.ts keeps its own separate opening fold (cumulative-only); callers must
+ * use one mechanism or the other, never both.
+ */
+export async function openingBalancePostings(opts: { toDate?: string } = {}): Promise<Array<{
+  date: string; entryId: string; ledgerId: number; debit: number; credit: number;
+  source: string; voucherNumber: string | null; description: string;
+  locationType: string | null; locationId: number | null;
+}>> {
+  const params: unknown[] = [];
+  let where = "";
+  if (opts.toDate) { params.push(opts.toDate); where = `WHERE as_of_date <= $1`; }
+  const { rows } = await pool.query(
+    `SELECT id, ledger_id, balance::numeric AS balance, balance_type, as_of_date::text AS as_of_date
+     FROM opening_balances ${where}`, params,
+  );
+  return rows
+    .filter((r: any) => Number(r.balance) !== 0)
+    .map((r: any) => {
+      const debit = String(r.balance_type ?? "debit").toLowerCase() === "debit";
+      const amt = Number(r.balance);
+      return {
+        date: String(r.as_of_date).slice(0, 10),
+        entryId: `opening-balance-${r.id}`,
+        ledgerId: Number(r.ledger_id),
+        debit: debit ? amt : 0,
+        credit: debit ? 0 : amt,
+        source: "opening_balance",
+        voucherNumber: null,
+        description: "Opening balance",
+        locationType: null,
+        locationId: null,
+      };
+    });
+}
+
+/**
  * The financial year we are currently inside, derived from company settings'
  * fy_start_month (defaults to April). The stored financial_year TEXT column is
  * a display default that nobody rolls forward, so it is deliberately NOT

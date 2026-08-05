@@ -84,6 +84,14 @@ async function allLocationLedgers(): Promise<LocationLedgerRow[]> {
     SELECT cash_ledger_id  AS ledger_id, 'outlet'    AS location_type, id AS location_id, 'cash'  AS kind FROM outlets    WHERE cash_ledger_id  IS NOT NULL
     UNION ALL
     SELECT sales_ledger_id AS ledger_id, 'outlet'    AS location_type, id AS location_id, 'sales' AS kind FROM outlets    WHERE sales_ledger_id IS NOT NULL
+    UNION ALL
+    -- Cash & Bank accounts assigned to a branch behave exactly like the
+    -- branch's till: money accounts the location's own staff may move money
+    -- through, invisible and unusable to every other branch.
+    SELECT ledger_id, location_type, location_id, 'cash' AS kind
+    FROM cash_bank_accounts
+    WHERE ledger_id IS NOT NULL AND location_id IS NOT NULL
+      AND location_type IN ('warehouse', 'outlet')
   `);
   return rows.map((r) => ({ ...r, ledger_id: Number(r.ledger_id), location_id: Number(r.location_id) }));
 }

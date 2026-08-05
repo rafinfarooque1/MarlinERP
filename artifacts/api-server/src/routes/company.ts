@@ -672,6 +672,16 @@ router.post("/company/reset", requireModuleAction("page:/company/settings", "del
     `, [adminHash, hierResult.id]);
   }
 
+  // The Cash & Bank accounts and their openings were truncated above, but the
+  // auto-maintained Opening Balance Adjustment ledger (STD-* code) survives the
+  // purge. Recomputing against the now-empty openings removes it cleanly.
+  try {
+    const { rebalanceCashBankOpeningEquity } = await import("../lib/cashBankLedgers");
+    await rebalanceCashBankOpeningEquity(pool);
+  } catch (err) {
+    console.error("[reset] cash-bank opening rebalance failed:", err);
+  }
+
   res.json({ ok: true, message: 'All company data has been reset successfully.' });
 });
 
@@ -821,6 +831,21 @@ router.post("/company/clear-transactions", requireModuleAction("page:/company/se
     return;
   } finally {
     client.release();
+  }
+
+  // Cash & Bank accounts and their opening balances survive this reset BY
+  // DESIGN: openings are part of each account's identity (masters), not
+  // transaction history — the accounts keep the balances they were created
+  // with. The recompute below is a consistency sweep, not a wipe: it re-derives
+  // the equity counterweight from the surviving openings so the trial balance
+  // stays balanced whatever state the books were left in.
+  if (!dryRun) {
+    try {
+      const { rebalanceCashBankOpeningEquity } = await import("../lib/cashBankLedgers");
+      await rebalanceCashBankOpeningEquity(pool);
+    } catch (err) {
+      console.error("[clear-transactions] cash-bank opening rebalance failed:", err);
+    }
   }
 
   if (!dryRun) {

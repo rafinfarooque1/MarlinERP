@@ -1464,7 +1464,7 @@ paths:
     post:
       operationId: createCashBankAccount
       tags: [accounts]
-      summary: Create cash or bank account
+      summary: Create cash or bank account (provisions its ledger under Cash / Bank Accounts)
       requestBody:
         required: true
         content:
@@ -1478,6 +1478,48 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CashBankAccount"
+
+  /accounts/cash-bank/{id}:
+    patch:
+      operationId: updateCashBankAccount
+      tags: [accounts]
+      summary: Update a cash/bank account (name changes mirror onto its ledger)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CashBankUpdate"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CashBankAccount"
+    delete:
+      operationId: deleteCashBankAccount
+      tags: [accounts]
+      summary: Delete a cash/bank account (blocked while its ledger carries transactions)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
 
   # ── EXPENSES ──────────────────────────────────────────────────────────────
   /expenses:
@@ -3157,13 +3199,15 @@ components:
           type: ["string", "null"]
         balance:
           type: number
-          description: Deprecated alias of storedBalance, kept for existing consumers.
+          description: >-
+            The account's reconciled balance, derived from the posting stream
+            plus opening balances — the same figure the Cash/Bank Book, Trial
+            Balance and Balance Sheet show.
         storedBalance:
           type: number
           description: >-
-            The figure held in the row's balance column, seeded from the opening
-            balance at creation. No accounting entry maintains it, so it is
-            reported under its own name and never as the account's balance.
+            Legacy stored column, no longer maintained. Kept for existing
+            consumers only.
         currentBalance:
           type: ["number", "null"]
           description: >-
@@ -3175,6 +3219,22 @@ components:
           enum: [unlinked, ledger]
         ledgerId:
           type: ["integer", "null"]
+        locationType:
+          type: ["string", "null"]
+          description: headoffice, warehouse or outlet — the ONE location this account belongs to.
+        locationId:
+          type: ["integer", "null"]
+        locationName:
+          type: ["string", "null"]
+        source:
+          type: string
+          enum: [module, location, system, ledger]
+          description: >-
+            module = managed on this screen; location = a branch till owned by
+            the Locations module (read-only here); system = the Cash / Bank
+            Accounts head itself; ledger = another ledger in the subtree.
+        readOnly:
+          type: boolean
 
     CashBankInput:
       type: object
@@ -3191,12 +3251,39 @@ components:
           type: string
         ifscCode:
           type: string
+        locationType:
+          type: string
+          enum: [headoffice, warehouse, outlet]
+          description: Defaults to headoffice.
+        locationId:
+          type: integer
+          description: Required when locationType is warehouse or outlet.
         openingBalance:
           type: number
           description: >-
-            Seeds the stored balance at creation. Absent or blank means 0. This
-            account type is not linked to the chart of accounts, so no ledger
-            posting is created from it.
+            Recorded as the backing ledger's opening balance (debit) through
+            the opening-balances store — never a stored column. Absent or
+            blank means 0.
+
+    CashBankUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        bankName:
+          type: string
+        accountNumber:
+          type: string
+        ifscCode:
+          type: string
+        locationType:
+          type: string
+          enum: [headoffice, warehouse, outlet]
+        locationId:
+          type: integer
+        openingBalance:
+          type: number
+          description: Replaces the ledger's opening balance for the current financial year.
 
     Expense:
       type: object

@@ -37,6 +37,11 @@ export interface ChartNode {
   canRename: boolean;
   /** Why delete is unavailable, straight from the route that would refuse it. */
   deleteBlockedReason: string | null;
+  /**
+   * True across the Cash / Bank Accounts subtrees: those ledgers mirror
+   * Cash & Bank accounts, so add/move/deactivate live on that screen, not here.
+   */
+  moduleManaged?: boolean;
   children: ChartNode[];
 }
 
@@ -286,7 +291,7 @@ const ChartRow = memo(function ChartRow({
       className={`group/row flex items-center gap-2 border-b border-border/25 transition-colors ${tone}
         ${isRoot ? `border-l-2 ${ACCENT[node.type] ?? 'border-l-border'}` : 'border-l-2 border-l-transparent'}
         ${!node.isActive ? 'opacity-60' : ''}`}
-      draggable={manage && canEdit && !node.isSystemGroup}
+      draggable={manage && canEdit && !node.isSystemGroup && !node.moduleManaged}
       onDragStart={(e) => { e.dataTransfer.setData('text/ledger-id', String(node.id)); e.dataTransfer.effectAllowed = 'move'; }}
       onDragOver={(e) => { if (manage && isGroupish) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; } }}
       onDrop={(e) => {
@@ -352,9 +357,17 @@ const ChartRow = memo(function ChartRow({
           </span>
         )}
         {!node.isSystemGroup && node.code && (
-          <span className="shrink-0" title={`Maintained by the system (${node.code})`}>
+          <span className="shrink-0" title={node.moduleManaged
+            ? 'Managed from Accounts → Cash & Bank'
+            : `Maintained by the system (${node.code})`}>
             <Lock className="w-3 h-3 text-muted-foreground/30" />
           </span>
+        )}
+        {node.moduleManaged && (
+          <Badge variant="outline" className="h-4 px-1 text-[9px] font-normal text-muted-foreground shrink-0"
+            title="Ledgers here mirror Cash & Bank accounts — manage them on that screen">
+            Cash &amp; Bank
+          </Badge>
         )}
         {!node.isActive && (
           <Badge variant="outline" className="h-4 px-1 text-[9px] font-normal text-muted-foreground shrink-0">Inactive</Badge>
@@ -389,10 +402,13 @@ const ChartRow = memo(function ChartRow({
             {canAdd && (
               <button
                 onClick={() => actions.onAddChild(node)}
-                className="p-1 rounded hover:bg-muted/60 text-muted-foreground hover:text-primary"
-                title={isGroupish
-                  ? 'Add a sub-group or ledger inside this group'
-                  : 'Add a sub-ledger under this ledger'}
+                disabled={!!node.moduleManaged}
+                className="p-1 rounded hover:bg-muted/60 text-muted-foreground hover:text-primary disabled:opacity-25 disabled:hover:bg-transparent"
+                title={node.moduleManaged
+                  ? 'Cash and bank ledgers are added from Accounts → Cash & Bank'
+                  : isGroupish
+                    ? 'Add a sub-group or ledger inside this group'
+                    : 'Add a sub-ledger under this ledger'}
                 data-testid={`chart-add-${node.id}`}
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -412,11 +428,13 @@ const ChartRow = memo(function ChartRow({
             {canEdit && (
               <button
                 onClick={() => actions.onToggleActive(node)}
-                disabled={node.isSystemGroup}
+                disabled={node.isSystemGroup || !!node.moduleManaged}
                 className="p-1 rounded hover:bg-muted/60 text-muted-foreground hover:text-amber-500 disabled:opacity-25 disabled:hover:bg-transparent"
                 title={node.isSystemGroup
                   ? 'System groups are always active'
-                  : node.isActive ? 'Deactivate — keeps history, stops new entries' : 'Reactivate'}
+                  : node.moduleManaged
+                    ? 'Managed from Accounts → Cash & Bank'
+                    : node.isActive ? 'Deactivate — keeps history, stops new entries' : 'Reactivate'}
                 data-testid={`chart-active-${node.id}`}
               >
                 {node.isActive ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
