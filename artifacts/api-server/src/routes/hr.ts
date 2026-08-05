@@ -864,8 +864,22 @@ async function postSalaryApproval(opts: {
 router.get("/hr/hierarchies", async (req, res): Promise<void> => {
   const paging = parsePaging(req.query as Record<string, unknown>);
   const all = await db.select().from(hierarchiesTable).orderBy(hierarchiesTable.level);
-  setPagingHeaders(res, all.length, paging);
-  res.json(applyPaging(all, paging));
+  // Per-role headcount drives the Delete button's disabled state. It is only
+  // added for callers who may delete roles: this endpoint is deliberately
+  // unguarded (see above), and company-wide headcount per role is not something
+  // every signed-in user should read off the app shell. Everyone else gets the
+  // same shape as before — the key is omitted, never zeroed.
+  const caller = (req as any).employee as { hierarchyId?: number } | undefined;
+  let out: Array<Record<string, unknown>> = all;
+  if (await hasModuleAction(caller?.hierarchyId, "page:/hr/hierarchy", "delete")) {
+    const { rows } = await pool.query(
+      `SELECT hierarchy_id, COUNT(*)::int AS n FROM employees GROUP BY hierarchy_id`,
+    );
+    const counts = new Map<number, number>(rows.map((r: any) => [Number(r.hierarchy_id), Number(r.n)]));
+    out = all.map((h) => ({ ...h, employeeCount: counts.get(h.id) ?? 0 }));
+  }
+  setPagingHeaders(res, out.length, paging);
+  res.json(applyPaging(out, paging));
 });
 
 // Roles form a reporting chain: every role names the role it reports to, and
@@ -1056,28 +1070,83 @@ router.patch("/hr/hierarchies/:id", requireModuleAction("page:/hr/hierarchy", "e
 router.delete("/hr/hierarchies/:id", requireModuleAction("page:/hr/hierarchy", "delete"), async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid role id" }); return; }
-  // Deleting the level-1 role would revoke the administrative override for
-  // everyone assigned to it — same RBAC exception the create/edit guards
-  // protect, closed off here too.
-  const [existing] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, id));
-  if (!existing) { res.status(404).json({ error: "Not found" }); return; }
-  if (existing.level === 1) {
-    res.status(403).json({ error: "The top-level administrative role cannot be deleted." });
-    return;
+
+  // Structure edit → same advisory lock the reparent path takes, so tree
+  // changes (add-under, reparent) cannot interleave with the child check.
+  // Employee ASSIGNMENT does not take this lock — there the safety net is the
+  // employees.hierarchy_id FK: an assignment committing between the count
+  // below and the DELETE makes the delete fail 23503, which the catch maps
+  // back to the same "employees assigned" refusal. Either way no orphan.
+  let deleted: { name: string; reportsToId: number | null; description: string | null } | null = null;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext('hierarchies_structure'))`);
+
+    const { rows: [existing] } = await client.query(
+      `SELECT id, name, level, reports_to_id AS "reportsToId", description
+         FROM hierarchies WHERE id = $1 FOR UPDATE`, [id],
+    );
+    if (!existing) { await client.query("ROLLBACK"); res.status(404).json({ error: "Not found" }); return; }
+    // Deleting the level-1 role would revoke the administrative override for
+    // everyone assigned to it — same RBAC exception the create/edit guards
+    // protect, closed off here too.
+    if (Number(existing.level) === 1) {
+      await client.query("ROLLBACK");
+      res.status(403).json({ error: "The top-level administrative role cannot be deleted." });
+      return;
+    }
+    const { rows: [child] } = await client.query(
+      `SELECT name FROM hierarchies WHERE reports_to_id = $1 LIMIT 1`, [id],
+    );
+    if (child) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: `This hierarchy contains child hierarchies (e.g. "${child.name}"). Delete or move the child hierarchies first.` });
+      return;
+    }
+    const { rows: [emp] } = await client.query(
+      `SELECT COUNT(*)::int AS n FROM employees WHERE hierarchy_id = $1`, [id],
+    );
+    if (Number(emp?.n ?? 0) > 0) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: "This hierarchy cannot be deleted because one or more employees are assigned to it. Please transfer or remove all employees from this hierarchy before deleting." });
+      return;
+    }
+
+    // The role's permission rows are owned by the role — permissions.hierarchy_id
+    // carries a NO ACTION FK, so without this cleanup the delete below fails on
+    // every role that has ever been seeded a permission row (i.e. all of them).
+    await client.query(`DELETE FROM permissions WHERE hierarchy_id = $1`, [id]);
+    await client.query(`DELETE FROM hierarchies WHERE id = $1`, [id]);
+    await client.query("COMMIT");
+    deleted = existing;
+  } catch (e: any) {
+    await client.query("ROLLBACK").catch(() => {});
+    // Any FK the pre-checks raced with (or a referencing table added later)
+    // refuses politely instead of surfacing as a 500 — the row survives, so
+    // nothing can orphan. Name the blocker when Postgres tells us which it is.
+    if (e?.code === "23503") {
+      res.status(409).json({
+        error: e?.table === "employees"
+          ? "This hierarchy cannot be deleted because one or more employees are assigned to it. Please transfer or remove all employees from this hierarchy before deleting."
+          : e?.table === "hierarchies"
+            ? "This hierarchy contains child hierarchies. Delete or move the child hierarchies first."
+            : "This hierarchy cannot be deleted because other records still reference it.",
+      });
+      return;
+    }
+    throw e;
+  } finally {
+    client.release();
   }
-  // Friendly refusals before the FK would fail anyway: a role that others
-  // report to, or that employees hold, must be re-pointed first.
-  const { rows: [child] } = await pool.query(`SELECT name FROM hierarchies WHERE reports_to_id = $1 LIMIT 1`, [id]);
-  if (child) {
-    res.status(409).json({ error: `Other roles report to "${existing.name}" (e.g. "${child.name}"). Change their Reports To first.` });
-    return;
-  }
-  const { rows: [emp] } = await pool.query(`SELECT COUNT(*)::int AS n FROM employees WHERE hierarchy_id = $1`, [id]);
-  if (Number(emp?.n ?? 0) > 0) {
-    res.status(409).json({ error: `${emp.n} employee(s) hold the role "${existing.name}". Move them to another role first.` });
-    return;
-  }
-  await db.delete(hierarchiesTable).where(eq(hierarchiesTable.id, id));
+  if (!deleted) { res.status(500).json({ error: "Delete did not complete" }); return; }
+
+  logActivity({
+    action: "DELETE", module: "hr", entityType: "hierarchy", entityId: id,
+    description: `Role "${deleted.name}" deleted`,
+    user: (req as any).employee?.username ?? undefined,
+    metadata: { before: { id, name: deleted.name, reportsToId: deleted.reportsToId, description: deleted.description } },
+  }).catch(() => {});
   res.status(204).send();
 });
 

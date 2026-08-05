@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useListHierarchies, useCreateHierarchy, useUpdateHierarchy, getListHierarchiesQueryKey } from '@workspace/api-client-react';
+import { useListHierarchies, useCreateHierarchy, useUpdateHierarchy, useDeleteHierarchy, getListHierarchiesQueryKey } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,7 +12,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Search, Network, Download, Eye, Pencil, ShieldOff, Crown } from 'lucide-react';
+import {
+  AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogCancel, AlertDialogAction,
+} from '@/components/ui/alert-dialog';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Plus, Search, Network, Download, Eye, Pencil, Trash2, ShieldOff, Crown } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { downloadCSV } from '@/lib/download';
@@ -63,9 +68,11 @@ export default function Hierarchy() {
   // the same hierarchy id, so assignments and permission rows follow the edit
   // automatically. null = the dialog is in "Add" mode.
   const [editItem, setEditItem] = useState<Role | null>(null);
+  const [deleteItem, setDeleteItem] = useState<Role | null>(null);
   const queryClient = useQueryClient();
   const createMutation = useCreateHierarchy();
   const updateMutation = useUpdateHierarchy();
+  const deleteMutation = useDeleteHierarchy();
 
   const roles = hierarchies as Role[];
   const byId = new Map(roles.map(r => [r.id, r]));
@@ -108,6 +115,31 @@ export default function Hierarchy() {
   const parentOptions = roles.filter(r => !invalidParents.has(r.id));
 
   const reportsToName = (h: Role) => (h.reportsToId != null ? byId.get(h.reportsToId)?.name ?? '—' : null);
+
+  // Why a role cannot be deleted right now — shown on the disabled button.
+  // Children are derived from the list itself; the employee headcount is
+  // server-provided and only present for callers who hold the delete right,
+  // so its absence means "unknown", never "zero" — the server re-checks anyway.
+  const blockReason = (h: Role): string | null => {
+    if (roles.some(r => r.reportsToId === h.id)) return 'Child hierarchies exist — delete or move them first';
+    const count = (h as Role & { employeeCount?: number }).employeeCount;
+    if (typeof count === 'number' && count > 0) {
+      return `${count} employee${count === 1 ? ' is' : 's are'} assigned — transfer them to another role first`;
+    }
+    return null;
+  };
+
+  const confirmDelete = () => {
+    if (!deleteItem) return;
+    deleteMutation.mutate({ id: deleteItem.id }, {
+      onSuccess: () => {
+        toast.success(`Role "${deleteItem.name}" deleted`);
+        queryClient.invalidateQueries({ queryKey: getListHierarchiesQueryKey() });
+        setDeleteItem(null);
+      },
+      onError: (e: any) => { toast.error(e?.data?.error || e.message || 'Failed to delete'); setDeleteItem(null); },
+    });
+  };
 
   if (!perm.isLoading && !perm.canView) {
     return (
@@ -188,6 +220,28 @@ export default function Hierarchy() {
                     {perm.canEdit && (
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => openEdit(h)}><Pencil className="w-4 h-4" /></Button>
                     )}
+                    {perm.canDelete && !isRoot(h) && (() => {
+                      const reason = blockReason(h);
+                      return reason ? (
+                        <TooltipProvider delayDuration={200}>
+                          <Tooltip>
+                            {/* A disabled button swallows pointer events — the span keeps the tooltip alive. */}
+                            <TooltipTrigger asChild>
+                              <span tabIndex={0} className="inline-flex">
+                                <Button variant="ghost" size="icon" className="h-8 w-8" disabled>
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent side="left" className="max-w-[240px]">{reason}</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      ) : (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-destructive" onClick={() => setDeleteItem(h)}>
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      );
+                    })()}
                   </TableCell>
                 </TableRow>
               ))}
@@ -251,6 +305,33 @@ export default function Hierarchy() {
           </Form>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!deleteItem} onOpenChange={v => !v && setDeleteItem(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Hierarchy?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <div>
+                  <span className="text-xs text-muted-foreground uppercase tracking-wider block">Hierarchy</span>
+                  <span className="font-semibold text-foreground">{deleteItem?.name}</span>
+                </div>
+                <p>This action cannot be undone.</p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteMutation.isPending}
+              onClick={e => { e.preventDefault(); confirmDelete(); }}
+            >
+              {deleteMutation.isPending ? 'Deleting…' : 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Sheet open={!!viewItem} onOpenChange={v => !v && setViewItem(null)}>
         <SheetContent>

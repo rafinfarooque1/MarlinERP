@@ -4,7 +4,7 @@ import {
   useListReceipts, useCreateReceipt, useDeleteReceipt, useUpdateReceipt,
   useListJournalVouchers, useCreateJournalVoucher, useDeleteJournalVoucher, useUpdateJournalVoucher,
   useListAccountsFlat, useCashBankLedgersFlat,
-  useListCustomers, useListVendors, useVoucherLocations,
+  useListCustomers, useListVendors,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -33,6 +33,7 @@ import { downloadCSV } from '@/lib/download';
 import { useGetCompanySettings } from '@workspace/api-client-react';
 import { downloadVoucherPDF } from '@/lib/pdfUtils';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
+import { useVoucherLocationChoice, parseLocKey, LocationSelectField } from '@/lib/voucherLocation';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const inr = (n: number) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
@@ -75,76 +76,9 @@ function typeBadge(type: VoucherType) {
   );
 }
 
-// ── Voucher location choice ────────────────────────────────────────────────
-/**
- * Shared by the New/Edit voucher dialogs: which locations the caller may
- * record a voucher under, the currently selected one, and which ledgers to
- * HIDE for it — accounts owned by a different location, plus Head Office's
- * own cash/bank when a branch is selected. The same rule is enforced by the
- * server on save; this just keeps the pickers honest.
- */
-function useVoucherLocationChoice(initial?: { locationType?: string | null; locationId?: number | null }) {
-  const { data: voucherLocs } = useVoucherLocations();
-  const locations = voucherLocs?.locations ?? [];
-  const [locKey, setLocKey] = useState<string>(
-    initial?.locationType ? `${initial.locationType}:${initial.locationId ?? 0}` : ''
-  );
-  // Default to the first offered location (Head Office for HO users, the
-  // user's own location for branch staff) once the list arrives.
-  useEffect(() => {
-    if (!locKey && locations.length) {
-      setLocKey(`${locations[0].locationType}:${locations[0].locationId}`);
-    }
-  }, [locKey, locations]);
-  const selLoc = locations.find(l => `${l.locationType}:${l.locationId}` === locKey);
-
-  const foreignLedgerIds = useMemo(() => {
-    const set = new Set<number>();
-    if (!voucherLocs || !selLoc) return set;
-    for (const o of voucherLocs.ownedLedgers) {
-      if (!(o.locationType === selLoc.locationType && o.locationId === selLoc.locationId)) set.add(o.ledgerId);
-    }
-    // A mirror location's shared till is owned by BOTH identities — if the
-    // selected location is one of them, the ledger stays visible.
-    for (const o of voucherLocs.ownedLedgers) {
-      if (o.locationType === selLoc.locationType && o.locationId === selLoc.locationId) set.delete(o.ledgerId);
-    }
-    if (selLoc.locationType !== 'headoffice') {
-      for (const id of voucherLocs.headOfficeCashBankLedgerIds) set.add(id);
-    }
-    return set;
-  }, [voucherLocs, selLoc]);
-
-  return { locations, locKey, setLocKey, selLoc, foreignLedgerIds };
-}
-
-function parseLocKey(key: string): { locationType: 'headoffice' | 'warehouse' | 'outlet'; locationId: number } | null {
-  const [t, i] = key.split(':');
-  if (t !== 'headoffice' && t !== 'warehouse' && t !== 'outlet') return null;
-  return { locationType: t, locationId: Number(i) || 0 };
-}
-
-function LocationSelectField({ locations, locKey, setLocKey }: {
-  locations: { locationType: string; locationId: number; name: string }[];
-  locKey: string;
-  setLocKey: (k: string) => void;
-}) {
-  return (
-    <div className="space-y-1">
-      <Label>Location</Label>
-      <Select value={locKey} onValueChange={setLocKey}>
-        <SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger>
-        <SelectContent>
-          {locations.map(l => (
-            <SelectItem key={`${l.locationType}:${l.locationId}`} value={`${l.locationType}:${l.locationId}`}>
-              {l.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  );
-}
+// Voucher location choice — shared across every manual voucher entry form.
+// Lives in lib/voucherLocation.tsx: which locations the caller may record
+// under, the ledgers to hide for the selected one, and the picker field.
 
 // ── Delete confirm ─────────────────────────────────────────────────────────
 function DeleteConfirm({ row, onClose }: { row: UnifiedRow; onClose: () => void }) {
@@ -242,14 +176,14 @@ function NewVoucherDialog({ onClose, defaultType }: { onClose: () => void; defau
     if (type === 'payment') {
       if (!fromId || !toId) { toast.error('Select both accounts'); return; }
       if (!amount || Number(amount) <= 0) { toast.error('Enter amount'); return; }
-      createPayment.mutate({ paymentDate: date, paidFromLedgerId: fromId, paidToLedgerId: toId, amount: Number(amount), narration } as any, {
+      createPayment.mutate({ paymentDate: date, paidFromLedgerId: fromId, paidToLedgerId: toId, amount: Number(amount), narration, locationType: loc.locationType, locationId: loc.locationId } as any, {
         onSuccess: (v: any) => { toast.success(`Payment ${v.voucherNumber} recorded`); invalidate(); },
         onError: onErr,
       });
     } else if (type === 'receipt') {
       if (!fromId || !toId) { toast.error('Select both accounts'); return; }
       if (!amount || Number(amount) <= 0) { toast.error('Enter amount'); return; }
-      createReceipt.mutate({ receiptDate: date, receivedFromLedgerId: fromId, receivedInLedgerId: toId, amount: Number(amount), narration } as any, {
+      createReceipt.mutate({ receiptDate: date, receivedFromLedgerId: fromId, receivedInLedgerId: toId, amount: Number(amount), narration, locationType: loc.locationType, locationId: loc.locationId } as any, {
         onSuccess: (v: any) => { toast.success(`Receipt ${v.voucherNumber} recorded`); invalidate(); },
         onError: onErr,
       });
@@ -728,8 +662,19 @@ function EditMoneyVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: ()
 
   const { data: allAccounts = [] } = useListAccountsFlat();
   const { data: cashBank = [] }    = useCashBankLedgersFlat();
-  const allLedgers  = (allAccounts as any[]).filter(a => !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code));
-  const cashLedgers = (cashBank as any[]).filter(a => !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code));
+
+  // Prefilled with the voucher's stored location; changing it moves the money
+  // entry between location books, and the pickers narrow to that location's
+  // own cash/bank accounts — the same rule the server re-checks on save.
+  const { locations, locKey, setLocKey, selLoc, foreignLedgerIds } = useVoucherLocationChoice({
+    locationType: v.locationType, locationId: v.locationId,
+  });
+
+  const allLedgers  = (allAccounts as any[]).filter(a =>
+    !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code) && !foreignLedgerIds.has(a.id));
+  const cashLedgers = (cashBank as any[]).filter(a =>
+    !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code)
+    && (!selLoc || selLoc.cashBankLedgerIds.includes(a.id)));
 
   const updatePayment = useUpdatePayment();
   const updateReceipt = useUpdateReceipt();
@@ -749,18 +694,22 @@ function EditMoneyVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: ()
     if (!fromId || !toId) { toast.error('Select both accounts'); return; }
     if (fromId === toId) { toast.error('The two accounts must be different'); return; }
     if (!(Number(amount) > 0)) { toast.error('Enter an amount'); return; }
+    const loc = parseLocKey(locKey);
+    if (!loc) { toast.error('Please select a location.'); return; }
 
     if (isPayment) {
       updatePayment.mutate({
         id: row.id, paymentDate: date, paidFromLedgerId: fromId, paidToLedgerId: toId,
         amount: Number(amount),
         referenceNumber: refNo || null, narration,
+        locationType: loc.locationType, locationId: loc.locationId,
       } as any, { onSuccess: onOk, onError: onErr });
     } else {
       updateReceipt.mutate({
         id: row.id, receiptDate: date, receivedFromLedgerId: fromId, receivedInLedgerId: toId,
         amount: Number(amount),
         referenceNumber: refNo || null, narration,
+        locationType: loc.locationType, locationId: loc.locationId,
       } as any, { onSuccess: onOk, onError: onErr });
     }
   };
@@ -788,6 +737,8 @@ function EditMoneyVoucherDialog({ row, onClose }: { row: UnifiedRow; onClose: ()
         </p>
 
         <Separator />
+
+        <LocationSelectField locations={locations} locKey={locKey} setLocKey={setLocKey} />
 
         <div className="space-y-1">
           <Label>Date</Label>

@@ -1,0 +1,339 @@
+Perform a COMPLETE ERP HEALTH CHECK and ACCOUNTING AUDIT on the entire system. Do not assume anything is correct—verify every module, every report, every posting, and every calculation. This is a production-grade ERP, so perform a complete end-to-end verification.
+
+====================================================
+1. ACCOUNTING INTEGRITY
+====================================================
+
+Verify that every accounting transaction is correct.
+
+Check:
+
+- Trial Balance (Dr = Cr exactly)
+- Balance Sheet
+- Profit & Loss
+- General Ledger
+- Chart of Accounts
+- Customer Ledgers
+- Vendor Ledgers
+- Cash Book
+- Bank Book
+- Day Book
+- Journal Book
+- Receipt Voucher
+- Payment Voucher
+- Contra Voucher
+- Journal Voucher
+- Credit Note
+- Debit Note
+
+Verify:
+
+- No orphan journal entries.
+- No orphan ledger postings.
+- No duplicate voucher numbers.
+- No missing postings.
+- Every voucher balances.
+- No negative impossible balances.
+- Receivable and payable control accounts match subsidiary ledgers exactly.
+
+====================================================
+2. DASHBOARD VALIDATION
+====================================================
+
+Verify every dashboard card.
+
+Check that every value is calculated correctly:
+
+- Sales
+- Purchases
+- Expenses
+- Inventory Value
+- Cash Balance
+- Bank Balance
+- Receivables
+- Payables
+- GP
+- NP
+- Sales Trend
+- Sales by Location
+- Top Items
+
+Cross-check dashboard values with reports.
+
+Dashboard values must exactly match accounting reports.
+
+====================================================
+3. CUSTOMER & VENDOR
+====================================================
+
+Verify:
+
+- Outstanding balances
+- Advances
+- Receipt allocation
+- Payment allocation
+- Ageing reports
+- Ledger balances
+- Opening balances
+- Credit limits
+
+Ensure customer/vendor ledgers equal dashboard receivables/payables.
+
+====================================================
+4. SALES
+====================================================
+
+Test:
+
+- Cash sale
+- Credit sale
+- Walk-in sale
+- B2B sale
+- B2C sale
+- Discount
+- GST Inclusive
+- GST Exclusive
+- Partial payment
+- Advance adjustment
+- Receipt allocation
+
+Verify:
+
+- Invoice totals
+- GST
+- Stock deduction
+- Ledger postings
+- Outstanding
+- Customer balance
+
+====================================================
+5. PURCHASES
+====================================================
+
+Verify:
+
+- Purchase posting
+- GST
+- Vendor payable
+- Stock increase
+- Batch creation
+- Expense allocation
+- Purchase returns
+- Payment allocation
+
+====================================================
+6. INVENTORY
+====================================================
+
+Verify:
+
+- Stock Ledger
+- Batch Ledger
+- FIFO
+- Weighted Average
+- Closing Stock
+- Inventory Valuation
+- Reservations
+- Transfers
+
+Check that stock equals valuation.
+
+====================================================
+7. IMPORT MODULE
+====================================================
+
+Test importing:
+
+Customers
+Vendors
+Ledgers
+Sales
+Purchases
+Receipts
+Payments
+
+Verify:
+
+- Amounts imported correctly
+- GST correct
+- Discounts correct
+- Customer creation
+- Vendor creation
+- Ledger creation
+- Payment allocation
+- Advance creation
+- Receipt allocation
+- Purchase posting
+- Sales posting
+- Stock movement
+
+Cross-check imported transactions with manually created transactions.
+
+Results must be identical.
+
+====================================================
+8. GST
+====================================================
+
+Verify:
+
+- CGST
+- SGST
+- IGST
+- GST Inclusive
+- GST Exclusive
+- HSN
+- Taxable Value
+
+Compare invoices with GST reports.
+
+====================================================
+9. LOCATION ACCOUNTING
+====================================================
+
+Verify each location separately.
+
+Head Office
+Warehouse
+Outlet
+
+Check:
+
+- Sales
+- Purchases
+- Expenses
+- Payroll
+- Inventory
+- Cash
+- Bank
+
+Verify "All Locations" equals sum of every location.
+
+====================================================
+10. PAYROLL
+====================================================
+
+Verify:
+
+- Salary calculation
+- LOP
+- Working days
+- Casual leave
+- Attendance
+- Payroll journals
+
+====================================================
+11. BANK & CASH
+====================================================
+
+Verify:
+
+Cash & Bank screen
+
+Compare with:
+
+Cash Book
+Bank Book
+Trial Balance
+Balance Sheet
+
+All balances must match.
+
+====================================================
+12. REPORTS
+====================================================
+
+Verify every report.
+
+Cross-check totals.
+
+No report should disagree with another.
+
+====================================================
+13. DATABASE HEALTH
+====================================================
+
+Check:
+
+- Foreign keys
+- Orphans
+- Duplicate records
+- Missing ledgers
+- Missing references
+- Missing batches
+- Missing allocations
+
+====================================================
+14. PERFORMANCE
+====================================================
+
+Check:
+
+Slow queries
+Missing indexes
+N+1 queries
+Large table scans
+
+====================================================
+15. SECURITY
+====================================================
+
+Verify:
+
+Permissions
+Location isolation
+Role access
+Management
+Admin
+Owner
+
+====================================================
+16. FINAL CONSISTENCY REPORT
+====================================================
+
+Provide a final report including:
+
+Overall ERP Health Score (/100)
+
+Accounting Integrity
+Dashboard Integrity
+Inventory Integrity
+Import Integrity
+GST Integrity
+Payroll Integrity
+Cash & Bank Integrity
+Location Integrity
+Performance
+Security
+
+List:
+
+Critical Issues
+High Priority Issues
+Medium Issues
+Low Issues
+
+List every inconsistency found.
+
+Do not automatically fix anything.
+
+Only report findings first.
+
+If everything passes, explicitly state:
+
+✓ Trial Balance reconciles.
+✓ Receivables reconcile.
+✓ Payables reconcile.
+✓ Customer Ledgers reconcile.
+✓ Vendor Ledgers reconcile.
+✓ Dashboard matches reports.
+✓ Inventory matches valuation.
+✓ Imported data posts correctly.
+✓ GST calculations are correct.
+✓ Cash & Bank balances reconcile.
+✓ All reports are internally consistent.
+✓ No orphan postings.
+✓ No duplicate accounting entries.
+✓ ERP is production-safe.
+
+This must be a true audit, not a code review. Verify using live calculations, database cross-checks, regression tests, and report reconciliation.

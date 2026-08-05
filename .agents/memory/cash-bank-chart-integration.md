@@ -30,3 +30,4 @@ Both TB routes (accounts + reports) aggregated only `buildDerivedPostings` — i
 - Boot ordering: a migration that writes a table must run AFTER that table's DDL block in index.ts — `opening_balances` is created surprisingly late. On a fresh DB the earlier position crashes boot.
 - Transaction reset preserves cash_bank_accounts AND their openings BY DESIGN (openings are account identity/masters); full reset truncates both. Both resets end with a rebalance sweep.
 - Write-route responses must return the DERIVED balance (`currentBalanceIndex().net()`), not a hard-coded 0/null — a stale zero flashes onto the screen before the list refetch.
+- Cash/Bank Book now folds `openingBalancePostings()` exactly like the TB (concat before subtree filter/sort). The durable rule stands: every ledger-anchored report must fold openings via ONE mechanism — a report that skips it understates by exactly the opening, and books.ts's own cumulative fold must never be combined with it.

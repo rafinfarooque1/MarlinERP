@@ -6,7 +6,7 @@ import { logActivity } from "../lib/audit";
 import { lineTaxHeads } from "../lib/gst";
 import { clearsThroughBank } from "../lib/paymentModes";
 import { isIsoDate } from "../lib/dateInput";
-import { callerLocation, ownLocationScope, foreignPartyLedgerIds } from "../lib/moneyScope";
+import { callerLocation, ownLocationScope, foreignPartyLedgerIds, locationOwnedLedgerMap } from "../lib/moneyScope";
 import { outletWritesBlocked } from "../lib/featureFlags";
 
 const router = Router();
@@ -339,48 +339,8 @@ async function resolveVoucherLocation(
   return { ok: true, loc };
 }
 
-interface LedgerOwner { locationType: "warehouse" | "outlet"; locationId: number; name: string }
-
-/**
- * Every location-owned ledger (cash / sales / warehouse purchase), with ALL of
- * its owners. A mirror location — one place kept as both a warehouse and an
- * outlet — shares a single cash ledger, so a ledger can have several owners
- * and a voucher stamped to any one of them is valid.
- */
-async function locationOwnedLedgerMap(): Promise<Map<number, LedgerOwner[]>> {
-  const map = new Map<number, LedgerOwner[]>();
-  const add = (ledgerId: unknown, owner: LedgerOwner) => {
-    const lid = Number(ledgerId);
-    if (!Number.isFinite(lid) || lid <= 0) return;
-    const arr = map.get(lid) ?? [];
-    arr.push(owner);
-    map.set(lid, arr);
-  };
-  const { rows } = await pool.query(`
-    SELECT 'warehouse' AS lt, id, name, cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses
-    UNION ALL
-    SELECT 'outlet' AS lt, id, name, cash_ledger_id, sales_ledger_id, NULL::integer AS purchase_ledger_id FROM outlets
-    UNION ALL
-    -- Cash & Bank accounts assigned to a branch: the branch owns that ledger
-    -- exactly like its till, so vouchers through it must be stamped to the
-    -- owner and its money stays inside the location's own books.
-    SELECT cba.location_type AS lt, cba.location_id AS id,
-           COALESCE(w.name, o.name, 'branch') AS name,
-           cba.ledger_id AS cash_ledger_id, NULL::integer AS sales_ledger_id, NULL::integer AS purchase_ledger_id
-    FROM cash_bank_accounts cba
-    LEFT JOIN warehouses w ON cba.location_type = 'warehouse' AND w.id = cba.location_id
-    LEFT JOIN outlets    o ON cba.location_type = 'outlet'    AND o.id = cba.location_id
-    WHERE cba.ledger_id IS NOT NULL AND cba.location_id IS NOT NULL
-      AND cba.location_type IN ('warehouse', 'outlet')
-  `);
-  for (const r of rows) {
-    const owner: LedgerOwner = { locationType: r.lt, locationId: Number(r.id), name: r.name };
-    add(r.cash_ledger_id, owner);
-    add(r.sales_ledger_id, owner);
-    add(r.purchase_ledger_id, owner);
-  }
-  return map;
-}
+// locationOwnedLedgerMap lives in lib/moneyScope.ts — shared with the money
+// voucher routes so payments/receipts stamp locations by the exact same rule.
 
 /**
  * A manual voucher's lines must be consistent with the location that stamps
@@ -508,7 +468,7 @@ router.get("/accounts/journal-vouchers", requireModuleView("page:/accounts/vouch
  * to a location other than the one selected — the same rule the server
  * enforces on save.
  */
-router.get("/accounts/voucher-locations", requireModuleView("page:/accounts/vouchers"), async (req, res): Promise<void> => {
+router.get("/accounts/voucher-locations", requireModuleView(["page:/accounts/vouchers", "page:/operations/receipt-voucher", "page:/operations/payment-voucher"]), async (req, res): Promise<void> => {
   const employee = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
   const { rows: whs } = await pool.query(
     `SELECT id, name, cash_ledger_id FROM warehouses ORDER BY name`
@@ -1583,7 +1543,13 @@ router.get("/accounts/cash-bank-book", requireModuleView(["page:/accounts/cash-b
   const subtree = await ledgerSubtreeIds(ledgerId);
   const locFilter = getPostingLocationFilter(req);
 
+  // Opening balances fold in as company-level postings dated at their as-of
+  // date — the same mechanism the Trial Balance uses — so the Cash/Bank Book's
+  // opening and closing agree with the TB, the Balance Sheet and the Cash &
+  // Bank screen (all of which already count them).
+  const { openingBalancePostings } = await import("../lib/openingBalances");
   const subtreePostings = (await buildDerivedPostings({ toDate: isDate(toDate) ? toDate : undefined }))
+    .concat(await openingBalancePostings({ toDate: isDate(toDate) ? toDate : undefined }) as Posting[])
     .filter(p => subtree.has(p.ledgerId));
   const postings = filterPostingsByLocation(subtreePostings, locFilter);
   postings.sort((a, b) => a.date.localeCompare(b.date) || a.source.localeCompare(b.source));

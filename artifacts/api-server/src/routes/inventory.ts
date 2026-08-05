@@ -225,7 +225,7 @@ async function guardedMasterDelete(materialType: "item" | "material" | "raw_mate
     const { rows: [r] } = await client.query(
       `SELECT COALESCE((SELECT SUM(quantity::numeric) FROM stock_entries WHERE material_type = $1 AND item_id = $2), 0) AS entry_qty,
               COALESCE((SELECT SUM(quantity::numeric)  FROM stock_batches  WHERE material_type = $1 AND item_id = $2), 0) AS batch_qty,
-              (SELECT COUNT(*)::int FROM stock_reservations WHERE material_type = $1 AND ref_id = $2 AND status IN ('hold', 'in_transit')) AS active_res`,
+              (SELECT COUNT(*)::int FROM stock_reservations WHERE material_type = $1 AND ref_id = $2 AND status = 'active' AND kind IN ('hold', 'in_transit')) AS active_res`,
       [materialType, id],
     );
     const entryQty = Number(r?.entry_qty ?? 0);
@@ -240,6 +240,15 @@ async function guardedMasterDelete(materialType: "item" | "material" | "raw_mate
       await client.query("ROLLBACK");
       return { status: 409, error: `This product has stock reserved or in transit on an open transfer. Complete or cancel the transfer before deleting it.` };
     }
+    // The checks above guarantee everything left is residue — zero-quantity
+    // stock entries, empty/consumed batch rows and released reservations.
+    // Sweep them in the same transaction so a deleted product can never leave
+    // orphan stock rows behind (they would render as blank-name lines if a
+    // later write ever revived them). stock_ledger is deliberately kept: it
+    // is the append-only movement audit trail.
+    await client.query(`DELETE FROM stock_entries WHERE material_type = $1 AND item_id = $2`, [materialType, id]);
+    await client.query(`DELETE FROM stock_batches WHERE material_type = $1 AND item_id = $2`, [materialType, id]);
+    await client.query(`DELETE FROM stock_reservations WHERE material_type = $1 AND ref_id = $2`, [materialType, id]);
     await client.query(`DELETE FROM ${table} WHERE id = $1`, [id]);
     await client.query("COMMIT");
     return { status: 204 };

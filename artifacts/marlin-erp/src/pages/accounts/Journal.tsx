@@ -19,6 +19,7 @@ import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { entryScopeKeyDown, autoFocusFirst, focusField, focusAndOpen, useEntryShortcuts } from '@/lib/keyboard-entry';
+import { useVoucherLocationChoice, parseLocKey, LocationSelectField } from '@/lib/voucherLocation';
 
 interface LineDraft { ledgerId: number; debit: string; credit: string }
 
@@ -43,7 +44,13 @@ export default function Journal() {
   const [narration, setNarration] = useState('');
   const [lines, setLines] = useState<LineDraft[]>([{ ...EMPTY_LINE }, { ...EMPTY_LINE }]);
 
-  const ledgerOptions = (allAccounts as any[]).filter(a => !a.isSystemGroup && !a.isGroup);
+  // The selected location OWNS the voucher's accounting — an Admin recording
+  // on behalf of a branch produces a branch voucher. Defaults to the global
+  // location selector; ledgers owned by other locations are hidden.
+  const { locations, locKey, setLocKey, foreignLedgerIds } = useVoucherLocationChoice();
+
+  const ledgerOptions = (allAccounts as any[]).filter(a =>
+    !a.isSystemGroup && !a.isGroup && !foreignLedgerIds.has(a.id));
 
   const totalDr = lines.reduce((s, l) => s + (Number(l.debit) || 0), 0);
   const totalCr = lines.reduce((s, l) => s + (Number(l.credit) || 0), 0);
@@ -111,12 +118,15 @@ export default function Journal() {
       focusField('journal-line-debit-0', scopeRef.current);
       return;
     }
+    const loc = parseLocKey(locKey);
+    if (!loc) { toast.error('Please select a location.'); return; }
     createMutation.mutate({
       voucherType: 'journal',
       voucherDate,
       narration: narration.trim() || undefined,
       lines: clean.map(l => ({ ledgerId: l.ledgerId, debit: Number(l.debit) || 0, credit: Number(l.credit) || 0 })),
-    }, {
+      locationType: loc.locationType, locationId: loc.locationId,
+    } as any, {
       onSuccess: (v) => { toast.success(`Journal ${v.voucherNumber} recorded`); setIsOpen(false); resetForm(); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
@@ -272,6 +282,7 @@ export default function Journal() {
             className="space-y-4 pt-2"
           >
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <LocationSelectField locations={locations} locKey={locKey} setLocKey={setLocKey} />
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Date <span className="text-destructive">*</span></label>
                 <Input type="date" data-field="voucherDate" value={voucherDate} onChange={e => setVoucherDate(e.target.value)} />

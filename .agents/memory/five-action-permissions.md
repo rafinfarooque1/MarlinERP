@@ -12,6 +12,9 @@ description: Post-consolidation permission model (View/Add/Edit/Delete/Download)
 
 # Role hierarchy (reports-to tree)
 
+- Role delete: a role OWNS its permission rows (`permissions.hierarchy_id` is a NO ACTION FK) — they must be swept inside the delete txn or every delete of a seeded role fails FK. Tree checks run under the hierarchies-structure advisory lock; employee assignment does NOT take that lock, so the employees FK is the race backstop — map 23503 by `e.table` back to the same friendly refusal the pre-check gives, never a generic 500/409.
+- The hierarchy list GET stays unguarded (app-shell permission resolution) — any per-role enrichment beyond the tree itself (e.g. headcounts) must be gated on the caller's own right and OMITTED (never zeroed) otherwise.
+
 - Single root, levels **derived** from the chain (root=1, child=parent+1) and never client-writable. `level === 1` still means unrestricted access in middleware and `isAdmin` on the client, so tree integrity IS the authorization model.
 - Root protections: no second root can be created (create requires an existing parent), root cannot be reparented or deleted; delete refuses roles with children or assigned employees.
 - **Structure edits (reparent) serialize on one transaction-scoped advisory lock**, and the cycle check is repeated inside that transaction against the stable tree. A pre-transaction check alone lets two concurrent reparents (A→B, B→A) commit a loop that the level-1 override then walks. Recursive CTEs over the tree carry a depth bound as defense in depth.

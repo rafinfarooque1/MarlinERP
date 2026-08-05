@@ -94,12 +94,36 @@ Reversal paths clamp at zero; **forward** consumption must never clamp, because
 flooring a real shortfall manufactures stock. Verify mirror == located sum after
 any change to a write path.
 
+## Master existence is enforced by trigger, not FK
+
+No FK can express "item_id points at ONE of three tables depending on
+material_type", so stock writes are guarded by a BEFORE INSERT/UPDATE trigger
+on `stock_entries`/`stock_batches` that takes **FOR KEY SHARE** on the master
+row and raises 23503 if it is gone. **Why KEY SHARE:** it conflicts with the
+delete's FOR UPDATE (writer blocks, then aborts instead of orphaning; or the
+delete waits and then sees the stock → 409) but NOT with writers' avg-cost
+UPDATEs (FOR NO KEY UPDATE), so normal concurrency is unchanged. Master-lock
+alone is NOT enough — production/purchase writers don't check the rowCount of
+their master UPDATE, so without the trigger they commit stock for a
+just-deleted master. API deletes also sweep residual zero-qty
+entries/batches/released reservations in the delete txn. Reservation gotcha:
+`status` is active/released; hold/in_transit live in `kind` — a guard matching
+status against kind values silently matches nothing.
+
+Historical statements: `stockAsOf` reconciles stock_ledger nets against
+today's entries per key — orphan LEDGER keys (masterless, non-zero net) make
+every backdated BS/P&L report "unreliable". Dev has ~180 such keys from old
+test fixtures (pre-existing; the stock-dating suite's books-integrity check
+fails on them); prod has none. stock_ledger stores its own item_name and is
+the append-only audit trail — never sweep it.
+
 ## Deleted items leave orphaned stock rows under reusable ids
 
-Deleting an item does not delete its `stock_batches`/`stock_entries` rows, and
-the items id sequence can hand a NEW item an old id — so a fresh fixture item
-can arrive already "owning" someone else's zero-qty lots (e.g. an old
-`OPENING` batch). Two consequences:
+Direct-SQL master deletes (test cleanups) still strand stock rows — the
+trigger guards stock WRITES, nothing guards raw master DELETEs — and the items
+id sequence can hand a NEW item an old id, so a fresh fixture item can arrive
+already "owning" someone else's zero-qty lots (e.g. an old `OPENING` batch).
+Two consequences:
 - **Row-count assertions lie**: "exactly one lot" fails on rows that predate
   the test. Snapshot pre-existing row ids (and quantities) at setup, exclude
   them from assertions, and restore rather than delete them in cleanup —

@@ -29,6 +29,9 @@ import { DATE_COLUMNS } from "./lib/dateColumns";
 import { addQuotations } from "./migrations/quotations";
 import { runOrgHierarchyRestructure } from "./migrations/orgHierarchyRestructure";
 import { backfillPartyLocations } from "./migrations/partyLocationBackfill";
+import { restampMoneyVoucherLocations } from "./migrations/moneyVoucherLocationRestamp";
+import { backfillSalePaymentLegs } from "./migrations/salePaymentLegsBackfill";
+import { cleanupOrphanStockRows, ensureStockMasterGuardTrigger } from "./migrations/orphanStockCleanup";
 import { addDataImport } from "./migrations/dataImport";
 
 async function runMigrations() {
@@ -881,6 +884,52 @@ async function runMigrations() {
 
       await pool.query(`INSERT INTO migration_log (name) VALUES ('warehouse_outlet_ledger_backfill_v1')`);
       console.log(`[migration] warehouse_outlet_ledger_backfill_v1: linked ledgers for ${warehouses.length} warehouse(s) + ${outlets.length} outlet(s)`);
+    }
+  }
+
+  // ── One-time repair: stamp credit/debit notes with their document's location ──
+  // Notes written before returns stamped voucher locations sit at company level
+  // (NULL location), so located statements miss the reversal where the revenue
+  // or bill was booked. Derive the stamp from the return's source document.
+  // JV convention: Head Office stores location_id 0 and matches on TYPE alone.
+  // Guarded by migration_log (never by data shape — re-added empty columns
+  // must not re-fire it).
+  // Marker-first inside one transaction: the ON CONFLICT insert serializes
+  // concurrent boots (the loser blocks on the unique index, then skips), and
+  // a mid-migration failure rolls the marker back with the data.
+  {
+    const noteClient = await pool.connect();
+    try {
+      await noteClient.query("BEGIN");
+      const { rowCount: claimed } = await noteClient.query(
+        `INSERT INTO migration_log (name) VALUES ('note_voucher_location_stamp_v1') ON CONFLICT (name) DO NOTHING`
+      );
+      if (claimed) {
+        const { rowCount: cnFixed } = await noteClient.query(`
+          UPDATE journal_vouchers jv
+          SET location_type = sr.location_type,
+              location_id = CASE WHEN sr.location_type = 'headoffice' THEN 0 ELSE sr.location_id END
+          FROM sales_returns sr
+          WHERE sr.credit_note_id = jv.id AND jv.location_type IS NULL
+        `);
+        const { rowCount: dnFixed } = await noteClient.query(`
+          UPDATE journal_vouchers jv
+          SET location_type = COALESCE(p.location_type, 'headoffice'),
+              location_id = CASE WHEN COALESCE(p.location_type, 'headoffice') = 'headoffice' THEN 0 ELSE COALESCE(p.location_id, 0) END
+          FROM purchase_returns pr
+          JOIN purchases p ON p.id = pr.purchase_id
+          WHERE pr.debit_note_id = jv.id AND jv.location_type IS NULL
+        `);
+        await noteClient.query("COMMIT");
+        console.log(`[migration] note_voucher_location_stamp_v1: stamped ${cnFixed} credit note(s), ${dnFixed} debit note(s)`);
+      } else {
+        await noteClient.query("ROLLBACK");
+      }
+    } catch (e) {
+      await noteClient.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      noteClient.release();
     }
   }
 
@@ -3742,6 +3791,45 @@ try {
   await backfillPartyLocations(pool);
 } catch (err) {
   console.error("[migration] party_location_backfill FAILED (non-fatal):", (err as Error).message);
+}
+
+// Money voucher location restamp — one-shot repair of receipts/payments that
+// the old writers stamped Head Office even though the money moved through a
+// branch till (Admin recording on behalf of a branch). Re-stamps them to the
+// till's owner, matching resolveMoneyVoucherLocation(). Own top-level step so
+// a throw inside runMigrations() can never silently skip it.
+try {
+  await restampMoneyVoucherLocations(pool);
+} catch (err) {
+  console.error("[migration] money_voucher_location_restamp_v1 FAILED (non-fatal):", (err as Error).message);
+}
+
+// Payment-history backfill for counter-settled cash sales that predate the
+// settlement-legs producer (audit M-2): recreates ONLY the missing
+// sale_payments history row — no receipts, no vouchers, no postings.
+try {
+  await backfillSalePaymentLegs(pool);
+} catch (err) {
+  console.error("[migration] sale_payment_legs_backfill_v1 FAILED (non-fatal):", (err as Error).message);
+}
+
+// Orphan stock sweep (audit M-3): removes stock rows stranded by product
+// deletions that predate the guarded master delete — the blank-name rows in
+// valuation/stock reports. Valuation is derived, never posted, so no ledger
+// figure moves.
+try {
+  await cleanupOrphanStockRows(pool);
+} catch (err) {
+  console.error("[migration] orphan_stock_cleanup_v1 FAILED (non-fatal):", (err as Error).message);
+}
+
+// Referential guard for the polymorphic stock tables: stock writes lock their
+// master row (FOR KEY SHARE) and abort if the product is gone, closing the
+// delete-vs-concurrent-writer race that no FK can express. Idempotent DDL.
+try {
+  await ensureStockMasterGuardTrigger(pool);
+} catch (err) {
+  console.error("[migration] stock_master_guard_trigger FAILED (non-fatal):", (err as Error).message);
 }
 
 // Automatic backups and retention. Starts after the migrations above so a

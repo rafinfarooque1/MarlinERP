@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useListReceipts, useCreateReceipt, useDeleteReceipt, useListAccountsFlat, useCashBankLedgersFlat } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -20,6 +20,7 @@ import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { isSystemLedger } from '@/lib/systemLedgers';
 import { BillSettlementPanel, type SettlementSelection } from '@/components/settlement/BillSettlementPanel';
+import { useVoucherLocationChoice, parseLocKey, LocationSelectField, voucherLocationName } from '@/lib/voucherLocation';
 
 const schema = z.object({
   receiptDate: z.string().min(1, 'Date required'),
@@ -43,21 +44,40 @@ export default function ReceiptPage() {
   const createMutation = useCreateReceipt();
   const deleteMutation = useDeleteReceipt();
 
-  // "Received From" — all non-system ledgers. Payroll/GST/internal ledgers
-  // stay module-owned (advances are recovered through payroll, not receipts).
-  const fromOptions = (allAccounts as any[]).filter(a => !a.isSystemGroup && !a.isGroup && !isSystemLedger(a.code));
-  // "Received In" — only Bank / Cash and their sub-ledgers
-  const inOptions = cashBankAccounts as any[];
+  // The selected location OWNS the receipt's accounting — an Admin recording
+  // on behalf of a branch produces a branch voucher. Defaults to the global
+  // location selector; the pickers narrow to that location's own accounts.
+  const { locations, locKey, setLocKey, selLoc, foreignLedgerIds } = useVoucherLocationChoice();
+
+  // "Received From" — all non-system ledgers minus other locations' accounts.
+  // Payroll/GST/internal ledgers stay module-owned (advances are recovered
+  // through payroll, not receipts).
+  const fromOptions = (allAccounts as any[]).filter(a =>
+    !a.isSystemGroup && !a.isGroup && !isSystemLedger(a.code) && !foreignLedgerIds.has(a.id));
+  // "Received In" — only the selected location's Bank / Cash accounts
+  const inOptions = (cashBankAccounts as any[]).filter(a =>
+    !selLoc || selLoc.cashBankLedgerIds.includes(a.id));
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: { receiptDate: new Date().toISOString().split('T')[0], receivedFromLedgerId: 0, receivedInLedgerId: 0, amount: 0, referenceNumber: '', narration: '' },
   });
 
+  // Switching location narrows the pickers — clear selections that just
+  // became foreign so a hidden value can't ride along into the submit.
+  useEffect(() => {
+    const inId = Number(form.getValues('receivedInLedgerId'));
+    if (inId && !inOptions.some((a: any) => Number(a.id) === inId)) form.setValue('receivedInLedgerId', 0);
+    const fromId = Number(form.getValues('receivedFromLedgerId'));
+    if (fromId && foreignLedgerIds.has(fromId)) form.setValue('receivedFromLedgerId', 0);
+  }, [locKey, inOptions, foreignLedgerIds]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const onSubmit = (data: FormValues) => {
+    const loc = parseLocKey(locKey);
+    if (!loc) { toast.error('Please select a location.'); return; }
     // A customer receipt carries its bill split so the books settle those
     // exact bills; any excess parks as the customer's advance.
-    const body: any = { ...data };
+    const body: any = { ...data, locationType: loc.locationType, locationId: loc.locationId };
     if (settlement && settlement.kind === 'customer'
         && (settlement.allocations.length > 0 || settlement.advanceAmount > 0.004)) {
       body.allocations = settlement.allocations.map(a => ({ saleId: a.billId, amount: a.amount }));
@@ -91,6 +111,7 @@ export default function ReceiptPage() {
     date: (r: any) => r.receiptDate,
     from: (r: any) => r.receivedFromName,
     in: (r: any) => r.receivedInName,
+    location: (r: any) => voucherLocationName(locations, r.locationType, r.locationId),
     reference: (r: any) => r.referenceNumber,
     narration: (r: any) => r.narration,
     amount: (r: any) => Number(r.amount),
@@ -121,7 +142,8 @@ export default function ReceiptPage() {
             {perm.canDownload && (
               <Button variant="outline" size="sm" onClick={() => downloadCSV('receipts.csv', filtered.map((r: any) => ({
                 Voucher: r.voucherNumber, Date: r.receiptDate, 'Received From': r.receivedFromName,
-                'Received In': r.receivedInName, Amount: r.amount,
+                'Received In': r.receivedInName, Location: voucherLocationName(locations, r.locationType, r.locationId),
+                Amount: r.amount,
                 Reference: r.referenceNumber || '', Narration: r.narration || '',
               })))}>
                 <Download className="w-4 h-4 mr-2" /> Export
@@ -157,6 +179,7 @@ export default function ReceiptPage() {
                 <SortableHead k="date" sort={sort}>Date</SortableHead>
                 <SortableHead k="from" sort={sort}>Received From</SortableHead>
                 <SortableHead k="in" sort={sort}>Received In</SortableHead>
+                <SortableHead k="location" sort={sort}>Location</SortableHead>
                 <SortableHead k="reference" sort={sort}>Reference</SortableHead>
                 <SortableHead k="narration" sort={sort}>Narration</SortableHead>
                 <SortableHead k="amount" sort={sort} className="text-right">Amount</SortableHead>
@@ -165,9 +188,9 @@ export default function ReceiptPage() {
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={8}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={8} className="text-center py-16 text-muted-foreground">
+                <TableRow><TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
                   <ArrowDownRight className="w-10 h-10 mx-auto mb-3 opacity-20" /><p>No receipt vouchers yet</p>
                 </TableCell></TableRow>
               ) : sorted.map((r: any) => (
@@ -178,6 +201,7 @@ export default function ReceiptPage() {
                   </TableCell>
                   <TableCell className="font-medium text-sm">{r.receivedFromName}</TableCell>
                   <TableCell><Badge variant="outline" className="text-xs">{r.receivedInName}</Badge></TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{voucherLocationName(locations, r.locationType, r.locationId)}</TableCell>
                   <TableCell className="text-sm">
                     {r.referenceNumber
                       ? <span className="text-[11px] text-muted-foreground font-mono max-w-[120px] truncate inline-block" title={r.referenceNumber}>{r.referenceNumber}</span>
@@ -211,6 +235,9 @@ export default function ReceiptPage() {
           <DialogHeader><DialogTitle>New Receipt Voucher</DialogTitle></DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
+
+              {/* Location — owns the voucher's accounting */}
+              <LocationSelectField locations={locations} locKey={locKey} setLocKey={setLocKey} />
 
               {/* Date */}
               <FormField control={form.control} name="receiptDate" render={({ field }) => (

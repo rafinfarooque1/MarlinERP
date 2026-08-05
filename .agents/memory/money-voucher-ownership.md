@@ -16,6 +16,27 @@ The leg arm keeps history visible and self-heals such omissions.
 **How to apply:** every money read/write filter must OR the two arms together, never rely on the
 stamp alone. New insert paths should still stamp — the leg arm is a safety net, not a licence.
 
+## Rule: the till anchors the stamp — resolve, never trust the body or the caller
+
+`resolveMoneyVoucherLocation(employee, body, tillLedgerId, fallback?)` in `lib/moneyScope.ts` is the
+ONE way a payment/receipt gets its location stamp. An explicit body location is a REQUEST that must
+match the till's owner (400 on mismatch; HO till ⇒ headoffice only); no body location ⇒ the till's
+owner speaks (mirror locations pick the warehouse identity); unrecognised till ⇒ fallback (the row's
+current stamp on edit) else the caller's location. Branch users may only request their own location
+(403). HO stores placeholder id 0. "All Locations" must never post.
+
+**Why:** admins recording on behalf of a branch used to stamp vouchers Head Office, corrupting every
+located book. And with rule 1 above (leg-ownership OR), a wrong stamp makes the voucher visible in
+TWO locations' books at once.
+
+**How to apply:** EVERY writer of payments/receipts must stamp via the resolver — the paths everyone
+forgets are cash-deposit reconcile, reconciliation batches, and the import commit paths
+(importVouchers/importTransactions validate the money account against the doc location instead;
+`importAccountOptions` filters out other branches' tills). One deliberate exception: imports may
+attribute a branch voucher through a company (HO) bank — historical collections banked centrally.
+Location-expense payments keep user-chosen attribution (excluded from the restamp migration
+`money_voucher_location_restamp_v1`, which healed old HO-stamped rows whose till is branch-owned).
+
 ## Rule: money scope is own-location only, not the general LBAC scope
 
 **Why:** `getUserDataScope` gives a warehouse user its own warehouse *plus every outlet it

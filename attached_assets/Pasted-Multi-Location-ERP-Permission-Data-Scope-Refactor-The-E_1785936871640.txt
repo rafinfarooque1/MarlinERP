@@ -1,0 +1,154 @@
+Multi-Location ERP Permission & Data Scope Refactor
+
+The ERP should follow a true multi-location architecture. Every warehouse/location should be able to use all operational modules, but only for its own location's data. Head Office should have access to all locations while also operating as its own separate location.
+
+Scope
+1. Every location can use all operational modules
+
+Remove any logic that restricts modules to Head Office only.
+
+Every location user should be able to use modules such as:
+
+Sales
+Quotations
+POS
+Customers
+Vendors
+Purchase Bills
+Purchase Returns
+Sales Returns
+Receipt Voucher
+Payment Voucher
+Expenses
+Stock
+Production
+Stock Transfer
+Cash & Bank
+Inventory
+Assets (if applicable)
+Reports (filtered to their location)
+
+No operational module should require Head Office access.
+
+2. Strict location isolation
+
+A warehouse/location user must only:
+
+View their own transactions
+Create transactions for their own location
+Edit their own transactions
+Delete their own transactions
+See only their own customers, vendors, ledgers, stock, cash, bank, expenses, production, vouchers and reports.
+
+They must never accidentally affect another location.
+
+3. Head Office behaviour
+
+Head Office is also a normal location.
+
+When "Head Office" is selected:
+
+Show only Head Office transactions.
+Head Office stock.
+Head Office expenses.
+Head Office production.
+Head Office ledgers.
+Head Office cash & bank.
+Head Office sales & purchases.
+
+When "All Locations" is selected:
+
+Show consolidated company-wide data.
+
+Head Office users should be able to switch between:
+
+Head Office
+Any warehouse
+All Locations
+4. Sales Return & Purchase Return
+
+Sales Returns and Purchase Returns must work from every warehouse.
+
+Example:
+
+If a sale belongs to Frozen Hub – Calicut
+
+Only Calicut users can create the Sales Return.
+
+If a purchase belongs to Frozen Hub – Ragiguda
+
+Only Ragiguda users can create the Purchase Return.
+
+Returns must:
+
+Update stock at that location.
+Reverse accounting only for that location.
+Update customer/vendor balance correctly.
+Update dashboard for that location.
+Update inventory valuation for that location.
+5. Vouchers
+
+Receipt Vouchers
+
+Payment Vouchers
+
+Journal Vouchers
+
+Cash transactions
+
+Bank transactions
+
+must always belong to the selected location.
+
+If an admin enters a voucher while Calicut is selected:
+
+Ledger updates must affect Calicut.
+Dashboard must update Calicut.
+Cash/Bank balances must update Calicut.
+Reports must update Calicut.
+
+Never post these to Head Office unless Head Office is actually selected.
+
+6. Reports
+
+Every report must respect the selected location:
+
+Dashboard
+Trial Balance
+Balance Sheet
+P&L
+Cash Book
+Bank Book
+Day Book
+GST Reports
+Stock Reports
+Customer Ledger
+Vendor Ledger
+Item Ledger
+Receivables
+Payables
+Sales Reports
+Purchase Reports
+Production Reports
+
+Head Office → only Head Office
+
+Warehouse → only Warehouse
+
+All Locations → consolidated company totals
+
+7. Validation
+
+Run a complete regression after implementation and verify:
+
+No transaction leaks between locations.
+Every voucher posts to the correct location.
+Every ledger updates only that location.
+Dashboard matches ledgers.
+Trial Balance matches Balance Sheet.
+Inventory matches stock.
+Customer/Vendor balances reconcile.
+Sales Returns and Purchase Returns work correctly from every warehouse.
+All accounting remains balanced to the paisa.
+
+The objective is to make the ERP a true location-based system where every branch operates independently, while Head Office can manage and consolidate all locations without special transaction restrictions.

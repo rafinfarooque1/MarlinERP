@@ -10,6 +10,7 @@ import {
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
+import { resolveMoneyVoucherLocation } from "../lib/moneyScope";
 import { outstandingExpr } from "../lib/salePaymentPosition";
 
 const router = Router();
@@ -660,13 +661,21 @@ router.post("/vendors/:id/payment", requireModuleAction(["page:/vendors", "page:
     res.status(400).json({ error: `Ledger account VEND-${vendorId} not found. Please re-save the vendor to create it.` }); return;
   }
 
+  // The voucher belongs to the location that owns the paying account (an
+  // explicit body location is validated against it) — never silently the
+  // caller's own branch, so Admin-recorded branch payments land in the
+  // branch's books.
+  const locRes = await resolveMoneyVoucherLocation((req as any).employee, req.body as any, Number(cashBankLedgerId));
+  if (!locRes.ok) { res.status(locRes.status).json({ error: locRes.error }); return; }
+
   // Auto-number the payment voucher (FY-aware sequence)
   const voucherNumber = await nextVoucherNumber(pool, 'payment', date);
 
   const { rows: [row] } = await pool.query<any>(
-    `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, source)
-     VALUES ($1, $2, $3, $4, $5, $6, 'vendor') RETURNING *`,
-    [voucherNumber, date, cashBankLedgerId, vendorLedger.id, amount, narration ?? `Payment to vendor #${vendorId}`],
+    `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, source, location_type, location_id)
+     VALUES ($1, $2, $3, $4, $5, $6, 'vendor', $7, $8) RETURNING *`,
+    [voucherNumber, date, cashBankLedgerId, vendorLedger.id, amount, narration ?? `Payment to vendor #${vendorId}`,
+     locRes.loc.locationType, Number(locRes.loc.locationId)],
   );
 
   res.status(201).json({

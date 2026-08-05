@@ -1,0 +1,140 @@
+TASK: Add Delete functionality to the Hierarchy module with proper dependency validation.
+
+Currently, the Hierarchy module does not have a Delete option. I need to add a safe Delete feature following ERP standards.
+
+==========================================================
+1. ADD DELETE BUTTON
+==========================================================
+
+In the Hierarchy list, add an Actions column containing:
+
+• View
+• Edit
+• Delete
+
+The Delete button should be visible only to users with permission to manage the hierarchy (Management/Admin).
+
+==========================================================
+2. DELETE VALIDATION
+==========================================================
+
+Before deleting a hierarchy node, check whether any employees are assigned to that hierarchy.
+
+Examples:
+
+Management
+ ├── Admin
+ ├── Warehouse Manager
+ ├── Accountant
+
+If one or more employees are assigned to "Warehouse Manager", it must NOT be possible to delete it.
+
+Show an error message:
+
+"This hierarchy cannot be deleted because one or more employees are assigned to it. Please transfer or remove all employees from this hierarchy before deleting."
+
+==========================================================
+3. CHECK CHILD HIERARCHIES
+==========================================================
+
+If the hierarchy has child nodes, prevent deletion.
+
+Example:
+
+Management
+ └── Warehouse Manager
+      ├── Supervisor
+      └── Store Keeper
+
+The user cannot delete "Warehouse Manager" until the child hierarchies are deleted or reassigned.
+
+Show:
+
+"This hierarchy contains child hierarchies. Delete or move the child hierarchies first."
+
+==========================================================
+4. SAFE DELETE
+==========================================================
+
+A hierarchy can only be deleted when:
+
+✓ No employees are assigned.
+✓ No child hierarchies exist.
+✓ No active references exist.
+
+Then show a confirmation dialog:
+
+Delete Hierarchy?
+
+Hierarchy:
+Warehouse Manager
+
+This action cannot be undone.
+
+[Cancel]
+[Delete]
+
+==========================================================
+5. SOFT DELETE
+==========================================================
+
+Use soft delete if supported by the ERP.
+
+Maintain the audit history.
+
+Do not physically remove records unless the ERP already follows hard delete for hierarchy records.
+
+==========================================================
+6. AUDIT LOG
+==========================================================
+
+Log every deletion:
+
+Hierarchy Name
+
+Deleted By
+
+Date
+
+Time
+
+Reason (if applicable)
+
+==========================================================
+7. PERMISSIONS
+==========================================================
+
+Only:
+
+• Management
+• Admin
+
+can delete hierarchy records.
+
+Warehouse users and Outlet users must not have delete permission.
+
+==========================================================
+8. UI
+==========================================================
+
+The Delete button should be disabled (or hidden) when deletion is not allowed.
+
+On hover (or when clicked), display the reason:
+
+• Employees assigned
+• Child hierarchies exist
+
+==========================================================
+9. TESTING
+==========================================================
+
+Verify:
+
+✓ Cannot delete a hierarchy with employees.
+✓ Cannot delete a hierarchy with child nodes.
+✓ Can delete an empty hierarchy.
+✓ Audit log is created.
+✓ Employee records remain intact.
+✓ No orphan hierarchy references are created.
+
+This implementation must preserve referential integrity and prevent accidental deletion of hierarchy records that are still in use.

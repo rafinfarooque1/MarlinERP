@@ -41,6 +41,7 @@ import {
 } from "./advanceLedgers";
 import { purchaseSettlementIndex } from "./vendorBillSettlement";
 import { type ProdLocation } from "./productionCosting";
+import { locationOwnedLedgerMap } from "./moneyScope";
 
 type Q = { query: Function };
 
@@ -111,8 +112,40 @@ export async function importAccountOptions(q: Q, loc: ProdLocation): Promise<Acc
         AND NOT EXISTS (SELECT 1 FROM account_ledgers ch WHERE ch.parent_id = s.id)
       ORDER BY s.id`,
   );
-  for (const b of banks) out.push({ id: Number(b.id), name: String(b.name), kind: "bank" });
+  // Branch-assigned Cash & Bank ledgers live under STD-BANK too, but they are
+  // another location's till: a voucher through one MUST be stamped with that
+  // owner (the rule every manual money-voucher route enforces), so a batch
+  // targeting a different location may never pick them. Only the batch
+  // location's own accounts and the company's unassigned banks are offered.
+  const owned = await locationOwnedLedgerMap();
+  for (const b of banks) {
+    const owners = owned.get(Number(b.id)) ?? [];
+    const usable = owners.length === 0
+      || owners.some((o) => o.locationType === loc.type && Number(o.locationId) === Number((loc as any).id ?? 0));
+    if (usable && !out.some((o) => o.id === Number(b.id))) {
+      out.push({ id: Number(b.id), name: String(b.name), kind: "bank" });
+    }
+  }
   return out;
+}
+
+/**
+ * Commit-time guard: the money account a voucher posts through must agree
+ * with the document's location stamp. Validation already filters the options
+ * (importAccountOptions above), but masters can change between validate and
+ * commit — and the stamp decides which location's books own the money, so a
+ * mismatch must never reach the table.
+ */
+async function assertAccountMatchesLocation(accountLedgerId: number, loc: ProdLocation): Promise<void> {
+  const owned = await locationOwnedLedgerMap();
+  const owners = owned.get(Number(accountLedgerId)) ?? [];
+  if (owners.length === 0) return; // company (HO) account — usable by any batch location
+  const match = owners.some((o) => o.locationType === loc.type && Number(o.locationId) === Number((loc as any).id ?? 0));
+  if (!match) {
+    throw new Error(
+      `The chosen money account belongs to ${owners[0].name} — record the voucher under that location, or pick the batch location's own account and re-validate.`,
+    );
+  }
 }
 
 /** Map a row's account cell onto one of the location's valid money accounts. */
@@ -301,6 +334,7 @@ export async function importReceiptVoucher(doc: ImportReceiptVoucherInput): Prom
     }
 
     const method = (await isCashFamilyLedger(client, doc.accountLedgerId)) ? "cash" : "bank";
+    await assertAccountMatchesLocation(doc.accountLedgerId, doc.loc);
     const stamp = voucherStamp(doc.loc);
     const { rows: [r] } = await client.query(
       `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id,
@@ -479,6 +513,7 @@ export async function importPaymentVoucher(doc: ImportPaymentVoucherInput): Prom
       advanceLedgerId = await ensureAdvanceLedger(client, "vendor", doc.vendorId, doc.vendorName);
     }
 
+    await assertAccountMatchesLocation(doc.accountLedgerId, doc.loc);
     const stamp = voucherStamp(doc.loc);
     const { rows: [r] } = await client.query(
       `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id,

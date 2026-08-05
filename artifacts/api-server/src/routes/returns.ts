@@ -21,6 +21,7 @@ import {
   outstandingAsOfExpr, creditAdjustmentsAsOfExpr, amountReceivedAsOfExpr,
 } from "../lib/salePaymentPosition";
 import { deductMaterialAt, isMaterialKind } from "../lib/materialStock";
+import { getUserDataScope, isLocationInScope } from "../lib/dataScope";
 import { getLocationFilter } from "../lib/requestLocation";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
 import { isIsoDate } from "../lib/dateInput";
@@ -73,6 +74,15 @@ async function resolveGstHeads(c: Q, side: "output" | "input", cgst: number, sgs
 async function locationLedgers(c: Q, locationType: string, locationId: number): Promise<{
   cashLedgerId: number | null; salesLedgerId: number | null; locationName: string;
 }> {
+  if (locationType === "headoffice") {
+    // HO sells like a branch but has no row of its own — mirror the sale
+    // derivation's fallback to the standard cash/sales heads.
+    return {
+      cashLedgerId: await ledgerIdByCode(c, "STD-CASH"),
+      salesLedgerId: await ledgerIdByCode(c, "STD-SALES"),
+      locationName: "Head Office",
+    };
+  }
   const table = locationType === "warehouse" ? "warehouses" : "outlets";
   const { rows: [loc] } = await c.query(
     `SELECT name, cash_ledger_id, sales_ledger_id FROM ${table} WHERE id = $1`, [locationId]
@@ -84,17 +94,29 @@ async function locationLedgers(c: Q, locationType: string, locationId: number): 
   };
 }
 
+/** Display name for a document's accounting location (error messages, ledger rows). */
+async function locationName(c: Q, locationType: string, locationId: number): Promise<string> {
+  if (locationType === "headoffice") return "Head Office";
+  const table = locationType === "warehouse" ? "warehouses" : "outlets";
+  const { rows: [loc] } = await c.query(`SELECT name FROM ${table} WHERE id = $1`, [locationId]);
+  return loc?.name ?? `${locationType} #${locationId}`;
+}
+
 async function insertVoucher(c: Q, args: {
   voucherType: string; voucherNumber: string; voucherDate: string; narration: string;
   partyLedgerId: number | null; reason: string | null; totalAmount: number; createdBy: string | null;
   lines: Array<{ ledgerId: number; debit: number; credit: number }>;
+  // Accounting location of the source document. Vouchers follow the JV
+  // convention: Head Office stores id 0 (matched on TYPE alone everywhere).
+  locationType: string; locationId: number;
 }): Promise<number> {
   const { rows: [v] } = await c.query(
     `INSERT INTO journal_vouchers (voucher_type, voucher_number, voucher_date, narration, party_ledger_id, reason, total_amount, created_by,
-                                  origin, source_module)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'system', 'returns') RETURNING id`,
+                                  origin, source_module, location_type, location_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'system', 'returns', $9, $10) RETURNING id`,
     [args.voucherType, args.voucherNumber, args.voucherDate, args.narration,
-     args.partyLedgerId, args.reason, args.totalAmount, args.createdBy]
+     args.partyLedgerId, args.reason, args.totalAmount, args.createdBy,
+     args.locationType, args.locationType === "headoffice" ? 0 : args.locationId]
   );
   for (const l of args.lines) {
     if (!(l.debit > 0.004) && !(l.credit > 0.004)) continue;
@@ -158,8 +180,25 @@ router.post("/sales-returns", requireModuleAction(["page:/returns", "page:/sales
     }
 
     const saleLines: any[] = Array.isArray(sale.line_items) ? sale.line_items : [];
-    const locationType: string = sale.location_type === "warehouse" ? "warehouse" : "outlet";
-    const locationId: number = Number(sale.location_id ?? sale.outlet_id ?? 0);
+    // Accounting location = the SALE's location, never the caller's. HO sells
+    // like a branch (stock convention headoffice/1), so it must round-trip
+    // here too — coercing it to "outlet" would restore stock into a phantom
+    // outlet and misfile the credit note.
+    const locationType: string =
+      sale.location_type === "warehouse" ? "warehouse"
+      : sale.location_type === "headoffice" ? "headoffice"
+      : "outlet";
+    const locationId: number = locationType === "headoffice" ? 1 : Number(sale.location_id ?? sale.outlet_id ?? 0);
+
+    // Only users of the sale's location (or Head Office acting for it) may
+    // take the return — holding the Returns page right is not authority over
+    // another location's stock and books. 404 keeps foreign ids unenumerable.
+    const srScope = await getUserDataScope((req as any).employee ?? { branchType: "headoffice", branchId: 0 });
+    if (!srScope.isHeadOffice && !isLocationInScope(srScope, locationType, locationId)) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Sale not found" });
+      return;
+    }
 
     // A return against an outlet bill would push stock and a credit note back
     // into a retired outlet. Blocked while the module is off; the original bill
@@ -343,6 +382,9 @@ router.post("/sales-returns", requireModuleAction(["page:/returns", "page:/sales
         totalAmount,
         createdBy: userOf(req),
         lines,
+        // Credit note belongs to the sale's location — the located P&L and
+        // customer ledger must see the reversal where the revenue was booked.
+        locationType, locationId,
       });
       // Keep the customer's lifetime purchases consistent with sale creation
       await client.query(
@@ -546,6 +588,24 @@ router.post("/purchase-returns", requireModuleAction(["page:/returns", "page:/pr
 
     const { rows: [purchase] } = await client.query(`SELECT * FROM purchases WHERE id = $1 FOR UPDATE`, [purchaseId]);
     if (!purchase) { await client.query("ROLLBACK"); res.status(404).json({ error: "Purchase not found" }); return; }
+
+    // Accounting location = the PURCHASE's location, never the caller's.
+    // Legacy bills predate the location columns and belong to Head Office
+    // (same convention as the purchase list and register).
+    const prLocType: string = purchase.location_type ?? "headoffice";
+    const prLocId: number = prLocType === "headoffice" ? 1 : Number(purchase.location_id ?? 0);
+    const prLocName = await locationName(client, prLocType, prLocId);
+
+    // Only users of the purchase's location (or Head Office acting for it)
+    // may return it — the goods leave THAT location's stock and the debit
+    // note lands in ITS books. 404 keeps foreign ids unenumerable.
+    const prScope = await getUserDataScope((req as any).employee ?? { branchType: "headoffice", branchId: 0 });
+    if (!prScope.isHeadOffice && !isLocationInScope(prScope, prLocType, prLocId)) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Purchase not found" });
+      return;
+    }
+
     if (returnDate < dateOnly(purchase.purchase_date)) {
       await client.query("ROLLBACK");
       res.status(400).json({ error: `Return date cannot be before the purchase date (${dateOnly(purchase.purchase_date)})` });
@@ -600,28 +660,28 @@ router.post("/purchase-returns", requireModuleAction(["page:/returns", "page:/pr
         const { rows: [row] } = await client.query(`SELECT id FROM ${tbl} WHERE id = $1 FOR UPDATE`, [materialId]);
         if (!row) { await client.query("ROLLBACK"); res.status(400).json({ error: `${materialName} no longer exists` }); return; }
         // Availability is checked against the location that holds the goods
-        // (Head Office), not the company-wide mirror — the mirror cannot tell
-        // you whether the stock is actually here to send back.
+        // (the purchase's location), not the company-wide mirror — the mirror
+        // cannot tell you whether the stock is actually here to send back.
         const held = await availabilityAt(client, {
-          refId: materialId, materialType, branchType: "headoffice", branchId: 1, lock: true,
+          refId: materialId, materialType, branchType: prLocType, branchId: prLocId, lock: true,
         });
         if (held.available + 0.001 < rq) {
           await client.query("ROLLBACK");
           res.status(400).json({
             error: insufficientStockMessage({
-              productName: materialName, locationName: "Head Office",
+              productName: materialName, locationName: prLocName,
               quantity: held.quantity, reserved: held.reserved, requested: rq,
             }),
             code: 'INSUFFICIENT_STOCK',
           });
           return;
         }
-        const sent = await deductMaterialAt(client, materialType, materialId, "headoffice", 1, rq);
+        const sent = await deductMaterialAt(client, materialType, materialId, prLocType, prLocId, rq);
         if (!sent.ok) {
           await client.query("ROLLBACK");
           res.status(400).json({
             error: insufficientStockMessage({
-              productName: materialName, locationName: "Head Office",
+              productName: materialName, locationName: prLocName,
               quantity: sent.available, reserved: held.reserved, requested: rq,
             }),
             code: 'INSUFFICIENT_STOCK',
@@ -633,18 +693,18 @@ router.post("/purchase-returns", requireModuleAction(["page:/returns", "page:/pr
         // keeps matching the located quantity after a purchase return.
         await consumeBatches(client, {
           itemId: materialId, materialType,
-          branchType: "headoffice", branchId: 1, quantity: rq,
+          branchType: prLocType, branchId: prLocId, quantity: rq,
         });
       } else {
-        // Finished item bought into production stock
+        // Finished item bought into stock at the purchase's location
         const held = await availabilityAt(client, {
-          refId: materialId, materialType: 'item', branchType: "headoffice", branchId: 1, lock: true,
+          refId: materialId, materialType: 'item', branchType: prLocType, branchId: prLocId, lock: true,
         });
         if (held.available + 0.001 < rq) {
           await client.query("ROLLBACK");
           res.status(400).json({
             error: insufficientStockMessage({
-              productName: materialName, locationName: "Head Office",
+              productName: materialName, locationName: prLocName,
               quantity: held.quantity, reserved: held.reserved, requested: rq,
             }),
             code: 'INSUFFICIENT_STOCK',
@@ -656,7 +716,7 @@ router.post("/purchase-returns", requireModuleAction(["page:/returns", "page:/pr
         const batchNumber = li.batchNumber || `PUR-${purchaseId}`;
         await debitBatchByNumber(client, {
           itemId: materialId, materialType: "item",
-          branchType: "headoffice", branchId: 1,
+          branchType: prLocType, branchId: prLocId,
           batchNumber, quantity: rq,
         });
       }
@@ -727,6 +787,9 @@ router.post("/purchase-returns", requireModuleAction(["page:/returns", "page:/pr
         { ledgerId: purLedger, debit: 0, credit: r2(subtotal + unresolved) },
         ...headLines.map(h => ({ ledgerId: h.ledgerId, debit: 0, credit: h.amount })),
       ],
+      // Debit note belongs to the purchase's location — the located books
+      // must see the reversal where the bill was recorded.
+      locationType: prLocType, locationId: prLocId,
     });
 
     const { rows: [ret] } = await client.query(
@@ -744,7 +807,11 @@ router.post("/purchase-returns", requireModuleAction(["page:/returns", "page:/pr
     await writeStockLedger(client, retLines.map((rl: any) => ({
       txnType: 'purchase_return', materialType: rl.materialType ?? 'material',
       refId: rl.materialId, itemName: rl.materialName ?? '', unit: '',
-      branchType: 'headoffice', branchId: rl.materialType === 'item' ? 1 : 0, branchName: 'Head Office',
+      // Same branch-id convention as the purchase inbound rows (ledgerBranchId):
+      // HO ledgers materials at 0 and items at 1; other locations use their own id.
+      branchType: prLocType,
+      branchId: prLocType === 'headoffice' ? (rl.materialType === 'item' ? 1 : 0) : prLocId,
+      branchName: prLocName,
       qtyChange: -Number(rl.quantity), unitCost: Number(rl.unitCost ?? 0),
       docType: 'purchase_return', docId: ret.id, txnDate: returnDate,
     })));
@@ -784,12 +851,25 @@ router.post("/purchase-returns", requireModuleAction(["page:/returns", "page:/pr
 // LBAC: purchases are headoffice-only; non-HO users get an empty list
 router.get("/purchase-returns", requireModuleView("page:/returns"), async (req: Request, res: Response) => {
   try {
-    const purchRetEmp = (req as any).employee as { branchType: string } | undefined;
-    if (purchRetEmp && purchRetEmp.branchType !== 'headoffice') {
-      res.json([]); return;
-    }
+    // LBAC: a location sees returns of its own bills; Head Office sees all.
+    // A return belongs to the purchase's location (legacy bills = Head Office).
+    const purchRetEmp = (req as any).employee as { branchType: string; branchId: number } | undefined;
+    const prListScope = await getUserDataScope(purchRetEmp ?? { branchType: 'headoffice', branchId: 0 });
     const params: any[] = [];
     const prConds: string[] = [];
+    if (!prListScope.isHeadOffice) {
+      const ors: string[] = [];
+      if (prListScope.warehouseIds.length) {
+        params.push(prListScope.warehouseIds);
+        ors.push(`(p.location_type = 'warehouse' AND p.location_id = ANY($${params.length}::int[]))`);
+      }
+      if (prListScope.outletIds.length) {
+        params.push(prListScope.outletIds);
+        ors.push(`(p.location_type = 'outlet' AND p.location_id = ANY($${params.length}::int[]))`);
+      }
+      if (!ors.length) { res.json([]); return; }
+      prConds.push(`(${ors.join(" OR ")})`);
+    }
     if (req.query.purchaseId) { params.push(Number(req.query.purchaseId)); prConds.push(`pr.purchase_id = $${params.length}`); }
     // Global location context — follow the purchase document's location.
     const viewLoc = getLocationFilter(req);

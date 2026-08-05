@@ -293,3 +293,135 @@ export async function headOfficeCashBankLedgerIds(): Promise<number[]> {
   }
   return [...ids];
 }
+
+// ── Voucher location resolution for money vouchers ─────────────────────────
+
+export interface LedgerOwner { locationType: "warehouse" | "outlet"; locationId: number; name: string }
+
+/**
+ * Every location-owned ledger (cash / sales / warehouse purchase), with ALL of
+ * its owners. A mirror location — one place kept as both a warehouse and an
+ * outlet — shares a single cash ledger, so a ledger can have several owners
+ * and a voucher stamped to any one of them is valid.
+ * (Moved here from routes/journal.ts so money vouchers share the same rule.)
+ */
+export async function locationOwnedLedgerMap(): Promise<Map<number, LedgerOwner[]>> {
+  const map = new Map<number, LedgerOwner[]>();
+  const add = (ledgerId: unknown, owner: LedgerOwner) => {
+    const lid = Number(ledgerId);
+    if (!Number.isFinite(lid) || lid <= 0) return;
+    const arr = map.get(lid) ?? [];
+    arr.push(owner);
+    map.set(lid, arr);
+  };
+  const { rows } = await pool.query(`
+    SELECT 'warehouse' AS lt, id, name, cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses
+    UNION ALL
+    SELECT 'outlet' AS lt, id, name, cash_ledger_id, sales_ledger_id, NULL::integer AS purchase_ledger_id FROM outlets
+    UNION ALL
+    -- Cash & Bank accounts assigned to a branch: the branch owns that ledger
+    -- exactly like its till, so vouchers through it must be stamped to the
+    -- owner and its money stays inside the location's own books.
+    SELECT cba.location_type AS lt, cba.location_id AS id,
+           COALESCE(w.name, o.name, 'branch') AS name,
+           cba.ledger_id AS cash_ledger_id, NULL::integer AS sales_ledger_id, NULL::integer AS purchase_ledger_id
+    FROM cash_bank_accounts cba
+    LEFT JOIN warehouses w ON cba.location_type = 'warehouse' AND w.id = cba.location_id
+    LEFT JOIN outlets    o ON cba.location_type = 'outlet'    AND o.id = cba.location_id
+    WHERE cba.ledger_id IS NOT NULL AND cba.location_id IS NOT NULL
+      AND cba.location_type IN ('warehouse', 'outlet')
+  `);
+  for (const r of rows) {
+    const owner: LedgerOwner = { locationType: r.lt, locationId: Number(r.id), name: r.name };
+    add(r.cash_ledger_id, owner);
+    add(r.sales_ledger_id, owner);
+    add(r.purchase_ledger_id, owner);
+  }
+  return map;
+}
+
+/**
+ * The ONE location a money voucher (payment / receipt) is stamped with.
+ *
+ * The rule the whole ERP follows: the selected transaction location owns the
+ * accounting — an Admin recording on behalf of a branch produces a branch
+ * voucher, never a Head Office one. Resolution order:
+ *
+ *   1. An explicit `locationType`/`locationId` in the body — a REQUEST, not
+ *      authority: Head Office may act for any location, branch staff only for
+ *      their own. It must also agree with the cash/bank leg: a voucher stamped
+ *      Ragiguda through Calicut's till would put money in a till that
+ *      Ragiguda's own cash book cannot see.
+ *   2. No explicit location: the cash/bank account's OWNER speaks for the
+ *      voucher (a receipt into a warehouse till is that warehouse's receipt,
+ *      whoever typed it). Mirror locations pick the warehouse identity, the
+ *      same preference every read-side dedupe applies.
+ *   3. Unrecognised money account: `fallback` (the row's current stamp on
+ *      edit), else the caller's own location — the pre-existing behaviour.
+ */
+export async function resolveMoneyVoucherLocation(
+  employee: { branchType?: string; branchId?: number } | undefined,
+  body: Record<string, any> | undefined,
+  tillLedgerId: number,
+  fallback?: CallerLocation | null,
+): Promise<{ ok: true; loc: CallerLocation } | { ok: false; status: number; error: string }> {
+  const owned = await locationOwnedLedgerMap();
+  const owners = owned.get(Number(tillLedgerId)) ?? [];
+  // HO's own cash/bank = the STD-CASH/STD-BANK subtrees minus every branch till.
+  const hoSet = new Set(await headOfficeCashBankLedgerIds());
+  for (const id of owned.keys()) hoSet.delete(id);
+  const isHoTill = hoSet.has(Number(tillLedgerId));
+
+  const rawType = body?.locationType != null && body.locationType !== "" ? String(body.locationType) : "";
+  if (rawType) {
+    let explicit: CallerLocation;
+    if (rawType === "headoffice") {
+      // Head Office is singular — money vouchers store the fixed placeholder 0.
+      explicit = { locationType: "headoffice", locationId: 0 };
+    } else if (rawType === "warehouse" || rawType === "outlet") {
+      const id = Number(body!.locationId);
+      if (!Number.isInteger(id) || id <= 0) {
+        return { ok: false, status: 400, error: "Please select a location." };
+      }
+      const table = rawType === "warehouse" ? "warehouses" : "outlets";
+      const { rows } = await pool.query(`SELECT id FROM ${table} WHERE id = $1`, [id]);
+      if (!rows[0]) {
+        return { ok: false, status: 400, error: `${rawType === "warehouse" ? "Warehouse" : "Outlet"} not found` };
+      }
+      explicit = { locationType: rawType, locationId: id };
+    } else {
+      return { ok: false, status: 400, error: "locationType must be headoffice, warehouse or outlet" };
+    }
+
+    const branchType = employee?.branchType;
+    if (branchType && branchType !== "headoffice") {
+      const own = callerLocation(employee);
+      if (own.locationType !== explicit.locationType || Number(own.locationId) !== explicit.locationId) {
+        return { ok: false, status: 403, error: "You can only record vouchers for your own location." };
+      }
+    }
+
+    if (owners.length > 0) {
+      const match = owners.some(o => o.locationType === explicit.locationType && Number(o.locationId) === explicit.locationId);
+      if (!match) {
+        return {
+          ok: false, status: 400,
+          error: `The selected Cash/Bank account belongs to ${owners[0].name}. Record the voucher under that location, or pick the selected location's own account.`,
+        };
+      }
+    } else if (isHoTill && explicit.locationType !== "headoffice") {
+      return {
+        ok: false, status: 400,
+        error: "That is a Head Office cash/bank account — record the voucher under Head Office, or pick the location's own cash/bank account.",
+      };
+    }
+    return { ok: true, loc: explicit };
+  }
+
+  if (owners.length > 0) {
+    const pick = owners.find(o => o.locationType === "warehouse") ?? owners[0];
+    return { ok: true, loc: { locationType: pick.locationType, locationId: Number(pick.locationId) } };
+  }
+  if (isHoTill) return { ok: true, loc: { locationType: "headoffice", locationId: 0 } };
+  return { ok: true, loc: fallback ?? callerLocation(employee) };
+}

@@ -26,9 +26,9 @@
 - [Payroll workflow](payroll-workflow.md) — draft→approved→paid; per-employee ledgers (SAL-EMP/SAL-PAY/ADV-EMP); hours-based attendance; advances auto-deducted at generate time.
 - [LOP leave policy](lop-leave-policy.md) — company-wide wd/paid-leave/LOP in general_settings; ONE formula (dayContribution/monthLeaveSummary); NULL leave snapshot = omit, never 0; test suites must pin policy.
 - [LBAC implementation](lbac-implementation.md) — full location-scoping across all routes; decisions on HO-only endpoints; vendor/customer location stamping; dataScope helpers.
-- [Money voucher ownership](money-voucher-ownership.md) — stamp OR ledger-leg ownership; money uses own-location scope (NOT getUserDataScope); foreign ledgers = set difference on ids.
+- [Money voucher ownership](money-voucher-ownership.md) — the till anchors the stamp via ONE resolver (reconcile/deposit/import paths get forgotten); ownership = stamp OR ledger-leg; own-location scope.
 - [Payment modes & invoice share](payment-modes-invoice-share.md) — modes are Cash/Bank/UPI/Credit with legacy card/bank_transfer read as Bank, never rewritten; share = composed message + channel seam.
-- [Polymorphic stock_entries](polymorphic-stock-entries.md) — items AND materials share the table with OVERLAPPING ids; every query must scope material_type; boot-time dedupe blocks destroy data when the key widens.
+- [Polymorphic stock_entries](polymorphic-stock-entries.md) — OVERLAPPING ids, scope material_type everywhere; master existence enforced by KEY SHARE trigger (no FK possible); orphan ledger keys poison backdated statements.
 - [Module retirement pattern](module-retirement-pattern.md) — retirement is a TOTAL hide (no badge/placeholder, owner rejected the badged variant); GETs still return data or history loses its names; stale filter state understates totals.
 - [Guard the effective value](effective-value-guards.md) — body-only write guards are routinely bypassed: session stamping and partial PATCHes both route around them. Compute the resulting state, then guard that, then write.
 - [Product identity](product-identity.md) — code prefixes follow the DISPLAY label (materials="Raw Material"→RM); EAN-13 in the `2` in-store range; inactive blocks CREATE only; HO-only is a location rule.

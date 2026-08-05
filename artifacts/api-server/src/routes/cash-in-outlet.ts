@@ -5,6 +5,7 @@ import { logActivity } from "../lib/audit";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import { isIsoDate } from "../lib/dateInput";
 import { getUserDataScope, isLocationInScope } from "../lib/dataScope";
+import { resolveMoneyVoucherLocation, callerLocation } from "../lib/moneyScope";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
 
 const router = Router();
@@ -422,13 +423,33 @@ router.post("/cash-in-outlet/deposits/:id/reconcile", requireModuleAction(["page
     const { rows: [citLedger] } = await client.query(`SELECT id FROM account_ledgers WHERE code = 'STD-CIT'`);
     if (!citLedger) { await client.query("ROLLBACK"); res.status(500).json({ error: "Cash in Transit ledger not configured" }); return; }
 
+    // Both vouchers belong to the location that owns the destination bank
+    // account (usually Head Office — the company bank the branch deposits
+    // into). Stamped explicitly so located bank books and dashboards see the
+    // settlement where the money actually landed.
+    const vlocRes = await resolveMoneyVoucherLocation(
+      (req as any).employee, undefined, Number(destinationBankLedgerId),
+      { locationType: "headoffice", locationId: 0 },
+    );
+    const vloc = vlocRes.ok ? vlocRes.loc : { locationType: "headoffice", locationId: 0 };
+    // A branch user may confirm a deposit into a company (HO) bank — that is
+    // the normal flow — but never into ANOTHER branch's bank account.
+    const caller = callerLocation((req as any).employee);
+    if (caller.locationType !== "headoffice" && vloc.locationType !== "headoffice"
+        && (vloc.locationType !== caller.locationType || Number(vloc.locationId) !== Number(caller.locationId))) {
+      await client.query("ROLLBACK");
+      res.status(403).json({ error: "That bank account belongs to another location." });
+      return;
+    }
+
     // 4. Post receipt: received_from=CIT, received_in=bank, net
     const recVoucher = await nextVoucherNumber(client, 'receipt', settlementDate);
     const { rows: [receipt] } = await client.query(
-      `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, source)
-       VALUES ($1, $2, $3, $4, $5, $6, 'deposit') RETURNING id`,
+      `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, source, location_type, location_id)
+       VALUES ($1, $2, $3, $4, $5, $6, 'deposit', $7, $8) RETURNING id`,
       [recVoucher, settlementDate, citLedger.id, destinationBankLedgerId, netAmount,
-        `Cash deposit confirmed — ${bankReference ?? "no ref"}`]
+        `Cash deposit confirmed — ${bankReference ?? "no ref"}`,
+        vloc.locationType, Number(vloc.locationId)]
     );
 
     // 5. If charges, post payment: paid_from=CIT, paid_to=charges ledger
@@ -441,10 +462,11 @@ router.post("/cash-in-outlet/deposits/:id/reconcile", requireModuleAction(["page
       }
       const payVoucher = await nextVoucherNumber(client, 'payment', settlementDate);
       await client.query(
-        `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, source)
-         VALUES ($1, $2, $3, $4, $5, $6, 'deposit')`,
+        `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, source, location_type, location_id)
+         VALUES ($1, $2, $3, $4, $5, $6, 'deposit', $7, $8)`,
         [payVoucher, settlementDate, citLedger.id, chargesLedger.id, parsedCharges,
-          `Bank charges on cash deposit`]
+          `Bank charges on cash deposit`,
+          vloc.locationType, Number(vloc.locationId)]
       );
     }
 

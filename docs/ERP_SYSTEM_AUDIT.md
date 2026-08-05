@@ -274,3 +274,21 @@ Full backlog: 60+ curated tasks in the project task list (each one a vetted find
 4. Land **B1** (`:id` validation) — small, removes a 500 class.
 5. Continue the Quotations module (#202, in progress) and its follow-ups.
 6. Then work the High/Medium backlog in the order above; schedule #57 (type errors) as a hardening sprint with CI enforcement.
+
+## 19. Addendum — Full Health-Check Re-Run (Aug 5, 2026)
+
+Report-only audit (no fixes applied). Method: 33 regression suites re-run, production + dev database integrity sweeps (25 invariant checks each), API-level cross-report reconciliation (17 checks), GST return reconciliation against raw invoices.
+
+**Production database: structurally clean.** Zero duplicates, zero unbalanced vouchers, zero orphan legs/ledgers/ghost documents, zero negative stock, zero cancelled sales holding money. The Aug 5 allocation-receipt cleanup verified applied (10 receipts removed, audit rows present, 13 sales reset).
+
+**Reconciliation (dev, quiet DB): 15/17 passed.** TB Dr=Cr (both TB endpoints agree to the paisa), BS balanced, receivables/payables reports = dashboard = ledger decomposition, Cash & Bank screen = TB per ledger, inventory valuation = dashboard, GSTR-1 = invoice sums exactly, day book Dr=Cr.
+
+**New findings (unfixed, reported only):**
+- **M-1 Cash Book / Bank Book omit opening balances.** `journal.ts` cash-bank-book route builds from `buildDerivedPostings` but never folds in `openingBalancePostings`, though the TB code comment claims the books count them. Dev: Main Cash book shows −175.25 vs screen/TB 49,474.75 — difference exactly the 49,650 opening. Prod currently has zero opening-balance rows, so latent there — until openings are entered.
+- **M-2 First 8 production cash sales (Aug 1–4) have `amount_paid` set but zero `sale_payments` legs** — created before the settlement-legs producer shipped. Their payment-history tabs are blank and reconciliation/method-level reports can't see them. One-time backfill would close it.
+- **M-3 Deleting a product leaves nameless stock rows** in valuation/stock reports (9 blank-name rows in dev from test suites; prod clean today).
+- **L-1** 9 FK columns lack indexes (trivial at current volume). **L-2** auth-lockout suite T13 flaky under residue (unique index verified present in DB; T15 recovery path passes).
+
+**Test battery: 26/33 suites fully green (~1,100 assertions).** All 7 failing suites are stale-test/fixture issues, not app bugs — already covered by task #190: gst + org-restructure (pre-auth-era harness), accounting (pre-statutory-payroll JV assertions + depleted fixture stock), invoice-pdf (expects coupons enabled in settings), per-location-numbering (assumes fresh serials), import-txn-semantics + stock-dating (fixture-month clock rollover).
+
+**Scores (Aug 5):** Accounting 92, Dashboard 95, Customer/Vendor 95, Sales 90, Purchases 95, Inventory 88, Imports 92, GST 85 (held by #54), Location 93, Payroll 92, Cash & Bank 80 (M-1), Reports 90, DB health 90, Performance 85, Security 92. **Overall: 90/100** (up from 86 — prod verified clean end-to-end; deductions: M-1/M-2/M-3, #54, stale test debt).

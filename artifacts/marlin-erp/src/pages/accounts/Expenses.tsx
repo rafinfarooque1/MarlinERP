@@ -375,9 +375,16 @@ export default function Expenses() {
   const createMutation = useCreateExpense();
   const scopeRef = useRef<HTMLFormElement>(null);
 
+  // Default "Attribute To" follows the global location selector — an Admin
+  // viewing a branch records that branch's expense unless they change it.
+  // "All Locations" is never a posting location, so it falls back to HO.
+  const defaultAttributeTo =
+    (locationState.locationType === 'warehouse' || locationState.locationType === 'outlet') && locationState.locationId
+      ? `${locationState.locationType}:${locationState.locationId}`
+      : 'headoffice';
   const blankForm = {
     description: '', amount: 0, expenseDate: new Date().toISOString().split('T')[0],
-    ledgerAccountId: 0, paymentAccountId: 0, attributeTo: 'headoffice',
+    ledgerAccountId: 0, paymentAccountId: 0, attributeTo: defaultAttributeTo,
   };
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),

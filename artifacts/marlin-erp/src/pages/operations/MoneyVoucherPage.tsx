@@ -41,6 +41,7 @@ import { isSystemLedger } from '@/lib/systemLedgers';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { BillSettlementPanel, type SettlementSelection } from '@/components/settlement/BillSettlementPanel';
 import { entryScopeKeyDown, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
+import { useVoucherLocationChoice, parseLocKey, LocationSelectField, voucherLocationName } from '@/lib/voucherLocation';
 
 // ── Per-kind wiring ───────────────────────────────────────────────────────────
 
@@ -167,12 +168,24 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
 
   const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: EMPTY });
 
+  // The selected location OWNS the voucher's accounting — an Admin recording
+  // on behalf of a branch produces a branch voucher. Defaults to the global
+  // location selector; the pickers narrow to that location's own accounts.
+  const { locations, locKey, setLocKey, selLoc, foreignLedgerIds } = useVoucherLocationChoice();
+
   const codeOf = (id: number) => (allAccounts as any[]).find(a => a.id === id)?.code ?? '';
   const partyTypeDef = PARTY_TYPES.find(t => t.value === partyType) ?? PARTY_TYPES[3];
   const partyOptions = useMemo(
     () => (allAccounts as any[]).filter(a =>
-      !a.isSystemGroup && !a.isGroup && !isSystemLedger(a.code) && partyTypeDef.match(a.code ?? '')),
-    [allAccounts, partyTypeDef],
+      !a.isSystemGroup && !a.isGroup && !isSystemLedger(a.code)
+      && partyTypeDef.match(a.code ?? '') && !foreignLedgerIds.has(a.id)),
+    [allAccounts, partyTypeDef, foreignLedgerIds],
+  );
+
+  // Till picker — only the selected location's own cash/bank accounts.
+  const tillOptions = useMemo(
+    () => (cashBankAccounts as any[]).filter(a => !selLoc || selLoc.cashBankLedgerIds.includes(a.id)),
+    [cashBankAccounts, selLoc],
   );
 
   // Branch users (warehouse/outlet) get exactly their own till from the
@@ -188,6 +201,16 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultCashId]);
 
+  // Switching location narrows the pickers — clear selections that just
+  // became foreign so a hidden value can't ride along into the submit.
+  useEffect(() => {
+    const cashId = Number(form.getValues('cashBankLedgerId'));
+    if (cashId && !tillOptions.some((a: any) => Number(a.id) === cashId)) form.setValue('cashBankLedgerId', 0);
+    const partyId = Number(form.getValues('partyLedgerId'));
+    if (partyId && foreignLedgerIds.has(partyId)) form.setValue('partyLedgerId', 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locKey, tillOptions, foreignLedgerIds]);
+
   const resetForm = () => {
     form.reset({ ...EMPTY, voucherDate: today(), cashBankLedgerId: defaultCashId });
     setEditing(null);
@@ -197,6 +220,8 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     const partyId = Number(row[C.partyField]);
     const code = codeOf(partyId);
     setPartyType((PARTY_TYPES.find(t => t.value !== 'ledger' && t.match(code)) ?? PARTY_TYPES[3]).value);
+    // Seed the location picker from the voucher's stored stamp.
+    if (row.locationType) setLocKey(`${row.locationType}:${row.locationId ?? 0}`);
     form.reset({
       voucherDate: String(row[C.dateField]).split('T')[0],
       cashBankLedgerId: Number(row[C.cashField]),
@@ -210,16 +235,21 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const toBody = (v: FormValues) => ({
-    [C.dateField]: v.voucherDate,
-    [C.cashField]: v.cashBankLedgerId,
-    [C.partyField]: v.partyLedgerId,
-    amount: v.amount,
-    referenceNumber: v.referenceNumber ?? '',
-    narration: v.narration ?? '',
-  });
+  const toBody = (v: FormValues) => {
+    const loc = parseLocKey(locKey);
+    return {
+      [C.dateField]: v.voucherDate,
+      [C.cashField]: v.cashBankLedgerId,
+      [C.partyField]: v.partyLedgerId,
+      amount: v.amount,
+      referenceNumber: v.referenceNumber ?? '',
+      narration: v.narration ?? '',
+      ...(loc ? { locationType: loc.locationType, locationId: loc.locationId } : {}),
+    };
+  };
 
   const submit = (values: FormValues) => {
+    if (!parseLocKey(locKey)) { toast.error('Please select a location.'); return; }
     const printTab = printTabRef.current;
     printTabRef.current = null;
     if (editing) {
@@ -320,6 +350,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     date: r => String(r[C.dateField]).split('T')[0],
     party: r => r[C.partyNameField],
     cash: r => r[C.cashNameField],
+    location: r => voucherLocationName(locations, r.locationType, r.locationId),
     reference: r => r.referenceNumber,
     narration: r => r.narration,
     by: r => r.createdBy,
@@ -334,6 +365,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
     Date: String(r[C.dateField]).split('T')[0],
     [C.partyLabel]: r[C.partyNameField],
     'Cash / Bank': r[C.cashNameField],
+    Location: voucherLocationName(locations, r.locationType, r.locationId),
     Amount: r.amount,
     Reference: r.referenceNumber || '',
     Narration: r.narration || '',
@@ -399,6 +431,8 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                 className="p-5 space-y-4"
               >
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {/* Location — owns the voucher's accounting */}
+                  <LocationSelectField locations={locations} locKey={locKey} setLocKey={setLocKey} />
                   <FormField control={form.control} name="voucherDate" render={({ field }) => (
                     <FormItem><FormLabel>Date <span className="text-destructive">*</span></FormLabel>
                       <Input type="date" data-field="voucherDate" {...field} />
@@ -406,10 +440,10 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                     </FormItem>
                   )} />
                   <FormField control={form.control} name="cashBankLedgerId" render={({ field }) => (
-                    <FormItem className="lg:col-span-2">
+                    <FormItem>
                       <FormLabel>{C.cashLabel} <span className="text-destructive">*</span></FormLabel>
-                      <AccountCombobox options={cashBankAccounts as any[]} value={field.value}
-                        onChange={field.onChange} placeholder="Head Office / branch cash or bank account" advanceOnSelect data-field="cashBankLedgerId" />
+                      <AccountCombobox options={tillOptions} value={field.value}
+                        onChange={field.onChange} placeholder="This location's cash or bank account" advanceOnSelect data-field="cashBankLedgerId" />
                       <FormMessage />
                     </FormItem>
                   )} />
@@ -558,6 +592,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                 <SortableHead k="date" sort={sort}>Date</SortableHead>
                 <SortableHead k="party" sort={sort}>{C.partyLabel}</SortableHead>
                 <SortableHead k="cash" sort={sort}>Cash / Bank</SortableHead>
+                <SortableHead k="location" sort={sort}>Location</SortableHead>
                 <SortableHead k="reference" sort={sort}>Reference</SortableHead>
                 <SortableHead k="narration" sort={sort}>Narration</SortableHead>
                 <SortableHead k="by" sort={sort}>By</SortableHead>
@@ -567,9 +602,9 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
             </TableHeader>
             <TableBody>
               {isLoading ? [...Array(3)].map((_, i) => (
-                <TableRow key={i}><TableCell colSpan={9}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
+                <TableRow key={i}><TableCell colSpan={10}><div className="h-8 bg-muted/30 rounded animate-pulse" /></TableCell></TableRow>
               )) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={9} className="text-center py-16 text-muted-foreground">
+                <TableRow><TableCell colSpan={10} className="text-center py-16 text-muted-foreground">
                   <C.Icon className="w-10 h-10 mx-auto mb-3 opacity-20" />
                   <p>{hasFilters ? 'No vouchers match the filters' : `No ${C.title.toLowerCase()}s yet`}</p>
                 </TableCell></TableRow>
@@ -583,6 +618,7 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                   </TableCell>
                   <TableCell className="font-medium text-sm">{r[C.partyNameField]}</TableCell>
                   <TableCell><Badge variant="outline" className="text-xs">{r[C.cashNameField]}</Badge></TableCell>
+                  <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{voucherLocationName(locations, r.locationType, r.locationId)}</TableCell>
                   <TableCell className="text-sm">
                     {r.referenceNumber
                       ? <span className="text-[11px] text-muted-foreground font-mono max-w-[110px] truncate inline-block" title={r.referenceNumber}>{r.referenceNumber}</span>

@@ -41,6 +41,20 @@ function parseRange(req: any): { fromDate?: string; toDate?: string } {
 
 /** Optional GSTIN / warehouse filter → location scope (null = unfiltered). */
 async function parseGstScope(req: any): Promise<GstScope | null> {
+  // Branch sessions are PINNED to their own registration's filing scope —
+  // a warehouse files under its own GSTIN, an outlet under its parent
+  // warehouse's. Query params and the view header cannot widen this; an
+  // outlet with no parent warehouse gets an empty scope (matches nothing).
+  const gstEmp = req.employee as { branchType?: string; branchId?: number } | undefined;
+  if (gstEmp?.branchType === "warehouse") {
+    return resolveGstScope({ warehouseId: Number(gstEmp.branchId) });
+  }
+  if (gstEmp?.branchType === "outlet") {
+    const { rows } = await pool.query(`SELECT warehouse_id FROM outlets WHERE id = $1`, [Number(gstEmp.branchId)]);
+    const wid = Number(rows[0]?.warehouse_id);
+    if (Number.isFinite(wid) && wid > 0) return resolveGstScope({ warehouseId: wid });
+    return { pairs: [], includeHeadOffice: false };
+  }
   const gstin = typeof req.query.gstin === "string" && req.query.gstin.trim() ? req.query.gstin.trim() : undefined;
   const whRaw = Number(req.query.warehouseId);
   const warehouseId = Number.isInteger(whRaw) && whRaw > 0 ? whRaw : undefined;
@@ -128,10 +142,7 @@ async function materialHsnMap(): Promise<Map<string, { hsn: string; unit: string
 // ── HSN Summary (outward from sales, inward from purchases) ─────────────────
 
 router.get("/gst/hsn-summary", requireModuleView("page:/accounts/gst-returns"), async (req, res): Promise<void> => {
-  // LBAC: GST filing is a Head Office activity
-  if ((req as any).employee?.branchType !== 'headoffice') {
-    res.json({ outward: [], inward: [] }); return;
-  }
+  // LBAC: branch sessions are pinned to their own registration by parseGstScope.
   const { fromDate, toDate } = parseRange(req);
   const scope = await parseGstScope(req);
 
@@ -205,10 +216,7 @@ router.get("/gst/hsn-summary", requireModuleView("page:/accounts/gst-returns"), 
 // ── GSTR-1 (outward supplies register: B2B invoice-wise, B2C rate-wise) ─────
 
 router.get("/gst/gstr1", requireModuleView("page:/accounts/gst-returns"), async (req, res): Promise<void> => {
-  // LBAC: GST filing is a Head Office activity
-  if ((req as any).employee?.branchType !== 'headoffice') {
-    res.json({ b2b: [], b2cs: [], totals: {} }); return;
-  }
+  // LBAC: branch sessions are pinned to their own registration by parseGstScope.
   const { fromDate, toDate } = parseRange(req);
   const scope = await parseGstScope(req);
 
@@ -305,10 +313,7 @@ router.get("/gst/gstr1", requireModuleView("page:/accounts/gst-returns"), async 
 // ── GSTR-3B (monthly summary: outward, ITC, net payable) ────────────────────
 
 router.get("/gst/gstr3b", requireModuleView("page:/accounts/gst-returns"), async (req, res): Promise<void> => {
-  // LBAC: GST filing is a Head Office activity
-  if ((req as any).employee?.branchType !== 'headoffice') {
-    res.json({}); return;
-  }
+  // LBAC: branch sessions are pinned to their own registration by parseGstScope.
   const month = String(req.query.month ?? "");
   if (!isMonth(month)) {
     res.status(400).json({ error: "month is required in YYYY-MM format" });
@@ -459,19 +464,26 @@ router.get("/gst/reconciliation", requireModuleView("page:/accounts/gst-returns"
 // ── Filter options (GSTIN groups → warehouses under each) ───────────────────
 
 router.get("/gst/filters", requireModuleView(["page:/accounts/gst", "page:/accounts/gst-returns"]), async (req, res): Promise<void> => {
-  if ((req as any).employee?.branchType !== 'headoffice') {
-    res.json({ gstins: [] }); return;
+  const groups = await listGstinGroups();
+  const filtEmp = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
+  if (filtEmp?.branchType && filtEmp.branchType !== "headoffice") {
+    // Branch users see only their own registration's group — the same pin
+    // parseGstScope applies to the data endpoints.
+    let wid = Number(filtEmp.branchId);
+    if (filtEmp.branchType === "outlet") {
+      const { rows } = await pool.query(`SELECT warehouse_id FROM outlets WHERE id = $1`, [wid]);
+      wid = Number(rows[0]?.warehouse_id);
+    }
+    res.json({ gstins: groups.filter(g => g.warehouses.some(w => w.id === wid)) });
+    return;
   }
-  res.json({ gstins: await listGstinGroups() });
+  res.json({ gstins: groups });
 });
 
 // ── Document register (invoice-wise, with payment settlement columns) ───────
 
 router.get("/gst/documents", requireModuleView(["page:/accounts/gst", "page:/accounts/gst-returns"]), async (req, res): Promise<void> => {
-  // LBAC: GST registers are Head Office accounting
-  if ((req as any).employee?.branchType !== 'headoffice') {
-    res.json({ outward: [], inward: [], totals: {} }); return;
-  }
+  // LBAC: branch sessions are pinned to their own registration by parseGstScope.
   const { fromDate, toDate } = parseRange(req);
   const scope = await parseGstScope(req);
   const locNames = await locationNameIndex();

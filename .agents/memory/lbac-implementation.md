@@ -16,14 +16,32 @@ Full LBAC implemented across the API. Three user types: Head Office (sees all), 
 - `vendors`: `location_type TEXT DEFAULT 'headoffice'`, `location_id INT DEFAULT 0`
 - `purchases`: `branch_type TEXT DEFAULT 'headoffice'`, `branch_id INT DEFAULT 1`
 
-## Decision: Purchases are Head Office only
-All purchases recorded at HO. Warehouse/outlet users get empty on all purchase endpoints.
+## Decision: Purchases are Head Office only — REVERSED
+Purchases now take a body-selectable location validated against scope. Legacy purchases with
+NULL `location_type` = headoffice/1. **This is a purchases-only convention**: legacy sales with
+NULL `location_type` COALESCE to `'outlet'` (with `outlet_id`) — never assume the two tables
+share a legacy default.
 
-## Decision: GST is Head Office only
-GSTR-1, GSTR-3B, HSN summary, GST reconciliation, GST summary — all return empty for non-HO.
+## Decision: GST is Head Office only — REVERSED (Aug 2026)
+Branch sessions are now PINNED to their own registration inside `parseGstScope` (gst.ts) and
+`/gst/summary` (accounts.ts): warehouse → own GSTIN scope, outlet → parent warehouse's, orphan
+outlet → empty scope (matches nothing). Query params/view header cannot widen the pin.
+`/gst/filters` returns only the branch's own registration group. **GST reconciliation stays
+HO-only on purpose** (books-vs-register self-check is a filing activity).
 
 ## Decision: Double-entry accounting is Head Office only — PARTLY REVERSED
-Journal vouchers, day book, trial balance, cash-bank book, financial statements: still HO-only.
+Journal vouchers, day book, trial balance, cash-bank book: still HO-only.
+**Financial statements are no longer HO-only**: branch users get their own location slice
+pinned server-side (view header cannot widen), with `companyLevel` nulled — the company-wide
+remainder is HO information.
+
+## Returns act at the DOCUMENT's location (Aug 2026)
+Sales/purchase returns derive every stock op, refund ledger, and note stamp from the sale's/
+purchase's stored location — never the caller's. POST guards: caller must have the document's
+location in scope (404 for foreign — scoped list ≠ scoped resource). Credit/debit notes are
+stamped with that location (JV convention: HO stores id 0, matched on type alone);
+`note_voucher_location_stamp_v1` boot migration repaired pre-existing NULL-stamped notes.
+HO walk-in refunds fall back to STD-CASH/STD-SALES, mirroring sale derivation.
 **Money vouchers are no longer HO-only.** Payments, receipts and ledger statements are now
 location-scoped so each warehouse runs its own till. See `money-voucher-ownership.md`.
 
@@ -42,11 +60,11 @@ Production batches and production reports return empty for non-HO users.
 | `customers.ts` | GET /customers → scopeLocationTypeWhere; GET /vendors → scopeLocationTypeWhere(includeHO=true); POST /customers and POST /vendors → stamp location from session |
 | `search.ts` | All 4 search queries scoped |
 | `sales.ts` | GET /sales → scopeSalesWhere (pre-existing); GET /sales/summary → scopeSalesWhere |
-| `returns.ts` | GET /sales-returns → scopeLocationTypeWhere; GET /purchase-returns → HO-only; receivables → scopeSalesWhere; payables → HO-only; collections → scopeSalesWhere |
-| `purchases.ts` | GET /purchases → HO-only |
+| `returns.ts` | GET /sales-returns → scopeLocationTypeWhere; GET /purchase-returns → scoped via joined purchase's location; POST both returns → document-location scope guard (404 foreign); receivables → scopeSalesWhere; collections → scopeSalesWhere |
+| `purchases.ts` | location-selectable, validated against scope (no longer HO-only) |
 | `reports.ts` | sales-by-item, sales-by-location, profitability, discounts, sales-stock-combined → scopeSalesWhere; purchase-register, purchases-by-vendor, purchases-by-material → HO-only |
-| `accounts.ts` | GET /expenses → HO gets both direct+location; non-HO gets only their cash ledger location expenses; location-expenses/summary, /all, /single → scoped to location; payments, receipts, ledger-statement, ledger/:id/statement, cash-bank-ledgers → own-location scoped (see `money-voucher-ownership.md`); gst/summary, financial-statements → HO-only |
-| `gst.ts` | All 4 endpoints → HO-only |
+| `accounts.ts` | GET /expenses → HO gets both direct+location; non-HO gets only their cash ledger location expenses; location-expenses/summary, /all, /single → scoped to location; payments, receipts, ledger-statement, ledger/:id/statement, cash-bank-ledgers → own-location scoped (see `money-voucher-ownership.md`); gst/summary → branch pinned to own registration; financial-statements → branch pinned to own location |
+| `gst.ts` | branch sessions pinned to own registration via parseGstScope; reconciliation HO-only |
 | `journal.ts` | journal-vouchers, day-book, trial-balance, cash-bank-book/ledgers, cash-bank-book → HO-only |
 | `production.ts` | GET /productions, GET /productions/reports → HO-only |
 | `reconciliation.ts` | GET /reconciliation/pending → outlet users auto-scoped to their outlet |

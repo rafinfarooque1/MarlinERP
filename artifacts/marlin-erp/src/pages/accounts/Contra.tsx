@@ -21,6 +21,7 @@ import { usePermission } from '@/lib/usePermission';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { entryScopeKeyDown, autoFocusFirst, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
+import { useVoucherLocationChoice, parseLocKey, LocationSelectField } from '@/lib/voucherLocation';
 
 const schema = z.object({
   voucherDate: z.string().min(1, 'Date required'),
@@ -45,7 +46,12 @@ export default function Contra() {
   const [deleteTarget, setDeleteTarget] = useState<JournalVoucher | null>(null);
   const scopeRef = useRef<HTMLFormElement>(null);
 
-  const options = (cashBankAccounts as any[]).filter(a => !a.isGroup && !a.isSystemGroup);
+  // The selected location OWNS the contra's accounting; both legs must be
+  // that location's own cash/bank accounts (the server re-checks on save).
+  const { locations, locKey, setLocKey, selLoc } = useVoucherLocationChoice();
+
+  const options = (cashBankAccounts as any[]).filter(a =>
+    !a.isGroup && !a.isSystemGroup && (!selLoc || selLoc.cashBankLedgerIds.includes(a.id)));
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -53,6 +59,8 @@ export default function Contra() {
   });
 
   const onSubmit = (data: FormValues) => {
+    const loc = parseLocKey(locKey);
+    if (!loc) { toast.error('Please select a location.'); return; }
     createMutation.mutate({
       voucherType: 'contra',
       voucherDate: data.voucherDate,
@@ -60,7 +68,8 @@ export default function Contra() {
       toLedgerId: data.toLedgerId,
       amount: data.amount,
       narration: data.narration?.trim() || undefined,
-    }, {
+      locationType: loc.locationType, locationId: loc.locationId,
+    } as any, {
       onSuccess: (v) => { toast.success(`Contra ${v.voucherNumber} recorded`); setIsOpen(false); form.reset(); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
@@ -213,6 +222,8 @@ export default function Contra() {
               onSubmit={form.handleSubmit(onSubmit)}
               className="space-y-4 pt-2"
             >
+              <LocationSelectField locations={locations} locKey={locKey} setLocKey={setLocKey} />
+
               <FormField control={form.control} name="voucherDate" render={({ field }) => (
                 <FormItem><FormLabel>Date <span className="text-destructive">*</span></FormLabel>
                   <Input type="date" data-field="voucherDate" {...field} />

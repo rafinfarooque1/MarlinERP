@@ -6,6 +6,7 @@ import { nextVoucherNumber } from "../lib/voucherNumber";
 import { isIsoDate } from "../lib/dateInput";
 import { LEGACY_BANK_MODES } from "../lib/paymentModes";
 import { getLocationFilter } from "../lib/requestLocation";
+import { resolveMoneyVoucherLocation } from "../lib/moneyScope";
 
 const router = Router();
 
@@ -470,23 +471,31 @@ router.post("/reconciliation/batches", requireModuleAction("page:/accounts/recon
     }
 
     // 9. Post accounting entries
+    // Both vouchers belong to the location that owns the destination bank
+    // account (usually Head Office) — stamped explicitly so located cash
+    // books and dashboards see the settlement where the money actually landed.
+    const batchLocRes = await resolveMoneyVoucherLocation((req as any).employee, undefined, Number(destinationBankLedgerId));
+    const batchLoc = batchLocRes.ok ? batchLocRes.loc : { locationType: 'headoffice', locationId: 0 };
+
     // Dr Bank (net) — receipt: received_from=clearing, received_in=bank
     const recVoucher = await nextVoucherNumber(client, 'receipt', settlementDate);
     await client.query(
-      `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, source)
-       VALUES ($1, $2, $3, $4, $5, $6, 'settlement')`,
+      `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, source, location_type, location_id)
+       VALUES ($1, $2, $3, $4, $5, $6, 'settlement', $7, $8)`,
       [recVoucher, settlementDate, clearingLedger.id, destinationBankLedgerId, netAmount,
-        `Bank settlement ${batchReference} — ${payments.length} payments`]
+        `Bank settlement ${batchReference} — ${payments.length} payments`,
+        batchLoc.locationType, Number(batchLoc.locationId)]
     );
 
     // Dr Charges expense (if any) — payment: paid_from=clearing, paid_to=charges ledger
     if (parsedCharges > 0 && chargesLedger) {
       const payVoucher = await nextVoucherNumber(client, 'payment', settlementDate);
       await client.query(
-        `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, source)
-         VALUES ($1, $2, $3, $4, $5, $6, 'settlement')`,
+        `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, source, location_type, location_id)
+         VALUES ($1, $2, $3, $4, $5, $6, 'settlement', $7, $8)`,
         [payVoucher, settlementDate, clearingLedger.id, chargesLedger.id, parsedCharges,
-          `Processor charges for ${batchReference}`]
+          `Processor charges for ${batchReference}`,
+          batchLoc.locationType, Number(batchLoc.locationId)]
       );
     }
 

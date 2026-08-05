@@ -22,6 +22,7 @@ import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { usePermission } from '@/lib/usePermission';
 import { AccountCombobox } from '@/components/ui/account-combobox';
 import { entryScopeKeyDown, autoFocusFirst, focusField, useEntryShortcuts } from '@/lib/keyboard-entry';
+import { useVoucherLocationChoice, parseLocKey, LocationSelectField } from '@/lib/voucherLocation';
 
 const schema = z.object({
   voucherDate: z.string().min(1, 'Date required'),
@@ -50,8 +51,13 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
   const [deleteTarget, setDeleteTarget] = useState<JournalVoucher | null>(null);
   const scopeRef = useRef<HTMLFormElement>(null);
 
+  // The selected location OWNS the note's accounting — an Admin recording on
+  // behalf of a branch produces a branch voucher (server re-checks on save).
+  const { locations, locKey, setLocKey, foreignLedgerIds } = useVoucherLocationChoice();
+
   const parties = (isCN ? (customers as any[]) : (vendors as any[])).map(p => ({ id: p.id, name: p.name }));
-  const counterOptions = (allAccounts as any[]).filter(a => !a.isSystemGroup && !a.isGroup);
+  const counterOptions = (allAccounts as any[]).filter(a =>
+    !a.isSystemGroup && !a.isGroup && !foreignLedgerIds.has(a.id));
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -59,6 +65,8 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
   });
 
   const onSubmit = (data: FormValues) => {
+    const loc = parseLocKey(locKey);
+    if (!loc) { toast.error('Please select a location.'); return; }
     createMutation.mutate({
       voucherType: noteType,
       voucherDate: data.voucherDate,
@@ -67,7 +75,8 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
       counterLedgerId: data.counterLedgerId || undefined,
       reason: data.reason?.trim() || undefined,
       narration: data.narration?.trim() || undefined,
-    }, {
+      locationType: loc.locationType, locationId: loc.locationId,
+    } as any, {
       onSuccess: (v) => { toast.success(`${isCN ? 'Credit' : 'Debit'} note ${v.voucherNumber} recorded`); setIsOpen(false); form.reset(); },
       onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
     });
@@ -196,6 +205,8 @@ function NotesTab({ noteType }: { noteType: 'credit_note' | 'debit_note' }) {
               onSubmit={form.handleSubmit(onSubmit)}
               className="space-y-4 pt-2"
             >
+              <LocationSelectField locations={locations} locKey={locKey} setLocKey={setLocKey} />
+
               <FormField control={form.control} name="voucherDate" render={({ field }) => (
                 <FormItem><FormLabel>Date <span className="text-destructive">*</span></FormLabel>
                   <Input type="date" data-field="voucherDate" {...field} />

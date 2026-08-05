@@ -31,6 +31,9 @@ import ExcelJS from 'exceljs';
 const BASE = process.env.API_URL || 'http://localhost:8080/api';
 const TAG = 'ZZIMPTPL';
 const WH = 2; // Marlin Mangaluru Depot — same warehouse the other suites use
+// Same "today" convention as the import validator (UTC ISO date) — hardcoding
+// a date here made every bill "backdated" the day after it was written.
+const TODAY = new Date().toISOString().slice(0, 10);
 
 let authToken = '';
 let passed = 0, failed = 0;
@@ -202,7 +205,7 @@ let importedSaleTotals = null;
 {
   const up = await uploadXlsx('sales', [
     ['Invoice No', 'Date', 'Customer', 'Item', 'Qty', 'Price', 'Discount', 'Payment Status', 'Payment Account'],
-    [`${TAG}/S/1`, '2026-08-04', `${TAG} Buyer`, `${TAG} Item`, 2, 200, 10, 'Paid', 'Cash'],
+    [`${TAG}/S/1`, TODAY, `${TAG} Buyer`, `${TAG} Item`, 2, 200, 10, 'Paid', 'Cash'],
   ]);
   const batchId = up.data?.batch?.id ?? 0;
   if (batchId) batches.push(batchId);
@@ -237,7 +240,7 @@ let importedSaleTotals = null;
 {
   const res = await post('/sales', {
     outletId: WH, locationType: 'warehouse', locationId: WH,
-    saleDate: '2026-08-04', paymentMode: 'cash', customerId: fixtures.custId,
+    saleDate: TODAY, paymentMode: 'cash', customerId: fixtures.custId,
     lineItems: [{ itemId: fixtures.itemId, quantity: 2, unitPrice: 200, unitDiscount: 10 }],
   });
   if (res.status === 201 && res.data?.id) createdSales.push(res.data.id);
@@ -259,8 +262,8 @@ console.log('\n[3] Sales validation guardrails');
 {
   const up = await uploadXlsx('sales', [
     ['Invoice No', 'Date', 'Customer', 'Item', 'Qty', 'Price', 'Discount', 'Payment Status', 'Payment Account'],
-    [`${TAG}/S/E1`, '2026-08-04', `${TAG} Buyer`, `${TAG} Item`, 1, 200, '', 'Partial', 'Customer Credit'],
-    [`${TAG}/S/E2`, '2026-08-04', `${TAG} Buyer`, `${TAG} Item`, 1, 200, 250, 'Unpaid', 'Customer Credit'],
+    [`${TAG}/S/E1`, TODAY, `${TAG} Buyer`, `${TAG} Item`, 1, 200, '', 'Partial', 'Customer Credit'],
+    [`${TAG}/S/E2`, TODAY, `${TAG} Buyer`, `${TAG} Item`, 1, 200, 250, 'Unpaid', 'Customer Credit'],
   ]);
   if (up.data?.batch?.id) batches.push(up.data.batch.id);
   const rows = up.data?.rows ?? [];
@@ -295,8 +298,8 @@ console.log('\n[3] Sales validation guardrails');
   // And a blank Payment Status with a Paid Amount records a part-payment.
   const up = await uploadXlsx('sales', [
     ['Invoice No', 'Date', 'Customer', 'Item', 'Qty', 'Price', 'Payment Status', 'Paid Amount', 'Payment Account'],
-    [`${TAG}/S/E3`, '2026-08-04', `${TAG} Buyer`, `${TAG} Item`, 1, 50, 'Unpaid', '', 'Customer Credit'],
-    [`${TAG}/S/E4`, '2026-08-04', `${TAG} Buyer`, `${TAG} Item`, 1, 200, '', 120, 'Customer Credit'],
+    [`${TAG}/S/E3`, TODAY, `${TAG} Buyer`, `${TAG} Item`, 1, 50, 'Unpaid', '', 'Customer Credit'],
+    [`${TAG}/S/E4`, TODAY, `${TAG} Buyer`, `${TAG} Item`, 1, 200, '', 120, 'Customer Credit'],
   ]);
   const bId = up.data?.batch?.id ?? 0;
   if (bId) batches.push(bId);
@@ -322,7 +325,7 @@ console.log('\n[3] Sales validation guardrails');
   // (manual entry: price ₹100 = MRP, ₹20/unit discount ⇒ import price ₹80).
   const up = await uploadXlsx('sales', [
     ['Invoice No', 'Date', 'Customer', 'Item', 'Qty', 'Price', 'Payment Status', 'Payment Account'],
-    [`${TAG}/S/M1`, '2026-08-04', `${TAG} Buyer`, `${TAG} Item`, 1, 80, 'Paid', 'Cash'],
+    [`${TAG}/S/M1`, TODAY, `${TAG} Buyer`, `${TAG} Item`, 1, 80, 'Paid', 'Cash'],
   ]);
   const bId = up.data?.batch?.id ?? 0;
   if (bId) batches.push(bId);
@@ -334,7 +337,7 @@ console.log('\n[3] Sales validation guardrails');
        FROM sales WHERE legacy_invoice_number = $1`, [`${TAG}/S/M1`]);
   const manual = await post('/sales', {
     outletId: WH, locationType: 'warehouse', locationId: WH,
-    saleDate: '2026-08-04', paymentMode: 'cash', customerId: fixtures.custId,
+    saleDate: TODAY, paymentMode: 'cash', customerId: fixtures.custId,
     lineItems: [{ itemId: fixtures.itemId, quantity: 1, unitPrice: 100, unitDiscount: 20 }],
   });
   if (manual.status === 201 && manual.data?.id) createdSales.push(manual.data.id);
@@ -350,7 +353,7 @@ console.log('\n[3] Sales validation guardrails');
   // Old-ERP file with a GST % column: still mapped, cross-checked, warned — never recorded.
   const up = await uploadXlsx('sales', [
     ['Invoice No', 'Date', 'Customer', 'Item', 'Qty', 'Price', 'GST %', 'Payment Status', 'Payment Account'],
-    [`${TAG}/S/W1`, '2026-08-04', `${TAG} Buyer`, `${TAG} Item`, 1, 210, 12, 'Paid', 'Cash'],
+    [`${TAG}/S/W1`, TODAY, `${TAG} Buyer`, `${TAG} Item`, 1, 210, 12, 'Paid', 'Cash'],
   ]);
   if (up.data?.batch?.id) batches.push(up.data.batch.id);
   const row = (up.data?.rows ?? [])[0];
@@ -365,9 +368,9 @@ const bankName = bankLeaves[0]?.name ?? null;
 {
   const header = ['Vendor Invoice No', 'Date', 'Vendor', 'Item', 'Qty', 'Purchase Rate', 'Discount %', 'Payment Status', 'Paid Amount', 'Payment Account'];
   const rows = [header,
-    [`${TAG}/P/1`, '2026-08-04', `${TAG} Vendor`, `${TAG} Item`, 10, 40, 0, 'Partial', 100, ''], // blank = cash till
+    [`${TAG}/P/1`, TODAY, `${TAG} Vendor`, `${TAG} Item`, 10, 40, 0, 'Partial', 100, ''], // blank = cash till
   ];
-  if (bankName) rows.push([`${TAG}/P/2`, '2026-08-04', `${TAG} Vendor`, `${TAG} Item`, 5, 40, 0, 'Paid', '', bankName]);
+  if (bankName) rows.push([`${TAG}/P/2`, TODAY, `${TAG} Vendor`, `${TAG} Item`, 5, 40, 0, 'Paid', '', bankName]);
   const up = await uploadXlsx('purchases', rows);
   const batchId = up.data?.batch?.id ?? 0;
   if (batchId) batches.push(batchId);
@@ -409,8 +412,8 @@ console.log('\n[5] Purchase validation guardrails');
 {
   const up = await uploadXlsx('purchases', [
     ['Vendor Invoice No', 'Date', 'Vendor', 'Item', 'Qty', 'Purchase Rate', 'Bill Discount', 'Payment Status', 'Paid Amount'],
-    [`${TAG}/P/E1`, '2026-08-04', `${TAG} Vendor`, `${TAG} Item`, 1, 40, 100, 'Unpaid', ''],
-    [`${TAG}/P/E2`, '2026-08-04', `${TAG} Vendor`, `${TAG} Item`, 1, 40, '', 'Partial', ''],
+    [`${TAG}/P/E1`, TODAY, `${TAG} Vendor`, `${TAG} Item`, 1, 40, 100, 'Unpaid', ''],
+    [`${TAG}/P/E2`, TODAY, `${TAG} Vendor`, `${TAG} Item`, 1, 40, '', 'Partial', ''],
   ]);
   if (up.data?.batch?.id) batches.push(up.data.batch.id);
   const rows = up.data?.rows ?? [];
@@ -424,7 +427,7 @@ console.log('\n[5] Purchase validation guardrails');
   // Unknown Payment Account name must be an error naming the options.
   const up = await uploadXlsx('purchases', [
     ['Vendor Invoice No', 'Date', 'Vendor', 'Item', 'Qty', 'Purchase Rate', 'Payment Status', 'Paid Amount', 'Payment Account'],
-    [`${TAG}/P/E3`, '2026-08-04', `${TAG} Vendor`, `${TAG} Item`, 1, 40, 'Paid', '', 'No Such Account XYZ'],
+    [`${TAG}/P/E3`, TODAY, `${TAG} Vendor`, `${TAG} Item`, 1, 40, 'Paid', '', 'No Such Account XYZ'],
   ]);
   if (up.data?.batch?.id) batches.push(up.data.batch.id);
   const row = (up.data?.rows ?? [])[0];

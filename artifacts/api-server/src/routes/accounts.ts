@@ -24,6 +24,7 @@ import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 import {
   callerLocation, ownLocationScope, scopeLedgerIds, scopeCashLedgerIds, scopeMoneyWhere,
   checkVoucherLegs, foreignLocationLedgerIds, foreignPartyLedgerIds, headOfficeCashBankLedgerIds,
+  resolveMoneyVoucherLocation,
 } from "../lib/moneyScope";
 import { loadLedgerUsage, deleteBlockReason } from "../lib/chartGroups";
 import { loadPaymentPosition, computePaymentPosition, outstandingExpr } from "../lib/salePaymentPosition";
@@ -773,7 +774,12 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
   const legCheck = await checkVoucherLegs(scope, Number(paidFromLedgerId), Number(paidToLedgerId), 'Paid from');
   if (!legCheck.ok) { res.status(403).json({ error: legCheck.error }); return; }
 
-  const { locationType, locationId } = callerLocation((req as any).employee);
+  // The stamped location = the selected transaction location (validated
+  // against the paying account's owner), NEVER blindly the caller's own — an
+  // Admin recording for a branch produces a branch voucher, not a HO one.
+  const payLocRes = await resolveMoneyVoucherLocation((req as any).employee, req.body as any, Number(paidFromLedgerId));
+  if (!payLocRes.ok) { res.status(payLocRes.status).json({ error: payLocRes.error }); return; }
+  const { locationType, locationId } = payLocRes.loc;
 
   // ── Bill-wise settlement path (vendor bills) ──────────────────────────────
   // Purchases have no amount_paid column, so vendor allocations live in
@@ -996,10 +1002,17 @@ router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouc
     const legCheck = await checkVoucherLegs(scope, newFrom, newTo, 'Paid from');
     if (!legCheck.ok) { await client.query("ROLLBACK"); res.status(403).json({ error: legCheck.error }); return; }
 
+    // Re-resolve the owning location on the EFFECTIVE paying account: an
+    // explicit body location is validated, otherwise the till's owner speaks,
+    // and only an unrecognised till keeps the row's current stamp.
+    const locRes = await resolveMoneyVoucherLocation((req as any).employee, b, newFrom,
+      { locationType: (row.location_type ?? 'headoffice') as any, locationId: Number(row.location_id ?? 0) });
+    if (!locRes.ok) { await client.query("ROLLBACK"); res.status(locRes.status).json({ error: locRes.error }); return; }
+
     const upd = await client.query(
       `UPDATE payments SET
          payment_date = $2, paid_from_ledger_id = $3, paid_to_ledger_id = $4, amount = $5,
-         narration = $6, reference_number = $7
+         narration = $6, reference_number = $7, location_type = $8, location_id = $9
        WHERE id = $1 RETURNING *`,
       [id,
        b.paymentDate !== undefined ? String(b.paymentDate) : row.payment_date,
@@ -1007,6 +1020,7 @@ router.patch("/accounts/payments/:id", requireModuleAction(["page:/accounts/vouc
        av.amount !== undefined ? av.amount : row.amount,
        b.narration !== undefined ? (String(b.narration).trim() || null) : row.narration,
        b.referenceNumber !== undefined ? (String(b.referenceNumber).trim() || null) : row.reference_number,
+       locRes.loc.locationType, Number(locRes.loc.locationId),
       ],
     );
     await client.query("COMMIT");
@@ -1204,7 +1218,12 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
   const legCheck = await checkVoucherLegs(scope, Number(receivedInLedgerId), Number(receivedFromLedgerId), 'Received in');
   if (!legCheck.ok) { res.status(403).json({ error: legCheck.error }); return; }
 
-  const { locationType, locationId } = callerLocation((req as any).employee);
+  // The stamped location = the selected transaction location (validated
+  // against the receiving account's owner), NEVER blindly the caller's own —
+  // an Admin recording for a branch produces a branch voucher, not a HO one.
+  const rcptLocRes = await resolveMoneyVoucherLocation((req as any).employee, req.body as any, Number(receivedInLedgerId));
+  if (!rcptLocRes.ok) { res.status(rcptLocRes.status).json({ error: rcptLocRes.error }); return; }
+  const { locationType, locationId } = rcptLocRes.loc;
 
   // ── Bill-wise settlement path ─────────────────────────────────────────────
   // The voucher names the invoices it settles; any excess parks in the
@@ -1430,10 +1449,17 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
     const legCheck = await checkVoucherLegs(scope, newIn, newFrom, 'Received in');
     if (!legCheck.ok) { await client.query("ROLLBACK"); res.status(403).json({ error: legCheck.error }); return; }
 
+    // Re-resolve the owning location on the EFFECTIVE receiving account: an
+    // explicit body location is validated, otherwise the till's owner speaks,
+    // and only an unrecognised till keeps the row's current stamp.
+    const locRes = await resolveMoneyVoucherLocation((req as any).employee, b, newIn,
+      { locationType: (row.location_type ?? 'headoffice') as any, locationId: Number(row.location_id ?? 0) });
+    if (!locRes.ok) { await client.query("ROLLBACK"); res.status(locRes.status).json({ error: locRes.error }); return; }
+
     const upd = await client.query(
       `UPDATE receipts SET
          receipt_date = $2, received_from_ledger_id = $3, received_in_ledger_id = $4, amount = $5,
-         narration = $6, reference_number = $7
+         narration = $6, reference_number = $7, location_type = $8, location_id = $9
        WHERE id = $1 RETURNING *`,
       [id,
        b.receiptDate !== undefined ? String(b.receiptDate) : row.receipt_date,
@@ -1441,6 +1467,7 @@ router.patch("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vouc
        av.amount !== undefined ? av.amount : row.amount,
        b.narration !== undefined ? (String(b.narration).trim() || null) : row.narration,
        b.referenceNumber !== undefined ? (String(b.referenceNumber).trim() || null) : row.reference_number,
+       locRes.loc.locationType, Number(locRes.loc.locationId),
       ],
     );
     await client.query("COMMIT");
@@ -3035,10 +3062,14 @@ router.delete("/accounts/location-expenses/:id", requireModuleAction("page:/sale
 // stream, so they agree with the Trial Balance, Cash Book and Bank Book by
 // construction. See lib/books.ts for why that removes the plug figure.
 router.get("/accounts/financial-statements", requireModuleView(["page:/accounts/chart", "page:/reports/sales"]), async (req, res): Promise<void> => {
-  // LBAC: P&L and Balance Sheet are Head Office accounting
-  if ((req as any).employee?.branchType !== 'headoffice') { res.json({ pl: null, bs: null }); return; }
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
-  const location = getPostingLocationFilter(req);
+  // LBAC: branch users always get their own location's slice — the view
+  // header/query cannot widen it. Head Office keeps the free selector.
+  const fsEmp = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
+  const fsBranch = fsEmp?.branchType && fsEmp.branchType !== 'headoffice';
+  const location = fsBranch
+    ? { type: fsEmp!.branchType as "warehouse" | "outlet", id: Number(fsEmp!.branchId ?? 0) }
+    : getPostingLocationFilter(req);
 
   const books = await buildBooks(buildDerivedPostings, { fromDate, toDate, location });
 
@@ -3052,7 +3083,9 @@ router.get("/accounts/financial-statements", requireModuleView(["page:/accounts/
   // silently would make per-location statements look like they sum to less
   // than the consolidated books.
   let companyLevel: { entries: number; debit: number; credit: number } | null = null;
-  if (location && location.type !== "company") {
+  // Branch users get their own slice only — the company-level remainder is
+  // Head Office information, so the key is omitted (never zeroed) for them.
+  if (!fsBranch && location && location.type !== "company") {
     let postings = await buildDerivedPostings(isIsoDate(toDate) ? { toDate } : {});
     if (isIsoDate(fromDate)) postings = postings.filter((p) => p.date >= fromDate);
     companyLevel = companyLevelSummary(postings);
@@ -3241,19 +3274,30 @@ router.get("/accounts/ledger/:id/statement", requireModuleView("page:/accounts/l
 
 // ── GST Summary ───────────────────────────────────────────────────────────
 router.get("/gst/summary", requireModuleView(["page:/accounts/gst", "page:/accounts/gst-returns"]), async (req, res): Promise<void> => {
-  // LBAC: GST summary is Head Office accounting
-  if ((req as any).employee?.branchType !== 'headoffice') {
-    res.json({ salesByRate: [], purchasesByRate: [], totals: {} }); return;
-  }
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
+
+  // LBAC: branch sessions are PINNED to their own registration — a warehouse
+  // files under its own GSTIN, an outlet under its parent warehouse's. Query
+  // params cannot widen this; an outlet with no parent sees an empty summary.
+  const gstSumEmp = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
+  let pinnedWh: number | undefined;
+  if (gstSumEmp?.branchType === "warehouse") {
+    pinnedWh = Number(gstSumEmp.branchId);
+  } else if (gstSumEmp?.branchType === "outlet") {
+    const { rows: pw } = await pool.query(`SELECT warehouse_id FROM outlets WHERE id = $1`, [Number(gstSumEmp.branchId)]);
+    const wid = Number(pw[0]?.warehouse_id);
+    if (Number.isFinite(wid) && wid > 0) pinnedWh = wid;
+    else { res.json({ salesByRate: [], purchasesByRate: [], totals: {} }); return; }
+  }
 
   // Optional GSTIN / warehouse scoping. Resolved to document-id sets via raw
   // SQL because the legacy location columns (outlet_id / branch_*) fall back
   // differently per table; when no filter is active nothing here runs and the
   // output stays byte-identical.
-  const gstinQ = typeof req.query.gstin === "string" && req.query.gstin.trim() ? req.query.gstin.trim() : undefined;
+  const gstinQ = pinnedWh != null ? undefined
+    : (typeof req.query.gstin === "string" && req.query.gstin.trim() ? req.query.gstin.trim() : undefined);
   const whQ = Number(req.query.warehouseId);
-  let whEff = Number.isInteger(whQ) && whQ > 0 ? whQ : undefined;
+  let whEff = pinnedWh ?? (Number.isInteger(whQ) && whQ > 0 ? whQ : undefined);
   // No explicit filter → fall back to the global location context the way the
   // GSTR-1/3B endpoints do (parseGstScope in gst.ts): filings are per GSTIN,
   // so a warehouse maps to its own filing scope, an outlet to its parent
