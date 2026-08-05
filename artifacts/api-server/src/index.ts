@@ -6,6 +6,7 @@ import { repairOpeningBatches } from "./migrations/repairOpeningBatches";
 import { addMaterialLocations } from "./migrations/materialLocations";
 import { addMaterialBatches } from "./migrations/materialBatches";
 import { cleanupPreResetGhosts } from "./migrations/prodResetGhostCleanup";
+import { cleanupAllocationReceipts } from "./migrations/allocationReceiptCleanup";
 import { sweepOrphanPartyLedgers } from "./migrations/orphanPartyLedgers";
 import { addWarehouseRent } from "./migrations/warehouseRent";
 import { addInvoiceShareLinks } from "./migrations/invoiceShareLinks";
@@ -2710,6 +2711,18 @@ try {
 }
 console.error(`[migration] ${ghostCleanupOutcome}`);
 
+// ── One-time settlement-receipt cleanup (owner-requested, 2026-08-05) ────────
+// Its own top-level step for the same reason as the others: a swallowed throw
+// inside runMigrations() must not silently skip it. Fingerprint-gated inside;
+// see allocationReceiptCleanup.ts.
+let receiptCleanupOutcome: string;
+try {
+  receiptCleanupOutcome = await cleanupAllocationReceipts(pool);
+} catch (err) {
+  receiptCleanupOutcome = `allocation_receipt_cleanup FAILED: ${(err as Error).message} — nothing deleted (rolled back), will retry next boot`;
+}
+console.error(`[migration] ${receiptCleanupOutcome}`);
+
 // ── Orphaned party-ledger sweep ──────────────────────────────────────────────
 // Party dropdowns in voucher entry / receipts / payments are built from the
 // chart of accounts, so a vendor/customer row deleted straight in the database
@@ -2726,7 +2739,7 @@ console.error(`[migration] ${orphanLedgerOutcome}`);
 await recordBootStatus(
   migrationsError,
   dateColumnsOutcome,
-  `${leaveRevertOutcome} | ${ghostCleanupOutcome} | ${orphanLedgerOutcome}`,
+  `${leaveRevertOutcome} | ${ghostCleanupOutcome} | ${receiptCleanupOutcome} | ${orphanLedgerOutcome}`,
 );
 
 // ── MRP column on materials and raw_materials ────────────────────────────────
