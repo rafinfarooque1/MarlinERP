@@ -386,6 +386,12 @@ export const ListPurchasesResponseItem = zod.object({
   "mfgDate": zod.string().optional(),
   "expiryDate": zod.string().optional()
 })),
+  "otherCharges": zod.array(zod.object({
+  "ledgerId": zod.number().describe('A postable expense ledger from the Chart of Accounts.'),
+  "ledgerName": zod.string().optional().describe('Server-enriched on reads; ignored on writes.'),
+  "amount": zod.number()
+})).optional(),
+  "otherChargesTotal": zod.number().optional(),
   "totalAmount": zod.number(),
   "taxTotal": zod.number().optional(),
   "discountTotal": zod.number().optional(),
@@ -425,6 +431,11 @@ export const CreatePurchaseBody = zod.object({
   "mfgDate": zod.string().optional(),
   "expiryDate": zod.string().optional()
 })),
+  "otherCharges": zod.array(zod.object({
+  "ledgerId": zod.number().describe('A postable expense ledger from the Chart of Accounts.'),
+  "ledgerName": zod.string().optional().describe('Server-enriched on reads; ignored on writes.'),
+  "amount": zod.number()
+})).optional().describe('Incidental purchase expenses (freight, hamali, courier…) posted straight to the chosen expense ledgers in P&L. Never part of inventory cost or line GST — the vendor is credited the bill total plus these charges.'),
   "notes": zod.string().optional()
 })
 
@@ -448,6 +459,12 @@ export const CreatePurchaseResponse = zod.object({
   "mfgDate": zod.string().optional(),
   "expiryDate": zod.string().optional()
 })),
+  "otherCharges": zod.array(zod.object({
+  "ledgerId": zod.number().describe('A postable expense ledger from the Chart of Accounts.'),
+  "ledgerName": zod.string().optional().describe('Server-enriched on reads; ignored on writes.'),
+  "amount": zod.number()
+})).optional(),
+  "otherChargesTotal": zod.number().optional(),
   "totalAmount": zod.number(),
   "taxTotal": zod.number().optional(),
   "discountTotal": zod.number().optional(),
@@ -486,6 +503,12 @@ export const GetPurchaseResponse = zod.object({
   "mfgDate": zod.string().optional(),
   "expiryDate": zod.string().optional()
 })),
+  "otherCharges": zod.array(zod.object({
+  "ledgerId": zod.number().describe('A postable expense ledger from the Chart of Accounts.'),
+  "ledgerName": zod.string().optional().describe('Server-enriched on reads; ignored on writes.'),
+  "amount": zod.number()
+})).optional(),
+  "otherChargesTotal": zod.number().optional(),
   "totalAmount": zod.number(),
   "taxTotal": zod.number().optional(),
   "discountTotal": zod.number().optional(),

@@ -258,7 +258,7 @@ export function ReportPicker<const T extends string>({ options, value, onChange 
 
 // ── Summary cards ─────────────────────────────────────────────────────────────
 export type CardTone = 'default' | 'pos' | 'neg' | 'warn' | 'accent' | 'info';
-const TONE_CLS: Record<CardTone, string> = {
+export const TONE_CLS: Record<CardTone, string> = {
   default: '',
   pos: 'text-emerald-600',
   neg: 'text-red-500',

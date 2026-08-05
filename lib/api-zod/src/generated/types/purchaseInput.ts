@@ -8,6 +8,7 @@
 import type { PurchaseInputLocationType } from './purchaseInputLocationType';
 import type { PurchaseInputPriceMode } from './purchaseInputPriceMode';
 import type { PurchaseLineItem } from './purchaseLineItem';
+import type { PurchaseOtherCharge } from './purchaseOtherCharge';
 
 export interface PurchaseInput {
   vendorId: number;
@@ -19,5 +20,7 @@ export interface PurchaseInput {
   locationType?: PurchaseInputLocationType;
   locationId?: number;
   lineItems: PurchaseLineItem[];
+  /** Incidental purchase expenses (freight, hamali, courier…) posted straight to the chosen expense ledgers in P&L. Never part of inventory cost or line GST — the vendor is credited the bill total plus these charges. */
+  otherCharges?: PurchaseOtherCharge[];
   notes?: string;
 }

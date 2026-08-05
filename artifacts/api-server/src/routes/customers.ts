@@ -353,7 +353,12 @@ router.get("/vendors", requireModuleView(["page:/production/purchase", "page:/ac
       -- excluded because they are owed to the sending branch's clearing ledger,
       -- not to this vendor — counting them here is what made "billed" disagree
       -- with the vendor's own account.
-      COALESCE(SUM(p.total_amount) FILTER (WHERE p.branch_transfer_id IS NULL), 0) AS "totalPurchased",
+      -- Goods + other purchase charges: both credit the vendor, so "billed"
+      -- must carry the same figure the vendor's ledger is owed.
+      COALESCE(SUM(p.total_amount::numeric
+        + COALESCE((SELECT SUM((e->>'amount')::numeric)
+                      FROM jsonb_array_elements(COALESCE(p.other_charges, '[]'::jsonb)) e
+                     WHERE (e->>'amount') ~ '^[0-9.]+$'), 0)) FILTER (WHERE p.branch_transfer_id IS NULL), 0) AS "totalPurchased",
       COALESCE((
         SELECT SUM(pay.amount)
         FROM payments pay
@@ -536,7 +541,11 @@ async function partyDocumentTotals(
   const payCond = locCond(`COALESCE(pay.location_type, 'headoffice')`, `COALESCE(pay.location_id, 0)`, payParams);
   const [{ rows: pr }, { rows: payr }] = await Promise.all([
     pool.query<any>(
-      `SELECT COALESCE(SUM(total_amount), 0) AS billed FROM purchases p
+      `SELECT COALESCE(SUM(total_amount::numeric
+                + COALESCE((SELECT SUM((e->>'amount')::numeric)
+                              FROM jsonb_array_elements(COALESCE(p.other_charges, '[]'::jsonb)) e
+                             WHERE (e->>'amount') ~ '^[0-9.]+$'), 0)), 0) AS billed
+         FROM purchases p
         WHERE p.vendor_id = $1 AND p.branch_transfer_id IS NULL AND ${prCond}`,
       prParams,
     ),

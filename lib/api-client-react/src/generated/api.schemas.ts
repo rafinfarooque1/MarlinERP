@@ -207,6 +207,14 @@ export const PurchasePriceMode = {
   inclusive: 'inclusive',
 } as const;
 
+export interface PurchaseOtherCharge {
+  /** A postable expense ledger from the Chart of Accounts. */
+  ledgerId: number;
+  /** Server-enriched on reads; ignored on writes. */
+  ledgerName?: string;
+  amount: number;
+}
+
 export interface Purchase {
   id: number;
   vendorId: number;
@@ -215,6 +223,8 @@ export interface Purchase {
   /** @nullable */
   invoiceNumber?: string | null;
   lineItems: PurchaseLineItem[];
+  otherCharges?: PurchaseOtherCharge[];
+  otherChargesTotal?: number;
   totalAmount: number;
   taxTotal?: number;
   discountTotal?: number;
@@ -262,6 +272,8 @@ export interface PurchaseInput {
   locationType?: PurchaseInputLocationType;
   locationId?: number;
   lineItems: PurchaseLineItem[];
+  /** Incidental purchase expenses (freight, hamali, courier…) posted straight to the chosen expense ledgers in P&L. Never part of inventory cost or line GST — the vendor is credited the bill total plus these charges. */
+  otherCharges?: PurchaseOtherCharge[];
   notes?: string;
 }
 

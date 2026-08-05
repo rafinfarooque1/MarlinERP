@@ -114,3 +114,4 @@
 - [Org role restructure](org-role-restructure.md) — root = Administrator, Management is view-only level 2; hierarchy migrations must fail closed (no marker) on name clashes/multi-root; reset rebuilds the tree via shared helper.
 - [Keyboard Entry Mode](keyboard-entry-mode.md) — all entry forms share keyboard-entry.tsx conventions; cmdk needs CommandList for arrow-nav; isPending is not a double-submit guard — sync submitLockRef.
 - [Table sorting](table-sorting.md) — every table sorts via lib/tableSort.tsx / RTable; accessors return RAW values, footers pinned, tri-state to default; see file for the non-sortable list.
+- [Purchase other charges](purchase-other-charges.md) — bill-borne freight/hamali in JSONB; goods figures stay goods-only, vendor owed goods+charges (every payable reader adds the sum); returns keep charges BY DESIGN.

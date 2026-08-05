@@ -40,6 +40,15 @@ export async function addPurchaseBillFields(pool: Pool): Promise<void> {
   await pool.query(
     `ALTER TABLE purchases ADD COLUMN IF NOT EXISTS price_mode text NOT NULL DEFAULT 'exclusive'`,
   );
+
+  // ── 1b. Other Purchase Charges ─────────────────────────────────────────────
+  // Incidental expenses on the bill (freight, hamali, courier…): an array of
+  // { ledgerId, amount } posted Dr <expense ledger> / Cr vendor by the derived
+  // postings. NEVER part of inventory cost — line costing ignores this column
+  // by construction. Historical bills backfill to the empty array.
+  await pool.query(
+    `ALTER TABLE purchases ADD COLUMN IF NOT EXISTS other_charges jsonb NOT NULL DEFAULT '[]'::jsonb`,
+  );
   // Constraints declared inside a CREATE TABLE never reach a live database, so
   // the check is added separately and tolerated if it is already there.
   try {

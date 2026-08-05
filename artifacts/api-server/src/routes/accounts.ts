@@ -184,8 +184,10 @@ router.get("/accounts/chart", requireModuleView(["page:/accounts/chart", "page:/
 });
 
 // Also expose flat list for dropdowns
-// Fills account dropdowns on Journal, Contra/Notes, Vouchers and Ledger.
-router.get("/accounts/chart/flat", requireModuleView(["page:/accounts/vouchers", "page:/accounts/ledger", "page:/operations/receipt-voucher", "page:/operations/payment-voucher"]), async (req, res): Promise<void> => {
+// Fills account dropdowns on Journal, Contra/Notes, Vouchers and Ledger — and
+// the "Other Charges" expense-ledger picker on the Purchase Bill form, so the
+// purchase page right must open it too (shared surface, any-of guard).
+router.get("/accounts/chart/flat", requireModuleView(["page:/accounts/vouchers", "page:/accounts/ledger", "page:/operations/receipt-voucher", "page:/operations/payment-voucher", "page:/production/purchase"]), async (req, res): Promise<void> => {
   // Deactivated ledgers are withheld: this list exists to be selected from, and
   // a deactivated ledger must not attract new postings.
   const result = await pool.query(`SELECT * FROM account_ledgers WHERE COALESCE(is_active, true) ORDER BY id`);
@@ -778,7 +780,10 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
       for (const al of [...allocRows].sort((a, b) => a.id - b.id)) {
         const { rows: [bill] } = await client.query(
           `SELECT id, invoice_number, vendor_id, branch_transfer_id, location_type, location_id,
-                  total_amount::numeric AS total_amount
+                  total_amount::numeric AS total_amount,
+                  COALESCE((SELECT SUM((e->>'amount')::numeric)
+                              FROM jsonb_array_elements(COALESCE(other_charges, '[]'::jsonb)) e
+                             WHERE (e->>'amount') ~ '^[0-9.]+$'), 0) AS other_charges_total
              FROM purchases WHERE id = $1 FOR UPDATE`,
           [al.id],
         );
@@ -811,9 +816,12 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
           [al.id],
         );
         const already = Number(ex?.allocated ?? 0);
-        if (already + al.amount > Number(bill.total_amount) + 0.005) {
+        // The bill's payable side is goods PLUS other purchase charges — both
+        // credit the vendor, so an allocation may cover the whole of it.
+        const billPayable = Number(bill.total_amount) + Number(bill.other_charges_total ?? 0);
+        if (already + al.amount > billPayable + 0.005) {
           await client.query("ROLLBACK");
-          res.status(400).json({ error: `₹${al.amount.toFixed(2)} against ${bill.invoice_number ?? `#${al.id}`} exceeds what is left on the bill (₹${money2(Number(bill.total_amount) - already).toFixed(2)}).` });
+          res.status(400).json({ error: `₹${al.amount.toFixed(2)} against ${bill.invoice_number ?? `#${al.id}`} exceeds what is left on the bill (₹${money2(billPayable - already).toFixed(2)}).` });
           return;
         }
         details.push({ bill, alloc: al });
@@ -1660,6 +1668,26 @@ router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledge
       date: p.purchase_date,
       description: `Purchase Bill ${p.invoice_number || '#' + p.id}`,
       debit: Number(p.total_amount), credit: 0, entryType: 'purchase',
+    })));
+  }
+
+  // Other Purchase Charges booked to this expense ledger (freight, hamali… on
+  // purchase bills) — mirrors the Dr leg buildDerivedPostings creates, so the
+  // statement agrees with the P&L and Trial Balance for these ledgers.
+  if (account.type === 'expense') {
+    const ocParams: unknown[] = [accountId];
+    const ocWhere = scopeBranchWhere(scope, ocParams, 'p');
+    const { rows: ocRows } = await pool.query(
+      `SELECT p.purchase_date, p.invoice_number, p.id, (e->>'amount')::numeric AS amount
+         FROM purchases p, jsonb_array_elements(COALESCE(p.other_charges, '[]'::jsonb)) e
+        WHERE e->>'ledgerId' ~ '^[0-9]+$' AND (e->>'ledgerId')::int = $1
+          AND ${ocWhere}${documentLocationCond(locFilter, 'p', ocParams, 'headoffice')}`,
+      ocParams,
+    );
+    entries.push(...ocRows.map((p: any) => ({
+      date: p.purchase_date,
+      description: `Purchase charge — ${p.invoice_number || 'Bill #' + p.id}`,
+      debit: Number(p.amount), credit: 0, entryType: 'purchase',
     })));
   }
 
@@ -3141,7 +3169,14 @@ router.get("/accounts/settlement-context", requireModuleView(["page:/accounts/vo
     locCond = `(COALESCE(p.location_type, 'headoffice') = $2 AND COALESCE(p.location_id, 0) = $3)`;
   }
   const { rows } = await pool.query(
-    `SELECT p.id, p.invoice_number, p.purchase_date, p.total_amount::numeric AS total
+    `SELECT p.id, p.invoice_number, p.purchase_date,
+            -- The payable side of the bill: goods plus other purchase charges,
+            -- matching the vendor credit in the books and the settlement index.
+            (p.total_amount::numeric + COALESCE((
+               SELECT SUM((e->>'amount')::numeric)
+                 FROM jsonb_array_elements(COALESCE(p.other_charges, '[]'::jsonb)) e
+                WHERE (e->>'amount') ~ '^[0-9.]+$'
+             ), 0)) AS total
        FROM purchases p
       WHERE p.vendor_id = $1 AND p.branch_transfer_id IS NULL AND ${locCond}
       ORDER BY p.purchase_date ASC, p.id ASC`,

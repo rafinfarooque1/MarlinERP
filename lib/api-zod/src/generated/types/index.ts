@@ -96,6 +96,7 @@ export * from './purchaseInputPriceMode';
 export * from './purchaseLineItem';
 export * from './purchaseLineItemMaterialType';
 export * from './purchaseLineItemTaxType';
+export * from './purchaseOtherCharge';
 export * from './purchasePriceMode';
 export * from './quotation';
 export * from './quotationInput';

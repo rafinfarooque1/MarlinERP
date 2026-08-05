@@ -1,0 +1,304 @@
+Redesign the entire mobile dashboard for a professional ERP experience.
+
+The current mobile dashboard works but is not visually balanced. It looks like the desktop layout has been compressed. Redesign ONLY the mobile view (desktop remains unchanged).
+
+========================================================
+GENERAL DESIGN
+========================================================
+
+Use a true mobile-first responsive layout.
+
+Cards should feel similar to banking apps like TallyPrime Mobile, Zoho Books, Vyapar, Oracle NetSuite Mobile or SAP Business One Mobile.
+
+The dashboard should be clean, balanced and easy to scan.
+
+========================================================
+CARD GRID
+========================================================
+
+Maintain a 2-column grid.
+
+Every row must have equal height.
+
+Every card must have
+
+• same width
+• same height
+• same border radius
+• same shadow
+• same padding
+• same spacing
+
+Cards should never stretch because one card has more content.
+
+========================================================
+CARD CONTENT
+========================================================
+
+Each card should contain
+
+Title
+
+Main Amount
+
+Optional secondary information
+
+Spacing must be consistent.
+
+Example
+
+Sales
+
+₹1,19,035
+
+NOT
+
+Sales
+
+₹1,19,035
+
+(blank area)
+
+========================================================
+AMOUNTS
+========================================================
+
+Amounts currently overflow.
+
+Make responsive typography.
+
+Rules
+
+Large amount:
+24px
+
+Medium:
+22px
+
+Small:
+20px
+
+If number becomes too long
+
+Reduce font size automatically.
+
+Never overflow.
+
+Never wrap to second line.
+
+Never cut digits.
+
+========================================================
+EXPENSE CARD
+========================================================
+
+Current card
+
+Salary
+Rent
+Other
+
+takes multiple lines.
+
+Instead show
+
+Expenses
+
+₹9,800.80
+
+Salary ₹3,000
+Rent ₹3,225
+Other ₹3,575
+
+using smaller muted text.
+
+Maximum two lines.
+
+========================================================
+PAYABLES CARD
+========================================================
+
+Current breakdown wraps badly.
+
+Show
+
+Suppliers
+
+Salary
+
+Rent
+
+on separate compact lines.
+
+Use muted grey.
+
+Keep amount bold.
+
+========================================================
+INVENTORY
+========================================================
+
+Inventory value should never overflow.
+
+Shrink font automatically.
+
+========================================================
+GP & NP
+========================================================
+
+Current GP and NP cards do not align.
+
+Make GP and NP identical height to every other dashboard card.
+
+Description
+
+Gross Profit
+
+Net Profit
+
+should be one line.
+
+Remove unnecessary whitespace.
+
+========================================================
+CARD ALIGNMENT
+========================================================
+
+Every row must look perfectly aligned.
+
+Example
+
+Sales | Purchases
+
+Expenses | Inventory
+
+Cash | Bank
+
+Receivable | Payable
+
+GP | NP
+
+No uneven spacing.
+
+========================================================
+TYPOGRAPHY
+========================================================
+
+Titles
+
+16px
+Medium weight
+
+Amounts
+
+22–24px
+Bold
+
+Description
+
+12px
+Muted grey
+
+========================================================
+ICONS
+========================================================
+
+Optionally add small icons to cards.
+
+Sales
+
+Purchases
+
+Expense
+
+Cash
+
+Bank
+
+Inventory
+
+Receivable
+
+Payable
+
+GP
+
+NP
+
+Icons should be subtle.
+
+========================================================
+WHITE SPACE
+========================================================
+
+Reduce excessive empty padding.
+
+Increase breathing room only where necessary.
+
+Dashboard should fit more information on one screen.
+
+========================================================
+RESPONSIVE RULES
+========================================================
+
+Cards must resize automatically for
+
+320px
+
+360px
+
+390px
+
+412px
+
+430px
+
+480px
+
+No overflow.
+
+No clipped text.
+
+========================================================
+PERFORMANCE
+========================================================
+
+No layout shifts.
+
+No flickering.
+
+No unnecessary re-renders.
+
+========================================================
+DESKTOP
+========================================================
+
+Do NOT modify desktop dashboard.
+
+Only improve the mobile layout.
+
+========================================================
+TESTING
+========================================================
+
+Verify on
+
+iPhone SE
+
+iPhone 13/14/15
+
+Samsung Galaxy
+
+Pixel
+
+Landscape
+
+Portrait
+
+No overflowing numbers.
+
+No inconsistent heights.
+
+Perfect alignment.
+
+Professional ERP appearance.

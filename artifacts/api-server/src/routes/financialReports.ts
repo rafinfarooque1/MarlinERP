@@ -424,6 +424,29 @@ router.get("/reports/fin/expenses", requireModuleView(REPORTS_KEY), async (req, 
     [from, to, effType, effId],
   );
 
+  // Other Purchase Charges — bill-borne expenses (freight, hamali…) recorded
+  // on purchase bills rather than as expense vouchers. They post to the same
+  // P&L expense ledgers, so this register must show them or its total would
+  // disagree with the P&L for any period that has them.
+  const { rows: chargeRows } = await pool.query<any>(
+    `SELECT p.id AS pid, e.idx, p.purchase_date, p.invoice_number,
+            p.location_type, p.location_id,
+            (e.val->>'amount')::numeric AS amount,
+            v.name AS vendor_name, l.name AS ledger_name, l.code AS ledger_code
+       FROM purchases p
+       JOIN LATERAL jsonb_array_elements(COALESCE(p.other_charges, '[]'::jsonb))
+            WITH ORDINALITY AS e(val, idx) ON (e.val->>'amount') ~ '^[0-9.]+$'
+       LEFT JOIN vendors v ON v.id = p.vendor_id
+       LEFT JOIN account_ledgers l ON l.id = (e.val->>'ledgerId')::int
+      WHERE p.cancelled_at IS NULL
+        AND ($1::date IS NULL OR p.purchase_date::date >= $1::date)
+        AND ($2::date IS NULL OR p.purchase_date::date <= $2::date)
+        AND ($3::text = ''   OR COALESCE(p.location_type,'headoffice') = $3)
+        AND ($4::int  = 0    OR p.location_id = $4)
+      ORDER BY p.purchase_date DESC, p.id DESC`,
+    [from, to, effType, effId],
+  );
+
   const { rows: whs } = await pool.query<any>(`SELECT id, name FROM warehouses`);
   const { rows: outs } = await pool.query<any>(`SELECT id, name FROM outlets`);
   const wMap = new Map<number, string>(whs.map((w: any) => [Number(w.id), String(w.name)]));
@@ -449,6 +472,26 @@ router.get("/reports/fin/expenses", requireModuleView(REPORTS_KEY), async (req, 
     createdBy: r.created_by_name ?? null,
     amount: r2(Number(r.amount)),
   }));
+
+  // Derived, read-only rows — negative synthetic ids so they can never collide
+  // with a real expense voucher's id in any client keyed on it.
+  for (const c of chargeRows) {
+    items.push({
+      id: -(Number(c.pid) * 100 + Number(c.idx)),
+      expenseNumber: c.invoice_number ? String(c.invoice_number) : `Bill #${c.pid}`,
+      date: String(c.purchase_date),
+      category: "Purchase Bill Charges",
+      ledgerName: c.ledger_name ?? "—",
+      ledgerCode: c.ledger_code ?? null,
+      paidFrom: c.vendor_name ? `${c.vendor_name} (bill dues)` : "Vendor (bill dues)",
+      description: `Other charge on purchase bill${c.invoice_number ? ` ${c.invoice_number}` : ` #${c.pid}`}${c.vendor_name ? ` — ${c.vendor_name}` : ""}`,
+      locationType: c.location_type ?? "headoffice",
+      locationName: locName(c.location_type, c.location_id),
+      createdBy: null,
+      amount: r2(Number(c.amount)),
+    });
+  }
+  items.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 
   const roll = (key: (i: typeof items[number]) => string) => {
     const m = new Map<string, { count: number; amount: number }>();

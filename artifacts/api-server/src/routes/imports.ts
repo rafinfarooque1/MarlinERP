@@ -197,6 +197,8 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
       { key: "billDiscount", header: "Bill Discount", hidden: true, example: 0, hint: "Not supported for purchases — spread it into the line Discount % instead", aliases: ["billdiscount", "invoicediscount", "totaldiscount", "overalldiscount"] },
       { key: "paymentStatus", header: "Payment Status", example: "Unpaid", hint: "Paid / Unpaid / Partial. Paid with a blank Paid Amount = fully paid; Partial REQUIRES a Paid Amount; blank = Unpaid (or partly paid when a Paid Amount is given)", aliases: ["paymentstatus", "paystatus", "status"] },
       { key: "paidAmount", header: "Paid Amount", example: 0, hint: "Amount already paid — recorded as a settlement from the Payment Account (blank account = the location's cash)", aliases: ["paidamount", "amountpaid", "paid", "advancepaid"] },
+      { key: "otherChargeLedger", header: "Other Charge Ledger", example: "", hint: "Optional — an EXPENSE ledger from the Chart of Accounts for an incidental charge on the bill (freight, hamali, courier…). Each filled row adds one charge; posted to P&L and owed to the vendor, never into stock cost. Unknown names are errors — create the ledger first", aliases: ["otherchargeledger", "chargeledger", "expenseledger", "otherexpenseledger", "freightledger", "chargeaccount"] },
+      { key: "otherChargeAmount", header: "Other Charge Amount", example: "", hint: "₹ amount for the Other Charge Ledger on this row — required when a ledger is named, and vice versa", aliases: ["otherchargeamount", "chargeamount", "otherchargeamt", "freightamount", "freightcharges", "othercharges"] },
       { key: "account", header: "Payment Account", example: "Cash", hint: "Where the Paid Amount was paid from: Cash, Bank, or the exact bank ledger name (blank = the location's cash)", aliases: ["paymentaccount", "account", "accountname", "paidfrom", "paidfromaccount", "paymentmode", "mode", "modeofpayment", "cashbank"] },
       { key: "reference", header: "Reference", example: "", hint: "Cheque / UTR / reference number", aliases: ["reference", "referenceno", "refno", "ref", "chequeno", "utr", "utrno", "txnid"] },
       { key: "narration", header: "Narration", example: "Migrated from old ERP", hint: "Stored on the bill", aliases: ["narration", "notes", "remarks", "note", "comment", "comments"] },
@@ -637,7 +639,37 @@ interface TxnContext {
   /** Purchases: the location's valid money accounts (cash till + bank leaves)
    *  for resolving the Payment Account cell — same options as voucher imports. */
   accounts: Awaited<ReturnType<typeof importAccountOptions>>;
+  /** Purchases: postable expense ledgers an "Other Charge Ledger" cell may
+   *  name (lower(name) → ledger) — the same set the manual bill form offers,
+   *  and the same rules importPurchaseDoc re-validates at commit. */
+  expenseLedgers: Map<string, { id: number; name: string }>;
   settings: ImportSettings;
+}
+
+/** Expense ledgers valid for Other Purchase Charges: postable, active,
+ *  expense-type, not internal, and not inside the Purchase (SYS-PUR) subtree —
+ *  mirrors lib/otherCharges.ts. Unknown names are ERRORS, not a resolve step:
+ *  auto-creating a ledger from a typo would scatter the chart of accounts. */
+async function importExpenseLedgerOptions(): Promise<Map<string, { id: number; name: string }>> {
+  const { rows } = await pool.query<any>(`
+    WITH RECURSIVE pur AS (
+      SELECT id FROM account_ledgers WHERE code = 'SYS-PUR'
+      UNION ALL
+      SELECT c.id FROM account_ledgers c JOIN pur p ON c.parent_id = p.id
+    )
+    SELECT id, name FROM account_ledgers
+     WHERE type = 'expense'
+       AND NOT COALESCE(is_group, false) AND NOT COALESCE(is_system_group, false)
+       AND COALESCE(is_active, true)
+       AND id NOT IN (SELECT id FROM pur)
+       AND (code IS NULL OR code !~ '^(SYS-|SAL-EMP-|SAL-PAY-|ADV-EMP-|GST-|STD-BRANCH-)')
+     ORDER BY id`);
+  const map = new Map<string, { id: number; name: string }>();
+  for (const r of rows) {
+    const key = String(r.name ?? "").trim().toLowerCase();
+    if (key && !map.has(key)) map.set(key, { id: Number(r.id), name: String(r.name) });
+  }
+  return map;
 }
 
 /** Legacy-migration behaviour toggles (Company Settings → Data Import).
@@ -742,6 +774,7 @@ async function loadTxnContext(module: TxnModule, loc: { type: string; id: number
     accounts: module === "purchases"
       ? await importAccountOptions(pool, loc as ProdLocation)
       : [],
+    expenseLedgers: module === "purchases" ? await importExpenseLedgerOptions() : new Map(),
     settings: await loadImportSettings(),
   };
 }
@@ -1180,6 +1213,29 @@ async function validateTransactionRows(
       }
     }
 
+    // Other Purchase Charges — an optional (ledger, amount) pair on any row of
+    // the bill. Both-or-neither: an amount without a ledger (or the reverse)
+    // is a hard error, never a silent skip that understates the vendor's dues.
+    if (module === "purchases") {
+      const ocLedgerRaw = (values.otherChargeLedger ?? "").trim();
+      const ocAmtRaw = (values.otherChargeAmount ?? "").trim();
+      if (ocLedgerRaw || ocAmtRaw) {
+        const amt = parseMoney(ocAmtRaw);
+        if (!ocLedgerRaw) {
+          s.errors.push(`Other Charge Amount "${ocAmtRaw}" has no Other Charge Ledger — name the expense ledger it belongs to`);
+        } else if (amt === null || !Number.isFinite(amt) || amt <= 0) {
+          s.errors.push(`Other Charge Amount "${ocAmtRaw || "(blank)"}" must be a number above zero when an Other Charge Ledger is named`);
+        } else {
+          const led = ctx.expenseLedgers.get(ocLedgerRaw.toLowerCase());
+          if (!led) {
+            s.errors.push(`Other Charge Ledger "${ocLedgerRaw}" is not a postable expense ledger in the Chart of Accounts — create it under Accounts → Chart of Accounts first, then re-validate`);
+          } else {
+            s.norm.otherCharge = { ledgerId: led.id, ledgerName: led.name, amount: Math.round(amt * 100) / 100 };
+          }
+        }
+      }
+    }
+
   }
 
   // ── Pass 2: document-level pricing + settlement resolution ──
@@ -1200,6 +1256,7 @@ async function validateTransactionRows(
     let computedTaxable = 0;
     let computedQty = 0;
     let computedDiscount = 0;
+    let otherChargesTot = 0;
     if (module === "sales") {
       const itemTaxMap = new Map<number, { taxRate: number; name: string; hsnCode: string | null; unit: string | null }>();
       for (const i of doc.rowIdxs) {
@@ -1257,6 +1314,15 @@ async function validateTransactionRows(
       computedTaxable = Number(priced.taxableTotal);
       computedDiscount = Number(priced.discountTotal);
       for (const i of doc.rowIdxs) computedQty += Number(slots[i].norm.line.quantity ?? 0);
+      // Other Purchase Charges gathered across the bill's rows — they add to
+      // what the vendor is owed (and what "Paid" may settle), never to the
+      // goods total, the GST cross-check or stock cost.
+      const ocs = doc.rowIdxs.map((i) => slots[i].norm.otherCharge).filter(Boolean);
+      if (ocs.length > 0) {
+        head.norm.otherCharges = ocs.map((c: any) => ({ ledgerId: c.ledgerId, amount: c.amount }));
+        otherChargesTot = Math.round(ocs.reduce((t: number, c: any) => t + Number(c.amount), 0) * 100) / 100;
+        head.norm.otherChargesTotal = otherChargesTot;
+      }
       if (doc.dateIso < todayIso) {
         head.warnings.push("Backdated bill — average cost updates in the ORDER bills are entered, not by bill date; import oldest bills first");
       }
@@ -1298,13 +1364,16 @@ async function validateTransactionRows(
         if (doc.status === "paid" && doc.paidGiven === null) paid = total;
       }
     } else {
-      paid = doc.paidGiven ?? (doc.status === "paid" ? total : 0);
-      if (paid > total + 0.01) {
-        head.warnings.push(`Paid Amount ₹${paid.toFixed(2)} exceeds the computed total ₹${total.toFixed(2)} — capped at the total`);
-        paid = total;
+      // A purchase bill's payable side is goods PLUS other charges — both
+      // credit the vendor, so "Paid" may settle the whole of it.
+      const grand = Math.round((total + otherChargesTot) * 100) / 100;
+      paid = doc.paidGiven ?? (doc.status === "paid" ? grand : 0);
+      if (paid > grand + 0.01) {
+        head.warnings.push(`Paid Amount ₹${paid.toFixed(2)} exceeds the computed total ₹${grand.toFixed(2)}${otherChargesTot > 0 ? " (goods + other charges)" : ""} — capped at the total`);
+        paid = grand;
       }
-      if (doc.status === "paid" && doc.paidGiven !== null && doc.paidGiven < total - 0.01) {
-        head.warnings.push(`Marked Paid but Paid Amount is ₹${doc.paidGiven.toFixed(2)} of ₹${total.toFixed(2)} — recorded as partly paid`);
+      if (doc.status === "paid" && doc.paidGiven !== null && doc.paidGiven < grand - 0.01) {
+        head.warnings.push(`Marked Paid but Paid Amount is ₹${doc.paidGiven.toFixed(2)} of ₹${grand.toFixed(2)} — recorded as partly paid`);
       }
       // Payment Account: which money account settles the paid amount —
       // resolved exactly like voucher imports (Cash / Bank / exact ledger name).
@@ -2445,6 +2514,9 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
             }),
             paidAmount: Number(hn.paidAmount ?? 0),
             paidFromLedgerId: hn.paidFromLedgerId != null ? Number(hn.paidFromLedgerId) : null,
+            otherCharges: Array.isArray(hn.otherCharges)
+              ? hn.otherCharges.map((c: any) => ({ ledgerId: Number(c.ledgerId), amount: Number(c.amount) }))
+              : [],
             narration: hn.narration ?? null,
             reference: hn.reference ?? null,
             loc, user,

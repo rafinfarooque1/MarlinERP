@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useRef, useState, useLayoutEffect } from 'react';
 import {
   useGetDashboardBi,
   useAssetSummary,
@@ -16,11 +16,12 @@ import {
   ShieldOff, TrendingUp, ShoppingCart, Factory, Boxes,
   Landmark, Trophy, Users, AlertTriangle, Clock, MapPin,
   Warehouse, Store, ArrowUpRight, ArrowDownRight, Wallet,
+  Receipt, PieChart, BarChart3, type LucideIcon,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import {
   fmt, num, fmtDate, periodLabel,
-  useDateRange, RangeBar, SummaryCards, LocationBadge,
+  useDateRange, RangeBar, SummaryCards, LocationBadge, TONE_CLS,
   type CardTone, type SummaryCard,
 } from '@/pages/reports/shared';
 
@@ -33,6 +34,129 @@ const PAY_LABEL: Record<string, string> = {
   cash: 'Cash', card: 'Card', upi: 'UPI',
   bank_transfer: 'Bank', credit: 'Credit', unknown: 'Other',
 };
+
+// ── Mobile KPI cards (phones only — desktop keeps SummaryCards untouched) ───
+
+/** Compact rupees for breakdown lines — whole rupees keep the lines short. */
+const rup = (n: number | null | undefined) =>
+  `₹${Math.round(Number(n ?? 0)).toLocaleString('en-IN')}`;
+
+/**
+ * Indian compact notation for amounts too wide to fit a card even at the
+ * minimum font size — ₹1.23Cr / ₹4.56L. The full figure stays available via
+ * the element's title/aria-label, so no digit is ever silently lost.
+ */
+function compactINR(text: string): string {
+  const n = Number(text.replace(/[₹,\s]/g, ''));
+  if (!Number.isFinite(n)) return text;
+  const sign = n < 0 ? '-' : '';
+  const abs = Math.abs(n);
+  if (abs >= 1e7) return `${sign}₹${(abs / 1e7).toFixed(2)}Cr`;
+  if (abs >= 1e5) return `${sign}₹${(abs / 1e5).toFixed(2)}L`;
+  return `${sign}₹${Math.round(abs).toLocaleString('en-IN')}`;
+}
+
+/**
+ * Renders an amount that shrinks (24px → 10px) until it fits its card on one
+ * line at any phone width down to 320px. If even 10px cannot hold the full
+ * figure, it switches to Indian compact notation (₹x.xxCr/L) and exposes the
+ * exact amount via title + aria-label — never wrapped, never clipped digits.
+ * Font-size refits mutate the style directly (no state), so resizes cause no
+ * React re-renders; only the rare compact switch does.
+ */
+function FitAmount({ text, className }: { text: string; className?: string }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [compact, setCompact] = useState(false);
+  const shown = compact ? compactINR(text) : text;
+  useLayoutEffect(() => setCompact(false), [text]);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const fit = () => {
+      let size = 24;
+      el.style.fontSize = `${size}px`;
+      while (size > 10 && el.scrollWidth > el.clientWidth) {
+        size -= 1;
+        el.style.fontSize = `${size}px`;
+      }
+      // Still too wide at the floor: fall back to compact notation (sticky
+      // for this value so it cannot oscillate with resizes).
+      if (el.scrollWidth > el.clientWidth) setCompact(true);
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [text, compact]);
+  return (
+    <p
+      ref={ref}
+      title={compact ? text : undefined}
+      aria-label={compact ? text : undefined}
+      className={`font-bold tabular-nums tracking-tight leading-tight whitespace-nowrap overflow-hidden ${className ?? ''}`}
+    >
+      {shown}
+    </p>
+  );
+}
+
+interface MobileKpi {
+  label: string;
+  icon: LucideIcon;
+  value: string;
+  tone?: CardTone;
+  /** Structured breakdown, e.g. Suppliers/Salary/Rent — one compact line each. */
+  lines?: { label: string; value: string }[];
+  /** One-line muted description (GP/NP). */
+  desc?: string;
+  /** Card takes the full row — used to keep semantic pairs intact when a
+      permission-hidden card (Inventory) would otherwise shift every pair. */
+  spanTwo?: boolean;
+  onClick?: () => void;
+}
+
+function MobileKpiCard({ card }: { card: MobileKpi }) {
+  const Icon = card.icon;
+  const body = (
+    <>
+      <div className="flex items-center gap-1.5 min-w-0">
+        <Icon className="w-4 h-4 shrink-0 text-muted-foreground/60" />
+        <span className="text-[16px] font-medium text-muted-foreground truncate">{card.label}</span>
+      </div>
+      <FitAmount text={card.value} className={`mt-1.5 ${TONE_CLS[card.tone ?? 'default']}`} />
+      {card.lines && card.lines.length > 0 && (
+        <div className="mt-auto pt-2 space-y-0.5">
+          {card.lines.map((l) => (
+            <div key={l.label} className="flex items-baseline justify-between gap-2 text-[12px] leading-tight">
+              <span className="text-muted-foreground truncate">{l.label}</span>
+              <span className="font-semibold tabular-nums whitespace-nowrap text-foreground/80">{l.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {card.desc && (
+        <p className="mt-auto pt-1.5 text-[12px] leading-tight text-muted-foreground truncate">{card.desc}</p>
+      )}
+    </>
+  );
+  const base = `bg-card border border-border rounded-xl shadow-sm p-3 flex flex-col min-w-0 text-left ${card.spanTwo ? 'col-span-2' : ''}`;
+  return card.onClick ? (
+    <button type="button" onClick={card.onClick} className={`${base} active:bg-muted/40 transition-colors`}>
+      {body}
+    </button>
+  ) : (
+    <div className={base}>{body}</div>
+  );
+}
+
+/** 2-across equal-height KPI grid; spanTwo cards take a full row. */
+function MobileSummaryCards({ cards }: { cards: MobileKpi[] }) {
+  return (
+    <div className="grid grid-cols-2 auto-rows-fr gap-2.5 md:hidden">
+      {cards.map((c) => <MobileKpiCard key={c.label} card={c} />)}
+    </div>
+  );
+}
 
 /** Horizontal CSS bar row — used for trends and breakdowns. */
 function BarRow({ label, sub, value, max, color, valueLabel }: {
@@ -229,6 +353,81 @@ export default function Dashboard() {
     },
   ];
 
+  // Mobile-only card set: same figures and tones as summaryCards, but with
+  // shorter labels, subtle icons, structured breakdown lines and one-line
+  // descriptions, per the owner's mobile-dashboard spec. Pairs land as
+  // Sales|Purchases, Expenses|Inventory, Cash|Bank, Receivables|Payables,
+  // GP|NP; when Inventory is permission-hidden, Expenses spans its full row
+  // so every later semantic pair stays intact.
+  const mobileCards: MobileKpi[] = [
+    { label: 'Sales', icon: TrendingUp, value: fmt(s?.total ?? 0), tone: 'pos' },
+    { label: 'Purchases', icon: ShoppingCart, value: fmt(bi?.purchases.total ?? 0) },
+    {
+      label: 'Expenses',
+      icon: Receipt,
+      value: bi?.expenses?.total == null ? '—' : fmt(bi.expenses.total),
+      tone: (bi?.expenses?.total ?? 0) > 0 ? 'neg' : 'default',
+      lines: bi?.expenses?.total != null && bi.expenses.salary != null
+        ? [
+            { label: 'Salary', value: rup(bi.expenses.salary) },
+            { label: 'Rent', value: rup(bi.expenses.rent) },
+            { label: 'Other', value: rup(bi.expenses.other) },
+          ]
+        : undefined,
+      spanTwo: !hasInventory,
+    },
+    ...(hasInventory
+      ? [{ label: 'Inventory', icon: Boxes, value: fmt(bi!.inventory.valuation ?? 0), tone: 'info' as CardTone }]
+      : []),
+    {
+      label: 'Cash',
+      icon: Wallet,
+      value: bi?.cash?.balance == null ? '—' : fmt(bi.cash.balance),
+      tone: bi?.cash?.balance == null ? 'default' : bi.cash.balance >= 0 ? 'pos' : 'neg',
+    },
+    {
+      label: 'Bank',
+      icon: Landmark,
+      value: bi?.bank?.balance == null ? '—' : fmt(bi.bank.balance),
+      tone: bi?.bank?.balance == null ? 'default' : bi.bank.balance >= 0 ? 'pos' : 'neg',
+    },
+    {
+      label: 'Receivables',
+      icon: ArrowDownRight,
+      value: bi?.receivables?.total == null ? '—' : fmt(bi.receivables.total),
+      tone: bi?.receivables?.total == null ? 'default' : (bi?.receivables?.overdue ?? 0) > 0 ? 'warn' : 'info',
+    },
+    {
+      label: 'Payables',
+      icon: ArrowUpRight,
+      value: (bi?.payables as any)?.allPayables == null ? '—' : fmt((bi!.payables as any).allPayables),
+      tone: (bi?.payables as any)?.allPayables == null ? 'default' : 'neg',
+      lines: (bi?.payables as any)?.salaryPayable != null
+        ? [
+            { label: 'Suppliers', value: rup(bi!.payables.total) },
+            { label: 'Salary', value: rup((bi!.payables as any).salaryPayable) },
+            { label: 'Rent', value: rup((bi!.payables as any).rentPayable) },
+          ]
+        : undefined,
+    },
+    {
+      label: 'GP',
+      icon: PieChart,
+      value: pf?.gross == null ? '—' : fmt(pf.gross),
+      tone: pf?.gross == null ? 'default' : pf.gross >= 0 ? 'pos' : 'neg',
+      desc: 'Gross Profit',
+      onClick: drill('pl-gross-profit'),
+    },
+    {
+      label: 'NP',
+      icon: BarChart3,
+      value: pf?.net == null ? '—' : fmt(pf.net),
+      tone: pf?.net == null ? 'default' : pf.net >= 0 ? 'pos' : 'neg',
+      desc: 'Net Profit',
+      onClick: drill('pl-net-profit'),
+    },
+  ];
+
   return (
     <AppLayout>
       <div className="space-y-6">
@@ -261,12 +460,15 @@ export default function Dashboard() {
 
         {/* ── Summary cards ──────────────────────────────────────────────── */}
         {isLoading ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {[...Array(10)].map((_, i) => <Skeleton key={i} className="h-[68px] rounded-lg" />)}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 md:gap-3">
+            {[...Array(10)].map((_, i) => <Skeleton key={i} className="h-24 md:h-[68px] rounded-xl md:rounded-lg" />)}
           </div>
         ) : (
           <>
-            <SummaryCards cards={summaryCards} gridClassName="grid grid-cols-2 md:grid-cols-6 gap-3" />
+            {/* Phones get the compact banking-app card grid; md+ keeps the
+                original SummaryCards layout pixel-identical. */}
+            <MobileSummaryCards cards={mobileCards} />
+            <SummaryCards cards={summaryCards} gridClassName="hidden md:grid md:grid-cols-6 gap-3" />
             {bi && bi.expenses?.total == null && (
               <p className="text-xs text-muted-foreground">
                 Expenses and Bank Balance are company-level accounting figures and are not

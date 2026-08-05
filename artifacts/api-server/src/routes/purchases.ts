@@ -17,6 +17,7 @@ import { isIsoDate } from "../lib/dateInput";
 import { nextVoucherNumber } from "../lib/voucherNumber";
 import { advanceAvailable, takeAdvanceLock, attributeAdvanceConsumption, releaseAdvanceConsumption } from "../lib/advanceLedgers";
 import { PURCHASE_BATCH_SEQUENCE } from "../migrations/purchaseBills";
+import { validateOtherCharges, parseStoredOtherCharges, otherChargesTotal, type OtherCharge } from "../lib/otherCharges";
 import {
   calcPurchaseBill, asPriceMode, asTaxType,
   type PriceMode, type TaxType,
@@ -427,6 +428,18 @@ async function locationNameMap(): Promise<Map<string, string>> {
   return m;
 }
 
+/** Current ledger names for the charge rows a bill stores — resolved live, so
+ *  a renamed ledger shows its current name everywhere. */
+async function chargeLedgerNames(charges: OtherCharge[][]): Promise<Map<number, string>> {
+  const ids = [...new Set(charges.flat().map((c) => c.ledgerId))];
+  if (ids.length === 0) return new Map();
+  const { rows } = await pool.query(`SELECT id, name FROM account_ledgers WHERE id = ANY($1::int[])`, [ids]);
+  return new Map(rows.map((r: any) => [Number(r.id), String(r.name)]));
+}
+
+const enrichCharges = (charges: OtherCharge[], names: Map<number, string>) =>
+  charges.map((c) => ({ ...c, ledgerName: names.get(c.ledgerId) ?? `Ledger #${c.ledgerId}` }));
+
 // Serves Purchases and Returns pages.
 router.get("/purchases", requireModuleView(["page:/production/purchase", "page:/returns"]), async (req, res): Promise<void> => {
   // LBAC: a location sees its own bills; Head Office sees every location's.
@@ -472,7 +485,9 @@ router.get("/purchases", requireModuleView(["page:/production/purchase", "page:/
   `, params);
   const nameMaps = await buildNameMaps();
   const locNames = await locationNameMap();
-  const mapped = rows.map((r: any) => ({
+  const chargeRows = rows.map((r: any) => parseStoredOtherCharges(r.other_charges));
+  const chargeNames = await chargeLedgerNames(chargeRows);
+  const mapped = rows.map((r: any, i: number) => ({
     id: r.id,
     vendorId: r.vendor_id,
     purchaseDate: r.purchase_date_str,
@@ -488,6 +503,8 @@ router.get("/purchases", requireModuleView(["page:/production/purchase", "page:/
     locationType: r.location_type ?? 'headoffice',
     locationId: Number(r.location_id ?? 1),
     locationName: locNames.get(`${r.location_type ?? 'headoffice'}:${Number(r.location_id ?? 1)}`) ?? 'Head Office',
+    otherCharges: enrichCharges(chargeRows[i], chargeNames),
+    otherChargesTotal: otherChargesTotal(chargeRows[i]),
     lineItems: enrichLines(r.line_items, nameMaps),
   }));
 
@@ -558,6 +575,16 @@ router.post("/purchases", requireModuleAction("page:/production/purchase", "add"
     if (!isValidGstSlab(li.gstRate)) { res.status(400).json({ error: gstSlabErrorMessage(li.gstRate) }); return; }
   }
 
+  // Other Purchase Charges (freight, hamali, courier…) — validated on the
+  // effective ledgers server-side; the dropdown filter is not a guard. They
+  // post to P&L and add to what the vendor is owed, never to stock cost.
+  const ocParsed = await validateOtherCharges(pool, (parsed.data as any).otherCharges);
+  if ("error" in ocParsed) { res.status(400).json({ error: ocParsed.error }); return; }
+  const otherCharges = ocParsed.charges;
+  const otherChargesTot = ocParsed.total;
+  // What the vendor is actually owed for this bill: goods + charges.
+  const grandPayable = Math.round((totalAmount + otherChargesTot) * 100) / 100;
+
   const warnings: string[] = [];
   for (let i = 0; i < enriched.length; i++) {
     const li = enriched[i] as any;
@@ -618,12 +645,13 @@ router.post("/purchases", requireModuleAction("page:/production/purchase", "add"
     const { rows: [ins] } = await client.query(
       `INSERT INTO purchases (vendor_id, purchase_date, invoice_number, line_items, total_amount,
                               notes, tax_total, discount_total, round_off, location_type, location_id,
-                              price_mode)
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12)
+                              price_mode, other_charges)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
        RETURNING id`,
       [parsed.data.vendorId, parsed.data.purchaseDate, parsed.data.invoiceNumber ?? null,
        JSON.stringify(enriched), String(totalAmount), parsed.data.notes ?? null,
-       taxTotal, discountTotal, roundOff, loc.type, loc.id, priceMode],
+       taxTotal, discountTotal, roundOff, loc.type, loc.id, priceMode,
+       JSON.stringify(otherCharges)],
     );
     newId = Number(ins.id);
 
@@ -634,7 +662,9 @@ router.post("/purchases", requireModuleAction("page:/production/purchase", "add"
     if (useAdvanceRequested && vendAdvLedgerExists) {
       await takeAdvanceLock(client, "vendor", parsed.data.vendorId);
       const advPos = await advanceAvailable("vendor", parsed.data.vendorId);
-      appliedAdvance = Math.min(advPos.available, totalAmount);
+      // The advance may settle the whole of what the vendor is owed —
+      // goods AND other charges, since both credit the vendor.
+      appliedAdvance = Math.min(advPos.available, grandPayable);
       if (Number.isFinite(advanceCapIn) && advanceCapIn >= 0) {
         appliedAdvance = Math.min(appliedAdvance, advanceCapIn);
       }
@@ -780,6 +810,7 @@ router.post("/purchases", requireModuleAction("page:/production/purchase", "add"
       vendorId: row.vendorId, vendorName: vendor?.name, totalAmount, lineCount: enriched.length,
       invoiceNumber: row.invoiceNumber, locationType: loc.type, locationId: loc.id,
       priceMode, taxableTotal, taxTotal, discountTotal,
+      otherChargesTotal: otherChargesTot,
       batchNumbers: (enriched as any[]).map(l => l.batchNumber),
     } },
   }).catch(() => {});
@@ -787,6 +818,8 @@ router.post("/purchases", requireModuleAction("page:/production/purchase", "add"
   res.status(201).json({
     ...row, vendorName: vendor?.name ?? "", totalAmount,
     subtotal, taxableTotal, taxTotal, discountTotal, roundOff, priceMode,
+    otherCharges: enrichCharges(otherCharges, await chargeLedgerNames([otherCharges])),
+    otherChargesTotal: otherChargesTot,
     locationType: loc.type, locationId: loc.id, locationName: locName,
     advanceApplied: appliedAdvance,
     ...(warnings.length ? { warnings } : {}),
@@ -799,8 +832,9 @@ router.get("/purchases/:id", requireModuleView("page:/production/purchase"), asy
   const [row] = await db.select().from(purchasesTable).where(eq(purchasesTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const { rows: [locRow] } = await pool.query(
-    `SELECT location_type, location_id, price_mode FROM purchases WHERE id = $1`, [id]);
+    `SELECT location_type, location_id, price_mode, other_charges FROM purchases WHERE id = $1`, [id]);
   const loc: ProdLocation = { type: locRow?.location_type ?? 'headoffice', id: Number(locRow?.location_id ?? 1) };
+  const gotCharges = parseStoredOtherCharges(locRow?.other_charges);
 
   // LBAC: a location may only open its own bills.
   const scope = await getUserDataScope((req as any).employee ?? { branchType: 'headoffice', branchId: 0 });
@@ -817,6 +851,8 @@ router.get("/purchases/:id", requireModuleView("page:/production/purchase"), asy
     discountTotal: Number((row as any).discountTotal ?? 0),
     roundOff: Number((row as any).roundOff ?? 0),
     priceMode: asPriceMode(locRow?.price_mode),
+    otherCharges: enrichCharges(gotCharges, await chargeLedgerNames([gotCharges])),
+    otherChargesTotal: otherChargesTotal(gotCharges),
     locationType: loc.type, locationId: loc.id,
     locationName: await locationLabel(pool, loc),
     lineItems: enrichLines(row.lineItems, await buildNameMaps()),
@@ -828,15 +864,15 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
   const [current] = await db.select().from(purchasesTable).where(eq(purchasesTable.id, id)).limit(1);
   if (!current) { res.status(404).json({ error: "Not found" }); return; }
 
-  const { purchaseDate, invoiceNumber, notes, vendorId, lineItems } = req.body as {
+  const { purchaseDate, invoiceNumber, notes, vendorId, lineItems, otherCharges: otherChargesBody } = req.body as {
     purchaseDate?: string; invoiceNumber?: string; notes?: string;
-    vendorId?: number; lineItems?: any[];
+    vendorId?: number; lineItems?: any[]; otherCharges?: any[];
   };
 
   // Bill-wise settlement guards. A bill that a payment voucher explicitly
   // settled, or that consumed a vendor advance, cannot have its money or its
   // vendor rewritten from under those records — dates and notes stay editable.
-  if (lineItems !== undefined || vendorId !== undefined) {
+  if (lineItems !== undefined || vendorId !== undefined || otherChargesBody !== undefined) {
     const { rows: [settled] } = await pool.query(
       `SELECT COALESCE((SELECT COUNT(*) FROM payment_bill_allocations WHERE purchase_id = $1), 0)::int AS allocs,
               COALESCE((SELECT SUM(amount)::numeric FROM purchase_advance_applications WHERE purchase_id = $1), 0) AS adv_applied,
@@ -929,7 +965,7 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     // Rate mode is part of the bill, so an edit that does not mention it keeps
     // whatever the bill was written with rather than silently reverting to
     // exclusive and restating the totals.
-    const { rows: [modeRow] } = await pool.query(`SELECT price_mode FROM purchases WHERE id = $1`, [id]);
+    const { rows: [modeRow] } = await pool.query(`SELECT price_mode, other_charges FROM purchases WHERE id = $1`, [id]);
     const modeSupplied = (req.body as any).priceMode;
     // Validated, not coerced. Silently reading an unrecognised mode as
     // "exclusive" would restate an inclusive bill's taxable value and tax on an
@@ -955,13 +991,27 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
       if (!isValidGstSlab(li.gstRate)) { res.status(400).json({ error: gstSlabErrorMessage(li.gstRate) }); return; }
     }
 
+    // Other Purchase Charges: replaced when sent, kept when omitted — an edit
+    // that never mentions them must not silently clear them.
+    let newOtherCharges: OtherCharge[];
+    if (otherChargesBody !== undefined) {
+      const ocEdit = await validateOtherCharges(pool, otherChargesBody);
+      if ("error" in ocEdit) { res.status(400).json({ error: ocEdit.error }); return; }
+      newOtherCharges = ocEdit.charges;
+    } else {
+      newOtherCharges = parseStoredOtherCharges(modeRow?.other_charges);
+    }
+    const newOtherTot = otherChargesTotal(newOtherCharges);
+
     // The advance already adjusted against this bill is spent money — the bill
     // cannot shrink below it, or the books would show an advance consumed by
-    // value that no longer exists.
+    // value that no longer exists. Judged on what the vendor is owed: goods
+    // plus other charges, since both credit the vendor.
     const advApplied = Number((req as any)._advApplied ?? 0);
-    if (advApplied > 0.004 && totalAmount < advApplied - 0.005) {
+    const grandPayable = Math.round((totalAmount + newOtherTot) * 100) / 100;
+    if (advApplied > 0.004 && grandPayable < advApplied - 0.005) {
       res.status(409).json({
-        error: `₹${advApplied.toFixed(2)} of vendor advance was adjusted against this bill — the new total (₹${totalAmount.toFixed(2)}) cannot go below that.`,
+        error: `₹${advApplied.toFixed(2)} of vendor advance was adjusted against this bill — the new total (₹${grandPayable.toFixed(2)}) cannot go below that.`,
         code: "BILL_BELOW_ADVANCE_APPLIED",
       });
       return;
@@ -1244,13 +1294,14 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
         `UPDATE purchases SET vendor_id = $2, purchase_date = $3, invoice_number = $4, notes = $5,
                               line_items = $6::jsonb, total_amount = $7,
                               tax_total = $8, discount_total = $9, round_off = $10,
-                              price_mode = $11, location_type = $12, location_id = $13
+                              price_mode = $11, location_type = $12, location_id = $13,
+                              other_charges = $14::jsonb
          WHERE id = $1`,
         [id, vendorId ?? locked.vendor_id, purchaseDate ?? locked.purchase_date,
          invoiceNumber !== undefined ? invoiceNumber : locked.invoice_number,
          notes !== undefined ? notes : locked.notes,
          JSON.stringify(enriched), String(totalAmount), taxTotal, discountTotal, roundOff,
-         priceMode, newLoc.type, newLoc.id],
+         priceMode, newLoc.type, newLoc.id, JSON.stringify(newOtherCharges)],
       );
 
       await client.query("COMMIT");
@@ -1274,13 +1325,15 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
       action: "UPDATE", module: "purchases", entityType: "purchase", entityId: id,
       description: `Purchase Bill #${id} fully edited at ${newLocName}`
         + (isMove ? ` (moved from ${locName})` : '') + ` — ₹${totalAmount.toFixed(2)}`,
-      metadata: { before: { totalAmount: beforeTotal, locationType: loc.type, locationId: loc.id }, after: { totalAmount, lineCount: enriched.length, locationType: newLoc.type, locationId: newLoc.id, priceMode, taxableTotal, taxTotal } },
+      metadata: { before: { totalAmount: beforeTotal, locationType: loc.type, locationId: loc.id }, after: { totalAmount, otherChargesTotal: newOtherTot, lineCount: enriched.length, locationType: newLoc.type, locationId: newLoc.id, priceMode, taxableTotal, taxTotal } },
     }).catch(() => {});
 
     const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, row.vendorId)).limit(1);
     res.json({
       ...row, vendorName: vendor?.name ?? "",
       totalAmount, subtotal, taxableTotal, taxTotal, discountTotal, roundOff, priceMode,
+      otherCharges: enrichCharges(newOtherCharges, await chargeLedgerNames([newOtherCharges])),
+      otherChargesTotal: newOtherTot,
       locationType: newLoc.type, locationId: newLoc.id, locationName: newLocName,
       ...(warnings.length ? { warnings } : {}),
       lineItems: enrichLines(enriched, maps),
@@ -1288,13 +1341,41 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     return;
   }
 
-  // ── Metadata-only edit (date / invoice ref / notes, no line changes) ──
+  // ── Metadata-only edit (date / invoice ref / notes / other charges, no line changes) ──
   const updateData: Record<string, unknown> = {};
   if (purchaseDate !== undefined) updateData.purchaseDate = purchaseDate;
   if (invoiceNumber !== undefined) updateData.invoiceNumber = invoiceNumber;
   if (notes !== undefined) updateData.notes = notes;
-  if (Object.keys(updateData).length === 0) { res.status(400).json({ error: "No fields to update" }); return; }
-  const [row] = await db.update(purchasesTable).set(updateData).where(eq(purchasesTable.id, id)).returning();
+
+  // Other charges may change without touching the lines. They change what the
+  // vendor is owed, so the settlement guard above already vetted allocations;
+  // the advance floor is re-judged on the resulting grand total here.
+  let chargesOnly: { charges: OtherCharge[]; total: number } | null = null;
+  if (otherChargesBody !== undefined) {
+    const ocp = await validateOtherCharges(pool, otherChargesBody);
+    if ("error" in ocp) { res.status(400).json({ error: ocp.error }); return; }
+    const advApplied = Number((req as any)._advApplied ?? 0);
+    const grand = Math.round((Number(current.totalAmount) + ocp.total) * 100) / 100;
+    if (advApplied > 0.004 && grand < advApplied - 0.005) {
+      res.status(409).json({
+        error: `₹${advApplied.toFixed(2)} of vendor advance was adjusted against this bill — the new total (₹${grand.toFixed(2)}) cannot go below that.`,
+        code: "BILL_BELOW_ADVANCE_APPLIED",
+      });
+      return;
+    }
+    chargesOnly = ocp;
+  }
+
+  if (Object.keys(updateData).length === 0 && !chargesOnly) { res.status(400).json({ error: "No fields to update" }); return; }
+  if (chargesOnly) {
+    // Raw column — a drizzle .set() cannot carry it (see raw-migration columns).
+    await pool.query(`UPDATE purchases SET other_charges = $2::jsonb WHERE id = $1`, [id, JSON.stringify(chargesOnly.charges)]);
+  }
+  // An empty drizzle SET throws — fall back to a plain read when every field
+  // that changed was the raw jsonb column.
+  const [row] = Object.keys(updateData).length > 0
+    ? await db.update(purchasesTable).set(updateData).where(eq(purchasesTable.id, id)).returning()
+    : await db.select().from(purchasesTable).where(eq(purchasesTable.id, id)).limit(1);
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   // A date-only edit re-dates the bill — its stock movements must follow, or
   // date-based stock reports keep the goods on the old day. txn_date is the
@@ -1308,7 +1389,15 @@ router.patch("/purchases/:id", requireModuleAction("page:/production/purchase", 
     );
   }
   const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, row.vendorId)).limit(1);
-  res.json({ ...row, vendorName: vendor?.name ?? "", totalAmount: Number(row.totalAmount), lineItems: row.lineItems ?? [] });
+  // other_charges is a raw-migration column drizzle cannot see — read it back
+  // explicitly so the response carries what was just stored.
+  const { rows: [ocRow] } = await pool.query(`SELECT other_charges FROM purchases WHERE id = $1`, [id]);
+  const storedCharges = parseStoredOtherCharges(ocRow?.other_charges);
+  res.json({
+    ...row, vendorName: vendor?.name ?? "", totalAmount: Number(row.totalAmount), lineItems: row.lineItems ?? [],
+    otherCharges: enrichCharges(storedCharges, await chargeLedgerNames([storedCharges])),
+    otherChargesTotal: otherChargesTotal(storedCharges),
+  });
 });
 
 router.delete("/purchases/:id", requireModuleAction("page:/production/purchase", "delete"), async (req, res): Promise<void> => {

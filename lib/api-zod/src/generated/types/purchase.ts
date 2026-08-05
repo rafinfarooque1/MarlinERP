@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { PurchaseLineItem } from './purchaseLineItem';
+import type { PurchaseOtherCharge } from './purchaseOtherCharge';
 import type { PurchasePriceMode } from './purchasePriceMode';
 
 export interface Purchase {
@@ -16,6 +17,8 @@ export interface Purchase {
   /** @nullable */
   invoiceNumber?: string | null;
   lineItems: PurchaseLineItem[];
+  otherCharges?: PurchaseOtherCharge[];
+  otherChargesTotal?: number;
   totalAmount: number;
   taxTotal?: number;
   discountTotal?: number;

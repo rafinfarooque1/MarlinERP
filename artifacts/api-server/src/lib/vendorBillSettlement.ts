@@ -71,7 +71,14 @@ export async function purchaseSettlementIndex(vendorIds?: number[]): Promise<Map
   const { rows: bills } = await pool.query(
     `SELECT * FROM (
        SELECT 'purchase'::text AS source, p.id, p.purchase_date, p.vendor_id,
-              p.total_amount::numeric AS total, p.invoice_number
+              -- What the vendor is owed for the bill: goods PLUS other purchase
+              -- charges (freight, hamali…) — both credit the vendor in the books,
+              -- so the FIFO walk must count them or settled bills read as open.
+              (p.total_amount::numeric + COALESCE((
+                 SELECT SUM((e->>'amount')::numeric)
+                   FROM jsonb_array_elements(COALESCE(p.other_charges, '[]'::jsonb)) e
+                  WHERE (e->>'amount') ~ '^[0-9.]+$'
+               ), 0)) AS total, p.invoice_number
          FROM purchases p
         WHERE TRUE${vendBillCond}
        ${assetSql}

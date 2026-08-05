@@ -36,6 +36,7 @@ import {
 import { writeStockLedger, batchResolveMeta } from "./stockLedger";
 import { availabilityAt, insufficientStockMessage } from "./reservations";
 import { isSettledAtSale, clearsThroughBank } from "./paymentModes";
+import { validateOtherCharges } from "./otherCharges";
 import { computePaymentPosition } from "./salePaymentPosition";
 import { nextVoucherNumber, allocateSalesInvoiceNumber } from "./voucherNumber";
 import { creditMaterialAt, deductMaterialAt } from "./materialStock";
@@ -402,6 +403,9 @@ export interface ImportPurchaseDocInput {
   /** Money account the paid amount was settled from (cash till or bank
    *  leaf, resolved at validation). Null/absent = the location's cash. */
   paidFromLedgerId?: number | null;
+  /** Other Purchase Charges (freight, hamali…) — validated expense-ledger
+   *  postings that add to the vendor's dues, never to stock cost. */
+  otherCharges?: Array<{ ledgerId: number; amount: number }>;
   narration: string | null;
   reference: string | null;
   loc: ProdLocation;
@@ -435,6 +439,12 @@ export async function importPurchaseDoc(doc: ImportPurchaseDocInput): Promise<Im
   }
   const locName = await locationLabel(pool, loc);
 
+  // Other Purchase Charges are re-validated at commit exactly like the manual
+  // bill — the chart may have changed since the validation pass ran.
+  const ocParsed = await validateOtherCharges(pool, doc.otherCharges ?? []);
+  if ("error" in ocParsed) throw new Error(ocParsed.error);
+  const otherCharges = ocParsed.charges;
+
   // Vendor ledger must exist BEFORE any settlement voucher can aim at it.
   const vendLedgerId = doc.paidAmount > 0.004
     ? await ensureVendorLedger(doc.vendorId, String(vend.name)) : null;
@@ -460,13 +470,14 @@ export async function importPurchaseDoc(doc: ImportPurchaseDocInput): Promise<Im
     const { rows: [ins] } = await client.query(
       `INSERT INTO purchases (vendor_id, purchase_date, invoice_number, line_items, total_amount,
                               notes, tax_total, discount_total, round_off, location_type, location_id,
-                              price_mode)
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12)
+                              price_mode, other_charges)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
        RETURNING id`,
       [doc.vendorId, doc.purchaseDate, doc.invoiceNumber ?? null,
        JSON.stringify(enriched), String(priced.totalAmount),
        notesParts.length ? notesParts.join(" — ") : null,
-       priced.taxTotal, priced.discountTotal, priced.roundOff, loc.type, loc.id, "exclusive"],
+       priced.taxTotal, priced.discountTotal, priced.roundOff, loc.type, loc.id, "exclusive",
+       JSON.stringify(otherCharges)],
     );
     purchaseId = Number(ins.id);
 
@@ -571,7 +582,10 @@ export async function importPurchaseDoc(doc: ImportPurchaseDocInput): Promise<Im
       if (!tillId) {
         throw new Error(`Cash ledger not provisioned for ${locName} — go to Accounts → Warehouses/Outlets and provision ledgers, then commit again.`);
       }
-      const paid = Math.min(r2(doc.paidAmount), r2(Number(priced.totalAmount)));
+      // A fully-paid bill settles goods PLUS other charges — both credit the
+      // vendor, so capping at the goods total alone would strand the charges
+      // as phantom dues.
+      const paid = Math.min(r2(doc.paidAmount), r2(Number(priced.totalAmount) + ocParsed.total));
       // Money vouchers carry the HO placeholder 0 (unlike sales/stock, which use 1).
       const voucherLocId = loc.type === "headoffice" ? 0 : loc.id;
       const voucherNumber = await nextVoucherNumber(client, "payment", doc.purchaseDate);

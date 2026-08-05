@@ -1247,7 +1247,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   const pup: any[] = [];
   const { rows: purchases } = await pool.query(
     `SELECT id, vendor_id, purchase_date, invoice_number, total_amount, tax_total, line_items,
-            location_type, location_id, branch_transfer_id
+            location_type, location_id, branch_transfer_id, other_charges
      FROM purchases WHERE 1=1${upTo("purchase_date", pup)}`, pup
   );
   for (const p of purchases) {
@@ -1294,7 +1294,21 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     } else {
       push({ entryId: eid, date: p.purchase_date, ledgerId: purLedger, debit: amt, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase ${bill}`, ...puLoc });
     }
-    push({ entryId: eid, date: p.purchase_date, ledgerId: vendLedger, debit: 0, credit: amt, source: "purchase", voucherNumber: p.invoice_number, description: isBranchTransfer ? `Due to branch — ${bill}` : `Purchase ${bill}`, ...puLoc });
+    // Other Purchase Charges (freight, hamali, courier…): Dr the chosen expense
+    // ledger, and the vendor is credited the bill total PLUS these charges.
+    // They are P&L expenses by construction — never part of stock cost, never
+    // part of the taxable/GST split above. The stored ledger id is posted as-is:
+    // the chart's delete guard (loadLedgerUsage) refuses to delete a ledger any
+    // bill's charges reference, so it cannot dangle.
+    let ocTotal = 0;
+    for (const c of (Array.isArray(p.other_charges) ? p.other_charges : []) as any[]) {
+      const cLid = Number(c?.ledgerId);
+      const cAmt = round2(Number(c?.amount));
+      if (!Number.isInteger(cLid) || cLid <= 0 || !(cAmt > 0.004)) continue;
+      ocTotal = round2(ocTotal + cAmt);
+      push({ entryId: eid, date: p.purchase_date, ledgerId: cLid, debit: cAmt, credit: 0, source: "purchase", voucherNumber: p.invoice_number, description: `Purchase charge — ${bill}`, ...puLoc });
+    }
+    push({ entryId: eid, date: p.purchase_date, ledgerId: vendLedger, debit: 0, credit: round2(amt + ocTotal), source: "purchase", voucherNumber: p.invoice_number, description: isBranchTransfer ? `Due to branch — ${bill}` : `Purchase ${bill}`, ...puLoc });
   }
 
   // 6b. Vendor advances consumed by purchase bills: Dr vendor payable /

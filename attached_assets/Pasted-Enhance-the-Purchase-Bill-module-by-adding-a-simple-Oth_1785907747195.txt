@@ -1,0 +1,151 @@
+Enhance the Purchase Bill module by adding a simple "Other Purchase Charges" section.
+
+This is NOT part of inventory cost.
+
+These charges are expenses incurred while purchasing goods and should always be posted directly to the Profit & Loss account.
+
+Examples:
+- Freight Expense
+- Loading & Unloading
+- Hamali
+- Courier Charges
+- Transportation Expense
+- Labour Charges
+- Miscellaneous Purchase Expense
+
+========================================================
+PURCHASE BILL UI
+========================================================
+
+Below the Line Items section, add a new section called:
+
+Other Purchase Charges
+
+Each row should contain:
+
+• Expense Ledger (Dropdown)
+• Amount
+
+Buttons:
+
++ Add Other Charge
+
+Allow unlimited rows.
+
+Example:
+
+Other Purchase Charges
+
+Freight Expense            ₹1,500
+
+Loading Charges            ₹500
+
+Courier Charges            ₹250
+
++ Add Other Charge
+
+========================================================
+EXPENSE LEDGER
+========================================================
+
+The dropdown should show only expense ledgers.
+
+Examples:
+
+Freight Expense
+
+Transportation Expense
+
+Loading & Unloading
+
+Packing Expense
+
+Courier Expense
+
+Miscellaneous Purchase Expense
+
+Labour Charges
+
+Other Purchase Expense
+
+Users can create additional expense ledgers from Chart of Accounts, and they should automatically appear in this dropdown.
+
+========================================================
+ACCOUNTING ENTRY
+========================================================
+
+Purchase of Goods:
+
+Dr Purchase / Inventory
+
+Cr Vendor
+
+Other Purchase Charges:
+
+Dr Selected Expense Ledger
+
+Cr Vendor (or Cash/Bank if paid immediately)
+
+These charges should NEVER be added to inventory valuation.
+
+They should NEVER increase stock cost.
+
+They should NEVER affect weighted average/FIFO valuation.
+
+========================================================
+PURCHASE TOTAL
+========================================================
+
+Display:
+
+Purchase Value
+
++ GST
+
++ Other Purchase Charges
+
+= Grand Total Payable
+
+Show Other Purchase Charges separately in the bill summary.
+
+========================================================
+REPORTS
+========================================================
+
+The selected expense ledger should appear in:
+
+• Profit & Loss Account
+• Ledger Statement
+• Day Book
+• Trial Balance
+• Expense Reports
+
+These charges must NOT appear in Inventory Valuation or Stock Reports.
+
+========================================================
+EDIT / DELETE
+========================================================
+
+Editing or deleting a Purchase Bill must automatically reverse and recalculate all related expense entries.
+
+========================================================
+IMPORT
+========================================================
+
+Extend the Purchase Import template to support optional Other Purchase Charges.
+
+Each additional charge should include:
+
+Expense Ledger
+
+Amount
+
+========================================================
+BACKWARD COMPATIBILITY
+========================================================
+
+Existing Purchase Bills should continue working without changes.
+
+New functionality applies only to newly created or imported Purchase Bills.
+
+The implementation should follow standard ERP accounting practice where incidental purchase expenses are tracked separately in Profit & Loss and not capitalized into inventory.

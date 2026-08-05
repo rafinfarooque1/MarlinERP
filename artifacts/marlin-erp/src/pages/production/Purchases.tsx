@@ -1,10 +1,11 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { SearchableItemSelect } from '@/components/ui/searchable-item-select';
 import {
   usePaginatedPurchases, useCreatePurchase, useListVendors, useListMaterials, useListRawMaterials, useListItems,
   getListPurchasesQueryKey, useUpdatePurchase, useDeletePurchase, useGetCompanySettings,
-  useListWarehouses, useListOutlets, usePartyAdvance,
+  useListWarehouses, useListOutlets, usePartyAdvance, useListAccountsFlat,
 } from '@workspace/api-client-react';
+import { isSystemLedger } from '@/lib/systemLedgers';
 import { downloadPurchaseInvoicePDF } from '@/lib/purchasePdf';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -58,6 +59,14 @@ const lineSchema = z.object({
   message: 'Expiry cannot be before manufacture', path: ['expiryDate'],
 });
 
+/** Other Purchase Charges — freight, hamali, courier… Posted Dr expense ledger
+ *  / Cr vendor, so they add to what the vendor is owed but NEVER touch stock
+ *  cost, item rates or GST (the server enforces the same rule). */
+const otherChargeSchema = z.object({
+  ledgerId: z.coerce.number().min(1, 'Pick an expense ledger'),
+  amount: z.coerce.number().gt(0, 'Amount must be above zero'),
+});
+
 const schema = z.object({
   vendorId: z.coerce.number().min(1, 'Vendor required'),
   purchaseDate: z.string().min(1, 'Date required'),
@@ -68,6 +77,7 @@ const schema = z.object({
   // equally valid exclusive one.
   priceMode: z.enum(['exclusive', 'inclusive']).default('exclusive'),
   lineItems: z.array(lineSchema).min(1, 'Add at least one item'),
+  otherCharges: z.array(otherChargeSchema).default([]),
   notes: z.string().optional(),
 });
 type FormValues = z.infer<typeof schema>;
@@ -174,7 +184,27 @@ export default function Purchases() {
     }
   };
 
-  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', location: 'headoffice:1', priceMode: 'exclusive', lineItems: [defaultLine], notes: '' } });
+  const form = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', location: 'headoffice:1', priceMode: 'exclusive', lineItems: [defaultLine], otherCharges: [], notes: '' } });
+
+  // Expense ledgers offered for Other Charges — postable, non-internal, and
+  // outside the Purchase (SYS-PUR) subtree. Mirrors the server's validation,
+  // so anything pickable here is accepted there; a ledger the user creates in
+  // Chart of Accounts appears automatically.
+  const { data: allAccounts = [] } = useListAccountsFlat();
+  const expenseLedgers = useMemo(() => {
+    const byId = new Map((allAccounts as any[]).map((a: any) => [Number(a.id), a]));
+    const underPurchaseGroup = (a: any): boolean => {
+      const seen = new Set<number>();
+      for (let cur = a; cur && !seen.has(Number(cur.id)); cur = cur.parentId != null ? byId.get(Number(cur.parentId)) : undefined) {
+        seen.add(Number(cur.id));
+        if (String(cur.code ?? '').toUpperCase() === 'SYS-PUR') return true;
+      }
+      return false;
+    };
+    return (allAccounts as any[])
+      .filter((a: any) => a.type === 'expense' && !a.isGroup && !a.isSystemGroup && !isSystemLedger(a.code) && !underPurchaseGroup(a))
+      .sort((x: any, y: any) => String(x.name).localeCompare(String(y.name)));
+  }, [allAccounts]);
 
   // Advance adjustment: does the selected vendor hold money we paid beyond
   // their bills? Create only — edits never touch the advance.
@@ -183,7 +213,12 @@ export default function Purchases() {
   const [applyAdvance, setApplyAdvance] = useState(true);
   useEffect(() => { setApplyAdvance(true); }, [watchVendorId]);
   const { fields, append, remove } = useFieldArray({ control: form.control, name: 'lineItems' });
+  const { fields: chargeFields, append: appendCharge, remove: removeCharge } = useFieldArray({ control: form.control, name: 'otherCharges' });
   const watchLines = form.watch('lineItems');
+  const watchCharges = form.watch('otherCharges');
+  // What the vendor is actually owed: goods total + other charges. Charges
+  // never enter `bill` — that is the goods/GST arithmetic the server stores.
+  const otherTotal = Math.round((watchCharges ?? []).reduce((t, c) => t + (Number(c?.amount) || 0), 0) * 100) / 100;
   const priceMode = (form.watch('priceMode') ?? 'exclusive') as PriceMode;
   // Bill-level GST type is a view over the lines: the selector writes every
   // line at once, so line 0 is the bill's value. The payload keeps carrying
@@ -205,6 +240,8 @@ export default function Purchases() {
     })),
     priceMode,
   );
+  // What the vendor is actually owed on this bill: goods + other charges.
+  const grandPayable = Math.round((bill.totalAmount + otherTotal) * 100) / 100;
 
   // ── Item Master defaults ───────────────────────────────────────────────────
   const masterFor = (kind: string, id: number): any => {
@@ -265,7 +302,7 @@ export default function Purchases() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hintTaxType, fields.length]);
 
-  const resetForm = () => form.reset({ vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', location: locations.defaultValue, priceMode: 'exclusive', lineItems: [defaultLine], notes: '' });
+  const resetForm = () => form.reset({ vendorId: 0, purchaseDate: new Date().toISOString().split('T')[0], invoiceNumber: '', location: locations.defaultValue, priceMode: 'exclusive', lineItems: [defaultLine], otherCharges: [], notes: '' });
 
   /** data-testid of the ONE category trigger auto-opened by Add Line (null =
    *  none): when THAT select closes (Enter pick, re-pick of the default, or
@@ -439,6 +476,9 @@ export default function Purchases() {
         mfgDate: (li.mfgDate ?? '').substring(0, 10),
         expiryDate: (li.expiryDate ?? '').substring(0, 10),
       })),
+      otherCharges: (((p as any).otherCharges as any[]) ?? []).map((c: any) => ({
+        ledgerId: Number(c.ledgerId), amount: Number(c.amount),
+      })),
     });
     setIsOpen(true);
   };
@@ -461,7 +501,7 @@ export default function Purchases() {
     location: (p: any) => p.locationName ?? 'Head Office',
     items: (p: any) => (p.lineItems as any[])?.length || 0,
     tax: (p: any) => Number(p.taxTotal || 0) || null,
-    total: (p: any) => Number(p.totalAmount),
+    total: (p: any) => Number(p.totalAmount) + Number(p.otherChargesTotal || 0),
   });
 
   if (!perm.isLoading && !perm.canView) {
@@ -493,6 +533,8 @@ export default function Purchases() {
                 'Taxable': Number((p as any).discountTotal ? Number(p.totalAmount) - Number((p as any).taxTotal || 0) : p.totalAmount),
                 'Tax': Number((p as any).taxTotal || 0),
                 'Total': Number(p.totalAmount),
+                'Other Charges': Number((p as any).otherChargesTotal || 0),
+                'Total Payable': Number(p.totalAmount) + Number((p as any).otherChargesTotal || 0),
               })))}>
                 <Download className="w-4 h-4 mr-2" /> Export
               </Button>
@@ -548,7 +590,7 @@ export default function Purchases() {
                   <TableCell className="text-right font-mono text-xs text-muted-foreground">
                     {Number((p as any).taxTotal || 0) > 0 ? `₹${fmt(Number((p as any).taxTotal || 0))}` : '—'}
                   </TableCell>
-                  <TableCell className="text-right font-mono font-bold text-primary">₹{fmt(Number(p.totalAmount))}</TableCell>
+                  <TableCell className="text-right font-mono font-bold text-primary">₹{fmt(Number(p.totalAmount) + Number((p as any).otherChargesTotal || 0))}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(p)}><Eye className="w-4 h-4" /></Button>
@@ -604,7 +646,7 @@ export default function Purchases() {
                       </div>
                     </div>
                     <div className="mt-2 flex items-center justify-between gap-2">
-                      <span className="font-mono font-bold text-primary text-sm">₹{fmt(Number(p.totalAmount))}</span>
+                      <span className="font-mono font-bold text-primary text-sm">₹{fmt(Number(p.totalAmount) + Number((p as any).otherChargesTotal || 0))}</span>
                       <div className="flex gap-1">
                         <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-primary" onClick={() => setViewItem(p)}><Eye className="w-4 h-4" /></Button>
                         {perm.canEdit && (
@@ -898,6 +940,48 @@ export default function Purchases() {
                 </Button>
               </div>
 
+              {/* Other Purchase Charges — freight, hamali, courier and the
+                  like. Posted to the chosen expense ledger and owed to the
+                  vendor; kept OUT of stock cost, item rates and GST. */}
+              <div>
+                <h3 className="text-sm font-semibold mb-2">
+                  Other Charges{' '}
+                  <span className="text-xs font-normal text-muted-foreground">(freight, hamali, courier… — booked as expenses, never into stock cost)</span>
+                </h3>
+                {chargeFields.length > 0 && (
+                  <div className="space-y-2">
+                    {chargeFields.map((cf, ci) => (
+                      <div key={cf.id} className="grid grid-cols-[minmax(0,1fr)_130px_32px] gap-2 items-start">
+                        <FormField control={form.control} name={`otherCharges.${ci}.ledgerId`} render={({ field }) => (
+                          <FormItem>
+                            <Select value={field.value ? String(field.value) : ''} onValueChange={v => field.onChange(Number(v))}>
+                              <FormControl><SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Expense ledger" /></SelectTrigger></FormControl>
+                              <SelectContent>
+                                {expenseLedgers.length === 0 && <div className="px-3 py-2 text-xs text-muted-foreground">No expense ledgers — create one under Accounts → Chart of Accounts</div>}
+                                {expenseLedgers.map((l: any) => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}
+                              </SelectContent>
+                            </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )} />
+                        <FormField control={form.control} name={`otherCharges.${ci}.amount`} render={({ field }) => (
+                          <FormItem>
+                            <FormControl><Input className="h-9 text-xs text-right font-mono" type="number" step="0.01" min="0" placeholder="Amount" {...field} value={(field.value as any) === 0 ? '' : (field.value as any) ?? ''} /></FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )} />
+                        <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-9 w-8 text-destructive justify-self-end" onClick={() => removeCharge(ci)}>
+                          <X className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => appendCharge({ ledgerId: 0, amount: 0 } as any)}>
+                  <Plus className="w-3.5 h-3.5 mr-1" /> Add Charge
+                </Button>
+              </div>
+
               {/* Bill Summary — right of the notes on wide screens, below on
                   small ones. */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -919,7 +1003,14 @@ export default function Purchases() {
                   {bill.igstTotal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">IGST</span><span className="font-mono">₹{fmt(bill.igstTotal)}</span></div>}
                   {Math.abs(bill.roundOff) > 0.001 && <div className="flex justify-between"><span className="text-muted-foreground">Round Off</span><span className="font-mono">{bill.roundOff > 0 ? '+' : ''}₹{fmt(Math.abs(bill.roundOff))}</span></div>}
                   <Separator />
-                  <div className="flex justify-between font-bold text-base pt-1"><span>Grand Total</span><span className="font-mono text-primary">₹{bill.totalAmount.toLocaleString('en-IN')}</span></div>
+                  <div className="flex justify-between font-bold text-base pt-1"><span>{otherTotal > 0 ? 'Goods Total' : 'Grand Total'}</span><span className="font-mono text-primary">₹{bill.totalAmount.toLocaleString('en-IN')}</span></div>
+                  {otherTotal > 0 && (
+                    <>
+                      <div className="flex justify-between"><span className="text-muted-foreground">(+) Other Charges</span><span className="font-mono">₹{fmt(otherTotal)}</span></div>
+                      <Separator />
+                      <div className="flex justify-between font-bold text-base"><span>Total Payable</span><span className="font-mono text-primary">₹{grandPayable.toLocaleString('en-IN')}</span></div>
+                    </>
+                  )}
                   {priceMode === 'inclusive' && (
                     <p className="text-[10px] text-muted-foreground pt-1">
                       GST is worked back out of the rates, so the total equals the rates you keyed in (plus round-off).
@@ -937,8 +1028,8 @@ export default function Purchases() {
                     long line-item list never scrolls the figure off-screen.
                     Placed last so flex-col-reverse renders it at the top. */}
                 <div className="flex md:hidden items-center justify-between w-full text-sm font-bold pb-1">
-                  <span>Grand Total</span>
-                  <span className="font-mono text-primary">₹{bill.totalAmount.toLocaleString('en-IN')}</span>
+                  <span>{otherTotal > 0 ? 'Total Payable' : 'Grand Total'}</span>
+                  <span className="font-mono text-primary">₹{grandPayable.toLocaleString('en-IN')}</span>
                 </div>
               </DialogFooter>
             </form>
@@ -1027,7 +1118,16 @@ export default function Purchases() {
                   <div className="flex justify-between"><span className="text-muted-foreground">Round Off</span><span className="font-mono">₹{fmt(Number(viewItem.roundOff))}</span></div>
                 )}
                 <Separator />
-                <div className="flex justify-between font-bold text-base"><span>Grand Total</span><span className="font-mono text-primary">₹{fmt(Number(viewItem.totalAmount))}</span></div>
+                <div className="flex justify-between font-bold text-base"><span>{(((viewItem as any).otherCharges as any[]) ?? []).length > 0 ? 'Goods Total' : 'Grand Total'}</span><span className="font-mono text-primary">₹{fmt(Number(viewItem.totalAmount))}</span></div>
+                {(((viewItem as any).otherCharges as any[]) ?? []).length > 0 && (
+                  <>
+                    {(((viewItem as any).otherCharges as any[]) ?? []).map((c: any, i: number) => (
+                      <div key={i} className="flex justify-between"><span className="text-muted-foreground">(+) {c.ledgerName || `Ledger #${c.ledgerId}`}</span><span className="font-mono">₹{fmt(Number(c.amount))}</span></div>
+                    ))}
+                    <Separator />
+                    <div className="flex justify-between font-bold text-base"><span>Total Payable</span><span className="font-mono text-primary">₹{fmt(Number(viewItem.totalAmount) + Number((viewItem as any).otherChargesTotal ?? 0))}</span></div>
+                  </>
+                )}
               </div>
 
               {viewItem.notes && <p className="text-sm text-muted-foreground italic mb-4">{viewItem.notes}</p>}

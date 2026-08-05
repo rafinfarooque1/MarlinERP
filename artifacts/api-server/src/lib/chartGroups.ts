@@ -293,7 +293,7 @@ export async function loadLedgerUsage(pool: Pool): Promise<Map<number, LedgerUsa
   const { rows: present } = await pool.query<{ table_name: string; column_name: string }>(
     `SELECT table_name, column_name FROM information_schema.columns
       WHERE table_schema = 'public' AND table_name = ANY($1::text[])`,
-    [wanted.map((s) => s.table)],
+    [[...wanted.map((s) => s.table), "purchases"]],
   );
   const has = new Set(present.map((r) => `${r.table_name}.${r.column_name}`));
 
@@ -311,6 +311,19 @@ export async function loadLedgerUsage(pool: Pool): Promise<Map<number, LedgerUsa
   };
   push(TRANSACTION_SOURCES, "txn");
   push(MASTER_SOURCES, "ref");
+
+  // Other Purchase Charges live INSIDE a jsonb array on purchases, not in a
+  // plain integer column — the generic shape above cannot see them. Deleting a
+  // ledger a bill's charges reference would leave the derived vendor credit
+  // unbalanced against a debit that classifies nowhere, so it must count as
+  // usage exactly like any voucher line.
+  if (has.has("purchases.other_charges")) {
+    parts.push(
+      `SELECT (e->>'ledgerId')::int AS ledger_id, 'txn' AS kind, 'purchase bill other charges' AS src
+         FROM purchases, jsonb_array_elements(COALESCE(other_charges, '[]'::jsonb)) e
+        WHERE e->>'ledgerId' ~ '^[0-9]+$'`,
+    );
+  }
 
   const usage = new Map<number, LedgerUsage>();
   if (parts.length === 0) return usage;

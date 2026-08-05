@@ -118,6 +118,12 @@ export async function buildPurchaseInvoicePDF(
   const taxTotal = sum(l => l.taxAmount ?? 0);
   const roundOff = Number(purchase?.roundOff ?? 0);
   const grandTotal = Number(purchase?.totalAmount ?? 0);
+  // Other Purchase Charges — shown exactly as stored on the bill (never
+  // recomputed here). They add to what the vendor is owed, not to the
+  // goods/GST figures above.
+  const otherCharges: any[] = Array.isArray(purchase?.otherCharges) ? purchase.otherCharges : [];
+  const otherChargesTotal = Number(purchase?.otherChargesTotal ?? 0);
+  const payableTotal = otherCharges.length > 0 ? grandTotal + otherChargesTotal : grandTotal;
 
   // ── Page furniture ────────────────────────────────────────────────────────
   const BAND_H = 34;
@@ -302,13 +308,19 @@ export async function buildPurchaseInvoicePDF(
   if (Math.abs(roundOff) >= 0.005) {
     totalRows.push(['Round Off', `${roundOff < 0 ? '- ' : '+ '}${inr(Math.abs(roundOff))}`]);
   }
+  if (otherCharges.length > 0) {
+    totalRows.push(['Goods Total', inr(grandTotal)]);
+    for (const c of otherCharges) {
+      totalRows.push([String(c.ledgerName || `Ledger #${c.ledgerId}`), inr(Number(c.amount ?? 0))]);
+    }
+  }
 
   const totW = 74;
   const totX = PW - M - totW;
   const rowH = 5.4;
   const totalsBoxH = totalRows.length * rowH + 1.5;
   const totalsH = totalsBoxH + 9.5;              // + the grand-total bar
-  const wordLines = p.wrap(amountInWords(grandTotal), CW - totW - 10, 7.4, true);
+  const wordLines = p.wrap(amountInWords(payableTotal), CW - totW - 10, 7.4, true);
   const wordsH = 12 + wordLines.length * 3.8;    // sized to its text, not stretched
   const notesLines = purchase?.notes ? p.wrap(String(purchase.notes), CW - totW - 10, 6.8) : [];
   const notesH = notesLines.length ? 6 + notesLines.length * 3.4 : 0;
@@ -350,8 +362,8 @@ export async function buildPurchaseInvoicePDF(
   });
   ty = y + totalsBoxH;
   p.fill(totX, ty, totW, 9.5, NAVY);
-  p.txt('GRAND TOTAL', totX + 3, ty + 6.2, { size: 8, bold: true, color: WHITE });
-  p.txt(inr(grandTotal), totX + totW - 3, ty + 6.2,
+  p.txt(otherCharges.length > 0 ? 'TOTAL PAYABLE' : 'GRAND TOTAL', totX + 3, ty + 6.2, { size: 8, bold: true, color: WHITE });
+  p.txt(inr(payableTotal), totX + totW - 3, ty + 6.2,
     { size: 10, bold: true, color: WHITE, align: 'right' });
 
   y += blockH + 8;
