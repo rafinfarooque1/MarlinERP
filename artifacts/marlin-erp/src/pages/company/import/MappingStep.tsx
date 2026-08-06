@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { SearchablePicker } from './shared';
 import { toast } from 'sonner';
 import { Link2, Loader2, Plus, Sparkles } from 'lucide-react';
 
@@ -241,36 +241,30 @@ export function MappingStep({ batchId = null, migrationId = null, canEdit }: {
                       </p>
                     ) : d.mode === 'ledger' ? (
                       <div className="space-y-1">
-                        <Select value={d.routeLedgerId} onValueChange={(v) => setDecision(u, { ...d, routeLedgerId: v })}>
-                          <SelectTrigger className="h-8 w-full sm:w-96 text-xs">
-                            <SelectValue placeholder="Ledger to post these rows to (journal entry)…" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {(data.routeLedgers ?? []).map((l) => (
-                              <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        <SearchablePicker
+                          value={d.routeLedgerId}
+                          onChange={(v) => setDecision(u, { ...d, routeLedgerId: v })}
+                          options={(data.routeLedgers ?? []).map((l) => ({ value: String(l.id), label: l.name }))}
+                          placeholder="Ledger to post these rows to (journal entry)…"
+                          emptyText="No ledgers exist yet."
+                          className="w-full sm:w-96"
+                        />
                         <p className="text-xs text-muted-foreground">
                           Not a real {KIND_ONE[kind]}? Each row becomes a journal voucher between the money account and this ledger.
                         </p>
                       </div>
                     ) : d.mode === 'existing' ? (
-                      <Select value={d.target} onValueChange={(v) => setDecision(u, { ...d, target: v })}>
-                        <SelectTrigger className="h-8 w-full sm:w-96 text-xs">
-                          <SelectValue placeholder={`Choose the matching ${KIND_ONE[kind]}…`} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {candidates.length === 0 && (
-                            <div className="px-2 py-1.5 text-xs text-muted-foreground">No {KIND_LABEL[kind].toLowerCase()} exist yet — use Create new.</div>
-                          )}
-                          {candidates.map((c) => (
-                            <SelectItem key={`${c.id}|${c.targetKind ?? ''}`} value={`${c.id}|${c.targetKind ?? ''}`}>
-                              {c.name}{c.targetKind && c.targetKind !== 'item' ? ` (${c.targetKind.replace('_', ' ')})` : ''}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <SearchablePicker
+                        value={d.target}
+                        onChange={(v) => setDecision(u, { ...d, target: v })}
+                        options={candidates.map((c) => ({
+                          value: `${c.id}|${c.targetKind ?? ''}`,
+                          label: `${c.name}${c.targetKind && c.targetKind !== 'item' ? ` (${c.targetKind.replace('_', ' ')})` : ''}`,
+                        }))}
+                        placeholder={`Choose the matching ${KIND_ONE[kind]}…`}
+                        emptyText={`No ${KIND_LABEL[kind].toLowerCase()} exist yet — use Create new.`}
+                        className="w-full sm:w-96"
+                      />
                     ) : kind === 'product' ? (
                       <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                         <Input className="h-8 text-xs" placeholder="Unit * (kg, pcs…)" value={d.create.unit}
@@ -285,16 +279,14 @@ export function MappingStep({ batchId = null, migrationId = null, canEdit }: {
                           onChange={(e) => setCreateField(u, 'hsnCode', e.target.value)} />
                       </div>
                     ) : kind === 'ledger' ? (
-                      <Select value={d.create.parentId} onValueChange={(v) => setCreateField(u, 'parentId', v)}>
-                        <SelectTrigger className="h-8 w-full sm:w-96 text-xs">
-                          <SelectValue placeholder="Ledger group for the new ledger * …" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {data.ledgerGroups.map((g) => (
-                            <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <SearchablePicker
+                        value={d.create.parentId}
+                        onChange={(v) => setCreateField(u, 'parentId', v)}
+                        options={data.ledgerGroups.map((g) => ({ value: String(g.id), label: g.name }))}
+                        placeholder="Ledger group for the new ledger * …"
+                        emptyText="No ledger groups exist yet."
+                        className="w-full sm:w-96"
+                      />
                     ) : (
                       <div className="grid grid-cols-2 gap-2 sm:w-96">
                         <Input className="h-8 text-xs" placeholder="GSTIN (optional)" value={d.create.gstNumber}

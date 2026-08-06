@@ -20,7 +20,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { toast } from 'sonner';
 import { Link2, Loader2, Pencil, Trash2, AlertTriangle } from 'lucide-react';
-import { fmtTime } from './shared';
+import { fmtTime, SearchablePicker } from './shared';
 
 const KIND_LABEL: Record<ImportMappingKind, string> = {
   customer: 'Customer', vendor: 'Vendor', ledger: 'Ledger', product: 'Item',
@@ -158,16 +158,17 @@ export function ManageMappings({ canEdit, canDelete }: { canEdit: boolean; canDe
               imported are not changed.
             </DialogDescription>
           </DialogHeader>
-          <Select value={editValue} onValueChange={setEditValue}>
-            <SelectTrigger><SelectValue placeholder={`Currently: ${editTarget?.targetName ?? 'target deleted'}`} /></SelectTrigger>
-            <SelectContent>
-              {(candidates?.candidates ?? []).map((c) => (
-                <SelectItem key={`${c.id}|${c.targetKind ?? ''}`} value={`${c.id}|${c.targetKind ?? ''}`}>
-                  {c.name}{c.targetKind && c.targetKind !== 'item' ? ` (${c.targetKind.replace('_', ' ')})` : ''}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <SearchablePicker
+            value={editValue}
+            onChange={setEditValue}
+            options={(candidates?.candidates ?? []).map((c) => ({
+              value: `${c.id}|${c.targetKind ?? ''}`,
+              label: `${c.name}${c.targetKind && c.targetKind !== 'item' ? ` (${c.targetKind.replace('_', ' ')})` : ''}`,
+            }))}
+            placeholder={`Currently: ${editTarget?.targetName ?? 'target deleted'}`}
+            emptyText="No records exist yet."
+            className="w-full h-10"
+          />
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditTarget(null)}>Cancel</Button>
             <Button onClick={handleUpdate} disabled={!editValue || updateMapping.isPending}>

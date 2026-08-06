@@ -2,12 +2,86 @@
  * Shared metadata and small widgets for the ERP Migration Wizard
  * (Company › Import Data).
  */
+import { useState } from 'react';
 import type { ImportBatch, ImportModule, ImportRow } from '@workspace/api-client-react';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
+} from '@/components/ui/command';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { cn } from '@/lib/utils';
 import {
   Users, Truck, BookOpen, ShoppingCart, Package, Receipt, Banknote,
-  Boxes, NotebookPen, Warehouse,
+  Boxes, NotebookPen, Warehouse, Check, ChevronsUpDown,
 } from 'lucide-react';
+
+// ── Searchable picker ───────────────────────────────────────────────────────
+
+/**
+ * Searchable dropdown for the mapping screens — customer/vendor/ledger lists
+ * run into the hundreds, so a plain Select is unusable. Type-to-filter plus a
+ * scrollable list, same pattern as AccountCombobox but with string values
+ * (mapping targets are "id|targetKind" composites).
+ */
+export function SearchablePicker({ value, onChange, options, placeholder, emptyText, className }: {
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<{ value: string; label: string }>;
+  placeholder: string;
+  /** Shown when there are no options at all (e.g. "No customers exist yet"). */
+  emptyText: string;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const selected = options.find((o) => o.value === value);
+  const filtered = query.trim()
+    ? options.filter((o) => o.label.toLowerCase().includes(query.toLowerCase()))
+    : options;
+
+  return (
+    <Popover open={open} onOpenChange={(v) => { setOpen(v); if (!v) setQuery(''); }}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className={cn('justify-between font-normal h-8 px-3 text-xs', !selected && 'text-muted-foreground', className)}
+        >
+          <span className="truncate">{selected?.label ?? placeholder}</span>
+          <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="p-0"
+        style={{ width: 'var(--radix-popover-trigger-width)', minWidth: '220px' }}
+      >
+        <Command shouldFilter={false}>
+          <CommandInput placeholder="Type to search…" value={query} onValueChange={setQuery} />
+          {/* cmdk keyboard navigation (arrows/Enter) only sees items inside CommandList. */}
+          <CommandList className="max-h-56">
+            <CommandEmpty>{options.length === 0 ? emptyText : 'No match — try fewer letters.'}</CommandEmpty>
+            <CommandGroup>
+              {filtered.map((o) => (
+                <CommandItem
+                  key={o.value}
+                  value={o.value}
+                  onSelect={() => { onChange(o.value); setOpen(false); setQuery(''); }}
+                >
+                  <Check className={cn('mr-2 h-4 w-4 shrink-0', value === o.value ? 'opacity-100' : 'opacity-0')} />
+                  <span className="text-sm">{o.label}</span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 // ── Module metadata ─────────────────────────────────────────────────────────
 
