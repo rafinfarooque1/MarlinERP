@@ -281,21 +281,24 @@ const normState = (s: unknown) => String(s ?? "").trim().toLowerCase().replace(/
  */
 export async function resolveSupplyTaxType(
   vendorId: number, loc: ProdLocation,
+  // Callers inside a transaction (e.g. import approval) pass their client so
+  // the resolution sees the same transactional view as the writes.
+  q: { query: (sql: string, params?: unknown[]) => Promise<any> } = pool,
 ): Promise<{ taxType: TaxType | null; why: string }> {
-  const { rows: [v] } = await pool.query(`SELECT state, gst_number FROM vendors WHERE id = $1`, [vendorId]);
+  const { rows: [v] } = await q.query(`SELECT state, gst_number FROM vendors WHERE id = $1`, [vendorId]);
   if (!v) return { taxType: null, why: "vendor not found" };
 
   let locState: string | null = null;
   let locGstin: string | null = null;
   if (loc.type === "warehouse") {
-    const { rows: [w] } = await pool.query(`SELECT state, gst_number FROM warehouses WHERE id = $1`, [loc.id]);
+    const { rows: [w] } = await q.query(`SELECT state, gst_number FROM warehouses WHERE id = $1`, [loc.id]);
     locState = w?.state ?? null; locGstin = w?.gst_number ?? null;
   } else if (loc.type === "outlet") {
-    const { rows: [o] } = await pool.query(`SELECT state, gstin FROM outlets WHERE id = $1`, [loc.id]);
+    const { rows: [o] } = await q.query(`SELECT state, gstin FROM outlets WHERE id = $1`, [loc.id]);
     locState = o?.state ?? null; locGstin = o?.gstin ?? null;
   }
   if (!normState(locState) && !gstinStateCode(locGstin)) {
-    const { rows: [c] } = await pool.query(`SELECT state, gst_number FROM company_settings LIMIT 1`);
+    const { rows: [c] } = await q.query(`SELECT state, gst_number FROM company_settings LIMIT 1`);
     locState = locState || (c?.state ?? null);
     locGstin = locGstin || (c?.gst_number ?? null);
   }
@@ -380,11 +383,15 @@ export type NameMaps = {
   item: Map<number, ProductMaster>;
 };
 
-export async function buildNameMaps(): Promise<NameMaps> {
+export async function buildNameMaps(
+  // Callers inside a transaction (e.g. import approval) pass their client so
+  // the maps see the same transactional view as the writes.
+  q: { query: (sql: string, params?: unknown[]) => Promise<any> } = pool,
+): Promise<NameMaps> {
   // Raw SQL rather than drizzle: hsn_code and tax_rate are startup-migration
   // columns on materials/raw_materials and so are invisible to the schema.
   const load = async (table: "materials" | "raw_materials" | "items") => {
-    const { rows } = await pool.query(
+    const { rows } = await q.query(
       `SELECT id, name, COALESCE(hsn_code, '') AS hsn_code,
               COALESCE(tax_rate, 0)::float8 AS tax_rate, COALESCE(unit, '') AS unit
          FROM ${table}`,

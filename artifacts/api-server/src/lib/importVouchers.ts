@@ -165,6 +165,14 @@ export function resolveAccountValue(
     if (banks.length === 0) return { ok: false, error: "No bank account exists in the chart of accounts — write Cash, or create the bank ledger first." };
     return { ok: false, error: `More than one bank account exists — name it exactly: ${banks.map((b) => b.name).join(", ")}.` };
   }
+  if (norm === "upi") {
+    // Old-software exports say just "UPI" — resolve to the bank-family ledger
+    // that carries UPI in its name, exactly one of which may exist.
+    const upis = banks.filter((b) => b.name.toLowerCase().includes("upi"));
+    if (upis.length === 1) return { ok: true, account: upis[0] };
+    if (upis.length === 0) return { ok: false, error: "No UPI account exists in the chart of accounts — create a bank-type ledger with UPI in its name (e.g. \"UPI Collections\"), or name a bank account instead." };
+    return { ok: false, error: `More than one UPI account exists — name it exactly: ${upis.map((b) => b.name).join(", ")}.` };
+  }
   const hit = options.find((o) => o.name.trim().toLowerCase() === norm);
   if (hit) return { ok: true, account: hit };
   return {

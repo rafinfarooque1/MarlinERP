@@ -74,6 +74,26 @@ export interface ImportBatch {
   canDiscard: boolean;
   canCommit: boolean;
   rollbackAvailable: boolean;
+  /** Present when the upload was recognised as an old-software report and
+   *  converted before validation. */
+  conversion?: ImportLegacyConversion | null;
+}
+
+/** Conversion summary for a recognised old-software report file. */
+export interface ImportLegacyConversion {
+  detected: true;
+  /** Human label of the recognised report, e.g. "Item-wise Sales report". */
+  report: string;
+  /** Spreadsheet row the real header was found on. */
+  headerRow: number;
+  /** Converted data rows fed into validation. */
+  keptRows: number;
+  /** Separator/total/blank-ish rows dropped by the converter. */
+  droppedRows: number;
+  /** Plain-language notes about what the conversion did. */
+  notes: string[];
+  /** Day book only: voucher types excluded because their own files cover them. */
+  excluded?: Array<{ type: string; vouchers: number }>;
 }
 
 export interface ImportDemoSummary {
@@ -171,6 +191,9 @@ export interface ImportUnmappedName {
   rows: number;
   /** Exact-name match found in this ERP (prefill). */
   suggestion: { targetId: number; targetKind: string | null; name: string } | null;
+  /** Receipt/payment party names only: may also be routed to a ledger
+   *  (journal entry) or explicitly skipped — for non-party accounts. */
+  routable?: boolean;
 }
 
 export interface ImportMappingCandidate {
@@ -192,6 +215,8 @@ export interface ImportBatchMappingsResponse {
   unmapped: ImportUnmappedName[];
   /** Pick-lists for "choose existing", keyed by kind. */
   candidates: Partial<Record<ImportMappingKind, ImportMappingCandidate[]>>;
+  /** Ledgers a routable (non-party) name may be routed to as a journal entry. */
+  routeLedgers?: Array<{ id: number; name: string }>;
   /** Groups a NEW ledger may be created under. */
   ledgerGroups: ImportLedgerGroup[];
 }
@@ -201,7 +226,9 @@ export interface ImportMappingInput {
   kind: ImportMappingKind;
   /** The old-ERP name being mapped (exactly as reported in `unmapped`). */
   name: string;
-  /** Choose existing … */
+  /** Choose existing … (targetKind "ledger" routes a non-party name to a
+   *  ledger as a journal entry; "skip" excludes its rows, visibly — both
+   *  for receipt/payment party names only, no targetId needed for skip) */
   targetId?: number;
   targetKind?: string | null;
   /** … or create new (fields depend on kind). */
@@ -628,6 +655,8 @@ export interface ImportMigrationDetail {
 export interface ImportMigrationMappingsResponse {
   unmapped: ImportUnmappedName[];
   candidates: Partial<Record<ImportMappingKind, ImportMappingCandidate[]>>;
+  /** Ledgers a routable (non-party) name may be routed to as a journal entry. */
+  routeLedgers?: Array<{ id: number; name: string }>;
   ledgerGroups: ImportLedgerGroup[];
 }
 

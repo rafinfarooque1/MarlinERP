@@ -4,7 +4,7 @@ description: Full stack ERP for Marlin Frozen Fruits — api-server + marlin-erp
 ---
 
 ## Login
-- username: admin; dev password = the DEFAULT_INITIAL_PASSWORD constant in artifacts/api-server/src/lib/passwordPolicy.ts (read it from code — never store the value in memory files)
+- Never assume the admin dev password matches the DEFAULT_INITIAL_PASSWORD constant — the owner may change it at any time. For API testing, create a temp employee cloned from admin's hierarchy_id (own bcrypt hash, must_change_password=false) and DELETE it (plus its login_attempts rows) afterwards; never leave the admin hash overwritten.
 - curl testing: POST /api/auth/login → use `Authorization: Bearer <token>` (cookie auth does NOT work from curl); JWTs survive server restarts
 
 ## Router mounting trap
@@ -78,6 +78,6 @@ description: Full stack ERP for Marlin Frozen Fruits — api-server + marlin-erp
 - valid_from/valid_to added as text columns via startup migration
 - ItemPrice type from generated code lacks these; use (ip as any).validFrom casts
 
-- Dev-login gotcha: the stored admin hash can drift from DEFAULT_INITIAL_PASSWORD (password-change tests do this). If admin login fails, suspect drift — re-seed the hash from the constant instead of debugging auth; a restart also clears the login rate-limit.
+- Dev-login gotcha: if admin login fails, it may be a deliberate owner password change — do NOT re-seed the hash. Test suites that hardcode the default constant then fail at login; either run them with a temporarily swapped hash (save + restore the original) or update the suites to use their own credentials.
 
 - Web app is served at ROOT paths on the dev domain (previewPath `/`): e2e test plans must use `/login`, `/reports` etc. — NOT `/marlin-erp/...` prefixed URLs (those hit the SPA catch-all 404).

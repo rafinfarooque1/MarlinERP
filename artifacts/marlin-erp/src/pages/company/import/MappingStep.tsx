@@ -28,9 +28,13 @@ const KIND_ONE: Record<ImportMappingKind, string> = {
 };
 
 interface Decision {
-  mode: 'existing' | 'create';
+  /** 'ledger' (route to a ledger as a journal entry) and 'skip' apply only to
+   *  routable receipt/payment names — non-party accounts in old-software files. */
+  mode: 'existing' | 'create' | 'ledger' | 'skip';
   /** "id|targetKind" of the chosen existing record. */
   target: string;
+  /** mode 'ledger': id of the ledger the rows post to as journal entries. */
+  routeLedgerId: string;
   create: {
     gstNumber: string; phone: string;
     unit: string; hsnCode: string; taxRate: string; mrp: string; cost: string;
@@ -66,7 +70,7 @@ export function MappingStep({ batchId = null, migrationId = null, canEdit }: {
         const k = keyOf(u);
         if (next[k]) continue;
         if (u.suggestion) {
-          next[k] = { mode: 'existing', target: `${u.suggestion.targetId}|${u.suggestion.targetKind ?? ''}`, create: emptyCreate() };
+          next[k] = { mode: 'existing', target: `${u.suggestion.targetId}|${u.suggestion.targetKind ?? ''}`, routeLedgerId: '', create: emptyCreate() };
         }
       }
       return next;
@@ -95,7 +99,7 @@ export function MappingStep({ batchId = null, migrationId = null, canEdit }: {
   if (!data || data.unmapped.length === 0) return null;
 
   const decision = (u: ImportUnmappedName): Decision =>
-    decisions[keyOf(u)] ?? { mode: 'existing', target: '', create: emptyCreate() };
+    decisions[keyOf(u)] ?? { mode: 'existing', target: '', routeLedgerId: '', create: emptyCreate() };
   const setDecision = (u: ImportUnmappedName, d: Decision) =>
     setDecisions((prev) => ({ ...prev, [keyOf(u)]: d }));
   const setCreateField = (u: ImportUnmappedName, field: keyof Decision['create'], value: string) => {
@@ -107,6 +111,8 @@ export function MappingStep({ batchId = null, migrationId = null, canEdit }: {
     const d = decisions[keyOf(u)];
     if (!d) return false;
     if (d.mode === 'existing') return d.target !== '';
+    if (d.mode === 'ledger') return d.routeLedgerId !== '';
+    if (d.mode === 'skip') return true;
     if (u.kind === 'product') return d.create.unit.trim() !== '';
     if (u.kind === 'ledger') return d.create.parentId !== '';
     return true;
@@ -117,7 +123,12 @@ export function MappingStep({ batchId = null, migrationId = null, canEdit }: {
     for (const u of data.unmapped) {
       const d = decisions[keyOf(u)];
       if (!d) continue;
-      if (d.mode === 'existing') {
+      if (d.mode === 'skip') {
+        mappings.push({ kind: u.kind, name: u.name, targetKind: 'skip' });
+      } else if (d.mode === 'ledger') {
+        if (!d.routeLedgerId) continue;
+        mappings.push({ kind: u.kind, name: u.name, targetId: Number(d.routeLedgerId), targetKind: 'ledger' });
+      } else if (d.mode === 'existing') {
         if (!d.target) continue;
         const [idStr, tk] = d.target.split('|');
         mappings.push({ kind: u.kind, name: u.name, targetId: Number(idStr), targetKind: tk || null });
@@ -199,7 +210,7 @@ export function MappingStep({ batchId = null, migrationId = null, canEdit }: {
                           <Sparkles className="w-3 h-3 mr-0.5" />exact match found
                         </Badge>
                       )}
-                      <div className="ml-auto flex gap-1">
+                      <div className="ml-auto flex flex-wrap gap-1">
                         <Button size="sm" variant={d.mode === 'existing' ? 'default' : 'outline'} className="h-7 text-xs"
                           onClick={() => setDecision(u, { ...d, mode: 'existing' })}>
                           Use existing
@@ -208,10 +219,43 @@ export function MappingStep({ batchId = null, migrationId = null, canEdit }: {
                           onClick={() => setDecision(u, { ...d, mode: 'create' })}>
                           <Plus className="w-3 h-3 mr-0.5" />Create new
                         </Button>
+                        {u.routable && (
+                          <>
+                            <Button size="sm" variant={d.mode === 'ledger' ? 'default' : 'outline'} className="h-7 text-xs"
+                              onClick={() => setDecision(u, { ...d, mode: 'ledger' })}>
+                              To ledger
+                            </Button>
+                            <Button size="sm" variant={d.mode === 'skip' ? 'destructive' : 'outline'} className="h-7 text-xs"
+                              onClick={() => setDecision(u, { ...d, mode: 'skip' })}>
+                              Skip
+                            </Button>
+                          </>
+                        )}
                       </div>
                     </div>
 
-                    {d.mode === 'existing' ? (
+                    {d.mode === 'skip' ? (
+                      <p className="text-xs text-muted-foreground">
+                        Rows with this name will <span className="font-medium text-destructive">not be imported</span> —
+                        they stay listed in the skip report so nothing disappears silently.
+                      </p>
+                    ) : d.mode === 'ledger' ? (
+                      <div className="space-y-1">
+                        <Select value={d.routeLedgerId} onValueChange={(v) => setDecision(u, { ...d, routeLedgerId: v })}>
+                          <SelectTrigger className="h-8 w-full sm:w-96 text-xs">
+                            <SelectValue placeholder="Ledger to post these rows to (journal entry)…" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {(data.routeLedgers ?? []).map((l) => (
+                              <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                          Not a real {KIND_ONE[kind]}? Each row becomes a journal voucher between the money account and this ledger.
+                        </p>
+                      </div>
+                    ) : d.mode === 'existing' ? (
                       <Select value={d.target} onValueChange={(v) => setDecision(u, { ...d, target: v })}>
                         <SelectTrigger className="h-8 w-full sm:w-96 text-xs">
                           <SelectValue placeholder={`Choose the matching ${KIND_ONE[kind]}…`} />

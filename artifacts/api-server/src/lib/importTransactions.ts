@@ -430,10 +430,10 @@ export interface ImportedPurchaseResult {
 export async function importPurchaseDoc(doc: ImportPurchaseDocInput, ext?: PoolClient): Promise<ImportedPurchaseResult> {
   const q = ext ?? pool;
   const loc = doc.loc;
-  const maps: NameMaps = await buildNameMaps();
+  const maps: NameMaps = await buildNameMaps(q);
   const { rows: [vend] } = await q.query(`SELECT name FROM vendors WHERE id = $1`, [doc.vendorId]);
   if (!vend) throw new Error(`Vendor #${doc.vendorId} no longer exists — re-validate the batch.`);
-  const supply = await resolveSupplyTaxType(doc.vendorId, loc);
+  const supply = await resolveSupplyTaxType(doc.vendorId, loc, q);
 
   const rawLines = doc.lines.map((l) => ({
     materialType: l.kind, materialId: l.id, quantity: l.quantity,

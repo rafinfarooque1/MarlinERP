@@ -1,4 +1,4 @@
-- [Marlin ERP architecture](marlin-erp-arch.md) — Full ERP stack: api-server (Express+Drizzle), marlin-erp (React+Vite), shared libs; dev login = admin + DEFAULT_INITIAL_PASSWORD constant in api-server passwordPolicy.ts
+- [Marlin ERP architecture](marlin-erp-arch.md) — Full ERP stack: api-server (Express+Drizzle), marlin-erp (React+Vite), shared libs; never assume the admin dev password — clone a temp user for API tests, never re-seed the hash
 - [Security hardening](security-hardening.md) — bcryptjs, global requireAuth, rate limiting, mustChangePassword, HMAC v2 tokens (legacy REJECTED), requireModuleAction write guards. See file.
 - [API client hook names](api-client-hooks.md) — Many hook names differ from intuition; several entities are create-only (no update/delete). Always grep the generated file first.
 - [Permission system](permissions.md) — one row per sidebar link keyed `page:<href>`; hierarchies/permissions GETs must stay unguarded; migration fallback must GRANT; duplicates break authz determinism.
@@ -105,7 +105,8 @@
 - [HO location convention](ho-location-convention.md) — HO sells like a branch but its placeholder id differs per table (vouchers 0, sales/stock 1): match on TYPE alone; dashboard/bi hand-rolls predicates — add new types explicitly.
 - [Ghost transfer documents](ghost-transfer-documents.md) — deleting a transfer nulls its twins' branch_transfer_id: ghost BTR invoices leak into lists/books, reservations stick; detect via BTR/% + NULL FK.
 - [Party advances & bill settlement](party-advances.md) — CADV/VADV ledgers (prefix dodges FROM-6 parsers); explicit-first vs FIFO; allocation vouchers locked+unwindable; advance-only parties need seed AND filter hooks in reports.
-- [Data import framework](data-import-framework.md) — commits MUST reuse manual-creation libs; txn imports: file-order commits (avg cost), consecutive-row grouping, needs_party resolve step, one-txn rollback.
+- [Data import framework](data-import-framework.md) — commits MUST reuse manual-creation libs; mapping-first name resolution (auto-create retired); file-order commits (avg cost); one-txn rollback.
+- [Legacy report import](legacy-report-import.md) — five old-software Excel reports auto-convert in the wizard; Amount is GST-inclusive; reused invoice/voucher numbers get /2 suffixes; day book = Journal/Contra only (real file: zero by design).
 - [Sale MRP floor](sale-mrp-floor.md) — line price ≥ master MRP (create+edit, grandfathered via stored lines); NOT in buildSaleLines (quotes exempt); test fixtures must price ≥ fixture mrp.
 - [Party location assignment](party-location-assignment.md) — ONE validated resolver for create+edit stamps; /:id routes need their own scope gate; located ledger filters totals too; import blank rows = batch stamp.
 - [Bill-level control over per-line fields](bill-level-over-per-line.md) — one control fronting a per-row stored field must surface mixed legacy rows (warn + apply-on-pick), never let row 0 silently speak for the bill.

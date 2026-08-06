@@ -92,23 +92,27 @@ Rules that must hold for every import type, and why:
   a CONFLICTING non-blank date or party on one invoice errors the offending
   row; other doc-level cells = first non-blank, later differing non-blank =
   warning (narration: silent).
-- **Five forgiving-import settings in `company_settings.general_settings`**,
-  read `!== false` (default ON), surfaced under Company Settings → Data
-  Import: `importAutoCreateCustomers`, `importAutoCreateVendors`,
-  `importAutoWalkInCustomer`, `importMrpToDiscount`, `importDetectLineTotal`.
-  MRP gate: toggle OFF turns the POS-style conversion into a row ERROR.
+- **Three forgiving-import settings in `company_settings.general_settings`**,
+  read `!== false` (default ON): `importAutoWalkInCustomer`,
+  `importMrpToDiscount`, `importDetectLineTotal`. MRP gate: toggle OFF turns
+  the POS-style conversion into a row ERROR. `importAutoCreateCustomers` /
+  `importAutoCreateVendors` were RETIRED with the mapping-first wizard —
+  the backend no longer reads them (the Settings UI still shows the dead
+  toggles; follow-up filed).
 - **Walk-in sales:** blank customer + effective mode ≠ credit + toggle ON →
   `norm.walkIn`, commits with `customer_id NULL` and a B2C number (POS
   convention — there is NO "Walk-in" customer master). Blank + credit is
   always an error; vendors are always required.
-- **Auto-create at commit (sales/purchases only):** unknown named party +
-  toggle ON → validation stamps `head.norm.createParty {name,gst}` (warning);
-  commit's `ensureParty` creates once per distinct lower(name) via the
-  createXWithLedger path under a **pg_advisory_lock on the normalised name**
-  (bare check-then-create duplicated masters across concurrent batches).
-  Like resolve-step parties they are PERMANENT masters — notes-marked
-  `Created automatically during import batch #<id>`, never batch-stamped,
-  never rolled back. Voucher imports still resolve-step only.
+- **Mapping-first resolution (replaced auto-create-at-commit, Aug 2026):**
+  file names resolve to masters ONLY through saved `import_mappings` rows
+  (kind + normalised name → target); an unmapped name holds the row at
+  `needs_mapping` until the user maps or creates the master in the mapping
+  step. Stale mappings (target deleted) are skipped → back to the mapping
+  step. No silent name matching anywhere. The old test suites
+  (`import-legacy-friendly`, `import-vouchers`,
+  `import-txn-template-semantics`) still test the retired auto-create /
+  resolve-step semantics and FAIL against this flow — see
+  legacy-report-import.md before treating that as a regression.
 - **Line Total column (toggle-gated):** blank price → derived from lt÷qty,
   BUT with a row discount the derived figure must be the GROSS one (sales:
   lt/qty + unitDiscount; purchases: (lt/qty)/(1−pct)) — the pricing engine

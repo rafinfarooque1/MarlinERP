@@ -32,7 +32,7 @@ import { toast } from 'sonner';
 import {
   Upload, Download, CheckCircle2, AlertTriangle, XCircle, RotateCcw, Loader2,
   Eye, MapPin, Link2, FlaskConical, FileBarChart2, ThumbsUp, Trash2,
-  PlayCircle, Replace, FileSpreadsheet, ArrowRight,
+  PlayCircle, Replace, FileSpreadsheet, ArrowRight, Sparkles,
 } from 'lucide-react';
 import { MODULE_META, MODULE_LABEL, WIZARD_MODULES, fmtTime, fmtMoney } from './shared';
 import { MappingStep } from './MappingStep';
@@ -337,6 +337,23 @@ export function MigrationWizard({ canAdd, canDelete, canDownload, resumeId = nul
                   {f ? (
                     <>
                       <div className="text-xs text-muted-foreground truncate" title={f.filename}>{f.filename}</div>
+                      {f.conversion && (
+                        <div className="rounded-md border border-blue-200 bg-blue-50 p-2 space-y-0.5">
+                          <div className="text-[11px] font-medium text-blue-900 flex items-center gap-1">
+                            <Sparkles className="w-3 h-3" />
+                            Old software report detected — converted automatically
+                          </div>
+                          <div className="text-[11px] text-blue-800">
+                            {f.conversion.report}: {f.conversion.keptRows} row{f.conversion.keptRows === 1 ? '' : 's'} kept
+                            {f.conversion.droppedRows > 0 ? `, ${f.conversion.droppedRows} banner/total row${f.conversion.droppedRows === 1 ? '' : 's'} dropped` : ''}
+                          </div>
+                          {(f.conversion.notes ?? []).length > 0 && (
+                            <ul className="text-[10px] text-blue-800/90 list-disc pl-4 max-h-24 overflow-y-auto">
+                              {f.conversion.notes.map((n, i) => <li key={i}>{n}</li>)}
+                            </ul>
+                          )}
+                        </div>
+                      )}
                       <div className="flex flex-wrap gap-1 text-[11px]">
                         <Badge variant="outline" className="px-1 py-0">{f.docCount} doc{f.docCount === 1 ? '' : 's'}</Badge>
                         {f.moneyTotal > 0 && <Badge variant="outline" className="px-1 py-0">{fmtMoney(f.moneyTotal)}</Badge>}
@@ -508,6 +525,7 @@ export function MigrationWizard({ canAdd, canDelete, canDownload, resumeId = nul
                     <TableRow>
                       <TableHead>File</TableHead>
                       <TableHead className="text-right">Would import</TableHead>
+                      <TableHead className="text-right">Skipped</TableHead>
                       <TableHead className="text-right">Failed</TableHead>
                       <TableHead>Old voucher numbers</TableHead>
                     </TableRow>
@@ -517,6 +535,7 @@ export function MigrationWizard({ canAdd, canDelete, canDownload, resumeId = nul
                       <TableRow key={m}>
                         <TableCell className="text-sm">{MODULE_LABEL(m)}</TableCell>
                         <TableCell className="text-right tabular-nums text-sm">{s.imported}</TableCell>
+                        <TableCell className={`text-right tabular-nums text-sm ${(s.skipped ?? 0) > 0 ? 'text-amber-700' : 'text-muted-foreground'}`}>{s.skipped ?? 0}</TableCell>
                         <TableCell className={`text-right tabular-nums text-sm ${s.failed > 0 ? 'text-destructive font-semibold' : 'text-muted-foreground'}`}>{s.failed}</TableCell>
                         <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
                           {s.legacyMin ? (s.legacyMin === s.legacyMax ? s.legacyMin : `${s.legacyMin} – ${s.legacyMax}`) : '—'}
@@ -526,6 +545,7 @@ export function MigrationWizard({ canAdd, canDelete, canDownload, resumeId = nul
                     <TableRow className="font-semibold bg-muted/40">
                       <TableCell>Total</TableCell>
                       <TableCell className="text-right tabular-nums">{mig.demoSummary.imported}</TableCell>
+                      <TableCell className="text-right tabular-nums">{mig.demoSummary.skipped ?? 0}</TableCell>
                       <TableCell className={`text-right tabular-nums ${mig.demoSummary.failed > 0 ? 'text-destructive' : ''}`}>{mig.demoSummary.failed}</TableCell>
                       <TableCell />
                     </TableRow>

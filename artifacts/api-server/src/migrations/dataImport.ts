@@ -213,6 +213,10 @@ export async function addDataImport(): Promise<void> {
     -- Legacy voucher-number range carried by the file (history display).
     ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS legacy_min    text;
     ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS legacy_max    text;
+    -- Old-software report conversion metadata (report family, header row,
+    -- kept/dropped counts, notes, excluded voucher types) — NULL for normal
+    -- sample-template files.
+    ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS conversion    jsonb;
   `);
 
   // Permanent master mapping memory: old-ERP name → this ERP's record.

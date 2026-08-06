@@ -59,6 +59,7 @@ import {
   rollbackImportedReceiptVoucher, rollbackImportedPaymentVoucher,
 } from "../lib/importVouchers";
 import { itemCreateError, createItemCore } from "../lib/itemCreate";
+import { convertLegacyReport, type LegacyConversionMeta } from "../lib/legacyReports";
 import { createJournalVoucherCore } from "../lib/journalCreate";
 import { importOpeningStockDoc, rollbackImportedOpeningStock } from "../lib/openingStockImport";
 import { computeTrialBalance, computeCashBankBook } from "./journal";
@@ -131,13 +132,21 @@ interface MappingTarget { targetId: number; targetKind: string | null }
 /** Record an unmapped name on a row's norm (deduped per row). Rows carrying
  *  any missing mapping validate as needs_mapping; the batch's mapping step
  *  aggregates these into the distinct name list the user works through. */
-function addMissingMapping(norm: Record<string, any>, kind: MappingKind, name: string) {
-  const list: Array<{ kind: MappingKind; name: string }> = norm.missingMappings ?? (norm.missingMappings = []);
-  if (!list.some((m) => m.kind === kind && normName(m.name) === normName(name))) list.push({ kind, name });
+function addMissingMapping(norm: Record<string, any>, kind: MappingKind, name: string, routable = false) {
+  const list: Array<{ kind: MappingKind; name: string; routable?: boolean }> = norm.missingMappings ?? (norm.missingMappings = []);
+  if (!list.some((m) => m.kind === kind && normName(m.name) === normName(name))) {
+    list.push(routable ? { kind, name, routable: true } : { kind, name });
+  }
 }
 
-async function loadMappings(kind: MappingKind): Promise<Map<string, MappingTarget>> {
-  const { rows } = await pool.query<any>(
+/** Queryable seam for the wizard's validation stack: every read defaults to
+ *  the shared pool, but a caller that holds a transaction (the approve
+ *  endpoint's revalidation) passes its client so validation sees the SAME
+ *  transactional view as the writes it gates. */
+type WizQ = { query: (sql: string, params?: unknown[]) => Promise<any> };
+
+async function loadMappings(kind: MappingKind, q: WizQ = pool): Promise<Map<string, MappingTarget>> {
+  const { rows } = await q.query(
     `SELECT source_norm, target_id, target_kind FROM import_mappings WHERE kind = $1`,
     [kind],
   );
@@ -810,6 +819,11 @@ interface TxnContext {
    *  name (lower(name) → ledger) — the same set the manual bill form offers,
    *  and the same rules importPurchaseDoc re-validates at commit. */
   expenseLedgers: Map<string, { id: number; name: string }>;
+  /** Product names the user mapped to a bill-charge expense ledger
+   *  (import_mappings kind='product', target_kind='charge') — old-software
+   *  purchase reports list charges like "PACKING AND TRANSPORT" as item
+   *  lines. norm(name) → ledger. Purchases only; on a sales file it errors. */
+  chargeMappings: Map<string, { id: number; name: string }>;
   settings: ImportSettings;
 }
 
@@ -817,8 +831,8 @@ interface TxnContext {
  *  expense-type, not internal, and not inside the Purchase (SYS-PUR) subtree —
  *  mirrors lib/otherCharges.ts. Unknown names are ERRORS, not a resolve step:
  *  auto-creating a ledger from a typo would scatter the chart of accounts. */
-async function importExpenseLedgerOptions(): Promise<Map<string, { id: number; name: string }>> {
-  const { rows } = await pool.query<any>(`
+async function importExpenseLedgerOptions(q: WizQ = pool): Promise<Map<string, { id: number; name: string }>> {
+  const { rows } = await q.query(`
     WITH RECURSIVE pur AS (
       SELECT id FROM account_ledgers WHERE code = 'SYS-PUR'
       UNION ALL
@@ -846,10 +860,10 @@ async function importExpenseLedgerOptions(): Promise<Map<string, { id: number; n
  * three tables are loaded so a sales file whose name maps to a packing
  * material can say so precisely instead of "not found".
  */
-async function loadMappedProducts(): Promise<Map<string, TxnProduct[]>> {
+async function loadMappedProducts(q: WizQ = pool): Promise<Map<string, TxnProduct[]>> {
   const metaByKind = new Map<TxnProduct["kind"], Map<number, TxnProduct>>();
   const load = async (kind: TxnProduct["kind"], sql: string) => {
-    const { rows } = await pool.query<any>(sql);
+    const { rows } = await q.query(sql);
     const m = new Map<number, TxnProduct>();
     for (const r of rows) m.set(Number(r.id), { kind, id: Number(r.id), name: String(r.name), taxRate: Number(r.tax_rate ?? 0), unit: String(r.unit ?? ""), mrp: Number(r.mrp ?? 0) });
     metaByKind.set(kind, m);
@@ -859,8 +873,9 @@ async function loadMappedProducts(): Promise<Map<string, TxnProduct[]>> {
   await load("raw_material", `SELECT id, name, COALESCE(tax_rate, 0)::float8 AS tax_rate, COALESCE(unit, '') AS unit, 0 AS mrp FROM raw_materials`);
 
   const products = new Map<string, TxnProduct[]>();
-  const mappings = await loadMappings("product");
+  const mappings = await loadMappings("product", q);
   for (const [norm, t] of mappings) {
+    if (t.targetKind === "charge") continue; // routed to a bill-charge ledger, not a product
     const kind = (t.targetKind === "material" || t.targetKind === "raw_material") ? t.targetKind : "item";
     const meta = metaByKind.get(kind)?.get(t.targetId);
     if (meta) products.set(norm, [meta]); // stale target → unmapped → needs_mapping
@@ -868,17 +883,37 @@ async function loadMappedProducts(): Promise<Map<string, TxnProduct[]>> {
   return products;
 }
 
+/** Product names routed to a bill-charge expense ledger (target_kind
+ *  'charge'). Only ledgers still eligible as purchase charges resolve —
+ *  a stale/retired target sends the name back to the mapping step. */
+async function loadChargeMappings(q: WizQ = pool): Promise<Map<string, { id: number; name: string }>> {
+  const eligible = await importExpenseLedgerOptions(q);
+  const byId = new Map<number, { id: number; name: string }>();
+  for (const v of eligible.values()) byId.set(v.id, v);
+  const out = new Map<string, { id: number; name: string }>();
+  for (const [norm, t] of await loadMappings("product", q)) {
+    if (t.targetKind !== "charge") continue;
+    const led = byId.get(t.targetId);
+    if (led) out.set(norm, led);
+  }
+  return out;
+}
+
 /** Customers/vendors, resolved through import_mappings. */
-async function loadMappedParties(kind: "customer" | "vendor"): Promise<Map<string, TxnParty>> {
+async function loadMappedParties(kind: "customer" | "vendor", q: WizQ = pool): Promise<Map<string, TxnParty>> {
   const table = kind === "customer" ? "customers" : "vendors";
-  const { rows } = await pool.query<any>(
+  const { rows } = await q.query(
     `SELECT id, name, COALESCE(gst_number, '') AS gst, COALESCE(state, '') AS state FROM ${table}`,
   );
   const byId = new Map<number, TxnParty>();
   for (const r of rows) byId.set(Number(r.id), { id: Number(r.id), name: String(r.name), gst: String(r.gst), state: String(r.state) });
 
   const parties = new Map<string, TxnParty>();
-  for (const [norm, t] of await loadMappings(kind)) {
+  for (const [norm, t] of await loadMappings(kind, q)) {
+    // target_kind 'ledger'/'skip' rows are voucher-import routing decisions
+    // (non-party accounts in old-software receipt/payment reports) — they
+    // never resolve to a customer/vendor.
+    if (t.targetKind != null) continue;
     const meta = byId.get(t.targetId);
     if (meta) parties.set(norm, meta); // stale target → unmapped → needs_mapping
   }
@@ -897,8 +932,8 @@ interface ImportSettings {
   detectLineTotal: boolean;
 }
 
-async function loadImportSettings(): Promise<ImportSettings> {
-  const { rows: [r] } = await pool.query<any>(`SELECT general_settings FROM company_settings LIMIT 1`);
+async function loadImportSettings(q: WizQ = pool): Promise<ImportSettings> {
+  const { rows: [r] } = await q.query(`SELECT general_settings FROM company_settings LIMIT 1`);
   const gs = (r?.general_settings ?? {}) as Record<string, any>;
   return {
     autoWalkInCustomer: gs.importAutoWalkInCustomer !== false,
@@ -907,21 +942,21 @@ async function loadImportSettings(): Promise<ImportSettings> {
   };
 }
 
-async function loadTxnContext(module: TxnModule, loc: { type: string; id: number }): Promise<TxnContext> {
+async function loadTxnContext(module: TxnModule, loc: { type: string; id: number }, q: WizQ = pool): Promise<TxnContext> {
   // Mapping-based resolution: a file name resolves to a master ONLY through a
   // saved import_mappings row (kind + normalised name → target). No silent
   // name matching — an unmapped name holds the row at needs_mapping until the
   // user maps or creates the master. Stale mappings (target deleted since)
   // are skipped, which sends the name back to the mapping step.
-  const products = await loadMappedProducts();
-  const parties = await loadMappedParties(module === "sales" ? "customer" : "vendor");
+  const products = await loadMappedProducts(q);
+  const parties = await loadMappedParties(module === "sales" ? "customer" : "vendor", q);
 
   const existingInvoices = new Set<string>();
   if (module === "sales") {
     // Both numbers guard against re-importing the same file: bills renumbered
     // into the SB2B/SB2C series keep their original number in
     // legacy_invoice_number, and the import source still carries the original.
-    const { rows } = await pool.query(
+    const { rows } = await q.query(
       `SELECT lower(invoice_number) AS inv, lower(legacy_invoice_number) AS legacy_inv
          FROM sales WHERE invoice_number IS NOT NULL`
     );
@@ -930,16 +965,16 @@ async function loadTxnContext(module: TxnModule, loc: { type: string; id: number
       if (r.legacy_inv) existingInvoices.add(String(r.legacy_inv));
     }
   } else {
-    const { rows } = await pool.query(`SELECT vendor_id, lower(invoice_number) AS inv FROM purchases WHERE invoice_number IS NOT NULL`);
+    const { rows } = await q.query(`SELECT vendor_id, lower(invoice_number) AS inv FROM purchases WHERE invoice_number IS NOT NULL`);
     for (const r of rows) existingInvoices.add(`${Number(r.vendor_id)}|${String(r.inv)}`);
   }
 
-  const { rows: [comp] } = await pool.query(`SELECT COALESCE(state, '') AS state FROM company_settings LIMIT 1`);
+  const { rows: [comp] } = await q.query(`SELECT COALESCE(state, '') AS state FROM company_settings LIMIT 1`);
 
   const stockAvail = new Map<number, number>();
   if (module === "sales") {
     const branchId = loc.type === "headoffice" ? 1 : loc.id;
-    const { rows } = await pool.query(
+    const { rows } = await q.query(
       `SELECT item_id, quantity::float8 AS qty FROM stock_entries
         WHERE material_type = 'item' AND branch_type = $1 AND branch_id = $2`,
       [loc.type, branchId],
@@ -949,15 +984,16 @@ async function loadTxnContext(module: TxnModule, loc: { type: string; id: number
 
   return {
     products,
-    nameMaps: module === "purchases" ? await buildNameMaps() : ({ material: new Map(), raw_material: new Map(), item: new Map() } as unknown as NameMaps),
+    nameMaps: module === "purchases" ? await buildNameMaps(q) : ({ material: new Map(), raw_material: new Map(), item: new Map() } as unknown as NameMaps),
     parties, existingInvoices,
     companyState: String(comp?.state ?? "").trim().toLowerCase(),
     stockAvail,
     accounts: module === "purchases"
-      ? await importAccountOptions(pool, loc as ProdLocation)
+      ? await importAccountOptions(q, loc as ProdLocation)
       : [],
-    expenseLedgers: module === "purchases" ? await importExpenseLedgerOptions() : new Map(),
-    settings: await loadImportSettings(),
+    expenseLedgers: module === "purchases" ? await importExpenseLedgerOptions(q) : new Map(),
+    chargeMappings: await loadChargeMappings(q),
+    settings: await loadImportSettings(q),
   };
 }
 
@@ -1005,10 +1041,10 @@ interface TxnDocAcc {
  * This catches "exported for branch A, imported into branch B" mistakes.
  * Mirror-safe: matches on the normalised NAME, never on type+id.
  */
-async function loadRowLocationCheck(loc: { type: string; id: number }): Promise<(locRaw: string) => string | null> {
+async function loadRowLocationCheck(loc: { type: string; id: number }, q: WizQ = pool): Promise<(locRaw: string) => string | null> {
   const [{ rows: whs }, { rows: outs }] = await Promise.all([
-    pool.query<any>(`SELECT id, name FROM warehouses`),
-    pool.query<any>(`SELECT id, name FROM outlets`),
+    q.query(`SELECT id, name FROM warehouses`),
+    q.query(`SELECT id, name FROM outlets`),
   ]);
   const known = new Set<string>();
   for (const r of [...whs, ...outs]) known.add(normHeader(String(r.name)));
@@ -1030,13 +1066,13 @@ async function loadRowLocationCheck(loc: { type: string; id: number }): Promise<
 async function validateTransactionRows(
   module: TxnModule,
   rowsIn: TxnRowInput[],
-  loc: { type: string; id: number },
+  loc: { type: string; id: number }, q: WizQ = pool,
 ): Promise<{
   results: RowVerdict[];
   counts: { valid: number; warning: number; error: number; needsMapping: number };
 }> {
-  const ctx = await loadTxnContext(module, loc);
-  const checkRowLoc = await loadRowLocationCheck(loc);
+  const ctx = await loadTxnContext(module, loc, q);
+  const checkRowLoc = await loadRowLocationCheck(loc, q);
   const todayIso = new Date().toISOString().slice(0, 10);
   const partyLabel = module === "sales" ? "Customer" : "Vendor";
 
@@ -1234,11 +1270,22 @@ async function validateTransactionRows(
       }
     }
 
-    // Product — resolved ONLY through a saved product mapping.
+    // Product — resolved ONLY through a saved product mapping. A name the
+    // user mapped as a BILL CHARGE (old-software purchase reports list
+    // freight/packing as item lines) becomes an other-charge on the bill
+    // instead of a stock line — purchases only.
     const itemName = (values.item ?? "").trim();
     let product: TxnProduct | null = null;
+    let charge: { id: number; name: string } | null = null;
     if (!itemName) {
       s.errors.push("Item is required");
+    } else if (ctx.chargeMappings.has(normName(itemName))) {
+      if (module !== "purchases") {
+        s.errors.push(`"${itemName}" is mapped as a bill charge — that treatment exists for purchase bills only`);
+        s.suggestions.push("Re-point the mapping at a product on the Manage Mappings screen");
+      } else {
+        charge = ctx.chargeMappings.get(normName(itemName))!;
+      }
     } else {
       const mapped = (ctx.products.get(normName(itemName)) ?? [])[0] ?? null;
       if (!mapped) {
@@ -1383,6 +1430,30 @@ async function validateTransactionRows(
       }
     }
 
+    // Charge-mapped line (purchases): the row's money becomes a bill charge —
+    // posted to the mapped expense ledger and owed to the vendor, never into
+    // stock. The vendor is owed the INCLUSIVE figure, so any GST on the row
+    // (file amounts first, else the file's GST%) folds into the charge.
+    if (charge && qty !== null && Number.isFinite(qty) && qty > 0
+        && price !== null && Number.isFinite(price) && price >= 0) {
+      const round2c = (n: number) => Math.round(n * 100) / 100;
+      const base = round2c(price * qty * (1 - discount / 100));
+      const fileGstAmt = (parseMoney((values.cgst ?? "").trim()) ?? 0)
+        + (parseMoney((values.sgst ?? "").trim()) ?? 0)
+        + (parseMoney((values.igst ?? "").trim()) ?? 0);
+      const pctRaw = Number((values.gstRate ?? "").trim());
+      const gstAmt = fileGstAmt > 0.004
+        ? round2c(fileGstAmt)
+        : (Number.isFinite(pctRaw) && pctRaw > 0 ? round2c(base * pctRaw / 100) : 0);
+      const amount = round2c(base + gstAmt);
+      if (amount <= 0) {
+        s.errors.push(`Bill charge "${itemName}" works out to ₹0 — give the row a rate above zero`);
+      } else {
+        s.norm.chargeLine = { ledgerId: charge.id, ledgerName: charge.name, amount };
+        s.warnings.push(`"${itemName}" is a bill charge — ₹${amount.toFixed(2)}${gstAmt > 0 ? " (incl. GST)" : ""} posts to "${charge.name}" and is owed to the vendor; it never enters stock`);
+      }
+    }
+
     // Other Purchase Charges — an optional (ledger, amount) pair on any row of
     // the bill. Both-or-neither: an amount without a ledger (or the reverse)
     // is a hard error, never a silent skip that understates the vendor's dues.
@@ -1414,11 +1485,19 @@ async function validateTransactionRows(
     const doc = docs[dIdx];
     const head = slots[doc.headIdx];
     const anyError = doc.rowIdxs.some((i) => slots[i].errors.length > 0);
-    const anyMissingLine = doc.rowIdxs.some((i) => !slots[i].norm.line);
+    // A charge-mapped purchase row has no stock line — its chargeLine stands in.
+    const anyMissingLine = doc.rowIdxs.some((i) => !slots[i].norm.line && !slots[i].norm.chargeLine);
     if (anyError || anyMissingLine || !doc.dateIso) continue;
     // Unmapped names stay unpriced — they hold the batch at the mapping step
     // and re-validation prices them once the mapping is saved.
     if (!doc.party && !doc.walkIn) continue;
+    // Purchases: rows mapped as bill charges fold into the bill's other
+    // charges below — the pricing engine only ever sees the goods rows.
+    const goodsIdxs = doc.rowIdxs.filter((i) => slots[i].norm.line);
+    if (module === "purchases" && goodsIdxs.length === 0) {
+      head.errors.push("Every line of this bill is mapped as a bill charge — a purchase bill needs at least one stock line. Enter pure-expense bills as journal vouchers instead, or re-point a mapping at a product");
+      continue;
+    }
 
     let total = 0;
     let computedTax = 0;
@@ -1462,7 +1541,7 @@ async function validateTransactionRows(
       let supply: Awaited<ReturnType<typeof resolveSupplyTaxType>>;
       if (doc.party) {
         const cached = supplyCache.get(doc.party.id);
-        supply = cached ?? await resolveSupplyTaxType(doc.party.id, { type: loc.type, id: loc.id });
+        supply = cached ?? await resolveSupplyTaxType(doc.party.id, { type: loc.type, id: loc.id }, q);
         if (!supplyCache.has(doc.party.id)) supplyCache.set(doc.party.id, supply);
       } else {
         // Vendor doesn't exist yet (created at commit) — price intra-state.
@@ -1471,7 +1550,7 @@ async function validateTransactionRows(
         supply = { taxType: "intra", why: "new vendor — priced intra-state" };
       }
       const priced = priceBill(
-        doc.rowIdxs.map((i) => {
+        goodsIdxs.map((i) => {
           const l = slots[i].norm.line;
           return { materialType: l.kind, materialId: l.id, quantity: l.quantity, unitCost: l.rate, discount: l.discountPct };
         }),
@@ -1482,11 +1561,15 @@ async function validateTransactionRows(
       // Straight from the pricing engine — the same totals the bill records.
       computedTaxable = Number(priced.taxableTotal);
       computedDiscount = Number(priced.discountTotal);
-      for (const i of doc.rowIdxs) computedQty += Number(slots[i].norm.line.quantity ?? 0);
-      // Other Purchase Charges gathered across the bill's rows — they add to
-      // what the vendor is owed (and what "Paid" may settle), never to the
-      // goods total, the GST cross-check or stock cost.
-      const ocs = doc.rowIdxs.map((i) => slots[i].norm.otherCharge).filter(Boolean);
+      for (const i of goodsIdxs) computedQty += Number(slots[i].norm.line.quantity ?? 0);
+      // Other Purchase Charges gathered across the bill's rows — explicit
+      // (ledger, amount) pairs AND charge-mapped item lines both land here.
+      // They add to what the vendor is owed (and what "Paid" may settle),
+      // never to the goods total, the GST cross-check or stock cost.
+      const ocs = [
+        ...doc.rowIdxs.map((i) => slots[i].norm.otherCharge).filter(Boolean),
+        ...doc.rowIdxs.map((i) => slots[i].norm.chargeLine).filter(Boolean),
+      ];
       if (ocs.length > 0) {
         head.norm.otherCharges = ocs.map((c: any) => ({ ledgerId: c.ledgerId, amount: c.amount }));
         otherChargesTot = Math.round(ocs.reduce((t: number, c: any) => t + Number(c.amount), 0) * 100) / 100;
@@ -1497,8 +1580,11 @@ async function validateTransactionRows(
       }
     }
 
-    // File-GST cross-check (sum of CGST/SGST/IGST cells vs computed tax)
+    // File-GST cross-check (sum of CGST/SGST/IGST cells vs computed tax).
+    // Charge-mapped rows are excluded — their GST already folded into the
+    // charge amount, so counting it here would double it against the goods.
     const fileTax = doc.rowIdxs.reduce((t, i) => {
+      if (slots[i].norm.chargeLine) return t;
       const v = rowsIn[i].values;
       return t + (parseMoney((v.cgst ?? "").trim()) || 0) + (parseMoney((v.sgst ?? "").trim()) || 0) + (parseMoney((v.igst ?? "").trim()) || 0);
     }, 0);
@@ -1618,15 +1704,58 @@ interface VoucherContext {
   docsByParty: Map<number, VoucherOpenDoc[]>;
   /** `${partyId}|${lower(invoiceNumber)}` → doc (ALL docs, incl. settled/cancelled — for explicit-reference errors) */
   docByRef: Map<string, VoucherOpenDoc>;
+  /** Non-party names ROUTED to a ledger (mapping target_kind 'ledger') —
+   *  the row imports as a journal voucher against that ledger. Old-software
+   *  receipt/payment reports mix capital accounts and expense heads in with
+   *  real parties; routing keeps them in the books without inventing fake
+   *  customers/vendors. norm(name) → ledger. */
+  routes: Map<string, { ledgerId: number; ledgerName: string }>;
+  /** Names the user chose to SKIP (mapping target_kind 'skip') — surfaced
+   *  as warnings + a skip report, never silently dropped. */
+  skips: Set<string>;
 }
 
-async function loadVoucherContext(module: VoucherModule, loc: { type: string; id: number }): Promise<VoucherContext> {
+async function loadVoucherContext(module: VoucherModule, loc: { type: string; id: number }, q: WizQ = pool): Promise<VoucherContext> {
   const parties = new Map<string, { id: number; name: string }>();
   const partyTable = module === "receipts" ? "customers" : "vendors";
-  const { rows: partyRows } = await pool.query(`SELECT id, name FROM ${partyTable}`);
+  const { rows: partyRows } = await q.query(`SELECT id, name FROM ${partyTable}`);
   for (const r of partyRows) {
     const key = String(r.name ?? "").trim().toLowerCase();
     if (key && !parties.has(key)) parties.set(key, { id: Number(r.id), name: String(r.name) });
+  }
+
+  // Mapping overlay for this module's party kind. target_kind decides what a
+  // saved decision MEANS: NULL → old name points at an existing party;
+  // 'ledger' → the row posts as a journal voucher against that ledger;
+  // 'skip' → the row is excluded, visibly. A stale/inactive route ledger is
+  // dropped, which sends the name back to the mapping step (never a silent
+  // fallback to some other treatment).
+  const routes = new Map<string, { ledgerId: number; ledgerName: string }>();
+  const skips = new Set<string>();
+  {
+    const partyById = new Map<number, { id: number; name: string }>();
+    for (const r of partyRows) partyById.set(Number(r.id), { id: Number(r.id), name: String(r.name) });
+    const mappings = await loadMappings(module === "receipts" ? "customer" : "vendor", q);
+    const ledgerIds = [...mappings.values()].filter((t) => t.targetKind === "ledger").map((t) => t.targetId);
+    const ledgerById = new Map<number, string>();
+    if (ledgerIds.length > 0) {
+      const { rows } = await q.query(
+        `SELECT id, name FROM account_ledgers
+          WHERE id = ANY($1::int[]) AND NOT COALESCE(is_group, false) AND COALESCE(is_active, true)`,
+        [ledgerIds],
+      );
+      for (const r of rows) ledgerById.set(Number(r.id), String(r.name));
+    }
+    for (const [norm, t] of mappings) {
+      if (t.targetKind === "skip") { skips.add(norm); continue; }
+      if (t.targetKind === "ledger") {
+        const nm = ledgerById.get(t.targetId);
+        if (nm) routes.set(norm, { ledgerId: t.targetId, ledgerName: nm });
+        continue;
+      }
+      const p = partyById.get(t.targetId);
+      if (p) parties.set(norm, p); // mapped name → party (overrides nothing real: keys are normalised file names)
+    }
   }
 
   // Re-import guard: vouchers always draw a fresh ERP number, so the file's
@@ -1634,10 +1763,10 @@ async function loadVoucherContext(module: VoucherModule, loc: { type: string; id
   // import — that is what marks "this old-ERP voucher is already in".
   const existingVoucherNos = new Set<string>();
   const vTable = module === "receipts" ? "receipts" : "payments";
-  const { rows: vnos } = await pool.query(`SELECT lower(legacy_voucher_number) AS v FROM ${vTable} WHERE legacy_voucher_number IS NOT NULL`);
+  const { rows: vnos } = await q.query(`SELECT lower(legacy_voucher_number) AS v FROM ${vTable} WHERE legacy_voucher_number IS NOT NULL`);
   for (const r of vnos) existingVoucherNos.add(String(r.v));
 
-  const accounts = await importAccountOptions(pool, loc as any);
+  const accounts = await importAccountOptions(q, loc as any);
 
   const docsByParty = new Map<number, VoucherOpenDoc[]>();
   const docByRef = new Map<string, VoucherOpenDoc>();
@@ -1654,7 +1783,7 @@ async function loadVoucherContext(module: VoucherModule, loc: { type: string; id
   };
 
   if (module === "receipts") {
-    const { rows } = await pool.query(
+    const { rows } = await q.query(
       `SELECT s.id, s.customer_id, s.invoice_number,
               to_char(s.sale_date, 'YYYY-MM-DD') AS d,
               ${outstandingExpr("s")}::float8 AS outstanding,
@@ -1678,7 +1807,7 @@ async function loadVoucherContext(module: VoucherModule, loc: { type: string; id
     // Dues the way every report computes them — the shared settlement index
     // (explicit allocations + advance applications + the FIFO pool).
     const idx = await purchaseSettlementIndex();
-    const { rows } = await pool.query(
+    const { rows } = await q.query(
       `SELECT p.id, p.vendor_id, p.invoice_number,
               to_char(p.purchase_date, 'YYYY-MM-DD') AS d,
               (p.branch_transfer_id IS NOT NULL) AS btr,
@@ -1698,7 +1827,7 @@ async function loadVoucherContext(module: VoucherModule, loc: { type: string; id
     }
   }
 
-  return { parties, existingVoucherNos, accounts, docsByParty, docByRef };
+  return { parties, existingVoucherNos, accounts, docsByParty, docByRef, routes, skips };
 }
 
 /**
@@ -1711,13 +1840,13 @@ async function loadVoucherContext(module: VoucherModule, loc: { type: string; id
 async function validateVoucherRows(
   module: VoucherModule,
   rowsIn: TxnRowInput[],
-  loc: { type: string; id: number },
+  loc: { type: string; id: number }, q: WizQ = pool,
 ): Promise<{
   results: RowVerdict[];
   counts: { valid: number; warning: number; error: number; needsMapping: number };
 }> {
-  const ctx = await loadVoucherContext(module, loc);
-  const checkRowLoc = await loadRowLocationCheck(loc);
+  const ctx = await loadVoucherContext(module, loc, q);
+  const checkRowLoc = await loadRowLocationCheck(loc, q);
   const todayIso = new Date().toISOString().slice(0, 10);
   const partyLabel = module === "receipts" ? "Customer" : "Vendor";
   const docLabel = module === "receipts" ? "Invoice" : "Bill";
@@ -1772,12 +1901,31 @@ async function validateVoucherRows(
     }
 
     // Party — resolved ONLY through a saved mapping (customer/vendor).
+    // Old-software reports mix NON-party accounts (capital, expense heads…)
+    // in with real parties; a saved routing decision either SKIPS the row
+    // (with a visible report) or posts it as a JOURNAL voucher against the
+    // chosen ledger — never a silent drop, never a fake party.
     const partyName = (values.party ?? "").trim();
     if (!partyName) s.errors.push(`${partyLabel} is required`);
-    const party = partyName ? ctx.parties.get(normName(partyName)) ?? null : null;
-    if (partyName && !party) {
-      addMissingMapping(s.norm, module === "receipts" ? "customer" : "vendor", partyName);
-      s.suggestions.push(`Map "${partyName}" to an existing ${partyLabel.toLowerCase()} (or create it) in the mapping step`);
+    if (partyName && ctx.skips.has(normName(partyName))) {
+      s.norm.route = "skip";
+      s.norm.partyName = partyName;
+      const skipAmt = parseMoney((values.amount ?? "").trim());
+      if (skipAmt !== null && Number.isFinite(skipAmt) && skipAmt > 0) s.norm.amount = skipAmt;
+      s.warnings.push(`"${partyName}" is marked SKIP in your mappings — this row will NOT be imported (it stays listed in the skip report)`);
+      continue;
+    }
+    const routed = partyName ? ctx.routes.get(normName(partyName)) ?? null : null;
+    if (routed) {
+      s.norm.route = "journal";
+      s.norm.routeLedgerId = routed.ledgerId;
+      s.norm.routeLedgerName = routed.ledgerName;
+      s.norm.partyName = partyName;
+    }
+    const party = partyName && !routed ? ctx.parties.get(normName(partyName)) ?? null : null;
+    if (partyName && !party && !routed) {
+      addMissingMapping(s.norm, module === "receipts" ? "customer" : "vendor", partyName, true);
+      s.suggestions.push(`Map "${partyName}" to an existing ${partyLabel.toLowerCase()} (or create it) in the mapping step — or, if it is not a ${partyLabel.toLowerCase()} at all, route it to a ledger as a journal entry or skip it`);
     }
     if (party) { s.norm.partyId = party.id; s.norm.partyName = party.name; }
 
@@ -1836,8 +1984,20 @@ async function validateVoucherRows(
       }
     }
 
-    // Planned allocation — explicit-first, else FIFO oldest-first; excess → advance.
+    // Routed rows post as a journal voucher — describe the exact legs so the
+    // preview says precisely what commit will write.
     const amountOk = amt !== null && Number.isFinite(amt) && amt > 0;
+    if (routed && amountOk && acc.ok) {
+      if (refRaw) s.errors.push(`"${partyName}" is routed to a ledger — an Against ${docLabel} reference cannot apply to a journal entry; clear the reference or map the name to a ${partyLabel.toLowerCase()}`);
+      else {
+        const a = (amt as number).toFixed(2);
+        s.warnings.push(module === "receipts"
+          ? `"${partyName}" is routed to the ledger "${routed.ledgerName}" — imported as a journal voucher: Dr ${acc.account.name} ₹${a} / Cr ${routed.ledgerName} ₹${a}`
+          : `"${partyName}" is routed to the ledger "${routed.ledgerName}" — imported as a journal voucher: Dr ${routed.ledgerName} ₹${a} / Cr ${acc.account.name} ₹${a}`);
+      }
+    }
+
+    // Planned allocation — explicit-first, else FIFO oldest-first; excess → advance.
     if (s.errors.length === 0 && party && amountOk && acc.ok) {
       const allocations: Array<{ id: number; invoiceNumber: string | null; amount: number }> = [];
       let remaining = round2(amt as number);
@@ -1902,24 +2062,24 @@ async function validateVoucherRows(
  */
 async function validateDaybookRows(
   rowsIn: TxnRowInput[],
-  loc: { type: string; id: number },
+  loc: { type: string; id: number }, q: WizQ = pool,
 ): Promise<{
   results: RowVerdict[];
   counts: { valid: number; warning: number; error: number; needsMapping: number };
 }> {
-  const checkRowLoc = await loadRowLocationCheck(loc);
+  const checkRowLoc = await loadRowLocationCheck(loc, q);
   const todayIso = new Date().toISOString().slice(0, 10);
   const round2 = (n: number) => Math.round(n * 100) / 100;
 
   // Mapped, postable ledgers (stale/unpostable targets → back to the mapping step)
-  const { rows: ledRows } = await pool.query<any>(
+  const { rows: ledRows } = await q.query(
     `SELECT id, name FROM account_ledgers
       WHERE NOT COALESCE(is_group, false) AND COALESCE(is_active, true)`,
   );
   const ledById = new Map<number, { id: number; name: string }>();
   for (const r of ledRows) ledById.set(Number(r.id), { id: Number(r.id), name: String(r.name) });
   const ledgers = new Map<string, { id: number; name: string }>();
-  for (const [norm, t] of await loadMappings("ledger")) {
+  for (const [norm, t] of await loadMappings("ledger", q)) {
     const meta = ledById.get(t.targetId);
     if (meta) ledgers.set(norm, meta);
   }
@@ -1927,7 +2087,7 @@ async function validateDaybookRows(
   // Re-import guard: file numbers only ever land in legacy_voucher_number.
   const existingLegacy = new Set<string>();
   {
-    const { rows } = await pool.query<any>(
+    const { rows } = await q.query(
       `SELECT lower(legacy_voucher_number) AS v FROM journal_vouchers WHERE legacy_voucher_number IS NOT NULL`,
     );
     for (const r of rows) existingLegacy.add(String(r.v));
@@ -2103,21 +2263,21 @@ async function validateDaybookRows(
  */
 async function validateOpeningStockRows(
   rowsIn: TxnRowInput[],
-  loc: { type: string; id: number },
+  loc: { type: string; id: number }, q: WizQ = pool,
 ): Promise<{
   results: RowVerdict[];
   counts: { valid: number; warning: number; error: number; needsMapping: number };
 }> {
-  const checkRowLoc = await loadRowLocationCheck(loc);
+  const checkRowLoc = await loadRowLocationCheck(loc, q);
   const todayIso = new Date().toISOString().slice(0, 10);
-  const products = await loadMappedProducts();
+  const products = await loadMappedProducts(q);
 
   // Existing stock at the target location — an opening import ADDS on top,
   // which is almost never what a migration wants for an item already stocked.
   const stockAvail = new Map<number, number>();
   {
     const branchId = loc.type === "headoffice" ? 1 : loc.id;
-    const { rows } = await pool.query<any>(
+    const { rows } = await q.query(
       `SELECT item_id, quantity::float8 AS qty FROM stock_entries
         WHERE material_type = 'item' AND branch_type = $1 AND branch_id = $2`,
       [loc.type, branchId],
@@ -2267,6 +2427,8 @@ function batchJson(b: any) {
     legacyRange: (b.legacy_min || b.legacy_max)
       ? { min: b.legacy_min ?? null, max: b.legacy_max ?? null }
       : null,
+    /** Old-software report conversion metadata (null for normal template files). */
+    conversion: b.conversion ?? null,
     canDemo: !batchIsMaster(b) && (b.status === "validated" || b.status === "demo_ready"),
     canApprove: !batchIsMaster(b) && b.status === "demo_ready",
     canDiscard: !batchIsMaster(b) && (b.status === "validated" || b.status === "demo_ready"),
@@ -2467,7 +2629,7 @@ const MAX_ROWS = 2000;
  */
 async function parseWorkbookValues(
   module: ImportModule, body: Buffer,
-): Promise<{ error: string } | { parsed: Array<{ rowNumber: number; values: Record<string, string> }> }> {
+): Promise<{ error: string } | { parsed: Array<{ rowNumber: number; values: Record<string, string> }>; conversion?: LegacyConversionMeta }> {
   const wb = new ExcelJS.Workbook();
   try {
     await wb.xlsx.load(body as any);
@@ -2476,6 +2638,24 @@ async function parseWorkbookValues(
   }
   const ws = wb.worksheets[0];
   if (!ws || ws.rowCount < 2) return { error: "The first sheet has no data rows below the header." };
+
+  // Old-software report pre-pass: the owner's previous software exports a
+  // report family whose layout the sample-template parser cannot read.
+  // Detection is signature-based (sample files never match); a detected file
+  // is CONVERTED into normal template rows and flows through the unchanged
+  // validate → map → demo → approve pipeline. The row cap applies to the
+  // converted rows — the raw day book legitimately exceeds it.
+  const legacy = convertLegacyReport(module, ws);
+  if (legacy) {
+    if ("error" in legacy) return { error: legacy.error };
+    if (legacy.parsed.length > MAX_ROWS) {
+      return { error: `Old-software ${legacy.conversion.report} recognised, but after conversion it still has ${legacy.parsed.length} rows — more than the ${MAX_ROWS}-row limit. Export it in smaller date ranges.` };
+    }
+    if (legacy.parsed.length === 0) {
+      return { error: `Old-software ${legacy.conversion.report} recognised, but no data rows survived conversion — check the export.` };
+    }
+    return legacy;
+  }
 
   const spec = TEMPLATES[module];
   const colForIdx = new Map<number, string>();
@@ -2517,12 +2697,12 @@ async function parseWorkbookValues(
 async function runWizardValidators(
   module: DemoModule,
   rowsIn: Array<{ rowNumber: number; values: Record<string, string> }>,
-  stamp: { type: string; id: number },
+  stamp: { type: string; id: number }, q: WizQ = pool,
 ): Promise<{ results: RowVerdict[]; counts: { valid: number; warning: number; error: number; needsMapping: number } }> {
-  return isTxnModule(module) ? validateTransactionRows(module, rowsIn, stamp)
-    : isVoucherModule(module) ? validateVoucherRows(module, rowsIn, stamp)
-    : module === "daybook" ? validateDaybookRows(rowsIn, stamp)
-    : validateOpeningStockRows(rowsIn, stamp);
+  return isTxnModule(module) ? validateTransactionRows(module, rowsIn, stamp, q)
+    : isVoucherModule(module) ? validateVoucherRows(module, rowsIn, stamp, q)
+    : module === "daybook" ? validateDaybookRows(rowsIn, stamp, q)
+    : validateOpeningStockRows(rowsIn, stamp, q);
 }
 
 router.post(
@@ -2661,13 +2841,14 @@ router.post(
 
     const emp = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
     const { rows: [batch] } = await pool.query(
-      `INSERT INTO import_batches (module, filename, status, total_rows, valid_rows, warning_rows, error_rows, created_by, location_type, location_id)
-       VALUES ($1, $2, 'validated', $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO import_batches (module, filename, status, total_rows, valid_rows, warning_rows, error_rows, created_by, location_type, location_id, conversion)
+       VALUES ($1, $2, 'validated', $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
       [module, filename, parsed.length, counts.valid, counts.warning, counts.error,
        username(req),
        txnLoc?.type ?? emp?.branchType ?? "headoffice",
-       txnLoc?.id ?? emp?.branchId ?? 0],
+       txnLoc?.id ?? emp?.branchId ?? 0,
+       pw.conversion ? JSON.stringify(pw.conversion) : null],
     );
 
     const rowsOut: any[] = [];
@@ -2702,19 +2883,24 @@ router.post(
 // raw values, so no re-upload is ever needed.
 
 /** Re-run the whole-file validator for a demo-module batch from stored raws. */
-async function revalidateDemoBatch(id: number, module: DemoModule, stamp: { type: string; id: number }) {
-  const { rows: importRows } = await pool.query(`SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [id]);
+export async function revalidateDemoBatch(
+  id: number, module: DemoModule, stamp: { type: string; id: number },
+  // Pass a transaction client to keep the revalidation writes atomic with the
+  // caller's other writes (the wizard approve does this).
+  q: { query: (sql: string, params?: unknown[]) => Promise<any> } = pool,
+) {
+  const { rows: importRows } = await q.query(`SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [id]);
   const rowsIn = importRows.map((r: any) => ({ rowNumber: Number(r.row_number), values: (r.raw?.values ?? {}) as Record<string, string> }));
-  const { results, counts } = await runWizardValidators(module, rowsIn, stamp);
+  const { results, counts } = await runWizardValidators(module, rowsIn, stamp, q);
   for (let i = 0; i < importRows.length; i++) {
     const v = results[i];
-    await pool.query(
+    await q.query(
       `UPDATE import_rows SET status = $2, reason = $3, suggestion = $4, raw = $5 WHERE id = $1`,
       [importRows[i].id, v.status, v.reason, v.suggestion,
        JSON.stringify({ values: rowsIn[i].values, norm: v.norm })],
     );
   }
-  const { rows: [updated] } = await pool.query(
+  const { rows: [updated] } = await q.query(
     `UPDATE import_batches SET valid_rows = $2, warning_rows = $3, error_rows = $4,
         demo_report  = CASE WHEN status = 'demo_ready' THEN NULL ELSE demo_report END,
         demo_summary = CASE WHEN status = 'demo_ready' THEN NULL ELSE demo_summary END,
@@ -2722,7 +2908,7 @@ async function revalidateDemoBatch(id: number, module: DemoModule, stamp: { type
      WHERE id = $1 RETURNING *`,
     [id, counts.valid, counts.warning, counts.error + counts.needsMapping],
   );
-  const { rows: outRows } = await pool.query(`SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [id]);
+  const { rows: outRows } = await q.query(`SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [id]);
   return { updated, outRows, counts };
 }
 
@@ -2738,6 +2924,18 @@ async function checkMappingTarget(
 ): Promise<{ name: string; targetKind: string | null } | { error: string }> {
   if (!Number.isInteger(targetId) || targetId <= 0) return { error: "targetId must be a positive integer" };
   if (kind === "customer" || kind === "vendor") {
+    // target_kind 'ledger': a NON-party name in a receipt/payment file routed
+    // to a Chart-of-Accounts ledger — its rows import as journal vouchers.
+    if (targetKind === "ledger") {
+      const { rows: [r] } = await pool.query(
+        `SELECT name, COALESCE(is_group, false) AS grp, COALESCE(is_active, true) AS act FROM account_ledgers WHERE id = $1`,
+        [targetId],
+      );
+      if (!r) return { error: `Ledger #${targetId} does not exist` };
+      if (r.grp) return { error: `"${r.name}" is a group — route onto a postable ledger, not a group` };
+      if (!r.act) return { error: `Ledger "${r.name}" is inactive` };
+      return { name: `${r.name} (journal entry)`, targetKind: "ledger" };
+    }
     const { rows: [r] } = await pool.query(`SELECT name FROM ${kind === "customer" ? "customers" : "vendors"} WHERE id = $1`, [targetId]);
     return r ? { name: String(r.name), targetKind: null } : { error: `${MAPPING_LABEL[kind]} #${targetId} does not exist` };
   }
@@ -2751,7 +2949,14 @@ async function checkMappingTarget(
     if (!r.act) return { error: `Ledger "${r.name}" is inactive` };
     return { name: String(r.name), targetKind: null };
   }
-  // product
+  // product — target_kind 'charge' routes a charge-type "item" line (freight,
+  // packing…) onto a purchase-bill expense ledger instead of a stock product.
+  if (targetKind === "charge") {
+    const eligible = await importExpenseLedgerOptions();
+    const led = [...eligible.values()].find((l) => l.id === targetId);
+    if (!led) return { error: `Ledger #${targetId} is not a postable expense ledger eligible as a purchase bill charge` };
+    return { name: `Bill charge → ${led.name}`, targetKind: "charge" };
+  }
   const tk = targetKind && (PRODUCT_TARGET_KINDS as readonly string[]).includes(targetKind) ? targetKind : "item";
   const { rows: [r] } = await pool.query(`SELECT name FROM ${PRODUCT_TABLE[tk]} WHERE id = $1`, [targetId]);
   return r ? { name: String(r.name), targetKind: tk } : { error: `${KIND_LABEL[tk as keyof typeof KIND_LABEL] ?? tk} #${targetId} does not exist` };
@@ -2773,13 +2978,13 @@ async function upsertMapping(kind: MappingKind, sourceName: string, targetId: nu
  *  without an explicit save) plus the pick-lists for "choose existing" —
  *  from any set of import rows: one batch or a whole migration. */
 async function buildMappingWorkspace(importRows: Array<{ raw?: any }>) {
-  const unmapped = new Map<string, { kind: MappingKind; name: string; rows: number }>();
+  const unmapped = new Map<string, { kind: MappingKind; name: string; rows: number; routable?: boolean }>();
   for (const r of importRows) {
-    for (const m of (r.raw?.norm?.missingMappings ?? []) as Array<{ kind: MappingKind; name: string }>) {
+    for (const m of (r.raw?.norm?.missingMappings ?? []) as Array<{ kind: MappingKind; name: string; routable?: boolean }>) {
       const key = `${m.kind}|${normName(String(m.name))}`;
       const cur = unmapped.get(key);
-      if (cur) cur.rows++;
-      else unmapped.set(key, { kind: m.kind, name: String(m.name), rows: 1 });
+      if (cur) { cur.rows++; if (m.routable) cur.routable = true; }
+      else unmapped.set(key, { kind: m.kind, name: String(m.name), rows: 1, ...(m.routable ? { routable: true } : {}) });
     }
   }
 
@@ -2825,14 +3030,29 @@ async function buildMappingWorkspace(importRows: Array<{ raw?: any }>) {
       (await pool.query(`SELECT id, name FROM ${table} ORDER BY name`)).rows
         .forEach((r: any) => prods.push({ id: Number(r.id), name: String(r.name), targetKind: tk }));
     }
+    // Bill-charge routing for charge-type lines in purchase files (freight,
+    // packing…) — pick "Bill charge → <expense ledger>" instead of a product.
+    for (const led of [...(await importExpenseLedgerOptions()).values()].sort((a, b) => a.name.localeCompare(b.name))) {
+      prods.push({ id: led.id, name: `Bill charge → ${led.name}`, targetKind: "charge" });
+    }
     candidates.product = prods;
   }
+
+  // Ledgers a non-party receipt/payment name may be ROUTED to (journal entry)
+  // — only offered when the file surfaced at least one routable name.
+  const anyRoutable = [...unmapped.values()].some((u) => u.routable);
+  const routeLedgers = anyRoutable
+    ? (await pool.query(
+        `SELECT id, name FROM account_ledgers WHERE NOT COALESCE(is_group, false) AND COALESCE(is_active, true) ORDER BY name`,
+      )).rows.map((r: any) => ({ id: Number(r.id), name: String(r.name) }))
+    : [];
 
   return {
     unmapped: [...unmapped.values()]
       .sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))
       .map((u) => ({ ...u, suggestion: suggest.get(`${u.kind}|${normName(u.name)}`) ?? null })),
     candidates,
+    routeLedgers,
     /** Groups a NEW ledger may be created under (create-ledger flow). */
     ledgerGroups: kindsPresent.has("ledger") ? await loadParentCandidates() : [],
   };
@@ -2877,6 +3097,16 @@ async function applyMappingEntries(
     if (!name) { errors.push({ kind, name: "(blank)", reason: "name is required" }); continue; }
 
     try {
+      if (m?.targetKind === "skip") {
+        // Explicit SKIP decision (receipt/payment non-party names only) —
+        // recorded so the rows surface in the skip report, never re-asked.
+        if (kind !== "customer" && kind !== "vendor") {
+          errors.push({ kind, name, reason: "Only receipt/payment party names can be skipped" }); continue;
+        }
+        await upsertMapping(kind, name, 0, "skip", user);
+        saved.push({ kind, name, targetName: "Skipped — not imported" });
+        continue;
+      }
       if (m?.create && typeof m.create === "object") {
         // Create a REAL master (same code path as manual creation), then map.
         const c = m.create as Record<string, unknown>;
@@ -3024,12 +3254,21 @@ router.get("/imports/mappings", requireModuleView(PERM), async (req: Request, re
   const { rows } = await pool.query<any>(
     `SELECT m.*,
             CASE m.kind
-              WHEN 'customer' THEN (SELECT c.name FROM customers c WHERE c.id = m.target_id)
-              WHEN 'vendor'   THEN (SELECT v.name FROM vendors v WHERE v.id = m.target_id)
+              WHEN 'customer' THEN CASE COALESCE(m.target_kind, '')
+                WHEN 'skip'   THEN 'Skipped — not imported'
+                WHEN 'ledger' THEN (SELECT l.name || ' (journal entry)' FROM account_ledgers l WHERE l.id = m.target_id)
+                ELSE (SELECT c.name FROM customers c WHERE c.id = m.target_id)
+              END
+              WHEN 'vendor'   THEN CASE COALESCE(m.target_kind, '')
+                WHEN 'skip'   THEN 'Skipped — not imported'
+                WHEN 'ledger' THEN (SELECT l.name || ' (journal entry)' FROM account_ledgers l WHERE l.id = m.target_id)
+                ELSE (SELECT v.name FROM vendors v WHERE v.id = m.target_id)
+              END
               WHEN 'ledger'   THEN (SELECT l.name FROM account_ledgers l WHERE l.id = m.target_id)
               WHEN 'product'  THEN CASE COALESCE(m.target_kind, 'item')
                 WHEN 'material'     THEN (SELECT mt.name FROM materials mt WHERE mt.id = m.target_id)
                 WHEN 'raw_material' THEN (SELECT rm.name FROM raw_materials rm WHERE rm.id = m.target_id)
+                WHEN 'charge'       THEN (SELECT 'Bill charge → ' || l.name FROM account_ledgers l WHERE l.id = m.target_id)
                 ELSE (SELECT i.name FROM items i WHERE i.id = m.target_id)
               END
             END AS target_name
@@ -3386,7 +3625,9 @@ async function runBatchImport(client: PoolClient, opts: {
             invoiceNumber: String(hn.invoiceNumber || "") || null,
             purchaseDate: String(hn.dateIso),
             vendorId: Number(hn.partyId),
-            lines: docRows.map((r) => {
+            // Charge-mapped rows carry no stock line — their money is already
+            // inside hn.otherCharges, folded in at validation.
+            lines: docRows.filter((r) => r.raw?.norm?.line).map((r) => {
               const l = r.raw?.norm?.line ?? {};
               return { kind: (l.kind ?? "item") as "item" | "material" | "raw_material", id: Number(l.id), quantity: Number(l.quantity), rate: Number(l.rate ?? 0), discountPct: Number(l.discountPct ?? 0) };
             }),
@@ -3426,6 +3667,70 @@ async function runBatchImport(client: PoolClient, opts: {
       const label = String(norm.voucherNo || "") || `row ${r.row_number}`;
       if (rowBad(r)) { counts.skipped++; continue; }
       if (demoFailed(r)) { emitSkip(r, "Excluded — this voucher failed in the demo run"); continue; }
+      // Routing decisions from the mapping step: non-party names (capital
+      // accounts, expense heads…) are either explicitly SKIPPED — surfaced
+      // in the skip report, never silently dropped — or posted as a JOURNAL
+      // voucher against the ledger the user picked.
+      if (norm.route === "skip") {
+        emitSkip(r, `Skipped by your mapping decision — "${String(norm.partyName ?? "")}" is not imported`);
+        continue;
+      }
+      if (norm.route === "journal") {
+        if (norm.routeLedgerId == null || norm.accountLedgerId == null || !norm.dateIso || !(Number(norm.amount) > 0)) {
+          emitSkip(r, "Skipped — the row was never fully validated");
+          continue;
+        }
+        const amt = Math.round(Number(norm.amount) * 100) / 100;
+        const jvLocId = opts.loc.type === "headoffice" ? 0 : Number(opts.loc.id ?? 0);
+        try {
+          await client.query("SAVEPOINT import_doc");
+          const narr = [
+            `${module === "receipts" ? "Receipt" : "Payment"} imported from the old software — ${String(norm.partyName ?? "")}`,
+            norm.narration ? String(norm.narration) : null,
+            norm.reference ? `Ref: ${String(norm.reference)}` : null,
+          ].filter(Boolean).join(" · ");
+          // Receipt: money IN — Dr money account / Cr routed ledger.
+          // Payment: money OUT — Dr routed ledger / Cr money account.
+          const lines = module === "receipts"
+            ? [
+                { ledgerId: Number(norm.accountLedgerId), debit: amt, credit: 0 },
+                { ledgerId: Number(norm.routeLedgerId), debit: 0, credit: amt },
+              ]
+            : [
+                { ledgerId: Number(norm.routeLedgerId), debit: amt, credit: 0 },
+                { ledgerId: Number(norm.accountLedgerId), debit: 0, credit: amt },
+              ];
+          const created = await createJournalVoucherCore(client, {
+            voucherType: "journal",
+            voucherNumber: null, // the ERP allocates its own number
+            voucherDate: String(norm.dateIso),
+            narration: narr,
+            partyLedgerId: null,
+            reason: null,
+            totalAmount: amt,
+            createdBy: user,
+            locationType: opts.loc.type,
+            locationId: jvLocId,
+            lines,
+          } as any);
+          await client.query(
+            `UPDATE journal_vouchers SET legacy_voucher_number = $1, import_batch_id = $2 WHERE id = $3`,
+            [norm.voucherNo ? String(norm.voucherNo) : null, id, created.id],
+          );
+          await client.query("RELEASE SAVEPOINT import_doc");
+          counts.imported++;
+          if (norm.voucherNo) legacyNumbers.push(String(norm.voucherNo));
+          emit(r, {
+            status: "imported", reason: null, createdType: "journal_voucher", createdId: created.id,
+            created: { voucherNumber: created.voucherNumber, routedLedger: norm.routeLedgerName ?? null },
+          });
+        } catch (e: any) {
+          await client.query("ROLLBACK TO SAVEPOINT import_doc").catch(() => {});
+          if (e instanceof ImportAbort) throw e;
+          failDoc([r], r, label, String(e?.message ?? e).slice(0, 400));
+        }
+        continue;
+      }
       if (norm.partyId == null || norm.accountLedgerId == null || !norm.dateIso || !(Number(norm.amount) > 0)) {
         emitSkip(r, "Skipped — the row was never fully validated");
         continue;
@@ -4511,6 +4816,14 @@ router.post("/imports/batches/:id/rollback", requireModuleAction(PERM, "delete")
       for (const r of vRows) {
         const recId = Number(r.created_record_id);
         const label = String(r.raw?.created?.voucherNumber ?? r.raw?.norm?.voucherNo ?? "") || `row ${r.row_number}`;
+        // Rows ROUTED to a ledger were imported as journal vouchers (non-party
+        // names) — plain removal, exactly like a day-book rollback.
+        if (String(r.created_record_type) === "journal_voucher") {
+          await client.query(`DELETE FROM journal_voucher_lines WHERE voucher_id = $1`, [recId]);
+          await client.query(`DELETE FROM journal_vouchers WHERE id = $1`, [recId]);
+          removed++;
+          continue;
+        }
         const reason = batch.module === "receipts"
           ? await rollbackImportedReceiptVoucher(client as any, recId)
           : await rollbackImportedPaymentVoucher(client as any, recId);
@@ -4886,7 +5199,9 @@ async function migrationDetail(id: number): Promise<Record<string, unknown> | nu
       for (const mm of (norm.missingMappings ?? []) as Array<{ kind: MappingKind; name: string }>) {
         missing[mm.kind]?.add(normName(String(mm.name)));
       }
-      if (module === "receipts" || module === "payments") moneyTotal += Number(norm.amount ?? 0);
+      // Rows the user chose to SKIP never reach the books — counting their
+      // money would overstate what the migration will actually post.
+      if (module === "receipts" || module === "payments") { if (norm.route !== "skip") moneyTotal += Number(norm.amount ?? 0); }
       else if (module === "daybook") moneyTotal += Number(norm.debit ?? 0);
       else if (module === "opening_stock") moneyTotal += Number(norm.quantity ?? 0) * Number(norm.unitCost ?? 0);
       if (norm.doc != null) docSet.add(Number(norm.doc));
@@ -5034,11 +5349,12 @@ router.post(
 
     const user = username(req);
     const { rows: [batch] } = await pool.query(
-      `INSERT INTO import_batches (module, filename, status, total_rows, valid_rows, warning_rows, error_rows, created_by, location_type, location_id, migration_id)
-       VALUES ($1, $2, 'validated', $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO import_batches (module, filename, status, total_rows, valid_rows, warning_rows, error_rows, created_by, location_type, location_id, migration_id, conversion)
+       VALUES ($1, $2, 'validated', $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [module, filename, pw.parsed.length, counts.valid, counts.warning, counts.error,
-       user, PROVISIONAL_STAMP.type, PROVISIONAL_STAMP.id, id],
+       user, PROVISIONAL_STAMP.type, PROVISIONAL_STAMP.id, id,
+       pw.conversion ? JSON.stringify(pw.conversion) : null],
     );
     for (let i = 0; i < pw.parsed.length; i++) {
       const p = pw.parsed[i];
@@ -5320,80 +5636,148 @@ router.post("/imports/migrations/:id/approve", requireModuleAction(PERM, "add"),
     await lockClient.query(`SELECT pg_advisory_lock(hashtext($1))`, [`import_migration_${id}`]);
     locked = true;
 
-    // Atomic claim — approval only ever follows a clean demo run.
-    const { rows: [mig] } = await pool.query(
-      `UPDATE import_migrations SET status = 'committing', committed_at = NOW(), committed_by = $2,
-          location_type = $3, location_id = $4
-        WHERE id = $1 AND status = 'demo_ready' RETURNING *`,
-      [id, user, loc.type, loc.id],
-    );
-    if (!mig) {
-      const { rows: [m] } = await pool.query(`SELECT status FROM import_migrations WHERE id = $1`, [id]);
-      if (!m) { res.status(404).json({ error: "Migration not found" }); return; }
-      res.status(409).json({
-        error: m.status === "draft"
-          ? "Run the demo first — approval imports exactly what the demo showed."
-          : `Migration ${migrationDisplayId(id)} is ${m.status === "committing" ? "already being imported" : `already ${String(m.status).replace("_", " ")}`}.`,
-      });
-      return;
-    }
-    const revert = () => pool.query(
-      `UPDATE import_migrations SET status = 'demo_ready', committed_at = NULL, committed_by = NULL,
-          location_type = NULL, location_id = NULL
-        WHERE id = $1 AND status = 'committing'`, [id],
-    );
-
-    if (Number((mig.demo_summary as any)?.failed ?? 1) > 0) {
-      await revert();
-      res.status(409).json({ error: "The demo run had failed documents — fix the files, re-run the demo, and approve only when the demo is clean." });
-      return;
-    }
-
-    const { rows: batches } = await pool.query(`SELECT * FROM import_batches WHERE migration_id = $1`, [id]);
-    if (batches.length === 0) { await revert(); res.status(400).json({ error: "This migration has no files." }); return; }
-
-    // Re-stamp every file to the chosen location and re-validate there —
-    // duplicates, stock scope and ledger ownership are all per-location.
-    const locBlocks: string[] = [];
-    for (const b of batches) {
-      const module = asModule(b.module) as DemoModule;
-      await pool.query(`UPDATE import_batches SET location_type = $2, location_id = $3 WHERE id = $1`, [b.id, loc.type, loc.id]);
-      const { counts } = await revalidateDemoBatch(Number(b.id), module, { type: loc.type, id: Number(loc.id) });
-      const bad = counts.error + counts.needsMapping;
-      if (bad > 0) locBlocks.push(`${b.module}: ${bad} row${bad === 1 ? "" : "s"}`);
-    }
-    if (locBlocks.length > 0) {
-      await revert();
-      res.status(409).json({
-        error: `The chosen location rejected some rows (${locBlocks.join(", ")}) — e.g. a Location column naming a different branch, or documents already existing there. Fix the cause or pick another location, then re-run the demo.`,
-      });
-      return;
-    }
-
-    // ── The ONE all-or-nothing transaction across every file ──
+    // ── The ONE all-or-nothing transaction for the WHOLE approval ──
+    // The status claim, the location restamp + revalidation, the documents,
+    // the row outcomes, the batch statuses and the final migration status all
+    // commit together: a failure ANYWHERE rolls back EVERYTHING, so the books
+    // can never hold records the migration doesn't acknowledge, no partial
+    // restamp/revalidation can survive a failed attempt, and the migration is
+    // never stranded in 'committing' — it simply stays demo_ready, exactly as
+    // the demo left it.
     const client = await pool.connect();
-    const runs: Array<{ module: DemoModule; batch: any; run: Awaited<ReturnType<typeof runBatchImport>> }> = [];
+    const totals = { imported: 0, skipped: 0, failed: 0 };
+    const recordCounts: Record<string, number> = {};
+    let finished: any = null;
+    let migRow: any = null;
+    let runCount = 0;
+    let released = false;
+    const releaseClient = () => { if (!released) { released = true; client.release(); } };
+    const bail = async (status: number, bodyOut: Record<string, unknown>): Promise<void> => {
+      await client.query("ROLLBACK").catch(() => {});
+      releaseClient();
+      res.status(status).json(bodyOut);
+    };
     try {
       await client.query("BEGIN");
+
+      // Claim — approval only ever follows a clean demo run. Uncommitted, so
+      // any failure below reverts it with the rest; the advisory lock (held
+      // outside the transaction) serialises concurrent approve attempts.
+      const { rows: [mig] } = await client.query(
+        `UPDATE import_migrations SET status = 'committing', committed_at = NOW(), committed_by = $2,
+            location_type = $3, location_id = $4
+          WHERE id = $1 AND status = 'demo_ready' RETURNING *`,
+        [id, user, loc.type, loc.id],
+      );
+      if (!mig) {
+        const { rows: [m] } = await pool.query(`SELECT status FROM import_migrations WHERE id = $1`, [id]);
+        if (!m) { await bail(404, { error: "Migration not found" }); return; }
+        await bail(409, {
+          error: m.status === "draft"
+            ? "Run the demo first — approval imports exactly what the demo showed."
+            : `Migration ${migrationDisplayId(id)} is ${m.status === "committing" ? "already being imported" : `already ${String(m.status).replace("_", " ")}`}.`,
+        });
+        return;
+      }
+      migRow = mig;
+
+      if (Number((mig.demo_summary as any)?.failed ?? 1) > 0) {
+        await bail(409, { error: "The demo run had failed documents — fix the files, re-run the demo, and approve only when the demo is clean." });
+        return;
+      }
+
+      const { rows: batches } = await client.query(`SELECT * FROM import_batches WHERE migration_id = $1`, [id]);
+      if (batches.length === 0) { await bail(400, { error: "This migration has no files." }); return; }
+
+      // Re-stamp every file to the chosen location and re-validate there —
+      // duplicates, stock scope and ledger ownership are all per-location.
+      // Runs on the transaction client: a failure (or rejection) below rolls
+      // back every restamp and every rewritten row status/reason.
+      const locBlocks: string[] = [];
+      for (const b of batches) {
+        const module = asModule(b.module) as DemoModule;
+        await client.query(`UPDATE import_batches SET location_type = $2, location_id = $3 WHERE id = $1`, [b.id, loc.type, loc.id]);
+        const { counts } = await revalidateDemoBatch(Number(b.id), module, { type: loc.type, id: Number(loc.id) }, client);
+        const bad = counts.error + counts.needsMapping;
+        if (bad > 0) locBlocks.push(`${b.module}: ${bad} row${bad === 1 ? "" : "s"}`);
+      }
+      // Dev-only fault injection: verifies a crash mid-revalidation leaves
+      // batch locations, row statuses and the migration status untouched.
+      if (process.env.NODE_ENV !== "production" && process.env.IMPORT_FAULT_INJECT === "approve_revalidation") {
+        throw new Error("Injected fault after location revalidation (IMPORT_FAULT_INJECT=approve_revalidation)");
+      }
+      if (locBlocks.length > 0) {
+        await bail(409, {
+          error: `The chosen location rejected some rows (${locBlocks.join(", ")}) — e.g. a Location column naming a different branch, or documents already existing there. Fix the cause or pick another location, then re-run the demo.`,
+        });
+        return;
+      }
+
       const byModule = new Map<string, any>(batches.map((b: any) => [String(b.module), b]));
+      const runs: Array<{ batch: any; run: Awaited<ReturnType<typeof runBatchImport>> }> = [];
       for (const module of WIZARD_RUN_ORDER) {
         const b = byModule.get(module);
         if (!b) continue;
-        const { rows: importRows } = await pool.query(
+        const { rows: importRows } = await client.query(
           `SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [b.id],
         );
         const run = await runBatchImport(client, {
-          batchId: Number(b.id), module, importRows, loc: { type: loc.type, id: Number(loc.id) }, user, mode: "approve",
+          batchId: Number(b.id), module: module as DemoModule, importRows, loc: { type: loc.type, id: Number(loc.id) }, user, mode: "approve",
         });
-        runs.push({ module, batch: b, run });
+        runs.push({ batch: b, run });
       }
+      runCount = runs.length;
+
+      // Dev-only fault injection: verifies the atomicity guarantee above —
+      // a crash between document creation and bookkeeping must roll back both.
+      if (process.env.NODE_ENV !== "production" && process.env.IMPORT_FAULT_INJECT === "approve_bookkeeping") {
+        throw new Error("Injected fault after document creation (IMPORT_FAULT_INJECT=approve_bookkeeping)");
+      }
+
+      const allLegacy: string[] = [];
+      for (const { batch: b, run } of runs) {
+        for (const o of run.outcomes) {
+          await client.query(
+            `UPDATE import_rows SET status = $2, reason = $3, created_record_type = $4, created_record_id = $5 WHERE id = $1`,
+            [o.rowId, o.status, o.reason, o.createdType, o.createdId],
+          );
+          if (o.created) {
+            await client.query(`UPDATE import_rows SET raw = raw || $2::jsonb WHERE id = $1`,
+              [o.rowId, JSON.stringify({ created: o.created })]);
+          }
+        }
+        const legacySorted = sortLegacy(run.legacyNumbers);
+        allLegacy.push(...run.legacyNumbers);
+        await client.query(
+          `UPDATE import_batches SET status = 'committed', committed_at = NOW(), committed_by = $2,
+              imported_rows = $3, updated_rows = 0, skipped_rows = $4, failed_rows = $5,
+              legacy_min = COALESCE($6, legacy_min), legacy_max = COALESCE($7, legacy_max)
+            WHERE id = $1`,
+          [b.id, user, run.counts.imported, run.counts.skipped, run.counts.failed,
+           legacySorted[0] ?? null, legacySorted[legacySorted.length - 1] ?? null],
+        );
+        totals.imported += run.counts.imported;
+        totals.skipped += run.counts.skipped;
+        totals.failed += run.counts.failed;
+        const rc = await batchRecordCounts(client, Number(b.id));
+        for (const [k, v] of Object.entries(rc)) recordCounts[k] = (recordCounts[k] ?? 0) + Number(v);
+      }
+      const legacyAll = sortLegacy(allLegacy);
+      const { rows: [fin] } = await client.query(
+        `UPDATE import_migrations SET status = 'committed', record_counts = $2,
+            legacy_min = COALESCE($3, legacy_min), legacy_max = COALESCE($4, legacy_max)
+          WHERE id = $1 AND status = 'committing' RETURNING *, (demo_report IS NOT NULL) AS has_demo_report`,
+        [id, JSON.stringify(recordCounts), legacyAll[0] ?? null, legacyAll[legacyAll.length - 1] ?? null],
+      );
+      finished = fin;
       await client.query("COMMIT");
     } catch (e: any) {
       // All-or-nothing across the WHOLE migration: the ROLLBACK erases every
-      // document any file created — the books are exactly as before.
+      // document any file created, every restamp/revalidation write AND every
+      // bookkeeping write — the books, the import tables and the migration
+      // status are exactly as before, free for another attempt.
       await client.query("ROLLBACK").catch(() => {});
-      client.release();
-      await revert();
+      releaseClient();
       if (e instanceof ImportAbort) {
         res.status(409).json({
           error: `Import stopped at ${e.docLabel}: ${e.reasonText}. Nothing was imported from ANY file — fix the cause and approve again.`,
@@ -5402,55 +5786,17 @@ router.post("/imports/migrations/:id/approve", requireModuleAction(PERM, "add"),
       }
       throw e;
     }
-    client.release();
-
-    // Committed — ordinary bookkeeping outside the all-or-nothing boundary.
-    const totals = { imported: 0, skipped: 0, failed: 0 };
-    const allLegacy: string[] = [];
-    const recordCounts: Record<string, number> = {};
-    for (const { batch: b, run } of runs) {
-      for (const o of run.outcomes) {
-        await pool.query(
-          `UPDATE import_rows SET status = $2, reason = $3, created_record_type = $4, created_record_id = $5 WHERE id = $1`,
-          [o.rowId, o.status, o.reason, o.createdType, o.createdId],
-        ).catch(() => {});
-        if (o.created) {
-          await pool.query(`UPDATE import_rows SET raw = raw || $2::jsonb WHERE id = $1`,
-            [o.rowId, JSON.stringify({ created: o.created })]).catch(() => {});
-        }
-      }
-      const legacySorted = sortLegacy(run.legacyNumbers);
-      allLegacy.push(...run.legacyNumbers);
-      await pool.query(
-        `UPDATE import_batches SET status = 'committed', committed_at = NOW(), committed_by = $2,
-            imported_rows = $3, updated_rows = 0, skipped_rows = $4, failed_rows = $5,
-            legacy_min = COALESCE($6, legacy_min), legacy_max = COALESCE($7, legacy_max)
-          WHERE id = $1`,
-        [b.id, user, run.counts.imported, run.counts.skipped, run.counts.failed,
-         legacySorted[0] ?? null, legacySorted[legacySorted.length - 1] ?? null],
-      );
-      totals.imported += run.counts.imported;
-      totals.skipped += run.counts.skipped;
-      totals.failed += run.counts.failed;
-      const rc = await batchRecordCounts(pool, Number(b.id));
-      for (const [k, v] of Object.entries(rc)) recordCounts[k] = (recordCounts[k] ?? 0) + Number(v);
-    }
-    const legacyAll = sortLegacy(allLegacy);
-    const { rows: [finished] } = await pool.query(
-      `UPDATE import_migrations SET status = 'committed', record_counts = $2,
-          legacy_min = COALESCE($3, legacy_min), legacy_max = COALESCE($4, legacy_max)
-        WHERE id = $1 AND status = 'committing' RETURNING *, (demo_report IS NOT NULL) AS has_demo_report`,
-      [id, JSON.stringify(recordCounts), legacyAll[0] ?? null, legacyAll[legacyAll.length - 1] ?? null],
-    );
+    releaseClient();
+    if (res.headersSent) return; // a bail() path already answered
 
     logActivity({
       action: "CREATE", module: "imports", entityType: "import_migration", entityId: id,
-      description: `Approved migration ${migrationDisplayId(id)} into ${loc.type === "headoffice" ? "Head Office" : `${loc.type} #${loc.id}`} — ${totals.imported} rows imported across ${runs.length} file${runs.length === 1 ? "" : "s"} (${describeCounts(recordCounts)})`,
+      description: `Approved migration ${migrationDisplayId(id)} into ${loc.type === "headoffice" ? "Head Office" : `${loc.type} #${loc.id}`} — ${totals.imported} rows imported across ${runCount} file${runCount === 1 ? "" : "s"} (${describeCounts(recordCounts)})`,
       user,
     }).catch(() => {});
 
     res.json({
-      migration: migrationJson(finished ?? mig),
+      migration: migrationJson(finished ?? migRow),
       summary: totals,
       details: { recordCounts, timeTakenMs: Date.now() - startedAt },
     });
@@ -5532,6 +5878,14 @@ async function reverseWizardBatch(
     for (const r of vRows) {
       const recId = Number(r.created_record_id);
       const label = String(r.raw?.created?.voucherNumber ?? r.raw?.norm?.voucherNo ?? "") || `row ${r.row_number}`;
+      // Rows ROUTED to a ledger were imported as journal vouchers (non-party
+      // names) — plain removal, exactly like a day-book rollback.
+      if (String(r.created_record_type) === "journal_voucher") {
+        await client.query(`DELETE FROM journal_voucher_lines WHERE voucher_id = $1`, [recId]);
+        await client.query(`DELETE FROM journal_vouchers WHERE id = $1`, [recId]);
+        removed++;
+        continue;
+      }
       const reason = batch.module === "receipts"
         ? await rollbackImportedReceiptVoucher(client as any, recId)
         : await rollbackImportedPaymentVoucher(client as any, recId);
