@@ -187,14 +187,22 @@ export interface StockBranchScope {
   branchType: string;
   /** null = every branch of that type (Head Office matches on type alone). */
   branchId: number | null;
+  /**
+   * Every (branch_type, branch_id) identity of the same physical place — a
+   * location mirrored as both warehouse and outlet holds stock under either
+   * stamp. When present it replaces the single branchType/branchId match.
+   */
+  branchPairs?: Array<{ type: string; id: number }>;
 }
 
 /** Closing stock: every product kind, in-transit included; optionally one branch. */
 export async function closingStockAt(scope?: StockBranchScope | null, q: Q = pool): Promise<StockAtDate> {
-  const v = await closingStockValuation(q as any, scope ? {
-    branchType: scope.branchType,
-    ...(scope.branchId != null ? { branchId: scope.branchId } : {}),
-  } : {});
+  const v = await closingStockValuation(q as any, scope ? (
+    scope.branchPairs?.length ? { branchPairs: scope.branchPairs } : {
+      branchType: scope.branchType,
+      ...(scope.branchId != null ? { branchId: scope.branchId } : {}),
+    }
+  ) : {});
   return { total: v.total, inTransit: v.inTransit, items: v.items, reliable: true, note: null };
 }
 
@@ -252,6 +260,13 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
   // outside the scope cannot flag a clean branch as unreliable (or vice versa).
   const branchWhere = (alias: string, params: unknown[]): string => {
     if (!scope) return "";
+    if (scope.branchPairs?.length) {
+      const parts = scope.branchPairs.map((p) => {
+        params.push(p.type, p.id);
+        return `(${alias}.branch_type = $${params.length - 1} AND ${alias}.branch_id = $${params.length})`;
+      });
+      return ` WHERE (${parts.join(" OR ")})`;
+    }
     params.push(scope.branchType);
     let sql = ` WHERE ${alias}.branch_type = $${params.length}`;
     if (scope.branchId != null) {
@@ -675,7 +690,9 @@ export async function buildBooks(
   // goods at all — stock is always somewhere — so it reads zero.
   const emptyStock: StockAtDate = { total: 0, inTransit: 0, items: [], reliable: true, note: null };
   const stockScope: StockBranchScope | null =
-    location && location.type !== "company" ? { branchType: location.type, branchId: location.id } : null;
+    location && location.type !== "company"
+      ? { branchType: location.type, branchId: location.id, ...(location.identities?.length ? { branchPairs: location.identities } : {}) }
+      : null;
   const skipStock = location?.type === "company";
   const historicalClose = toDate !== null && toDate < todayISO();
   const closing = skipStock ? emptyStock

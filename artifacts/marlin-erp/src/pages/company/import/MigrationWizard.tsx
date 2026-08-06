@@ -4,12 +4,14 @@
  * Step 1  Upload every old-ERP file (sales, purchases, receipts, payments,
  *         day book, opening stock) — one file per type, replace any time.
  * Step 2  Combined check: totals, problem rows, and old names to match.
- * Step 3  Trial run — the REAL import inside a rehearsal that is thrown away;
- *         builds the full report pack from all files together.
+ * Step 3  Trial run — pick the location HERE, then the REAL import runs
+ *         inside a rehearsal that is thrown away; builds the full report
+ *         pack from all files together, scoped to that location.
  * Step 4  Compare the reports against the old ERP; loop back if needed.
- * Step 5  Approve — pick the location NOW (not earlier), and everything
- *         imports in one all-or-nothing pass. Rollback removes the ENTIRE
- *         migration from History, never part of it.
+ *         Changing the location means re-running the trial there.
+ * Step 5  Approve — imports at the SAME location the trial ran at (the
+ *         server refuses any other), in one all-or-nothing pass. Rollback
+ *         removes the ENTIRE migration from History, never part of it.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -131,7 +133,7 @@ export function MigrationWizard({ canAdd, canDelete, canDownload, resumeId = nul
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // A different migration (or none) became active — transient choices from the
-  // previous one must never carry over, especially the approval location.
+  // previous one must never carry over, especially the trial location.
   useEffect(() => {
     setLocation('');
     setApproveOpen(false);
@@ -139,6 +141,14 @@ export function MigrationWizard({ canAdd, canDelete, canDownload, resumeId = nul
     setReportOpen(false);
     setPendingModule(null);
   }, [activeId]);
+
+  // Pre-fill the picker with the location the last trial ran at, so a plain
+  // re-run keeps it and the approve dialog can show it.
+  const migLocKey = detail?.migration?.locationType != null && detail?.migration?.locationId != null
+    ? `${detail.migration.locationType}|${detail.migration.locationId}` : '';
+  useEffect(() => {
+    if (migLocKey) setLocation((cur) => cur || migLocKey);
+  }, [migLocKey]);
 
   // The native file chooser fires 'cancel' (never 'change') when dismissed —
   // clear the routing state so a later upload can't target a stale module.
@@ -220,9 +230,10 @@ export function MigrationWizard({ canAdd, canDelete, canDownload, resumeId = nul
   };
 
   const handleDemo = async () => {
-    if (activeId == null) return;
+    if (activeId == null || !location) return;
+    const [locType, locId] = location.split('|');
     try {
-      const r = await runDemo.mutateAsync({ id: activeId });
+      const r = await runDemo.mutateAsync({ id: activeId, locationType: locType, locationId: Number(locId) });
       if (r.summary.failed > 0) toast.warning(`Trial finished — ${r.summary.imported} would import, ${r.summary.failed} FAILED. Fix the causes below and run the trial again; approval needs a clean trial.`);
       else toast.success(`Trial finished — ${r.summary.imported} document${r.summary.imported === 1 ? '' : 's'} across ${files.length} file${files.length === 1 ? '' : 's'} would import. Nothing was recorded. Compare the reports next.`);
     } catch (e: any) {
@@ -230,9 +241,11 @@ export function MigrationWizard({ canAdd, canDelete, canDownload, resumeId = nul
     }
   };
 
+  // The approval location is the one the trial ran at — the server refuses
+  // any other, so the UI never offers a choice here.
   const handleApprove = async () => {
-    if (activeId == null || !location) return;
-    const [locType, locId] = location.split('|');
+    if (activeId == null || !migLocKey) return;
+    const [locType, locId] = migLocKey.split('|');
     try {
       const r = await approveMigration.mutateAsync({ id: activeId, locationType: locType, locationId: Number(locId) });
       setApproveOpen(false);
@@ -489,15 +502,36 @@ export function MigrationWizard({ canAdd, canDelete, canDownload, resumeId = nul
               thrown away. You get the complete report pack to put beside your old ERP.
             </CardDescription>
           </CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
-            <Button onClick={handleDemo} disabled={!canAdd || runDemo.isPending}>
-              {runDemo.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <PlayCircle className="w-4 h-4 mr-1.5" />}
-              Run the trial
-            </Button>
-            <Button variant="outline" className="text-destructive hover:text-destructive"
-              onClick={() => setDiscardOpen(true)} disabled={!canDelete || !mig?.canDiscard}>
-              <Trash2 className="w-4 h-4 mr-1.5" />Discard migration
-            </Button>
+          <CardContent className="space-y-3">
+            <div className="space-y-1.5">
+              <div className="text-sm font-medium flex items-center gap-1.5"><MapPin className="w-4 h-4 text-primary" />Where do these documents belong?</div>
+              <Select value={location} onValueChange={setLocation}>
+                <SelectTrigger className="w-full sm:w-72"><SelectValue placeholder="Choose the location…" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="headoffice|1">Head Office</SelectItem>
+                  {(warehouses ?? []).map((w: any) => (
+                    <SelectItem key={`w${w.id}`} value={`warehouse|${w.id}`}>{w.name} (Warehouse)</SelectItem>
+                  ))}
+                  {(outlets ?? []).map((o: any) => (
+                    <SelectItem key={`o${o.id}`} value={`outlet|${o.id}`}>{o.name} (Outlet)</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                The trial rehearses the import at this location and the comparison reports show
+                its figures only. Approval imports at this same location.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={handleDemo} disabled={!canAdd || !location || runDemo.isPending}>
+                {runDemo.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <PlayCircle className="w-4 h-4 mr-1.5" />}
+                Run the trial
+              </Button>
+              <Button variant="outline" className="text-destructive hover:text-destructive"
+                onClick={() => setDiscardOpen(true)} disabled={!canDelete || !mig?.canDiscard}>
+                <Trash2 className="w-4 h-4 mr-1.5" />Discard migration
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -512,8 +546,11 @@ export function MigrationWizard({ canAdd, canDelete, canDownload, resumeId = nul
             </CardTitle>
             <CardDescription>
               Trial run {mig.demoAt ? fmtTime(mig.demoAt) : ''} by {mig.demoBy ?? ''}. Nothing has
-              been recorded. Open the reports and put your old ERP beside them. If a figure
-              disagrees, fix the file or the matches — the trial re-runs in seconds.
+              been recorded. The comparison reports show figures for{' '}
+              <span className="font-semibold text-foreground">{mig.locationName ?? 'Head Office'}</span> only —
+              open them and put the same location from your old ERP beside them. If a figure
+              disagrees, fix the file or the matches — the trial re-runs in seconds. Approval
+              imports at this same location.
               {mig.legacyRange?.min ? ` Covers old voucher numbers ${mig.legacyRange.min} – ${mig.legacyRange.max}.` : ''}
             </CardDescription>
           </CardHeader>
@@ -569,22 +606,42 @@ export function MigrationWizard({ canAdd, canDelete, canDownload, resumeId = nul
               </div>
             )}
 
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button variant="outline" onClick={() => setReportOpen(true)}>
                 <FileBarChart2 className="w-4 h-4 mr-1.5" />View comparison reports
               </Button>
-              <Button variant="outline" onClick={handleDemo} disabled={!canAdd || runDemo.isPending}>
+              {/* Changing the location = re-running the trial there; approval
+                  only ever accepts the location the trial ran at. */}
+              <Select value={location} onValueChange={setLocation}>
+                <SelectTrigger className="h-9 w-56"><SelectValue placeholder="Trial location…" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="headoffice|1">Head Office</SelectItem>
+                  {(warehouses ?? []).map((w: any) => (
+                    <SelectItem key={`w${w.id}`} value={`warehouse|${w.id}`}>{w.name} (Warehouse)</SelectItem>
+                  ))}
+                  {(outlets ?? []).map((o: any) => (
+                    <SelectItem key={`o${o.id}`} value={`outlet|${o.id}`}>{o.name} (Outlet)</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button variant="outline" onClick={handleDemo} disabled={!canAdd || !location || runDemo.isPending}>
                 {runDemo.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <RotateCcw className="w-4 h-4 mr-1.5" />}
-                Re-run trial
+                {location && migLocKey && location !== migLocKey ? 'Re-run trial at new location' : 'Re-run trial'}
               </Button>
-              <Button onClick={() => setApproveOpen(true)} disabled={!canAdd || !mig.canApprove}>
-                <ThumbsUp className="w-4 h-4 mr-1.5" />Approve — pick location &amp; import
+              <Button onClick={() => setApproveOpen(true)} disabled={!canAdd || !mig.canApprove || !migLocKey}>
+                <ThumbsUp className="w-4 h-4 mr-1.5" />Approve &amp; import
               </Button>
               <Button variant="outline" className="text-destructive hover:text-destructive"
                 onClick={() => setDiscardOpen(true)} disabled={!canDelete || !mig.canDiscard}>
                 <Trash2 className="w-4 h-4 mr-1.5" />Discard
               </Button>
             </div>
+            {!migLocKey && (
+              <p className="text-xs text-amber-700">
+                This trial ran before locations were part of the trial step — pick the location
+                above and re-run it once, then approve.
+              </p>
+            )}
           </CardContent>
         </Card>
       )}
@@ -601,7 +658,8 @@ export function MigrationWizard({ canAdd, canDelete, canDownload, resumeId = nul
       {/* Report pack viewer */}
       <DemoReportView migrationId={activeId} open={reportOpen} onOpenChange={setReportOpen} />
 
-      {/* Approve dialog — the location is chosen HERE, last. */}
+      {/* Approve dialog — the location was fixed when the trial ran; the
+          server refuses any other, so no choice is offered here. */}
       <Dialog open={approveOpen} onOpenChange={setApproveOpen}>
         <DialogContent>
           <DialogHeader>
@@ -615,26 +673,16 @@ export function MigrationWizard({ canAdd, canDelete, canDownload, resumeId = nul
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
-            <div className="text-sm font-medium flex items-center gap-1.5"><MapPin className="w-4 h-4 text-primary" />Where do these documents belong?</div>
-            <Select value={location} onValueChange={setLocation}>
-              <SelectTrigger className="w-full"><SelectValue placeholder="Choose the location…" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="headoffice|1">Head Office</SelectItem>
-                {(warehouses ?? []).map((w: any) => (
-                  <SelectItem key={`w${w.id}`} value={`warehouse|${w.id}`}>{w.name} (Warehouse)</SelectItem>
-                ))}
-                {(outlets ?? []).map((o: any) => (
-                  <SelectItem key={`o${o.id}`} value={`outlet|${o.id}`}>{o.name} (Outlet)</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="text-sm font-medium flex items-center gap-1.5"><MapPin className="w-4 h-4 text-primary" />Where these documents will be recorded</div>
+            <p className="text-sm font-semibold">{mig?.locationName ?? 'Head Office'}</p>
             <p className="text-xs text-muted-foreground">
-              Every document, its stock and its ledger effects are recorded at this location.
+              The location was fixed when the trial ran — the reports you compared show this
+              location's figures. To import somewhere else, cancel and re-run the trial there.
             </p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setApproveOpen(false)}>Cancel</Button>
-            <Button onClick={handleApprove} disabled={!location || approveMigration.isPending}>
+            <Button onClick={handleApprove} disabled={!migLocKey || approveMigration.isPending}>
               {approveMigration.isPending && <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />}
               Approve &amp; import
             </Button>

@@ -662,7 +662,9 @@ export default function ImportData() {
                       </CardTitle>
                       <CardDescription>
                         Demo run {batch.demoAt ? fmtTime(batch.demoAt) : ''} by {batch.demoBy ?? ''}.
-                        {' '}Nothing has been recorded. Open the reports, put your old ERP beside them, and
+                        {' '}Nothing has been recorded. The comparison reports show figures for{' '}
+                        <span className="font-semibold text-foreground">{batch.locationName ?? 'Head Office'}</span> only —
+                        put the same location's reports from your old ERP beside them, and
                         approve only when the figures match.
                         {batch.legacyRange?.min ? ` Covers old voucher numbers ${batch.legacyRange.min} – ${batch.legacyRange.max}.` : ''}
                       </CardDescription>

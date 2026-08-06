@@ -118,4 +118,5 @@
 - [Purchase other charges](purchase-other-charges.md) — bill-borne freight/hamali in JSONB; goods figures stay goods-only, vendor owed goods+charges (every payable reader adds the sum); returns keep charges BY DESIGN.
 - [Shared customer form & infinite sales list](shared-customer-form.md) — ONE CustomerFormDialog for every entry point (branch payloads carry no location); infinite sales key must keep '/api/sales' as element 0.
 - [Cash & Bank ↔ Chart integration](cash-bank-chart-integration.md) — CBA- ledgers, derived balances, code-guarded heads (never is_system_group), one-sided openings need the STD-OB-ADJ counterweight; TB must fold openings.
+- [Located import compare pack](import-compare-pack.md) — pack scopes via opt-in identity sets on owning filter types; wizard location is picked at TRIAL time and approval refuses any other location.
 - [Warehouse lifecycle](warehouse-lifecycle.md) — disabled_at raw cols; EVERY new transaction producer needs the disabled guard (effective location, ROLLBACK in-txn); permanent delete = 1 txn cascade + in-txn validation; cross-location = blocker.

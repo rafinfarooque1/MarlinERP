@@ -83,6 +83,13 @@ export interface ValuationRow {
 export interface ValuationScope {
   branchType?: string;
   branchId?: number;
+  /**
+   * Every (branch_type, branch_id) identity of ONE physical place — a location
+   * mirrored as both a warehouse and an outlet holds stock under either stamp.
+   * When present, rows matching ANY pair are included and branchType/branchId
+   * are ignored.
+   */
+  branchPairs?: Array<{ type: string; id: number }>;
   materialType?: ProductKind;
   /** Defaults to true: excluding in-flight stock understates inventory. */
   includeInTransit?: boolean;
@@ -126,8 +133,16 @@ export interface ValuationSummary {
 export async function stockValuationRows(q: Queryable, scope: ValuationScope = {}): Promise<ValuationRow[]> {
   const conds = ["se.quantity::numeric > 0"];
   const params: unknown[] = [];
-  if (scope.branchType) { params.push(scope.branchType); conds.push(`se.branch_type = $${params.length}`); }
-  if (scope.branchId != null) { params.push(scope.branchId); conds.push(`se.branch_id = $${params.length}`); }
+  if (scope.branchPairs && scope.branchPairs.length > 0) {
+    const parts = scope.branchPairs.map((p) => {
+      params.push(p.type, p.id);
+      return `(se.branch_type = $${params.length - 1} AND se.branch_id = $${params.length})`;
+    });
+    conds.push(`(${parts.join(" OR ")})`);
+  } else {
+    if (scope.branchType) { params.push(scope.branchType); conds.push(`se.branch_type = $${params.length}`); }
+    if (scope.branchId != null) { params.push(scope.branchId); conds.push(`se.branch_id = $${params.length}`); }
+  }
   if (scope.materialType) { params.push(scope.materialType); conds.push(`se.material_type = $${params.length}`); }
   if (scope.dataScope && !scope.dataScope.isHeadOffice) {
     conds.push(scopeBranchWhere(scope.dataScope, params, "se"));
@@ -175,10 +190,13 @@ export async function stockValuationRows(q: Queryable, scope: ValuationScope = {
   // predates cost stamping falls back to the product's current cost rather than
   // valuing the shipment at zero.
   const transit = (await activeInTransit(q, {
-    branchType: scope.branchType,
-    branchId: scope.branchId,
+    branchType: scope.branchPairs?.length ? undefined : scope.branchType,
+    branchId: scope.branchPairs?.length ? undefined : scope.branchId,
     materialType: scope.materialType,
-  })).filter((t) => locationInScope(scope.dataScope, t.branchType, t.branchId));
+  }))
+    .filter((t) => locationInScope(scope.dataScope, t.branchType, t.branchId))
+    .filter((t) => !scope.branchPairs?.length
+      || scope.branchPairs.some((p) => p.type === t.branchType && Number(p.id) === Number(t.branchId)));
   if (transit.length === 0) return onHand;
 
   const names = await resolveProductNames(q, transit.map((t) => ({ materialType: t.materialType, refId: t.refId })));
@@ -331,7 +349,7 @@ export type ValuedItem = {
  */
 export async function closingStockValuation(
   q: Queryable,
-  scope: { branchType?: string; branchId?: number } = {},
+  scope: { branchType?: string; branchId?: number; branchPairs?: Array<{ type: string; id: number }> } = {},
 ): Promise<{ items: ValuedItem[]; total: number; inTransit: number }> {
   const summary = await stockValuation(q, { includeInTransit: true, ...scope });
   return {

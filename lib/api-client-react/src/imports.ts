@@ -575,7 +575,7 @@ export interface ImportMigration {
   /** Human-facing id, e.g. "MIG0001". */
   displayId: string;
   status: ImportMigrationStatus;
-  /** Chosen at approval time — null until then. */
+  /** Where the trial ran (and approval will import) — null until a located trial. */
   locationType: string | null;
   locationId: number | null;
   locationName?: string | null;
@@ -768,11 +768,23 @@ export const useSaveMigrationMappings = () => {
   });
 };
 
-/** The combined demo across every file — one transaction, never committed. */
+/**
+ * The combined demo across every file — one transaction, never committed.
+ * Pass the location the migration will finally import at: the trial re-stamps
+ * every file there, the compare pack is scoped to it, and approval only
+ * accepts that same location.
+ */
 export const useRunMigrationDemo = () => {
   const qc = useQueryClient();
-  return useMutation<ImportMigrationDemoResponse, Error, { id: number }>({
-    mutationFn: ({ id }) => customFetch<ImportMigrationDemoResponse>(`/api/imports/migrations/${id}/demo`, { method: "POST" }),
+  return useMutation<ImportMigrationDemoResponse, Error, { id: number; locationType?: string; locationId?: number }>({
+    mutationFn: ({ id, locationType, locationId }) =>
+      customFetch<ImportMigrationDemoResponse>(`/api/imports/migrations/${id}/demo`, {
+        method: "POST",
+        ...(locationType ? {
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ locationType, locationId }),
+        } : {}),
+      }),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: migrationKeys.list });
       qc.invalidateQueries({ queryKey: migrationKeys.detail(vars.id) });

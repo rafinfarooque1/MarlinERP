@@ -69,6 +69,7 @@ import { stockValuation, stockValuationRows } from "../lib/valuation";
 import { buildLedgerBalanceIndex } from "../lib/ledgerBalances";
 import { type ProdLocation } from "../lib/productionCosting";
 import { outstandingExpr } from "../lib/salePaymentPosition";
+import { type PostingLocationFilter } from "../lib/postingLocation";
 import { purchaseSettlementIndex } from "../lib/vendorBillSettlement";
 import { type PgPoolClient as PoolClient } from "@workspace/db";
 
@@ -3889,9 +3890,67 @@ async function runBatchImport(client: PoolClient, opts: {
  * reads (never re-derived here), so the demo figures match what the real
  * screens would show after an approve.
  */
-async function buildDemoReportPack(client: PoolClient): Promise<Record<string, unknown>> {
-  const trialBalance = await computeTrialBalance({ q: client });
-  const books = await buildBooks(buildDerivedPostings, { q: client });
+/**
+ * Resolve the import's location stamp into the display name, the posting
+ * filter and the document-level identity set the pack builder scopes with.
+ *
+ * A place can exist as BOTH a warehouse and an outlet sharing one cash ledger
+ * (mirror rows), and documents there carry whichever stamp their module used —
+ * so a warehouse/outlet resolves to every identity sharing its cash ledger,
+ * exactly like the live located reads that resolve mirrors. Head Office
+ * matches on TYPE ALONE: its placeholder id differs per table, so an id match
+ * would silently split it. `identities` is null for Head Office.
+ */
+async function demoPackLocation(client: PoolClient, loc: { type: string; id: number }): Promise<{
+  name: string;
+  filter: PostingLocationFilter;
+  identities: Array<{ type: "warehouse" | "outlet"; id: number }> | null;
+}> {
+  if (loc.type !== "warehouse" && loc.type !== "outlet") {
+    return { name: "Head Office", filter: { type: "headoffice", id: null }, identities: null };
+  }
+  const table = loc.type === "warehouse" ? "warehouses" : "outlets";
+  const { rows: [row] } = await client.query(
+    `SELECT name, cash_ledger_id FROM ${table} WHERE id = $1`, [loc.id],
+  );
+  const name = row?.name ? String(row.name) : `${loc.type === "warehouse" ? "Warehouse" : "Outlet"} #${loc.id}`;
+  const identities: Array<{ type: "warehouse" | "outlet"; id: number }> = [{ type: loc.type, id: Number(loc.id) }];
+  if (row?.cash_ledger_id != null) {
+    const { rows: twins } = await client.query(
+      `SELECT 'warehouse' AS t, id FROM warehouses WHERE cash_ledger_id = $1
+       UNION ALL
+       SELECT 'outlet' AS t, id FROM outlets WHERE cash_ledger_id = $1`,
+      [row.cash_ledger_id],
+    );
+    for (const r of twins) {
+      const t = String(r.t) as "warehouse" | "outlet";
+      if (!identities.some((i) => i.type === t && i.id === Number(r.id))) identities.push({ type: t, id: Number(r.id) });
+    }
+  }
+  const filter: PostingLocationFilter = {
+    type: loc.type, id: Number(loc.id),
+    ...(identities.length > 1 ? { identities } : {}),
+  };
+  return { name, filter, identities };
+}
+
+/** Human name for a location stamp — used in messages and pack labels. */
+async function locationDisplayName(q: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> }, loc: { type: string; id: number }): Promise<string> {
+  if (loc.type !== "warehouse" && loc.type !== "outlet") return "Head Office";
+  const table = loc.type === "warehouse" ? "warehouses" : "outlets";
+  const { rows: [row] } = await q.query(`SELECT name FROM ${table} WHERE id = $1`, [loc.id]);
+  return row?.name ? String(row.name) : `${loc.type === "warehouse" ? "Warehouse" : "Outlet"} #${loc.id}`;
+}
+
+async function buildDemoReportPack(client: PoolClient, packLoc: { type: string; id: number }): Promise<Record<string, unknown>> {
+  // Everything below is narrowed to the import's location, through the SAME
+  // filter types and predicates the live located screens use — so each tab
+  // matches what the corresponding live report shows for that location filter
+  // after an approve.
+  const { name: locationName, filter: locFilter, identities } = await demoPackLocation(client, packLoc);
+
+  const trialBalance = await computeTrialBalance({ q: client, locFilter });
+  const books = await buildBooks(buildDerivedPostings, { q: client, location: locFilter });
 
   const { rows: roots } = await client.query(
     `SELECT id, code FROM account_ledgers WHERE code IN ('STD-CASH', 'STD-BANK')`,
@@ -3902,16 +3961,40 @@ async function buildDemoReportPack(client: PoolClient): Promise<Record<string, u
   };
   const cashRootId = rootId("STD-CASH");
   const bankRootId = rootId("STD-BANK");
-  const cashBook = cashRootId != null ? await computeCashBankBook({ q: client, ledgerId: cashRootId }) : null;
-  const bankBook = bankRootId != null ? await computeCashBankBook({ q: client, ledgerId: bankRootId }) : null;
+  const cashBook = cashRootId != null ? await computeCashBankBook({ q: client, ledgerId: cashRootId, locFilter }) : null;
+  const bankBook = bankRootId != null ? await computeCashBankBook({ q: client, ledgerId: bankRootId, locFilter }) : null;
 
+  // Document-level location predicates, following the live report conventions:
+  // sales coalesce to ('outlet', outlet_id) and purchases to ('headoffice', 1)
+  // for legacy unstamped rows; Head Office matches on type alone; a mirrored
+  // place matches under ANY of its identities.
+  const salesLocCond = (params: unknown[]): string => {
+    if (!identities) return `COALESCE(s.location_type, 'outlet') = 'headoffice'`;
+    const parts = identities.map((i) => {
+      params.push(i.type, i.id);
+      return `(COALESCE(s.location_type, 'outlet') = $${params.length - 1} AND COALESCE(s.location_id, s.outlet_id) = $${params.length})`;
+    });
+    return `(${parts.join(" OR ")})`;
+  };
+  const purchaseLocCond = (params: unknown[]): string => {
+    if (!identities) return `COALESCE(p.location_type, 'headoffice') = 'headoffice'`;
+    const parts = identities.map((i) => {
+      params.push(i.type, i.id);
+      return `(COALESCE(p.location_type, 'headoffice') = $${params.length - 1} AND COALESCE(p.location_id, 1) = $${params.length})`;
+    });
+    return `(${parts.join(" OR ")})`;
+  };
+
+  const recvParams: unknown[] = [];
   const { rows: recvRows } = await client.query(
     `SELECT c.id, c.name, ROUND(SUM(${outstandingExpr("s")})::numeric, 2)::float8 AS outstanding
        FROM sales s JOIN customers c ON c.id = s.customer_id
       WHERE s.branch_transfer_id IS NULL
+        AND ${salesLocCond(recvParams)}
       GROUP BY c.id, c.name
      HAVING SUM(${outstandingExpr("s")}) > 0.005
       ORDER BY 3 DESC`,
+    recvParams,
   );
   const receivables = {
     rows: recvRows.map((r: any) => ({ customerId: Number(r.id), name: String(r.name), outstanding: Number(r.outstanding) })),
@@ -3919,11 +4002,16 @@ async function buildDemoReportPack(client: PoolClient): Promise<Record<string, u
   };
 
   // Vendor dues through the owning settlement walk (advances, other charges
-  // and FIFO order included) — never a hand-rolled total−paid.
+  // and FIFO order included) — never a hand-rolled total−paid. The walk stays
+  // over every vendor's FULL bill history (settlement order is global); only
+  // WHICH bills are shown is restricted to the import's location.
   const settlements = await purchaseSettlementIndex(undefined, client as any);
+  const billParams: unknown[] = [];
   const { rows: billRows } = await client.query(
     `SELECT p.id, p.vendor_id, v.name FROM purchases p JOIN vendors v ON v.id = p.vendor_id
-      WHERE p.branch_transfer_id IS NULL`,
+      WHERE p.branch_transfer_id IS NULL
+        AND ${purchaseLocCond(billParams)}`,
+    billParams,
   );
   const dueByVendor = new Map<number, { vendorId: number; name: string; outstanding: number }>();
   for (const b of billRows) {
@@ -3938,10 +4026,20 @@ async function buildDemoReportPack(client: PoolClient): Promise<Record<string, u
     total: round2([...dueByVendor.values()].reduce((s, v) => s + v.outstanding, 0)),
   };
 
-  const valuation = await stockValuation(client, {});
+  // Stock: HO holds its rows under branch_type 'headoffice' with its own
+  // placeholder id — filter by type alone; a mirrored place matches any of
+  // its identity pairs.
+  const valuation = await stockValuation(client, identities
+    ? { branchPairs: identities }
+    : { branchType: "headoffice" });
 
   return {
     generatedAt: new Date().toISOString(),
+    location: {
+      type: identities ? packLoc.type : "headoffice",
+      id: identities ? Number(packLoc.id) : null,
+      name: locationName,
+    },
     trialBalance,
     profitAndLoss: (books as any).profitAndLoss ?? null,
     balanceSheet: (books as any).balanceSheet ?? null,
@@ -4002,7 +4100,9 @@ router.post("/imports/batches/:id/demo", requireModuleAction(PERM, "add"), async
     try {
       await client.query("BEGIN");
       run = await runBatchImport(client, { batchId: id, module, importRows, loc, user, mode: "demo" });
-      report = await buildDemoReportPack(client);
+      // The pack is scoped to the batch's stored location — the one chosen at
+      // upload, where every demo document was just recorded.
+      report = await buildDemoReportPack(client, loc);
     } finally {
       // EVERYTHING the demo wrote vanishes here — documents, stock, numbers.
       await client.query("ROLLBACK").catch(() => {});
@@ -5490,8 +5590,64 @@ router.post("/imports/migrations/:id/demo", requireModuleAction(PERM, "add"), as
     const { rows: batches } = await pool.query(`SELECT * FROM import_batches WHERE migration_id = $1`, [id]);
     if (batches.length === 0) { res.status(400).json({ error: "Upload at least one file first." }); return; }
 
+    // ── The trial runs WHERE approval will import ──
+    // The caller picks the location here, at trial time: every file is
+    // re-stamped and re-validated at it, the rehearsal records everything
+    // there, and the compare pack is scoped to it. Approval then refuses any
+    // other location — so the figures the user compared are exactly the
+    // figures that land in the books.
+    const demoBody = (req.body ?? {}) as { locationType?: unknown; locationId?: unknown };
+    let chosenLoc: { type: string; id: number } | null = null;
+    if (demoBody.locationType) {
+      const resolved = await resolveActingLocation(pool, {
+        employee: (req as any).employee,
+        requested: { type: demoBody.locationType, id: demoBody.locationId },
+      });
+      if ("error" in resolved) { res.status(400).json({ error: resolved.error }); return; }
+      if (resolved.loc.type === "outlet" && await outletWritesBlocked(pool)) {
+        res.status(400).json({ error: OUTLETS_DISABLED_MESSAGE }); return;
+      }
+      const disabledMsg = await disabledWarehouseError(pool, [{ type: resolved.loc.type, id: resolved.loc.id }]);
+      if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
+      chosenLoc = { type: resolved.loc.type, id: Number(resolved.loc.id) };
+    } else {
+      // No location passed: allowed only when every file already shares one
+      // stamp (a plain re-run). Divergent stamps would rehearse a mixed-
+      // location import nobody can compare against.
+      const stamps = new Set(batches.map((b: any) => `${String(b.location_type ?? "headoffice")}|${Number(b.location_id ?? 1)}`));
+      if (stamps.size > 1) {
+        res.status(400).json({ error: "Pick the location for the trial — the files carry different location stamps." }); return;
+      }
+    }
+    if (chosenLoc) {
+      const needsRestamp = batches.some((b: any) =>
+        String(b.location_type ?? "headoffice") !== chosenLoc!.type || Number(b.location_id ?? 1) !== chosenLoc!.id);
+      if (needsRestamp) {
+        // One transaction: a failure mid-way must never leave the files
+        // straddling two locations (duplicates, stock scope and ledger
+        // ownership are all validated per-location).
+        const rc = await pool.connect();
+        try {
+          await rc.query("BEGIN");
+          for (const b of batches) {
+            const module = asModule(b.module) as DemoModule;
+            await rc.query(`UPDATE import_batches SET location_type = $2, location_id = $3 WHERE id = $1`, [b.id, chosenLoc.type, chosenLoc.id]);
+            await revalidateDemoBatch(Number(b.id), module, chosenLoc, rc);
+          }
+          await rc.query("COMMIT");
+        } catch (e) {
+          await rc.query("ROLLBACK").catch(() => {});
+          throw e;
+        } finally {
+          rc.release();
+        }
+        for (const b of batches) { b.location_type = chosenLoc.type; b.location_id = chosenLoc.id; }
+      }
+    }
+
     // Strict gate: unmapped names go back to the mapping step, error rows go
     // back to the file. This is what makes the demo EQUAL the final import.
+    // (Runs AFTER the re-stamp so the counts reflect the chosen location.)
     const mapBlocks: string[] = [];
     const errBlocks: string[] = [];
     for (const b of batches) {
@@ -5517,6 +5673,10 @@ router.post("/imports/migrations/:id/demo", requireModuleAction(PERM, "add"), as
     const client = await pool.connect();
     const runs: Array<{ module: DemoModule; batch: any; run: Awaited<ReturnType<typeof runBatchImport>> }> = [];
     let report: Record<string, unknown>;
+    // The pack is scoped to the batches' (now uniform) stamp — the location
+    // the trial documents were just recorded at, and the ONLY location
+    // approval will accept. The pack labels itself with it.
+    let packLoc = chosenLoc ?? { type: "headoffice", id: 1 };
     try {
       await client.query("BEGIN");
       for (const module of WIZARD_RUN_ORDER) {
@@ -5526,10 +5686,11 @@ router.post("/imports/migrations/:id/demo", requireModuleAction(PERM, "add"), as
           `SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [b.id],
         );
         const loc = { type: String(b.location_type ?? "headoffice"), id: Number(b.location_id ?? 1) };
+        packLoc = loc;
         const run = await runBatchImport(client, { batchId: Number(b.id), module, importRows, loc, user, mode: "demo" });
         runs.push({ module, batch: b, run });
       }
-      report = await buildDemoReportPack(client);
+      report = await buildDemoReportPack(client, packLoc);
     } finally {
       // EVERYTHING the demo wrote vanishes here — documents, stock, numbers.
       await client.query("ROLLBACK").catch(() => {});
@@ -5580,12 +5741,16 @@ router.post("/imports/migrations/:id/demo", requireModuleAction(PERM, "add"), as
       failures: failures.slice(0, 100),
       timeTakenMs: Date.now() - startedAt,
     };
+    // The migration remembers where its trial ran — the UI shows it and the
+    // approve step pre-fills (and enforces) the same location.
     const { rows: [updated] } = await pool.query(
       `UPDATE import_migrations SET status = 'demo_ready', demo_report = $2, demo_summary = $3,
-          demo_at = NOW(), demo_by = $4, legacy_min = $5, legacy_max = $6
+          demo_at = NOW(), demo_by = $4, legacy_min = $5, legacy_max = $6,
+          location_type = $7, location_id = $8
         WHERE id = $1 RETURNING *, (demo_report IS NOT NULL) AS has_demo_report`,
       [id, JSON.stringify(report), JSON.stringify(migSummary), user,
-       legacyAll[0] ?? null, legacyAll[legacyAll.length - 1] ?? null],
+       legacyAll[0] ?? null, legacyAll[legacyAll.length - 1] ?? null,
+       packLoc.type, packLoc.id],
     );
 
     logActivity({
@@ -5698,6 +5863,22 @@ router.post("/imports/migrations/:id/approve", requireModuleAction(PERM, "add"),
 
       const { rows: batches } = await client.query(`SELECT * FROM import_batches WHERE migration_id = $1`, [id]);
       if (batches.length === 0) { await bail(400, { error: "This migration has no files." }); return; }
+
+      // Approval imports exactly what the trial showed — INCLUDING where.
+      // The trial recorded its rehearsal documents (and scoped its compare
+      // pack) at the files' stamped location; approving anywhere else would
+      // import figures nobody compared. Older migrations whose trial predates
+      // location-aware trials simply re-run the trial once at the chosen
+      // location.
+      const mismatched = batches.find((b: any) =>
+        String(b.location_type ?? "headoffice") !== loc.type || Number(b.location_id ?? 1) !== Number(loc.id));
+      if (mismatched) {
+        const stamp = { type: String(mismatched.location_type ?? "headoffice"), id: Number(mismatched.location_id ?? 1) };
+        await bail(409, {
+          error: `The trial ran at ${await locationDisplayName(pool, stamp)}, but this approval asks for ${await locationDisplayName(pool, { type: loc.type, id: Number(loc.id) })}. Approval imports exactly what the trial showed — re-run the trial at the right location, compare the reports again, then approve.`,
+        });
+        return;
+      }
 
       // Re-stamp every file to the chosen location and re-validate there —
       // duplicates, stock scope and ledger ownership are all per-location.

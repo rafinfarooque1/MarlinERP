@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { fmtMoney, fmtTime } from './shared';
-import { Loader2 } from 'lucide-react';
+import { Loader2, MapPin } from 'lucide-react';
 
 // ── Light local types for the pack (server is authoritative) ───────────────
 
@@ -142,6 +142,18 @@ export function DemoReportView({ batchId = null, migrationId = null, open, onOpe
             {data?.demoAt ? ` Demo run ${fmtTime(data.demoAt)} by ${data.demoBy}.` : ''}
           </DialogDescription>
         </DialogHeader>
+
+        {/* Older packs were computed company-wide and carry no location — the
+            label only appears on packs that are genuinely scoped. */}
+        {report?.location?.name && (
+          <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+            <MapPin className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              <span className="font-semibold">Figures for {report.location.name} only.</span>{' '}
+              Every tab shows just this location's slice — compare it against the same location in your old ERP.
+            </span>
+          </div>
+        )}
 
         {isLoading && (
           <div className="py-12 text-center text-muted-foreground"><Loader2 className="w-5 h-5 animate-spin inline" /></div>

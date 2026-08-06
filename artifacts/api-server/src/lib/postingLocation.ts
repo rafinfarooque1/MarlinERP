@@ -25,6 +25,15 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 export interface PostingLocationFilter {
   type: "warehouse" | "outlet" | "headoffice" | "company";
   id: number | null;
+  /**
+   * Every (type, id) identity of the SAME physical place. A location can exist
+   * as both a warehouse and an outlet sharing one cash ledger ("mirror" rows),
+   * and documents at that place carry whichever stamp their module used. A
+   * caller that resolves the mirrors (e.g. the import compare pack) passes all
+   * identities so postings stamped under either one land in the slice. Absent
+   * (every parsed request filter) the match stays exact type + id.
+   */
+  identities?: Array<{ type: "warehouse" | "outlet"; id: number }>;
 }
 
 export interface LocatedPosting {
@@ -47,6 +56,9 @@ export function parsePostingLocationFilter(query: Record<string, unknown>): Post
 export function postingMatchesLocation(p: LocatedPosting, f: PostingLocationFilter): boolean {
   if (f.type === "company") return p.locationType == null;
   if (f.type === "headoffice") return p.locationType === "headoffice";
+  if (f.identities && f.identities.length > 0) {
+    return f.identities.some((i) => p.locationType === i.type && Number(p.locationId) === i.id);
+  }
   return p.locationType === f.type && Number(p.locationId) === f.id;
 }
 
