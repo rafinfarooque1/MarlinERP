@@ -16,7 +16,7 @@ import {
   ShieldOff, TrendingUp, ShoppingCart, Factory, Boxes,
   Landmark, Trophy, Users, AlertTriangle, Clock, MapPin,
   Warehouse, Store, ArrowUpRight, ArrowDownRight, Wallet,
-  Receipt, PieChart, BarChart3, type LucideIcon,
+  Receipt, PieChart, BarChart3, Banknote, HandCoins, type LucideIcon,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import {
@@ -253,27 +253,33 @@ export default function Dashboard() {
 
   // GP / NP for the selected period — served off the SAME P&L build as the
   // Expenses tile, so they always equal the Profit & Loss report for the same
-  // range and location. The generated type predates the field, hence the cast.
-  const pf = (bi as any)?.profit as { gross: number | null; net: number | null } | null | undefined;
+  // range and location.
+  const pf = bi?.profit;
+  // Period money paid out / received over the cash+bank ledger subtrees, from
+  // the SAME derived-posting stream as the Cash/Bank balance tiles — so the
+  // Payments/Receipts tiles always agree with the books for the range and
+  // location. Null exactly when the balance tiles are null.
+  const mf = bi?.moneyFlows;
 
   const [, navigate] = useLocation();
   const drill = (anchor: string) => () => navigate(`/reports/financial#${anchor}`);
 
-  // Fixed row layout (3 / 3 / 3 / 1) on md+: a 6-column grid where the first
-  // three rows' cards span 2 columns and NP takes the last row full-width. On
-  // mobile the cards go two across (Sales|Purchases, Expenses|Inventory,
-  // Cash|Bank, Receivables|Payables, GP|NP-ish) with NP spanning both columns.
-  const SPAN2 = 'md:col-span-2';
-  const SPAN3 = 'md:col-span-3';
+  // Fixed two-per-row pair layout (owner's spec), identical on desktop and
+  // mobile: Sales|Purchases, Inventory|Expenses, Payables|Receivables,
+  // Payments|Receipts, Cash|Bank, GP|NP.
   // Inventory Value is hidden entirely for employees without the valuation
-  // right (the server omits the figure) — Cash and Bank then split row 2.
+  // right (the server omits the figure) — Expenses then spans its full row so
+  // every later pair stays intact.
   const hasInventory = !!bi?.canViewValuation;
-  const rowTwoSpan = hasInventory ? SPAN2 : SPAN3;
 
   const summaryCards: SummaryCard[] = [
-    // ── Row 1: Sales · Purchases · Expenses ─────────────────────────────────
-    { label: 'Sales', value: fmt(s?.total ?? 0), tone: 'pos', className: SPAN2 },
-    { label: 'Purchases', value: fmt(bi?.purchases.total ?? 0), className: SPAN2 },
+    // ── Row 1: Sales · Purchases ────────────────────────────────────────────
+    { label: 'Sales', value: fmt(s?.total ?? 0), tone: 'pos' },
+    { label: 'Purchases', value: fmt(bi?.purchases.total ?? 0) },
+    // ── Row 2: Inventory · Expenses ─────────────────────────────────────────
+    ...(hasInventory
+      ? [{ label: 'Inventory Value', value: fmt(bi!.inventory.valuation ?? 0), tone: 'info' as CardTone }]
+      : []),
     // Expenses and the balance tiles come from the accounting postings, which
     // carry no location. The API returns null for a single-location login
     // rather than passing off a company-wide number as that branch's — render
@@ -289,33 +295,13 @@ export default function Dashboard() {
       hint: bi?.expenses?.total != null && bi.expenses.salary != null
         ? `Salary ${fmt(bi.expenses.salary)} · Rent ${fmt(bi.expenses.rent ?? 0)} · Other ${fmt(bi.expenses.other ?? 0)}`
         : undefined,
-      className: SPAN2,
+      // When Inventory is permission-hidden, Expenses takes the whole row so
+      // the later pairs (Payables|Receivables etc.) stay aligned.
+      className: hasInventory ? undefined : 'md:col-span-2',
     },
-    // ── Row 2: Inventory · Cash · Bank ──────────────────────────────────────
-    ...(hasInventory
-      ? [{ label: 'Inventory Value', value: fmt(bi!.inventory.valuation ?? 0), tone: 'info' as CardTone, className: SPAN2 }]
-      : []),
-    {
-      label: 'Cash Balance',
-      value: bi?.cash?.balance == null ? '—' : fmt(bi.cash.balance),
-      tone: bi?.cash?.balance == null ? 'default' : bi.cash.balance >= 0 ? 'pos' : 'neg',
-      className: rowTwoSpan,
-    },
-    {
-      label: 'Bank Balance',
-      value: bi?.bank?.balance == null ? '—' : fmt(bi.bank.balance),
-      tone: bi?.bank?.balance == null ? 'default' : bi.bank.balance >= 0 ? 'pos' : 'neg',
-      className: rowTwoSpan,
-    },
-    // ── Row 3: Receivables · Payables · GP ──────────────────────────────────
+    // ── Row 3: Payables · Receivables ───────────────────────────────────────
     // Balance Sheet positions taken from the accounting ledgers, so they carry
     // no location and read '—' for a single-location login, like Expenses.
-    {
-      label: 'Receivables',
-      value: bi?.receivables?.total == null ? '—' : fmt(bi.receivables.total),
-      tone: bi?.receivables?.total == null ? 'default' : (bi?.receivables?.overdue ?? 0) > 0 ? 'warn' : 'info',
-      className: SPAN2,
-    },
     // Everything the company owes, not just its trade creditors. Salary accrues
     // to a payable that sits outside Sundry Creditors, so the old tile read the
     // control account alone and showed nothing at all for unpaid wages.
@@ -330,38 +316,67 @@ export default function Dashboard() {
       hint: (bi?.payables as any)?.salaryPayable != null
         ? `Suppliers ${fmt(bi!.payables.total ?? 0)} · Salary ${fmt((bi!.payables as any).salaryPayable)} · Rent ${fmt((bi!.payables as any).rentPayable ?? 0)}`
         : undefined,
-      className: SPAN2,
     },
-    // GP closes row 3; NP takes row 4 full-width. Click either to open the
-    // Profit & Loss report.
+    {
+      label: 'Receivables',
+      value: bi?.receivables?.total == null ? '—' : fmt(bi.receivables.total),
+      tone: bi?.receivables?.total == null ? 'default' : (bi?.receivables?.overdue ?? 0) > 0 ? 'warn' : 'info',
+    },
+    // ── Row 4: Payments · Receipts ──────────────────────────────────────────
+    // Period money out / in over the cash and bank books; the hint splits the
+    // figure by book, so it always reconciles with the number above it.
+    {
+      label: 'Payments',
+      value: mf == null ? '—' : fmt(mf.totalOut),
+      tone: mf == null ? 'default' : mf.totalOut > 0 ? 'neg' : 'default',
+      hint: mf == null ? undefined : `Cash ${fmt(mf.cashOut)} · Bank ${fmt(mf.bankOut)}`,
+    },
+    {
+      label: 'Receipts',
+      value: mf == null ? '—' : fmt(mf.totalIn),
+      tone: mf == null ? 'default' : mf.totalIn > 0 ? 'pos' : 'default',
+      hint: mf == null ? undefined : `Cash ${fmt(mf.cashIn)} · Bank ${fmt(mf.bankIn)}`,
+    },
+    // ── Row 5: Cash · Bank ──────────────────────────────────────────────────
+    {
+      label: 'Cash Balance',
+      value: bi?.cash?.balance == null ? '—' : fmt(bi.cash.balance),
+      tone: bi?.cash?.balance == null ? 'default' : bi.cash.balance >= 0 ? 'pos' : 'neg',
+    },
+    {
+      label: 'Bank Balance',
+      value: bi?.bank?.balance == null ? '—' : fmt(bi.bank.balance),
+      tone: bi?.bank?.balance == null ? 'default' : bi.bank.balance >= 0 ? 'pos' : 'neg',
+    },
+    // ── Row 6: GP · NP — click either to open the Profit & Loss report ──────
     {
       label: 'GP',
       value: pf?.gross == null ? '—' : fmt(pf.gross),
       tone: pf?.gross == null ? 'default' : pf.gross >= 0 ? 'pos' : 'neg',
       hint: 'Gross Profit · tap for P&L',
       onClick: drill('pl-gross-profit'),
-      className: SPAN2,
     },
-    // ── Row 4: NP ───────────────────────────────────────────────────────────
     {
       label: 'NP',
       value: pf?.net == null ? '—' : fmt(pf.net),
       tone: pf?.net == null ? 'default' : pf.net >= 0 ? 'pos' : 'neg',
       hint: 'Net Profit · tap for P&L',
       onClick: drill('pl-net-profit'),
-      className: 'col-span-2 md:col-span-6',
     },
   ];
 
-  // Mobile-only card set: same figures and tones as summaryCards, but with
-  // shorter labels, subtle icons, structured breakdown lines and one-line
+  // Mobile-only card set: same figures, order and tones as summaryCards, but
+  // with shorter labels, subtle icons, structured breakdown lines and one-line
   // descriptions, per the owner's mobile-dashboard spec. Pairs land as
-  // Sales|Purchases, Expenses|Inventory, Cash|Bank, Receivables|Payables,
-  // GP|NP; when Inventory is permission-hidden, Expenses spans its full row
-  // so every later semantic pair stays intact.
+  // Sales|Purchases, Inventory|Expenses, Payables|Receivables,
+  // Payments|Receipts, Cash|Bank, GP|NP; when Inventory is permission-hidden,
+  // Expenses spans its full row so every later semantic pair stays intact.
   const mobileCards: MobileKpi[] = [
     { label: 'Sales', icon: TrendingUp, value: fmt(s?.total ?? 0), tone: 'pos' },
     { label: 'Purchases', icon: ShoppingCart, value: fmt(bi?.purchases.total ?? 0) },
+    ...(hasInventory
+      ? [{ label: 'Inventory', icon: Boxes, value: fmt(bi!.inventory.valuation ?? 0), tone: 'info' as CardTone }]
+      : []),
     {
       label: 'Expenses',
       icon: Receipt,
@@ -376,27 +391,6 @@ export default function Dashboard() {
         : undefined,
       spanTwo: !hasInventory,
     },
-    ...(hasInventory
-      ? [{ label: 'Inventory', icon: Boxes, value: fmt(bi!.inventory.valuation ?? 0), tone: 'info' as CardTone }]
-      : []),
-    {
-      label: 'Cash',
-      icon: Wallet,
-      value: bi?.cash?.balance == null ? '—' : fmt(bi.cash.balance),
-      tone: bi?.cash?.balance == null ? 'default' : bi.cash.balance >= 0 ? 'pos' : 'neg',
-    },
-    {
-      label: 'Bank',
-      icon: Landmark,
-      value: bi?.bank?.balance == null ? '—' : fmt(bi.bank.balance),
-      tone: bi?.bank?.balance == null ? 'default' : bi.bank.balance >= 0 ? 'pos' : 'neg',
-    },
-    {
-      label: 'Receivables',
-      icon: ArrowDownRight,
-      value: bi?.receivables?.total == null ? '—' : fmt(bi.receivables.total),
-      tone: bi?.receivables?.total == null ? 'default' : (bi?.receivables?.overdue ?? 0) > 0 ? 'warn' : 'info',
-    },
     {
       label: 'Payables',
       icon: ArrowUpRight,
@@ -409,6 +403,48 @@ export default function Dashboard() {
             { label: 'Rent', value: rup((bi!.payables as any).rentPayable) },
           ]
         : undefined,
+    },
+    {
+      label: 'Receivables',
+      icon: ArrowDownRight,
+      value: bi?.receivables?.total == null ? '—' : fmt(bi.receivables.total),
+      tone: bi?.receivables?.total == null ? 'default' : (bi?.receivables?.overdue ?? 0) > 0 ? 'warn' : 'info',
+    },
+    {
+      label: 'Payments',
+      icon: Banknote,
+      value: mf == null ? '—' : fmt(mf.totalOut),
+      tone: mf == null ? 'default' : mf.totalOut > 0 ? 'neg' : 'default',
+      lines: mf == null
+        ? undefined
+        : [
+            { label: 'Cash', value: rup(mf.cashOut) },
+            { label: 'Bank', value: rup(mf.bankOut) },
+          ],
+    },
+    {
+      label: 'Receipts',
+      icon: HandCoins,
+      value: mf == null ? '—' : fmt(mf.totalIn),
+      tone: mf == null ? 'default' : mf.totalIn > 0 ? 'pos' : 'default',
+      lines: mf == null
+        ? undefined
+        : [
+            { label: 'Cash', value: rup(mf.cashIn) },
+            { label: 'Bank', value: rup(mf.bankIn) },
+          ],
+    },
+    {
+      label: 'Cash',
+      icon: Wallet,
+      value: bi?.cash?.balance == null ? '—' : fmt(bi.cash.balance),
+      tone: bi?.cash?.balance == null ? 'default' : bi.cash.balance >= 0 ? 'pos' : 'neg',
+    },
+    {
+      label: 'Bank',
+      icon: Landmark,
+      value: bi?.bank?.balance == null ? '—' : fmt(bi.bank.balance),
+      tone: bi?.bank?.balance == null ? 'default' : bi.bank.balance >= 0 ? 'pos' : 'neg',
     },
     {
       label: 'GP',
@@ -460,15 +496,15 @@ export default function Dashboard() {
 
         {/* ── Summary cards ──────────────────────────────────────────────── */}
         {isLoading ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 md:gap-3">
-            {[...Array(10)].map((_, i) => <Skeleton key={i} className="h-24 md:h-[68px] rounded-xl md:rounded-lg" />)}
+          <div className="grid grid-cols-2 gap-2.5 md:gap-3">
+            {[...Array(12)].map((_, i) => <Skeleton key={i} className="h-24 md:h-[68px] rounded-xl md:rounded-lg" />)}
           </div>
         ) : (
           <>
             {/* Phones get the compact banking-app card grid; md+ keeps the
                 original SummaryCards layout pixel-identical. */}
             <MobileSummaryCards cards={mobileCards} />
-            <SummaryCards cards={summaryCards} gridClassName="hidden md:grid md:grid-cols-6 gap-3" />
+            <SummaryCards cards={summaryCards} gridClassName="hidden md:grid md:grid-cols-2 gap-3" />
             {bi && bi.expenses?.total == null && (
               <p className="text-xs text-muted-foreground">
                 Expenses and Bank Balance are company-level accounting figures and are not

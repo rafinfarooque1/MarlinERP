@@ -64,3 +64,15 @@ STD-BANK group ledgers for the same range — they must match exactly (same
 derived stream, same location helper). Opening balances are not postings, so
 they never count as movement. The per-toDate postings cache is shared with
 `companyFinancials`; a from-only request filters the uncapped stream.
+
+The web dashboard's Payments/Receipts tiles read `moneyFlows.totalOut` /
+`totalIn` directly. Cash-book convention applies: a cash→bank contra deposit
+counts on BOTH sides (a payment out of cash and a receipt into bank) — that
+is deliberate, not double-counting.
+
+# DashboardBi client type is hand-written, not generated
+
+`lib/api-client-react/src/dashboard-bi.ts` maintains the `/dashboard/bi`
+response type by hand — new response fields must be added there (then
+`pnpm tsc` in lib/api-client-react), or the frontend ends up with `as any`
+casts like the old `profit` read.

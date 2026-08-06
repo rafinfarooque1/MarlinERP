@@ -91,6 +91,23 @@ export interface DashboardBi {
   };
   /** Aggregate bank ledger balance (excludes physical cash). `null` as above. */
   bank: { balance: number | null; companyWide: boolean };
+  /**
+   * Gross/net profit for the selected period, off the SAME P&L build as
+   * `expenses` — so the GP/NP tiles always equal the Profit & Loss report.
+   * Fields are `null` exactly when the other accounting figures are.
+   */
+  profit: { gross: number | null; net: number | null; companyWide: boolean };
+  /**
+   * Money movement over the cash and bank ledger subtrees for the selected
+   * range and location, from the SAME derived-posting stream as the balance
+   * tiles. Debits in = money received, credits out = money paid. `null`
+   * exactly when the Cash/Bank balances are `null`.
+   */
+  moneyFlows: {
+    cashIn: number; cashOut: number;
+    bankIn: number; bankOut: number;
+    totalIn: number; totalOut: number;
+  } | null;
   topItems: BiTopItem[];
   topCustomers: BiTopCustomer[];
 }
