@@ -5,6 +5,7 @@ description: Full stack ERP for Marlin Frozen Fruits — api-server + marlin-erp
 
 ## Login
 - Never assume the admin dev password matches the DEFAULT_INITIAL_PASSWORD constant — the owner may change it at any time. For API testing, create a temp employee cloned from admin's hierarchy_id (own bcrypt hash, must_change_password=false) and DELETE it (plus its login_attempts rows) afterwards; never leave the admin hash overwritten.
+- The .test.mjs suites hardcode the admin login — after the owner changes the password, EVERY suite fails at login. Don't debug that as a regression; use the temp-employee clone.
 - curl testing: POST /api/auth/login → use `Authorization: Bearer <token>` (cookie auth does NOT work from curl); JWTs survive server restarts
 
 ## Router mounting trap

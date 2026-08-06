@@ -94,8 +94,19 @@ async function isCashFamilyLedger(q: Q, ledgerId: number): Promise<boolean> {
 
 export interface AccountOption { id: number; name: string; kind: "cash" | "bank" }
 
-export async function importAccountOptions(q: Q, loc: ProdLocation): Promise<AccountOption[]> {
+/** A bank-family ledger owned by ANOTHER location. Never offerable to this
+ *  batch — but essential context when resolution fails: the user must be told
+ *  the bank EXISTS and who owns it, not that the chart of accounts has none. */
+export interface ForeignBankAccount { id: number; name: string; ownerName: string }
+
+export interface ImportAccountContext {
+  options: AccountOption[];
+  foreignBanks: ForeignBankAccount[];
+}
+
+export async function importAccountContext(q: Q, loc: ProdLocation): Promise<ImportAccountContext> {
   const out: AccountOption[] = [];
+  const foreignBanks: ForeignBankAccount[] = [];
   const cashId = await locationCashLedgerId(q, loc);
   if (cashId != null) {
     const { rows: [c] } = await (q as any).query(`SELECT name FROM account_ledgers WHERE id = $1`, [cashId]);
@@ -122,11 +133,20 @@ export async function importAccountOptions(q: Q, loc: ProdLocation): Promise<Acc
     const owners = owned.get(Number(b.id)) ?? [];
     const usable = owners.length === 0
       || owners.some((o) => o.locationType === loc.type && Number(o.locationId) === Number((loc as any).id ?? 0));
-    if (usable && !out.some((o) => o.id === Number(b.id))) {
-      out.push({ id: Number(b.id), name: String(b.name), kind: "bank" });
+    if (usable) {
+      if (!out.some((o) => o.id === Number(b.id))) {
+        out.push({ id: Number(b.id), name: String(b.name), kind: "bank" });
+      }
+    } else if (!foreignBanks.some((f) => f.id === Number(b.id))) {
+      const ownerName = [...new Set(owners.map((o) => String(o.name)))].join(" / ") || "another location";
+      foreignBanks.push({ id: Number(b.id), name: String(b.name), ownerName });
     }
   }
-  return out;
+  return { options: out, foreignBanks };
+}
+
+export async function importAccountOptions(q: Q, loc: ProdLocation): Promise<AccountOption[]> {
+  return (await importAccountContext(q, loc)).options;
 }
 
 /**
@@ -148,10 +168,24 @@ async function assertAccountMatchesLocation(accountLedgerId: number, loc: ProdLo
   }
 }
 
-/** Map a row's account cell onto one of the location's valid money accounts. */
+/** "hdfc-4737 (calicut), sbi-current (kochi)" — the ledgers that DO exist, with owners. */
+function foreignBankList(foreign: ForeignBankAccount[]): string {
+  return foreign.map((f) => `${f.name} (${f.ownerName})`).join(", ");
+}
+
+/** Both remedies, spelled out — the ownership rule itself is invisible to the user. */
+function foreignBankRemedy(foreign: ForeignBankAccount[]): string {
+  const owners = [...new Set(foreign.map((f) => f.ownerName))];
+  return `A location may only move money through its own accounts — re-import choosing ${owners.length === 1 ? `the ${owners[0]} location` : "the owning location"}, or create a bank account for this location first.`;
+}
+
+/** Map a row's account cell onto one of the location's valid money accounts.
+ *  `foreignBanks` (bank ledgers owned by OTHER locations) never resolve, but
+ *  they turn a dead-end "no bank exists" into an actionable explanation. */
 export function resolveAccountValue(
   value: string,
   options: AccountOption[],
+  foreignBanks: ForeignBankAccount[] = [],
 ): { ok: true; account: AccountOption } | { ok: false; error: string } {
   const norm = value.trim().toLowerCase();
   const cash = options.find((o) => o.kind === "cash");
@@ -162,7 +196,12 @@ export function resolveAccountValue(
   }
   if (norm === "bank") {
     if (banks.length === 1) return { ok: true, account: banks[0] };
-    if (banks.length === 0) return { ok: false, error: "No bank account exists in the chart of accounts — write Cash, or create the bank ledger first." };
+    if (banks.length === 0) {
+      if (foreignBanks.length > 0) {
+        return { ok: false, error: `This location has no bank account of its own. Bank accounts that exist: ${foreignBankList(foreignBanks)}. ${foreignBankRemedy(foreignBanks)}` };
+      }
+      return { ok: false, error: "No bank account exists in the chart of accounts — write Cash, or create the bank ledger first." };
+    }
     return { ok: false, error: `More than one bank account exists — name it exactly: ${banks.map((b) => b.name).join(", ")}.` };
   }
   if (norm === "upi") {
@@ -170,11 +209,22 @@ export function resolveAccountValue(
     // that carries UPI in its name, exactly one of which may exist.
     const upis = banks.filter((b) => b.name.toLowerCase().includes("upi"));
     if (upis.length === 1) return { ok: true, account: upis[0] };
-    if (upis.length === 0) return { ok: false, error: "No UPI account exists in the chart of accounts — create a bank-type ledger with UPI in its name (e.g. \"UPI Collections\"), or name a bank account instead." };
+    if (upis.length === 0) {
+      const foreignUpis = foreignBanks.filter((f) => f.name.toLowerCase().includes("upi"));
+      if (foreignUpis.length > 0) {
+        return { ok: false, error: `This location has no UPI account of its own. UPI accounts that exist: ${foreignBankList(foreignUpis)}. ${foreignBankRemedy(foreignUpis)}` };
+      }
+      return { ok: false, error: "No UPI account exists in the chart of accounts — create a bank-type ledger with UPI in its name (e.g. \"UPI Collections\"), or name a bank account instead." };
+    }
     return { ok: false, error: `More than one UPI account exists — name it exactly: ${upis.map((b) => b.name).join(", ")}.` };
   }
   const hit = options.find((o) => o.name.trim().toLowerCase() === norm);
   if (hit) return { ok: true, account: hit };
+  // An exact ledger name that exists — but under another location's ownership.
+  const foreignHit = foreignBanks.find((f) => f.name.trim().toLowerCase() === norm);
+  if (foreignHit) {
+    return { ok: false, error: `Account "${value.trim()}" exists but belongs to ${foreignHit.ownerName}. ${foreignBankRemedy([foreignHit])}` };
+  }
   return {
     ok: false,
     error: `Unknown account "${value.trim()}". Valid for this location: ${options.map((o) => o.name).concat(["Cash", "Bank"]).join(", ")}.`,

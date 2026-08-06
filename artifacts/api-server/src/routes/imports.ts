@@ -54,9 +54,10 @@ import {
   rollbackImportedSale, rollbackImportedPurchase,
 } from "../lib/importTransactions";
 import {
-  importAccountOptions, resolveAccountValue,
+  importAccountOptions, importAccountContext, resolveAccountValue,
   importReceiptVoucher, importPaymentVoucher,
   rollbackImportedReceiptVoucher, rollbackImportedPaymentVoucher,
+  type ForeignBankAccount,
 } from "../lib/importVouchers";
 import { itemCreateError, createItemCore } from "../lib/itemCreate";
 import { convertLegacyReport, type LegacyConversionMeta } from "../lib/legacyReports";
@@ -815,6 +816,9 @@ interface TxnContext {
   /** Purchases: the location's valid money accounts (cash till + bank leaves)
    *  for resolving the Payment Account cell — same options as voucher imports. */
   accounts: Awaited<ReturnType<typeof importAccountOptions>>;
+  /** Purchases: bank ledgers owned by OTHER locations — never resolvable here,
+   *  but named in errors so "no bank exists" is never claimed when one does. */
+  foreignBanks: ForeignBankAccount[];
   /** Purchases: postable expense ledgers an "Other Charge Ledger" cell may
    *  name (lower(name) → ledger) — the same set the manual bill form offers,
    *  and the same rules importPurchaseDoc re-validates at commit. */
@@ -988,9 +992,12 @@ async function loadTxnContext(module: TxnModule, loc: { type: string; id: number
     parties, existingInvoices,
     companyState: String(comp?.state ?? "").trim().toLowerCase(),
     stockAvail,
-    accounts: module === "purchases"
-      ? await importAccountOptions(q, loc as ProdLocation)
-      : [],
+    ...(module === "purchases"
+      ? await (async () => {
+          const acc = await importAccountContext(q, loc as ProdLocation);
+          return { accounts: acc.options, foreignBanks: acc.foreignBanks };
+        })()
+      : { accounts: [], foreignBanks: [] }),
     expenseLedgers: module === "purchases" ? await importExpenseLedgerOptions(q) : new Map(),
     chargeMappings: await loadChargeMappings(q),
     settings: await loadImportSettings(q),
@@ -1633,7 +1640,7 @@ async function validateTransactionRows(
       // Payment Account: which money account settles the paid amount —
       // resolved exactly like voucher imports (Cash / Bank / exact ledger name).
       if (paid > 0.004 || doc.accountRaw) {
-        const acct = resolveAccountValue(doc.accountRaw, ctx.accounts);
+        const acct = resolveAccountValue(doc.accountRaw, ctx.accounts, ctx.foreignBanks);
         if (!acct.ok) head.errors.push(`Payment Account: ${acct.error}`);
         else paidFromLedgerId = acct.account.id;
       }
@@ -1700,6 +1707,9 @@ interface VoucherContext {
   parties: Map<string, { id: number; name: string }>; // lower(name) → party
   existingVoucherNos: Set<string>;                    // lower(voucher_number)
   accounts: Awaited<ReturnType<typeof importAccountOptions>>;
+  /** Bank ledgers owned by OTHER locations — never resolvable for this batch,
+   *  but named in errors so "no bank exists" is never claimed when one does. */
+  foreignBanks: ForeignBankAccount[];
   /** party id → open, in-scope docs in FIFO (oldest-first) order */
   docsByParty: Map<number, VoucherOpenDoc[]>;
   /** `${partyId}|${lower(invoiceNumber)}` → doc (ALL docs, incl. settled/cancelled — for explicit-reference errors) */
@@ -1766,7 +1776,7 @@ async function loadVoucherContext(module: VoucherModule, loc: { type: string; id
   const { rows: vnos } = await q.query(`SELECT lower(legacy_voucher_number) AS v FROM ${vTable} WHERE legacy_voucher_number IS NOT NULL`);
   for (const r of vnos) existingVoucherNos.add(String(r.v));
 
-  const accounts = await importAccountOptions(q, loc as any);
+  const { options: accounts, foreignBanks } = await importAccountContext(q, loc as any);
 
   const docsByParty = new Map<number, VoucherOpenDoc[]>();
   const docByRef = new Map<string, VoucherOpenDoc>();
@@ -1827,7 +1837,7 @@ async function loadVoucherContext(module: VoucherModule, loc: { type: string; id
     }
   }
 
-  return { parties, existingVoucherNos, accounts, docsByParty, docByRef, routes, skips };
+  return { parties, existingVoucherNos, accounts, foreignBanks, docsByParty, docByRef, routes, skips };
 }
 
 /**
@@ -1950,7 +1960,7 @@ async function validateVoucherRows(
     else s.norm.amount = amt;
 
     // Received-in / paid-from account
-    const acc = resolveAccountValue(values.account ?? "", ctx.accounts);
+    const acc = resolveAccountValue(values.account ?? "", ctx.accounts, ctx.foreignBanks);
     if (!acc.ok) {
       s.errors.push(acc.error);
     } else {

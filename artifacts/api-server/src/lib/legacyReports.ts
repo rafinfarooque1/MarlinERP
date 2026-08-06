@@ -355,17 +355,21 @@ function convertVouchers(module: "receipts" | "payments", ws: ExcelJS.Worksheet)
     const iso = toIsoDate(txt(row, c.date));
     if (!iso) badDates++;
 
-    // Mode → received-in / paid-from account. NEFT/HDFC/TPT and friends are
-    // bank movements; UPI stays UPI; blank means the cash till. Unknown
-    // spellings pass through verbatim so the validator can name them.
+    // Mode → received-in / paid-from account. Only GENERIC spellings collapse:
+    // NEFT/plain HDFC/TPT and friends → Bank, UPI apps → UPI, blank/cash →
+    // the cash till. Anything more specific — digits or extra words, e.g.
+    // "hdfc-4737" — is an account NAME and passes through verbatim so the
+    // validator can exact-match the ledger (collapsing it to generic "Bank"
+    // would erase which account, and be ambiguous at multi-bank locations).
     let account = "";
     const modeRaw = txt(row, c.mode);
     if (modeRaw) {
-      const t = modeRaw.toLowerCase().replace(/[^a-z]/g, "");
+      // Keep digits when normalising: "hdfc-4737" must NOT reduce to "hdfc".
+      const t = modeRaw.toLowerCase().replace(/[^a-z0-9]/g, "");
       if (["neft", "rtgs", "imps", "hdfc", "tpt", "cheque", "chq", "check", "dd", "banktransfer", "transfer", "netbanking", "online", "bank", "card"].includes(t)) account = "Bank";
       else if (["upi", "gpay", "googlepay", "phonepe", "paytm", "bhim", "qr"].includes(t)) account = "UPI";
       else if (t === "cash") account = "";
-      else account = modeRaw; // let the validator report the exact unknown value
+      else account = modeRaw; // specific account name (or unknown) — the validator matches or names it
     }
 
     const disc = num(txt(row, c.discount)) ?? 0;
@@ -387,7 +391,7 @@ function convertVouchers(module: "receipts" | "payments", ws: ExcelJS.Worksheet)
   const label = module === "receipts" ? "Receipt" : "Payment";
   const notes: string[] = [];
   if (c.mode == null) notes.push("This report has no payment-mode column — every voucher imports against the cash ledger.");
-  else notes.push("Payment Type mapped to the money account: NEFT/HDFC/TPT → Bank, UPI → UPI, blank → Cash.");
+  else notes.push("Payment Type mapped to the money account: generic spellings (NEFT/HDFC/TPT…) → Bank, UPI apps → UPI, blank → Cash; a specific account name (e.g. hdfc-4737) is kept as-is and must match a ledger name exactly.");
   notes.push("Names that are not customers/vendors (capital accounts, expense heads…) are surfaced in the mapping step — route each to a ledger as a journal entry, or skip it explicitly.");
   if (renumbered > 0) notes.push(`${renumbered} repeated voucher numbers were kept by suffixing (/2 style) — each row is a separate voucher in the old software.`);
   if (discounts > 0) notes.push(`${discounts} rows carry a Discount amount — noted in the voucher narration, NOT posted (record discount vouchers manually if needed).`);
