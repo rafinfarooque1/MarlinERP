@@ -1,3 +1,4 @@
+import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehouseLifecycle";
 /**
  * Asset Management module — purchases, register, categories, transfers,
  * disposals, reports/summary.
@@ -392,6 +393,10 @@ router.post("/assets/purchases", requireModuleAction(PG_PURCHASES, "add"), async
   });
   if ("error" in resolved) { res.status(400).json({ error: resolved.error }); return; }
   const loc = resolved.loc;
+  {
+    const disabledMsg = await disabledWarehouseError(pool, [{ type: loc.type, id: loc.id }]);
+    if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
+  }
   const locName = await locationLabel(pool, loc);
   const createdBy = employee?.username ?? "system";
 
@@ -818,6 +823,18 @@ router.post("/assets/transfers", requireModuleAction(PG_TRANSFERS, "add"), async
       res.status(400).json({ error: "The asset is already at that location." });
       return;
     }
+    // A disabled warehouse takes no new movements in either direction — the
+    // asset's CURRENT (locked) location and the destination both count, and
+    // outlets inherit their parent warehouse's state.
+    const disabledMsg = await disabledWarehouseError(client, [
+      { type: fromType, id: fromId },
+      { type: toType, id: toId },
+    ]);
+    if (disabledMsg) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE });
+      return;
+    }
 
     const { rows: [tr] } = await client.query(
       `INSERT INTO asset_transfers
@@ -945,6 +962,14 @@ router.post("/assets/disposals", requireModuleAction(PG_DISPOSAL, "add"), async 
     if ((row.status ?? "active") !== "active") {
       await client.query("ROLLBACK");
       res.status(400).json({ error: "This asset has already been disposed." });
+      return;
+    }
+    // Disposal is a new transaction at the asset's current location — blocked
+    // while that location's warehouse is disabled.
+    const disabledMsg = await disabledWarehouseError(client, [{ type: locType, id: locId }]);
+    if (disabledMsg) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE });
       return;
     }
 

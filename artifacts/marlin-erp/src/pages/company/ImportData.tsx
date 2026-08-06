@@ -1,20 +1,21 @@
 /**
- * Import Data (Company).
+ * Import Data (Company) — the ERP Migration Wizard.
  *
- * Tally/Zoho-style migration of old-ERP masters: pick a module, download the
- * pre-filled sample, upload the filled file, review the validation preview
- * (per-row reason + suggestion), then commit. Every verdict is computed on the
- * server; this page displays it. History lists every batch with rollback,
- * whose real eligibility is decided server-side at click time — a batch whose
- * records have since been used refuses with per-record reasons.
+ * Masters (customers, vendors, ledgers, items): upload → validate → commit.
+ * Transactions (sales, purchases, receipts, payments, day book, opening
+ * stock): upload → analyse → MAP every old-ERP name (remembered forever) →
+ * DEMO import (nothing recorded; full report pack computed) → compare against
+ * the old ERP → APPROVE (all-or-nothing real import) or DISCARD.
+ *
+ * Every verdict and figure is computed on the server; this page displays it.
  */
 import { useMemo, useRef, useState } from 'react';
 import {
   useImportBatches, useImportBatch, useParseImportFile, useCommitImportBatch,
-  useRollbackImportBatch, useResolveImportParties, downloadImportTemplate,
-  downloadImportErrorFile, useListWarehouses, useListOutlets,
-  type ImportModule, type ImportBatch, type ImportRow, type ImportRollbackBlocked,
-  type ImportPartyInput, type ImportTxnSummary, type ImportCommitResponse,
+  useRollbackImportBatch, useRunImportDemo, useApproveImportBatch, useDiscardImportBatch,
+  downloadImportTemplate, downloadImportErrorFile, useListWarehouses, useListOutlets,
+  type ImportModule, type ImportBatch, type ImportRollbackBlocked,
+  type ImportCommitResponse, type ImportApproveResponse,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { usePermission } from '@/lib/usePermission';
@@ -22,7 +23,6 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -30,144 +30,56 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { toast } from 'sonner';
 import {
-  ShieldOff, Upload, Download, FileSpreadsheet, Users, Truck, BookOpen,
-  CheckCircle2, AlertTriangle, XCircle, RotateCcw, Loader2, History, Eye,
-  ShoppingCart, Package, MapPin, UserPlus, Receipt, Banknote,
+  ShieldOff, Upload, Download, FileSpreadsheet, CheckCircle2, AlertTriangle,
+  XCircle, RotateCcw, Loader2, History, Eye, MapPin, Link2, FlaskConical,
+  FileBarChart2, ThumbsUp, Trash2, PlayCircle,
 } from 'lucide-react';
-
-// ── Module metadata ─────────────────────────────────────────────────────────
-
-const MODULE_META: Record<ImportModule, { label: string; icon: typeof Users; blurb: string }> = {
-  customers: {
-    label: 'Customers', icon: Users,
-    blurb: 'Creates customers with their debtor ledgers, credit limits and opening balances.',
-  },
-  vendors: {
-    label: 'Vendors', icon: Truck,
-    blurb: 'Creates vendors with their creditor ledgers and opening balances.',
-  },
-  ledgers: {
-    label: 'Ledgers', icon: BookOpen,
-    blurb: 'Creates chart-of-accounts ledgers under a valid group, with opening balances.',
-  },
-  sales: {
-    label: 'Sales', icon: ShoppingCart,
-    blurb: 'Records old-ERP sales invoices with full stock, GST and settlement effects at a chosen location.',
-  },
-  purchases: {
-    label: 'Purchases', icon: Package,
-    blurb: 'Records old-ERP purchase bills with stock, average cost, GST and vendor settlement effects.',
-  },
-  receipts: {
-    label: 'Receipts', icon: Receipt,
-    blurb: 'Records money received from customers — allocated against outstanding invoices, excess parked as advances.',
-  },
-  payments: {
-    label: 'Payments', icon: Banknote,
-    blurb: 'Records money paid to vendors — allocated against outstanding bills, excess parked as advances.',
-  },
-};
-
-/** Transaction imports: whole documents with stock effects. */
-const isTxn = (m: ImportModule) => m === 'sales' || m === 'purchases';
-/** Voucher imports: receipts & payments with invoice allocation. */
-const isVoucher = (m: ImportModule) => m === 'receipts' || m === 'payments';
-/** Which imports need a target location and a party-resolution step. */
-const needsLocation = (m: ImportModule) => isTxn(m) || isVoucher(m);
-/** Whose party master the import references. */
-const partyIsCustomer = (m: ImportModule) => m === 'sales' || m === 'receipts';
-
-/** What to show in the "Name" column — masters have a name, documents don't. */
-const rowLabel = (m: ImportModule, r: ImportRow) =>
-  isVoucher(m)
-    ? [r.values.voucherNo, r.values.party, r.values.amount && `₹${r.values.amount}`].filter(Boolean).join(' · ') || '—'
-    : isTxn(m)
-      ? [r.values.invoiceNo, r.values.party, r.values.item].filter(Boolean).join(' · ') || '—'
-      : r.values.name ?? '—';
-
-/** Planned (preview) or recorded (post-commit) allocation for a voucher row. */
-function AllocationCell({ r }: { r: ImportRow }) {
-  const allocations = r.created?.allocations ?? r.plan?.allocations ?? null;
-  const advance = r.created?.advanceAmount ?? r.plan?.advance ?? 0;
-  if (!allocations) return <span className="text-muted-foreground">—</span>;
-  return (
-    <div className="space-y-0.5 text-xs">
-      {allocations.map((a) => (
-        <div key={a.id} className="whitespace-nowrap">
-          {a.invoiceNumber ?? `#${a.id}`} — ₹{a.amount.toFixed(2)}
-        </div>
-      ))}
-      {advance > 0 && (
-        <div className="whitespace-nowrap font-medium text-amber-700">Advance ₹{advance.toFixed(2)}</div>
-      )}
-      {allocations.length === 0 && advance <= 0 && <span className="text-muted-foreground">—</span>}
-    </div>
-  );
-}
-
-const fmtTime = (iso: string) =>
-  new Date(iso).toLocaleString('en-IN', {
-    day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
-  });
-
-const MODULE_LABEL = (m: string) => MODULE_META[m as ImportModule]?.label ?? m;
-
-// ── Status badges ───────────────────────────────────────────────────────────
-
-function RowStatusBadge({ status }: { status: ImportRow['status'] }) {
-  switch (status) {
-    case 'valid':       return <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">Valid</Badge>;
-    case 'warning':     return <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">Warning</Badge>;
-    case 'needs_party': return <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-100">Needs party</Badge>;
-    case 'error':       return <Badge variant="destructive">Error</Badge>;
-    case 'imported':    return <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">Imported</Badge>;
-    case 'updated':     return <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-100">Updated</Badge>;
-    case 'skipped':     return <Badge variant="secondary">Skipped</Badge>;
-    case 'failed':      return <Badge variant="destructive">Failed</Badge>;
-    case 'rolled_back': return <Badge variant="outline">Rolled back</Badge>;
-    default:            return <Badge variant="outline">{status}</Badge>;
-  }
-}
-
-function BatchStatusBadge({ b }: { b: ImportBatch }) {
-  switch (b.status) {
-    case 'validated':   return <Badge variant="secondary">Awaiting commit</Badge>;
-    case 'committing':  return <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">Committing…</Badge>;
-    case 'committed':   return <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">Committed</Badge>;
-    case 'rolled_back': return <Badge variant="outline">Rolled back</Badge>;
-    default:            return <Badge variant="outline">{b.status}</Badge>;
-  }
-}
-
-// ── Page ────────────────────────────────────────────────────────────────────
+import {
+  MODULE_META, MODULE_LABEL, MASTER_MODULES, WIZARD_MODULES,
+  isTxn, isVoucher, isWizard, partyIsCustomer, rowLabel, fmtTime, fmtMoney,
+  RowStatusBadge, BatchStatusBadge, AllocationCell,
+} from './import/shared';
+import { MappingStep } from './import/MappingStep';
+import { DemoReportView } from './import/DemoReportView';
+import { ManageMappings } from './import/ManageMappings';
+import { MigrationWizard, MigrationHistory } from './import/MigrationWizard';
 
 export default function ImportData() {
   const perm = usePermission('page:/company/import');
 
+  const [tab, setTab] = useState('migration');
   const [module, setModule] = useState<ImportModule>('customers');
-  const [preview, setPreview] = useState<{ batch: ImportBatch; rows: ImportRow[]; summary?: ImportTxnSummary } | null>(null);
-  /** Result panel shown after a commit finishes. */
+  const [resumeMigId, setResumeMigId] = useState<number | null>(null);
+  /** The batch currently open in the wizard/preview area. */
+  const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
+  /** Result panels shown after the work finishes. */
   const [commitResult, setCommitResult] = useState<ImportCommitResponse | null>(null);
+  const [approveResult, setApproveResult] = useState<ImportApproveResponse | null>(null);
   const [skippedRowIds, setSkippedRowIds] = useState<Set<number>>(new Set());
   const [duplicateAction, setDuplicateAction] = useState<'skip' | 'update'>('skip');
   const [commitOpen, setCommitOpen] = useState(false);
+  const [approveOpen, setApproveOpen] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
   const [detailBatchId, setDetailBatchId] = useState<number | null>(null);
   const [rollbackTarget, setRollbackTarget] = useState<ImportBatch | null>(null);
   const [rollbackBlocked, setRollbackBlocked] = useState<ImportRollbackBlocked | null>(null);
-  /** Target location for sales/purchase imports, as "type|id". */
+  /** Which batch's demo report pack is open, if any. */
+  const [reportBatchId, setReportBatchId] = useState<number | null>(null);
+  /** Target location for transaction imports, as "type|id". */
   const [location, setLocation] = useState<string>('');
-  /** Editable mini-forms for the resolve-missing-parties step, keyed by name. */
-  const [partyForms, setPartyForms] = useState<Record<string, ImportPartyInput>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: historyData, isLoading: loadingHistory } = useImportBatches();
+  const { data: active } = useImportBatch(activeBatchId);
   const { data: detailData } = useImportBatch(detailBatchId);
   const { data: warehouses } = useListWarehouses();
   const { data: outlets } = useListOutlets();
   const parseFile = useParseImportFile();
   const commitBatch = useCommitImportBatch();
   const rollbackBatch = useRollbackImportBatch();
-  const resolveParties = useResolveImportParties();
+  const runDemo = useRunImportDemo();
+  const approveBatch = useApproveImportBatch();
+  const discardBatch = useDiscardImportBatch();
 
   const batches = historyData?.batches ?? [];
 
@@ -179,59 +91,44 @@ export default function ImportData() {
     location: b => b.locationName,
     by: b => b.createdBy,
     rows: b => Number(b.totalRows),
-    imported: b => b.status === 'validated' ? null : Number(b.importedRows),
-    failed: b => b.status === 'validated' ? null : Number(b.failedRows),
+    imported: b => b.status === 'validated' || b.status === 'demo_ready' ? null : Number(b.importedRows),
     status: b => b.status,
   });
 
+  const wizard = isWizard(module);
   const txn = isTxn(module);
   const voucher = isVoucher(module);
-  const locationRequired = needsLocation(module);
   const partyWord = partyIsCustomer(module) ? 'customer' : 'vendor';
 
-  /** Unique missing parties in the current preview, with prefills from the file. */
-  const missingParties = useMemo(() => {
-    if (!preview) return [] as Array<{ name: string; gstNumber: string }>;
-    const seen = new Map<string, { name: string; gstNumber: string }>();
-    for (const r of preview.rows) {
-      if (r.status !== 'needs_party' || !r.missingParty) continue;
-      const key = r.missingParty.toLowerCase();
-      const existing = seen.get(key);
-      if (!existing) seen.set(key, { name: r.missingParty, gstNumber: (r.values.gstNumber ?? '').trim() });
-      else if (!existing.gstNumber && (r.values.gstNumber ?? '').trim()) existing.gstNumber = r.values.gstNumber.trim();
-    }
-    return [...seen.values()];
-  }, [preview]);
+  const batch = active?.batch ?? null;
+  const rows = useMemo(() => active?.rows ?? [], [active]);
+  const summary = active?.summary;
 
-  const partyForm = (name: string, gst: string): ImportPartyInput =>
-    partyForms[name] ?? { name, gstNumber: gst };
-  const setPartyField = (name: string, gst: string, field: keyof ImportPartyInput, value: string) => {
-    setPartyForms((prev) => ({
-      ...prev,
-      [name]: {
-        ...partyForm(name, gst),
-        [field]: field === 'creditLimit' ? (value === '' ? undefined : Number(value)) : value,
-      },
-    }));
+  const needsMappingCount = useMemo(
+    () => rows.filter((r) => r.status === 'needs_mapping' || r.status === 'needs_party').length,
+    [rows],
+  );
+  const committableRows = useMemo(
+    () => rows.filter((r) => r.status !== 'error' && r.status !== 'needs_mapping' && r.status !== 'needs_party' && !skippedRowIds.has(r.id)),
+    [rows, skippedRowIds],
+  );
+  const hasDuplicates = !wizard && rows.some((r) => r.duplicateOfId != null && r.status !== 'error');
+  const pureErrorRows = batch ? Math.max(0, batch.errorRows - (wizard ? 0 : 0)) : 0;
+
+  const openBatch = (b: ImportBatch) => {
+    setModule(b.module);
+    if (b.locationType) setLocation(`${b.locationType}|${b.locationId ?? 0}`);
+    setActiveBatchId(b.id);
+    setCommitResult(null);
+    setApproveResult(null);
+    setSkippedRowIds(new Set());
+    setTab('import');
   };
 
-  const handleResolveParties = async () => {
-    if (!preview || missingParties.length === 0) return;
-    try {
-      const r = await resolveParties.mutateAsync({
-        id: preview.batch.id,
-        parties: missingParties.map((p) => partyForm(p.name, p.gstNumber)),
-      });
-      setPreview({ batch: r.batch, rows: r.rows, summary: r.summary });
-      setPartyForms({});
-      if (r.errors.length > 0) {
-        toast.warning(`${r.created.length} created, ${r.errors.length} failed: ${r.errors.map((e) => `${e.name} — ${e.reason}`).join('; ')}`);
-      } else {
-        toast.success(`${r.created.length} ${partyWord}${r.created.length === 1 ? '' : 's'} created with ledgers${r.skipped.length ? ` (${r.skipped.length} already existed)` : ''} — rows re-validated.`);
-      }
-    } catch (e: any) {
-      toast.error(e?.message ?? 'The parties could not be created.');
-    }
+  const resetActive = () => {
+    setActiveBatchId(null);
+    setSkippedRowIds(new Set());
+    setDuplicateAction('skip');
   };
 
   const handleDownloadSample = async () => {
@@ -248,18 +145,18 @@ export default function ImportData() {
       const [locType, locId] = location.split('|');
       const r = await parseFile.mutateAsync({
         module, file,
-        ...(locationRequired ? { locationType: locType, locationId: Number(locId) } : {}),
+        ...(wizard ? { locationType: locType, locationId: Number(locId) } : {}),
       });
-      setPreview(r);
+      setActiveBatchId(r.batch.id);
       setCommitResult(null);
+      setApproveResult(null);
       setSkippedRowIds(new Set());
       setDuplicateAction('skip');
-      setPartyForms({});
       const { validRows, warningRows, errorRows } = r.batch;
-      const needsParty = r.rows.filter((row) => row.status === 'needs_party').length;
-      if (needsParty > 0) toast.info(`${needsParty} row${needsParty === 1 ? '' : 's'} reference ${partyWord}s that don't exist yet — create them in the resolve step below.`);
-      else if (errorRows > 0) toast.warning(`${errorRows} row${errorRows === 1 ? '' : 's'} have errors and will not be imported. Fix and re-upload, or commit the rest.`);
-      else toast.success(`File validated — ${validRows} valid, ${warningRows} warning${warningRows === 1 ? '' : 's'}.`);
+      const needsMapping = r.rows.filter((row) => row.status === 'needs_mapping' || row.status === 'needs_party').length;
+      if (needsMapping > 0) toast.info(`${needsMapping} row${needsMapping === 1 ? '' : 's'} carry old-ERP names not seen before — map them below, once, and they are remembered forever.`);
+      else if (errorRows > 0) toast.warning(`${errorRows} row${errorRows === 1 ? '' : 's'} have errors. Fix and re-upload, or continue without them.`);
+      else toast.success(`File analysed — ${validRows} valid, ${warningRows} warning${warningRows === 1 ? '' : 's'}. Nothing has been recorded.`);
     } catch (e: any) {
       toast.error(e?.message ?? 'That file could not be read.');
     }
@@ -273,22 +170,16 @@ export default function ImportData() {
     });
   };
 
-  const committableRows = preview
-    ? preview.rows.filter((r) => r.status !== 'error' && r.status !== 'needs_party' && !skippedRowIds.has(r.id))
-    : [];
-  const hasDuplicates = !txn && preview ? preview.rows.some((r) => r.duplicateOfId != null && r.status !== 'error') : false;
-  const needsPartyCount = preview ? preview.rows.filter((r) => r.status === 'needs_party').length : 0;
-
   const handleCommit = async () => {
-    if (!preview) return;
+    if (!batch) return;
     try {
       const r = await commitBatch.mutateAsync({
-        id: preview.batch.id,
+        id: batch.id,
         skipRowIds: [...skippedRowIds],
         duplicateAction,
       });
       setCommitOpen(false);
-      setPreview(null);
+      resetActive();
       setCommitResult(r);
       const { imported, updated, skipped, failed } = r.summary;
       const msg = `${imported} imported${updated ? `, ${updated} updated` : ''}${skipped ? `, ${skipped} skipped` : ''}${failed ? `, ${failed} FAILED` : ''}`;
@@ -297,6 +188,45 @@ export default function ImportData() {
     } catch (e: any) {
       setCommitOpen(false);
       toast.error(e?.message ?? 'The import could not be committed.');
+    }
+  };
+
+  const handleDemo = async () => {
+    if (!batch) return;
+    try {
+      const r = await runDemo.mutateAsync({ id: batch.id });
+      const { imported, skipped, failed } = r.summary;
+      if (failed > 0) toast.warning(`Demo finished — ${imported} would import, ${failed} FAILED. Check the failures below; failed documents are left out of the real import.`);
+      else toast.success(`Demo finished — ${imported} document${imported === 1 ? '' : 's'} would import${skipped ? `, ${skipped} skipped` : ''}. Nothing was recorded. Compare the reports before approving.`);
+    } catch (e: any) {
+      toast.error(e?.message ?? 'The demo run failed.');
+    }
+  };
+
+  const handleApprove = async () => {
+    if (!batch) return;
+    try {
+      const r = await approveBatch.mutateAsync({ id: batch.id });
+      setApproveOpen(false);
+      resetActive();
+      setApproveResult(r);
+      toast.success(`Import approved — ${r.summary.imported} document${r.summary.imported === 1 ? '' : 's'} recorded in your books.`);
+    } catch (e: any) {
+      setApproveOpen(false);
+      toast.error(e?.message ?? 'The import could not be approved — nothing was recorded.');
+    }
+  };
+
+  const handleDiscard = async () => {
+    if (!batch) return;
+    try {
+      await discardBatch.mutateAsync({ id: batch.id });
+      setDiscardOpen(false);
+      resetActive();
+      toast.success('Batch discarded — nothing was ever recorded in your books.');
+    } catch (e: any) {
+      setDiscardOpen(false);
+      toast.error(e?.message ?? 'The batch could not be discarded.');
     }
   };
 
@@ -340,6 +270,8 @@ export default function ImportData() {
     );
   }
 
+  const showDemoStep = batch != null && isWizard(batch.module);
+
   return (
     <AppLayout>
       <div className="space-y-6 font-sans">
@@ -349,83 +281,70 @@ export default function ImportData() {
             Import Data
           </h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Migrate masters from your old ERP: download a sample, fill it in, upload, review, commit.
+            Move your old ERP into this one: upload all your files, match the old names once, run a
+            trial, compare the reports, then approve. Nothing touches your books until you approve.
           </p>
         </div>
 
-        <Tabs defaultValue="import">
+        <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
-            <TabsTrigger value="import"><Upload className="w-4 h-4 mr-1.5" />Import</TabsTrigger>
-            <TabsTrigger value="history"><History className="w-4 h-4 mr-1.5" />Import History</TabsTrigger>
+            <TabsTrigger value="migration"><PlayCircle className="w-4 h-4 mr-1.5" />Migration</TabsTrigger>
+            <TabsTrigger value="import"><Upload className="w-4 h-4 mr-1.5" />Masters</TabsTrigger>
+            <TabsTrigger value="mappings"><Link2 className="w-4 h-4 mr-1.5" />Mappings</TabsTrigger>
+            <TabsTrigger value="history"><History className="w-4 h-4 mr-1.5" />History</TabsTrigger>
           </TabsList>
+
+          {/* ── Migration tab (the wizard) ─────────────────────────────── */}
+          <TabsContent value="migration" className="mt-4">
+            <MigrationWizard canAdd={perm.canAdd} canDelete={perm.canDelete} canDownload={perm.canDownload} resumeId={resumeMigId} />
+          </TabsContent>
 
           {/* ── Import tab ─────────────────────────────────────────────── */}
           <TabsContent value="import" className="space-y-4 mt-4">
-            <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
-              {(Object.keys(MODULE_META) as ImportModule[]).map((m) => {
-                const meta = MODULE_META[m];
-                const Icon = meta.icon;
-                const active = module === m;
-                return (
-                  <Card
-                    key={m}
-                    className={`cursor-pointer transition-colors ${active ? 'border-primary ring-1 ring-primary' : 'hover:border-muted-foreground/40'}`}
-                    onClick={() => { setModule(m); setPreview(null); setCommitResult(null); setPartyForms({}); }}
-                  >
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-base flex items-center gap-2">
-                        <Icon className={`w-4 h-4 ${active ? 'text-primary' : 'text-muted-foreground'}`} />
-                        {meta.label}
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <p className="text-xs text-muted-foreground">{meta.blurb}</p>
-                    </CardContent>
-                  </Card>
-                );
-              })}
+            <div className="space-y-3">
+              <div>
+                <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                  Masters — created directly at commit. Sales, purchases and other transactions are imported from the Migration tab.
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  {MASTER_MODULES.map((m) => {
+                    const meta = MODULE_META[m];
+                    const Icon = meta.icon;
+                    const activeCard = module === m;
+                    return (
+                      <Card key={m}
+                        className={`cursor-pointer transition-colors ${activeCard ? 'border-primary ring-1 ring-primary' : 'hover:border-muted-foreground/40'}`}
+                        onClick={() => { setModule(m); resetActive(); setCommitResult(null); setApproveResult(null); }}>
+                        <CardHeader className="pb-2">
+                          <CardTitle className="text-sm flex items-center gap-2">
+                            <Icon className={`w-4 h-4 ${activeCard ? 'text-primary' : 'text-muted-foreground'}`} />
+                            {meta.label}
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <p className="text-xs text-muted-foreground">{meta.blurb}</p>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
-
-            {locationRequired && (
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <MapPin className="w-4 h-4 text-primary" />
-                    Target location
-                  </CardTitle>
-                  <CardDescription>
-                    {voucher
-                      ? `Every voucher in the file is stamped to this location and its cash/bank ledgers — collections allocate against ${partyWord} ${module === 'receipts' ? 'invoices' : 'bills'} raised here (Head Office sees all locations). Pick it before uploading.`
-                      : `Every ${module === 'sales' ? 'invoice' : 'bill'} in the file is recorded at this location — its stock, ledgers and reports carry the effects. Pick it before uploading.`}
-                    {' '}Location determines which branch/warehouse owns the imported record.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Select value={location} onValueChange={(v) => { setLocation(v); setPreview(null); }}>
-                    <SelectTrigger className="w-72"><SelectValue placeholder="Choose a location…" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="headoffice|1">Head Office</SelectItem>
-                      {(warehouses ?? []).map((w: any) => (
-                        <SelectItem key={`w${w.id}`} value={`warehouse|${w.id}`}>{w.name} (Warehouse)</SelectItem>
-                      ))}
-                      {(outlets ?? []).map((o: any) => (
-                        <SelectItem key={`o${o.id}`} value={`outlet|${o.id}`}>{o.name} (Outlet)</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </CardContent>
-              </Card>
-            )}
 
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-base">{locationRequired ? 'Get the sample, fill it, upload it' : 'Step 1 — Get the sample, fill it, upload it'}</CardTitle>
+                <CardTitle className="text-base">Step 1 — Get the sample, fill it, upload it</CardTitle>
                 <CardDescription>
                   {voucher
-                    ? `Columns marked * are required. One row per voucher. ${module === 'receipts' ? 'Against Invoice' : 'Against Bill'} settles only that ${module === 'receipts' ? 'invoice' : 'bill'}; blank auto-allocates oldest-first, excess becomes a ${partyWord} advance. ${module === 'receipts' ? 'Received In' : 'Paid From'} is Cash, Bank or an exact bank ledger name.`
+                    ? `Columns marked * are required. One row per voucher. ${module === 'receipts' ? 'Against Invoice' : 'Against Bill'} settles only that ${module === 'receipts' ? 'invoice' : 'bill'}; blank auto-allocates oldest-first, excess becomes a ${partyWord} advance.`
                     : txn
-                      ? `Columns marked * are required. One row per invoice line — rows of one invoice must sit together with the same invoice number, date and ${partyWord}. ${module === 'sales' ? 'Prices INCLUDE GST (the selling price), and Discount is ₹ per unit — exactly like manual sale entry.' : 'Purchase rates are GST-exclusive, like manual purchase entry.'} GST is worked out from the product master — you never enter tax amounts.`
-                      : 'Columns marked * are required. Location determines which branch/warehouse owns the imported record — use "Head Office" or an exact warehouse/outlet name. Duplicate names are flagged — you decide at commit whether to skip or update them.'}
+                      ? `Columns marked * are required. One row per invoice line — rows of one invoice must sit together with the same invoice number, date and ${partyWord}. ${module === 'sales' ? 'Prices INCLUDE GST; a price below the item MRP is recorded at MRP with the difference as a line discount.' : 'Purchase rates are GST-exclusive, like manual purchase entry.'}`
+                      : module === 'daybook'
+                        ? 'Columns marked * are required. One row per voucher line — rows sharing a voucher number become one voucher, and its debits must equal its credits.'
+                        : module === 'opening_stock'
+                          ? 'Columns marked * are required. One row per item with the as-on date, quantity and unit cost from your old ERP.'
+                          : 'Columns marked * are required. Duplicate names are flagged — you decide at commit whether to skip or update them.'}
+                  {' '}Uploading only analyses the file — nothing is recorded.
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-wrap items-center gap-3">
@@ -435,7 +354,7 @@ export default function ImportData() {
                 </Button>
                 <Button
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={!perm.canAdd || parseFile.isPending || (locationRequired && !location)}
+                  disabled={!perm.canAdd || parseFile.isPending || (wizard && !location)}
                 >
                   {parseFile.isPending
                     ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
@@ -456,7 +375,47 @@ export default function ImportData() {
               </CardContent>
             </Card>
 
-            {commitResult && !preview && (
+            {/* Post-approve result panel */}
+            {approveResult && !batch && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                    Import approved — {approveResult.batch.filename}
+                  </CardTitle>
+                  <CardDescription>
+                    Counted from the records this batch actually created in your books.
+                    {approveResult.details ? ` Finished in ${(approveResult.details.timeTakenMs / 1000).toFixed(1)}s.` : ''}
+                    {approveResult.batch.legacyRange?.min ? ` Old voucher numbers ${approveResult.batch.legacyRange.min} – ${approveResult.batch.legacyRange.max} are searchable on every screen.` : ''}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                    {Object.entries(approveResult.details?.recordCounts ?? {})
+                      .filter(([, v]) => Number(v) > 0)
+                      .map(([label, value]) => (
+                        <div key={label} className="rounded-lg border p-3">
+                          <div className="text-xl font-bold">{value}</div>
+                          <div className="text-xs text-muted-foreground capitalize">{label.replace(/([A-Z])/g, ' $1').toLowerCase()}</div>
+                        </div>
+                      ))}
+                    <div className="rounded-lg border p-3">
+                      <div className={`text-xl font-bold ${approveResult.summary.skipped > 0 ? 'text-amber-600' : 'text-muted-foreground'}`}>{approveResult.summary.skipped}</div>
+                      <div className="text-xs text-muted-foreground">Left out (failed in demo)</div>
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    The whole batch can be deleted from History while its records are untouched.
+                  </p>
+                  <div>
+                    <Button variant="ghost" size="sm" onClick={() => setApproveResult(null)}>Dismiss</Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Post-commit result panel (masters) */}
+            {commitResult && !batch && (
               <Card>
                 <CardHeader className="pb-3">
                   <CardTitle className="text-base flex items-center gap-2">
@@ -464,45 +423,13 @@ export default function ImportData() {
                     Import summary — {commitResult.batch.filename}
                   </CardTitle>
                   <CardDescription>
-                    Counted from the records this batch actually created in the books.
-                    {commitResult.details ? ` Finished in ${(commitResult.details.timeTakenMs / 1000).toFixed(1)}s.` : ''}
+                    {commitResult.summary.imported} imported
+                    {commitResult.summary.updated ? `, ${commitResult.summary.updated} updated` : ''}
+                    {commitResult.summary.skipped ? `, ${commitResult.summary.skipped} skipped` : ''}
+                    {commitResult.summary.failed ? `, ${commitResult.summary.failed} failed` : ''}.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  {commitResult.details ? (
-                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-                      {([
-                        ...(isTxn(commitResult.batch.module) ? [
-                          [commitResult.batch.module === 'sales' ? 'Invoices imported' : 'Bills imported', commitResult.details.invoicesImported],
-                          [commitResult.batch.module === 'sales' ? 'Invoices failed' : 'Bills failed', commitResult.details.invoicesFailed],
-                          ['Stock movements', commitResult.details.stockMovements],
-                          ['Invoices with GST', commitResult.details.gstInvoices],
-                        ] : [
-                          ['Records imported', commitResult.summary.imported],
-                          ['Failed', commitResult.summary.failed],
-                        ]),
-                        ['Customers created', commitResult.details.customersCreated],
-                        ['Vendors created', commitResult.details.vendorsCreated],
-                        ['Ledgers created', commitResult.details.ledgersCreated],
-                        ['Receipt entries', commitResult.details.receiptsCreated],
-                        ['Payment entries', commitResult.details.paymentsCreated],
-                      ] as Array<[string, number]>).map(([label, value]) => (
-                        <div key={label} className="rounded-lg border p-3">
-                          <div className={`text-xl font-bold ${label.includes('failed') || label === 'Failed' ? (value > 0 ? 'text-destructive' : 'text-muted-foreground') : ''}`}>{value}</div>
-                          <div className="text-xs text-muted-foreground">{label}</div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">
-                      {commitResult.summary.imported} imported, {commitResult.summary.skipped} skipped, {commitResult.summary.failed} failed.
-                    </p>
-                  )}
-                  {(commitResult.partiesCreated?.length ?? 0) > 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      Created automatically: {commitResult.partiesCreated!.map((p) => p.name).join(', ')}
-                    </p>
-                  )}
                   {(commitResult.summary.failed > 0 || commitResult.batch.errorRows > 0 || commitResult.batch.failedRows > 0) && (
                     <div className="flex items-center gap-2">
                       <Button variant="outline" size="sm" disabled={!perm.canDownload}
@@ -520,219 +447,331 @@ export default function ImportData() {
               </Card>
             )}
 
-            {preview && (
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base">Step 2 — Review &amp; commit ({preview.batch.filename})</CardTitle>
-                  <CardDescription>
-                    Rows with errors are never imported — fix them in the file and re-upload, or commit the rest.
-                    Untick a row to leave it out.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className={`grid grid-cols-2 gap-3 ${locationRequired ? 'sm:grid-cols-5' : 'sm:grid-cols-4'}`}>
-                    <div className="rounded-lg border p-3">
-                      <div className="text-2xl font-bold">{preview.batch.totalRows}</div>
-                      <div className="text-xs text-muted-foreground">Total rows</div>
-                    </div>
-                    <div className="rounded-lg border p-3">
-                      <div className="text-2xl font-bold text-emerald-600 flex items-center gap-1"><CheckCircle2 className="w-5 h-5" />{preview.batch.validRows}</div>
-                      <div className="text-xs text-muted-foreground">Valid</div>
-                    </div>
-                    <div className="rounded-lg border p-3">
-                      <div className="text-2xl font-bold text-amber-600 flex items-center gap-1"><AlertTriangle className="w-5 h-5" />{preview.batch.warningRows}</div>
-                      <div className="text-xs text-muted-foreground">Warnings</div>
-                    </div>
-                    {locationRequired && (
+            {/* ── Active batch area ──────────────────────────────────── */}
+            {batch && (
+              <>
+                {/* Analyse summary */}
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base flex items-center justify-between gap-2">
+                      <span>Step 2 — Analysis ({batch.filename})</span>
+                      <BatchStatusBadge b={batch} />
+                    </CardTitle>
+                    <CardDescription>
+                      {showDemoStep
+                        ? 'Nothing has been recorded. Rows with errors are left out; unmapped names must be mapped below before the demo run.'
+                        : 'Rows with errors are never imported — fix them in the file and re-upload, or commit the rest. Untick a row to leave it out.'}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className={`grid grid-cols-2 gap-3 ${showDemoStep ? 'sm:grid-cols-5' : 'sm:grid-cols-4'}`}>
                       <div className="rounded-lg border p-3">
-                        <div className="text-2xl font-bold text-blue-600 flex items-center gap-1"><UserPlus className="w-5 h-5" />{needsPartyCount}</div>
-                        <div className="text-xs text-muted-foreground">Need {partyWord}</div>
+                        <div className="text-2xl font-bold">{batch.totalRows}</div>
+                        <div className="text-xs text-muted-foreground">Total rows</div>
+                      </div>
+                      <div className="rounded-lg border p-3">
+                        <div className="text-2xl font-bold text-emerald-600 flex items-center gap-1"><CheckCircle2 className="w-5 h-5" />{batch.validRows}</div>
+                        <div className="text-xs text-muted-foreground">Valid</div>
+                      </div>
+                      <div className="rounded-lg border p-3">
+                        <div className="text-2xl font-bold text-amber-600 flex items-center gap-1"><AlertTriangle className="w-5 h-5" />{batch.warningRows}</div>
+                        <div className="text-xs text-muted-foreground">Warnings</div>
+                      </div>
+                      {showDemoStep && (
+                        <div className="rounded-lg border p-3">
+                          <div className="text-2xl font-bold text-blue-600 flex items-center gap-1"><Link2 className="w-5 h-5" />{needsMappingCount}</div>
+                          <div className="text-xs text-muted-foreground">Need mapping</div>
+                        </div>
+                      )}
+                      <div className="rounded-lg border p-3">
+                        <div className="text-2xl font-bold text-destructive flex items-center gap-1"><XCircle className="w-5 h-5" />{Math.max(0, batch.errorRows - (showDemoStep ? needsMappingCount : 0))}</div>
+                        <div className="text-xs text-muted-foreground">Errors</div>
+                      </div>
+                    </div>
+
+                    {summary && (
+                      <div className="rounded-lg border bg-muted/40 p-3">
+                        <div className="text-xs font-medium text-muted-foreground mb-2">
+                          What the import would record — computed by the ERP exactly as manual entry would:
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                          <div>
+                            <div className="text-lg font-bold">{summary.invoices}</div>
+                            <div className="text-xs text-muted-foreground">{batch.module === 'sales' ? 'Invoices' : 'Bills'}</div>
+                          </div>
+                          <div>
+                            <div className="text-lg font-bold">{summary.totalQuantity}</div>
+                            <div className="text-xs text-muted-foreground">Total quantity</div>
+                          </div>
+                          <div>
+                            <div className="text-lg font-bold">{fmtMoney(summary.totalTaxable)}</div>
+                            <div className="text-xs text-muted-foreground">Taxable value</div>
+                          </div>
+                          <div>
+                            <div className="text-lg font-bold">{fmtMoney(summary.totalGst)}</div>
+                            <div className="text-xs text-muted-foreground">Total GST</div>
+                          </div>
+                          <div>
+                            <div className="text-lg font-bold">{fmtMoney(summary.totalDiscount)}</div>
+                            <div className="text-xs text-muted-foreground">Total discount</div>
+                          </div>
+                          <div>
+                            <div className="text-lg font-bold text-primary">{fmtMoney(summary.totalAmount)}</div>
+                            <div className="text-xs text-muted-foreground">Total amount</div>
+                          </div>
+                        </div>
                       </div>
                     )}
-                    <div className="rounded-lg border p-3">
-                      <div className="text-2xl font-bold text-destructive flex items-center gap-1"><XCircle className="w-5 h-5" />{locationRequired ? preview.batch.errorRows - needsPartyCount : preview.batch.errorRows}</div>
-                      <div className="text-xs text-muted-foreground">Errors</div>
-                    </div>
-                  </div>
 
-                  {preview.summary && (
-                    <div className="rounded-lg border bg-muted/40 p-3">
-                      <div className="text-xs font-medium text-muted-foreground mb-2">
-                        What will be recorded — computed by the ERP exactly as manual entry would:
+                    {batch.errorRows > 0 && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <Button variant="outline" size="sm" disabled={!perm.canDownload}
+                          onClick={() => downloadImportErrorFile(batch.id, batch.module).catch((e: any) => toast.error(e?.message ?? 'The error file could not be downloaded.'))}>
+                          <Download className="w-4 h-4 mr-1.5" />
+                          Download problem rows (Excel)
+                        </Button>
+                        <span className="text-muted-foreground text-xs">Only the problem rows, with the reason on each — fix in Excel and re-upload just those.</span>
                       </div>
-                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-                        <div>
-                          <div className="text-lg font-bold">{preview.summary.invoices}</div>
-                          <div className="text-xs text-muted-foreground">{module === 'sales' ? 'Invoices' : 'Bills'}</div>
-                        </div>
-                        <div>
-                          <div className="text-lg font-bold">{preview.summary.totalQuantity}</div>
-                          <div className="text-xs text-muted-foreground">Total quantity</div>
-                        </div>
-                        <div>
-                          <div className="text-lg font-bold">₹{preview.summary.totalTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
-                          <div className="text-xs text-muted-foreground">Taxable value</div>
-                        </div>
-                        <div>
-                          <div className="text-lg font-bold">₹{preview.summary.totalGst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
-                          <div className="text-xs text-muted-foreground">Total GST</div>
-                        </div>
-                        <div>
-                          <div className="text-lg font-bold">₹{preview.summary.totalDiscount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
-                          <div className="text-xs text-muted-foreground">Total discount</div>
-                        </div>
-                        <div>
-                          <div className="text-lg font-bold text-primary">₹{preview.summary.totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
-                          <div className="text-xs text-muted-foreground">Total amount</div>
-                        </div>
+                    )}
+
+                    {hasDuplicates && (
+                      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>Some names already exist. When committing:</span>
+                        <Select value={duplicateAction} onValueChange={(v) => setDuplicateAction(v as 'skip' | 'update')}>
+                          <SelectTrigger className="w-56 h-8 bg-white"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="skip">Skip duplicates (keep existing)</SelectItem>
+                            <SelectItem value="update">Update existing records</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </div>
-                      {((preview.summary.distinctParties ?? 0) > 0 || (preview.summary.distinctItems ?? 0) > 0 || (preview.summary.walkInInvoices ?? 0) > 0) && (
-                        <div className="mt-2 pt-2 border-t text-xs text-muted-foreground flex flex-wrap gap-x-4 gap-y-1">
-                          <span><span className="font-semibold text-foreground">{preview.summary.distinctItems ?? 0}</span> different item{(preview.summary.distinctItems ?? 0) === 1 ? '' : 's'}</span>
-                          <span><span className="font-semibold text-foreground">{preview.summary.distinctParties ?? 0}</span> {module === 'sales' ? 'customer' : 'vendor'}{(preview.summary.distinctParties ?? 0) === 1 ? '' : 's'}</span>
-                          {(preview.summary.walkInInvoices ?? 0) > 0 && (
-                            <span><span className="font-semibold text-foreground">{preview.summary.walkInInvoices}</span> walk-in sale{preview.summary.walkInInvoices === 1 ? '' : 's'} (no customer on the bill)</span>
-                          )}
-                        </div>
-                      )}
-                      {(preview.summary.partiesToCreate?.length ?? 0) > 0 && (
-                        <div className="mt-2 pt-2 border-t text-xs">
-                          <span className="text-muted-foreground">Will be created automatically (with ledgers) at commit: </span>
-                          <span className="font-medium">{preview.summary.partiesToCreate.join(', ')}</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                    )}
 
-                  {preview.batch.errorRows > 0 && (
-                    <div className="flex items-center gap-2 text-sm">
-                      <Button variant="outline" size="sm" disabled={!perm.canDownload}
-                        onClick={() => downloadImportErrorFile(preview.batch.id, module).catch((e: any) => toast.error(e?.message ?? 'The error file could not be downloaded.'))}>
-                        <Download className="w-4 h-4 mr-1.5" />
-                        Download failed rows (Excel)
-                      </Button>
-                      <span className="text-muted-foreground text-xs">Only the problem rows, with the reason on each — fix in Excel and re-upload just those.</span>
-                    </div>
-                  )}
-
-                  {locationRequired && missingParties.length > 0 && (
-                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-3">
-                      <div className="flex items-center gap-2 text-sm font-medium">
-                        <UserPlus className="w-4 h-4 text-blue-600" />
-                        {missingParties.length} {partyWord}{missingParties.length === 1 ? '' : 's'} in the file
-                        {missingParties.length === 1 ? ' does' : ' do'} not exist yet
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        Fill in what you know and create them — each gets its {partyIsCustomer(module) ? 'debtor' : 'creditor'} ledger automatically,
-                        exactly like manual creation, and the rows re-validate without re-uploading. Or fix the spelling in the file and upload again.
-                      </p>
-                      <div className="space-y-2 max-h-[22rem] overflow-y-auto pr-1">
-                        {missingParties.map((p) => {
-                          const f = partyForm(p.name, p.gstNumber);
-                          return (
-                            <div key={p.name} className="grid gap-2 sm:grid-cols-6 items-center rounded-md border bg-white p-2">
-                              <div className="sm:col-span-1 text-sm font-medium truncate" title={p.name}>{p.name}</div>
-                              <Input className="h-8 text-xs" placeholder="GSTIN (optional)" value={f.gstNumber ?? ''}
-                                onChange={(e) => setPartyField(p.name, p.gstNumber, 'gstNumber', e.target.value)} />
-                              <Input className="h-8 text-xs" placeholder="Phone" value={f.phone ?? ''}
-                                onChange={(e) => setPartyField(p.name, p.gstNumber, 'phone', e.target.value)} />
-                              <Input className="h-8 text-xs" placeholder="State" value={f.state ?? ''}
-                                onChange={(e) => setPartyField(p.name, p.gstNumber, 'state', e.target.value)} />
-                              <Input className="h-8 text-xs" placeholder="Address" value={f.address ?? ''}
-                                onChange={(e) => setPartyField(p.name, p.gstNumber, 'address', e.target.value)} />
-                              {partyIsCustomer(module) ? (
-                                <Input className="h-8 text-xs" type="number" placeholder="Credit limit" value={f.creditLimit ?? ''}
-                                  onChange={(e) => setPartyField(p.name, p.gstNumber, 'creditLimit', e.target.value)} />
-                              ) : <div />}
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <Button size="sm" onClick={handleResolveParties} disabled={!perm.canAdd || resolveParties.isPending}>
-                        {resolveParties.isPending
-                          ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
-                          : <UserPlus className="w-4 h-4 mr-1.5" />}
-                        Create {missingParties.length === 1 ? 'this' : `all ${missingParties.length}`} &amp; re-validate
-                      </Button>
-                    </div>
-                  )}
-
-                  {hasDuplicates && (
-                    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
-                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                      <span>Some names already exist. When committing:</span>
-                      <Select value={duplicateAction} onValueChange={(v) => setDuplicateAction(v as 'skip' | 'update')}>
-                        <SelectTrigger className="w-56 h-8 bg-white"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="skip">Skip duplicates (keep existing)</SelectItem>
-                          <SelectItem value="update">Update existing records</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
-
-                  <div className="rounded-lg border overflow-x-auto max-h-[28rem] overflow-y-auto">
-                    <Table className="no-sticky-col">
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="w-10">Import</TableHead>
-                          <TableHead className="w-14">Row</TableHead>
-                          <TableHead>Name</TableHead>
-                          <TableHead className="w-24">Status</TableHead>
-                          {voucher && <TableHead>Will settle</TableHead>}
-                          <TableHead>Reason</TableHead>
-                          <TableHead>Suggestion</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {preview.rows.map((r) => (
-                          <TableRow key={r.id} className={r.status === 'error' ? 'opacity-60' : ''}>
-                            <TableCell>
-                              <Checkbox
-                                checked={r.status !== 'error' && r.status !== 'needs_party' && !skippedRowIds.has(r.id)}
-                                disabled={r.status === 'error' || r.status === 'needs_party'}
-                                onCheckedChange={() => toggleSkip(r.id)}
-                              />
-                            </TableCell>
-                            <TableCell className="text-muted-foreground">{r.rowNumber}</TableCell>
-                            <TableCell className="font-medium">
-                              {rowLabel(module, r)}
-                              {r.walkIn && <Badge variant="outline" className="ml-1.5 text-[10px] px-1 py-0 align-middle">Walk-in</Badge>}
-                              {r.willCreateParty && <Badge variant="outline" className="ml-1.5 text-[10px] px-1 py-0 align-middle text-blue-700 border-blue-300">New {partyWord}</Badge>}
-                            </TableCell>
-                            <TableCell><RowStatusBadge status={r.status} /></TableCell>
-                            {voucher && <TableCell><AllocationCell r={r} /></TableCell>}
-                            <TableCell className="text-sm text-muted-foreground max-w-[22rem]">{r.reason ?? '—'}</TableCell>
-                            <TableCell className="text-sm text-muted-foreground max-w-[22rem]">{r.suggestion ?? '—'}</TableCell>
+                    <div className="rounded-lg border overflow-x-auto max-h-[28rem] overflow-y-auto">
+                      <Table className="no-sticky-col">
+                        <TableHeader>
+                          <TableRow>
+                            {!showDemoStep && <TableHead className="w-10">Import</TableHead>}
+                            <TableHead className="w-14">Row</TableHead>
+                            <TableHead>Name</TableHead>
+                            <TableHead className="w-28">Status</TableHead>
+                            {voucher && <TableHead>Will settle</TableHead>}
+                            {batch.status === 'demo_ready' && <TableHead className="w-24">Demo</TableHead>}
+                            <TableHead>Reason</TableHead>
+                            <TableHead>Suggestion</TableHead>
                           </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm text-muted-foreground">
-                      {committableRows.length} of {preview.batch.totalRows} row{preview.batch.totalRows === 1 ? '' : 's'} will be committed.
-                    </p>
-                    <div className="flex gap-2">
-                      <Button variant="outline" onClick={() => setPreview(null)}>Discard</Button>
-                      <Button onClick={() => setCommitOpen(true)} disabled={!perm.canAdd || committableRows.length === 0}>
-                        Commit import
-                      </Button>
+                        </TableHeader>
+                        <TableBody>
+                          {rows.map((r) => (
+                            <TableRow key={r.id} className={r.status === 'error' ? 'opacity-60' : ''}>
+                              {!showDemoStep && (
+                                <TableCell>
+                                  <Checkbox
+                                    checked={r.status !== 'error' && !skippedRowIds.has(r.id)}
+                                    disabled={r.status === 'error'}
+                                    onCheckedChange={() => toggleSkip(r.id)}
+                                  />
+                                </TableCell>
+                              )}
+                              <TableCell className="text-muted-foreground">{r.rowNumber}</TableCell>
+                              <TableCell className="font-medium">
+                                {rowLabel(batch.module, r)}
+                                {r.walkIn && <Badge variant="outline" className="ml-1.5 text-[10px] px-1 py-0 align-middle">Walk-in</Badge>}
+                              </TableCell>
+                              <TableCell><RowStatusBadge status={r.status} /></TableCell>
+                              {voucher && <TableCell><AllocationCell r={r} /></TableCell>}
+                              {batch.status === 'demo_ready' && (
+                                <TableCell>
+                                  {r.demo
+                                    ? r.demo.status === 'failed'
+                                      ? <Badge variant="destructive" title={r.demo.reason ?? ''}>Failed</Badge>
+                                      : r.demo.status === 'imported'
+                                        ? <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">OK</Badge>
+                                        : <Badge variant="secondary">Skipped</Badge>
+                                    : <span className="text-muted-foreground text-xs">—</span>}
+                                </TableCell>
+                              )}
+                              <TableCell className="text-sm text-muted-foreground max-w-[22rem]">{r.demo?.reason ?? r.reason ?? '—'}</TableCell>
+                              <TableCell className="text-sm text-muted-foreground max-w-[22rem]">{r.suggestion ?? '—'}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
+
+                    {/* Masters: commit actions */}
+                    {!showDemoStep && batch.status === 'validated' && (
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm text-muted-foreground">
+                          {committableRows.length} of {batch.totalRows} row{batch.totalRows === 1 ? '' : 's'} will be committed.
+                        </p>
+                        <div className="flex gap-2">
+                          <Button variant="outline" onClick={resetActive}>Close</Button>
+                          <Button onClick={() => setCommitOpen(true)} disabled={!perm.canAdd || !batch.canCommit || committableRows.length === 0}>
+                            Commit import
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Wizard: mapping step */}
+                {showDemoStep && batch.status === 'validated' && needsMappingCount > 0 && (
+                  <MappingStep key={`batch-${batch.id}`} batchId={batch.id} canEdit={perm.canAdd} />
+                )}
+
+                {/* Wizard: demo step */}
+                {showDemoStep && batch.status === 'validated' && needsMappingCount === 0 && (
+                  <Card className="border-primary/40">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <FlaskConical className="w-4 h-4 text-primary" />
+                        Step 3 — Demo import
+                      </CardTitle>
+                      <CardDescription>
+                        The demo performs the REAL import — full accounting, stock, GST and voucher
+                        numbering — inside a rehearsal that is thrown away. You get the complete report
+                        pack (trial balance, P&amp;L, balance sheet, cash &amp; bank books, dues, stock) to
+                        compare against your old ERP. Nothing is recorded until you approve.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="flex flex-wrap gap-2">
+                      <Button onClick={handleDemo} disabled={!perm.canAdd || runDemo.isPending}>
+                        {runDemo.isPending
+                          ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                          : <PlayCircle className="w-4 h-4 mr-1.5" />}
+                        Run demo import
+                      </Button>
+                      <Button variant="outline" className="text-destructive hover:text-destructive"
+                        onClick={() => setDiscardOpen(true)} disabled={!perm.canAdd || !batch.canDiscard}>
+                        <Trash2 className="w-4 h-4 mr-1.5" />Discard batch
+                      </Button>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Wizard: demo done — compare & approve */}
+                {showDemoStep && batch.status === 'demo_ready' && (
+                  <Card className="border-blue-300">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <FileBarChart2 className="w-4 h-4 text-blue-600" />
+                        Step 4 — Compare, then approve
+                      </CardTitle>
+                      <CardDescription>
+                        Demo run {batch.demoAt ? fmtTime(batch.demoAt) : ''} by {batch.demoBy ?? ''}.
+                        {' '}Nothing has been recorded. Open the reports, put your old ERP beside them, and
+                        approve only when the figures match.
+                        {batch.legacyRange?.min ? ` Covers old voucher numbers ${batch.legacyRange.min} – ${batch.legacyRange.max}.` : ''}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {batch.demoSummary && (
+                        <div className="grid grid-cols-3 gap-3 sm:w-96">
+                          <div className="rounded-lg border p-3">
+                            <div className="text-xl font-bold text-emerald-600">{batch.demoSummary.imported}</div>
+                            <div className="text-xs text-muted-foreground">Would import</div>
+                          </div>
+                          <div className="rounded-lg border p-3">
+                            <div className="text-xl font-bold text-muted-foreground">{batch.demoSummary.skipped}</div>
+                            <div className="text-xs text-muted-foreground">Skipped</div>
+                          </div>
+                          <div className="rounded-lg border p-3">
+                            <div className={`text-xl font-bold ${batch.demoSummary.failed > 0 ? 'text-destructive' : 'text-muted-foreground'}`}>{batch.demoSummary.failed}</div>
+                            <div className="text-xs text-muted-foreground">Failed</div>
+                          </div>
+                        </div>
+                      )}
+                      {(batch.demoSummary?.failures?.length ?? 0) > 0 && (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-1">
+                          <div className="text-sm font-medium flex items-center gap-1.5">
+                            <AlertTriangle className="w-4 h-4 text-amber-600" />
+                            {batch.demoSummary!.failures.length} document{batch.demoSummary!.failures.length === 1 ? '' : 's'} failed in the demo — they will be LEFT OUT of the real import
+                          </div>
+                          <ul className="text-xs text-muted-foreground list-disc pl-5 max-h-40 overflow-y-auto">
+                            {batch.demoSummary!.failures.map((f, i) => (
+                              <li key={i}><span className="font-medium text-foreground">{f.name}</span> — {f.reason}</li>
+                            ))}
+                          </ul>
+                          <p className="text-xs text-muted-foreground">Fix the file and re-upload, or approve without them.</p>
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-2">
+                        <Button variant="outline" onClick={() => setReportBatchId(batch.id)}>
+                          <FileBarChart2 className="w-4 h-4 mr-1.5" />View comparison reports
+                        </Button>
+                        <Button variant="outline" onClick={handleDemo} disabled={!perm.canAdd || runDemo.isPending}>
+                          {runDemo.isPending
+                            ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                            : <RotateCcw className="w-4 h-4 mr-1.5" />}
+                          Re-run demo
+                        </Button>
+                        <Button onClick={() => setApproveOpen(true)} disabled={!perm.canAdd || !batch.canApprove}>
+                          <ThumbsUp className="w-4 h-4 mr-1.5" />Approve — record in my books
+                        </Button>
+                        <Button variant="outline" className="text-destructive hover:text-destructive"
+                          onClick={() => setDiscardOpen(true)} disabled={!perm.canAdd || !batch.canDiscard}>
+                          <Trash2 className="w-4 h-4 mr-1.5" />Discard
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Terminal states when a batch is opened from history */}
+                {batch.status === 'committed' && (
+                  <Card>
+                    <CardContent className="py-4 flex flex-wrap items-center gap-3 text-sm">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      This batch has been imported into your books.
+                      {batch.hasDemoReport && (
+                        <Button variant="outline" size="sm" onClick={() => setReportBatchId(batch.id)}>
+                          <FileBarChart2 className="w-4 h-4 mr-1.5" />View demo reports
+                        </Button>
+                      )}
+                      <Button variant="ghost" size="sm" onClick={resetActive}>Close</Button>
+                    </CardContent>
+                  </Card>
+                )}
+                {(batch.status === 'discarded' || batch.status === 'rolled_back') && (
+                  <Card>
+                    <CardContent className="py-4 flex items-center gap-3 text-sm text-muted-foreground">
+                      This batch was {batch.status === 'discarded' ? 'discarded — nothing was ever recorded' : 'rolled back — its records were removed'}.
+                      <Button variant="ghost" size="sm" onClick={resetActive}>Close</Button>
+                    </CardContent>
+                  </Card>
+                )}
+              </>
             )}
           </TabsContent>
 
+          {/* ── Mappings tab ───────────────────────────────────────────── */}
+          <TabsContent value="mappings" className="mt-4">
+            <ManageMappings canEdit={perm.canEdit} canDelete={perm.canDelete} />
+          </TabsContent>
+
           {/* ── History tab ────────────────────────────────────────────── */}
-          <TabsContent value="history" className="mt-4">
+          <TabsContent value="history" className="mt-4 space-y-4">
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-base">Import History</CardTitle>
+                <CardTitle className="text-base">Migrations</CardTitle>
                 <CardDescription>
-                  Rollback removes only the records that batch created — it refuses when any of them has since been used.
+                  Each migration imported as ONE unit — remove deletes everything it created across all
+                  its files, or nothing at all. Open migrations can be resumed from the Migration tab.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <MigrationHistory canDelete={perm.canDelete} onResume={(id) => { setResumeMigId(id); setTab('migration'); }} />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Master &amp; older imports</CardTitle>
+                <CardDescription>
+                  Delete removes only the records that batch created — it refuses when any of them has
+                  since been used. Batches at the mapping or demo stage can be re-opened or discarded.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -753,7 +792,7 @@ export default function ImportData() {
                           <SortableHead k="by" sort={batchSort}>By</SortableHead>
                           <SortableHead k="rows" sort={batchSort} className="text-right">Rows</SortableHead>
                           <SortableHead k="imported" sort={batchSort} className="text-right">Imported</SortableHead>
-                          <SortableHead k="failed" sort={batchSort} className="text-right">Failed</SortableHead>
+                          <TableHead>Old voucher nos</TableHead>
                           <SortableHead k="status" sort={batchSort}>Status</SortableHead>
                           <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
@@ -764,19 +803,32 @@ export default function ImportData() {
                             <TableCell className="font-mono text-xs whitespace-nowrap">{b.displayId ?? `IMP${String(b.id).padStart(6, '0')}`}</TableCell>
                             <TableCell className="whitespace-nowrap">{fmtTime(b.createdAt)}</TableCell>
                             <TableCell>{MODULE_LABEL(b.module)}</TableCell>
-                            <TableCell className="max-w-[14rem] truncate" title={b.filename}>{b.filename}</TableCell>
+                            <TableCell className="max-w-[12rem] truncate" title={b.filename}>{b.filename}</TableCell>
                             <TableCell className="whitespace-nowrap">{b.locationName ?? '—'}</TableCell>
                             <TableCell>{b.createdBy}</TableCell>
                             <TableCell className="text-right">{b.totalRows}</TableCell>
                             <TableCell className="text-right">
-                              {b.status === 'validated' ? '—' : `${b.importedRows}${b.updatedRows ? ` (+${b.updatedRows} upd)` : ''}`}
+                              {b.status === 'validated' || b.status === 'demo_ready' || b.status === 'discarded' ? '—' : `${b.importedRows}${b.updatedRows ? ` (+${b.updatedRows} upd)` : ''}`}
                             </TableCell>
-                            <TableCell className="text-right">{b.status === 'validated' ? '—' : b.failedRows}</TableCell>
+                            <TableCell className="text-xs whitespace-nowrap text-muted-foreground">
+                              {b.legacyRange?.min ? (b.legacyRange.min === b.legacyRange.max ? b.legacyRange.min : `${b.legacyRange.min} – ${b.legacyRange.max}`) : '—'}
+                            </TableCell>
                             <TableCell><BatchStatusBadge b={b} /></TableCell>
                             <TableCell className="text-right whitespace-nowrap">
-                              <Button variant="ghost" size="sm" onClick={() => setDetailBatchId(b.id)}>
-                                <Eye className="w-4 h-4" />
-                              </Button>
+                              {(b.status === 'validated' || b.status === 'demo_ready') && isWizard(b.module) ? (
+                                <Button variant="ghost" size="sm" title="Resume this import" onClick={() => openBatch(b)}>
+                                  <PlayCircle className="w-4 h-4 mr-1" />Resume
+                                </Button>
+                              ) : (
+                                <Button variant="ghost" size="sm" title="View rows" onClick={() => setDetailBatchId(b.id)}>
+                                  <Eye className="w-4 h-4" />
+                                </Button>
+                              )}
+                              {b.hasDemoReport && (
+                                <Button variant="ghost" size="sm" title="View demo reports" onClick={() => setReportBatchId(b.id)}>
+                                  <FileBarChart2 className="w-4 h-4" />
+                                </Button>
+                              )}
                               {b.rollbackAvailable && (
                                 <Button
                                   variant="ghost" size="sm"
@@ -800,35 +852,62 @@ export default function ImportData() {
         </Tabs>
       </div>
 
-      {/* Commit confirmation */}
+      {/* Demo report pack viewer */}
+      <DemoReportView batchId={reportBatchId} open={reportBatchId != null} onOpenChange={(open) => { if (!open) setReportBatchId(null); }} />
+
+      {/* Approve confirmation */}
+      <Dialog open={approveOpen} onOpenChange={setApproveOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Approve this import?</DialogTitle>
+            <DialogDescription>
+              The {batch?.demoSummary?.imported ?? 0} document{(batch?.demoSummary?.imported ?? 0) === 1 ? '' : 's'} that
+              passed the demo will be recorded in your REAL books — stock, GST, ledgers and dues, exactly
+              as the demo reports showed. If anything goes wrong midway, nothing at all is recorded.
+              {(batch?.demoSummary?.failed ?? 0) > 0 ? ` NOTE: ${batch!.demoSummary!.failed} document${batch!.demoSummary!.failed === 1 ? '' : 's'} that FAILED in the demo will be permanently left out — approve only if you are fine importing without them. ` : ' '}
+              The whole batch can still be deleted from History afterwards.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApproveOpen(false)}>Cancel</Button>
+            <Button onClick={handleApprove} disabled={approveBatch.isPending}>
+              {approveBatch.isPending && <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />}
+              Approve &amp; record
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Discard confirmation */}
+      <Dialog open={discardOpen} onOpenChange={setDiscardOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Discard this batch?</DialogTitle>
+            <DialogDescription>
+              The uploaded file and its analysis will be closed permanently. Nothing was ever recorded
+              in your books, and any mappings you saved are kept for next time.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDiscardOpen(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDiscard} disabled={discardBatch.isPending}>
+              {discardBatch.isPending && <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />}
+              Discard
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Commit confirmation (masters) */}
       <Dialog open={commitOpen} onOpenChange={setCommitOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Commit this import?</DialogTitle>
             <DialogDescription>
-              {voucher ? (
-                <>
-                  {committableRows.length} row{committableRows.length === 1 ? '' : 's'} will be recorded as {module === 'receipts' ? 'receipt' : 'payment'} vouchers —
-                  allocated against outstanding {module === 'receipts' ? 'invoices' : 'bills'} exactly as previewed (re-checked against live balances at commit),
-                  with any excess parked as {partyWord} advances. Cash, bank and all books update immediately.
-                  {needsPartyCount > 0 && ` ${needsPartyCount} row${needsPartyCount === 1 ? '' : 's'} with unresolved ${partyWord}s will be SKIPPED.`}
-                  {' '}The whole batch can be rolled back from Import History while its vouchers and advances are untouched.
-                </>
-              ) : txn ? (
-                <>
-                  {committableRows.length} row{committableRows.length === 1 ? '' : 's'} will be recorded as {module === 'sales' ? 'sales invoices' : 'purchase bills'} —
-                  with real stock, GST, ledger and settlement effects, exactly as if entered manually.
-                  {needsPartyCount > 0 && ` ${needsPartyCount} row${needsPartyCount === 1 ? '' : 's'} with unresolved ${partyWord}s will be SKIPPED.`}
-                  {' '}The whole batch can be rolled back from Import History while its documents have no later activity.
-                </>
-              ) : (
-                <>
-                  {committableRows.length} {MODULE_LABEL(module).toLowerCase()} row{committableRows.length === 1 ? '' : 's'} will be created
-                  {hasDuplicates ? ` — duplicates will be ${duplicateAction === 'skip' ? 'skipped' : 'updated'}` : ''}.
-                  Records are created exactly as if entered manually (ledgers auto-provisioned, opening balances recorded),
-                  and the whole batch can be rolled back from Import History while its records are unused.
-                </>
-              )}
+              {committableRows.length} {MODULE_LABEL(module).toLowerCase()} row{committableRows.length === 1 ? '' : 's'} will be created
+              {hasDuplicates ? ` — duplicates will be ${duplicateAction === 'skip' ? 'skipped' : 'updated'}` : ''}.
+              Records are created exactly as if entered manually, and the whole batch can be rolled back
+              from History while its records are unused.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -841,7 +920,7 @@ export default function ImportData() {
         </DialogContent>
       </Dialog>
 
-      {/* Batch detail (error log) */}
+      {/* Batch detail (row log) */}
       <Dialog open={detailBatchId != null} onOpenChange={(open) => { if (!open) setDetailBatchId(null); }}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
@@ -850,7 +929,8 @@ export default function ImportData() {
             </DialogTitle>
             <DialogDescription>
               {detailData
-                ? `${fmtTime(detailData.batch.createdAt)} by ${detailData.batch.createdBy}`
+                ? `${fmtTime(detailData.batch.createdAt)} by ${detailData.batch.createdBy}` +
+                  (detailData.batch.legacyRange?.min ? ` · old voucher numbers ${detailData.batch.legacyRange.min} – ${detailData.batch.legacyRange.max}` : '')
                 : 'Loading…'}
             </DialogDescription>
           </DialogHeader>
@@ -878,7 +958,7 @@ export default function ImportData() {
                   {detailData.rows.map((r) => (
                     <TableRow key={r.id}>
                       <TableCell className="text-muted-foreground">{r.rowNumber}</TableCell>
-                      <TableCell className="font-medium">{detailData ? rowLabel(detailData.batch.module, r) : '—'}</TableCell>
+                      <TableCell className="font-medium">{rowLabel(detailData.batch.module, r)}</TableCell>
                       <TableCell><RowStatusBadge status={r.status} /></TableCell>
                       <TableCell className="text-sm text-muted-foreground">{r.reason ?? '—'}</TableCell>
                     </TableRow>
@@ -900,17 +980,23 @@ export default function ImportData() {
                 This will permanently remove ALL records imported in batch {rollbackTarget.displayId ?? `IMP${String(rollbackTarget.id).padStart(6, '0')}`}. This action cannot be undone.
               </span>}
               {rollbackTarget && (isVoucher(rollbackTarget.module) ? (
-                <>Every voucher created by "{rollbackTarget.filename}" ({rollbackTarget.importedRows} voucher{rollbackTarget.importedRows === 1 ? '' : 's'}) will be
-                removed — allocations unwound so {rollbackTarget.module === 'receipts' ? 'invoice' : 'bill'} dues are restored, and any advances they created withdrawn.
-                A voucher whose advance has since been adjusted against other documents blocks the whole rollback with per-voucher reasons.</>
+                <>Every voucher created by "{rollbackTarget.filename}" will be removed — allocations
+                unwound so dues are restored, and any advances they created withdrawn. A voucher whose
+                advance has since been used blocks the whole rollback with per-voucher reasons.</>
               ) : isTxn(rollbackTarget.module) ? (
-                <>Every document created by "{rollbackTarget.filename}" ({rollbackTarget.importedRows} row{rollbackTarget.importedRows === 1 ? '' : 's'}) will be
-                reversed — stock restored, settlements unwound{rollbackTarget.module === 'purchases' ? ', average cost unwound' : ''}, books cleaned.
-                Documents that have since gained payments, returns or other activity block the whole rollback with per-document reasons.</>
+                <>Every document created by "{rollbackTarget.filename}" will be reversed — stock restored,
+                settlements unwound, books cleaned. Documents that have since gained payments, returns or
+                other activity block the whole rollback with per-document reasons.</>
+              ) : rollbackTarget.module === 'daybook' ? (
+                <>Every journal voucher created by "{rollbackTarget.filename}" will be removed and the
+                books cleaned.</>
+              ) : rollbackTarget.module === 'opening_stock' ? (
+                <>The opening stock recorded by "{rollbackTarget.filename}" will be reversed — stock that
+                has since been consumed or moved blocks the rollback with reasons.</>
               ) : (
-                <>Every record created by "{rollbackTarget.filename}" ({rollbackTarget.importedRows} record{rollbackTarget.importedRows === 1 ? '' : 's'}) will be
-                deleted — opening balances first, then ledgers, then parties. Records that have since been used block the
-                rollback with a per-record explanation. Updates made to pre-existing records are not reverted.</>
+                <>Every record created by "{rollbackTarget.filename}" will be deleted. Records that have
+                since been used block the rollback with a per-record explanation. Updates made to
+                pre-existing records are not reverted.</>
               ))}
             </DialogDescription>
           </DialogHeader>

@@ -1,0 +1,397 @@
+Redesign the existing Import module into a step-by-step ERP Migration Wizard.
+
+The current Import UI should be removed and replaced with a guided workflow.
+
+The workflow must be linear. The user cannot skip steps.
+
+==========================================================
+STEP 1 – Upload Migration Files
+==========================================================
+
+Create a single "Migration" screen.
+
+Show upload cards in this order:
+
+1. Sales
+   [Upload File]
+
+2. Purchase
+   [Upload File]
+
+3. Receipt
+   [Upload File]
+
+4. Payment
+   [Upload File]
+
+5. Day Book
+   [Upload File]
+
+Each card should show:
+
+✓ File uploaded
+Rows detected
+Transactions detected
+Errors
+Warnings
+
+The user should be able to replace an uploaded file before continuing.
+
+Only when all required files are uploaded should the "Next" button become enabled.
+
+==========================================================
+STEP 2 – Analyse
+==========================================================
+
+Analyse all uploaded files together.
+
+Display:
+
+Total Sales
+Total Purchases
+Total Receipts
+Total Payments
+Total Journal Entries
+Customers Found
+Vendors Found
+Items Found
+Ledgers Found
+
+Also detect:
+
+Duplicate invoices
+
+Duplicate vouchers
+
+Missing customers
+
+Missing vendors
+
+Missing items
+
+Missing ledgers
+
+Invalid GST
+
+Invalid dates
+
+Invalid amounts
+
+Do NOT import anything.
+
+==========================================================
+STEP 3 – Manual Mapping
+==========================================================
+
+No automatic mapping.
+
+Every unmatched master must be mapped manually.
+
+-----------------------------------
+
+Customers
+
+Old ERP Name
+
+↓
+
+Choose
+
+Existing Customer
+
+OR
+
+Create Customer
+
+-----------------------------------
+
+Vendors
+
+Old ERP Name
+
+↓
+
+Choose
+
+Existing Vendor
+
+OR
+
+Create Vendor
+
+-----------------------------------
+
+Items
+
+Old ERP Item
+
+↓
+
+Choose
+
+Existing Item
+
+OR
+
+Create Item
+
+-----------------------------------
+
+Ledgers
+
+Old Ledger
+
+↓
+
+Choose
+
+Existing Ledger
+
+OR
+
+Create Ledger
+
+If creating ledger
+
+Ask
+
+Group
+
+Sub Group
+
+Nature
+
+Dr/Cr
+
+Save mappings permanently.
+
+Future imports should reuse the saved mapping automatically.
+
+Only after ALL mappings are completed should the Next button be enabled.
+
+==========================================================
+STEP 4 – Demo Import
+==========================================================
+
+Run a complete DEMO IMPORT.
+
+Nothing should be written into production.
+
+Process every uploaded file using the normal ERP business logic.
+
+Generate ERP voucher numbers.
+
+Store the old voucher number as
+
+Legacy Voucher Number.
+
+==========================================================
+STEP 5 – Financial Verification
+==========================================================
+
+Generate reports from the Demo Import.
+
+Show
+
+✓ Trial Balance
+
+✓ Profit & Loss
+
+✓ Balance Sheet
+
+✓ Customer Outstanding
+
+✓ Vendor Outstanding
+
+✓ Stock Valuation
+
+✓ Cash Book
+
+✓ Bank Book
+
+✓ Dashboard Summary
+
+These reports should be generated entirely from the demo data.
+
+No production data should exist.
+
+==========================================================
+STEP 6 – Verification
+==========================================================
+
+Ask the user to compare the reports with the old ERP.
+
+Provide two options.
+
+Back
+
+Approve Migration
+
+If reports do not match
+
+User can return to Mapping
+
+or
+
+Upload corrected files.
+
+==========================================================
+STEP 7 – Select Import Location
+==========================================================
+
+Only AFTER the user approves the reports
+
+Ask
+
+Where should this migration be imported?
+
+Choose Location
+
+Head Office
+
+Warehouse A
+
+Warehouse B
+
+Warehouse C
+
+etc.
+
+Every imported transaction must belong to the selected location.
+
+Everything should be tagged with that warehouse.
+
+Sales
+
+Purchases
+
+Receipts
+
+Payments
+
+Ledgers
+
+Stock
+
+Customers
+
+Vendors
+
+Dashboard
+
+Reports
+
+Cash
+
+Bank
+
+Inventory
+
+Everything should belong to that selected location.
+
+==========================================================
+STEP 8 – Final Import
+==========================================================
+
+Only now commit the data.
+
+Generate ERP voucher numbers.
+
+Use existing ERP posting logic.
+
+Update
+
+Inventory
+
+Ledgers
+
+Customer Outstanding
+
+Vendor Outstanding
+
+GST
+
+Dashboard
+
+Reports
+
+Cash Book
+
+Bank Book
+
+Balance Sheet
+
+Profit & Loss
+
+Trial Balance
+
+==========================================================
+ROLLBACK
+==========================================================
+
+If any transaction fails
+
+Rollback the ENTIRE migration.
+
+Never allow partial imports.
+
+==========================================================
+IMPORT HISTORY
+==========================================================
+
+Save
+
+Import Date
+
+User
+
+Location
+
+Files Imported
+
+Rows
+
+Warnings
+
+Errors
+
+Legacy Voucher Range
+
+Status
+
+Allow reopening past imports.
+
+==========================================================
+OBJECTIVE
+==========================================================
+
+The Import module should become a professional ERP Migration Wizard.
+
+The workflow should always be:
+
+Upload Files
+↓
+
+Analyse
+↓
+
+Manual Mapping
+↓
+
+Demo Import
+↓
+
+Generate Trial Balance, Profit & Loss and Balance Sheet
+↓
+
+User Verification
+↓
+
+Select Warehouse/Location
+↓
+
+Final Import
+
+No production data should be written before the user verifies and approves the generated financial statements.
+
+The existing Import page should be completely redesigned to follow this workflow.

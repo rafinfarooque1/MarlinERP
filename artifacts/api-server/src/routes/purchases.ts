@@ -1,3 +1,4 @@
+import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehouseLifecycle";
 import { Router } from "express";
 import { requireModuleAction, requireModuleView } from "../middleware/permissions";
 import { db, pool, purchasesTable, vendorsTable, materialsTable, rawMaterialsTable, itemsTable } from "@workspace/db";
@@ -554,6 +555,10 @@ router.post("/purchases", requireModuleAction("page:/production/purchase", "add"
   });
   if ("error" in resolved) { res.status(400).json({ error: resolved.error }); return; }
   const loc = resolved.loc;
+  {
+    const disabledMsg = await disabledWarehouseError(pool, [{ type: loc.type, id: loc.id }]);
+    if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
+  }
   const locName = await locationLabel(pool, loc);
 
   // Checked against the RESOLVED location, not the requested one.

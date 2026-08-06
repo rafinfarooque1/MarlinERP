@@ -12,6 +12,8 @@ import { normalizeWarehouseBilling, validateGstin, stateCodeFromGstin, loadWareh
 import { parsePaging, setPagingHeaders, applyPaging } from "../lib/paging";
 import { provisionRentLedgers, syncRentLedgerNames, rentLedgerIdsFor } from "../lib/rentLedgers";
 import { resolveChartParentId } from "../lib/chartGroups";
+import { warehouseDeleteSummary, permanentlyDeleteWarehouse, deleteConfirmationPhrase } from "../lib/warehouseLifecycle";
+import { logActivity } from "../lib/audit";
 
 const router = Router();
 
@@ -155,10 +157,13 @@ router.get("/warehouses", requireModuleView(["page:/", "page:/production/item-ma
     .groupBy(outletsTable.warehouseId);
   const countMap = new Map(outletCounts.map((o) => [o.warehouseId, o.cnt]));
   // Fetch ledger IDs via raw query (columns not in Drizzle schema)
-  const { rows: raw } = await pool.query<{ id: number; cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null }>(
-    `SELECT id, cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses ORDER BY id`
+  const { rows: raw } = await pool.query<{ id: number; cash_ledger_id: number | null; sales_ledger_id: number | null; purchase_ledger_id: number | null; disabled_at: Date | null; disabled_by: string | null }>(
+    `SELECT id, cash_ledger_id, sales_ledger_id, purchase_ledger_id, disabled_at, disabled_by FROM warehouses ORDER BY id`
   );
-  const ledgerMap = new Map(raw.map(r => [r.id, { cashLedgerId: r.cash_ledger_id, salesLedgerId: r.sales_ledger_id, purchaseLedgerId: r.purchase_ledger_id }]));
+  const ledgerMap = new Map(raw.map(r => [r.id, {
+    cashLedgerId: r.cash_ledger_id, salesLedgerId: r.sales_ledger_id, purchaseLedgerId: r.purchase_ledger_id,
+    disabledAt: r.disabled_at ? new Date(r.disabled_at).toISOString() : null, disabledBy: r.disabled_by ?? null,
+  }]));
   // What the invoice will actually print, not what this row happens to hold —
   // the bank and UPI fall back to the company, so a warehouse without its own
   // is not necessarily incomplete.
@@ -324,6 +329,95 @@ router.delete("/warehouses/:id", requireModuleAction("page:/headoffice/warehouse
   }
   await db.delete(warehousesTable).where(eq(warehousesTable.id, id));
   res.status(204).send();
+});
+
+// ── Warehouse lifecycle ────────────────────────────────────────────────────
+// Disable / re-enable / permanent delete. All three are restricted to the
+// level-1 administrator — taking a location out of service, let alone erasing
+// its books, is beyond the warehouses page's ordinary edit/delete rights.
+async function requireLevelOne(req: any, res: any): Promise<boolean> {
+  const hid = Number((req as any).employee?.hierarchyId);
+  if (Number.isFinite(hid) && hid > 0) {
+    try {
+      const { rows: [h] } = await pool.query<{ level: number }>(
+        `SELECT level FROM hierarchies WHERE id = $1`, [hid]);
+      if (Number(h?.level) === 1) return true;
+    } catch { /* fail closed */ }
+  }
+  res.status(403).json({ error: "Only a super administrator can change a warehouse's lifecycle." });
+  return false;
+}
+
+router.post("/warehouses/:id/disable", requireModuleAction("page:/headoffice/warehouses", "edit"), async (req, res): Promise<void> => {
+  if (!(await requireLevelOne(req, res))) return;
+  const id = parseInt(req.params.id, 10);
+  const username = (req as any).employee?.username ?? "system";
+  const { rows: [wh] } = await pool.query<{ id: number; name: string; disabled_at: Date | null }>(
+    `SELECT id, name, disabled_at FROM warehouses WHERE id = $1`, [id]);
+  if (!wh) { res.status(404).json({ error: "Warehouse not found" }); return; }
+  if (!wh.disabled_at) {
+    await pool.query(`UPDATE warehouses SET disabled_at = now(), disabled_by = $2 WHERE id = $1 AND disabled_at IS NULL`, [id, username]);
+    logActivity({
+      action: "UPDATE", module: "headoffice", entityType: "warehouse", entityId: id,
+      description: `Warehouse "${wh.name}" disabled — all new transactions blocked, history preserved`,
+    }).catch(() => {});
+  }
+  const { rows: [after] } = await pool.query<{ disabled_at: Date | null; disabled_by: string | null }>(
+    `SELECT disabled_at, disabled_by FROM warehouses WHERE id = $1`, [id]);
+  res.json({
+    id, name: wh.name,
+    disabledAt: after?.disabled_at ? new Date(after.disabled_at).toISOString() : null,
+    disabledBy: after?.disabled_by ?? null,
+  });
+});
+
+router.post("/warehouses/:id/enable", requireModuleAction("page:/headoffice/warehouses", "edit"), async (req, res): Promise<void> => {
+  if (!(await requireLevelOne(req, res))) return;
+  const id = parseInt(req.params.id, 10);
+  const { rows: [wh] } = await pool.query<{ id: number; name: string; disabled_at: Date | null }>(
+    `SELECT id, name, disabled_at FROM warehouses WHERE id = $1`, [id]);
+  if (!wh) { res.status(404).json({ error: "Warehouse not found" }); return; }
+  if (wh.disabled_at) {
+    await pool.query(`UPDATE warehouses SET disabled_at = NULL, disabled_by = NULL WHERE id = $1`, [id]);
+    logActivity({
+      action: "UPDATE", module: "headoffice", entityType: "warehouse", entityId: id,
+      description: `Warehouse "${wh.name}" re-enabled — new transactions allowed again`,
+    }).catch(() => {});
+  }
+  res.json({ id, name: wh.name, disabledAt: null, disabledBy: null });
+});
+
+// Pre-deletion summary: what would be removed, the exact confirmation phrase,
+// and any blockers that force "disable" instead. The client shows this before
+// the typed confirmation step.
+router.get("/warehouses/:id/delete-summary", requireModuleAction("page:/headoffice/warehouses", "delete"), async (req, res): Promise<void> => {
+  if (!(await requireLevelOne(req, res))) return;
+  const id = parseInt(req.params.id, 10);
+  const summary = await warehouseDeleteSummary(pool, id);
+  if (!summary) { res.status(404).json({ error: "Warehouse not found" }); return; }
+  res.json(summary);
+});
+
+// Permanent, atomic, validated deletion. Requires the typed confirmation
+// phrase (checked again server-side against the CURRENT name). Everything
+// happens in one transaction with post-delete integrity checks; any failed
+// check rolls the whole thing back.
+router.delete("/warehouses/:id/permanent", requireModuleAction("page:/headoffice/warehouses", "delete"), async (req, res): Promise<void> => {
+  if (!(await requireLevelOne(req, res))) return;
+  const id = parseInt(req.params.id, 10);
+  const confirmation = String((req.body as any)?.confirmation ?? "");
+  const { rows: [whBefore] } = await pool.query<{ name: string }>(`SELECT name FROM warehouses WHERE id = $1`, [id]);
+  const result = await permanentlyDeleteWarehouse(pool, { id, confirmation });
+  if (!result.ok) {
+    res.status(result.status).json({ error: result.error, ...(result.failures ? { failures: result.failures } : {}) });
+    return;
+  }
+  logActivity({
+    action: "DELETE", module: "headoffice", entityType: "warehouse", entityId: id,
+    description: `Warehouse "${whBefore?.name ?? id}" permanently deleted with all its records (typed confirmation "${deleteConfirmationPhrase(whBefore?.name ?? String(id))}")`,
+    metadata: { after: { deleted: result.deleted } },
+  }).catch(() => {});
+  res.json({ ok: true, deleted: result.deleted });
 });
 
 // ── Outlets ────────────────────────────────────────────────────────────────

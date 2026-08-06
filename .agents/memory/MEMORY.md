@@ -106,7 +106,6 @@
 - [Ghost transfer documents](ghost-transfer-documents.md) — deleting a transfer nulls its twins' branch_transfer_id: ghost BTR invoices leak into lists/books, reservations stick; detect via BTR/% + NULL FK.
 - [Party advances & bill settlement](party-advances.md) — CADV/VADV ledgers (prefix dodges FROM-6 parsers); explicit-first vs FIFO; allocation vouchers locked+unwindable; advance-only parties need seed AND filter hooks in reports.
 - [Data import framework](data-import-framework.md) — commits MUST reuse manual-creation libs; txn imports: file-order commits (avg cost), consecutive-row grouping, needs_party resolve step, one-txn rollback.
-- [Legacy ERP DBF import](legacy-dbf-import.md) — transient /tmp sessions (410 on restart); ZipCrypto wrong-password "succeeds" with garbage (DBF signature is the tell); seeded level-2 ONLY.
 - [Sale MRP floor](sale-mrp-floor.md) — line price ≥ master MRP (create+edit, grandfathered via stored lines); NOT in buildSaleLines (quotes exempt); test fixtures must price ≥ fixture mrp.
 - [Party location assignment](party-location-assignment.md) — ONE validated resolver for create+edit stamps; /:id routes need their own scope gate; located ledger filters totals too; import blank rows = batch stamp.
 - [Bill-level control over per-line fields](bill-level-over-per-line.md) — one control fronting a per-row stored field must surface mixed legacy rows (warn + apply-on-pick), never let row 0 silently speak for the bill.
@@ -118,3 +117,4 @@
 - [Purchase other charges](purchase-other-charges.md) — bill-borne freight/hamali in JSONB; goods figures stay goods-only, vendor owed goods+charges (every payable reader adds the sum); returns keep charges BY DESIGN.
 - [Shared customer form & infinite sales list](shared-customer-form.md) — ONE CustomerFormDialog for every entry point (branch payloads carry no location); infinite sales key must keep '/api/sales' as element 0.
 - [Cash & Bank ↔ Chart integration](cash-bank-chart-integration.md) — CBA- ledgers, derived balances, code-guarded heads (never is_system_group), one-sided openings need the STD-OB-ADJ counterweight; TB must fold openings.
+- [Warehouse lifecycle](warehouse-lifecycle.md) — disabled_at raw cols; EVERY new transaction producer needs the disabled guard (effective location, ROLLBACK in-txn); permanent delete = 1 txn cascade + in-txn validation; cross-location = blocker.

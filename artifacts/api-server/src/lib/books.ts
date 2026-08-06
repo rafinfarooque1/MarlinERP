@@ -28,6 +28,9 @@
 
 import { pool } from "@workspace/db";
 import { closingStockValuation, stockValuation, resolveProductNames, type ValuedItem } from "./valuation";
+
+/** A queryable database handle (pg pool or PoolClient), per lib/importVouchers.ts. */
+type Q = { query: Function };
 import { isIsoDate } from "./dateInput";
 import { filterPostingsByLocation, type PostingLocationFilter } from "./postingLocation";
 
@@ -99,8 +102,8 @@ export interface Chart {
   idsUnder(codes: readonly string[]): Set<number>;
 }
 
-export async function loadChart(): Promise<Chart> {
-  const { rows } = await pool.query(
+export async function loadChart(q: Q = pool): Promise<Chart> {
+  const { rows } = await q.query(
     `SELECT id, code, name, type, parent_id, is_group, is_system_group
        FROM account_ledgers ORDER BY id`,
   );
@@ -187,8 +190,8 @@ export interface StockBranchScope {
 }
 
 /** Closing stock: every product kind, in-transit included; optionally one branch. */
-export async function closingStockAt(scope?: StockBranchScope | null): Promise<StockAtDate> {
-  const v = await closingStockValuation(pool, scope ? {
+export async function closingStockAt(scope?: StockBranchScope | null, q: Q = pool): Promise<StockAtDate> {
+  const v = await closingStockValuation(q as any, scope ? {
     branchType: scope.branchType,
     ...(scope.branchId != null ? { branchId: scope.branchId } : {}),
   } : {});
@@ -211,8 +214,8 @@ export async function closingStockAt(scope?: StockBranchScope | null): Promise<S
  * into `stock_entries` and logs no movement at all, so omitting it would let a
  * date after real stock existed be reported as a confident zero.
  */
-async function inceptionDate(): Promise<string | null> {
-  const { rows: [r] } = await pool.query(
+async function inceptionDate(q: Q = pool): Promise<string | null> {
+  const { rows: [r] } = await q.query(
     `SELECT MIN(d)::date::text AS first_doc FROM (
        SELECT MIN(purchase_date)          AS d FROM purchases
        UNION ALL SELECT MIN(sale_date)             FROM sales
@@ -238,7 +241,7 @@ async function inceptionDate(): Promise<string | null> {
  *
  * Cost is today's weighted-average cost — per-date cost history is not stored.
  */
-export async function stockAsOf(asOf: string | null | undefined, scope?: StockBranchScope | null): Promise<StockAtDate> {
+export async function stockAsOf(asOf: string | null | undefined, scope?: StockBranchScope | null, q: Q = pool): Promise<StockAtDate> {
   if (!isDate(asOf)) {
     return { total: 0, inTransit: 0, items: [], reliable: true, note: null };
   }
@@ -264,8 +267,8 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
   // only means "nothing held" once the log is proven to explain today's
   // quantity, which is checked below.
   const [{ rows: [bounds] }, inception] = await Promise.all([
-    pool.query(`SELECT MIN(created_at)::date::text AS first_move FROM stock_ledger`),
-    inceptionDate(),
+    q.query(`SELECT MIN(created_at)::date::text AS first_move FROM stock_ledger`),
+    inceptionDate(q),
   ]);
   const firstMove: string | null = bounds?.first_move ?? null;
 
@@ -279,7 +282,7 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
   // Movement after the as-at date, and total logged movement, per product+location.
   const mvParams: unknown[] = [asOf];
   const mvWhere = branchWhere("sl", mvParams);
-  const { rows: moves } = await pool.query(
+  const { rows: moves } = await q.query(
     `SELECT material_type, ref_id::int AS ref_id, branch_type, branch_id::int AS branch_id,
             COALESCE(SUM(qty_change::numeric) FILTER (WHERE COALESCE(txn_date, created_at::date) > $1::date), 0) AS after_qty,
             COALESCE(SUM(qty_change::numeric), 0) AS all_qty
@@ -305,7 +308,7 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
   // be reported as reliable.
   const ohParams: unknown[] = [];
   const ohWhere = branchWhere("se", ohParams);
-  const { rows: onHand } = await pool.query(
+  const { rows: onHand } = await q.query(
     `SELECT material_type, item_id::int AS ref_id, branch_type, branch_id::int AS branch_id,
             quantity::numeric AS quantity
        FROM stock_entries se${ohWhere}`,
@@ -327,7 +330,7 @@ export async function stockAsOf(asOf: string | null | undefined, scope?: StockBr
   };
   // Cost comes from the product master, the same avg-cost-else-cost rule
   // `stockValuation()` applies, so both paths value a product identically.
-  const meta = await resolveProductNames(pool, [...keys].map(parseKey));
+  const meta = await resolveProductNames(q as any, [...keys].map(parseKey));
 
   const byProduct = new Map<string, ValuedItem>();
   let total = 0;
@@ -469,6 +472,8 @@ export interface BooksOptions {
    * scoped to the location's branches.
    */
   location?: PostingLocationFilter | null;
+  /** Queryable to run on (default the shared pool); also threaded into buildDerivedPostings. */
+  q?: Q;
 }
 
 export interface Books {
@@ -548,7 +553,7 @@ export interface Books {
  * not depend on the route file that owns it.
  */
 export async function buildBooks(
-  buildDerivedPostings: (opts: { toDate?: string }) => Promise<Array<{
+  buildDerivedPostings: (opts: { toDate?: string; q?: Q }) => Promise<Array<{
     date: string; ledgerId: number; debit: number; credit: number;
     source?: string;
     locationType?: string | null; locationId?: number | null;
@@ -558,9 +563,10 @@ export async function buildBooks(
   const fromDate = isDate(opts.fromDate) ? opts.fromDate : null;
   const toDate = isDate(opts.toDate) ? opts.toDate : null;
   const location = opts.location ?? null;
+  const q = opts.q ?? pool;
 
-  const chart = await loadChart();
-  const allPostings = await buildDerivedPostings(toDate ? { toDate } : {});
+  const chart = await loadChart(q);
+  const allPostings = await buildDerivedPostings(toDate ? { toDate, q } : { q });
   const postings = location
     ? filterPostingsByLocation(
         allPostings.map((p) => ({ ...p, locationType: p.locationType ?? null, locationId: p.locationId ?? null })),
@@ -636,7 +642,7 @@ export async function buildBooks(
   let obWhere = "";
   if (toDate) { obParams.push(toDate); obWhere = `WHERE as_of_date <= $1`; }
   const { rows: obRows } = includeOpeningBalances
-    ? await pool.query(
+    ? await q.query(
         `SELECT ledger_id, balance::numeric AS balance, balance_type FROM opening_balances ${obWhere}`,
         obParams,
       )
@@ -673,9 +679,9 @@ export async function buildBooks(
   const skipStock = location?.type === "company";
   const historicalClose = toDate !== null && toDate < todayISO();
   const closing = skipStock ? emptyStock
-    : historicalClose ? await stockAsOf(toDate, stockScope) : await closingStockAt(stockScope);
+    : historicalClose ? await stockAsOf(toDate, stockScope, q) : await closingStockAt(stockScope, q);
   const opening = skipStock ? emptyStock
-    : fromDate ? await stockAsOf(previousDay(fromDate), stockScope) : await stockAsOf(null);
+    : fromDate ? await stockAsOf(previousDay(fromDate), stockScope, q) : await stockAsOf(null, undefined, q);
 
   // ── Group builders ────────────────────────────────────────────────────────
 

@@ -1,3 +1,4 @@
+import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehouseLifecycle";
 /**
  * Quotations — offers to customers that touch NOTHING else.
  *
@@ -393,6 +394,10 @@ router.post("/quotations", requireModuleAction(QUOTE_PAGES, "add"), async (req, 
     `SELECT id, name FROM ${locTable} WHERE id = $1`, [body.locationId],
   );
   if (!loc) { res.status(400).json({ error: `${body.locationType} not found` }); return; }
+  {
+    const disabledMsg = await disabledWarehouseError(pool, [{ type: body.locationType, id: body.locationId }]);
+    if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
+  }
 
   const figures = await buildQuotationFigures(body);
   if (!figures.ok) { res.status(400).json({ error: figures.error }); return; }
@@ -511,6 +516,10 @@ router.put("/quotations/:id", requireModuleAction(QUOTE_PAGES, "edit"), async (r
   const locTable = body.locationType === "warehouse" ? "warehouses" : "outlets";
   const { rows: [loc] } = await pool.query(`SELECT id FROM ${locTable} WHERE id = $1`, [body.locationId]);
   if (!loc) { res.status(400).json({ error: `${body.locationType} not found` }); return; }
+  {
+    const disabledMsg = await disabledWarehouseError(pool, [{ type: body.locationType, id: body.locationId }]);
+    if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
+  }
 
   const figures = await buildQuotationFigures(body);
   if (!figures.ok) { res.status(400).json({ error: figures.error }); return; }

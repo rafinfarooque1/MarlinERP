@@ -213,3 +213,26 @@ Rules that must hold for every import type, and why:
 - **Dues include GST:** sale outstanding is MRP-inclusive but purchase-bill
   dues = taxable + GST (unitCost is pre-tax) — FIFO expectations in tests must
   use bill TOTALS, not qty×unitCost.
+
+## Migration wizard (multi-file umbrella)
+
+- **A migration OWNS its batches** (`import_batches.migration_id`): every
+  per-batch mutating endpoint must 409 on migration-owned batches, and the
+  standalone batch list filters `migration_id IS NULL`. **Why:** two drivers
+  over one batch desync the migration's combined state.
+- **Location is chosen LAST, at approval — by design.** Files carry no
+  location; mapping/demo stamp a PROVISIONAL Head Office location, and
+  approve re-stamps + re-validates everything at the chosen location inside
+  the import transaction. Copy tells users to leave Location columns blank.
+- **Demo = ONE never-committed transaction** over the fixed run order
+  (opening_stock → purchases → sales → receipts → payments → daybook); the
+  comparison report pack is captured from inside that txn and persisted for
+  later viewing. Approve replays the same order in ONE real transaction;
+  any failure aborts everything (status reverts, nothing partial).
+- **Any mapping edit demotes a demo_ready migration back to draft** — a demo
+  is only valid for the mappings it ran under.
+- **Rollback is whole-migration only** (reverse run order, role level ≤ 2,
+  blocked → 409 with nothing deleted, per-batch verification after).
+- **Frontend:** ImportData 'Migration' tab (default) hosts MigrationWizard;
+  Masters tab keeps standalone master imports; MappingStep/DemoReportView are
+  shared components taking either batchId or migrationId.

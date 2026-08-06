@@ -1,3 +1,4 @@
+import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehouseLifecycle";
 import { Router } from "express";
 import { pool } from "@workspace/db";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
@@ -519,6 +520,11 @@ router.post("/stock/verifications", requireModuleAction("page:/headoffice/stock-
   // becomes a side door for creating outlet inventory.
   if (branchType === 'outlet' && await outletWritesBlocked(pool)) {
     res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+  }
+  // A stock count is an inventory adjustment — a disabled warehouse takes none.
+  {
+    const disabledMsg = await disabledWarehouseError(pool, [{ type: branchType, id: Number(branchId) }]);
+    if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
   }
   if (!verifyDate) { res.status(400).json({ error: "verifyDate is required" }); return; }
   if (!isIsoDate(verifyDate)) { res.status(400).json({ error: "verifyDate must be a real calendar date in YYYY-MM-DD form" }); return; }

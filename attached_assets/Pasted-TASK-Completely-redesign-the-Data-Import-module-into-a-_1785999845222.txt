@@ -1,0 +1,493 @@
+TASK: Completely redesign the Data Import module into a Legacy ERP Migration Wizard.
+
+The current Excel import is too basic. I need a professional migration module that can migrate historical data from another ERP into this ERP with minimal manual work while preserving complete accounting integrity.
+
+====================================================================
+OBJECTIVE
+====================================================================
+
+Instead of importing one transaction at a time, the system should support migrating an entire company's historical data.
+
+The migration should support:
+
+• Item Master
+• Customer Master
+• Vendor Master
+• Ledger Master
+• Sales
+• Purchases
+• Receipt Vouchers
+• Payment Vouchers
+• Journal Vouchers
+• Debit Notes
+• Credit Notes
+• Opening Balances
+• Opening Stock
+
+using Excel files.
+
+====================================================================
+STEP 1 - UPLOAD
+====================================================================
+
+Create a Migration Wizard.
+
+Step 1
+
+Upload Excel.
+
+Supported:
+
+Sales.xlsx
+
+Purchase.xlsx
+
+Receipt.xlsx
+
+Payment.xlsx
+
+Customer.xlsx
+
+Vendor.xlsx
+
+Ledger.xlsx
+
+Item Master.xlsx
+
+The wizard should automatically detect which type of file has been uploaded.
+
+====================================================================
+STEP 2 - ANALYSE
+====================================================================
+
+Automatically analyse the Excel.
+
+Show:
+
+Number of rows
+
+Number of invoices
+
+Customers found
+
+Vendors found
+
+Items found
+
+Ledgers found
+
+Warnings
+
+Errors
+
+Missing Masters
+
+Duplicate Masters
+
+Duplicate Invoice Numbers
+
+====================================================================
+STEP 3 - MAPPING
+====================================================================
+
+This is the most important part.
+
+Instead of stopping with errors, open a Mapping Screen.
+
+==================================================
+LEDGER MAPPING
+==================================================
+
+For every ledger from the old ERP
+
+Example
+
+Old ERP
+
+Cash
+
+Bank
+
+ABC Traders
+
+Purchase Account
+
+Sales Account
+
+Search automatically inside the ERP.
+
+If an exact ledger already exists
+
+Automatically map it.
+
+Example
+
+Old ERP
+
+ABC Traders
+
+↓
+
+ERP
+
+ABC Traders
+
+Mapped automatically.
+
+--------------------------------------------------
+
+If multiple similar ledgers exist
+
+Show suggestions.
+
+Example
+
+ABC Traders
+
+ABC Traders Pvt Ltd
+
+ABC Trade
+
+User selects one.
+
+--------------------------------------------------
+
+If ledger does not exist
+
+Provide options
+
+Create New Ledger
+
+OR
+
+Map to Existing Ledger
+
+When creating a new ledger
+
+Ask
+
+Ledger Group
+
+Examples
+
+Current Assets
+
+Current Liabilities
+
+Indirect Expenses
+
+Direct Expenses
+
+Sales
+
+Purchase
+
+Bank Accounts
+
+Cash
+
+Sundry Debtors
+
+Sundry Creditors
+
+etc.
+
+After confirmation
+
+Automatically create the ledger.
+
+==================================================
+CUSTOMER MAPPING
+==================================================
+
+Search existing customers.
+
+If found
+
+Auto-map.
+
+If not
+
+Create customer.
+
+Ask
+
+Location
+
+Credit Limit
+
+GST
+
+State
+
+Default Ledger
+
+==================================================
+VENDOR MAPPING
+==================================================
+
+Same workflow.
+
+==================================================
+ITEM MAPPING
+==================================================
+
+Search Item Master.
+
+If found
+
+Map automatically.
+
+If not
+
+Show
+
+Create Item
+
+or
+
+Map to Existing Item
+
+When creating
+
+Use Item Master defaults.
+
+==================================================
+SAVE MAPPING
+==================================================
+
+After mapping
+
+Save it permanently.
+
+Next time the same Excel is imported
+
+Do not ask again.
+
+Automatically reuse previous mappings.
+
+Provide
+
+Manage Mapping
+
+screen.
+
+====================================================================
+STEP 4 - PREVIEW
+====================================================================
+
+Show
+
+Customers to Create
+
+Vendors to Create
+
+Ledgers to Create
+
+Items to Create
+
+Invoices
+
+Total Value
+
+GST
+
+Stock Impact
+
+Accounting Impact
+
+Warnings
+
+Errors
+
+====================================================================
+STEP 5 - IMPORT
+====================================================================
+
+Import using the SAME business logic as manual ERP entry.
+
+Never directly insert accounting records.
+
+Use existing services for
+
+Sales
+
+Purchases
+
+Receipts
+
+Payments
+
+Stock
+
+GST
+
+Ledger Posting
+
+Journal Posting
+
+Customer Outstanding
+
+Vendor Outstanding
+
+Dashboard
+
+====================================================================
+SALES IMPORT
+====================================================================
+
+The uploaded sales file contains the ACTUAL selling price.
+
+Example
+
+Item Master MRP = ₹250
+
+Old ERP Selling Price = ₹240
+
+Do NOT reject the invoice.
+
+Instead
+
+Price = ₹250
+
+Discount = ₹10
+
+Invoice Value = ₹240
+
+If selling price is above Item Master MRP
+
+Example
+
+MRP = ₹250
+
+Old ERP Selling Price = ₹260
+
+Increase selling price to ₹260
+
+Discount = 0
+
+Exactly like manual ERP Sales Entry.
+
+This ensures imported invoices behave exactly like manually created invoices.
+
+====================================================================
+PURCHASE IMPORT
+====================================================================
+
+Import purchase rates exactly as supplied.
+
+GST must be calculated using Item Master.
+
+====================================================================
+RECEIPT & PAYMENT IMPORT
+====================================================================
+
+Automatically map
+
+Customer
+
+Vendor
+
+Ledger
+
+Cash
+
+Bank
+
+Allocate against outstanding invoices whenever possible.
+
+If excess payment
+
+Automatically create Customer Advance or Vendor Advance.
+
+====================================================================
+VALIDATION
+====================================================================
+
+Warnings
+
+Do not stop import.
+
+Errors
+
+Stop only the affected records.
+
+Generate an Excel containing
+
+Failed Rows
+
+Reason
+
+Suggested Fix
+
+====================================================================
+ROLLBACK
+====================================================================
+
+Entire import must be transactional.
+
+If anything fails
+
+Rollback everything.
+
+====================================================================
+VERIFICATION
+====================================================================
+
+After import verify:
+
+✓ Trial Balance balances.
+
+✓ Balance Sheet balances.
+
+✓ Profit & Loss balances.
+
+✓ Dashboard matches reports.
+
+✓ Customer balances reconcile.
+
+✓ Vendor balances reconcile.
+
+✓ Ledger balances reconcile.
+
+✓ Cash Book matches.
+
+✓ Bank Book matches.
+
+✓ Inventory matches valuation.
+
+✓ GST matches invoices.
+
+✓ Imported transactions are identical to manually entered transactions.
+
+====================================================================
+MIGRATION HISTORY
+====================================================================
+
+Save every migration.
+
+Store
+
+Uploaded File
+
+Import Date
+
+Imported By
+
+Records Imported
+
+Mappings Used
+
+Warnings
+
+Errors
+
+Allow viewing previous migration history.
+
+====================================================================
+OBJECTIVE
+====================================================================
+
+The migration module should allow historical data from another ERP to be imported with minimal manual work.
+
+The user should only upload Excel files, map unknown masters once, and the ERP should automatically create missing Customers, Vendors, Ledgers, Items and import all transactions using the same accounting logic as manual entry while maintaining perfect accounting integrity.

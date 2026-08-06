@@ -33,6 +33,7 @@ import { restampMoneyVoucherLocations } from "./migrations/moneyVoucherLocationR
 import { backfillSalePaymentLegs } from "./migrations/salePaymentLegsBackfill";
 import { cleanupOrphanStockRows, ensureStockMasterGuardTrigger } from "./migrations/orphanStockCleanup";
 import { addDataImport } from "./migrations/dataImport";
+import { addWarehouseLifecycle } from "./migrations/warehouseLifecycle";
 
 async function runMigrations() {
   // Existing migrations
@@ -3315,29 +3316,22 @@ await pool.query(`
   }
 }
 
-// ── Legacy ERP Import page permission (ONE TIME) ─────────────────────────────
-// Unlike the module seedings above (grant to everyone pre-existing), Data
-// Migration is Management-and-Admin-only BY SPEC: seed only level-2 roles.
-// Level-1 admins bypass permission checks; everyone else stays default-denied
-// until an admin grants the page explicitly on the Permissions screen.
+// ── Legacy ERP Import module REMOVED (ONE TIME cleanup) ─────────────────────
+// The DBF-backup Legacy ERP Import module was deleted (Aug 2026; the Excel
+// Import Data module and Migration Wizard replaced it). Its permission rows
+// would otherwise linger as orphans on the Permissions screen. Guarded by
+// migration_log, not by data shape — a later module reusing the key must not
+// have its rows swept (destructive-boot-cleanup rule).
 {
-  const { rows: seeded } = await pool.query(
-    `SELECT 1 FROM migration_log WHERE name = 'legacy_import_page_perm_v1'`,
+  const { rows: done } = await pool.query(
+    `SELECT 1 FROM migration_log WHERE name = 'legacy_import_module_removed_v1'`,
   );
-  if (seeded.length === 0) {
-    const { rows: hRows } = await pool.query(
-      `SELECT id FROM hierarchies WHERE level = 2`,
+  if (done.length === 0) {
+    const { rowCount } = await pool.query(
+      `DELETE FROM permissions WHERE module = 'page:/company/legacy-import'`,
     );
-    for (const h of hRows) {
-      await pool.query(
-        `INSERT INTO permissions (hierarchy_id, module, can_view, can_add, can_edit, can_delete, can_download, can_print, can_approve, can_share)
-         VALUES ($1, 'page:/company/legacy-import', true, true, true, true, true, true, true, true)
-         ON CONFLICT (hierarchy_id, module) DO NOTHING`,
-        [h.id],
-      );
-    }
-    await pool.query(`INSERT INTO migration_log (name) VALUES ('legacy_import_page_perm_v1') ON CONFLICT (name) DO NOTHING`);
-    console.log(`[migration] legacy_import_page_perm_v1 — granted Legacy ERP Import to ${hRows.length} level-2 (Management) role(s)`);
+    await pool.query(`INSERT INTO migration_log (name) VALUES ('legacy_import_module_removed_v1') ON CONFLICT (name) DO NOTHING`);
+    console.log(`[migration] legacy_import_module_removed_v1 — removed ${rowCount} orphaned Legacy ERP Import permission row(s)`);
   }
 }
 
@@ -3783,6 +3777,11 @@ await addQuotations(pool);
 // pan/notes columns on parties, and one-time permission seeding for the new
 // page under default-deny.
 await addDataImport();
+
+// Warehouse lifecycle — disabled_at/disabled_by columns so a warehouse can be
+// taken out of service (all NEW transactions blocked, history intact) before
+// anyone reaches for permanent deletion.
+await addWarehouseLifecycle(pool);
 
 // Org restructure — rename the level-1 root "Management" → "Administrator"
 // (same row, so its employees keep full access via the level-1 bypass) and

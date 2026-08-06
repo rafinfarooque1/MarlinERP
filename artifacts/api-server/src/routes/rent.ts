@@ -1,3 +1,4 @@
+import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehouseLifecycle";
 import { Router, type IRouter, type Response } from "express";
 import { pool } from "@workspace/db";
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
@@ -504,6 +505,10 @@ router.post("/rent/periods/:warehouseId/:year/:month/pay", requireModuleAction(P
   const month = parseInt(req.params.month, 10);
   const scope = await getUserDataScope(req.employee!);
   if (!requireHeadOffice(scope, res)) return;
+  {
+    const disabledMsg = await disabledWarehouseError(pool, [{ type: "warehouse", id: warehouseId }]);
+    if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
+  }
 
   const b = (req.body ?? {}) as Record<string, any>;
   const paymentMode = String(b.paymentMode ?? "cash").toLowerCase();

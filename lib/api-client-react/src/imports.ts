@@ -1,22 +1,36 @@
 /**
- * Data Import (Company › Import Data).
+ * ERP Migration Wizard (Company › Import Data).
  *
- * Migration of old-ERP masters: sample template download, upload → validate →
- * preview, commit, history and per-batch rollback. All verdicts (valid /
- * warning / error, per-row reason + suggestion, rollback eligibility) are
- * computed on the server; the client displays them.
+ * Two flows share one page:
+ *  - MASTER imports (customers, vendors, ledgers, items): upload → validate →
+ *    commit directly. Rows become real records at commit.
+ *  - TRANSACTION imports (sales, purchases, receipts, payments, day book,
+ *    opening stock): upload → validate → MAPPING (every old-ERP name is linked
+ *    to an existing record or created, remembered forever) → DEMO run (the
+ *    real import inside a never-committed transaction; a full report pack is
+ *    computed from that state) → compare vs the old ERP → APPROVE (the real,
+ *    all-or-nothing import) or DISCARD.
+ *
+ * All verdicts and figures are computed server-side; the client displays them.
  */
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { customFetch } from "./custom-fetch";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-export type ImportModule = "customers" | "vendors" | "ledgers" | "sales" | "purchases" | "receipts" | "payments";
+export type ImportModule =
+  | "customers" | "vendors" | "ledgers" | "items"
+  | "sales" | "purchases" | "receipts" | "payments"
+  | "daybook" | "opening_stock";
 
-export type ImportBatchStatus = "validated" | "committing" | "committed" | "rolled_back";
+export const IMPORT_MASTER_MODULES: ImportModule[] = ["customers", "vendors", "ledgers", "items"];
+export const IMPORT_TXN_MODULES: ImportModule[] = ["sales", "purchases", "receipts", "payments", "daybook", "opening_stock"];
+
+export type ImportBatchStatus =
+  | "validated" | "demo_ready" | "committing" | "committed" | "rolled_back" | "discarded";
 
 export type ImportRowStatus =
-  | "valid" | "warning" | "error" | "needs_party"
+  | "valid" | "warning" | "error" | "needs_party" | "needs_mapping"
   | "imported" | "updated" | "skipped" | "failed" | "rolled_back";
 
 export interface ImportBatch {
@@ -34,7 +48,7 @@ export interface ImportBatch {
   updatedRows: number;
   skippedRows: number;
   failedRows: number;
-  /** Target location (sales/purchase imports) — where documents are stamped. */
+  /** Target location — where imported documents are stamped. */
   locationType: string | null;
   locationId: number | null;
   /** Display name of the target location (resolved server-side). */
@@ -45,7 +59,31 @@ export interface ImportBatch {
   committedBy: string | null;
   rolledBackAt: string | null;
   rolledBackBy: string | null;
+  // ── Wizard state ──
+  demoAt: string | null;
+  demoBy: string | null;
+  /** Counts + failures of the last demo run (small; the full report pack is fetched separately). */
+  demoSummary: ImportDemoSummary | null;
+  hasDemoReport: boolean;
+  discardedAt: string | null;
+  discardedBy: string | null;
+  /** Old-ERP voucher number range covered by this batch. */
+  legacyRange: { min: string | null; max: string | null } | null;
+  canDemo: boolean;
+  canApprove: boolean;
+  canDiscard: boolean;
+  canCommit: boolean;
   rollbackAvailable: boolean;
+}
+
+export interface ImportDemoSummary {
+  imported: number;
+  skipped: number;
+  failed: number;
+  failures: Array<{ rowNumber: number; name: string; reason: string }>;
+  legacyMin: string | null;
+  legacyMax: string | null;
+  timeTakenMs?: number;
 }
 
 export interface ImportRow {
@@ -56,18 +94,23 @@ export interface ImportRow {
   suggestion: string | null;
   duplicateOfId: number | null;
   values: Record<string, string>;
-  /** Party name that must be created/resolved before commit (needs_party rows). */
-  missingParty: string | null;
-  /** Document group index — rows of one invoice share it (sales/purchases). */
+  /** Old-ERP names this row still needs mapped (needs_mapping rows). */
+  missingMappings: Array<{ kind: ImportMappingKind; name: string }>;
+  /** Document group index — rows of one invoice/voucher share it. */
   docIndex: number | null;
-  /** Txn imports: this document's party will be auto-created at commit. */
-  willCreateParty: string | null;
   /** Txn imports: walk-in counter sale (no customer on the bill). */
   walkIn: boolean;
   /** Voucher imports: planned allocation shown in the preview. */
   plan: ImportVoucherPlan | null;
-  /** Voucher imports: what commit actually recorded. */
+  /** What commit/approve actually recorded. */
   created: ImportVoucherCreated | null;
+  /** This row's outcome in the last demo run. */
+  demo: {
+    status: "imported" | "skipped" | "failed";
+    reason: string | null;
+    createdType: string | null;
+    created: Record<string, unknown> | null;
+  } | null;
   createdRecordType: string | null;
   createdRecordId: number | null;
   createdLedgerId: number | null;
@@ -89,32 +132,13 @@ export interface ImportVoucherPlan {
 /** What commit actually recorded for a voucher row. */
 export interface ImportVoucherCreated {
   voucherNumber: string;
-  allocations: ImportVoucherAllocation[];
-  advanceAmount: number;
-}
-
-/** Inline party creation during a sales/purchase import (resolve step). */
-export interface ImportPartyInput {
-  name: string;
-  gstNumber?: string;
-  phone?: string;
-  state?: string;
-  address?: string;
-  creditLimit?: number;
-}
-
-export interface ImportResolvePartiesResponse {
-  batch: ImportBatch;
-  rows: ImportRow[];
-  created: string[];
-  skipped: string[];
-  errors: Array<{ name: string; reason: string }>;
-  /** Present for sales/purchase imports — refreshed batch totals. */
-  summary?: ImportTxnSummary;
+  allocations?: ImportVoucherAllocation[];
+  advanceAmount?: number;
+  [k: string]: unknown;
 }
 
 /** Batch-level money totals for a sales/purchase preview — computed by the
- *  same server-side pricing pass the commit uses. */
+ *  same server-side pricing pass the import uses. */
 export interface ImportTxnSummary {
   invoices: number;
   totalQuantity: number;
@@ -122,14 +146,11 @@ export interface ImportTxnSummary {
   totalGst: number;
   totalDiscount: number;
   totalAmount: number;
-  /** Distinct customers/vendors across fully-validated documents. */
   distinctParties: number;
-  /** Distinct product names across all parsed lines. */
   distinctItems: number;
-  /** Documents that will be recorded as walk-in counter sales. */
   walkInInvoices: number;
-  /** Party names that will be created automatically at commit. */
-  partiesToCreate: string[];
+  /** Old-ERP names not yet linked — resolved in the mapping step. */
+  unmappedNames: Array<{ kind: ImportMappingKind; name: string }>;
 }
 
 export interface ImportParseResponse {
@@ -138,6 +159,115 @@ export interface ImportParseResponse {
   /** Present for sales/purchase imports. */
   summary?: ImportTxnSummary;
 }
+
+// ── Mappings (old-ERP name → this ERP's record; permanent memory) ──────────
+
+export type ImportMappingKind = "customer" | "vendor" | "ledger" | "product";
+
+export interface ImportUnmappedName {
+  kind: ImportMappingKind;
+  name: string;
+  /** How many file rows carry this name. */
+  rows: number;
+  /** Exact-name match found in this ERP (prefill). */
+  suggestion: { targetId: number; targetKind: string | null; name: string } | null;
+}
+
+export interface ImportMappingCandidate {
+  id: number;
+  name: string;
+  /** product candidates only: item | material | raw_material */
+  targetKind?: string;
+}
+
+export interface ImportLedgerGroup {
+  id: number;
+  name: string;
+  type: string;
+  section: string | null;
+}
+
+export interface ImportBatchMappingsResponse {
+  batch: ImportBatch;
+  unmapped: ImportUnmappedName[];
+  /** Pick-lists for "choose existing", keyed by kind. */
+  candidates: Partial<Record<ImportMappingKind, ImportMappingCandidate[]>>;
+  /** Groups a NEW ledger may be created under. */
+  ledgerGroups: ImportLedgerGroup[];
+}
+
+/** One mapping decision: link to an existing record OR create a new one. */
+export interface ImportMappingInput {
+  kind: ImportMappingKind;
+  /** The old-ERP name being mapped (exactly as reported in `unmapped`). */
+  name: string;
+  /** Choose existing … */
+  targetId?: number;
+  targetKind?: string | null;
+  /** … or create new (fields depend on kind). */
+  create?: {
+    name?: string;
+    // customer/vendor
+    gstNumber?: string;
+    phone?: string;
+    state?: string;
+    address?: string;
+    // product (created as a finished item)
+    unit?: string;
+    hsnCode?: string;
+    taxRate?: number;
+    mrp?: number;
+    cost?: number;
+    // ledger
+    parentId?: number;
+  };
+}
+
+export interface ImportSaveMappingsResponse {
+  batch: ImportBatch;
+  rows: ImportRow[];
+  saved: Array<{ kind: ImportMappingKind; name: string; targetName: string }>;
+  created: Array<{ kind: ImportMappingKind; name: string; targetName: string }>;
+  errors: Array<{ kind: ImportMappingKind; name: string; reason: string }>;
+  summary?: ImportTxnSummary;
+}
+
+export interface ImportSavedMapping {
+  id: number;
+  kind: ImportMappingKind;
+  sourceName: string;
+  targetId: number;
+  targetKind: string | null;
+  /** Resolved current name of the target record (null if since deleted). */
+  targetName: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ── Demo report pack ────────────────────────────────────────────────────────
+
+export interface ImportDemoReportResponse {
+  /** The full report pack computed from the demo state (TB, P&L, BS, books, dues, stock, KPIs). */
+  report: {
+    generatedAt: string;
+    trialBalance: unknown;
+    profitAndLoss: unknown;
+    balanceSheet: unknown;
+    cashBook: unknown;
+    bankBook: unknown;
+    receivables: { rows: Array<{ customerId: number; name: string; outstanding: number }>; total: number };
+    payables: { rows: Array<{ vendorId: number; name: string; outstanding: number }>; total: number };
+    stockValuation: unknown;
+    kpis: { totalReceivables: number; totalPayables: number; stockValue: number };
+  };
+  summary: ImportDemoSummary | null;
+  demoAt: string | null;
+  demoBy: string | null;
+  status: ImportBatchStatus;
+}
+
+// ── Commit / approve / rollback responses ───────────────────────────────────
 
 /** What the commit actually put into the books (counted from provenance stamps). */
 export interface ImportCommitDetails {
@@ -159,8 +289,19 @@ export interface ImportCommitResponse {
   summary: { imported: number; updated: number; skipped: number; failed: number };
   failures: Array<{ rowNumber: number; name: string; reason: string }>;
   details?: ImportCommitDetails;
-  /** Parties auto-created during a sales/purchase commit (auto-create toggle). */
-  partiesCreated?: Array<{ id: number; name: string }>;
+}
+
+export interface ImportApproveResponse {
+  batch: ImportBatch;
+  summary: { imported: number; skipped: number; failed: number };
+  failures: Array<{ rowNumber: number; name: string; reason: string }>;
+  details?: { recordCounts: Record<string, number>; timeTakenMs: number };
+}
+
+export interface ImportDemoRunResponse {
+  batch: ImportBatch;
+  summary: { imported: number; skipped: number; failed: number };
+  failures: Array<{ rowNumber: number; name: string; reason: string }>;
 }
 
 export interface ImportRollbackResponse {
@@ -188,6 +329,9 @@ export interface ImportRollbackBlocked {
 export const importKeys = {
   batches: ["imports", "batches"] as const,
   batch: (id: number) => ["imports", "batches", id] as const,
+  batchMappings: (id: number) => ["imports", "batches", id, "mappings"] as const,
+  demoReport: (id: number) => ["imports", "batches", id, "demo-report"] as const,
+  mappings: (kind?: string, q?: string) => ["imports", "mappings", kind ?? "all", q ?? ""] as const,
 };
 
 // ── Hooks ──────────────────────────────────────────────────────────────────
@@ -206,15 +350,14 @@ export const useImportBatch = (id: number | null) =>
   });
 
 /**
- * Upload a filled template for validation. Sent as a raw body (same pattern as
- * the backup upload) — the server parses the workbook and answers with the
- * batch preview.
+ * Upload a filled template for validation. Sent as a raw body — the server
+ * parses the workbook and answers with the batch preview.
  */
 export const useParseImportFile = () => {
   const qc = useQueryClient();
   return useMutation<ImportParseResponse, Error, {
     module: ImportModule; file: File;
-    /** Required for sales/purchase imports: where the documents land. */
+    /** Required for transaction imports: where the documents land. */
     locationType?: string; locationId?: number;
   }>({
     mutationFn: ({ module, file, locationType, locationId }) => {
@@ -229,21 +372,70 @@ export const useParseImportFile = () => {
   });
 };
 
+/** The unmapped old-ERP names of a batch, with pick-lists and prefill suggestions. */
+export const useImportBatchMappings = (id: number | null) =>
+  useQuery<ImportBatchMappingsResponse, Error>({
+    queryKey: importKeys.batchMappings(id ?? 0),
+    queryFn: () => customFetch<ImportBatchMappingsResponse>(`/api/imports/batches/${id}/mappings`, { method: "GET" }),
+    enabled: id != null,
+  });
+
 /**
- * Create the missing customers/vendors reported by a sales/purchase import,
- * through the standard party-creation path (ledgers auto-provisioned), then
- * re-validate the whole batch server-side. Answer includes the re-validated
- * rows — no re-upload needed.
+ * Save mapping decisions (choose-existing or create-new per name), upserting
+ * the permanent mapping memory and re-validating the whole batch server-side.
  */
-export const useResolveImportParties = () => {
+export const useSaveImportMappings = () => {
   const qc = useQueryClient();
-  return useMutation<ImportResolvePartiesResponse, Error, { id: number; parties: ImportPartyInput[] }>({
-    mutationFn: ({ id, parties }) =>
-      customFetch<ImportResolvePartiesResponse>(`/api/imports/batches/${id}/resolve-parties`, {
+  return useMutation<ImportSaveMappingsResponse, Error, { id: number; mappings: ImportMappingInput[] }>({
+    mutationFn: ({ id, mappings }) =>
+      customFetch<ImportSaveMappingsResponse>(`/api/imports/batches/${id}/mappings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ parties }),
+        body: JSON.stringify({ mappings }),
       }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: importKeys.batches });
+      qc.invalidateQueries({ queryKey: importKeys.batch(vars.id) });
+      qc.invalidateQueries({ queryKey: importKeys.batchMappings(vars.id) });
+      qc.invalidateQueries({ queryKey: ["imports", "mappings"] });
+    },
+  });
+};
+
+/**
+ * DEMO run — the real import inside a transaction that is never committed.
+ * Nothing lands in the books; the batch stores the report pack for comparison.
+ */
+export const useRunImportDemo = () => {
+  const qc = useQueryClient();
+  return useMutation<ImportDemoRunResponse, Error, { id: number }>({
+    mutationFn: ({ id }) =>
+      customFetch<ImportDemoRunResponse>(`/api/imports/batches/${id}/demo`, { method: "POST" }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: importKeys.batches });
+      qc.invalidateQueries({ queryKey: importKeys.batch(vars.id) });
+      qc.invalidateQueries({ queryKey: importKeys.demoReport(vars.id) });
+    },
+  });
+};
+
+/** The stored demo report pack (large — fetched only when viewed). */
+export const useImportDemoReport = (id: number | null, enabled = true) =>
+  useQuery<ImportDemoReportResponse, Error>({
+    queryKey: importKeys.demoReport(id ?? 0),
+    queryFn: () => customFetch<ImportDemoReportResponse>(`/api/imports/batches/${id}/demo-report`, { method: "GET" }),
+    enabled: id != null && enabled,
+  });
+
+/**
+ * APPROVE — the production import. Runs the same code the demo ran, in one
+ * all-or-nothing transaction: any new failure rolls the whole import back.
+ */
+export const useApproveImportBatch = () => {
+  const qc = useQueryClient();
+  return useMutation<ImportApproveResponse, Error, { id: number }>({
+    mutationFn: ({ id }) =>
+      customFetch<ImportApproveResponse>(`/api/imports/batches/${id}/approve`, { method: "POST" }),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: importKeys.batches });
       qc.invalidateQueries({ queryKey: importKeys.batch(vars.id) });
@@ -251,6 +443,20 @@ export const useResolveImportParties = () => {
   });
 };
 
+/** Discard an un-imported batch (nothing was ever written to the books). */
+export const useDiscardImportBatch = () => {
+  const qc = useQueryClient();
+  return useMutation<{ batch: ImportBatch }, Error, { id: number }>({
+    mutationFn: ({ id }) =>
+      customFetch<{ batch: ImportBatch }>(`/api/imports/batches/${id}/discard`, { method: "POST" }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: importKeys.batches });
+      qc.invalidateQueries({ queryKey: importKeys.batch(vars.id) });
+    },
+  });
+};
+
+/** Direct commit — MASTER imports only (customers, vendors, ledgers, items). */
 export const useCommitImportBatch = () => {
   const qc = useQueryClient();
   return useMutation<ImportCommitResponse, Error, { id: number; skipRowIds?: number[]; duplicateAction?: "skip" | "update" }>({
@@ -279,6 +485,334 @@ export const useRollbackImportBatch = () => {
   });
 };
 
+// ── Manage Mappings (permanent memory, independent of any batch) ───────────
+
+export const useImportMappings = (kind?: ImportMappingKind, search?: string) =>
+  useQuery<{ mappings: ImportSavedMapping[] }, Error>({
+    queryKey: importKeys.mappings(kind, search),
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (kind) params.set("kind", kind);
+      if (search) params.set("search", search);
+      const qs = params.toString();
+      return customFetch<{ mappings: ImportSavedMapping[] }>(`/api/imports/mappings${qs ? `?${qs}` : ""}`, { method: "GET" });
+    },
+  });
+
+/** Pick-list for re-pointing a saved mapping (Manage Mappings screen). */
+export const useImportMappingCandidates = (kind: ImportMappingKind | null) =>
+  useQuery<{ candidates: ImportMappingCandidate[] }, Error>({
+    queryKey: ["imports", "mapping-candidates", kind ?? ""] as const,
+    queryFn: () => customFetch<{ candidates: ImportMappingCandidate[] }>(`/api/imports/mapping-candidates?kind=${kind}`, { method: "GET" }),
+    enabled: kind != null,
+  });
+
+export const useUpdateImportMapping = () => {
+  const qc = useQueryClient();
+  return useMutation<{ mapping: ImportSavedMapping }, Error, { id: number; targetId: number; targetKind?: string | null }>({
+    mutationFn: ({ id, targetId, targetKind }) =>
+      customFetch<{ mapping: ImportSavedMapping }>(`/api/imports/mappings/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetId, targetKind: targetKind ?? null }),
+      }),
+    // Mapping edits also demote in-flight batches (demo cleared server-side),
+    // so refresh everything import-related, not just the mapping list.
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["imports"] }); },
+  });
+};
+
+export const useDeleteImportMapping = () => {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean }, Error, { id: number }>({
+    mutationFn: ({ id }) =>
+      customFetch<{ ok: boolean }>(`/api/imports/mappings/${id}`, { method: "DELETE" }),
+    // Mapping edits also demote in-flight batches (demo cleared server-side),
+    // so refresh everything import-related, not just the mapping list.
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["imports"] }); },
+  });
+};
+
+// ── Migration wizard (ONE migration, many files) ────────────────────────────
+//
+// The umbrella over up to one file per transaction module: upload all files →
+// combined analyse → mapping → ONE demo across every file (one report pack) →
+// verification → pick the location LAST → approve = one all-or-nothing
+// import. Rollback removes the ENTIRE migration, never part of it.
+
+export type ImportMigrationStatus =
+  | "draft" | "demo_ready" | "committing" | "committed" | "rolled_back" | "discarded";
+
+export interface ImportMigration {
+  id: number;
+  /** Human-facing id, e.g. "MIG0001". */
+  displayId: string;
+  status: ImportMigrationStatus;
+  /** Chosen at approval time — null until then. */
+  locationType: string | null;
+  locationId: number | null;
+  locationName?: string | null;
+  createdBy: string;
+  createdAt: string;
+  demoAt: string | null;
+  demoBy: string | null;
+  demoSummary: ImportMigrationDemoSummary | null;
+  hasDemoReport: boolean;
+  /** Per-record-type counts of what approval actually wrote. */
+  recordCounts: Record<string, number> | null;
+  legacyRange: { min: string | null; max: string | null } | null;
+  committedAt: string | null;
+  committedBy: string | null;
+  discardedAt: string | null;
+  discardedBy: string | null;
+  rolledBackAt: string | null;
+  rolledBackBy: string | null;
+  canEdit: boolean;
+  canDemo: boolean;
+  canApprove: boolean;
+  canDiscard: boolean;
+  rollbackAvailable: boolean;
+}
+
+export interface ImportMigrationDemoSummary {
+  imported: number;
+  skipped: number;
+  failed: number;
+  perModule: Record<string, { imported: number; skipped: number; failed: number; legacyMin: string | null; legacyMax: string | null }>;
+  failures: Array<{ module: ImportModule; rowNumber: number; name: string; reason: string }>;
+  timeTakenMs?: number;
+}
+
+/** Lightweight per-file summary on the migrations LIST. */
+export interface ImportMigrationFileSummary {
+  module: ImportModule;
+  filename: string;
+  status: ImportBatchStatus;
+  totalRows: number;
+  validRows: number;
+  warningRows: number;
+  errorRows: number;
+  importedRows: number | null;
+}
+
+export interface ImportMigrationListItem extends ImportMigration {
+  files: ImportMigrationFileSummary[];
+}
+
+/** One uploaded file on the migration DETAIL — a full batch plus wizard extras. */
+export interface ImportMigrationFile extends ImportBatch {
+  /** Rows waiting on the mapping step. */
+  needsMappingRows: number;
+  /** Error rows that are NOT mapping problems — fix the file and re-upload. */
+  hardErrorRows: number;
+  /** Documents in the file (invoices / vouchers / JVs / lines). */
+  docCount: number;
+  /** Money the file carries (invoice totals / voucher amounts / debit total / stock value). */
+  moneyTotal: number;
+  summary?: ImportTxnSummary;
+}
+
+export interface ImportMigrationAnalysis {
+  issues: { duplicates: number; invalidGst: number; invalidDates: number; invalidAmounts: number; other: number };
+  masters: Partial<Record<ImportMappingKind, { found: number; missing: number }>>;
+}
+
+export interface ImportMigrationDetail {
+  migration: ImportMigration;
+  files: ImportMigrationFile[];
+  analysis: ImportMigrationAnalysis;
+  /** Distinct old-ERP names still waiting in the mapping step. */
+  unmappedTotal: number;
+}
+
+export interface ImportMigrationMappingsResponse {
+  unmapped: ImportUnmappedName[];
+  candidates: Partial<Record<ImportMappingKind, ImportMappingCandidate[]>>;
+  ledgerGroups: ImportLedgerGroup[];
+}
+
+export interface ImportMigrationSaveMappingsResponse extends ImportMigrationDetail {
+  saved: Array<{ kind: ImportMappingKind; name: string; targetName: string }>;
+  created: Array<{ kind: ImportMappingKind; name: string; targetName: string }>;
+  errors: Array<{ kind: ImportMappingKind; name: string; reason: string }>;
+}
+
+export interface ImportMigrationDemoResponse {
+  migration: ImportMigration;
+  summary: ImportMigrationDemoSummary;
+  failures: Array<{ module: ImportModule; rowNumber: number; name: string; reason: string }>;
+}
+
+export interface ImportMigrationApproveResponse {
+  migration: ImportMigration;
+  summary: { imported: number; skipped: number; failed: number };
+  details: { recordCounts: Record<string, number>; timeTakenMs: number };
+}
+
+export interface ImportMigrationRollbackResponse {
+  migration: ImportMigration;
+  removed: number;
+  removedCounts: Record<string, number>;
+  verification: {
+    ok: boolean;
+    perBatch: Array<{ module: ImportModule; verification: { ok: boolean; leftoverStamps: number; booksBalanced: boolean; orphanSaleReceipts: number } }>;
+  };
+}
+
+export const migrationKeys = {
+  list: ["imports", "migrations"] as const,
+  detail: (id: number) => ["imports", "migrations", id] as const,
+  mappings: (id: number) => ["imports", "migrations", id, "mappings"] as const,
+  demoReport: (id: number) => ["imports", "migrations", id, "demo-report"] as const,
+};
+
+export const useImportMigrations = () =>
+  useQuery<{ migrations: ImportMigrationListItem[] }, Error>({
+    queryKey: migrationKeys.list,
+    queryFn: () => customFetch<{ migrations: ImportMigrationListItem[] }>("/api/imports/migrations", { method: "GET" }),
+  });
+
+export const useImportMigration = (id: number | null) =>
+  useQuery<ImportMigrationDetail, Error>({
+    queryKey: migrationKeys.detail(id ?? 0),
+    queryFn: () => customFetch<ImportMigrationDetail>(`/api/imports/migrations/${id}`, { method: "GET" }),
+    enabled: id != null,
+  });
+
+export const useCreateImportMigration = () => {
+  const qc = useQueryClient();
+  return useMutation<{ migration: ImportMigration }, Error, void>({
+    mutationFn: () => customFetch<{ migration: ImportMigration }>("/api/imports/migrations", { method: "POST" }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: migrationKeys.list }); },
+  });
+};
+
+/** Upload (or replace) one module's file. Answers with the fresh detail. */
+export const useUploadMigrationFile = () => {
+  const qc = useQueryClient();
+  return useMutation<ImportMigrationDetail, Error, { id: number; module: ImportModule; file: File }>({
+    mutationFn: ({ id, module, file }) =>
+      customFetch<ImportMigrationDetail>(
+        `/api/imports/migrations/${id}/files?module=${module}&filename=${encodeURIComponent(file.name)}`,
+        { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file },
+      ),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: migrationKeys.list });
+      qc.invalidateQueries({ queryKey: migrationKeys.detail(vars.id) });
+      qc.invalidateQueries({ queryKey: migrationKeys.mappings(vars.id) });
+    },
+  });
+};
+
+export const useRemoveMigrationFile = () => {
+  const qc = useQueryClient();
+  return useMutation<ImportMigrationDetail, Error, { id: number; module: ImportModule }>({
+    mutationFn: ({ id, module }) =>
+      customFetch<ImportMigrationDetail>(`/api/imports/migrations/${id}/files/${module}`, { method: "DELETE" }),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: migrationKeys.list });
+      qc.invalidateQueries({ queryKey: migrationKeys.detail(vars.id) });
+      qc.invalidateQueries({ queryKey: migrationKeys.mappings(vars.id) });
+    },
+  });
+};
+
+/** Unmapped names across ALL files of the migration, in one workspace. */
+export const useImportMigrationMappings = (id: number | null) =>
+  useQuery<ImportMigrationMappingsResponse, Error>({
+    queryKey: migrationKeys.mappings(id ?? 0),
+    queryFn: () => customFetch<ImportMigrationMappingsResponse>(`/api/imports/migrations/${id}/mappings`, { method: "GET" }),
+    enabled: id != null,
+  });
+
+export const useSaveMigrationMappings = () => {
+  const qc = useQueryClient();
+  return useMutation<ImportMigrationSaveMappingsResponse, Error, { id: number; mappings: ImportMappingInput[] }>({
+    mutationFn: ({ id, mappings }) =>
+      customFetch<ImportMigrationSaveMappingsResponse>(`/api/imports/migrations/${id}/mappings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mappings }),
+      }),
+    // Mappings are global memory — refresh every import surface.
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["imports"] }); },
+  });
+};
+
+/** The combined demo across every file — one transaction, never committed. */
+export const useRunMigrationDemo = () => {
+  const qc = useQueryClient();
+  return useMutation<ImportMigrationDemoResponse, Error, { id: number }>({
+    mutationFn: ({ id }) => customFetch<ImportMigrationDemoResponse>(`/api/imports/migrations/${id}/demo`, { method: "POST" }),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: migrationKeys.list });
+      qc.invalidateQueries({ queryKey: migrationKeys.detail(vars.id) });
+      qc.invalidateQueries({ queryKey: migrationKeys.demoReport(vars.id) });
+    },
+  });
+};
+
+/** The stored demo report pack for a migration (large — fetch when viewed). */
+export const useMigrationDemoReport = (id: number | null, enabled = true) =>
+  useQuery<ImportDemoReportResponse, Error>({
+    queryKey: migrationKeys.demoReport(id ?? 0),
+    queryFn: () => customFetch<ImportDemoReportResponse>(`/api/imports/migrations/${id}/demo-report`, { method: "GET" }),
+    enabled: id != null && enabled,
+  });
+
+/**
+ * APPROVE — the final import. The location is chosen HERE (after
+ * verification); the server re-checks every file at it, then imports all
+ * files in one all-or-nothing transaction.
+ */
+export const useApproveMigration = () => {
+  const qc = useQueryClient();
+  return useMutation<ImportMigrationApproveResponse, Error, { id: number; locationType: string; locationId: number }>({
+    mutationFn: ({ id, locationType, locationId }) =>
+      customFetch<ImportMigrationApproveResponse>(`/api/imports/migrations/${id}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ locationType, locationId }),
+      }),
+    // A committed migration changed the books everywhere.
+    onSuccess: () => { qc.invalidateQueries(); },
+  });
+};
+
+export const useDiscardMigration = () => {
+  const qc = useQueryClient();
+  return useMutation<{ migration: ImportMigration }, Error, { id: number }>({
+    mutationFn: ({ id }) => customFetch<{ migration: ImportMigration }>(`/api/imports/migrations/${id}/discard`, { method: "POST" }),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: migrationKeys.list });
+      qc.invalidateQueries({ queryKey: migrationKeys.detail(vars.id) });
+    },
+  });
+};
+
+/** Roll back the ENTIRE migration — every file, or nothing. */
+export const useRollbackMigration = () => {
+  const qc = useQueryClient();
+  return useMutation<ImportMigrationRollbackResponse, Error, { id: number }>({
+    mutationFn: ({ id }) => customFetch<ImportMigrationRollbackResponse>(`/api/imports/migrations/${id}/rollback`, { method: "POST" }),
+    // A rollback changed the books everywhere.
+    onSuccess: () => { qc.invalidateQueries(); },
+  });
+};
+
+// ── Downloads ───────────────────────────────────────────────────────────────
+
+function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 /**
  * Download the pre-filled sample template. Fetched with the auth header and
  * saved as a blob — a bare link would arrive without a token and fail.
@@ -288,14 +822,7 @@ export async function downloadImportTemplate(module: ImportModule): Promise<void
     method: "GET",
     responseType: "blob",
   });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${module}-import-sample.xlsx`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  saveBlob(blob, `${module}-import-sample.xlsx`);
 }
 
 /**
@@ -307,12 +834,5 @@ export async function downloadImportErrorFile(batchId: number, module: ImportMod
     method: "GET",
     responseType: "blob",
   });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${module}-import-errors.xlsx`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  saveBlob(blob, `${module}-import-errors.xlsx`);
 }

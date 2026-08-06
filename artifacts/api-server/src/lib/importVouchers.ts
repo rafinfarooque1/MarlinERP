@@ -215,8 +215,9 @@ export interface ImportedVoucherResult {
 // ── Receipts ─────────────────────────────────────────────────────────────────
 
 export interface ImportReceiptVoucherInput {
-  /** Old-ERP voucher number, kept verbatim; null → sequence allocator. */
-  voucherNumber: string | null;
+  /** Old-ERP voucher number — stored in legacy_voucher_number (searchable);
+   *  the voucher itself ALWAYS draws the next ERP number from the allocator. */
+  legacyVoucherNumber: string | null;
   date: string; // YYYY-MM-DD (business date)
   customerId: number;
   customerName: string;
@@ -231,17 +232,22 @@ export interface ImportReceiptVoucherInput {
   user: string;
 }
 
-export async function importReceiptVoucher(doc: ImportReceiptVoucherInput): Promise<ImportedVoucherResult> {
-  const custLedgerId = await ensureCustomerLedger(doc.customerId, doc.customerName);
+/**
+ * When `ext` is supplied the voucher writes through THAT client inside a
+ * SAVEPOINT (caller owns BEGIN/COMMIT — demo import / all-or-nothing commit).
+ * Without `ext` it keeps its historical own-connection behaviour.
+ */
+export async function importReceiptVoucher(doc: ImportReceiptVoucherInput, ext?: PoolClient): Promise<ImportedVoucherResult> {
+  const custLedgerId = await ensureCustomerLedger(doc.customerId, doc.customerName, ext ?? pool);
   if (custLedgerId == null) throw new Error(`Customer ledger could not be provisioned for ${doc.customerName}.`);
 
-  const client = await pool.connect();
+  const client = ext ?? await pool.connect();
   try {
-    await client.query("BEGIN");
+    await client.query(ext ? "SAVEPOINT import_doc" : "BEGIN");
 
-    let voucherNumber = doc.voucherNumber;
-    if (voucherNumber) await assertVoucherNumberFree(client, "receipts", voucherNumber);
-    else voucherNumber = await nextVoucherNumber(client, "receipt", doc.date);
+    // Migration-wizard rule: the ERP allocates its own voucher number; the
+    // file's number is kept as the searchable legacy reference only.
+    const voucherNumber = await nextVoucherNumber(client, "receipt", doc.date);
 
     // ── Allocation on locked rows, same checks as the manual settlement path ──
     const details: { sale: any; amount: number; position: any }[] = [];
@@ -338,11 +344,11 @@ export async function importReceiptVoucher(doc: ImportReceiptVoucherInput): Prom
     const stamp = voucherStamp(doc.loc);
     const { rows: [r] } = await client.query(
       `INSERT INTO receipts (voucher_number, receipt_date, received_from_ledger_id, received_in_ledger_id, amount, narration, location_type, location_id,
-                             reference_number, created_by, source, advance_amount, advance_ledger_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'allocation', $11, $12) RETURNING id, voucher_number`,
+                             reference_number, created_by, source, advance_amount, advance_ledger_id, legacy_voucher_number)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'allocation', $11, $12, $13) RETURNING id, voucher_number`,
       [voucherNumber, doc.date, custLedgerId, doc.accountLedgerId, r2(doc.amount),
        doc.narration, stamp.type, stamp.id, doc.reference, doc.user,
-       advance, advanceLedgerId],
+       advance, advanceLedgerId, doc.legacyVoucherNumber || null],
     );
 
     for (const d of details) {
@@ -365,24 +371,26 @@ export async function importReceiptVoucher(doc: ImportReceiptVoucherInput): Prom
       );
     }
 
-    await client.query("COMMIT");
+    await client.query(ext ? "RELEASE SAVEPOINT import_doc" : "COMMIT");
     return {
       id: Number(r.id), voucherNumber: String(r.voucher_number),
       allocations: details.map((d) => ({ id: d.sale.id, invoiceNumber: d.sale.invoice_number ?? null, amount: d.amount })),
       advanceAmount: advance, advanceLedgerId,
     };
   } catch (e) {
-    await client.query("ROLLBACK").catch(() => {});
+    await client.query(ext ? "ROLLBACK TO SAVEPOINT import_doc" : "ROLLBACK").catch(() => {});
     throw e;
   } finally {
-    client.release();
+    if (!ext) (client as PoolClient).release();
   }
 }
 
 // ── Payments ─────────────────────────────────────────────────────────────────
 
 export interface ImportPaymentVoucherInput {
-  voucherNumber: string | null;
+  /** Old-ERP voucher number — stored in legacy_voucher_number (searchable);
+   *  the voucher itself ALWAYS draws the next ERP number from the allocator. */
+  legacyVoucherNumber: string | null;
   date: string;
   vendorId: number;
   vendorName: string;
@@ -397,22 +405,24 @@ export interface ImportPaymentVoucherInput {
   user: string;
 }
 
-export async function importPaymentVoucher(doc: ImportPaymentVoucherInput): Promise<ImportedVoucherResult> {
-  const vendLedgerId = await ensureVendorLedger(doc.vendorId, doc.vendorName);
+/** Same `ext` contract as importReceiptVoucher. */
+export async function importPaymentVoucher(doc: ImportPaymentVoucherInput, ext?: PoolClient): Promise<ImportedVoucherResult> {
+  const vendLedgerId = await ensureVendorLedger(doc.vendorId, doc.vendorName, ext ?? pool);
   if (vendLedgerId == null) throw new Error(`Vendor ledger could not be provisioned for ${doc.vendorName}.`);
 
   // Dues the way every report computes them (shared settlement index):
   // explicit allocations, advance applications and the FIFO pool all reduce a
   // bill's balance. The hard cap inside the transaction holds under concurrency.
-  const idx = await purchaseSettlementIndex([doc.vendorId]);
+  // Threaded through ext so a demo run sees its own imported bills/settlements.
+  const idx = await purchaseSettlementIndex([doc.vendorId], ext);
 
-  const client = await pool.connect();
+  const client = ext ?? await pool.connect();
   try {
-    await client.query("BEGIN");
+    await client.query(ext ? "SAVEPOINT import_doc" : "BEGIN");
 
-    let voucherNumber = doc.voucherNumber;
-    if (voucherNumber) await assertVoucherNumberFree(client, "payments", voucherNumber);
-    else voucherNumber = await nextVoucherNumber(client, "payment", doc.date);
+    // Migration-wizard rule: the ERP allocates its own voucher number; the
+    // file's number is kept as the searchable legacy reference only.
+    const voucherNumber = await nextVoucherNumber(client, "payment", doc.date);
 
     const checkBill = (bill: any) => {
       const label = bill.invoice_number ?? `#${bill.id}`;
@@ -517,11 +527,11 @@ export async function importPaymentVoucher(doc: ImportPaymentVoucherInput): Prom
     const stamp = voucherStamp(doc.loc);
     const { rows: [r] } = await client.query(
       `INSERT INTO payments (voucher_number, payment_date, paid_from_ledger_id, paid_to_ledger_id, amount, narration, location_type, location_id,
-                             reference_number, created_by, source, advance_amount, advance_ledger_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'allocation', $11, $12) RETURNING id, voucher_number`,
+                             reference_number, created_by, source, advance_amount, advance_ledger_id, legacy_voucher_number)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'allocation', $11, $12, $13) RETURNING id, voucher_number`,
       [voucherNumber, doc.date, doc.accountLedgerId, vendLedgerId, r2(doc.amount),
        doc.narration, stamp.type, stamp.id, doc.reference, doc.user,
-       advance, advanceLedgerId],
+       advance, advanceLedgerId, doc.legacyVoucherNumber || null],
     );
     for (const d of details) {
       await client.query(
@@ -530,17 +540,17 @@ export async function importPaymentVoucher(doc: ImportPaymentVoucherInput): Prom
       );
     }
 
-    await client.query("COMMIT");
+    await client.query(ext ? "RELEASE SAVEPOINT import_doc" : "COMMIT");
     return {
       id: Number(r.id), voucherNumber: String(r.voucher_number),
       allocations: details.map((d) => ({ id: d.bill.id, invoiceNumber: d.bill.invoice_number ?? null, amount: d.amount })),
       advanceAmount: advance, advanceLedgerId,
     };
   } catch (e) {
-    await client.query("ROLLBACK").catch(() => {});
+    await client.query(ext ? "ROLLBACK TO SAVEPOINT import_doc" : "ROLLBACK").catch(() => {});
     throw e;
   } finally {
-    client.release();
+    if (!ext) (client as PoolClient).release();
   }
 }
 

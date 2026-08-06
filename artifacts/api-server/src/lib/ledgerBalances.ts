@@ -47,12 +47,15 @@
  */
 import { pool } from "@workspace/db";
 
+/** A queryable database handle (pg pool or PoolClient), per lib/importVouchers.ts. */
+type Q = { query: Function };
+
 export type BalancePosting = {
   ledgerId: number;
   debit: number;
   credit: number;
 };
-export type PostingsFn = (opts: { toDate?: string }) => Promise<
+export type PostingsFn = (opts: { toDate?: string; q?: Q }) => Promise<
   Array<{ date: string; ledgerId: number; debit: number; credit: number }>
 >;
 
@@ -136,18 +139,21 @@ export async function buildLedgerBalanceIndex(
      * reconciliation. Default true (company-wide view).
      */
     includeOpeningBalances?: boolean;
+    /** Queryable to run on (default the shared pool); also threaded into postingsFn. */
+    q?: Q;
   } = {},
 ): Promise<LedgerBalanceIndex> {
   const toDate = opts.toDate || null;
   const includeOb = opts.includeOpeningBalances !== false;
+  const q = opts.q ?? pool;
 
   const [{ rows: ledgerRows }, postings, { rows: obRows }] = await Promise.all([
-    pool.query(`SELECT id, code, parent_id FROM account_ledgers`),
+    q.query(`SELECT id, code, parent_id FROM account_ledgers`),
     opts.postings
       ? Promise.resolve(opts.postings)
-      : postingsFn(toDate ? { toDate } : {}),
+      : postingsFn(toDate ? { toDate, q } : { q }),
     includeOb
-      ? pool.query(
+      ? q.query(
           `SELECT ledger_id, balance::numeric AS balance, balance_type FROM opening_balances${
             toDate ? ` WHERE as_of_date <= $1` : ""
           }`,
@@ -331,15 +337,18 @@ export async function buildLedgerStatement(
     fromDate?: string | null; toDate?: string | null; natural?: 1 | -1;
     /** An already-derived posting stream for the same `toDate`, to avoid rebuilding it. */
     postings?: Array<Record<string, any>>;
+    /** Queryable to run on (default the shared pool); also threaded into postingsFn. */
+    q?: Q;
   } = {},
 ): Promise<LedgerStatement> {
   const natural = opts.natural ?? 1;
   const toDate = opts.toDate || null;
   const fromDate = opts.fromDate || null;
+  const q = opts.q ?? pool;
 
   const [all, { rows: obRows }] = await Promise.all([
-    opts.postings ? Promise.resolve(opts.postings) : postingsFn(toDate ? { toDate } : {}),
-    pool.query(
+    opts.postings ? Promise.resolve(opts.postings) : postingsFn(toDate ? { toDate, q } : { q }),
+    q.query(
       `SELECT balance::numeric AS balance, balance_type, as_of_date
          FROM opening_balances WHERE ledger_id = $1${toDate ? ` AND as_of_date <= $2` : ""}`,
       toDate ? [ledgerId, toDate] : [ledgerId],
@@ -401,7 +410,7 @@ export async function buildLedgerStatement(
  * cycle. Everything downstream stays a plain function call.
  */
 export async function currentBalanceIndex(
-  opts: { toDate?: string | null } = {},
+  opts: { toDate?: string | null; q?: Q } = {},
 ): Promise<LedgerBalanceIndex> {
   const { buildDerivedPostings } = await import("../routes/journal");
   return buildLedgerBalanceIndex(buildDerivedPostings as PostingsFn, opts);
@@ -421,6 +430,8 @@ export async function currentPartyStatement(
      * not the party's company-wide balance.
      */
     postingFilter?: (p: Record<string, any>) => boolean;
+    /** Queryable to run on (default the shared pool); also threaded into postingsFn. */
+    q?: Q;
   } = {},
 ): Promise<(LedgerStatement & { hasLedger: boolean }) | { hasLedger: false } & LedgerStatement> {
   const { buildDerivedPostings } = await import("../routes/journal");
@@ -428,8 +439,9 @@ export async function currentPartyStatement(
   // (which resolves the party's ledger) and the statement. Letting each build
   // its own doubles the cost of the most expensive part of this request.
   const toDate = opts.toDate ?? null;
-  const postings = await (buildDerivedPostings as PostingsFn)(toDate ? { toDate } : {});
-  const idx = await buildLedgerBalanceIndex(buildDerivedPostings as PostingsFn, { toDate, postings });
+  const q = opts.q;
+  const postings = await (buildDerivedPostings as PostingsFn)(toDate ? { toDate, q } : { q });
+  const idx = await buildLedgerBalanceIndex(buildDerivedPostings as PostingsFn, { toDate, postings, q });
   const ledgerId = idx.partyLedgerId(kind, partyId);
   if (ledgerId == null) {
     return { hasLedger: false, ledgerId: 0, opening: 0, closing: 0, totalDebit: 0, totalCredit: 0, entries: [] };
@@ -441,6 +453,7 @@ export async function currentPartyStatement(
     fromDate: opts.fromDate, toDate: opts.toDate,
     natural: PARTY[kind].natural,
     postings: stream,
+    q,
   });
   return { ...st, hasLedger: true };
 }

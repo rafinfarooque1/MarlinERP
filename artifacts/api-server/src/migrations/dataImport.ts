@@ -193,4 +193,104 @@ export async function addDataImport(): Promise<void> {
       `[migration] import_page_perms_v1 — granted Import Data page to ${hRows.length} pre-existing roles`,
     );
   }
+
+  // ══ ERP Migration Wizard (module replacement) ══════════════════════════════
+  // The Import Data page became a staged wizard: Upload → Analyse → Manual
+  // Mapping → Demo Import (one never-committed transaction; report snapshots
+  // taken before ROLLBACK) → Approve (all-or-nothing) or Discard.
+  await pool.query(`
+    -- Demo-run snapshots and outcome bookkeeping. demo_report holds the full
+    -- financial report pack computed INSIDE the demo transaction (TB, P&L, BS,
+    -- receivables, vendor outstanding, cash/bank book, stock valuation,
+    -- dashboard KPIs); demo_summary the per-row outcome counts. Stored via a
+    -- separate small transaction after the demo ROLLBACK.
+    ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS demo_report   jsonb;
+    ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS demo_summary  jsonb;
+    ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS demo_at       timestamptz;
+    ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS demo_by       text;
+    ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS discarded_at  timestamptz;
+    ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS discarded_by  text;
+    -- Legacy voucher-number range carried by the file (history display).
+    ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS legacy_min    text;
+    ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS legacy_max    text;
+  `);
+
+  // Permanent master mapping memory: old-ERP name → this ERP's record.
+  // ONE row per (kind, normalized name); validation resolves masters ONLY
+  // through this table — no silent auto-matching. Managed on the page's
+  // Manage Mapping screen. Unique index OUTSIDE the CREATE TABLE
+  // (migration-ddl-drift: constraints inside CREATE TABLE IF NOT EXISTS
+  // never reach live databases).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS import_mappings (
+      id           serial PRIMARY KEY,
+      kind         text NOT NULL,            -- customer | vendor | item | ledger
+      source_name  text NOT NULL,            -- as it appeared in the file (display)
+      source_norm  text NOT NULL,            -- normalized match key (lower/trim/squeeze)
+      target_id    integer NOT NULL,         -- id in the matching master table
+      created_by   text NOT NULL DEFAULT 'system',
+      created_at   timestamptz NOT NULL DEFAULT now(),
+      updated_at   timestamptz NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_import_mappings_kind_norm ON import_mappings (kind, source_norm)`,
+  );
+  // Product mappings must remember WHICH master table the target id lives in:
+  // items, materials and raw_materials have overlapping id spaces
+  // (polymorphic-stock-entries), so a bare integer is ambiguous. NULL for
+  // customer/vendor/ledger kinds (their id spaces are unambiguous).
+  await pool.query(
+    `ALTER TABLE import_mappings ADD COLUMN IF NOT EXISTS target_kind text`,
+  );
+
+  // Legacy voucher numbers: every imported document gets a REAL ERP number
+  // from the allocators; the old ERP's number is stored alongside and stays
+  // searchable. sales.legacy_invoice_number already exists; these cover the
+  // voucher-shaped documents (Day Book journals, receipts, payments).
+  await pool.query(`
+    ALTER TABLE journal_vouchers ADD COLUMN IF NOT EXISTS legacy_voucher_number text;
+    ALTER TABLE receipts         ADD COLUMN IF NOT EXISTS legacy_voucher_number text;
+    ALTER TABLE payments         ADD COLUMN IF NOT EXISTS legacy_voucher_number text;
+
+    -- New importable record kinds need batch provenance too.
+    ALTER TABLE journal_vouchers    ADD COLUMN IF NOT EXISTS import_batch_id integer;
+    ALTER TABLE items               ADD COLUMN IF NOT EXISTS import_batch_id integer;
+    ALTER TABLE stock_verifications ADD COLUMN IF NOT EXISTS import_batch_id integer;
+  `);
+  // ── ERP Migration Wizard: the umbrella over one multi-file migration ──────
+  // One import_migrations row groups up to one batch per wizard module
+  // (sales, purchases, receipts, payments, daybook, opening_stock). The
+  // wizard's demo report, approval and rollback all live at THIS level —
+  // the per-batch columns keep their per-file bookkeeping.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS import_migrations (
+      id             serial PRIMARY KEY,
+      status         text NOT NULL DEFAULT 'draft',
+      location_type  text,
+      location_id    integer,
+      demo_report    jsonb,
+      demo_summary   jsonb,
+      demo_at        timestamptz,
+      demo_by        text,
+      record_counts  jsonb,
+      legacy_min     text,
+      legacy_max     text,
+      created_by     text NOT NULL DEFAULT 'system',
+      created_at     timestamptz NOT NULL DEFAULT now(),
+      committed_at   timestamptz,
+      committed_by   text,
+      discarded_at   timestamptz,
+      discarded_by   text,
+      rolled_back_at timestamptz,
+      rolled_back_by text
+    );
+    ALTER TABLE import_batches ADD COLUMN IF NOT EXISTS migration_id integer;
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_import_batches_migration ON import_batches (migration_id) WHERE migration_id IS NOT NULL`);
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_sales_legacy_no ON sales (legacy_invoice_number) WHERE legacy_invoice_number IS NOT NULL`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_jv_legacy_no ON journal_vouchers (legacy_voucher_number) WHERE legacy_voucher_number IS NOT NULL`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_receipts_legacy_no ON receipts (legacy_voucher_number) WHERE legacy_voucher_number IS NOT NULL`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_legacy_no ON payments (legacy_voucher_number) WHERE legacy_voucher_number IS NOT NULL`);
 }

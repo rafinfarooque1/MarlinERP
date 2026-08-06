@@ -20,6 +20,9 @@ import { pool } from "@workspace/db";
 import { paymentModeLabel } from "./paymentModes";
 import { currentBalanceIndex } from "./ledgerBalances";
 
+/** A queryable database handle (pg pool or PoolClient), per lib/importVouchers.ts. */
+type Q = { query: Function };
+
 const r2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 const EPS = 0.005;
 
@@ -49,16 +52,16 @@ export function settlementModeSummary(s: BillSettlement): string {
  * result set should pass the vendors that actually appear in it — each such
  * vendor's FULL bill history still participates, as required.
  */
-export async function purchaseSettlementIndex(vendorIds?: number[]): Promise<Map<number, BillSettlement>> {
+export async function purchaseSettlementIndex(vendorIds?: number[], q: Q = pool): Promise<Map<number, BillSettlement>> {
   if (vendorIds && vendorIds.length === 0) return new Map();
   const vend = vendorIds ? [...new Set(vendorIds.filter(Number.isFinite))] : null;
   const vendBillCond = vend ? ` AND p.vendor_id = ANY($1::int[])` : "";
   const vendParams = vend ? [vend] : [];
 
   // Bills in the exact order the payables ageing settles them.
-  const { rows: [assetTbl] } = await pool.query<{ ok: boolean }>(
+  const { rows: [assetTbl] } = await (q as any).query(
     `SELECT to_regclass('public.asset_purchases') IS NOT NULL AS ok`,
-  );
+  ) as { rows: Array<{ ok: boolean }> };
   const assetSql = assetTbl?.ok
     ? `UNION ALL
        SELECT 'asset_purchase'::text AS source, ap.id, ap.purchase_date, ap.vendor_id,
@@ -68,7 +71,7 @@ export async function purchaseSettlementIndex(vendorIds?: number[]): Promise<Map
         WHERE ap.vendor_id IS NOT NULL AND (ap.quantity * ap.acquisition_cost) > 0.004
         ${vend ? "AND ap.vendor_id = ANY($1::int[])" : ""}`
     : "";
-  const { rows: bills } = await pool.query(
+  const { rows: bills } = await q.query(
     `SELECT * FROM (
        SELECT 'purchase'::text AS source, p.id, p.purchase_date, p.vendor_id,
               -- What the vendor is owed for the bill: goods PLUS other purchase
@@ -93,7 +96,7 @@ export async function purchaseSettlementIndex(vendorIds?: number[]): Promise<Map
   // the Dr VEND/Cr VADV contra respectively), so both are carved OUT of the
   // derived pool below before the oldest-first walk.
   const explicitAllocCond = vend ? ` AND pu.vendor_id = ANY($1::int[])` : "";
-  const { rows: explicitPayRows } = await pool.query(
+  const { rows: explicitPayRows } = await q.query(
     `WITH RECURSIVE cashfam AS (
        SELECT id FROM account_ledgers WHERE code = 'STD-CASH'
        UNION ALL
@@ -110,7 +113,7 @@ export async function purchaseSettlementIndex(vendorIds?: number[]): Promise<Map
     vendParams,
   );
   const advAppCond = vend ? ` WHERE a.vendor_id = ANY($1::int[])` : "";
-  const { rows: advAppRows } = await pool.query(
+  const { rows: advAppRows } = await q.query(
     `SELECT a.purchase_id, a.vendor_id, a.amount::numeric AS amount
        FROM purchase_advance_applications a${advAppCond}`,
     vendParams,
@@ -139,7 +142,7 @@ export async function purchaseSettlementIndex(vendorIds?: number[]): Promise<Map
   // stored mode when present, else by the funding ledger's family (Cash
   // subtree vs everything else = Bank).
   const vendChunkCond = vend ? ` AND SUBSTRING(lt.code FROM 6)::int = ANY($1::int[])` : "";
-  const { rows: payChunks } = await pool.query(
+  const { rows: payChunks } = await q.query(
     `WITH RECURSIVE cashfam AS (
        SELECT id FROM account_ledgers WHERE code = 'STD-CASH'
        UNION ALL
@@ -157,7 +160,7 @@ export async function purchaseSettlementIndex(vendorIds?: number[]): Promise<Map
       ORDER BY p.payment_date ASC, p.id ASC`,
     vendParams,
   );
-  const { rows: dnChunks } = await pool.query(
+  const { rows: dnChunks } = await q.query(
     `SELECT SUBSTRING(lt.code FROM 6)::int AS vendor_id,
             v.voucher_date AS payment_date, v.total_amount::numeric AS amount
        FROM journal_vouchers v
@@ -185,7 +188,7 @@ export async function purchaseSettlementIndex(vendorIds?: number[]): Promise<Map
   for (const c of dnChunks) pushChunk(Number(c.vendor_id), Number(c.amount), "Debit Note");
 
   // The authoritative settled pool per vendor: billed − ledger balance.
-  const balIdx = await currentBalanceIndex({});
+  const balIdx = await currentBalanceIndex({ q });
   const ledgerByVendor = balIdx.partyBalances("vendor");
 
   const billedByVendor = new Map<number, number>();

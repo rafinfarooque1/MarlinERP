@@ -1,0 +1,178 @@
+====================================================================
+11. SAFE WAREHOUSE DELETION POLICY
+====================================================================
+
+Implement a two-stage warehouse lifecycle to prevent accidental loss of accounting data.
+
+A warehouse can have one of two administrative actions:
+
+1. Disable Warehouse (Recommended)
+2. Permanently Delete Warehouse
+
+------------------------------------------------------------
+DISABLE WAREHOUSE
+------------------------------------------------------------
+
+Disabling a warehouse must:
+
+• Prevent all new transactions.
+• Prevent new Sales.
+• Prevent new Purchases.
+• Prevent new Quotations.
+• Prevent new Production.
+• Prevent new Stock Transfers.
+• Prevent new Receipt Vouchers.
+• Prevent new Payment Vouchers.
+• Prevent new Expenses.
+• Prevent new Inventory adjustments.
+
+However, historical data must remain available.
+
+Users can still:
+
+• View reports.
+• View ledgers.
+• View stock history.
+• View customer history.
+• View vendor history.
+• Print invoices.
+• Export reports.
+
+The warehouse should appear as:
+
+DISABLED
+
+with an option to re-enable later.
+
+------------------------------------------------------------
+PERMANENT DELETE
+------------------------------------------------------------
+
+Permanent deletion is intended only for test warehouses, migration mistakes, or warehouses that are no longer required.
+
+If the warehouse contains transactions, display the first confirmation:
+
+"This warehouse contains accounting and inventory data.
+
+The recommended action is to Disable the warehouse instead of deleting it.
+
+Permanent deletion will remove all accounting history for this warehouse and cannot be undone."
+
+The administrator must explicitly choose:
+
+○ Disable Warehouse (Recommended)
+
+OR
+
+○ Continue with Permanent Delete
+
+If the administrator chooses Permanent Delete:
+
+Display a second confirmation.
+
+The administrator must type exactly:
+
+DELETE <Warehouse Name>
+
+Example:
+
+DELETE Frozen Hub - Calicut
+
+The Delete button must remain disabled until the entered text exactly matches.
+
+------------------------------------------------------------
+DELETE VALIDATION
+------------------------------------------------------------
+
+Before deleting, display a summary of what will be removed.
+
+Example:
+
+Warehouse:
+Frozen Hub - Calicut
+
+Sales:
+245
+
+Purchases:
+61
+
+Receipt Vouchers:
+184
+
+Payment Vouchers:
+77
+
+Customers:
+42
+
+Vendors:
+19
+
+Ledger Entries:
+8,942
+
+Inventory Items:
+315
+
+Production Entries:
+96
+
+Cash Accounts:
+2
+
+Bank Accounts:
+1
+
+Stock Value:
+₹14,52,830.00
+
+This gives the administrator one final opportunity to cancel.
+
+------------------------------------------------------------
+POST DELETE VALIDATION
+------------------------------------------------------------
+
+After deletion automatically verify:
+
+✓ No orphan transactions remain.
+✓ No orphan ledger entries remain.
+✓ No orphan stock records remain.
+✓ No orphan customers remain.
+✓ No orphan vendors remain.
+✓ Trial Balance is balanced.
+✓ Balance Sheet is balanced.
+✓ Profit & Loss is balanced.
+✓ Dashboard totals are correct.
+✓ Cash Book is correct.
+✓ Bank Book is correct.
+✓ Inventory valuation is correct.
+✓ Customer receivables reconcile.
+✓ Vendor payables reconcile.
+✓ All location reports reconcile.
+
+Do not complete the delete operation until every validation passes successfully.
+
+------------------------------------------------------------
+PERMISSIONS
+------------------------------------------------------------
+
+Only Super Admin can:
+
+• Disable Warehouse
+• Enable Warehouse
+• Permanently Delete Warehouse
+
+No other role may perform these actions.
+
+====================================================================
+FINAL REQUIREMENT
+====================================================================
+
+The warehouse lifecycle must be safe, production-ready, and enterprise-grade.
+
+The default recommendation should always be "Disable Warehouse."
+
+Permanent deletion should only be used intentionally after multiple confirmation steps and complete integrity validation.
+
+The ERP must remain 100% accounting-consistent after enabling, disabling, or permanently deleting a warehouse.

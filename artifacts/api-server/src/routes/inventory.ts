@@ -10,6 +10,7 @@ import {
   nextProductIdentity, isProductStatus, PRODUCT_STATUSES,
   type ProductKind,
 } from "../lib/productIdentity";
+import { createItemCore } from "../lib/itemCreate";
 
 const router = Router();
 
@@ -365,15 +366,14 @@ router.post("/items", hoOnly, requireModuleAction("page:/production/item-master"
   if (!name || !unit) { res.status(400).json({ error: "name and unit are required" }); return; }
   if (slabViolation(taxRate, res)) return;
   if (identityViolation(req.body, res)) return;
-  const ident = await resolveNewIdentity("item", req.body);
   await handleWrite(res, async () => {
-    const result = await pool.query(
-      `INSERT INTO items (name, hsn_code, tax_rate, unit, description, cost, reorder_level, mrp, item_code, barcode, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [name, hsnCode || '', Number(taxRate ?? 0), unit, description || null, Number(cost ?? 0),
-       Number(reorderLevel ?? 10), Number(mrp ?? 0), ident.itemCode, ident.barcode, ident.status]
-    );
-    res.status(201).json(fmtItem(result.rows[0]));
+    // Shared creation core — the ERP Migration Wizard imports items through
+    // the exact same insert (identity from the per-kind sequence).
+    const created = await createItemCore(pool, {
+      name, hsnCode, taxRate, unit, description, cost, reorderLevel, mrp,
+      itemCode: req.body.itemCode, barcode: req.body.barcode, status: req.body.status,
+    });
+    res.status(201).json(fmtItem(created.row));
   });
 });
 

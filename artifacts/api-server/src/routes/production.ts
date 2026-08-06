@@ -1,3 +1,4 @@
+import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehouseLifecycle";
 import { Router } from "express";
 import { db, pool, productionsTable, itemsTable } from "@workspace/db";
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
@@ -394,6 +395,10 @@ router.post("/productions", requireModuleAction("page:/production/production", "
   });
   if ("error" in resolved) { res.status(400).json({ error: resolved.error }); return; }
   const loc: ProdLocation = resolved.loc;
+  {
+    const disabledMsg = await disabledWarehouseError(pool, [{ type: loc.type, id: loc.id }]);
+    if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
+  }
 
   // ── Manual labour fallback ───────────────────────────────────────────────
   // Labour normally comes from the day's production payroll. When attendance

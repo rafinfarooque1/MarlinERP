@@ -1,3 +1,4 @@
+import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehouseLifecycle";
 import { Router } from "express";
 import { db, stockEntriesTable, itemsTable, warehousesTable, outletsTable } from "@workspace/db";
 import { requireModuleView, requireModuleAction, canViewStockValuation } from "../middleware/permissions";
@@ -486,6 +487,16 @@ router.post("/stock/transfers", requireModuleAction("page:/transfers", "add"), a
   // Retired outlets take no part in new stock movement, in either direction.
   if ((parsed.data.fromType === 'outlet' || parsed.data.toType === 'outlet') && await outletWritesBlocked(pool)) {
     res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
+  }
+  // A disabled warehouse takes no part in NEW stock movement, in either
+  // direction. Transfers already in flight stay receivable so nothing is
+  // stranded mid-journey.
+  {
+    const disabledMsg = await disabledWarehouseError(pool, [
+      { type: parsed.data.fromType, id: parsed.data.fromId },
+      { type: parsed.data.toType, id: parsed.data.toId },
+    ]);
+    if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
   }
   // Discontinued products take no part in NEW movement. Transfers already in
   // flight are unaffected — dispatch, receive and reject stay open so nothing

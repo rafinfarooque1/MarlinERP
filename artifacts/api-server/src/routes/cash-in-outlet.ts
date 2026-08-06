@@ -1,3 +1,4 @@
+import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehouseLifecycle";
 import { Router } from "express";
 import { requireModuleAction, requireModuleView } from "../middleware/permissions";
 import { pool } from "@workspace/db";
@@ -246,6 +247,10 @@ router.post("/cash-in-outlet/deposits", requireModuleAction("page:/accounts/cash
   const depositScope = await getUserDataScope((req as any).employee);
   if (!isLocationInScope(depositScope, isWarehouse ? "warehouse" : "outlet", locationId)) {
     res.status(403).json({ error: "You cannot create a cash deposit for another location." }); return;
+  }
+  {
+    const disabledMsg = await disabledWarehouseError(pool, [{ type: isWarehouse ? "warehouse" : "outlet", id: locationId }]);
+    if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
   }
 
   const createdBy = (req as any).employee?.username ?? "system";

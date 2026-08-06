@@ -1,3 +1,4 @@
+import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehouseLifecycle";
 // ── Returns, Credit Notes/Debit Notes & Outstanding (Phase 4) ────────────────
 // Sales returns: restore stock (entries + batch layer) at the sale's location,
 // reverse GST proportionally, and post money as either a Credit Note JV on the
@@ -207,6 +208,14 @@ router.post("/sales-returns", requireModuleAction(["page:/returns", "page:/sales
       await client.query("ROLLBACK");
       res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE });
       return;
+    }
+    {
+      const disabledMsg = await disabledWarehouseError(client, [{ type: locationType, id: locationId }]);
+      if (disabledMsg) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE });
+        return;
+      }
     }
 
     // Aggregate prior returns for this sale: qty per lineIndex + restored per batch
@@ -604,6 +613,14 @@ router.post("/purchase-returns", requireModuleAction(["page:/returns", "page:/pr
       await client.query("ROLLBACK");
       res.status(404).json({ error: "Purchase not found" });
       return;
+    }
+    {
+      const disabledMsg = await disabledWarehouseError(client, [{ type: prLocType, id: prLocId }]);
+      if (disabledMsg) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE });
+        return;
+      }
     }
 
     if (returnDate < dateOnly(purchase.purchase_date)) {

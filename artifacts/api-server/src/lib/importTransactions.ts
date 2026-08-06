@@ -116,7 +116,15 @@ export interface ImportedSaleResult {
   clearingReceiptIds: number[];
 }
 
-export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSaleResult> {
+/**
+ * When `ext` is supplied the document writes through THAT client inside a
+ * SAVEPOINT (the caller owns BEGIN/COMMIT — this is how the demo import runs
+ * a whole batch in one never-committed transaction, and how the production
+ * commit gets all-or-nothing semantics). Without `ext` the function keeps its
+ * historical behaviour: its own connection, own BEGIN/COMMIT.
+ */
+export async function importSaleDoc(doc: ImportSaleDocInput, ext?: PoolClient): Promise<ImportedSaleResult> {
+  const q = ext ?? pool;
   const loc = doc.loc;
   // Sales/stock convention: HO rows carry location_id 1 (placeholder differs
   // per table — vouchers use 0, sales and stock use 1).
@@ -128,11 +136,11 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
   if (doc.customerId == null && doc.paymentMode === "credit") {
     throw new Error("A credit sale needs a customer — walk-in (no-customer) sales must be Cash, Bank or UPI.");
   }
-  const { rows: [comp] } = await pool.query(`SELECT state FROM company_settings LIMIT 1`);
+  const { rows: [comp] } = await q.query(`SELECT state FROM company_settings LIMIT 1`);
   const companyState = String(comp?.state ?? "").trim().toLowerCase();
   let customerState = "";
   if (doc.customerId != null) {
-    const { rows: [cust] } = await pool.query(`SELECT state, name FROM customers WHERE id = $1`, [doc.customerId]);
+    const { rows: [cust] } = await q.query(`SELECT state, name FROM customers WHERE id = $1`, [doc.customerId]);
     if (!cust) throw new Error(`Customer #${doc.customerId} no longer exists — re-validate the batch.`);
     customerState = String(cust.state ?? "").trim().toLowerCase();
   }
@@ -140,7 +148,7 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
 
   // ── Item master snapshot (tax_rate/mrp are raw-migration columns → raw SQL) ──
   const itemIds = [...new Set(doc.lines.map((l) => l.itemId))];
-  const { rows: itemRows } = await pool.query(
+  const { rows: itemRows } = await q.query(
     `SELECT id, name, COALESCE(tax_rate, 0)::float8 AS tax_rate,
             COALESCE(hsn_code, '') AS hsn_code, COALESCE(unit, '') AS unit
        FROM items WHERE id = ANY($1::int[])`, [itemIds],
@@ -160,7 +168,7 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
   // inclusive MRP; they were previewed and stay grandfathered. ──
   const newConventionLines = doc.lines.filter((l) => l.unitDiscount !== undefined);
   if (newConventionLines.length > 0) {
-    const mrpCheck = await checkMrpFloor(pool, newConventionLines.map((l) => ({ itemId: l.itemId, unitPrice: l.unitPrice })));
+    const mrpCheck = await checkMrpFloor(q, newConventionLines.map((l) => ({ itemId: l.itemId, unitPrice: l.unitPrice })));
     if (!mrpCheck.ok) throw new Error(mrpCheck.error);
   }
 
@@ -189,7 +197,7 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
   let salesLedgerId: number | null = null;
   let locationName = "Head Office";
   if (loc.type === "warehouse") {
-    const { rows: [wh] } = await pool.query(
+    const { rows: [wh] } = await q.query(
       `SELECT name, cash_ledger_id, sales_ledger_id FROM warehouses WHERE id = $1`, [loc.id],
     );
     if (!wh) throw new Error(`Warehouse #${loc.id} no longer exists`);
@@ -197,7 +205,7 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
     salesLedgerId = wh.sales_ledger_id == null ? null : Number(wh.sales_ledger_id);
     locationName = String(wh.name);
   } else if (loc.type === "outlet") {
-    const { rows: [ol] } = await pool.query(
+    const { rows: [ol] } = await q.query(
       `SELECT name, cash_ledger_id, sales_ledger_id FROM outlets WHERE id = $1`, [loc.id],
     );
     if (!ol) throw new Error(`Outlet #${loc.id} no longer exists`);
@@ -206,12 +214,12 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
     locationName = String(ol.name);
   }
   const elecClrLedgerId = clearsThroughBank(doc.paymentMode)
-    ? await ledgerIdByCode(pool, "STD-ELEC-CLR") : null;
+    ? await ledgerIdByCode(q, "STD-ELEC-CLR") : null;
   const custLedgerId = doc.paymentMode === "credit" && doc.customerId != null
-    ? await ledgerIdByCode(pool, `CUST-${doc.customerId}`) : null;
+    ? await ledgerIdByCode(q, `CUST-${doc.customerId}`) : null;
 
   const [ledgerMeta, branchNameOf] = await Promise.all([
-    batchResolveMeta(pool, lineItems.map((li: any) => ({ materialType: "item" as const, refId: li.itemId }))),
+    batchResolveMeta(q, lineItems.map((li: any) => ({ materialType: "item" as const, refId: li.itemId }))),
     buildBranchMaps(),
   ]);
 
@@ -219,11 +227,11 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
   const salePaymentIds: number[] = [];
   const clearingReceiptIds: number[] = [];
 
-  const client = await pool.connect();
+  const client = ext ?? await pool.connect();
   let saleId = 0;
   let newInvoiceNumber = "";
   try {
-    await client.query("BEGIN");
+    await client.query(ext ? "SAVEPOINT import_doc" : "BEGIN");
 
     // ── Stock: check, lock, deduct — ascending item id (same as POST /sales) ──
     const stockOrder = lineItems.map((_: any, i: number) => i)
@@ -368,15 +376,15 @@ export async function importSaleDoc(doc: ImportSaleDocInput): Promise<ImportedSa
       );
     }
 
-    await client.query("COMMIT");
+    await client.query(ext ? "RELEASE SAVEPOINT import_doc" : "COMMIT");
   } catch (e: any) {
-    await client.query("ROLLBACK").catch(() => {});
+    await client.query(ext ? "ROLLBACK TO SAVEPOINT import_doc" : "ROLLBACK").catch(() => {});
     if (e?.code === "23505" && String(e?.constraint ?? "").includes("uq_sales_invoice_number")) {
       throw new Error(`Invoice number allocation collided for "${doc.invoiceNumber}" — retry the commit; if it persists, restart the server so the sales counters reconcile.`);
     }
     throw e;
   } finally {
-    client.release();
+    if (!ext) (client as PoolClient).release();
   }
 
   return { saleId, invoiceNumber: newInvoiceNumber, totalAmount: r2(totalAmount), salePaymentIds, clearingReceiptIds };
@@ -418,10 +426,12 @@ export interface ImportedPurchaseResult {
   paymentId: number | null;
 }
 
-export async function importPurchaseDoc(doc: ImportPurchaseDocInput): Promise<ImportedPurchaseResult> {
+/** Same `ext` contract as importSaleDoc: caller-owned transaction + SAVEPOINT. */
+export async function importPurchaseDoc(doc: ImportPurchaseDocInput, ext?: PoolClient): Promise<ImportedPurchaseResult> {
+  const q = ext ?? pool;
   const loc = doc.loc;
   const maps: NameMaps = await buildNameMaps();
-  const { rows: [vend] } = await pool.query(`SELECT name FROM vendors WHERE id = $1`, [doc.vendorId]);
+  const { rows: [vend] } = await q.query(`SELECT name FROM vendors WHERE id = $1`, [doc.vendorId]);
   if (!vend) throw new Error(`Vendor #${doc.vendorId} no longer exists — re-validate the batch.`);
   const supply = await resolveSupplyTaxType(doc.vendorId, loc);
 
@@ -437,30 +447,32 @@ export async function importPurchaseDoc(doc: ImportPurchaseDocInput): Promise<Im
       throw new Error(`${master?.name ?? `#${li.materialId}`}: ${gstSlabErrorMessage(li.gstRate ?? li.taxRate)}`);
     }
   }
-  const locName = await locationLabel(pool, loc);
+  const locName = await locationLabel(q, loc);
 
   // Other Purchase Charges are re-validated at commit exactly like the manual
   // bill — the chart may have changed since the validation pass ran.
-  const ocParsed = await validateOtherCharges(pool, doc.otherCharges ?? []);
+  const ocParsed = await validateOtherCharges(q, doc.otherCharges ?? []);
   if ("error" in ocParsed) throw new Error(ocParsed.error);
   const otherCharges = ocParsed.charges;
 
   // Vendor ledger must exist BEFORE any settlement voucher can aim at it.
+  // Threaded through q: under an external (demo) transaction the ledger must
+  // be provisioned INSIDE it, never committed to production as a side effect.
   const vendLedgerId = doc.paidAmount > 0.004
-    ? await ensureVendorLedger(doc.vendorId, String(vend.name)) : null;
+    ? await ensureVendorLedger(doc.vendorId, String(vend.name), q) : null;
 
   const notesParts: string[] = [];
   if (doc.narration) notesParts.push(doc.narration);
   if (doc.reference) notesParts.push(`Ref: ${doc.reference}`);
 
   const lineIdentity = (li: any) =>
-    productBatchIdentity(pool, (li.materialType ?? "item") as ProductKind, Number(li.materialId));
+    productBatchIdentity(q, (li.materialType ?? "item") as ProductKind, Number(li.materialId));
 
-  const client = await pool.connect();
+  const client = ext ?? await pool.connect();
   let purchaseId = 0;
   let paymentId: number | null = null;
   try {
-    await client.query("BEGIN");
+    await client.query(ext ? "SAVEPOINT import_doc" : "BEGIN");
 
     // Imports never carry hand-typed lot numbers — every line gets a
     // server-issued one from the sequence (collision-free by construction).
@@ -605,15 +617,15 @@ export async function importPurchaseDoc(doc: ImportPurchaseDocInput): Promise<Im
       );
     }
 
-    await client.query("COMMIT");
+    await client.query(ext ? "RELEASE SAVEPOINT import_doc" : "COMMIT");
   } catch (e: any) {
-    await client.query("ROLLBACK").catch(() => {});
+    await client.query(ext ? "ROLLBACK TO SAVEPOINT import_doc" : "ROLLBACK").catch(() => {});
     if (e?.code === "23505" && String(e?.constraint ?? "").includes("purchases_vendor_invoice")) {
       throw new Error(`Invoice "${doc.invoiceNumber}" is already recorded for this vendor — it was entered since validation.`);
     }
     throw e;
   } finally {
-    client.release();
+    if (!ext) (client as PoolClient).release();
   }
 
   return { purchaseId, totalAmount: r2(Number(priced.totalAmount)), paymentId };

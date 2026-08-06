@@ -1,22 +1,35 @@
+import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehouseLifecycle";
 /**
- * Data Import module — Tally/Zoho-style migration of old-ERP masters.
+ * ERP Migration Wizard — staged replacement of an old ERP's books.
  *
- * Pipeline per module (customers / vendors / ledgers):
+ * MASTER modules (customers / vendors / ledgers / items) keep the direct flow:
  *   1. GET  /imports/templates/:module      → pre-filled sample .xlsx
  *   2. POST /imports/parse                  → upload + validate → batch preview
  *   3. POST /imports/batches/:id/commit     → create records (same code paths
  *                                             as manual creation), row by row
- *   4. GET  /imports/batches                → history
- *   5. POST /imports/batches/:id/rollback   → delete ONLY that batch's records
  *
- * Commit goes through lib/partyCreate.ts, lib/chartGroups.insertChartAccount
- * and lib/openingBalances.ts — the exact code manual creation uses — so ledger
- * auto-provisioning, location stamping and audit stamps behave identically.
+ * TRANSACTION modules (sales / purchases / receipts / payments / daybook /
+ * opening_stock) run the wizard:
+ *   1. parse (analyse — NO writes)
+ *   2. manual mapping — every file name (customer/vendor/product/ledger) must
+ *      be mapped to an existing master or created, via import_mappings; the
+ *      mapping memory is permanent and managed on the Manage Mappings screen.
+ *      NO silent auto-matching: unmapped names hold the batch at needs_mapping.
+ *   3. POST /imports/batches/:id/demo       → the ENTIRE batch runs through the
+ *      SAME commit code path inside ONE never-committed transaction; the full
+ *      report pack (TB, P&L, BS, receivables, vendor dues, cash/bank books,
+ *      stock valuation) is computed on that client BEFORE the ROLLBACK and
+ *      stored in demo_report for side-by-side comparison with the old ERP.
+ *   4. POST /imports/batches/:id/approve    → same shared routine + COMMIT,
+ *      all-or-nothing; or POST .../discard  → nothing was ever written.
  *
- * Rollback eligibility is decided from ACTUAL state at rollback time (ledger
- * postings, sales/purchases, child ledgers), never from the history flag: a
- * batch that looks rollback-able in the list can still refuse with per-record
- * reasons if its records have since been used.
+ * Every imported document draws a REAL ERP voucher/invoice number from the
+ * allocators; the old ERP's number is stored as the searchable legacy
+ * reference (legacy_invoice_number / legacy_voucher_number). Purchases keep
+ * the vendor's bill number verbatim — that IS the legacy number.
+ *
+ * Rollback (committed batches) eligibility is decided from ACTUAL state at
+ * rollback time, never from the history flag.
  */
 import { Router, type IRouter, type Request, type Response } from "express";
 import express from "express";
@@ -45,16 +58,37 @@ import {
   importReceiptVoucher, importPaymentVoucher,
   rollbackImportedReceiptVoucher, rollbackImportedPaymentVoucher,
 } from "../lib/importVouchers";
+import { itemCreateError, createItemCore } from "../lib/itemCreate";
+import { createJournalVoucherCore } from "../lib/journalCreate";
+import { importOpeningStockDoc, rollbackImportedOpeningStock } from "../lib/openingStockImport";
+import { computeTrialBalance, computeCashBankBook } from "./journal";
+import { buildBooks } from "../lib/books";
+import { stockValuation, stockValuationRows } from "../lib/valuation";
+import { buildLedgerBalanceIndex } from "../lib/ledgerBalances";
 import { type ProdLocation } from "../lib/productionCosting";
 import { outstandingExpr } from "../lib/salePaymentPosition";
 import { purchaseSettlementIndex } from "../lib/vendorBillSettlement";
+import { type PgPoolClient as PoolClient } from "@workspace/db";
 
 const router: IRouter = Router();
 
 const PERM = "page:/company/import";
 
-type ImportModule = "customers" | "vendors" | "ledgers" | "sales" | "purchases" | "receipts" | "payments";
-const MODULES: ImportModule[] = ["customers", "vendors", "ledgers", "sales", "purchases", "receipts", "payments"];
+type ImportModule =
+  | "customers" | "vendors" | "ledgers" | "items"
+  | "sales" | "purchases" | "receipts" | "payments"
+  | "daybook" | "opening_stock";
+const MODULES: ImportModule[] = [
+  "customers", "vendors", "ledgers", "items",
+  "sales", "purchases", "receipts", "payments",
+  "daybook", "opening_stock",
+];
+
+/** Master modules commit records directly (they CREATE the masters the
+ *  transaction modules map onto) — no demo stage, no mapping resolution. */
+type MasterModule = "customers" | "vendors" | "ledgers" | "items";
+const isMasterModule = (m: ImportModule): m is MasterModule =>
+  m === "customers" || m === "vendors" || m === "ledgers" || m === "items";
 
 /** Sales & purchases import whole DOCUMENTS (with stock + books effects), not
  *  master records — they get their own validation, commit and rollback paths. */
@@ -66,9 +100,50 @@ const isTxnModule = (m: ImportModule): m is TxnModule => m === "sales" || m === 
 type VoucherModule = "receipts" | "payments";
 const isVoucherModule = (m: ImportModule): m is VoucherModule => m === "receipts" || m === "payments";
 
+/** Wizard (demo-capable) modules: everything that is NOT a master module.
+ *  These run Analyse → Mapping → Demo → Approve/Discard. */
+type DemoModule = TxnModule | VoucherModule | "daybook" | "opening_stock";
+const isDemoModule = (m: ImportModule): m is DemoModule => !isMasterModule(m);
+
 function asModule(v: unknown): ImportModule | null {
   const s = String(v ?? "").toLowerCase();
   return (MODULES as string[]).includes(s) ? (s as ImportModule) : null;
+}
+
+// ── Mapping memory ───────────────────────────────────────────────────────────
+// import_mappings is the ONLY way a transaction-module file name resolves to a
+// master record. kind ∈ customer | vendor | ledger | product; product rows
+// carry target_kind (item | material | raw_material) because those id spaces
+// overlap (polymorphic-stock-entries). The table is permanent memory: once
+// "M/S Fresh Mart & Co" is mapped, every future file resolves it silently.
+
+type MappingKind = "customer" | "vendor" | "ledger" | "product";
+const MAPPING_KINDS: MappingKind[] = ["customer", "vendor", "ledger", "product"];
+const MAPPING_LABEL: Record<MappingKind, string> = {
+  customer: "Customer", vendor: "Vendor", ledger: "Ledger", product: "Item",
+};
+
+/** Normalised match key: lower-case, trimmed, internal whitespace squeezed. */
+const normName = (s: string) => s.toLowerCase().trim().replace(/\s+/g, " ");
+
+interface MappingTarget { targetId: number; targetKind: string | null }
+
+/** Record an unmapped name on a row's norm (deduped per row). Rows carrying
+ *  any missing mapping validate as needs_mapping; the batch's mapping step
+ *  aggregates these into the distinct name list the user works through. */
+function addMissingMapping(norm: Record<string, any>, kind: MappingKind, name: string) {
+  const list: Array<{ kind: MappingKind; name: string }> = norm.missingMappings ?? (norm.missingMappings = []);
+  if (!list.some((m) => m.kind === kind && normName(m.name) === normName(name))) list.push({ kind, name });
+}
+
+async function loadMappings(kind: MappingKind): Promise<Map<string, MappingTarget>> {
+  const { rows } = await pool.query<any>(
+    `SELECT source_norm, target_id, target_kind FROM import_mappings WHERE kind = $1`,
+    [kind],
+  );
+  const map = new Map<string, MappingTarget>();
+  for (const r of rows) map.set(String(r.source_norm), { targetId: Number(r.target_id), targetKind: r.target_kind ?? null });
+  return map;
 }
 
 // ── Column specs ─────────────────────────────────────────────────────────────
@@ -208,7 +283,7 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
   receipts: {
     title: "Receipt Vouchers",
     columns: [
-      { key: "voucherNo", header: "Voucher No", example: "RV/25-26/0087", hint: "Old ERP voucher number — kept exactly as supplied and must be unique; blank rows draw the next number from the voucher sequence", aliases: ["voucherno", "vouchernumber", "vchno", "vchnumber", "receiptno", "receiptnumber", "rcptno", "no", "number"] },
+      { key: "voucherNo", header: "Voucher No", example: "RV/25-26/0087", hint: "Old ERP voucher number — stored as a searchable legacy reference; the ERP allocates its own receipt voucher number", aliases: ["voucherno", "vouchernumber", "vchno", "vchnumber", "receiptno", "receiptnumber", "rcptno", "no", "number"] },
       { key: "date", header: "Date", required: true, example: "2025-04-15", hint: "Receipt date — YYYY-MM-DD or DD/MM/YYYY", aliases: ["date", "receiptdate", "voucherdate", "vchdate", "txndate", "transactiondate"] },
       { key: "party", header: "Customer", required: true, example: "Fresh Mart Traders", hint: "Customer the money came from — unknown names can be created in the resolve step before commit", aliases: ["customer", "customername", "party", "partyname", "receivedfrom", "client", "clientname", "buyer"] },
       { key: "partyType", header: "Party Type", example: "Customer", hint: "Customer (receipts always settle customer invoices — cross-checked)", aliases: ["partytype", "type", "partykind"] },
@@ -223,7 +298,7 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
   payments: {
     title: "Payment Vouchers",
     columns: [
-      { key: "voucherNo", header: "Voucher No", example: "PV/25-26/0042", hint: "Old ERP voucher number — kept exactly as supplied and must be unique; blank rows draw the next number from the voucher sequence", aliases: ["voucherno", "vouchernumber", "vchno", "vchnumber", "paymentno", "paymentnumber", "no", "number"] },
+      { key: "voucherNo", header: "Voucher No", example: "PV/25-26/0042", hint: "Old ERP voucher number — stored as a searchable legacy reference; the ERP allocates its own payment voucher number", aliases: ["voucherno", "vouchernumber", "vchno", "vchnumber", "paymentno", "paymentnumber", "no", "number"] },
       { key: "date", header: "Date", required: true, example: "2025-04-15", hint: "Payment date — YYYY-MM-DD or DD/MM/YYYY", aliases: ["date", "paymentdate", "voucherdate", "vchdate", "txndate", "transactiondate"] },
       { key: "party", header: "Vendor", required: true, example: "Global Fruits Supply Co", hint: "Vendor the money went to — unknown names can be created in the resolve step before commit", aliases: ["vendor", "vendorname", "supplier", "suppliername", "party", "partyname", "paidto"] },
       { key: "partyType", header: "Party Type", example: "Vendor", hint: "Vendor (payments always settle vendor bills — cross-checked)", aliases: ["partytype", "type", "partykind"] },
@@ -232,6 +307,45 @@ const TEMPLATES: Record<ImportModule, { title: string; columns: ColSpec[] }> = {
       { key: "againstInvoice", header: "Against Bill", example: "", hint: "Optional bill number — the amount settles ONLY that bill; blank auto-allocates against the vendor's oldest unpaid bills", aliases: ["againstbill", "against", "againstinvoice", "billno", "billnumber", "invoiceno", "invoicenumber", "invoice", "againstbillno"] },
       { key: "reference", header: "Reference", example: "", hint: "Cheque / UTR / reference number", aliases: ["reference", "referenceno", "refno", "ref", "chequeno", "utr", "utrno", "txnid"] },
       { key: "narration", header: "Narration", example: "Migrated from old ERP", hint: "Stored on the voucher", aliases: ["narration", "notes", "remarks", "note", "comment", "comments", "description"] },
+      TXN_LOCATION_COL,
+    ],
+  },
+  items: {
+    title: "Item Master",
+    columns: [
+      { key: "name", header: "Name", required: true, example: "Frozen Mango Dices 1kg", hint: "Finished-item name (required, must be unique)", aliases: ["name", "itemname", "item", "productname", "product", "description1"] },
+      { key: "unit", header: "Unit", required: true, example: "kg", hint: "Selling unit — kg, pcs, box…", aliases: ["unit", "uom", "units", "unitofmeasure", "sellingunit"] },
+      { key: "hsnCode", header: "HSN Code", example: "08119010", hint: "HSN/SAC code, blank if unknown", aliases: ["hsncode", "hsn", "hsnsac", "sac", "saccode"] },
+      { key: "taxRate", header: "GST %", example: 5, hint: "GST slab: 0, 5, 12, 18 or 28", aliases: ["gst", "gstrate", "gstpercent", "taxrate", "tax", "taxpercent", "igstrate", "gstslabs"] },
+      { key: "mrp", header: "MRP", example: 250, hint: "Maximum retail price per unit (sales are floored at MRP)", aliases: ["mrp", "maximumretailprice", "mrpperunit", "retailprice"] },
+      { key: "cost", header: "Cost", example: 180, hint: "Purchase/production cost per unit (used until real purchases set the average cost)", aliases: ["cost", "costprice", "purchasecost", "purchaseprice", "costperunit", "rate"] },
+      { key: "reorderLevel", header: "Reorder Level", example: 10, hint: "Low-stock alert threshold; blank = 10", aliases: ["reorderlevel", "reorder", "reorderqty", "minstock", "minimumstock"] },
+      { key: "itemCode", header: "Item Code", example: "", hint: "Old ERP item code — blank rows draw the next code from the ERP's own series", aliases: ["itemcode", "code", "productcode", "skucode", "sku"] },
+      { key: "barcode", header: "Barcode", example: "", hint: "EAN/UPC barcode; blank rows get an ERP-generated barcode", aliases: ["barcode", "ean", "eancode", "upc", "barcodeno"] },
+      { key: "description", header: "Description", example: "", hint: "Free text", aliases: ["description", "desc", "itemdescription", "remarks", "notes"] },
+    ],
+  },
+  daybook: {
+    title: "Day Book (Journal / Contra)",
+    columns: [
+      { key: "voucherNo", header: "Voucher No", required: true, example: "JV/25-26/0012", hint: "Old ERP voucher number — rows sharing a number form ONE voucher; stored as a searchable legacy reference while the ERP allocates its own number", aliases: ["voucherno", "vouchernumber", "vchno", "vchnumber", "journalno", "journalnumber", "no", "number"] },
+      { key: "date", header: "Date", required: true, example: "2025-04-15", hint: "Voucher date — YYYY-MM-DD or DD/MM/YYYY (one date per voucher)", aliases: ["date", "voucherdate", "vchdate", "journaldate", "txndate", "transactiondate"] },
+      { key: "voucherType", header: "Voucher Type", example: "Journal", hint: "Journal or Contra; blank = Journal", aliases: ["vouchertype", "type", "vchtype", "journaltype"] },
+      { key: "ledger", header: "Ledger", required: true, example: "Rent Expense", hint: "Account ledger for this leg — mapped to this ERP's chart of accounts in the mapping step", aliases: ["ledger", "ledgername", "account", "accountname", "accounthead", "particulars", "head"] },
+      { key: "debit", header: "Debit", example: 5000, hint: "₹ debit amount (each row carries a debit OR a credit, never both)", aliases: ["debit", "debitamount", "dramount", "dr"] },
+      { key: "credit", header: "Credit", example: "", hint: "₹ credit amount (each row carries a debit OR a credit, never both)", aliases: ["credit", "creditamount", "cramount", "cr"] },
+      { key: "narration", header: "Narration", example: "April shop rent", hint: "Stored on the voucher (first non-blank row wins)", aliases: ["narration", "notes", "remarks", "note", "comment", "comments", "description"] },
+      TXN_LOCATION_COL,
+    ],
+  },
+  opening_stock: {
+    title: "Opening Stock",
+    columns: [
+      { key: "date", header: "As-on Date", required: true, example: "2025-04-01", hint: "The date the opening quantities are as of — every row must carry the SAME date", aliases: ["asondate", "date", "openingdate", "asofdate", "stockdate"] },
+      { key: "item", header: "Item", required: true, example: "Frozen Mango Dices 1kg", hint: "Finished item — mapped to this ERP's Item Master in the mapping step", aliases: ["item", "itemname", "product", "productname", "name", "particulars"] },
+      { key: "quantity", header: "Quantity", required: true, example: 120, hint: "Opening quantity on hand (must be greater than 0)", aliases: ["quantity", "qty", "openingqty", "openingquantity", "stockqty", "closingqty", "balanceqty"] },
+      { key: "unitCost", header: "Unit Cost", example: 180, hint: "GST-exclusive cost per unit; blank uses the item's current cost", aliases: ["unitcost", "cost", "costperunit", "rate", "costprice", "purchaserate", "avgcost", "averagecost"] },
+      NOTES_COL,
       TXN_LOCATION_COL,
     ],
   },
@@ -407,9 +521,12 @@ const groupSuggestion = (candidates: ParentCandidate[]) =>
 // ── Validation ───────────────────────────────────────────────────────────────
 
 interface RowVerdict {
-  /** needs_party: valid row whose customer/vendor doesn't exist yet — resolved
-   *  via POST /imports/batches/:id/resolve-parties before commit. */
-  status: "valid" | "warning" | "error" | "needs_party";
+  /** needs_mapping: valid row whose customer/vendor/product/ledger name has no
+   *  saved mapping yet — the user maps or creates the master on the batch's
+   *  mapping step (POST /imports/batches/:id/mappings), then re-validation
+   *  promotes the row. ("needs_party" is the retired pre-wizard spelling; old
+   *  batches may still carry it in the DB.) */
+  status: "valid" | "warning" | "error" | "needs_mapping";
   reason: string | null;
   suggestion: string | null;
   duplicateOfId: number | null;
@@ -427,6 +544,9 @@ interface ValidateContext {
   partyLocations?: Map<string, { type: string; id: number; name: string }>;
   /** party modules: `${type}:${id}` keys the uploader may assign; null = all (Head Office) */
   allowedLocationKeys?: Set<string> | null;
+  /** items module: lower item_code / barcode → item id (uniqueness pre-check) */
+  existingItemCodes?: Map<string, number>;
+  existingBarcodes?: Map<string, number>;
 }
 
 function validateRow(
@@ -545,6 +665,53 @@ function validateRow(
     if (gstApp === "invalid") warnings.push(`GST Applicable "${values.gstApplicable}" not understood — leaving unset (use Yes or No)`);
     else if (gstApp !== null) norm.gstApplicable = gstApp;
     if ((values.notes ?? "").trim()) norm.notes = values.notes.trim();
+  }
+
+  if (module === "items") {
+    const unit = (values.unit ?? "").trim();
+    if (!unit) errors.push("Unit is required (kg, pcs, box…)");
+    else norm.unit = unit;
+
+    const hsn = (values.hsnCode ?? "").trim();
+    if (hsn) {
+      if (hsn.length > 16) errors.push("HSN Code cannot exceed 16 characters");
+      else norm.hsnCode = hsn;
+    }
+
+    const taxRaw = (values.taxRate ?? "").trim();
+    const tax = parseMoney(taxRaw);
+    if (tax !== null) {
+      if (!Number.isFinite(tax) || !isValidGstSlab(tax)) {
+        errors.push(`GST % "${taxRaw}" is not a GST slab`);
+        suggestions.push("Use 0, 5, 12, 18 or 28");
+      } else norm.taxRate = tax;
+    }
+    for (const [key, label] of [["mrp", "MRP"], ["cost", "Cost"], ["reorderLevel", "Reorder Level"]] as const) {
+      const v = parseMoney((values[key] ?? "").trim());
+      if (v !== null) {
+        if (!Number.isFinite(v) || v < 0) errors.push(`${label} "${values[key]}" must be a number ≥ 0`);
+        else norm[key] = v;
+      }
+    }
+    const code = (values.itemCode ?? "").trim();
+    if (code) {
+      if (/\s/.test(code) || code.length > 32) errors.push("Item Code cannot contain spaces or exceed 32 characters");
+      else {
+        norm.itemCode = code;
+        const clash = ctx.existingItemCodes?.get(code.toLowerCase());
+        if (clash !== undefined) errors.push(`Item Code "${code}" is already used by another item`);
+      }
+    }
+    const barcode = (values.barcode ?? "").trim();
+    if (barcode) {
+      if (/\s/.test(barcode) || barcode.length > 64) errors.push("Barcode cannot contain spaces or exceed 64 characters");
+      else {
+        norm.barcode = barcode;
+        const clash = ctx.existingBarcodes?.get(barcode.toLowerCase());
+        if (clash !== undefined) errors.push(`Barcode "${barcode}" is already used by another item`);
+      }
+    }
+    if ((values.description ?? "").trim()) norm.description = values.description.trim();
   }
 
   // Assigned location — REQUIRED for all three master modules: every imported
@@ -672,14 +839,56 @@ async function importExpenseLedgerOptions(): Promise<Map<string, { id: number; n
   return map;
 }
 
+/**
+ * Product masters, resolved through import_mappings kind='product'. Each
+ * mapping row targets ONE master (target_kind disambiguates the overlapping
+ * item/material/raw_material id spaces — polymorphic-stock-entries). All
+ * three tables are loaded so a sales file whose name maps to a packing
+ * material can say so precisely instead of "not found".
+ */
+async function loadMappedProducts(): Promise<Map<string, TxnProduct[]>> {
+  const metaByKind = new Map<TxnProduct["kind"], Map<number, TxnProduct>>();
+  const load = async (kind: TxnProduct["kind"], sql: string) => {
+    const { rows } = await pool.query<any>(sql);
+    const m = new Map<number, TxnProduct>();
+    for (const r of rows) m.set(Number(r.id), { kind, id: Number(r.id), name: String(r.name), taxRate: Number(r.tax_rate ?? 0), unit: String(r.unit ?? ""), mrp: Number(r.mrp ?? 0) });
+    metaByKind.set(kind, m);
+  };
+  await load("item", `SELECT id, name, COALESCE(tax_rate, 0)::float8 AS tax_rate, COALESCE(unit, '') AS unit, COALESCE(mrp, 0)::float8 AS mrp FROM items`);
+  await load("material", `SELECT id, name, COALESCE(tax_rate, 0)::float8 AS tax_rate, COALESCE(unit, '') AS unit, 0 AS mrp FROM materials`);
+  await load("raw_material", `SELECT id, name, COALESCE(tax_rate, 0)::float8 AS tax_rate, COALESCE(unit, '') AS unit, 0 AS mrp FROM raw_materials`);
+
+  const products = new Map<string, TxnProduct[]>();
+  const mappings = await loadMappings("product");
+  for (const [norm, t] of mappings) {
+    const kind = (t.targetKind === "material" || t.targetKind === "raw_material") ? t.targetKind : "item";
+    const meta = metaByKind.get(kind)?.get(t.targetId);
+    if (meta) products.set(norm, [meta]); // stale target → unmapped → needs_mapping
+  }
+  return products;
+}
+
+/** Customers/vendors, resolved through import_mappings. */
+async function loadMappedParties(kind: "customer" | "vendor"): Promise<Map<string, TxnParty>> {
+  const table = kind === "customer" ? "customers" : "vendors";
+  const { rows } = await pool.query<any>(
+    `SELECT id, name, COALESCE(gst_number, '') AS gst, COALESCE(state, '') AS state FROM ${table}`,
+  );
+  const byId = new Map<number, TxnParty>();
+  for (const r of rows) byId.set(Number(r.id), { id: Number(r.id), name: String(r.name), gst: String(r.gst), state: String(r.state) });
+
+  const parties = new Map<string, TxnParty>();
+  for (const [norm, t] of await loadMappings(kind)) {
+    const meta = byId.get(t.targetId);
+    if (meta) parties.set(norm, meta); // stale target → unmapped → needs_mapping
+  }
+  return parties;
+}
+
 /** Legacy-migration behaviour toggles (Company Settings → Data Import).
  *  Everything defaults ON — a fresh company gets the forgiving behaviour;
  *  each can be switched off to force strict review instead. */
 interface ImportSettings {
-  /** Sales/receipts: unknown customer names are created automatically at commit. */
-  autoCreateCustomers: boolean;
-  /** Purchases/payments: unknown vendor names are created automatically at commit. */
-  autoCreateVendors: boolean;
   /** Sales: a blank Customer on a cash/bank/UPI sale = walk-in counter sale (no customer). */
   autoWalkInCustomer: boolean;
   /** Sales: a price below the Item Master MRP is folded into a per-unit discount (POS rule). */
@@ -692,8 +901,6 @@ async function loadImportSettings(): Promise<ImportSettings> {
   const { rows: [r] } = await pool.query<any>(`SELECT general_settings FROM company_settings LIMIT 1`);
   const gs = (r?.general_settings ?? {}) as Record<string, any>;
   return {
-    autoCreateCustomers: gs.importAutoCreateCustomers !== false,
-    autoCreateVendors: gs.importAutoCreateVendors !== false,
     autoWalkInCustomer: gs.importAutoWalkInCustomer !== false,
     mrpToDiscount: gs.importMrpToDiscount !== false,
     detectLineTotal: gs.importDetectLineTotal !== false,
@@ -701,38 +908,13 @@ async function loadImportSettings(): Promise<ImportSettings> {
 }
 
 async function loadTxnContext(module: TxnModule, loc: { type: string; id: number }): Promise<TxnContext> {
-  const products = new Map<string, TxnProduct[]>();
-  const push = (kind: TxnProduct["kind"]) => (r: any) => {
-    const key = String(r.name ?? "").trim().toLowerCase();
-    if (!key) return;
-    const list = products.get(key) ?? [];
-    list.push({ kind, id: Number(r.id), name: String(r.name), taxRate: Number(r.tax_rate ?? 0), unit: String(r.unit ?? ""), mrp: Number(r.mrp ?? 0) });
-    products.set(key, list);
-  };
-  const { rows: items } = await pool.query(
-    `SELECT id, name, COALESCE(tax_rate, 0)::float8 AS tax_rate, COALESCE(unit, '') AS unit, COALESCE(mrp, 0)::float8 AS mrp FROM items`,
-  );
-  items.forEach(push("item"));
-  if (module === "purchases") {
-    const { rows: mats } = await pool.query(
-      `SELECT id, name, COALESCE(tax_rate, 0)::float8 AS tax_rate, COALESCE(unit, '') AS unit, 0 AS mrp FROM materials`,
-    );
-    mats.forEach(push("material"));
-    const { rows: raws } = await pool.query(
-      `SELECT id, name, COALESCE(tax_rate, 0)::float8 AS tax_rate, COALESCE(unit, '') AS unit, 0 AS mrp FROM raw_materials`,
-    );
-    raws.forEach(push("raw_material"));
-  }
-
-  const parties = new Map<string, TxnParty>();
-  const partyTable = module === "sales" ? "customers" : "vendors";
-  const { rows: partyRows } = await pool.query(
-    `SELECT id, name, COALESCE(gst_number, '') AS gst, COALESCE(state, '') AS state FROM ${partyTable}`,
-  );
-  for (const r of partyRows) {
-    const key = String(r.name ?? "").trim().toLowerCase();
-    if (key && !parties.has(key)) parties.set(key, { id: Number(r.id), name: String(r.name), gst: String(r.gst), state: String(r.state) });
-  }
+  // Mapping-based resolution: a file name resolves to a master ONLY through a
+  // saved import_mappings row (kind + normalised name → target). No silent
+  // name matching — an unmapped name holds the row at needs_mapping until the
+  // user maps or creates the master. Stale mappings (target deleted since)
+  // are skipped, which sends the name back to the mapping step.
+  const products = await loadMappedProducts();
+  const parties = await loadMappedParties(module === "sales" ? "customer" : "vendor");
 
   const existingInvoices = new Set<string>();
   if (module === "sales") {
@@ -800,8 +982,6 @@ interface TxnDocAcc {
   /** Sales: blank Customer on a settled (cash/bank/upi) sale → POS-style
    *  walk-in bill with NO customer (Company Settings → Data Import toggle). */
   walkIn?: boolean;
-  /** Unknown party name to be created automatically at commit (toggle). */
-  createParty?: { name: string; gst: string } | null;
 }
 
 /**
@@ -853,7 +1033,7 @@ async function validateTransactionRows(
   loc: { type: string; id: number },
 ): Promise<{
   results: RowVerdict[];
-  counts: { valid: number; warning: number; error: number; needsParty: number };
+  counts: { valid: number; warning: number; error: number; needsMapping: number };
 }> {
   const ctx = await loadTxnContext(module, loc);
   const checkRowLoc = await loadRowLocationCheck(loc);
@@ -944,7 +1124,7 @@ async function validateTransactionRows(
         slots[i].suggestions.push("Fix the name, or renumber the row if it is genuinely a different invoice");
       }
     }
-    doc.party = doc.partyName ? ctx.parties.get(doc.partyName.toLowerCase()) ?? null : null;
+    doc.party = doc.partyName ? ctx.parties.get(normName(doc.partyName)) ?? null : null;
 
     // Settlement / other document-level fields.
     doc.accountRaw = docCell("account", "Payment Account");
@@ -1002,22 +1182,12 @@ async function validateTransactionRows(
         }
       }
     } else if (!doc.party) {
-      // Unknown named party → created automatically at commit (toggle ON,
-      // same create-with-ledger path as the resolve step) or flagged for the
-      // resolve step (toggle OFF).
-      const auto = module === "sales" ? ctx.settings.autoCreateCustomers : ctx.settings.autoCreateVendors;
-      if (auto) {
-        let gst = "";
-        for (const i of doc.rowIdxs) {
-          const g = (rowsIn[i].values.gstNumber ?? "").trim().toUpperCase();
-          if (g && GSTIN_RE.test(g)) { gst = g; break; }
-        }
-        doc.createParty = { name: doc.partyName, gst };
-        head.warnings.push(`${partyLabel} "${doc.partyName}" is not in the masters — it will be created automatically (with its ledger) when you press Import. Switch off auto-create under Company Settings → Data Import to review such names instead`);
-      } else {
-        for (const i of doc.rowIdxs) slots[i].norm.missingParty = doc.partyName;
-        head.suggestions.push(`Create "${doc.partyName}" in the resolve step below, or fix the spelling to match an existing ${partyLabel.toLowerCase()}`);
-      }
+      // Unmapped party name → the mapping step. NEVER auto-created and never
+      // silently matched: the user maps the old-ERP name onto an existing
+      // master (or creates one) once, and the mapping is remembered forever.
+      const mk = module === "sales" ? "customer" : "vendor";
+      for (const i of doc.rowIdxs) addMissingMapping(slots[i].norm, mk, doc.partyName);
+      head.suggestions.push(`Map "${doc.partyName}" to an existing ${partyLabel.toLowerCase()} (or create it) in the mapping step`);
     }
 
     // Already-recorded invoices / placeholder-number note (head row).
@@ -1064,21 +1234,21 @@ async function validateTransactionRows(
       }
     }
 
-    // Product
+    // Product — resolved ONLY through a saved product mapping.
     const itemName = (values.item ?? "").trim();
     let product: TxnProduct | null = null;
     if (!itemName) {
       s.errors.push("Item is required");
     } else {
-      const candidates = ctx.products.get(itemName.toLowerCase()) ?? [];
-      if (candidates.length === 0) {
-        s.errors.push(`Item "${itemName}" not found in the ${module === "sales" ? "Item Master" : "product masters"}`);
-        s.suggestions.push("Create the item first — this import never creates items");
-      } else if (candidates.length > 1) {
-        s.errors.push(`"${itemName}" exists as ${candidates.map((c) => KIND_LABEL[c.kind]).join(" AND ")} — the name is ambiguous`);
-        s.suggestions.push("Rename one of the products so the name is unique, then re-upload");
+      const mapped = (ctx.products.get(normName(itemName)) ?? [])[0] ?? null;
+      if (!mapped) {
+        addMissingMapping(s.norm, "product", itemName);
+        s.suggestions.push(`Map "${itemName}" to a product (or create the item) in the mapping step`);
+      } else if (module === "sales" && mapped.kind !== "item") {
+        s.errors.push(`"${itemName}" is mapped to ${KIND_LABEL[mapped.kind]} — sales sell finished items only`);
+        s.suggestions.push("Fix the mapping on the Manage Mappings screen to point at a finished item");
       } else {
-        product = candidates[0];
+        product = mapped;
       }
     }
 
@@ -1246,10 +1416,9 @@ async function validateTransactionRows(
     const anyError = doc.rowIdxs.some((i) => slots[i].errors.length > 0);
     const anyMissingLine = doc.rowIdxs.some((i) => !slots[i].norm.line);
     if (anyError || anyMissingLine || !doc.dateIso) continue;
-    // Walk-in and to-be-created parties still get priced — the preview totals
-    // must cover every document that will actually commit. Only unresolved
-    // names (auto-create OFF → resolve step) stay unpriced here.
-    if (!doc.party && !doc.walkIn && !doc.createParty) continue;
+    // Unmapped names stay unpriced — they hold the batch at the mapping step
+    // and re-validation prices them once the mapping is saved.
+    if (!doc.party && !doc.walkIn) continue;
 
     let total = 0;
     let computedTax = 0;
@@ -1389,7 +1558,6 @@ async function validateTransactionRows(
     head.norm.partyName = doc.party ? doc.party.name : doc.walkIn ? "Walk-in customer" : doc.partyName;
     if (doc.party) head.norm.partyId = doc.party.id;
     if (doc.walkIn) head.norm.walkIn = true;
-    if (doc.createParty) head.norm.createParty = doc.createParty;
     head.norm.billDiscount = doc.billDiscount;
     head.norm.paymentMode = mode;
     head.norm.paymentStatus = doc.status;
@@ -1405,18 +1573,19 @@ async function validateTransactionRows(
   }
 
   // ── Verdicts ──
-  const counts = { valid: 0, warning: 0, error: 0, needsParty: 0 };
+  const counts = { valid: 0, warning: 0, error: 0, needsMapping: 0 };
   const results: RowVerdict[] = slots.map((s) => {
+    const missing: Array<{ kind: MappingKind; name: string }> = s.norm.missingMappings ?? [];
     const status: RowVerdict["status"] =
       s.errors.length > 0 ? "error"
-      : s.norm.missingParty ? "needs_party"
+      : missing.length > 0 ? "needs_mapping"
       : s.warnings.length > 0 ? "warning" : "valid";
     if (status === "valid") counts.valid++;
     else if (status === "warning") counts.warning++;
-    else if (status === "needs_party") counts.needsParty++;
+    else if (status === "needs_mapping") counts.needsMapping++;
     else counts.error++;
-    const reason = status === "needs_party"
-      ? [`${partyLabel} "${s.norm.missingParty}" not found — create it below or fix the name`, ...s.warnings].join("; ")
+    const reason = status === "needs_mapping"
+      ? [missing.map((m) => `${MAPPING_LABEL[m.kind]} "${m.name}" is not mapped yet`).join("; ") + " — map or create it in the mapping step", ...s.warnings].join("; ")
       : [...s.errors, ...s.warnings].join("; ") || null;
     return { status, reason, suggestion: s.suggestions[0] ?? null, duplicateOfId: null, norm: s.norm };
   });
@@ -1460,9 +1629,12 @@ async function loadVoucherContext(module: VoucherModule, loc: { type: string; id
     if (key && !parties.has(key)) parties.set(key, { id: Number(r.id), name: String(r.name) });
   }
 
+  // Re-import guard: vouchers always draw a fresh ERP number, so the file's
+  // number can only collide with a LEGACY reference stored by an earlier
+  // import — that is what marks "this old-ERP voucher is already in".
   const existingVoucherNos = new Set<string>();
   const vTable = module === "receipts" ? "receipts" : "payments";
-  const { rows: vnos } = await pool.query(`SELECT lower(voucher_number) AS v FROM ${vTable} WHERE voucher_number IS NOT NULL`);
+  const { rows: vnos } = await pool.query(`SELECT lower(legacy_voucher_number) AS v FROM ${vTable} WHERE legacy_voucher_number IS NOT NULL`);
   for (const r of vnos) existingVoucherNos.add(String(r.v));
 
   const accounts = await importAccountOptions(pool, loc as any);
@@ -1542,7 +1714,7 @@ async function validateVoucherRows(
   loc: { type: string; id: number },
 ): Promise<{
   results: RowVerdict[];
-  counts: { valid: number; warning: number; error: number; needsParty: number };
+  counts: { valid: number; warning: number; error: number; needsMapping: number };
 }> {
   const ctx = await loadVoucherContext(module, loc);
   const checkRowLoc = await loadRowLocationCheck(loc);
@@ -1570,13 +1742,14 @@ async function validateVoucherRows(
       } else {
         seenVouchers.set(key, rowNumber);
         if (ctx.existingVoucherNos.has(key)) {
-          s.errors.push(`Voucher number "${vno}" is already recorded in this system`);
-          s.suggestions.push("Already migrated or manually entered — remove the row, or renumber if it is genuinely a different voucher");
+          s.errors.push(`Voucher number "${vno}" was already imported — an earlier voucher carries it as its legacy reference`);
+          s.suggestions.push("Already migrated — remove the row, or renumber if it is genuinely a different voucher");
         }
       }
       s.norm.voucherNo = vno;
+      s.norm.legacyVoucherNo = vno;
     } else {
-      s.warnings.push("No voucher number — the next number from the voucher sequence will be assigned at commit");
+      s.warnings.push("No voucher number in the file — the ERP allocates its own number either way; there will be no legacy reference to search by");
     }
 
     // Date
@@ -1598,13 +1771,13 @@ async function validateVoucherRows(
       if (locErr) s.errors.push(locErr);
     }
 
-    // Party
+    // Party — resolved ONLY through a saved mapping (customer/vendor).
     const partyName = (values.party ?? "").trim();
     if (!partyName) s.errors.push(`${partyLabel} is required`);
-    const party = partyName ? ctx.parties.get(partyName.toLowerCase()) ?? null : null;
+    const party = partyName ? ctx.parties.get(normName(partyName)) ?? null : null;
     if (partyName && !party) {
-      s.norm.missingParty = partyName;
-      s.suggestions.push(`Create "${partyName}" in the resolve step below, or fix the spelling to match an existing ${partyLabel.toLowerCase()}`);
+      addMissingMapping(s.norm, module === "receipts" ? "customer" : "vendor", partyName);
+      s.suggestions.push(`Map "${partyName}" to an existing ${partyLabel.toLowerCase()} (or create it) in the mapping step`);
     }
     if (party) { s.norm.partyId = party.id; s.norm.partyName = party.name; }
 
@@ -1698,22 +1871,353 @@ async function validateVoucherRows(
   }
 
   // ── Verdicts ──
-  const counts = { valid: 0, warning: 0, error: 0, needsParty: 0 };
+  const counts = { valid: 0, warning: 0, error: 0, needsMapping: 0 };
   const results: RowVerdict[] = slots.map((s) => {
+    const missing: Array<{ kind: MappingKind; name: string }> = s.norm.missingMappings ?? [];
     const status: RowVerdict["status"] =
       s.errors.length > 0 ? "error"
-      : s.norm.missingParty ? "needs_party"
+      : missing.length > 0 ? "needs_mapping"
       : s.warnings.length > 0 ? "warning" : "valid";
     if (status === "valid") counts.valid++;
     else if (status === "warning") counts.warning++;
-    else if (status === "needs_party") counts.needsParty++;
+    else if (status === "needs_mapping") counts.needsMapping++;
     else counts.error++;
-    const reason = status === "needs_party"
-      ? [`${partyLabel} "${s.norm.missingParty}" not found — create it below or fix the name`, ...s.warnings].join("; ")
+    const reason = status === "needs_mapping"
+      ? [missing.map((m) => `${MAPPING_LABEL[m.kind]} "${m.name}" is not mapped yet`).join("; ") + " — map or create it in the mapping step", ...s.warnings].join("; ")
       : [...s.errors, ...s.warnings].join("; ") || null;
     return { status, reason, suggestion: s.suggestions[0] ?? null, duplicateOfId: null, norm: s.norm };
   });
 
+  return { results, counts };
+}
+
+// ── Day Book validation (journal / contra vouchers) ─────────────────────────
+
+/**
+ * One voucher = every row sharing a Voucher No (required — the number is what
+ * groups legs). Ledger names resolve ONLY through 'ledger' mappings. Per
+ * voucher: one date, one type, legs must balance to the paise, at least two
+ * legs. The ERP allocates its own voucher number at import; the file's
+ * number is stored as the searchable legacy reference.
+ */
+async function validateDaybookRows(
+  rowsIn: TxnRowInput[],
+  loc: { type: string; id: number },
+): Promise<{
+  results: RowVerdict[];
+  counts: { valid: number; warning: number; error: number; needsMapping: number };
+}> {
+  const checkRowLoc = await loadRowLocationCheck(loc);
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  // Mapped, postable ledgers (stale/unpostable targets → back to the mapping step)
+  const { rows: ledRows } = await pool.query<any>(
+    `SELECT id, name FROM account_ledgers
+      WHERE NOT COALESCE(is_group, false) AND COALESCE(is_active, true)`,
+  );
+  const ledById = new Map<number, { id: number; name: string }>();
+  for (const r of ledRows) ledById.set(Number(r.id), { id: Number(r.id), name: String(r.name) });
+  const ledgers = new Map<string, { id: number; name: string }>();
+  for (const [norm, t] of await loadMappings("ledger")) {
+    const meta = ledById.get(t.targetId);
+    if (meta) ledgers.set(norm, meta);
+  }
+
+  // Re-import guard: file numbers only ever land in legacy_voucher_number.
+  const existingLegacy = new Set<string>();
+  {
+    const { rows } = await pool.query<any>(
+      `SELECT lower(legacy_voucher_number) AS v FROM journal_vouchers WHERE legacy_voucher_number IS NOT NULL`,
+    );
+    for (const r of rows) existingLegacy.add(String(r.v));
+  }
+
+  type Slot = { errors: string[]; warnings: string[]; suggestions: string[]; norm: Record<string, any> };
+  const slots: Slot[] = rowsIn.map(() => ({ errors: [], warnings: [], suggestions: [], norm: {} }));
+
+  // Group by voucher number (first-appearance order).
+  type VDoc = { vno: string; headIdx: number; rowIdxs: number[] };
+  const docs: VDoc[] = [];
+  const docByNo = new Map<string, number>();
+  for (let i = 0; i < rowsIn.length; i++) {
+    const vno = (rowsIn[i].values.voucherNo ?? "").trim();
+    if (!vno) {
+      slots[i].errors.push("Voucher No is required — rows sharing a number form ONE voucher, so every leg must carry it");
+      continue;
+    }
+    const key = vno.toLowerCase();
+    const at = docByNo.get(key);
+    if (at !== undefined) { docs[at].rowIdxs.push(i); continue; }
+    docs.push({ vno, headIdx: i, rowIdxs: [i] });
+    docByNo.set(key, docs.length - 1);
+  }
+
+  // Per-row: date, ledger, debit/credit, location cross-check.
+  for (let i = 0; i < rowsIn.length; i++) {
+    const { values } = rowsIn[i];
+    const s = slots[i];
+
+    const rowLocRaw = (values.location ?? "").trim();
+    if (rowLocRaw) {
+      const locErr = checkRowLoc(rowLocRaw);
+      if (locErr) s.errors.push(locErr);
+    }
+
+    const dateRaw = (values.date ?? "").trim();
+    if (dateRaw) {
+      const iso = parseDateFlexible(dateRaw);
+      if (!iso) {
+        s.errors.push(`Date "${dateRaw}" not understood`);
+        s.suggestions.push("Use YYYY-MM-DD or DD/MM/YYYY");
+      } else {
+        s.norm.dateIso = iso;
+        if (iso > todayIso) s.warnings.push(`Date ${iso} is in the future`);
+      }
+    }
+
+    const ledgerRaw = (values.ledger ?? "").trim();
+    if (!ledgerRaw) {
+      s.errors.push("Ledger is required on every row");
+    } else {
+      const led = ledgers.get(normName(ledgerRaw));
+      if (!led) {
+        addMissingMapping(s.norm, "ledger", ledgerRaw);
+        s.suggestions.push(`Map "${ledgerRaw}" to a ledger in the Chart of Accounts (or create one) in the mapping step`);
+      } else {
+        s.norm.ledgerId = led.id;
+        s.norm.ledgerName = led.name;
+      }
+    }
+
+    const dr = parseMoney((values.debit ?? "").trim());
+    const cr = parseMoney((values.credit ?? "").trim());
+    const drOk = dr !== null && Number.isFinite(dr) && dr > 0.004;
+    const crOk = cr !== null && Number.isFinite(cr) && cr > 0.004;
+    if ((dr !== null && (!Number.isFinite(dr) || dr < 0)) || (cr !== null && (!Number.isFinite(cr) || cr < 0))) {
+      s.errors.push("Debit/Credit must be numbers ≥ 0");
+    } else if (drOk && crOk) {
+      s.errors.push("A row carries a Debit OR a Credit, never both — split it into two rows");
+    } else if (!drOk && !crOk) {
+      s.errors.push("Each row needs a Debit or a Credit amount above zero");
+    } else {
+      s.norm.debit = drOk ? round2(dr!) : 0;
+      s.norm.credit = crOk ? round2(cr!) : 0;
+    }
+
+    const vt = (values.voucherType ?? "").trim().toLowerCase().replace(/[^a-z]/g, "");
+    if (vt) {
+      if (["journal", "jv", "jrnl"].includes(vt)) s.norm.voucherType = "journal";
+      else if (["contra", "contravoucher"].includes(vt)) s.norm.voucherType = "contra";
+      else s.errors.push(`Voucher Type "${values.voucherType}" must be Journal or Contra`);
+    }
+  }
+
+  // Per-voucher: one date, one type, balanced legs, ≥ 2 legs, legacy dupe.
+  for (const doc of docs) {
+    const head = slots[doc.headIdx];
+    const label = `Voucher "${doc.vno}"`;
+
+    if (existingLegacy.has(doc.vno.toLowerCase())) {
+      head.errors.push(`${label} was already imported — an earlier journal voucher carries it as its legacy reference`);
+      head.suggestions.push("Already migrated — remove these rows, or renumber if it is genuinely a different voucher");
+    }
+
+    let dateIso: string | null = null; let dateFrom = 0;
+    let vtype: string | null = null; let vtypeFrom = 0;
+    let narration: string | null = null;
+    let sumDr = 0, sumCr = 0;
+    for (const i of doc.rowIdxs) {
+      const n = slots[i].norm;
+      if (n.dateIso) {
+        if (!dateIso) { dateIso = String(n.dateIso); dateFrom = rowsIn[i].rowNumber; }
+        else if (String(n.dateIso) !== dateIso) {
+          slots[i].errors.push(`${label} has two different dates — ${dateIso} (row ${dateFrom}) vs ${n.dateIso} here; one voucher carries ONE date`);
+        }
+      }
+      if (n.voucherType) {
+        if (!vtype) { vtype = String(n.voucherType); vtypeFrom = rowsIn[i].rowNumber; }
+        else if (String(n.voucherType) !== vtype) {
+          slots[i].errors.push(`${label} mixes voucher types — ${vtype} (row ${vtypeFrom}) vs ${n.voucherType} here`);
+        }
+      }
+      if (!narration && (rowsIn[i].values.narration ?? "").trim()) narration = (rowsIn[i].values.narration ?? "").trim();
+      sumDr = round2(sumDr + Number(n.debit ?? 0));
+      sumCr = round2(sumCr + Number(n.credit ?? 0));
+    }
+    if (!dateIso) head.errors.push(`${label} has no date — at least one of its rows must carry the Date`);
+    if (doc.rowIdxs.length < 2) {
+      head.errors.push(`${label} has only one row — a voucher needs at least a debit leg and a credit leg`);
+    }
+    const anyBad = doc.rowIdxs.some((i) => slots[i].errors.length > 0 || (slots[i].norm.missingMappings?.length ?? 0) > 0);
+    if (!anyBad && Math.abs(sumDr - sumCr) > 0.005) {
+      head.errors.push(`${label} does not balance — debits ₹${sumDr.toFixed(2)} vs credits ₹${sumCr.toFixed(2)}`);
+      head.suggestions.push("Fix the amounts so total debits equal total credits");
+    }
+
+    // Head row carries the assembled voucher for the import routine.
+    head.norm.head = true;
+    head.norm.voucher = {
+      legacyVoucherNo: doc.vno,
+      dateIso,
+      voucherType: vtype ?? "journal",
+      narration,
+      totalAmount: sumDr,
+      lines: doc.rowIdxs.map((i) => ({
+        ledgerId: slots[i].norm.ledgerId ?? null,
+        ledgerName: slots[i].norm.ledgerName ?? null,
+        debit: Number(slots[i].norm.debit ?? 0),
+        credit: Number(slots[i].norm.credit ?? 0),
+      })),
+    };
+    for (const i of doc.rowIdxs) slots[i].norm.doc = docs.indexOf(doc);
+  }
+
+  // ── Verdicts ──
+  const counts = { valid: 0, warning: 0, error: 0, needsMapping: 0 };
+  const results: RowVerdict[] = slots.map((s) => {
+    const missing: Array<{ kind: MappingKind; name: string }> = s.norm.missingMappings ?? [];
+    const status: RowVerdict["status"] =
+      s.errors.length > 0 ? "error"
+      : missing.length > 0 ? "needs_mapping"
+      : s.warnings.length > 0 ? "warning" : "valid";
+    if (status === "valid") counts.valid++;
+    else if (status === "warning") counts.warning++;
+    else if (status === "needs_mapping") counts.needsMapping++;
+    else counts.error++;
+    const reason = status === "needs_mapping"
+      ? [missing.map((m) => `${MAPPING_LABEL[m.kind]} "${m.name}" is not mapped yet`).join("; ") + " — map or create it in the mapping step", ...s.warnings].join("; ")
+      : [...s.errors, ...s.warnings].join("; ") || null;
+    return { status, reason, suggestion: s.suggestions[0] ?? null, duplicateOfId: null, norm: s.norm };
+  });
+  return { results, counts };
+}
+
+// ── Opening Stock validation ─────────────────────────────────────────────────
+
+/**
+ * The whole file is ONE opening-stock document: every row must carry the SAME
+ * as-on date, one row per item. Items resolve ONLY through 'product' mappings
+ * that point at finished items (opening stock is an Item Master concern —
+ * materials arrive through purchases).
+ */
+async function validateOpeningStockRows(
+  rowsIn: TxnRowInput[],
+  loc: { type: string; id: number },
+): Promise<{
+  results: RowVerdict[];
+  counts: { valid: number; warning: number; error: number; needsMapping: number };
+}> {
+  const checkRowLoc = await loadRowLocationCheck(loc);
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const products = await loadMappedProducts();
+
+  // Existing stock at the target location — an opening import ADDS on top,
+  // which is almost never what a migration wants for an item already stocked.
+  const stockAvail = new Map<number, number>();
+  {
+    const branchId = loc.type === "headoffice" ? 1 : loc.id;
+    const { rows } = await pool.query<any>(
+      `SELECT item_id, quantity::float8 AS qty FROM stock_entries
+        WHERE material_type = 'item' AND branch_type = $1 AND branch_id = $2`,
+      [loc.type, branchId],
+    );
+    for (const r of rows) stockAvail.set(Number(r.item_id), Number(r.qty));
+  }
+
+  type Slot = { errors: string[]; warnings: string[]; suggestions: string[]; norm: Record<string, any> };
+  const slots: Slot[] = rowsIn.map(() => ({ errors: [], warnings: [], suggestions: [], norm: {} }));
+
+  let docDate: string | null = null; let dateFrom = 0;
+  const seenItems = new Map<number, number>(); // item id → first row number
+
+  for (let i = 0; i < rowsIn.length; i++) {
+    const { rowNumber, values } = rowsIn[i];
+    const s = slots[i];
+
+    const rowLocRaw = (values.location ?? "").trim();
+    if (rowLocRaw) {
+      const locErr = checkRowLoc(rowLocRaw);
+      if (locErr) s.errors.push(locErr);
+    }
+
+    const dateRaw = (values.date ?? "").trim();
+    if (!dateRaw) {
+      s.errors.push("As-on Date is required on every row");
+    } else {
+      const iso = parseDateFlexible(dateRaw);
+      if (!iso) {
+        s.errors.push(`As-on Date "${dateRaw}" not understood`);
+        s.suggestions.push("Use YYYY-MM-DD or DD/MM/YYYY");
+      } else {
+        if (!docDate) { docDate = iso; dateFrom = rowNumber; }
+        else if (iso !== docDate) {
+          s.errors.push(`As-on Date ${iso} differs from ${docDate} (row ${dateFrom}) — the whole file is ONE opening-stock statement as of ONE date`);
+          s.suggestions.push("Split different dates into separate files");
+        }
+        if (iso > todayIso) s.warnings.push(`As-on Date ${iso} is in the future`);
+        s.norm.dateIso = iso;
+      }
+    }
+
+    const itemRaw = (values.item ?? "").trim();
+    if (!itemRaw) {
+      s.errors.push("Item is required");
+    } else {
+      const mapped = (products.get(normName(itemRaw)) ?? [])[0] ?? null;
+      if (!mapped) {
+        addMissingMapping(s.norm, "product", itemRaw);
+        s.suggestions.push(`Map "${itemRaw}" to a finished item (or create it) in the mapping step`);
+      } else if (mapped.kind !== "item") {
+        s.errors.push(`"${itemRaw}" is mapped to ${KIND_LABEL[mapped.kind]} — opening stock covers finished items only`);
+        s.suggestions.push("Fix the mapping on the Manage Mappings screen to point at a finished item");
+      } else {
+        const firstAt = seenItems.get(mapped.id);
+        if (firstAt !== undefined) {
+          s.errors.push(`"${mapped.name}" already appeared at row ${firstAt} — one row per item`);
+          s.suggestions.push("Combine the quantities into one row");
+        } else {
+          seenItems.set(mapped.id, rowNumber);
+          s.norm.itemId = mapped.id;
+          s.norm.itemName = mapped.name;
+          const have = stockAvail.get(mapped.id) ?? 0;
+          if (have > 0.001) {
+            s.warnings.push(`The location already holds ${have} of "${mapped.name}" — this opening quantity ADDS on top of it`);
+          }
+        }
+      }
+    }
+
+    const qty = parseQty(values.quantity ?? "");
+    if (qty === null) s.errors.push("Quantity is required");
+    else if (!Number.isFinite(qty) || qty <= 0) s.errors.push(`Quantity "${values.quantity}" must be a number greater than 0`);
+    else s.norm.quantity = qty;
+
+    const uc = parseMoney((values.unitCost ?? "").trim());
+    if (uc !== null) {
+      if (!Number.isFinite(uc) || uc < 0) s.errors.push(`Unit Cost "${values.unitCost}" must be a number ≥ 0`);
+      else s.norm.unitCost = uc;
+    }
+    if ((values.notes ?? "").trim()) s.norm.notes = values.notes.trim();
+  }
+
+  // ── Verdicts ──
+  const counts = { valid: 0, warning: 0, error: 0, needsMapping: 0 };
+  const results: RowVerdict[] = slots.map((s) => {
+    const missing: Array<{ kind: MappingKind; name: string }> = s.norm.missingMappings ?? [];
+    const status: RowVerdict["status"] =
+      s.errors.length > 0 ? "error"
+      : missing.length > 0 ? "needs_mapping"
+      : s.warnings.length > 0 ? "warning" : "valid";
+    if (status === "valid") counts.valid++;
+    else if (status === "warning") counts.warning++;
+    else if (status === "needs_mapping") counts.needsMapping++;
+    else counts.error++;
+    const reason = status === "needs_mapping"
+      ? [missing.map((m) => `${MAPPING_LABEL[m.kind]} "${m.name}" is not mapped yet`).join("; ") + " — map or create it in the mapping step", ...s.warnings].join("; ")
+      : [...s.errors, ...s.warnings].join("; ") || null;
+    return { status, reason, suggestion: s.suggestions[0] ?? null, duplicateOfId: null, norm: s.norm };
+  });
   return { results, counts };
 }
 
@@ -1722,6 +2226,12 @@ async function validateVoucherRows(
 /** Human-facing batch id shown in history, dialogs and the audit trail. */
 function batchDisplayId(id: number): string {
   return `IMP${String(id).padStart(6, "0")}`;
+}
+
+/** Legacy/unknown module strings count as master (no wizard buttons). */
+function batchIsMaster(b: any): boolean {
+  const m = asModule(String(b.module ?? ""));
+  return m == null || isMasterModule(m);
 }
 
 function batchJson(b: any) {
@@ -1747,6 +2257,20 @@ function batchJson(b: any) {
     committedBy: b.committed_by,
     rolledBackAt: b.rolled_back_at,
     rolledBackBy: b.rolled_back_by,
+    // ── Wizard state ──
+    demoAt: b.demo_at ?? null,
+    demoBy: b.demo_by ?? null,
+    demoSummary: b.demo_summary ?? null,
+    hasDemoReport: b.has_demo_report != null ? Boolean(b.has_demo_report) : b.demo_report != null,
+    discardedAt: b.discarded_at ?? null,
+    discardedBy: b.discarded_by ?? null,
+    legacyRange: (b.legacy_min || b.legacy_max)
+      ? { min: b.legacy_min ?? null, max: b.legacy_max ?? null }
+      : null,
+    canDemo: !batchIsMaster(b) && (b.status === "validated" || b.status === "demo_ready"),
+    canApprove: !batchIsMaster(b) && b.status === "demo_ready",
+    canDiscard: !batchIsMaster(b) && (b.status === "validated" || b.status === "demo_ready"),
+    canCommit: batchIsMaster(b) && b.status === "validated",
     // "available" from cheap state — actual eligibility is re-decided at
     // rollback time from live usage.
     rollbackAvailable:
@@ -1765,16 +2289,17 @@ function rowJson(r: any) {
     suggestion: r.suggestion ?? null,
     duplicateOfId: r.duplicate_of_id == null ? null : Number(r.duplicate_of_id),
     values: raw.values ?? {},
-    missingParty: raw.norm?.missingParty ?? null,
+    /** unmapped names holding this row at needs_mapping */
+    missingMappings: raw.norm?.missingMappings ?? [],
     docIndex: raw.norm?.doc ?? null,
-    /** txn imports: this document's party will be auto-created at commit */
-    willCreateParty: raw.norm?.createParty?.name ?? null,
     /** txn imports: walk-in counter sale (no customer on the bill) */
     walkIn: raw.norm?.walkIn === true,
     /** voucher imports: planned allocation shown in the preview */
     plan: raw.norm?.plan ?? null,
     /** voucher imports: what commit actually recorded */
     created: raw.created ?? null,
+    /** wizard: this row's outcome in the last demo run */
+    demo: raw.demo ?? null,
     createdRecordType: r.created_record_type ?? null,
     createdRecordId: r.created_record_id == null ? null : Number(r.created_record_id),
     createdLedgerId: r.created_ledger_id == null ? null : Number(r.created_ledger_id),
@@ -1793,16 +2318,20 @@ function txnBatchSummary(dbRows: Array<{ raw?: any }>): {
   invoices: number; totalQuantity: number; totalTaxable: number;
   totalGst: number; totalDiscount: number; totalAmount: number;
   distinctParties: number; distinctItems: number;
-  walkInInvoices: number; partiesToCreate: string[];
+  walkInInvoices: number;
+  unmappedNames: Array<{ kind: string; name: string }>;
 } {
   const r2 = (n: number) => Math.round(n * 100) / 100;
   let invoices = 0, qty = 0, taxable = 0, gst = 0, discount = 0, amount = 0, walkIns = 0;
   const partyKeys = new Set<string>();
   const itemKeys = new Set<string>();
-  const toCreate = new Map<string, string>(); // lower(name) → display name
+  const unmapped = new Map<string, { kind: string; name: string }>(); // `${kind}|${norm}` → display
   for (const r of dbRows) {
     const n = r.raw?.norm ?? {};
     if (n.line?.name) itemKeys.add(String(n.line.name).toLowerCase());
+    for (const m of (n.missingMappings ?? []) as Array<{ kind: string; name: string }>) {
+      unmapped.set(`${m.kind}|${normName(String(m.name))}`, { kind: m.kind, name: String(m.name) });
+    }
     if (!n.head || n.computedTotal == null) continue;
     invoices++;
     amount += Number(n.computedTotal ?? 0);
@@ -1812,18 +2341,14 @@ function txnBatchSummary(dbRows: Array<{ raw?: any }>): {
     discount += Number(n.computedDiscount ?? 0);
     if (n.walkIn === true) walkIns++;
     else if (n.partyId != null) partyKeys.add(`#${n.partyId}`);
-    if (n.createParty?.name) {
-      const nm = String(n.createParty.name);
-      partyKeys.add(nm.toLowerCase());
-      toCreate.set(nm.toLowerCase(), nm);
-    }
   }
   return {
     invoices, totalQuantity: Math.round(qty * 1000) / 1000,
     totalTaxable: r2(taxable), totalGst: r2(gst),
     totalDiscount: r2(discount), totalAmount: r2(amount),
     distinctParties: partyKeys.size, distinctItems: itemKeys.size,
-    walkInInvoices: walkIns, partiesToCreate: [...toCreate.values()].sort((a, b) => a.localeCompare(b)),
+    walkInInvoices: walkIns,
+    unmappedNames: [...unmapped.values()].sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)),
   };
 }
 
@@ -1835,7 +2360,10 @@ router.get("/imports/templates/:module", requireModuleAction(PERM, "download"), 
   const spec = TEMPLATES[module];
 
   const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet(spec.title);
+  // Excel forbids * ? : \ / [ ] in worksheet names and caps them at 31 chars —
+  // a display title like "Day Book (Journal / Contra)" must be sanitised or
+  // exceljs throws and the download 500s.
+  const ws = wb.addWorksheet(spec.title.replace(/[*?:\\/[\]]/g, "-").slice(0, 31));
 
   // Hidden columns (cross-check-only, e.g. GST amounts) never appear in the
   // template — the user supplies business data only; the ERP computes the rest.
@@ -1876,7 +2404,7 @@ router.get("/imports/templates/:module", requireModuleAction(PERM, "download"), 
       help.addRow(["• Discount % is a percent off that line. There is no bill-level discount on purchases — spread it into the lines."]);
     }
     help.addRow(["• Dates: YYYY-MM-DD or DD/MM/YYYY."]);
-    help.addRow([`• Items must already exist in the masters — unknown items are errors. Unknown ${party.toLowerCase()}s are created automatically at import (with their ledgers), or via the resolve step when auto-create is switched off in Company Settings → Data Import.`]);
+    help.addRow([`• Every item and ${party.toLowerCase()} name from your old ERP is matched through the mapping step: you link each name to an existing record (or create one) ONCE, and the link is remembered for every later file.`]);
     help.addRow(["• Payment Status: Paid / Unpaid / Partial. Paid with a blank Paid Amount = fully paid; Partial REQUIRES a Paid Amount; blank = Unpaid (or partly paid when a Paid Amount is given)."]);
     if (module === "sales") {
       help.addRow(["• Payment Account: Cash / Bank / UPI / Customer Credit. Cash, Bank and UPI sales are recorded as fully paid at creation; use Customer Credit + Paid Amount for partly-paid invoices."]);
@@ -1893,9 +2421,21 @@ router.get("/imports/templates/:module", requireModuleAction(PERM, "download"), 
     help.addRow([`• ${module === "receipts" ? "Against Invoice" : "Against Bill"} is optional: fill it to settle ONLY that ${docWord}; leave it blank to auto-allocate against the ${party.toLowerCase()}'s oldest unpaid ${docWord}s (FIFO).`]);
     help.addRow([`• Any amount beyond the open balance is parked as a ${party.toLowerCase()} advance, adjustable against future ${docWord}s.`]);
     help.addRow([`• ${module === "receipts" ? "Received In" : "Paid From"}: write Cash, Bank, or the exact bank ledger name — it decides whether the money ${module === "receipts" ? "lands in" : "leaves"} the cash book or bank book.`]);
-    help.addRow(["• Voucher numbers are kept exactly as supplied and must be unique; blank rows draw the next number from the voucher sequence."]);
+    help.addRow(["• The ERP gives every voucher its own number; the number from your file is kept as the old reference and stays searchable. A file number that was already imported is flagged."]);
     help.addRow(["• Dates: YYYY-MM-DD or DD/MM/YYYY."]);
-    help.addRow([`• Unknown ${party.toLowerCase()}s can be created during the import (resolve step). Import the ${docWord}s FIRST so allocation finds them.`]);
+    help.addRow([`• ${party} names are matched through the mapping step (map once, remembered forever). Import the ${docWord}s FIRST so allocation finds them.`]);
+  } else if (module === "daybook") {
+    help.addRow(["• One row per voucher LEG. Every row carrying the same Voucher No belongs to that voucher; each row is a Debit OR a Credit, and the voucher's debits must equal its credits."]);
+    help.addRow(["• Voucher Type: Journal or Contra (blank = Journal). One date per voucher."]);
+    help.addRow(["• Ledger names are matched through the mapping step — link each old-ERP ledger to your Chart of Accounts once, and it is remembered for every later file."]);
+    help.addRow(["• The ERP gives every voucher its own number; the number from your file is kept as the old reference and stays searchable."]);
+    help.addRow(["• Sales, purchases, receipts and payments have their own imports — the Day Book is for the journal and contra entries that remain."]);
+    help.addRow(["• Dates: YYYY-MM-DD or DD/MM/YYYY."]);
+  } else if (module === "opening_stock") {
+    help.addRow(["• The whole file is ONE opening-stock statement: every row carries the SAME As-on Date, one row per item."]);
+    help.addRow(["• Item names are matched through the mapping step to your Item Master (finished items only)."]);
+    help.addRow(["• Unit Cost is optional — when given, the stock is valued at it; when blank, the item's current average cost is used."]);
+    help.addRow(["• Quantities ADD to whatever the location already holds — a warning tells you when that happens."]);
   } else {
     help.addRow(["• Opening Type is Dr or Cr. Opening Balance is the amount as on migration date."]);
     help.addRow([""]);
@@ -1918,6 +2458,73 @@ router.get("/imports/templates/:module", requireModuleAction(PERM, "download"), 
 
 const MAX_ROWS = 2000;
 
+/**
+ * Load the first sheet of an uploaded workbook, map its headers through the
+ * module's alias table and walk the data rows into { rowNumber, values }
+ * records. Shared by the single-file parse endpoint and the Migration
+ * Wizard's per-module file uploads — validation happens AFTER this, per
+ * caller.
+ */
+async function parseWorkbookValues(
+  module: ImportModule, body: Buffer,
+): Promise<{ error: string } | { parsed: Array<{ rowNumber: number; values: Record<string, string> }> }> {
+  const wb = new ExcelJS.Workbook();
+  try {
+    await wb.xlsx.load(body as any);
+  } catch {
+    return { error: "That file could not be read as an Excel (.xlsx) workbook. Download the sample and fill it in." };
+  }
+  const ws = wb.worksheets[0];
+  if (!ws || ws.rowCount < 2) return { error: "The first sheet has no data rows below the header." };
+
+  const spec = TEMPLATES[module];
+  const colForIdx = new Map<number, string>();
+  const headerCells = ws.getRow(1);
+  headerCells.eachCell((cell, colNumber) => {
+    const h = normHeader(cellText(cell.value).replace(/\*/g, ""));
+    if (!h) return;
+    const match = spec.columns.find((c) => c.aliases.includes(h) || normHeader(c.header) === h);
+    if (match && ![...colForIdx.values()].includes(match.key)) colForIdx.set(colNumber, match.key);
+  });
+  const mappedKeys = new Set(colForIdx.values());
+  const missingRequired = spec.columns.filter((c) => c.required && !mappedKeys.has(c.key));
+  if (missingRequired.length > 0) {
+    return { error: `Required column${missingRequired.length > 1 ? "s" : ""} not found: ${missingRequired.map((c) => c.header).join(", ")}. Keep the sample's header row unchanged.` };
+  }
+
+  // Walk data rows. Row numbers reported to the user are SPREADSHEET rows.
+  const parsed: Array<{ rowNumber: number; values: Record<string, string> }> = [];
+  for (let rn = 2; rn <= ws.rowCount; rn++) {
+    const row = ws.getRow(rn);
+    const values: Record<string, string> = {};
+    let hasAny = false;
+    for (const [colNumber, key] of colForIdx) {
+      const text = cellText(row.getCell(colNumber).value);
+      if (text) hasAny = true;
+      values[key] = text;
+    }
+    if (!hasAny) continue; // blank line
+    if (parsed.length >= MAX_ROWS) {
+      return { error: `That file has more than ${MAX_ROWS} rows — split it into smaller files.` };
+    }
+    parsed.push({ rowNumber: rn, values });
+  }
+  if (parsed.length === 0) return { error: "No data rows found below the header." };
+  return { parsed };
+}
+
+/** Whole-file validator dispatch for the wizard (demo) modules. */
+async function runWizardValidators(
+  module: DemoModule,
+  rowsIn: Array<{ rowNumber: number; values: Record<string, string> }>,
+  stamp: { type: string; id: number },
+): Promise<{ results: RowVerdict[]; counts: { valid: number; warning: number; error: number; needsMapping: number } }> {
+  return isTxnModule(module) ? validateTransactionRows(module, rowsIn, stamp)
+    : isVoucherModule(module) ? validateVoucherRows(module, rowsIn, stamp)
+    : module === "daybook" ? validateDaybookRows(rowsIn, stamp)
+    : validateOpeningStockRows(rowsIn, stamp);
+}
+
 router.post(
   "/imports/parse",
   requireModuleAction(PERM, "add"),
@@ -1933,43 +2540,15 @@ router.post(
       res.status(400).json({ error: "The uploaded file was empty." }); return;
     }
 
-    const wb = new ExcelJS.Workbook();
-    try {
-      await wb.xlsx.load(body as any);
-    } catch {
-      res.status(400).json({ error: "That file could not be read as an Excel (.xlsx) workbook. Download the sample and fill it in." });
-      return;
-    }
-    const ws = wb.worksheets[0];
-    if (!ws || ws.rowCount < 2) {
-      res.status(400).json({ error: "The first sheet has no data rows below the header." }); return;
-    }
-
-    // Map headers → column keys via the alias table.
-    const spec = TEMPLATES[module];
-    const colForIdx = new Map<number, string>();
-    const headerCells = ws.getRow(1);
-    headerCells.eachCell((cell, colNumber) => {
-      const h = normHeader(cellText(cell.value).replace(/\*/g, ""));
-      if (!h) return;
-      const match = spec.columns.find((c) => c.aliases.includes(h) || normHeader(c.header) === h);
-      if (match && ![...colForIdx.values()].includes(match.key)) colForIdx.set(colNumber, match.key);
-    });
-    const mappedKeys = new Set(colForIdx.values());
-    const missingRequired = spec.columns.filter((c) => c.required && !mappedKeys.has(c.key));
-    if (missingRequired.length > 0) {
-      res.status(400).json({
-        error: `Required column${missingRequired.length > 1 ? "s" : ""} not found: ${missingRequired.map((c) => c.header).join(", ")}. Keep the sample's header row unchanged.`,
-      });
-      return;
-    }
+    const pw = await parseWorkbookValues(module, body);
+    if ("error" in pw) { res.status(400).json({ error: pw.error }); return; }
 
     // Transaction AND voucher imports must know WHERE the documents land
     // before anything is validated — stock checks, ledgers, allocation scope
     // and duplicates are all per-location. The location is a request,
     // resolveActingLocation is the authority.
     let txnLoc: { type: string; id: number } | null = null;
-    if (isTxnModule(module) || isVoucherModule(module)) {
+    if (isDemoModule(module)) {
       // Explicit choice required — defaulting to the uploader's own branch
       // would silently stamp a whole migration onto the wrong location.
       if (!req.query.locationType) {
@@ -1983,6 +2562,10 @@ router.post(
       if ("error" in resolved) { res.status(400).json({ error: resolved.error }); return; }
       if (resolved.loc.type === "outlet" && await outletWritesBlocked(pool)) {
         res.status(400).json({ error: OUTLETS_DISABLED_MESSAGE }); return;
+      }
+      {
+        const disabledMsg = await disabledWarehouseError(pool, [{ type: resolved.loc.type, id: resolved.loc.id }]);
+        if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
       }
       txnLoc = resolved.loc;
     }
@@ -2004,6 +2587,18 @@ router.post(
     } else if (module === "customers" || module === "vendors") {
       const { rows } = await pool.query<any>(`SELECT id, lower(name) AS lname FROM ${module}`);
       for (const r of rows) if (!existingByName.has(r.lname)) existingByName.set(r.lname, Number(r.id));
+    }
+    const existingItemCodes = new Map<string, number>();
+    const existingBarcodes = new Map<string, number>();
+    if (module === "items") {
+      const { rows } = await pool.query<any>(
+        `SELECT id, lower(name) AS lname, lower(item_code) AS lcode, lower(barcode) AS lbarcode FROM items`,
+      );
+      for (const r of rows) {
+        if (!existingByName.has(r.lname)) existingByName.set(r.lname, Number(r.id));
+        if (r.lcode && !existingItemCodes.has(r.lcode)) existingItemCodes.set(r.lcode, Number(r.id));
+        if (r.lbarcode && !existingBarcodes.has(r.lbarcode)) existingBarcodes.set(r.lbarcode, Number(r.id));
+      }
     }
 
     // Master modules: index of assignable locations, plus which of them the
@@ -2039,52 +2634,30 @@ router.post(
       parentCandidates: module === "ledgers" ? await loadParentCandidates() : undefined,
       partyLocations,
       allowedLocationKeys,
+      existingItemCodes: module === "items" ? existingItemCodes : undefined,
+      existingBarcodes: module === "items" ? existingBarcodes : undefined,
     };
 
-    // Walk data rows. Row numbers reported to the user are SPREADSHEET rows.
-    const parsed: Array<{ rowNumber: number; values: Record<string, string>; verdict: RowVerdict }> = [];
-    for (let rn = 2; rn <= ws.rowCount; rn++) {
-      const row = ws.getRow(rn);
-      const values: Record<string, string> = {};
-      let hasAny = false;
-      for (const [colNumber, key] of colForIdx) {
-        const text = cellText(row.getCell(colNumber).value);
-        if (text) hasAny = true;
-        values[key] = text;
-      }
-      if (!hasAny) continue; // blank line
-      if (parsed.length >= MAX_ROWS) {
-        res.status(400).json({ error: `That file has more than ${MAX_ROWS} rows — split it into smaller files.` });
-        return;
-      }
-      parsed.push({
-        rowNumber: rn, values,
-        // Txn/voucher rows are validated as a whole file below (grouping and
-        // running allocation both need order).
-        verdict: isTxnModule(module) || isVoucherModule(module)
+    // Row verdicts. Wizard-module rows are validated as a whole file
+    // (grouping and running allocation both need order); master rows one by
+    // one against the ctx indexes.
+    const parsed: Array<{ rowNumber: number; values: Record<string, string>; verdict: RowVerdict }> =
+      pw.parsed.map((p) => ({
+        rowNumber: p.rowNumber, values: p.values,
+        verdict: isDemoModule(module)
           ? { status: "valid", reason: null, suggestion: null, duplicateOfId: null, norm: {} }
-          : validateRow(module, rn, values, ctx),
-      });
-    }
-    if (parsed.length === 0) {
-      res.status(400).json({ error: "No data rows found below the header." }); return;
-    }
+          : validateRow(module, p.rowNumber, p.values, ctx),
+      }));
 
-    if (isTxnModule(module) && txnLoc) {
-      const { results } = await validateTransactionRows(
-        module, parsed.map((p) => ({ rowNumber: p.rowNumber, values: p.values })), txnLoc,
-      );
-      parsed.forEach((p, i) => { p.verdict = results[i]; });
-    }
-    if (isVoucherModule(module) && txnLoc) {
-      const { results } = await validateVoucherRows(
+    if (isDemoModule(module) && txnLoc) {
+      const { results } = await runWizardValidators(
         module, parsed.map((p) => ({ rowNumber: p.rowNumber, values: p.values })), txnLoc,
       );
       parsed.forEach((p, i) => { p.verdict = results[i]; });
     }
 
     const counts = { valid: 0, warning: 0, error: 0 };
-    for (const p of parsed) counts[p.verdict.status === "needs_party" ? "error" : p.verdict.status]++;
+    for (const p of parsed) counts[p.verdict.status === "needs_mapping" ? "error" : p.verdict.status]++;
 
     const emp = (req as any).employee as { branchType?: string; branchId?: number } | undefined;
     const { rows: [batch] } = await pool.query(
@@ -2121,80 +2694,18 @@ router.post(
   },
 );
 
-// ── 2b. Resolve missing parties (sales & purchases) ─────────────────────────
-// Creates the missing customers/vendors through the SAME code path as manual
-// creation (ledgers auto-provisioned, location stamped), then re-validates the
-// whole batch from the stored raw values — no re-upload needed.
+// ── 2b. Mapping step ─────────────────────────────────────────────────────────
+// import_mappings is permanent memory: map an old-ERP name once (choose an
+// existing master or create one) and every later file resolves it silently.
+// Masters created here are REAL records — created through the SAME code paths
+// as manual creation. Saving mappings re-validates the batch from its stored
+// raw values, so no re-upload is ever needed.
 
-router.post("/imports/batches/:id/resolve-parties", requireModuleAction(PERM, "add"), async (req: Request, res: Response): Promise<void> => {
-  const id = parseInt(String(req.params.id), 10);
-  const { rows: [batch] } = await pool.query(`SELECT * FROM import_batches WHERE id = $1`, [id]);
-  if (!batch) { res.status(404).json({ error: "Import batch not found" }); return; }
-  const module = asModule(batch.module);
-  if (!module || (!isTxnModule(module) && !isVoucherModule(module))) {
-    res.status(400).json({ error: "Only sales, purchase, receipt and payment imports have a party-resolution step." }); return;
-  }
-  if (batch.status !== "validated") {
-    res.status(409).json({ error: "Parties can only be created while the batch is awaiting commit." }); return;
-  }
-
-  const body = (req.body ?? {}) as { parties?: unknown };
-  const partiesIn = Array.isArray(body.parties) ? body.parties : [];
-  if (partiesIn.length === 0) { res.status(400).json({ error: "Pass parties: [{ name, gstNumber?, phone?, state?, address?, creditLimit? }]" }); return; }
-  if (partiesIn.length > 500) { res.status(400).json({ error: "Too many parties in one request." }); return; }
-
-  const stamp = { type: String(batch.location_type ?? "headoffice"), id: Number(batch.location_id ?? 0) };
-  const user = username(req);
-  const partyIsCustomer = module === "sales" || module === "receipts";
-  const table = partyIsCustomer ? "customers" : "vendors";
-  const created: string[] = [];
-  const skipped: string[] = [];
-  const errors: Array<{ name: string; reason: string }> = [];
-
-  for (const p of partiesIn as any[]) {
-    const name = String(p?.name ?? "").trim();
-    if (!name || name.length < 2) { errors.push({ name: name || "(blank)", reason: "Name must be at least 2 characters" }); continue; }
-    const gst = String(p?.gstNumber ?? "").trim().toUpperCase();
-    if (gst && !GSTIN_RE.test(gst)) { errors.push({ name, reason: `GSTIN "${gst}" is not a valid 15-character GSTIN` }); continue; }
-    const phone = parsePhone(String(p?.phone ?? "").trim());
-    if (phone === "invalid") { errors.push({ name, reason: `Phone "${p?.phone}" is not a 10-digit number` }); continue; }
-    const state = String(p?.state ?? "").trim();
-    const address = String(p?.address ?? "").trim();
-
-    // Someone may have created it since the preview rendered — that is fine,
-    // the re-validation below will pick the existing record up.
-    const { rows: [dupe] } = await pool.query(`SELECT id FROM ${table} WHERE lower(name) = lower($1) LIMIT 1`, [name]);
-    if (dupe) { skipped.push(name); continue; }
-
-    try {
-      const input: any = {
-        name,
-        ...(gst ? { gstNumber: gst } : {}),
-        ...(phone ? { phone } : {}),
-        ...(state ? { state } : {}),
-        ...(address ? { address } : {}),
-        notes: `Created during import batch #${id}`,
-      };
-      const { row } = partyIsCustomer
-        ? await createCustomerWithLedger(input, stamp)
-        : await createVendorWithLedger(input, stamp);
-      const cl = Number(p?.creditLimit ?? NaN);
-      if (partyIsCustomer && Number.isFinite(cl) && cl > 0) {
-        await pool.query(`UPDATE customers SET credit_limit = $1 WHERE id = $2`, [Math.round(cl * 100) / 100, row.id]);
-      }
-      created.push(name);
-    } catch (e: any) {
-      errors.push({ name, reason: String(e?.message ?? e).slice(0, 300) });
-    }
-  }
-
-  // Full re-validation from the stored raw values — grouping, duplicates and
-  // totals are all order-dependent, so the whole file runs again.
+/** Re-run the whole-file validator for a demo-module batch from stored raws. */
+async function revalidateDemoBatch(id: number, module: DemoModule, stamp: { type: string; id: number }) {
   const { rows: importRows } = await pool.query(`SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [id]);
   const rowsIn = importRows.map((r: any) => ({ rowNumber: Number(r.row_number), values: (r.raw?.values ?? {}) as Record<string, string> }));
-  const { results, counts } = isVoucherModule(module)
-    ? await validateVoucherRows(module, rowsIn, stamp)
-    : await validateTransactionRows(module, rowsIn, stamp);
+  const { results, counts } = await runWizardValidators(module, rowsIn, stamp);
   for (let i = 0; i < importRows.length; i++) {
     const v = results[i];
     await pool.query(
@@ -2204,22 +2715,437 @@ router.post("/imports/batches/:id/resolve-parties", requireModuleAction(PERM, "a
     );
   }
   const { rows: [updated] } = await pool.query(
-    `UPDATE import_batches SET valid_rows = $2, warning_rows = $3, error_rows = $4 WHERE id = $1 RETURNING *`,
-    [id, counts.valid, counts.warning, counts.error + counts.needsParty],
+    `UPDATE import_batches SET valid_rows = $2, warning_rows = $3, error_rows = $4,
+        demo_report  = CASE WHEN status = 'demo_ready' THEN NULL ELSE demo_report END,
+        demo_summary = CASE WHEN status = 'demo_ready' THEN NULL ELSE demo_summary END,
+        status       = CASE WHEN status = 'demo_ready' THEN 'validated' ELSE status END
+     WHERE id = $1 RETURNING *`,
+    [id, counts.valid, counts.warning, counts.error + counts.needsMapping],
   );
   const { rows: outRows } = await pool.query(`SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [id]);
+  return { updated, outRows, counts };
+}
+
+/** Master tables a mapping kind can target. product spans three tables with
+ *  overlapping id spaces, so its rows carry target_kind. */
+const PRODUCT_TARGET_KINDS = ["item", "material", "raw_material"] as const;
+const PRODUCT_TABLE: Record<string, string> = { item: "items", material: "materials", raw_material: "raw_materials" };
+
+/** Verify a chosen mapping target actually exists (and, for ledgers, is a
+ *  postable active ledger). Returns the target's display name or an error. */
+async function checkMappingTarget(
+  kind: MappingKind, targetId: number, targetKind: string | null,
+): Promise<{ name: string; targetKind: string | null } | { error: string }> {
+  if (!Number.isInteger(targetId) || targetId <= 0) return { error: "targetId must be a positive integer" };
+  if (kind === "customer" || kind === "vendor") {
+    const { rows: [r] } = await pool.query(`SELECT name FROM ${kind === "customer" ? "customers" : "vendors"} WHERE id = $1`, [targetId]);
+    return r ? { name: String(r.name), targetKind: null } : { error: `${MAPPING_LABEL[kind]} #${targetId} does not exist` };
+  }
+  if (kind === "ledger") {
+    const { rows: [r] } = await pool.query(
+      `SELECT name, COALESCE(is_group, false) AS grp, COALESCE(is_active, true) AS act FROM account_ledgers WHERE id = $1`,
+      [targetId],
+    );
+    if (!r) return { error: `Ledger #${targetId} does not exist` };
+    if (r.grp) return { error: `"${r.name}" is a group — map onto a postable ledger, not a group` };
+    if (!r.act) return { error: `Ledger "${r.name}" is inactive` };
+    return { name: String(r.name), targetKind: null };
+  }
+  // product
+  const tk = targetKind && (PRODUCT_TARGET_KINDS as readonly string[]).includes(targetKind) ? targetKind : "item";
+  const { rows: [r] } = await pool.query(`SELECT name FROM ${PRODUCT_TABLE[tk]} WHERE id = $1`, [targetId]);
+  return r ? { name: String(r.name), targetKind: tk } : { error: `${KIND_LABEL[tk as keyof typeof KIND_LABEL] ?? tk} #${targetId} does not exist` };
+}
+
+async function upsertMapping(kind: MappingKind, sourceName: string, targetId: number, targetKind: string | null, user: string) {
+  await pool.query(
+    `INSERT INTO import_mappings (kind, source_name, source_norm, target_id, target_kind, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (kind, source_norm) DO UPDATE
+       SET target_id = EXCLUDED.target_id, target_kind = EXCLUDED.target_kind,
+           source_name = EXCLUDED.source_name, updated_at = now()`,
+    [kind, sourceName, normName(sourceName), targetId, targetKind, user],
+  );
+}
+
+/** Build the mapping workspace — unmapped names (with exact-match
+ *  suggestions the user CONFIRMS; prefill only, nothing is ever mapped
+ *  without an explicit save) plus the pick-lists for "choose existing" —
+ *  from any set of import rows: one batch or a whole migration. */
+async function buildMappingWorkspace(importRows: Array<{ raw?: any }>) {
+  const unmapped = new Map<string, { kind: MappingKind; name: string; rows: number }>();
+  for (const r of importRows) {
+    for (const m of (r.raw?.norm?.missingMappings ?? []) as Array<{ kind: MappingKind; name: string }>) {
+      const key = `${m.kind}|${normName(String(m.name))}`;
+      const cur = unmapped.get(key);
+      if (cur) cur.rows++;
+      else unmapped.set(key, { kind: m.kind, name: String(m.name), rows: 1 });
+    }
+  }
+
+  // Exact-name candidates for prefill.
+  const kindsPresent = new Set([...unmapped.values()].map((u) => u.kind));
+  const suggest = new Map<string, { targetId: number; targetKind: string | null; name: string }>();
+  const index = (kind: MappingKind, tk: string | null) => (r: any) => {
+    const key = `${kind}|${normName(String(r.name))}`;
+    if (!suggest.has(key)) suggest.set(key, { targetId: Number(r.id), targetKind: tk, name: String(r.name) });
+  };
+  if (kindsPresent.has("customer")) (await pool.query(`SELECT id, name FROM customers`)).rows.forEach(index("customer", null));
+  if (kindsPresent.has("vendor")) (await pool.query(`SELECT id, name FROM vendors`)).rows.forEach(index("vendor", null));
+  if (kindsPresent.has("ledger")) {
+    (await pool.query(
+      `SELECT id, name FROM account_ledgers WHERE NOT COALESCE(is_group, false) AND COALESCE(is_active, true)`,
+    )).rows.forEach(index("ledger", null));
+  }
+  if (kindsPresent.has("product")) {
+    (await pool.query(`SELECT id, name FROM items`)).rows.forEach(index("product", "item"));
+    (await pool.query(`SELECT id, name FROM materials`)).rows.forEach(index("product", "material"));
+    (await pool.query(`SELECT id, name FROM raw_materials`)).rows.forEach(index("product", "raw_material"));
+  }
+
+  // Pick-lists for the "choose existing" dropdowns — served here because the
+  // import page's permission does not imply the masters pages' permissions.
+  const candidates: Record<string, Array<{ id: number; name: string; targetKind?: string }>> = {};
+  if (kindsPresent.has("customer")) {
+    candidates.customer = (await pool.query(`SELECT id, name FROM customers ORDER BY name`)).rows
+      .map((r: any) => ({ id: Number(r.id), name: String(r.name) }));
+  }
+  if (kindsPresent.has("vendor")) {
+    candidates.vendor = (await pool.query(`SELECT id, name FROM vendors ORDER BY name`)).rows
+      .map((r: any) => ({ id: Number(r.id), name: String(r.name) }));
+  }
+  if (kindsPresent.has("ledger")) {
+    candidates.ledger = (await pool.query(
+      `SELECT id, name FROM account_ledgers WHERE NOT COALESCE(is_group, false) AND COALESCE(is_active, true) ORDER BY name`,
+    )).rows.map((r: any) => ({ id: Number(r.id), name: String(r.name) }));
+  }
+  if (kindsPresent.has("product")) {
+    const prods: Array<{ id: number; name: string; targetKind: string }> = [];
+    for (const [table, tk] of [["items", "item"], ["materials", "material"], ["raw_materials", "raw_material"]] as const) {
+      (await pool.query(`SELECT id, name FROM ${table} ORDER BY name`)).rows
+        .forEach((r: any) => prods.push({ id: Number(r.id), name: String(r.name), targetKind: tk }));
+    }
+    candidates.product = prods;
+  }
+
+  return {
+    unmapped: [...unmapped.values()]
+      .sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name))
+      .map((u) => ({ ...u, suggestion: suggest.get(`${u.kind}|${normName(u.name)}`) ?? null })),
+    candidates,
+    /** Groups a NEW ledger may be created under (create-ledger flow). */
+    ledgerGroups: kindsPresent.has("ledger") ? await loadParentCandidates() : [],
+  };
+}
+
+/** Unmapped names of a single batch (per-file flow). */
+router.get("/imports/batches/:id/mappings", requireModuleView(PERM), async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  const { rows: [batch] } = await pool.query(`SELECT * FROM import_batches WHERE id = $1`, [id]);
+  if (!batch) { res.status(404).json({ error: "Import batch not found" }); return; }
+  const module = asModule(batch.module);
+  if (!module || !isDemoModule(module)) {
+    res.status(400).json({ error: "Master imports have no mapping step — names ARE the records being created." }); return;
+  }
+  const { rows: importRows } = await pool.query(`SELECT raw FROM import_rows WHERE batch_id = $1`, [id]);
+  res.json({ batch: batchJson(batch), ...(await buildMappingWorkspace(importRows)) });
+});
+
+/** Apply a list of mapping decisions — choose existing (targetId) or create
+ *  new (create payload) per name — using the SAME creation code paths as
+ *  manual entry, then upsert the permanent mapping memory. Shared by the
+ *  per-batch and migration mapping endpoints. `noteRef` lands in the created
+ *  masters' notes/description. */
+async function applyMappingEntries(
+  mappingsIn: any[],
+  stamp: { type: string; id: number },
+  user: string,
+  noteRef: string,
+): Promise<{
+  saved: Array<{ kind: string; name: string; targetName: string }>;
+  created: Array<{ kind: string; name: string; targetName: string }>;
+  errors: Array<{ kind: string; name: string; reason: string }>;
+}> {
+  const saved: Array<{ kind: string; name: string; targetName: string }> = [];
+  const created: Array<{ kind: string; name: string; targetName: string }> = [];
+  const errors: Array<{ kind: string; name: string; reason: string }> = [];
+
+  for (const m of mappingsIn as any[]) {
+    const kind = String(m?.kind ?? "") as MappingKind;
+    const name = String(m?.name ?? "").trim();
+    if (!MAPPING_KINDS.includes(kind)) { errors.push({ kind: String(m?.kind), name, reason: `kind must be one of: ${MAPPING_KINDS.join(", ")}` }); continue; }
+    if (!name) { errors.push({ kind, name: "(blank)", reason: "name is required" }); continue; }
+
+    try {
+      if (m?.create && typeof m.create === "object") {
+        // Create a REAL master (same code path as manual creation), then map.
+        const c = m.create as Record<string, unknown>;
+        const newName = String(c.name ?? name).trim() || name;
+        if (kind === "customer" || kind === "vendor") {
+          const gst = String(c.gstNumber ?? "").trim().toUpperCase();
+          if (gst && !GSTIN_RE.test(gst)) { errors.push({ kind, name, reason: `GSTIN "${gst}" is not a valid 15-character GSTIN` }); continue; }
+          const phone = parsePhone(String(c.phone ?? "").trim());
+          if (phone === "invalid") { errors.push({ kind, name, reason: `Phone "${c.phone}" is not a 10-digit number` }); continue; }
+          const table = kind === "customer" ? "customers" : "vendors";
+          const { rows: [dupe] } = await pool.query(`SELECT id, name FROM ${table} WHERE lower(name) = lower($1) LIMIT 1`, [newName]);
+          if (dupe) {
+            // Someone created it meanwhile — map onto it instead of failing.
+            await upsertMapping(kind, name, Number(dupe.id), null, user);
+            saved.push({ kind, name, targetName: String(dupe.name) });
+            continue;
+          }
+          const input: any = {
+            name: newName,
+            ...(gst ? { gstNumber: gst } : {}),
+            ...(phone ? { phone } : {}),
+            ...(String(c.state ?? "").trim() ? { state: String(c.state).trim() } : {}),
+            ...(String(c.address ?? "").trim() ? { address: String(c.address).trim() } : {}),
+            notes: `Created at the mapping step (${noteRef})`,
+          };
+          const { row } = kind === "customer"
+            ? await createCustomerWithLedger(input, stamp)
+            : await createVendorWithLedger(input, stamp);
+          const cl = Number(c.creditLimit ?? NaN);
+          if (kind === "customer" && Number.isFinite(cl) && cl > 0) {
+            await pool.query(`UPDATE customers SET credit_limit = $1 WHERE id = $2`, [Math.round(cl * 100) / 100, row.id]);
+          }
+          await upsertMapping(kind, name, Number(row.id), null, user);
+          created.push({ kind, name, targetName: newName });
+        } else if (kind === "product") {
+          const input = {
+            name: newName,
+            unit: String(c.unit ?? "").trim(),
+            hsnCode: String(c.hsnCode ?? "").trim() || null,
+            taxRate: c.taxRate == null || c.taxRate === "" ? 0 : Number(c.taxRate),
+            mrp: c.mrp == null || c.mrp === "" ? 0 : Number(c.mrp),
+            cost: c.cost == null || c.cost === "" ? 0 : Number(c.cost),
+          };
+          const invalid = itemCreateError(input);
+          if (invalid) { errors.push({ kind, name, reason: invalid }); continue; }
+          const { rows: [dupe] } = await pool.query(`SELECT id, name FROM items WHERE lower(name) = lower($1) LIMIT 1`, [newName]);
+          if (dupe) {
+            await upsertMapping(kind, name, Number(dupe.id), "item", user);
+            saved.push({ kind, name, targetName: String(dupe.name) });
+            continue;
+          }
+          const createdItem = await createItemCore(pool, input);
+          await upsertMapping(kind, name, createdItem.id, "item", user);
+          created.push({ kind, name, targetName: newName });
+        } else {
+          // ledger — parent group comes from the caller (picked off the chart).
+          const parentId = Number(c.parentId ?? NaN);
+          const parents = await loadParentCandidates();
+          const parent = parents.find((p) => p.id === parentId);
+          if (!parent) { errors.push({ kind, name, reason: "Pick a valid Ledger Group (parentId) for the new ledger" }); continue; }
+          const { rows: [dupe] } = await pool.query(`SELECT id, name FROM account_ledgers WHERE lower(name) = lower($1) LIMIT 1`, [newName]);
+          if (dupe) {
+            const check = await checkMappingTarget("ledger", Number(dupe.id), null);
+            if ("error" in check) { errors.push({ kind, name, reason: `"${newName}" already exists but ${check.error.replace(/^Ledger /, "").toLowerCase()}` }); continue; }
+            await upsertMapping(kind, name, Number(dupe.id), null, user);
+            saved.push({ kind, name, targetName: String(dupe.name) });
+            continue;
+          }
+          const createdLedger = await insertChartAccount(pool, {
+            name: newName, type: parent.type, parentId: parent.id, section: parent.section,
+            description: `Created at the mapping step (${noteRef})`, isGroup: false, user,
+          });
+          await pool.query(
+            `UPDATE account_ledgers SET location_type = $1, location_id = $2 WHERE id = $3`,
+            [stamp.type, stamp.id, createdLedger.id],
+          );
+          await upsertMapping(kind, name, createdLedger.id, null, user);
+          created.push({ kind, name, targetName: newName });
+        }
+      } else {
+        // Choose existing.
+        const targetId = Number(m?.targetId ?? NaN);
+        const check = await checkMappingTarget(kind, targetId, m?.targetKind == null ? null : String(m.targetKind));
+        if ("error" in check) { errors.push({ kind, name, reason: check.error }); continue; }
+        await upsertMapping(kind, name, targetId, check.targetKind, user);
+        saved.push({ kind, name, targetName: check.name });
+      }
+    } catch (e: any) {
+      errors.push({ kind, name, reason: String(e?.message ?? e).slice(0, 300) });
+    }
+  }
+  return { saved, created, errors };
+}
+
+/** Save mappings for a batch: choose existing (targetId) or create new
+ *  (create payload) per name; upserts import_mappings and re-validates. */
+router.post("/imports/batches/:id/mappings", requireModuleAction(PERM, "add"), async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  const { rows: [batch] } = await pool.query(`SELECT * FROM import_batches WHERE id = $1`, [id]);
+  if (!batch) { res.status(404).json({ error: "Import batch not found" }); return; }
+  const module = asModule(batch.module);
+  if (!module || !isDemoModule(module)) {
+    res.status(400).json({ error: "Master imports have no mapping step." }); return;
+  }
+  if (batch.migration_id != null) {
+    res.status(409).json({ error: `This file belongs to migration ${migrationDisplayId(Number(batch.migration_id))} — save its mappings from the Migration wizard.` });
+    return;
+  }
+  if (batch.status !== "validated") {
+    res.status(409).json({ error: "Mappings can only be saved while the batch is at the mapping/analyse stage." }); return;
+  }
+
+  const body = (req.body ?? {}) as { mappings?: unknown };
+  const mappingsIn = Array.isArray(body.mappings) ? body.mappings : [];
+  if (mappingsIn.length === 0) {
+    res.status(400).json({ error: "Pass mappings: [{ kind, name, targetId | create }]" }); return;
+  }
+  if (mappingsIn.length > 500) { res.status(400).json({ error: "Too many mappings in one request." }); return; }
+
+  const stamp = { type: String(batch.location_type ?? "headoffice"), id: Number(batch.location_id ?? 0) };
+  const user = username(req);
+  const { saved, created, errors } = await applyMappingEntries(mappingsIn, stamp, user, `import batch #${id}`);
+
+  const { updated, outRows } = await revalidateDemoBatch(id, module, stamp);
 
   logActivity({
-    action: "CREATE", module: "imports", entityType: "import_batch", entityId: id,
-    description: `Resolved parties for ${module} import "${batch.filename}" — ${created.length} created, ${skipped.length} already existed${errors.length ? `, ${errors.length} failed` : ""}`,
+    action: "UPDATE", module: "imports", entityType: "import_batch", entityId: id,
+    description: `Saved mappings for ${module} import "${batch.filename}" — ${saved.length} mapped, ${created.length} created${errors.length ? `, ${errors.length} failed` : ""}`,
     user,
   }).catch(() => {});
 
   res.json({
-    batch: batchJson(updated), rows: outRows.map(rowJson), created, skipped, errors,
+    batch: batchJson(updated), rows: outRows.map(rowJson), saved, created, errors,
     ...(isTxnModule(module) ? { summary: txnBatchSummary(outRows) } : {}),
   });
 });
+
+// ── 2c. Manage Mappings (permanent memory, independent of any batch) ────────
+
+router.get("/imports/mappings", requireModuleView(PERM), async (req: Request, res: Response): Promise<void> => {
+  const kindFilter = req.query.kind ? String(req.query.kind) : null;
+  if (kindFilter && !(MAPPING_KINDS as string[]).includes(kindFilter)) {
+    res.status(400).json({ error: `kind must be one of: ${MAPPING_KINDS.join(", ")}` }); return;
+  }
+  const { rows } = await pool.query<any>(
+    `SELECT m.*,
+            CASE m.kind
+              WHEN 'customer' THEN (SELECT c.name FROM customers c WHERE c.id = m.target_id)
+              WHEN 'vendor'   THEN (SELECT v.name FROM vendors v WHERE v.id = m.target_id)
+              WHEN 'ledger'   THEN (SELECT l.name FROM account_ledgers l WHERE l.id = m.target_id)
+              WHEN 'product'  THEN CASE COALESCE(m.target_kind, 'item')
+                WHEN 'material'     THEN (SELECT mt.name FROM materials mt WHERE mt.id = m.target_id)
+                WHEN 'raw_material' THEN (SELECT rm.name FROM raw_materials rm WHERE rm.id = m.target_id)
+                ELSE (SELECT i.name FROM items i WHERE i.id = m.target_id)
+              END
+            END AS target_name
+       FROM import_mappings m
+      WHERE ($1::text IS NULL OR m.kind = $1)
+      ORDER BY m.kind, lower(m.source_name)`,
+    [kindFilter],
+  );
+  res.json({
+    mappings: rows.map((r: any) => ({
+      id: Number(r.id),
+      kind: r.kind,
+      sourceName: r.source_name,
+      targetId: Number(r.target_id),
+      targetKind: r.target_kind ?? null,
+      /** null = stale: the target was deleted since — remap or delete. */
+      targetName: r.target_name ?? null,
+      createdBy: r.created_by,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    })),
+  });
+});
+
+/** Pick-lists for re-pointing a saved mapping (Manage Mappings screen). */
+router.get("/imports/mapping-candidates", requireModuleView(PERM), async (req: Request, res: Response): Promise<void> => {
+  const kind = String(req.query.kind ?? "") as MappingKind;
+  if (!MAPPING_KINDS.includes(kind)) {
+    res.status(400).json({ error: `kind must be one of: ${MAPPING_KINDS.join(", ")}` }); return;
+  }
+  const out: Array<{ id: number; name: string; targetKind?: string }> = [];
+  if (kind === "customer") {
+    (await pool.query(`SELECT id, name FROM customers ORDER BY name`)).rows
+      .forEach((r: any) => out.push({ id: Number(r.id), name: String(r.name) }));
+  } else if (kind === "vendor") {
+    (await pool.query(`SELECT id, name FROM vendors ORDER BY name`)).rows
+      .forEach((r: any) => out.push({ id: Number(r.id), name: String(r.name) }));
+  } else if (kind === "ledger") {
+    (await pool.query(
+      `SELECT id, name FROM account_ledgers WHERE NOT COALESCE(is_group, false) AND COALESCE(is_active, true) ORDER BY name`,
+    )).rows.forEach((r: any) => out.push({ id: Number(r.id), name: String(r.name) }));
+  } else {
+    for (const [table, tk] of [["items", "item"], ["materials", "material"], ["raw_materials", "raw_material"]] as const) {
+      (await pool.query(`SELECT id, name FROM ${table} ORDER BY name`)).rows
+        .forEach((r: any) => out.push({ id: Number(r.id), name: String(r.name), targetKind: tk }));
+    }
+  }
+  res.json({ candidates: out });
+});
+
+/** A change to the permanent mapping memory invalidates every wizard batch
+ *  still in flight: rows re-resolve against the current mappings and any
+ *  pending demo is cleared (demo_ready → validated), so an approve can never
+ *  post to targets the reviewed demo report never showed. Over-invalidation
+ *  (batches not touching the edited name) is harmless — they just re-demo. */
+async function revalidateInFlightBatches(): Promise<void> {
+  const { rows } = await pool.query(
+    `SELECT id, module, location_type, location_id FROM import_batches
+      WHERE status IN ('validated', 'demo_ready')
+        AND module IN ('sales','purchases','receipts','payments','daybook','opening_stock')`,
+  );
+  for (const b of rows) {
+    await revalidateDemoBatch(
+      Number(b.id),
+      b.module as DemoModule,
+      { type: String(b.location_type ?? "headoffice"), id: Number(b.location_id ?? 1) },
+    );
+  }
+  // Migrations gate their approve on THEIR demo snapshot — a mapping change
+  // invalidates that too (over-invalidation is harmless: just re-demo).
+  await pool.query(
+    `UPDATE import_migrations SET status = 'draft', demo_report = NULL, demo_summary = NULL, demo_at = NULL, demo_by = NULL
+      WHERE status = 'demo_ready'`,
+  );
+}
+
+router.put("/imports/mappings/:id", requireModuleAction(PERM, "edit"), async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  const { rows: [row] } = await pool.query(`SELECT * FROM import_mappings WHERE id = $1`, [id]);
+  if (!row) { res.status(404).json({ error: "Mapping not found" }); return; }
+  const kind = String(row.kind) as MappingKind;
+  const body = (req.body ?? {}) as { targetId?: unknown; targetKind?: unknown };
+  const targetId = Number(body.targetId ?? NaN);
+  const check = await checkMappingTarget(kind, targetId, body.targetKind == null ? null : String(body.targetKind));
+  if ("error" in check) { res.status(400).json({ error: check.error }); return; }
+  const { rows: [updated] } = await pool.query(
+    `UPDATE import_mappings SET target_id = $2, target_kind = $3, updated_at = now() WHERE id = $1 RETURNING *`,
+    [id, targetId, check.targetKind],
+  );
+  await revalidateInFlightBatches();
+  logActivity({
+    action: "UPDATE", module: "imports", entityType: "import_mapping", entityId: id,
+    description: `Re-pointed ${kind} mapping "${row.source_name}" → "${check.name}"`,
+    user: username(req),
+  }).catch(() => {});
+  res.json({
+    mapping: {
+      id: Number(updated.id), kind: updated.kind, sourceName: updated.source_name,
+      targetId: Number(updated.target_id), targetKind: updated.target_kind ?? null, targetName: check.name,
+    },
+  });
+});
+
+router.delete("/imports/mappings/:id", requireModuleAction(PERM, "delete"), async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  const { rows: [row] } = await pool.query(`DELETE FROM import_mappings WHERE id = $1 RETURNING *`, [id]);
+  if (!row) { res.status(404).json({ error: "Mapping not found" }); return; }
+  await revalidateInFlightBatches();
+  logActivity({
+    action: "DELETE", module: "imports", entityType: "import_mapping", entityId: id,
+    description: `Deleted ${row.kind} mapping "${row.source_name}" — the name will ask to be mapped again on its next appearance`,
+    user: username(req),
+  }).catch(() => {});
+  res.json({ success: true });
+});
+
 
 // ── 3. History + detail ──────────────────────────────────────────────────────
 
@@ -2242,11 +3168,12 @@ async function locationNameResolver(): Promise<(b: any) => string | null> {
 }
 
 router.get("/imports/batches", requireModuleView(PERM), async (_req: Request, res: Response): Promise<void> => {
+  // Migration-owned files are managed (and listed) by the Migration wizard.
   const [{ rows }, nameOf] = await Promise.all([
-    pool.query(`SELECT * FROM import_batches ORDER BY id DESC LIMIT 200`),
+    pool.query(`SELECT *, (demo_report IS NOT NULL) AS has_demo_report FROM import_batches WHERE migration_id IS NULL ORDER BY id DESC LIMIT 200`),
     locationNameResolver(),
   ]);
-  res.json({ batches: rows.map((b: any) => ({ ...batchJson(b), locationName: nameOf(b) })) });
+  res.json({ batches: rows.map((b: any) => { const { demo_report: _dr, ...rest } = b; return { ...batchJson(rest), locationName: nameOf(b) }; }) });
 });
 
 router.get("/imports/batches/:id", requireModuleView(PERM), async (req: Request, res: Response): Promise<void> => {
@@ -2274,7 +3201,7 @@ router.get("/imports/batches/:id/error-file", requireModuleAction(PERM, "downloa
   const module = asModule(batch.module);
   if (!module) { res.status(400).json({ error: "Unknown module on this batch" }); return; }
   const { rows } = await pool.query(
-    `SELECT * FROM import_rows WHERE batch_id = $1 AND status IN ('error', 'needs_party', 'failed') ORDER BY row_number`,
+    `SELECT * FROM import_rows WHERE batch_id = $1 AND status IN ('error', 'needs_party', 'needs_mapping', 'failed') ORDER BY row_number`,
     [id],
   );
   if (rows.length === 0) { res.status(404).json({ error: "This batch has no failed rows — nothing to download." }); return; }
@@ -2305,6 +3232,648 @@ router.get("/imports/batches/:id/error-file", requireModuleAction(PERM, "downloa
   res.send(Buffer.from(buf as ArrayBuffer));
 });
 
+
+// ── 4a. Wizard: demo run, approve, discard ───────────────────────────────────
+//
+// ONE routine (runBatchImport) performs the actual import for every demo
+// module, writing exclusively through the caller's PoolClient. The demo
+// endpoint runs it inside a transaction it NEVER commits — computing the full
+// report pack on the same client first, so the reports show the books exactly
+// as they would look — then rolls everything back. Approve runs the very same
+// routine and commits, all-or-nothing.
+
+interface RunRowOutcome {
+  rowId: number;
+  rowNumber: number;
+  status: "imported" | "skipped" | "failed";
+  reason: string | null;
+  createdType: string | null;
+  createdId: number | null;
+  created: Record<string, unknown> | null;
+}
+
+/** Thrown in approve mode on ANY document failure: the whole transaction must
+ *  die — a partially approved migration would be worse than none. */
+class ImportAbort extends Error {
+  constructor(public docLabel: string, public reasonText: string) {
+    super(`${docLabel}: ${reasonText}`);
+  }
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Old-ERP numbers sorted numeric-aware so min/max read naturally. */
+function sortLegacy(nums: string[]): string[] {
+  const uniq = [...new Set(nums.map((s) => String(s).trim()).filter(Boolean))];
+  return uniq.sort((a, b) => {
+    const na = Number(a), nb = Number(b);
+    if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+    return a.localeCompare(b, undefined, { numeric: true });
+  });
+}
+
+async function runBatchImport(client: PoolClient, opts: {
+  batchId: number;
+  module: DemoModule;
+  importRows: any[];
+  loc: { type: string; id: number };
+  user: string;
+  mode: "demo" | "approve";
+}): Promise<{
+  outcomes: RunRowOutcome[];
+  counts: { imported: number; skipped: number; failed: number };
+  failures: Array<{ rowNumber: number; name: string; reason: string }>;
+  legacyNumbers: string[];
+}> {
+  const { batchId: id, module, importRows, user, mode } = opts;
+  const counts = { imported: 0, skipped: 0, failed: 0 };
+  const failures: Array<{ rowNumber: number; name: string; reason: string }> = [];
+  const outcomes: RunRowOutcome[] = [];
+  const legacyNumbers: string[] = [];
+
+  // Rows that never validated keep their verdict text — no outcome is emitted
+  // for them, so neither the demo nor the approve writer touches them.
+  const rowBad = (r: any) =>
+    r.status === "error" || r.status === "needs_mapping" || r.status === "needs_party";
+  // Approve imports exactly what the demo proved out: documents that failed
+  // in the demo run are excluded (visibly), never silently retried.
+  const demoFailed = (r: any) => mode === "approve" && r.raw?.demo?.status === "failed";
+
+  const emit = (r: any, o: Omit<RunRowOutcome, "rowId" | "rowNumber">) =>
+    outcomes.push({ rowId: Number(r.id), rowNumber: Number(r.row_number), ...o });
+  const emitSkip = (r: any, reason: string) => {
+    counts.skipped++;
+    emit(r, { status: "skipped", reason, createdType: null, createdId: null, created: null });
+  };
+  const failDoc = (docRows: any[], head: any, label: string, reason: string) => {
+    if (mode === "approve") throw new ImportAbort(label, reason);
+    counts.failed += docRows.length;
+    failures.push({ rowNumber: Number(head.row_number), name: label, reason });
+    for (const rr of docRows) emit(rr, { status: "failed", reason, createdType: null, createdId: null, created: null });
+  };
+
+  if (module === "sales" || module === "purchases") {
+    // Whole DOCUMENTS in file order (avg cost depends on it — never re-sort).
+    const loc = { type: opts.loc.type, id: Number(opts.loc.id ?? 0) } as ProdLocation;
+    const docsMap = new Map<number, any[]>();
+    for (const r of importRows) {
+      const dIdx = Number(r.raw?.norm?.doc ?? -1);
+      if (!docsMap.has(dIdx)) docsMap.set(dIdx, []);
+      docsMap.get(dIdx)!.push(r);
+    }
+    for (const dIdx of [...docsMap.keys()].sort((a, b) => a - b)) {
+      const docRows = docsMap.get(dIdx)!;
+      const head = docRows.find((r) => r.raw?.norm?.head) ?? docRows[0];
+      const hn = (head.raw?.norm ?? {}) as Record<string, any>;
+      const label = String(hn.invoiceNumber || "") || `rows ${docRows[0].row_number}–${docRows[docRows.length - 1].row_number}`;
+      const walkIn = module === "sales" && hn.walkIn === true;
+      const hasBad = dIdx < 0 || docRows.some(rowBad);
+      if (hasBad || (hn.partyId == null && !walkIn)) {
+        for (const r of docRows) {
+          if (rowBad(r)) { counts.skipped++; continue; } // keep the verdict text
+          emitSkip(r, hasBad
+            ? "Skipped — another row of this document has errors or unmapped names"
+            : "Skipped — the document's party was never mapped");
+        }
+        continue;
+      }
+      if (docRows.some(demoFailed)) {
+        for (const r of docRows) emitSkip(r, "Excluded — this document failed in the demo run");
+        continue;
+      }
+      try {
+        if (module === "sales") {
+          const invoiceNumber = String(hn.invoiceNumber || "") || `IMP-${id}-${dIdx + 1}`;
+          const result = await importSaleDoc({
+            invoiceNumber,
+            saleDate: String(hn.dateIso),
+            customerId: hn.partyId != null ? Number(hn.partyId) : null, // null = walk-in
+            lines: docRows.map((r) => {
+              const l = r.raw?.norm?.line ?? {};
+              return l.unitDiscount !== undefined
+                ? { itemId: Number(l.id), quantity: Number(l.quantity), unitPrice: Number(l.price ?? 0), unitDiscount: Number(l.unitDiscount ?? 0), priceMode: "inclusive" as const }
+                : { itemId: Number(l.id), quantity: Number(l.quantity), unitPrice: Number(l.price ?? 0), discount: Number(l.discount ?? 0), priceMode: "exclusive" as const };
+            }),
+            billDiscount: Number(hn.billDiscount ?? 0),
+            paymentMode: (hn.paymentMode ?? "credit") as "cash" | "bank" | "upi" | "credit",
+            paidAmount: Number(hn.paidAmount ?? 0),
+            reference: hn.reference ?? null,
+            loc, user,
+          }, client);
+          // Provenance stamps — the bill, its sale-trail receipt (named after
+          // the NEW invoice number) and any clearing receipts. Same client:
+          // these stamps live and die with the surrounding transaction.
+          await client.query(`UPDATE sales SET import_batch_id = $1 WHERE id = $2`, [id, result.saleId]);
+          await client.query(
+            `UPDATE receipts SET import_batch_id = $1
+              WHERE (voucher_number = $2 OR id = ANY($3::int[])) AND import_batch_id IS NULL`,
+            [id, result.invoiceNumber, result.clearingReceiptIds ?? []],
+          );
+          counts.imported += docRows.length;
+          if (hn.invoiceNumber) legacyNumbers.push(String(hn.invoiceNumber));
+          for (const r of docRows) {
+            emit(r, {
+              status: "imported", reason: null, createdType: "sale", createdId: result.saleId,
+              created: r.id === head.id ? {
+                invoiceNumber: result.invoiceNumber, totalAmount: result.totalAmount,
+                salePaymentIds: result.salePaymentIds, clearingReceiptIds: result.clearingReceiptIds,
+              } : null,
+            });
+          }
+        } else {
+          if (hn.partyId == null) throw new Error("Purchase bills always need a vendor"); // unreachable — validation guarantees it
+          const result = await importPurchaseDoc({
+            invoiceNumber: String(hn.invoiceNumber || "") || null,
+            purchaseDate: String(hn.dateIso),
+            vendorId: Number(hn.partyId),
+            lines: docRows.map((r) => {
+              const l = r.raw?.norm?.line ?? {};
+              return { kind: (l.kind ?? "item") as "item" | "material" | "raw_material", id: Number(l.id), quantity: Number(l.quantity), rate: Number(l.rate ?? 0), discountPct: Number(l.discountPct ?? 0) };
+            }),
+            paidAmount: Number(hn.paidAmount ?? 0),
+            paidFromLedgerId: hn.paidFromLedgerId != null ? Number(hn.paidFromLedgerId) : null,
+            otherCharges: Array.isArray(hn.otherCharges)
+              ? hn.otherCharges.map((c: any) => ({ ledgerId: Number(c.ledgerId), amount: Number(c.amount) }))
+              : [],
+            narration: hn.narration ?? null,
+            reference: hn.reference ?? null,
+            loc, user,
+          }, client);
+          await client.query(`UPDATE purchases SET import_batch_id = $1 WHERE id = $2`, [id, result.purchaseId]);
+          if (result.paymentId) {
+            await client.query(`UPDATE payments SET import_batch_id = $1 WHERE id = $2`, [id, result.paymentId]);
+          }
+          counts.imported += docRows.length;
+          if (hn.invoiceNumber) legacyNumbers.push(String(hn.invoiceNumber));
+          for (const r of docRows) {
+            emit(r, {
+              status: "imported", reason: null, createdType: "purchase", createdId: result.purchaseId,
+              created: r.id === head.id ? { totalAmount: result.totalAmount, paymentId: result.paymentId } : null,
+            });
+          }
+        }
+      } catch (e: any) {
+        if (e instanceof ImportAbort) throw e;
+        failDoc(docRows, head, label, String(e?.message ?? e).slice(0, 400));
+      }
+    }
+  } else if (module === "receipts" || module === "payments") {
+    // One row = one voucher. The ERP allocates its own voucher number; the
+    // file's number becomes the searchable legacy reference.
+    const loc = { type: opts.loc.type, id: Number(opts.loc.id ?? 0) };
+    for (const r of importRows) {
+      const norm = (r.raw?.norm ?? {}) as Record<string, any>;
+      const label = String(norm.voucherNo || "") || `row ${r.row_number}`;
+      if (rowBad(r)) { counts.skipped++; continue; }
+      if (demoFailed(r)) { emitSkip(r, "Excluded — this voucher failed in the demo run"); continue; }
+      if (norm.partyId == null || norm.accountLedgerId == null || !norm.dateIso || !(Number(norm.amount) > 0)) {
+        emitSkip(r, "Skipped — the row was never fully validated");
+        continue;
+      }
+      try {
+        const common = {
+          legacyVoucherNumber: norm.voucherNo ? String(norm.voucherNo) : null,
+          date: String(norm.dateIso),
+          amount: Number(norm.amount),
+          accountLedgerId: Number(norm.accountLedgerId),
+          narration: norm.narration != null ? String(norm.narration) : null,
+          reference: norm.reference != null ? String(norm.reference) : null,
+          loc: loc as any, user,
+        };
+        const result = module === "receipts"
+          ? await importReceiptVoucher({
+              ...common,
+              customerId: Number(norm.partyId), customerName: String(norm.partyName ?? ""),
+              explicitSaleId: norm.explicitSaleId != null ? Number(norm.explicitSaleId) : null,
+            }, client)
+          : await importPaymentVoucher({
+              ...common,
+              vendorId: Number(norm.partyId), vendorName: String(norm.partyName ?? ""),
+              explicitPurchaseId: norm.explicitPurchaseId != null ? Number(norm.explicitPurchaseId) : null,
+            }, client);
+        await client.query(`UPDATE ${module} SET import_batch_id = $1 WHERE id = $2`, [id, result.id]);
+        counts.imported++;
+        if (norm.voucherNo) legacyNumbers.push(String(norm.voucherNo));
+        emit(r, {
+          status: "imported", reason: null,
+          createdType: module === "receipts" ? "receipt" : "payment", createdId: result.id,
+          created: { voucherNumber: result.voucherNumber, allocations: result.allocations, advanceAmount: result.advanceAmount },
+        });
+      } catch (e: any) {
+        if (e instanceof ImportAbort) throw e;
+        failDoc([r], r, label, String(e?.message ?? e).slice(0, 400));
+      }
+    }
+  } else if (module === "daybook") {
+    // Whole VOUCHERS (journal/contra), grouped at validation. Voucher-family
+    // convention: head-office rows carry location id 0 (sales/stock use 1).
+    const locId = opts.loc.type === "headoffice" ? 0 : Number(opts.loc.id ?? 0);
+    const docsMap = new Map<number, any[]>();
+    for (const r of importRows) {
+      const dIdx = Number(r.raw?.norm?.doc ?? -1);
+      if (!docsMap.has(dIdx)) docsMap.set(dIdx, []);
+      docsMap.get(dIdx)!.push(r);
+    }
+    for (const dIdx of [...docsMap.keys()].sort((a, b) => a - b)) {
+      const docRows = docsMap.get(dIdx)!;
+      const head = docRows.find((r) => r.raw?.norm?.head) ?? docRows[0];
+      const v = (head.raw?.norm?.voucher ?? null) as Record<string, any> | null;
+      const label = String(v?.legacyVoucherNo || "") || `rows ${docRows[0].row_number}–${docRows[docRows.length - 1].row_number}`;
+      const hasBad = dIdx < 0 || !v || docRows.some(rowBad);
+      if (hasBad) {
+        for (const r of docRows) {
+          if (rowBad(r)) { counts.skipped++; continue; }
+          emitSkip(r, "Skipped — another line of this voucher has errors or unmapped ledgers");
+        }
+        continue;
+      }
+      if (docRows.some(demoFailed)) {
+        for (const r of docRows) emitSkip(r, "Excluded — this voucher failed in the demo run");
+        continue;
+      }
+      try {
+        await client.query("SAVEPOINT import_doc");
+        const created = await createJournalVoucherCore(client, {
+          voucherType: String(v.voucherType ?? "journal") as any,
+          voucherNumber: null, // the ERP allocates its own number
+          voucherDate: String(v.dateIso),
+          narration: v.narration != null ? String(v.narration) : null,
+          partyLedgerId: null,
+          reason: null,
+          totalAmount: Number(v.totalAmount ?? 0),
+          createdBy: user,
+          locationType: opts.loc.type,
+          locationId: locId,
+          lines: (v.lines as any[]).map((l) => ({
+            ledgerId: Number(l.ledgerId), debit: Number(l.debit ?? 0), credit: Number(l.credit ?? 0),
+          })),
+        } as any);
+        await client.query(
+          `UPDATE journal_vouchers SET legacy_voucher_number = $1, import_batch_id = $2 WHERE id = $3`,
+          [v.legacyVoucherNo ? String(v.legacyVoucherNo) : null, id, created.id],
+        );
+        await client.query("RELEASE SAVEPOINT import_doc");
+        counts.imported += docRows.length;
+        if (v.legacyVoucherNo) legacyNumbers.push(String(v.legacyVoucherNo));
+        for (const r of docRows) {
+          emit(r, {
+            status: "imported", reason: null, createdType: "journal_voucher", createdId: created.id,
+            created: r.id === head.id ? { voucherNumber: created.voucherNumber } : null,
+          });
+        }
+      } catch (e: any) {
+        await client.query("ROLLBACK TO SAVEPOINT import_doc").catch(() => {});
+        if (e instanceof ImportAbort) throw e;
+        failDoc(docRows, head, label, String(e?.message ?? e).slice(0, 400));
+      }
+    }
+  } else {
+    // ── Opening stock: the WHOLE file is one statement ──
+    const good: any[] = [];
+    for (const r of importRows) {
+      if (rowBad(r)) { counts.skipped++; continue; }
+      good.push(r);
+    }
+    if (good.length > 0) {
+      if (good.some(demoFailed)) {
+        for (const r of good) emitSkip(r, "Excluded — the opening stock failed in the demo run");
+      } else {
+        const first = (good[0].raw?.norm ?? {}) as Record<string, any>;
+        try {
+          const result = await importOpeningStockDoc(client, {
+            loc: { type: opts.loc.type, id: Number(opts.loc.id ?? 0) } as ProdLocation,
+            openingDate: String(first.dateIso),
+            notes: `Opening stock imported from old ERP (batch ${batchDisplayId(id)})`,
+            user,
+            lines: good.map((r) => ({
+              itemId: Number(r.raw?.norm?.itemId),
+              quantity: Number(r.raw?.norm?.quantity),
+              unitCost: r.raw?.norm?.unitCost != null ? Number(r.raw.norm.unitCost) : null,
+            })),
+          });
+          await client.query(`UPDATE stock_verifications SET import_batch_id = $1 WHERE id = $2`, [id, result.verificationId]);
+          counts.imported += good.length;
+          for (const r of good) {
+            emit(r, { status: "imported", reason: null, createdType: "stock_verification", createdId: result.verificationId, created: null });
+          }
+        } catch (e: any) {
+          if (e instanceof ImportAbort) throw e;
+          failDoc(good, good[0], "Opening stock", String(e?.message ?? e).slice(0, 400));
+        }
+      }
+    }
+  }
+
+  return { outcomes, counts, failures, legacyNumbers };
+}
+
+/**
+ * The comparison pack, computed ON THE DEMO CLIENT so it sees the uncommitted
+ * documents: Trial Balance, P&L, Balance Sheet, cash/bank books, receivables,
+ * vendor dues and stock valuation — the same owning modules every live screen
+ * reads (never re-derived here), so the demo figures match what the real
+ * screens would show after an approve.
+ */
+async function buildDemoReportPack(client: PoolClient): Promise<Record<string, unknown>> {
+  const trialBalance = await computeTrialBalance({ q: client });
+  const books = await buildBooks(buildDerivedPostings, { q: client });
+
+  const { rows: roots } = await client.query(
+    `SELECT id, code FROM account_ledgers WHERE code IN ('STD-CASH', 'STD-BANK')`,
+  );
+  const rootId = (code: string) => {
+    const r = roots.find((x: any) => String(x.code) === code);
+    return r ? Number(r.id) : null;
+  };
+  const cashRootId = rootId("STD-CASH");
+  const bankRootId = rootId("STD-BANK");
+  const cashBook = cashRootId != null ? await computeCashBankBook({ q: client, ledgerId: cashRootId }) : null;
+  const bankBook = bankRootId != null ? await computeCashBankBook({ q: client, ledgerId: bankRootId }) : null;
+
+  const { rows: recvRows } = await client.query(
+    `SELECT c.id, c.name, ROUND(SUM(${outstandingExpr("s")})::numeric, 2)::float8 AS outstanding
+       FROM sales s JOIN customers c ON c.id = s.customer_id
+      WHERE s.branch_transfer_id IS NULL
+      GROUP BY c.id, c.name
+     HAVING SUM(${outstandingExpr("s")}) > 0.005
+      ORDER BY 3 DESC`,
+  );
+  const receivables = {
+    rows: recvRows.map((r: any) => ({ customerId: Number(r.id), name: String(r.name), outstanding: Number(r.outstanding) })),
+    total: round2(recvRows.reduce((s: number, r: any) => s + Number(r.outstanding), 0)),
+  };
+
+  // Vendor dues through the owning settlement walk (advances, other charges
+  // and FIFO order included) — never a hand-rolled total−paid.
+  const settlements = await purchaseSettlementIndex(undefined, client as any);
+  const { rows: billRows } = await client.query(
+    `SELECT p.id, p.vendor_id, v.name FROM purchases p JOIN vendors v ON v.id = p.vendor_id
+      WHERE p.branch_transfer_id IS NULL`,
+  );
+  const dueByVendor = new Map<number, { vendorId: number; name: string; outstanding: number }>();
+  for (const b of billRows) {
+    const due = settlements.get(Number(b.id))?.due ?? 0;
+    if (!(due > 0.005)) continue;
+    const cur = dueByVendor.get(Number(b.vendor_id)) ?? { vendorId: Number(b.vendor_id), name: String(b.name), outstanding: 0 };
+    cur.outstanding = round2(cur.outstanding + due);
+    dueByVendor.set(Number(b.vendor_id), cur);
+  }
+  const payables = {
+    rows: [...dueByVendor.values()].sort((a, b) => b.outstanding - a.outstanding),
+    total: round2([...dueByVendor.values()].reduce((s, v) => s + v.outstanding, 0)),
+  };
+
+  const valuation = await stockValuation(client, {});
+
+  return {
+    generatedAt: new Date().toISOString(),
+    trialBalance,
+    profitAndLoss: (books as any).profitAndLoss ?? null,
+    balanceSheet: (books as any).balanceSheet ?? null,
+    cashBook, bankBook, receivables, payables,
+    stockValuation: valuation,
+    kpis: {
+      totalReceivables: receivables.total,
+      totalPayables: payables.total,
+      stockValue: Number((valuation as any).onHandValue ?? 0),
+    },
+  };
+}
+
+router.post("/imports/batches/:id/demo", requireModuleAction(PERM, "add"), async (req: Request, res: Response): Promise<void> => {
+  const startedAt = Date.now();
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid batch id" }); return; }
+
+  const lockClient = await pool.connect();
+  let locked = false;
+  try {
+    await lockClient.query(`SELECT pg_advisory_lock(hashtext($1))`, [`import_batch_${id}`]);
+    locked = true;
+
+    const { rows: [batch] } = await pool.query(`SELECT * FROM import_batches WHERE id = $1`, [id]);
+    if (!batch) { res.status(404).json({ error: "Import batch not found" }); return; }
+    const module = asModule(batch.module);
+    if (!module || !isDemoModule(module)) {
+      res.status(400).json({ error: "Master imports (customers, vendors, ledgers, items) commit directly — the demo run is for transaction imports." });
+      return;
+    }
+    if (batch.migration_id != null) {
+      res.status(409).json({ error: `This file belongs to migration ${migrationDisplayId(Number(batch.migration_id))} — run the demo from the Migration wizard.` });
+      return;
+    }
+    if (batch.status !== "validated" && batch.status !== "demo_ready") {
+      res.status(409).json({ error: `This batch is already ${String(batch.status).replace("_", " ")} — the demo runs before approval.` });
+      return;
+    }
+    const { rows: [nm] } = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM import_rows WHERE batch_id = $1 AND status IN ('needs_mapping', 'needs_party')`, [id],
+    );
+    if (Number(nm?.n ?? 0) > 0) {
+      res.status(409).json({ error: `Finish the mapping step first — ${nm.n} row${Number(nm.n) === 1 ? " still has" : "s still have"} unmapped names.` });
+      return;
+    }
+
+    const { rows: importRows } = await pool.query(
+      `SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [id],
+    );
+    const loc = { type: String(batch.location_type ?? "headoffice"), id: Number(batch.location_id ?? 0) };
+    const user = username(req);
+
+    // ── The never-committed transaction ──
+    const client = await pool.connect();
+    let run: Awaited<ReturnType<typeof runBatchImport>>;
+    let report: Record<string, unknown>;
+    try {
+      await client.query("BEGIN");
+      run = await runBatchImport(client, { batchId: id, module, importRows, loc, user, mode: "demo" });
+      report = await buildDemoReportPack(client);
+    } finally {
+      // EVERYTHING the demo wrote vanishes here — documents, stock, numbers.
+      await client.query("ROLLBACK").catch(() => {});
+      client.release();
+    }
+
+    // Snapshot bookkeeping happens OUTSIDE the demo transaction (small,
+    // ordinary writes): per-row outcomes into raw.demo, the report pack and
+    // summary onto the batch.
+    await pool.query(`UPDATE import_rows SET raw = raw - 'demo' WHERE batch_id = $1`, [id]);
+    for (const o of run.outcomes) {
+      await pool.query(`UPDATE import_rows SET raw = raw || $2::jsonb WHERE id = $1`, [o.rowId, JSON.stringify({
+        demo: { status: o.status, reason: o.reason, createdType: o.createdType, created: o.created },
+      })]);
+    }
+    const legacySorted = sortLegacy(run.legacyNumbers);
+    const summary = {
+      ...run.counts,
+      failures: run.failures.slice(0, 100),
+      legacyMin: legacySorted[0] ?? null,
+      legacyMax: legacySorted[legacySorted.length - 1] ?? null,
+      timeTakenMs: Date.now() - startedAt,
+    };
+    const { rows: [updated] } = await pool.query(
+      `UPDATE import_batches SET status = 'demo_ready', demo_report = $2, demo_summary = $3,
+          demo_at = NOW(), demo_by = $4, legacy_min = $5, legacy_max = $6
+        WHERE id = $1 RETURNING *`,
+      [id, JSON.stringify(report), JSON.stringify(summary), user,
+       legacySorted[0] ?? null, legacySorted[legacySorted.length - 1] ?? null],
+    );
+
+    logActivity({
+      action: "UPDATE", module: "imports", entityType: "import_batch", entityId: id,
+      description: `Demo run for ${module} import "${batch.filename}" — ${run.counts.imported} would import, ${run.counts.failed} failed, ${run.counts.skipped} skipped (nothing committed)`,
+      user,
+    }).catch(() => {});
+
+    res.json({ batch: batchJson(updated), summary: run.counts, failures: run.failures });
+  } finally {
+    if (locked) await lockClient.query(`SELECT pg_advisory_unlock(hashtext($1))`, [`import_batch_${id}`]).catch(() => {});
+    lockClient.release();
+  }
+});
+
+router.get("/imports/batches/:id/demo-report", requireModuleView(PERM), async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid batch id" }); return; }
+  const { rows: [b] } = await pool.query(
+    `SELECT demo_report, demo_summary, demo_at, demo_by, status FROM import_batches WHERE id = $1`, [id],
+  );
+  if (!b) { res.status(404).json({ error: "Import batch not found" }); return; }
+  if (b.demo_report == null) { res.status(404).json({ error: "No demo run on record — run the demo first." }); return; }
+  res.json({ report: b.demo_report, summary: b.demo_summary ?? null, demoAt: b.demo_at, demoBy: b.demo_by, status: b.status });
+});
+
+router.post("/imports/batches/:id/approve", requireModuleAction(PERM, "add"), async (req: Request, res: Response): Promise<void> => {
+  const startedAt = Date.now();
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid batch id" }); return; }
+  const user = username(req);
+
+  const lockClient = await pool.connect();
+  let locked = false;
+  try {
+    await lockClient.query(`SELECT pg_advisory_lock(hashtext($1))`, [`import_batch_${id}`]);
+    locked = true;
+
+    // Atomic claim — approval only ever follows a demo run. Migration-owned
+    // files are approved as ONE unit through the Migration wizard, never here.
+    const { rows: [batch] } = await pool.query(
+      `UPDATE import_batches SET status = 'committing', committed_at = NOW(), committed_by = $2
+        WHERE id = $1 AND status = 'demo_ready' AND migration_id IS NULL RETURNING *`,
+      [id, user],
+    );
+    if (!batch) {
+      const { rows: [b] } = await pool.query(`SELECT status, migration_id FROM import_batches WHERE id = $1`, [id]);
+      if (!b) { res.status(404).json({ error: "Import batch not found" }); return; }
+      if (b.migration_id != null) {
+        res.status(409).json({ error: `This file belongs to migration ${migrationDisplayId(Number(b.migration_id))} — approve the whole migration from the Migration wizard.` });
+        return;
+      }
+      res.status(409).json({
+        error: b.status === "validated"
+          ? "Run the demo first — approval imports exactly what the demo showed."
+          : `This batch is ${b.status === "committing" ? "already being imported" : `already ${String(b.status).replace("_", " ")}`} — refresh the history.`,
+      });
+      return;
+    }
+    const module = asModule(batch.module) as DemoModule; // demo_ready ⇒ demo module
+
+    const { rows: importRows } = await pool.query(
+      `SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [id],
+    );
+    const loc = { type: String(batch.location_type ?? "headoffice"), id: Number(batch.location_id ?? 0) };
+
+    const client = await pool.connect();
+    let run: Awaited<ReturnType<typeof runBatchImport>>;
+    try {
+      await client.query("BEGIN");
+      run = await runBatchImport(client, { batchId: id, module, importRows, loc, user, mode: "approve" });
+      await client.query("COMMIT");
+    } catch (e: any) {
+      // All-or-nothing: the ROLLBACK erases every document this approval
+      // created — the books are exactly as they were before the click.
+      await client.query("ROLLBACK").catch(() => {});
+      client.release();
+      await pool.query(
+        `UPDATE import_batches SET status = 'demo_ready', committed_at = NULL, committed_by = NULL
+          WHERE id = $1 AND status = 'committing'`, [id],
+      );
+      if (e instanceof ImportAbort) {
+        res.status(409).json({
+          error: `Import stopped at ${e.docLabel}: ${e.reasonText}. Nothing was imported — fix the cause (or re-run the demo) and approve again.`,
+        });
+        return;
+      }
+      throw e;
+    }
+    client.release();
+
+    // The transaction is committed — now write the row verdicts and finish
+    // the batch (ordinary bookkeeping, outside the all-or-nothing boundary).
+    for (const o of run.outcomes) {
+      await pool.query(
+        `UPDATE import_rows SET status = $2, reason = $3, created_record_type = $4, created_record_id = $5 WHERE id = $1`,
+        [o.rowId, o.status, o.reason, o.createdType, o.createdId],
+      ).catch(() => {});
+      if (o.created) {
+        await pool.query(`UPDATE import_rows SET raw = raw || $2::jsonb WHERE id = $1`,
+          [o.rowId, JSON.stringify({ created: o.created })]).catch(() => {});
+      }
+    }
+    const legacySorted = sortLegacy(run.legacyNumbers);
+    const { rows: [finished] } = await pool.query(
+      `UPDATE import_batches SET status = 'committed',
+          imported_rows = $2, updated_rows = 0, skipped_rows = $3, failed_rows = $4,
+          legacy_min = COALESCE($5, legacy_min), legacy_max = COALESCE($6, legacy_max)
+        WHERE id = $1 AND status = 'committing' RETURNING *`,
+      [id, run.counts.imported, run.counts.skipped, run.counts.failed,
+       legacySorted[0] ?? null, legacySorted[legacySorted.length - 1] ?? null],
+    );
+
+    // Post-import report from the provenance stamps — provable, never tallied.
+    const rc = await batchRecordCounts(pool, id);
+    logActivity({
+      action: "CREATE", module: "imports", entityType: "import_batch", entityId: id,
+      description: `Approved ${module} import "${batch.filename}" — ${run.counts.imported} imported, ${run.counts.skipped} skipped (${describeCounts(rc)})`,
+      user,
+    }).catch(() => {});
+
+    res.json({
+      batch: batchJson(finished ?? batch), summary: run.counts, failures: run.failures,
+      details: { recordCounts: rc, timeTakenMs: Date.now() - startedAt },
+    });
+  } finally {
+    if (locked) await lockClient.query(`SELECT pg_advisory_unlock(hashtext($1))`, [`import_batch_${id}`]).catch(() => {});
+    lockClient.release();
+  }
+});
+
+router.post("/imports/batches/:id/discard", requireModuleAction(PERM, "add"), async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid batch id" }); return; }
+  const { rows: [b] } = await pool.query(
+    `UPDATE import_batches SET status = 'discarded', discarded_at = NOW(), discarded_by = $2
+      WHERE id = $1 AND status IN ('validated', 'demo_ready') AND migration_id IS NULL RETURNING *`,
+    [id, username(req)],
+  );
+  if (!b) {
+    const { rows: [cur] } = await pool.query(`SELECT status, migration_id FROM import_batches WHERE id = $1`, [id]);
+    if (!cur) { res.status(404).json({ error: "Import batch not found" }); return; }
+    if (cur.migration_id != null) {
+      res.status(409).json({ error: `This file belongs to migration ${migrationDisplayId(Number(cur.migration_id))} — remove or replace it from the Migration wizard.` });
+      return;
+    }
+    res.status(409).json({ error: `This batch is already ${String(cur.status).replace("_", " ")} — only un-imported batches can be discarded.` });
+    return;
+  }
+  logActivity({
+    action: "UPDATE", module: "imports", entityType: "import_batch", entityId: id,
+    description: `Discarded ${b.module} import "${b.filename}" — nothing was ever written to the books`,
+    user: username(req),
+  }).catch(() => {});
+  res.json({ batch: batchJson(b) });
+});
+
 // ── 4. Commit ────────────────────────────────────────────────────────────────
 
 router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), async (req: Request, res: Response): Promise<void> => {
@@ -2327,6 +3896,16 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
   try {
   await lockClient.query(`SELECT pg_advisory_lock(hashtext($1))`, [`import_batch_${id}`]);
   locked = true;
+
+  // Direct commit is for MASTER modules only — transaction imports must go
+  // through the wizard (demo → compare reports → approve).
+  const { rows: [pre] } = await pool.query(`SELECT module FROM import_batches WHERE id = $1`, [id]);
+  if (!pre) { res.status(404).json({ error: "Import batch not found" }); return; }
+  const preModule = asModule(pre.module);
+  if (!preModule || !isMasterModule(preModule)) {
+    res.status(400).json({ error: "Transaction imports use the wizard: run the Demo, review the reports, then Approve." });
+    return;
+  }
 
   // Atomic claim — two concurrent commits of one batch must collapse to one.
   const { rows: [batch] } = await pool.query(
@@ -2359,9 +3938,6 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
 
   const counts = { imported: 0, updated: 0, skipped: 0, failed: 0 };
   const failures: Array<{ rowNumber: number; name: string; reason: string }> = [];
-  // Parties auto-created during a txn commit (auto-create toggle) — reported
-  // back so the UI can say exactly which masters appeared.
-  const partiesCreated: Array<{ id: number; name: string }> = [];
 
   const setRow = (rowId: number, fields: Record<string, unknown>) => {
     const keys = Object.keys(fields);
@@ -2369,253 +3945,7 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
     return pool.query(`UPDATE import_rows SET ${sets} WHERE id = $1`, [rowId, ...keys.map((k) => fields[k])]);
   };
 
-  if (isTxnModule(module)) {
-    // ── Transaction commit: whole DOCUMENTS, not rows ──
-    // Each document commits in its own transaction through the same logic as
-    // manual entry (lib/importTransactions). A failed document marks only its
-    // own rows failed; the rest of the batch continues — same per-record
-    // semantics as the masters loop.
-    const loc = {
-      type: String(batch.location_type ?? "headoffice"),
-      id: Number(batch.location_id ?? 0) || (String(batch.location_type ?? "headoffice") === "headoffice" ? 1 : 0),
-    };
-
-    const docsMap = new Map<number, any[]>();
-    for (const r of importRows) {
-      const d = Number(r.raw?.norm?.doc ?? -1);
-      if (!docsMap.has(d)) docsMap.set(d, []);
-      docsMap.get(d)!.push(r);
-    }
-
-    // Parties stamped `createParty` at validation (auto-create toggle) are
-    // created here, once per distinct name, through the SAME create-with-
-    // ledger path as the resolve step. Existence is re-checked at commit —
-    // someone may have created the party since validation.
-    const partyTable = module === "sales" ? "customers" : "vendors";
-    const createdPartyIds = new Map<string, number>(); // lower(name) → id
-    const ensureParty = async (cp: { name?: string; gst?: string }): Promise<number> => {
-      const name = String(cp?.name ?? "").trim();
-      if (name.length < 2) throw new Error(`Cannot create ${module === "sales" ? "customer" : "vendor"} "${name || "(blank)"}" — name too short`);
-      const key = name.toLowerCase();
-      const cached = createdPartyIds.get(key);
-      if (cached !== undefined) return cached;
-      // Advisory lock on the normalised name: two batches committing the
-      // same unknown party concurrently would both pass a bare check-then-
-      // create and make duplicate masters. The lock serialises the check.
-      const lockClient = await pool.connect();
-      try {
-        await lockClient.query(`SELECT pg_advisory_lock(hashtext($1))`, [`import-party:${partyTable}:${key}`]);
-        const { rows: [dupe] } = await pool.query(`SELECT id FROM ${partyTable} WHERE lower(name) = lower($1) LIMIT 1`, [name]);
-        if (dupe) { createdPartyIds.set(key, Number(dupe.id)); return Number(dupe.id); }
-        const gst = String(cp?.gst ?? "").trim().toUpperCase();
-        const input: any = {
-          name,
-          ...(gst && GSTIN_RE.test(gst) ? { gstNumber: gst } : {}),
-          notes: `Created automatically during import batch #${id}`,
-        };
-        const { row } = module === "sales"
-          ? await createCustomerWithLedger(input, stamp)
-          : await createVendorWithLedger(input, stamp);
-        createdPartyIds.set(key, Number(row.id));
-        partiesCreated.push({ id: Number(row.id), name });
-        return Number(row.id);
-      } finally {
-        await lockClient.query(`SELECT pg_advisory_unlock(hashtext($1))`, [`import-party:${partyTable}:${key}`]).catch(() => {});
-        lockClient.release();
-      }
-    };
-
-    // FILE ORDER, deliberately: average cost and stock consequences follow
-    // entry order, and the preview warned about backdating. Never re-sort.
-    for (const dIdx of [...docsMap.keys()].sort((a, b) => a - b)) {
-      const docRows = docsMap.get(dIdx)!;
-      const head = docRows.find((r) => r.raw?.norm?.head) ?? docRows[0];
-      const hn = (head.raw?.norm ?? {}) as Record<string, any>;
-      const label = String(hn.invoiceNumber || "") || `rows ${docRows[0].row_number}–${docRows[docRows.length - 1].row_number}`;
-
-      // A document may commit with: a resolved party id, a walk-in flag
-      // (sales, no customer), or a validation-stamped party to create now.
-      const walkIn = module === "sales" && hn.walkIn === true;
-      const willCreate = hn.partyId == null && !walkIn && !!hn.createParty?.name;
-      const hasBad = docRows.some((r) => r.status === "error" || r.status === "needs_party");
-      const userSkip = docRows.some((r) => skipSet.has(Number(r.id)));
-      if (dIdx < 0 || hasBad || userSkip || (hn.partyId == null && !walkIn && !willCreate)) {
-        counts.skipped += docRows.length;
-        for (const r of docRows) {
-          if (r.status === "error" || r.status === "needs_party") continue; // keep the verdict text
-          await setRow(r.id, {
-            status: "skipped",
-            reason: userSkip ? "Skipped by user at commit"
-              : (hn.partyId == null && !walkIn && !willCreate) ? "Skipped — the document's party was never resolved"
-              : "Skipped — another row of this invoice has errors",
-          });
-        }
-        continue;
-      }
-
-      try {
-        // Auto-create the party first (throws → the whole document fails,
-        // same per-document semantics as any other commit error).
-        const resolvedPartyId: number | null = hn.partyId != null
-          ? Number(hn.partyId)
-          : willCreate ? await ensureParty(hn.createParty) : null;
-
-        if (module === "sales") {
-          const invoiceNumber = String(hn.invoiceNumber || "") || `IMP-${id}-${dIdx + 1}`;
-          const result = await importSaleDoc({
-            invoiceNumber,
-            saleDate: String(hn.dateIso),
-            customerId: resolvedPartyId, // null = walk-in counter sale
-            lines: docRows.map((r) => {
-              const l = r.raw?.norm?.line ?? {};
-              // New batches carry `unitDiscount` (per-unit ₹, GST-inclusive
-              // price). Batches validated before that convention carry the
-              // legacy `discount` (line-total ₹, GST-exclusive price) — they
-              // must commit with the math their preview showed.
-              return l.unitDiscount !== undefined
-                ? { itemId: Number(l.id), quantity: Number(l.quantity), unitPrice: Number(l.price ?? 0), unitDiscount: Number(l.unitDiscount ?? 0), priceMode: "inclusive" as const }
-                : { itemId: Number(l.id), quantity: Number(l.quantity), unitPrice: Number(l.price ?? 0), discount: Number(l.discount ?? 0), priceMode: "exclusive" as const };
-            }),
-            billDiscount: Number(hn.billDiscount ?? 0),
-            paymentMode: (hn.paymentMode ?? "credit") as "cash" | "bank" | "upi" | "credit",
-            paidAmount: Number(hn.paidAmount ?? 0),
-            reference: hn.reference ?? null,
-            loc, user,
-          });
-          // Batch provenance stamps — the bill, its sale-trail receipt (named
-          // after the NEW invoice number) and any clearing receipts.
-          await pool.query(`UPDATE sales SET import_batch_id = $1 WHERE id = $2`, [id, result.saleId]);
-          await pool.query(
-            `UPDATE receipts SET import_batch_id = $1
-              WHERE (voucher_number = $2 OR id = ANY($3::int[])) AND import_batch_id IS NULL`,
-            [id, result.invoiceNumber, result.clearingReceiptIds ?? []],
-          );
-          counts.imported += docRows.length;
-          for (const r of docRows) {
-            await setRow(r.id, { status: "imported", reason: null, created_record_type: "sale", created_record_id: result.saleId });
-          }
-          // Settlement ids ride on the head row so rollback can tell OUR
-          // payments/receipts from any collected later.
-          await pool.query(`UPDATE import_rows SET raw = raw || $2::jsonb WHERE id = $1`, [head.id, JSON.stringify({
-            created: {
-              invoiceNumber: result.invoiceNumber, totalAmount: result.totalAmount,
-              salePaymentIds: result.salePaymentIds, clearingReceiptIds: result.clearingReceiptIds,
-            },
-          })]);
-        } else {
-          if (resolvedPartyId == null) throw new Error("Purchase bills always need a vendor"); // unreachable — validation guarantees it
-          const result = await importPurchaseDoc({
-            invoiceNumber: String(hn.invoiceNumber || "") || null,
-            purchaseDate: String(hn.dateIso),
-            vendorId: resolvedPartyId,
-            lines: docRows.map((r) => {
-              const l = r.raw?.norm?.line ?? {};
-              return { kind: (l.kind ?? "item") as "item" | "material" | "raw_material", id: Number(l.id), quantity: Number(l.quantity), rate: Number(l.rate ?? 0), discountPct: Number(l.discountPct ?? 0) };
-            }),
-            paidAmount: Number(hn.paidAmount ?? 0),
-            paidFromLedgerId: hn.paidFromLedgerId != null ? Number(hn.paidFromLedgerId) : null,
-            otherCharges: Array.isArray(hn.otherCharges)
-              ? hn.otherCharges.map((c: any) => ({ ledgerId: Number(c.ledgerId), amount: Number(c.amount) }))
-              : [],
-            narration: hn.narration ?? null,
-            reference: hn.reference ?? null,
-            loc, user,
-          });
-          // Batch provenance stamps — the bill and its settlement payment.
-          await pool.query(`UPDATE purchases SET import_batch_id = $1 WHERE id = $2`, [id, result.purchaseId]);
-          if (result.paymentId) {
-            await pool.query(`UPDATE payments SET import_batch_id = $1 WHERE id = $2`, [id, result.paymentId]);
-          }
-          counts.imported += docRows.length;
-          for (const r of docRows) {
-            await setRow(r.id, { status: "imported", reason: null, created_record_type: "purchase", created_record_id: result.purchaseId });
-          }
-          await pool.query(`UPDATE import_rows SET raw = raw || $2::jsonb WHERE id = $1`, [head.id, JSON.stringify({
-            created: { totalAmount: result.totalAmount, paymentId: result.paymentId },
-          })]);
-        }
-      } catch (e: any) {
-        counts.failed += docRows.length;
-        const reason = String(e?.message ?? e).slice(0, 400);
-        failures.push({ rowNumber: Number(head.row_number), name: label, reason });
-        for (const r of docRows) await setRow(r.id, { status: "failed", reason }).catch(() => {});
-      }
-    }
-  } else if (isVoucherModule(module)) {
-    // ── Voucher commit: one row = one voucher ──
-    // Each voucher commits in its own transaction through the same settlement
-    // primitives as the manual allocation routes (lib/importVouchers).
-    // Allocation is RECOMPUTED on locked rows at commit time with the same
-    // explicit-first / FIFO rules — the preview's plan was a snapshot, and
-    // outstanding figures may have moved since validation.
-    const loc = {
-      type: String(batch.location_type ?? "headoffice"),
-      id: Number(batch.location_id ?? 0),
-    };
-
-    for (const r of importRows) {
-      const norm = (r.raw?.norm ?? {}) as Record<string, any>;
-      const label = String(norm.voucherNo || "") || `row ${r.row_number}`;
-      if (r.status === "error" || r.status === "needs_party") {
-        counts.skipped++; // keep the verdict text
-        continue;
-      }
-      if (skipSet.has(Number(r.id))) {
-        counts.skipped++;
-        await setRow(r.id, { status: "skipped", reason: "Skipped by user at commit" });
-        continue;
-      }
-      if (norm.partyId == null || norm.accountLedgerId == null || !norm.dateIso || !(Number(norm.amount) > 0)) {
-        counts.skipped++;
-        await setRow(r.id, { status: "skipped", reason: "Skipped — the row was never fully validated" });
-        continue;
-      }
-      try {
-        const common = {
-          voucherNumber: norm.voucherNo ? String(norm.voucherNo) : null,
-          date: String(norm.dateIso),
-          amount: Number(norm.amount),
-          accountLedgerId: Number(norm.accountLedgerId),
-          narration: norm.narration != null ? String(norm.narration) : null,
-          reference: norm.reference != null ? String(norm.reference) : null,
-          loc: loc as any, user,
-        };
-        const result = module === "receipts"
-          ? await importReceiptVoucher({
-              ...common,
-              customerId: Number(norm.partyId), customerName: String(norm.partyName ?? ""),
-              explicitSaleId: norm.explicitSaleId != null ? Number(norm.explicitSaleId) : null,
-            })
-          : await importPaymentVoucher({
-              ...common,
-              vendorId: Number(norm.partyId), vendorName: String(norm.partyName ?? ""),
-              explicitPurchaseId: norm.explicitPurchaseId != null ? Number(norm.explicitPurchaseId) : null,
-            });
-        counts.imported++;
-        // Batch provenance stamp (module name === table name here).
-        await pool.query(`UPDATE ${module} SET import_batch_id = $1 WHERE id = $2`, [id, result.id]);
-        await setRow(r.id, {
-          status: "imported", reason: null,
-          created_record_type: module === "receipts" ? "receipt" : "payment",
-          created_record_id: result.id,
-        });
-        // What commit ACTUALLY recorded — the preview plan stays in norm.plan
-        // for comparison; rollback needs only created_record_id.
-        await pool.query(`UPDATE import_rows SET raw = raw || $2::jsonb WHERE id = $1`, [r.id, JSON.stringify({
-          created: {
-            voucherNumber: result.voucherNumber,
-            allocations: result.allocations,
-            advanceAmount: result.advanceAmount,
-          },
-        })]);
-      } catch (e: any) {
-        counts.failed++;
-        const reason = String(e?.message ?? e).slice(0, 400);
-        failures.push({ rowNumber: Number(r.row_number), name: label, reason });
-        await setRow(r.id, { status: "failed", reason }).catch(() => {});
-      }
-    }
-  } else {
+  {
   for (const r of importRows) {
     const values = (r.raw?.values ?? {}) as Record<string, string>;
     const norm = (r.raw?.norm ?? {}) as Record<string, any>;
@@ -2739,6 +4069,52 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
           created_record_type: module === "customers" ? "customer" : "vendor",
           created_record_id: row.id, created_ledger_id: ledgerId, opening_balance_id: obId,
         });
+        continue;
+      }
+
+      if (module === "items") {
+        // Re-check for a same-name item AT COMMIT TIME — another batch or a
+        // manual create may have landed the same name since validation.
+        const { rows: [dupe] } = await pool.query<any>(
+          `SELECT id FROM items WHERE lower(name) = lower($1) LIMIT 1`, [name],
+        );
+        if (dupe) {
+          if (duplicateAction === "skip") {
+            counts.skipped++;
+            await setRow(r.id, { status: "skipped", reason: `"${name}" already exists — duplicates skipped`, duplicate_of_id: dupe.id });
+            continue;
+          }
+          // Update the EXISTING item with the non-blank imported fields
+          // (tax_rate/mrp are raw-migration columns → raw SQL only).
+          const sets: string[] = []; const params: unknown[] = [];
+          const put = (col: string, v: unknown) => { params.push(v); sets.push(`${col} = $${params.length}`); };
+          if (norm.unit !== undefined) put("unit", norm.unit);
+          if (norm.hsnCode !== undefined) put("hsn_code", norm.hsnCode);
+          if (norm.taxRate !== undefined) put("tax_rate", norm.taxRate);
+          if (norm.mrp !== undefined) put("mrp", norm.mrp);
+          if (norm.cost !== undefined) put("cost", norm.cost);
+          if (norm.reorderLevel !== undefined) put("reorder_level", norm.reorderLevel);
+          if (norm.description !== undefined) put("description", norm.description);
+          if (sets.length > 0) {
+            params.push(dupe.id);
+            await pool.query(`UPDATE items SET ${sets.join(", ")}, updated_at = NOW() WHERE id = $${params.length}`, params);
+          }
+          counts.updated++;
+          await setRow(r.id, { status: "updated", reason: "Updated existing item", duplicate_of_id: dupe.id });
+          continue;
+        }
+        // CREATE — the same core as POST /items (code/barcode allocated when blank).
+        const createdItem = await createItemCore(pool, {
+          name, unit: String(norm.unit ?? ""),
+          hsnCode: norm.hsnCode ?? null, taxRate: norm.taxRate ?? null,
+          mrp: norm.mrp ?? null, cost: norm.cost ?? null,
+          reorderLevel: norm.reorderLevel ?? null,
+          itemCode: norm.itemCode ?? null, barcode: norm.barcode ?? null,
+          description: norm.description ?? null,
+        });
+        await pool.query(`UPDATE items SET import_batch_id = $1 WHERE id = $2`, [id, createdItem.id]);
+        counts.imported++;
+        await setRow(r.id, { status: "imported", reason: null, created_record_type: "item", created_record_id: createdItem.id });
         continue;
       }
 
@@ -2886,8 +4262,7 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
     customersCreated: rc.customers + Number(resolved?.custs ?? 0),
     vendorsCreated: rc.vendors + Number(resolved?.vends ?? 0),
     ledgersCreated: rc.ledgers + Number(resolved?.ledgs ?? 0),
-    // One stock movement per imported invoice LINE (sales/purchase imports).
-    stockMovements: isTxnModule(module) ? counts.imported : 0,
+    stockMovements: 0, // master imports move no stock
     // Books are DERIVED from the documents themselves — imports create no
     // separate journal vouchers. Reported explicitly so the figure is honest.
     journalEntriesCreated: 0,
@@ -2897,7 +4272,7 @@ router.post("/imports/batches/:id/commit", requireModuleAction(PERM, "add"), asy
     timeTakenMs: Date.now() - commitStartedAt,
   };
 
-  res.json({ batch: batchJson(finished), summary: counts, failures, details, partiesCreated });
+  res.json({ batch: batchJson(finished), summary: counts, failures, details });
   } finally {
     if (locked) await lockClient.query(`SELECT pg_advisory_unlock(hashtext($1))`, [`import_batch_${id}`]).catch(() => {});
     lockClient.release();
@@ -2924,7 +4299,10 @@ async function batchRecordCounts(
        (SELECT COUNT(*) FROM sales            WHERE import_batch_id = $1)::int AS "sales",
        (SELECT COUNT(*) FROM purchases        WHERE import_batch_id = $1)::int AS "purchases",
        (SELECT COUNT(*) FROM receipts         WHERE import_batch_id = $1)::int AS "receipts",
-       (SELECT COUNT(*) FROM payments         WHERE import_batch_id = $1)::int AS "payments"`,
+       (SELECT COUNT(*) FROM payments         WHERE import_batch_id = $1)::int AS "payments",
+       (SELECT COUNT(*) FROM items            WHERE import_batch_id = $1)::int AS "items",
+       (SELECT COUNT(*) FROM journal_vouchers WHERE import_batch_id = $1)::int AS "journalVouchers",
+       (SELECT COUNT(*) FROM stock_verifications WHERE import_batch_id = $1)::int AS "stockVerifications"`,
     [batchId],
   );
   const out: Record<string, number> = {};
@@ -2934,8 +4312,10 @@ async function batchRecordCounts(
 
 const COUNT_LABELS: Array<[string, string]> = [
   ["customers", "customers"], ["vendors", "vendors"], ["ledgers", "ledgers"],
+  ["items", "items"],
   ["openingBalances", "opening balances"], ["sales", "sales invoices"],
   ["purchases", "purchase bills"], ["receipts", "receipts"], ["payments", "payments"],
+  ["journalVouchers", "journal vouchers"], ["stockVerifications", "opening stock uploads"],
 ];
 
 function describeCounts(counts: Record<string, number>): string {
@@ -3024,6 +4404,11 @@ router.post("/imports/batches/:id/rollback", requireModuleAction(PERM, "delete")
     }
     const { rows: [batch] } = await client.query(`SELECT * FROM import_batches WHERE id = $1 FOR UPDATE`, [id]);
     if (!batch) { await client.query("ROLLBACK"); res.status(404).json({ error: "Import batch not found" }); return; }
+    if (batch.migration_id != null) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: `This file belongs to migration ${migrationDisplayId(Number(batch.migration_id))} — a migration only rolls back as a WHOLE, from the Migration wizard.` });
+      return;
+    }
     if (batch.rolled_back_at || batch.status === "rolled_back") {
       await client.query("ROLLBACK"); res.status(409).json({ error: "This batch was already rolled back." }); return;
     }
@@ -3161,6 +4546,92 @@ router.post("/imports/batches/:id/rollback", requireModuleAction(PERM, "delete")
       return;
     }
 
+    // ── Day Book batches: delete the imported journal vouchers ──
+    // Journal/contra vouchers have no downstream dependents (they are
+    // deletable in the voucher screens too), so this is a plain removal.
+    if (batch.module === "daybook") {
+      const { rows: jvRows } = await client.query(
+        `SELECT DISTINCT created_record_id AS jv_id FROM import_rows
+          WHERE batch_id = $1 AND status = 'imported'
+            AND created_record_type = 'journal_voucher' AND created_record_id IS NOT NULL`,
+        [id],
+      );
+      const jvIds = jvRows.map((r: any) => Number(r.jv_id));
+      if (jvIds.length === 0) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: "This batch created no vouchers, so there is nothing to roll back." });
+        return;
+      }
+      await client.query(`DELETE FROM journal_voucher_lines WHERE voucher_id = ANY($1::int[])`, [jvIds]);
+      await client.query(`DELETE FROM journal_vouchers WHERE id = ANY($1::int[])`, [jvIds]);
+      await client.query(`UPDATE import_rows SET status = 'rolled_back' WHERE batch_id = $1 AND status = 'imported'`, [id]);
+      const { rows: [finishedJv] } = await client.query(
+        `UPDATE import_batches SET status = 'rolled_back', rolled_back_at = NOW(), rolled_back_by = $2 WHERE id = $1 RETURNING *`,
+        [id, user],
+      );
+      await client.query("COMMIT");
+
+      const verification = await verifyAfterRollback(id, batchInvoices);
+      logActivity({
+        action: "DELETE", module: "imports", entityType: "import_batch", entityId: id,
+        description: `Deleted import batch ${batchDisplayId(id)} (daybook import "${batch.filename}") — removed ${describeCounts(countsSnapshot)}; verification ${verification.ok ? "passed" : "FAILED"} (books ${verification.booksBalanced ? "balanced" : "NOT balanced"}, ${verification.leftoverStamps} leftover records)`,
+        user,
+        metadata: { displayId: batchDisplayId(id), removedCounts: countsSnapshot, verification },
+      }).catch(() => {});
+
+      res.json({ batch: batchJson(finishedJv), removed: jvIds.length, removedCounts: countsSnapshot, verification });
+      return;
+    }
+
+    // ── Opening stock batches: unwind the OPN lots and quantities ──
+    // Refused when the opening lots have since been consumed (sold/produced/
+    // transferred) — removing them then would corrupt costs and FEFO order.
+    if (batch.module === "opening_stock") {
+      const { rows: verifRows } = await client.query(
+        `SELECT DISTINCT created_record_id AS vid FROM import_rows
+          WHERE batch_id = $1 AND status = 'imported'
+            AND created_record_type = 'stock_verification' AND created_record_id IS NOT NULL`,
+        [id],
+      );
+      if (verifRows.length === 0) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: "This batch recorded no opening stock, so there is nothing to roll back." });
+        return;
+      }
+      const blocked: Array<{ rowNumber: number; name: string; reason: string }> = [];
+      let removed = 0;
+      for (const v of verifRows) {
+        const reason = await rollbackImportedOpeningStock(client as any, Number(v.vid));
+        if (reason) blocked.push({ rowNumber: 0, name: `Opening stock upload #${v.vid}`, reason });
+        else removed++;
+      }
+      if (blocked.length > 0) {
+        await client.query("ROLLBACK");
+        res.status(409).json({
+          error: "Cannot roll back: the imported opening stock has since been sold, moved or consumed. Remove that activity first, or leave the batch in place.",
+          blocked,
+        });
+        return;
+      }
+      await client.query(`UPDATE import_rows SET status = 'rolled_back' WHERE batch_id = $1 AND status = 'imported'`, [id]);
+      const { rows: [finishedOs] } = await client.query(
+        `UPDATE import_batches SET status = 'rolled_back', rolled_back_at = NOW(), rolled_back_by = $2 WHERE id = $1 RETURNING *`,
+        [id, user],
+      );
+      await client.query("COMMIT");
+
+      const verification = await verifyAfterRollback(id, batchInvoices);
+      logActivity({
+        action: "DELETE", module: "imports", entityType: "import_batch", entityId: id,
+        description: `Deleted import batch ${batchDisplayId(id)} (opening stock import "${batch.filename}") — removed ${describeCounts(countsSnapshot)}; stock restored; verification ${verification.ok ? "passed" : "FAILED"} (books ${verification.booksBalanced ? "balanced" : "NOT balanced"}, ${verification.leftoverStamps} leftover records)`,
+        user,
+        metadata: { displayId: batchDisplayId(id), removedCounts: countsSnapshot, verification },
+      }).catch(() => {});
+
+      res.json({ batch: batchJson(finishedOs), removed, removedCounts: countsSnapshot, verification });
+      return;
+    }
+
     const { rows: created } = await client.query(
       `SELECT * FROM import_rows
         WHERE batch_id = $1 AND status = 'imported'
@@ -3178,6 +4649,7 @@ router.post("/imports/batches/:id/rollback", requireModuleAction(PERM, "delete")
     const ledgerIds = created.map((r: any) => r.created_ledger_id).filter((v: any) => v != null).map(Number);
     const customerIds = created.filter((r: any) => r.created_record_type === "customer").map((r: any) => Number(r.created_record_id));
     const vendorIds = created.filter((r: any) => r.created_record_type === "vendor").map((r: any) => Number(r.created_record_id));
+    const itemIds = created.filter((r: any) => r.created_record_type === "item").map((r: any) => Number(r.created_record_id));
 
     // 1. Opening balances go first — inside this txn, so if anything below
     //    blocks, the deletes are undone with the ROLLBACK.
@@ -3213,6 +4685,29 @@ router.post("/imports/batches/:id/rollback", requireModuleAction(PERM, "delete")
       );
       return new Map<number, number>(rows.map((r: any) => [Number(r.pid), Number(r.n)]));
     };
+    // Item usage — any stock movement or price row means the item is live.
+    const itemUsage = new Map<number, string[]>();
+    if (itemIds.length > 0) {
+      const addUse = (rows: any[], msg: (n: number) => string) => {
+        for (const u of rows) {
+          const iid = Number(u.iid);
+          itemUsage.set(iid, [...(itemUsage.get(iid) ?? []), msg(Number(u.n))]);
+        }
+      };
+      const { rows: se } = await client.query(
+        `SELECT item_id AS iid, COUNT(*)::int AS n FROM stock_entries
+          WHERE material_type = 'item' AND item_id = ANY($1::int[]) GROUP BY item_id`, [itemIds]);
+      addUse(se, (n) => `${n} stock record${n === 1 ? "" : "s"} exist for this item`);
+      const { rows: sl } = await client.query(
+        `SELECT ref_id AS iid, COUNT(*)::int AS n FROM stock_ledger
+          WHERE material_type = 'item' AND ref_id = ANY($1::int[]) GROUP BY ref_id`, [itemIds]);
+      addUse(sl, (n) => `${n} stock ledger entr${n === 1 ? "y" : "ies"} reference this item`);
+      const { rows: ip } = await client.query(
+        `SELECT item_id AS iid, COUNT(*)::int AS n FROM item_prices
+          WHERE item_id = ANY($1::int[]) GROUP BY item_id`, [itemIds]);
+      addUse(ip, (n) => `${n} price entr${n === 1 ? "y" : "ies"} reference this item`);
+    }
+
     const custSales = await partyUsage("sales", "customer_id", customerIds);
     const custQuotes = await partyUsage("quotations", "customer_id", customerIds);
     const vendPurchases = await partyUsage("purchases", "vendor_id", vendorIds);
@@ -3241,6 +4736,9 @@ router.post("/imports/batches/:id/rollback", requireModuleAction(PERM, "delete")
         if (p > 0) reasons.push(`${p} purchase${p === 1 ? "" : "s"} reference this vendor`);
         if (a > 0) reasons.push(`${a} asset purchase${a === 1 ? "" : "s"} reference this vendor`);
       }
+      if (r.created_record_type === "item") {
+        for (const msg of itemUsage.get(Number(r.created_record_id)) ?? []) reasons.push(msg);
+      }
       if (reasons.length > 0) blocked.push({ rowNumber: Number(r.row_number), name, reason: reasons.join("; ") });
     }
 
@@ -3257,6 +4755,7 @@ router.post("/imports/batches/:id/rollback", requireModuleAction(PERM, "delete")
     if (ledgerIds.length > 0) await client.query(`DELETE FROM account_ledgers WHERE id = ANY($1::int[])`, [ledgerIds]);
     if (customerIds.length > 0) await client.query(`DELETE FROM customers WHERE id = ANY($1::int[])`, [customerIds]);
     if (vendorIds.length > 0) await client.query(`DELETE FROM vendors WHERE id = ANY($1::int[])`, [vendorIds]);
+    if (itemIds.length > 0) await client.query(`DELETE FROM items WHERE id = ANY($1::int[])`, [itemIds]);
 
     await client.query(
       `UPDATE import_rows SET status = 'rolled_back' WHERE batch_id = $1 AND status = 'imported'`, [id],
@@ -3276,6 +4775,914 @@ router.post("/imports/batches/:id/rollback", requireModuleAction(PERM, "delete")
     }).catch(() => {});
 
     res.json({ batch: batchJson(finished), removed: created.length, removedCounts: countsSnapshot, verification });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+});
+
+// ═══ 5. ERP Migration Wizard — ONE migration, many files ════════════════════
+// A migration is the umbrella over up to one file per wizard module. The
+// whole set analyses together, maps together, demos together (one combined
+// never-committed transaction → one report pack), and is approved as ONE
+// all-or-nothing import at a location chosen only AFTER verification.
+// Rollback removes the ENTIRE migration — never a partial one.
+
+const WIZARD_MODULES: DemoModule[] = ["sales", "purchases", "receipts", "payments", "daybook", "opening_stock"];
+/** Import order inside the one transaction: stock exists before the documents
+ *  that consume it, documents exist before the money that settles them. */
+const WIZARD_RUN_ORDER: DemoModule[] = ["opening_stock", "purchases", "sales", "receipts", "payments", "daybook"];
+/** Files are validated and demoed at Head Office until the real location is
+ *  chosen AFTER verification (the wizard picks the location LAST). Approve
+ *  re-stamps every file and re-validates at the chosen location before the
+ *  final import. */
+const PROVISIONAL_STAMP = { type: "headoffice", id: 1 };
+
+function migrationDisplayId(id: number): string {
+  return `MIG${String(id).padStart(4, "0")}`;
+}
+
+function migrationJson(m: any) {
+  const status = String(m.status);
+  return {
+    id: Number(m.id),
+    displayId: migrationDisplayId(Number(m.id)),
+    status,
+    locationType: m.location_type ?? null,
+    locationId: m.location_id == null ? null : Number(m.location_id),
+    createdBy: m.created_by,
+    createdAt: m.created_at,
+    demoAt: m.demo_at ?? null,
+    demoBy: m.demo_by ?? null,
+    demoSummary: m.demo_summary ?? null,
+    hasDemoReport: m.has_demo_report != null ? Boolean(m.has_demo_report) : m.demo_report != null,
+    recordCounts: m.record_counts ?? null,
+    legacyRange: m.legacy_min || m.legacy_max ? { min: m.legacy_min ?? null, max: m.legacy_max ?? null } : null,
+    committedAt: m.committed_at ?? null,
+    committedBy: m.committed_by ?? null,
+    discardedAt: m.discarded_at ?? null,
+    discardedBy: m.discarded_by ?? null,
+    rolledBackAt: m.rolled_back_at ?? null,
+    rolledBackBy: m.rolled_back_by ?? null,
+    canEdit: status === "draft" || status === "demo_ready",
+    canDemo: status === "draft" || status === "demo_ready",
+    canApprove: status === "demo_ready" && Number((m.demo_summary as any)?.failed ?? 0) === 0,
+    canDiscard: status === "draft" || status === "demo_ready",
+    rollbackAvailable: status === "committed" && !m.rolled_back_at,
+  };
+}
+
+/** Which master kinds a module's name columns feed (for the analyse tiles). */
+const MODULE_NAME_COLUMNS: Partial<Record<DemoModule, Array<{ column: string; kind: MappingKind }>>> = {
+  sales: [{ column: "party", kind: "customer" }, { column: "item", kind: "product" }],
+  purchases: [{ column: "party", kind: "vendor" }, { column: "item", kind: "product" }],
+  receipts: [{ column: "party", kind: "customer" }],
+  payments: [{ column: "party", kind: "vendor" }],
+  daybook: [{ column: "ledger", kind: "ledger" }],
+  opening_stock: [{ column: "item", kind: "product" }],
+};
+
+/** Display-only issue buckets for the combined analyse step. */
+function issueBucket(reason: string | null): "duplicates" | "invalidGst" | "invalidDates" | "invalidAmounts" | "other" {
+  const r = String(reason ?? "").toLowerCase();
+  if (r.includes("duplicate") || r.includes("already imported") || r.includes("already exists")) return "duplicates";
+  if (r.includes("gst")) return "invalidGst";
+  if (r.includes("date")) return "invalidDates";
+  if (r.includes("amount") || r.includes("price") || r.includes("total") || r.includes("qty") || r.includes("quantity") || r.includes("debit") || r.includes("credit") || r.includes("cost")) return "invalidAmounts";
+  return "other";
+}
+
+/** Full detail for one migration: file cards + combined analysis. */
+async function migrationDetail(id: number): Promise<Record<string, unknown> | null> {
+  const { rows: [m] } = await pool.query(
+    `SELECT *, (demo_report IS NOT NULL) AS has_demo_report FROM import_migrations WHERE id = $1`, [id],
+  );
+  if (!m) return null;
+  const { rows: batches } = await pool.query(`SELECT * FROM import_batches WHERE migration_id = $1`, [id]);
+  const byModule = new Map<string, any>(batches.map((b: any) => [String(b.module), b]));
+
+  const issues = { duplicates: 0, invalidGst: 0, invalidDates: 0, invalidAmounts: 0, other: 0 };
+  const seen: Record<MappingKind, Set<string>> = { customer: new Set(), vendor: new Set(), product: new Set(), ledger: new Set() };
+  const missing: Record<MappingKind, Set<string>> = { customer: new Set(), vendor: new Set(), product: new Set(), ledger: new Set() };
+
+  const files: any[] = [];
+  for (const module of WIZARD_MODULES) {
+    const b = byModule.get(module);
+    if (!b) continue;
+    const { rows: rws } = await pool.query(`SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [b.id]);
+    let needsMapping = 0;
+    let moneyTotal = 0;
+    const docSet = new Set<number>();
+    for (const r of rws) {
+      const norm = (r.raw?.norm ?? {}) as Record<string, any>;
+      if (r.status === "needs_mapping" || r.status === "needs_party") needsMapping++;
+      else if (r.status === "error") issues[issueBucket(r.reason)]++;
+      for (const nc of MODULE_NAME_COLUMNS[module] ?? []) {
+        const v = String((r.raw?.values ?? {})[nc.column] ?? "").trim();
+        if (v) seen[nc.kind].add(normName(v));
+      }
+      for (const mm of (norm.missingMappings ?? []) as Array<{ kind: MappingKind; name: string }>) {
+        missing[mm.kind]?.add(normName(String(mm.name)));
+      }
+      if (module === "receipts" || module === "payments") moneyTotal += Number(norm.amount ?? 0);
+      else if (module === "daybook") moneyTotal += Number(norm.debit ?? 0);
+      else if (module === "opening_stock") moneyTotal += Number(norm.quantity ?? 0) * Number(norm.unitCost ?? 0);
+      if (norm.doc != null) docSet.add(Number(norm.doc));
+    }
+    let docCount = rws.length;
+    let summary: Record<string, unknown> | undefined;
+    if (module === "sales" || module === "purchases") {
+      summary = txnBatchSummary(rws) as Record<string, unknown>;
+      docCount = Number((summary as any).invoices ?? docSet.size);
+      moneyTotal = Number((summary as any).totalAmount ?? 0);
+    } else if (module === "daybook") {
+      docCount = docSet.size;
+    }
+    files.push({
+      ...batchJson(b),
+      needsMappingRows: needsMapping,
+      hardErrorRows: Math.max(0, Number(b.error_rows ?? 0) - needsMapping),
+      docCount,
+      moneyTotal: round2(moneyTotal),
+      ...(summary ? { summary } : {}),
+    });
+  }
+
+  const masters: Record<string, { found: number; missing: number }> = {};
+  for (const kind of ["customer", "vendor", "product", "ledger"] as MappingKind[]) {
+    if (seen[kind].size === 0 && missing[kind].size === 0) continue;
+    masters[kind] = {
+      found: Math.max(0, seen[kind].size - missing[kind].size),
+      missing: missing[kind].size,
+    };
+  }
+  const unmappedTotal = (Object.values(missing) as Array<Set<string>>).reduce((s, x) => s + x.size, 0);
+  const nameOf = await locationNameResolver();
+  return {
+    migration: { ...migrationJson(m), locationName: nameOf(m) },
+    files,
+    analysis: { issues, masters },
+    unmappedTotal,
+  };
+}
+
+/** Any change to a migration's inputs invalidates its pending demo. */
+async function demoteMigration(id: number): Promise<void> {
+  await pool.query(
+    `UPDATE import_migrations SET status = 'draft', demo_report = NULL, demo_summary = NULL, demo_at = NULL, demo_by = NULL
+      WHERE id = $1 AND status IN ('draft', 'demo_ready')`,
+    [id],
+  );
+}
+
+router.post("/imports/migrations", requireModuleAction(PERM, "add"), async (req: Request, res: Response): Promise<void> => {
+  const user = username(req);
+  const { rows: [m] } = await pool.query(
+    `INSERT INTO import_migrations (status, created_by) VALUES ('draft', $1) RETURNING *`, [user],
+  );
+  logActivity({
+    action: "CREATE", module: "imports", entityType: "import_migration", entityId: Number(m.id),
+    description: `Started migration ${migrationDisplayId(Number(m.id))}`,
+    user,
+  }).catch(() => {});
+  res.status(201).json({ migration: migrationJson(m) });
+});
+
+router.get("/imports/migrations", requireModuleView(PERM), async (_req: Request, res: Response): Promise<void> => {
+  const [{ rows: migs }, { rows: batches }, nameOf] = await Promise.all([
+    pool.query(`SELECT *, (demo_report IS NOT NULL) AS has_demo_report FROM import_migrations ORDER BY id DESC LIMIT 100`),
+    pool.query(
+      `SELECT id, migration_id, module, filename, status, total_rows, valid_rows, warning_rows, error_rows,
+              imported_rows, skipped_rows, failed_rows
+         FROM import_batches WHERE migration_id IS NOT NULL ORDER BY id`,
+    ),
+    locationNameResolver(),
+  ]);
+  const filesByMig = new Map<number, any[]>();
+  for (const b of batches) {
+    const mid = Number(b.migration_id);
+    if (!filesByMig.has(mid)) filesByMig.set(mid, []);
+    filesByMig.get(mid)!.push({
+      module: b.module, filename: b.filename, status: b.status,
+      totalRows: Number(b.total_rows ?? 0), validRows: Number(b.valid_rows ?? 0),
+      warningRows: Number(b.warning_rows ?? 0), errorRows: Number(b.error_rows ?? 0),
+      importedRows: b.imported_rows == null ? null : Number(b.imported_rows),
+    });
+  }
+  res.json({
+    migrations: migs.map((m: any) => ({
+      ...migrationJson(m),
+      locationName: nameOf(m),
+      files: filesByMig.get(Number(m.id)) ?? [],
+    })),
+  });
+});
+
+router.get("/imports/migrations/:id", requireModuleView(PERM), async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid migration id" }); return; }
+  const detail = await migrationDetail(id);
+  if (!detail) { res.status(404).json({ error: "Migration not found" }); return; }
+  res.json(detail);
+});
+
+/** Upload (or replace) one module's file inside a migration. The old file's
+ *  batch is hard-deleted — a migration holds at most ONE file per module. */
+router.post(
+  "/imports/migrations/:id/files",
+  requireModuleAction(PERM, "add"),
+  express.raw({ type: () => true, limit: "10mb" }),
+  async (req: Request, res: Response): Promise<void> => {
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid migration id" }); return; }
+    const module = asModule(req.query.module) as DemoModule | null;
+    if (!module || !isDemoModule(module) || !WIZARD_MODULES.includes(module)) {
+      res.status(400).json({ error: `Pass ?module= one of: ${WIZARD_MODULES.join(", ")}` }); return;
+    }
+    const filename = String(req.query.filename ?? "upload.xlsx").replace(/[^A-Za-z0-9 ._()-]/g, "_").slice(-120);
+    const body = req.body as Buffer;
+    if (!Buffer.isBuffer(body) || body.length === 0) {
+      res.status(400).json({ error: "Send the .xlsx file as the request body." }); return;
+    }
+    const { rows: [mig] } = await pool.query(`SELECT * FROM import_migrations WHERE id = $1`, [id]);
+    if (!mig) { res.status(404).json({ error: "Migration not found" }); return; }
+    if (mig.status !== "draft" && mig.status !== "demo_ready") {
+      res.status(409).json({ error: `Migration ${migrationDisplayId(id)} is already ${String(mig.status).replace("_", " ")} — start a new migration for more files.` });
+      return;
+    }
+
+    const pw = await parseWorkbookValues(module, body);
+    if ("error" in pw) { res.status(400).json({ error: pw.error }); return; }
+    const { results } = await runWizardValidators(module, pw.parsed, PROVISIONAL_STAMP);
+
+    const counts = { valid: 0, warning: 0, error: 0 };
+    for (const v of results) {
+      const s = String(v.status);
+      counts[s === "needs_mapping" || s === "needs_party" ? "error" : (s as "valid" | "warning" | "error")]++;
+    }
+
+    // Replace: the previous upload for this module (if any) disappears.
+    const { rows: oldBatches } = await pool.query(
+      `SELECT id FROM import_batches WHERE migration_id = $1 AND module = $2`, [id, module],
+    );
+    for (const ob of oldBatches) {
+      await pool.query(`DELETE FROM import_rows WHERE batch_id = $1`, [ob.id]);
+      await pool.query(`DELETE FROM import_batches WHERE id = $1`, [ob.id]);
+    }
+
+    const user = username(req);
+    const { rows: [batch] } = await pool.query(
+      `INSERT INTO import_batches (module, filename, status, total_rows, valid_rows, warning_rows, error_rows, created_by, location_type, location_id, migration_id)
+       VALUES ($1, $2, 'validated', $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING *`,
+      [module, filename, pw.parsed.length, counts.valid, counts.warning, counts.error,
+       user, PROVISIONAL_STAMP.type, PROVISIONAL_STAMP.id, id],
+    );
+    for (let i = 0; i < pw.parsed.length; i++) {
+      const p = pw.parsed[i];
+      const v = results[i];
+      await pool.query(
+        `INSERT INTO import_rows (batch_id, row_number, raw, status, reason, suggestion, duplicate_of_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [batch.id, p.rowNumber, JSON.stringify({ values: p.values, norm: v.norm }),
+         v.status, v.reason, v.suggestion, v.duplicateOfId],
+      );
+    }
+    await demoteMigration(id);
+
+    logActivity({
+      action: "CREATE", module: "imports", entityType: "import_migration", entityId: id,
+      description: `Migration ${migrationDisplayId(id)}: ${oldBatches.length > 0 ? "replaced" : "added"} ${module} file "${filename}" — ${pw.parsed.length} rows (${counts.valid} valid, ${counts.warning} warnings, ${counts.error} errors)`,
+      user,
+    }).catch(() => {});
+
+    res.status(201).json(await migrationDetail(id));
+  },
+);
+
+/** Remove one module's file from a draft migration. */
+router.delete("/imports/migrations/:id/files/:module", requireModuleAction(PERM, "add"), async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid migration id" }); return; }
+  const module = asModule(req.params.module) as DemoModule | null;
+  if (!module || !WIZARD_MODULES.includes(module)) { res.status(400).json({ error: "Unknown module" }); return; }
+  const { rows: [mig] } = await pool.query(`SELECT * FROM import_migrations WHERE id = $1`, [id]);
+  if (!mig) { res.status(404).json({ error: "Migration not found" }); return; }
+  if (mig.status !== "draft" && mig.status !== "demo_ready") {
+    res.status(409).json({ error: `Migration ${migrationDisplayId(id)} is already ${String(mig.status).replace("_", " ")}.` }); return;
+  }
+  const { rows: old } = await pool.query(`SELECT id, filename FROM import_batches WHERE migration_id = $1 AND module = $2`, [id, module]);
+  if (old.length === 0) { res.status(404).json({ error: "No file uploaded for that module." }); return; }
+  for (const ob of old) {
+    await pool.query(`DELETE FROM import_rows WHERE batch_id = $1`, [ob.id]);
+    await pool.query(`DELETE FROM import_batches WHERE id = $1`, [ob.id]);
+  }
+  await demoteMigration(id);
+  logActivity({
+    action: "DELETE", module: "imports", entityType: "import_migration", entityId: id,
+    description: `Migration ${migrationDisplayId(id)}: removed ${module} file "${old[0].filename}"`,
+    user: username(req),
+  }).catch(() => {});
+  res.json(await migrationDetail(id));
+});
+
+/** Unmapped names across ALL of a migration's files, in one workspace. */
+router.get("/imports/migrations/:id/mappings", requireModuleView(PERM), async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid migration id" }); return; }
+  const { rows: [mig] } = await pool.query(`SELECT id FROM import_migrations WHERE id = $1`, [id]);
+  if (!mig) { res.status(404).json({ error: "Migration not found" }); return; }
+  const { rows: importRows } = await pool.query(
+    `SELECT r.raw FROM import_rows r JOIN import_batches b ON b.id = r.batch_id WHERE b.migration_id = $1`, [id],
+  );
+  res.json(await buildMappingWorkspace(importRows));
+});
+
+/** Save mapping decisions for a migration, then re-check every file. */
+router.post("/imports/migrations/:id/mappings", requireModuleAction(PERM, "add"), async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid migration id" }); return; }
+  const { rows: [mig] } = await pool.query(`SELECT * FROM import_migrations WHERE id = $1`, [id]);
+  if (!mig) { res.status(404).json({ error: "Migration not found" }); return; }
+  if (mig.status !== "draft" && mig.status !== "demo_ready") {
+    res.status(409).json({ error: "Mappings can only be saved before the migration is approved." }); return;
+  }
+  const body = (req.body ?? {}) as { mappings?: unknown };
+  const mappingsIn = Array.isArray(body.mappings) ? body.mappings : [];
+  if (mappingsIn.length === 0) { res.status(400).json({ error: "Pass mappings: [{ kind, name, targetId | create }]" }); return; }
+  if (mappingsIn.length > 500) { res.status(400).json({ error: "Too many mappings in one request." }); return; }
+
+  const user = username(req);
+  // Masters created while mapping are stamped Head Office — visible from
+  // every location, including whichever one the migration finally lands at.
+  const { saved, created, errors } = await applyMappingEntries(
+    mappingsIn, PROVISIONAL_STAMP, user, `migration ${migrationDisplayId(id)}`,
+  );
+
+  // Re-check every file against the new mappings (each at its own stamp).
+  const { rows: batches } = await pool.query(`SELECT * FROM import_batches WHERE migration_id = $1`, [id]);
+  for (const b of batches) {
+    const module = asModule(b.module);
+    if (!module || !isDemoModule(module)) continue;
+    await revalidateDemoBatch(Number(b.id), module, {
+      type: String(b.location_type ?? "headoffice"), id: Number(b.location_id ?? 1),
+    });
+  }
+  await demoteMigration(id);
+
+  logActivity({
+    action: "UPDATE", module: "imports", entityType: "import_migration", entityId: id,
+    description: `Migration ${migrationDisplayId(id)}: saved mappings — ${saved.length} mapped, ${created.length} created${errors.length ? `, ${errors.length} failed` : ""}`,
+    user,
+  }).catch(() => {});
+
+  res.json({ saved, created, errors, ...(await migrationDetail(id)) });
+});
+
+/** The combined demo: every file runs through the REAL import code in ONE
+ *  transaction, the full report pack is built from inside it, then EVERYTHING
+ *  is rolled back. Requires every file to be clean (no errors, no unmapped
+ *  names) so the demo is exactly what approval will write. */
+router.post("/imports/migrations/:id/demo", requireModuleAction(PERM, "add"), async (req: Request, res: Response): Promise<void> => {
+  const startedAt = Date.now();
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid migration id" }); return; }
+
+  const lockClient = await pool.connect();
+  let locked = false;
+  try {
+    await lockClient.query(`SELECT pg_advisory_lock(hashtext($1))`, [`import_migration_${id}`]);
+    locked = true;
+
+    const { rows: [mig] } = await pool.query(`SELECT * FROM import_migrations WHERE id = $1`, [id]);
+    if (!mig) { res.status(404).json({ error: "Migration not found" }); return; }
+    if (mig.status !== "draft" && mig.status !== "demo_ready") {
+      res.status(409).json({ error: `Migration ${migrationDisplayId(id)} is already ${String(mig.status).replace("_", " ")}.` }); return;
+    }
+    const { rows: batches } = await pool.query(`SELECT * FROM import_batches WHERE migration_id = $1`, [id]);
+    if (batches.length === 0) { res.status(400).json({ error: "Upload at least one file first." }); return; }
+
+    // Strict gate: unmapped names go back to the mapping step, error rows go
+    // back to the file. This is what makes the demo EQUAL the final import.
+    const mapBlocks: string[] = [];
+    const errBlocks: string[] = [];
+    for (const b of batches) {
+      const { rows: [c] } = await pool.query(
+        `SELECT COUNT(*) FILTER (WHERE status IN ('needs_mapping','needs_party'))::int AS nm,
+                COUNT(*) FILTER (WHERE status = 'error')::int AS err
+           FROM import_rows WHERE batch_id = $1`, [b.id],
+      );
+      if (Number(c?.nm ?? 0) > 0) mapBlocks.push(`${b.module}: ${c.nm}`);
+      if (Number(c?.err ?? 0) > 0) errBlocks.push(`${b.module}: ${c.err}`);
+    }
+    if (mapBlocks.length > 0) {
+      res.status(409).json({ error: `Finish the mapping step first — unmapped names remain (${mapBlocks.join(", ")}).` }); return;
+    }
+    if (errBlocks.length > 0) {
+      res.status(409).json({ error: `Fix the error rows first (${errBlocks.join(", ")}) — correct the file and upload it again. The demo only runs on clean files so it shows exactly what the final import will do.` }); return;
+    }
+
+    const user = username(req);
+    const byModule = new Map<string, any>(batches.map((b: any) => [String(b.module), b]));
+
+    // ── ONE never-committed transaction across every file ──
+    const client = await pool.connect();
+    const runs: Array<{ module: DemoModule; batch: any; run: Awaited<ReturnType<typeof runBatchImport>> }> = [];
+    let report: Record<string, unknown>;
+    try {
+      await client.query("BEGIN");
+      for (const module of WIZARD_RUN_ORDER) {
+        const b = byModule.get(module);
+        if (!b) continue;
+        const { rows: importRows } = await pool.query(
+          `SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [b.id],
+        );
+        const loc = { type: String(b.location_type ?? "headoffice"), id: Number(b.location_id ?? 1) };
+        const run = await runBatchImport(client, { batchId: Number(b.id), module, importRows, loc, user, mode: "demo" });
+        runs.push({ module, batch: b, run });
+      }
+      report = await buildDemoReportPack(client);
+    } finally {
+      // EVERYTHING the demo wrote vanishes here — documents, stock, numbers.
+      await client.query("ROLLBACK").catch(() => {});
+      client.release();
+    }
+
+    // Snapshot bookkeeping outside the demo transaction.
+    const totals = { imported: 0, skipped: 0, failed: 0 };
+    const failures: Array<{ module: DemoModule; rowNumber: number; name: string; reason: string }> = [];
+    const perModule: Record<string, unknown> = {};
+    const allLegacy: string[] = [];
+    for (const { module, batch: b, run } of runs) {
+      await pool.query(`UPDATE import_rows SET raw = raw - 'demo' WHERE batch_id = $1`, [b.id]);
+      for (const o of run.outcomes) {
+        await pool.query(`UPDATE import_rows SET raw = raw || $2::jsonb WHERE id = $1`, [o.rowId, JSON.stringify({
+          demo: { status: o.status, reason: o.reason, createdType: o.createdType, created: o.created },
+        })]);
+      }
+      const legacySorted = sortLegacy(run.legacyNumbers);
+      allLegacy.push(...run.legacyNumbers);
+      const summary = {
+        ...run.counts,
+        failures: run.failures.slice(0, 100),
+        legacyMin: legacySorted[0] ?? null,
+        legacyMax: legacySorted[legacySorted.length - 1] ?? null,
+        timeTakenMs: Date.now() - startedAt,
+      };
+      await pool.query(
+        `UPDATE import_batches SET status = 'demo_ready', demo_summary = $2, demo_at = NOW(), demo_by = $3,
+            legacy_min = $4, legacy_max = $5
+          WHERE id = $1`,
+        [b.id, JSON.stringify(summary), user, legacySorted[0] ?? null, legacySorted[legacySorted.length - 1] ?? null],
+      );
+      totals.imported += run.counts.imported;
+      totals.skipped += run.counts.skipped;
+      totals.failed += run.counts.failed;
+      for (const f of run.failures) failures.push({ module, ...f });
+      perModule[module] = {
+        ...run.counts,
+        legacyMin: legacySorted[0] ?? null,
+        legacyMax: legacySorted[legacySorted.length - 1] ?? null,
+      };
+    }
+    const legacyAll = sortLegacy(allLegacy);
+    const migSummary = {
+      ...totals,
+      perModule,
+      failures: failures.slice(0, 100),
+      timeTakenMs: Date.now() - startedAt,
+    };
+    const { rows: [updated] } = await pool.query(
+      `UPDATE import_migrations SET status = 'demo_ready', demo_report = $2, demo_summary = $3,
+          demo_at = NOW(), demo_by = $4, legacy_min = $5, legacy_max = $6
+        WHERE id = $1 RETURNING *, (demo_report IS NOT NULL) AS has_demo_report`,
+      [id, JSON.stringify(report), JSON.stringify(migSummary), user,
+       legacyAll[0] ?? null, legacyAll[legacyAll.length - 1] ?? null],
+    );
+
+    logActivity({
+      action: "UPDATE", module: "imports", entityType: "import_migration", entityId: id,
+      description: `Migration ${migrationDisplayId(id)}: demo run across ${runs.length} file${runs.length === 1 ? "" : "s"} — ${totals.imported} would import, ${totals.failed} failed, ${totals.skipped} skipped (nothing committed)`,
+      user,
+    }).catch(() => {});
+
+    res.json({ migration: migrationJson(updated), summary: migSummary, failures });
+  } finally {
+    if (locked) await lockClient.query(`SELECT pg_advisory_unlock(hashtext($1))`, [`import_migration_${id}`]).catch(() => {});
+    lockClient.release();
+  }
+});
+
+router.get("/imports/migrations/:id/demo-report", requireModuleView(PERM), async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid migration id" }); return; }
+  const { rows: [m] } = await pool.query(
+    `SELECT demo_report, demo_summary, demo_at, demo_by, status FROM import_migrations WHERE id = $1`, [id],
+  );
+  if (!m) { res.status(404).json({ error: "Migration not found" }); return; }
+  if (m.demo_report == null) { res.status(404).json({ error: "No demo run on record — run the demo first." }); return; }
+  res.json({ report: m.demo_report, summary: m.demo_summary ?? null, demoAt: m.demo_at, demoBy: m.demo_by, status: m.status });
+});
+
+/** Approve = the FINAL import. The location is chosen here (after
+ *  verification, per the wizard's order), every file is re-stamped and
+ *  re-validated at it, and the whole set imports in ONE transaction —
+ *  any failure rolls back the entire migration. */
+router.post("/imports/migrations/:id/approve", requireModuleAction(PERM, "add"), async (req: Request, res: Response): Promise<void> => {
+  const startedAt = Date.now();
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid migration id" }); return; }
+  const user = username(req);
+
+  const body = (req.body ?? {}) as { locationType?: unknown; locationId?: unknown };
+  if (!body.locationType) {
+    res.status(400).json({ error: "Pick the location first — every document in the migration is recorded there." }); return;
+  }
+  const resolved = await resolveActingLocation(pool, {
+    employee: (req as any).employee,
+    requested: { type: body.locationType, id: body.locationId },
+  });
+  if ("error" in resolved) { res.status(400).json({ error: resolved.error }); return; }
+  if (resolved.loc.type === "outlet" && await outletWritesBlocked(pool)) {
+    res.status(400).json({ error: OUTLETS_DISABLED_MESSAGE }); return;
+  }
+  const loc = resolved.loc;
+  {
+    const disabledMsg = await disabledWarehouseError(pool, [{ type: loc.type, id: loc.id }]);
+    if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
+  }
+
+  const lockClient = await pool.connect();
+  let locked = false;
+  try {
+    await lockClient.query(`SELECT pg_advisory_lock(hashtext($1))`, [`import_migration_${id}`]);
+    locked = true;
+
+    // Atomic claim — approval only ever follows a clean demo run.
+    const { rows: [mig] } = await pool.query(
+      `UPDATE import_migrations SET status = 'committing', committed_at = NOW(), committed_by = $2,
+          location_type = $3, location_id = $4
+        WHERE id = $1 AND status = 'demo_ready' RETURNING *`,
+      [id, user, loc.type, loc.id],
+    );
+    if (!mig) {
+      const { rows: [m] } = await pool.query(`SELECT status FROM import_migrations WHERE id = $1`, [id]);
+      if (!m) { res.status(404).json({ error: "Migration not found" }); return; }
+      res.status(409).json({
+        error: m.status === "draft"
+          ? "Run the demo first — approval imports exactly what the demo showed."
+          : `Migration ${migrationDisplayId(id)} is ${m.status === "committing" ? "already being imported" : `already ${String(m.status).replace("_", " ")}`}.`,
+      });
+      return;
+    }
+    const revert = () => pool.query(
+      `UPDATE import_migrations SET status = 'demo_ready', committed_at = NULL, committed_by = NULL,
+          location_type = NULL, location_id = NULL
+        WHERE id = $1 AND status = 'committing'`, [id],
+    );
+
+    if (Number((mig.demo_summary as any)?.failed ?? 1) > 0) {
+      await revert();
+      res.status(409).json({ error: "The demo run had failed documents — fix the files, re-run the demo, and approve only when the demo is clean." });
+      return;
+    }
+
+    const { rows: batches } = await pool.query(`SELECT * FROM import_batches WHERE migration_id = $1`, [id]);
+    if (batches.length === 0) { await revert(); res.status(400).json({ error: "This migration has no files." }); return; }
+
+    // Re-stamp every file to the chosen location and re-validate there —
+    // duplicates, stock scope and ledger ownership are all per-location.
+    const locBlocks: string[] = [];
+    for (const b of batches) {
+      const module = asModule(b.module) as DemoModule;
+      await pool.query(`UPDATE import_batches SET location_type = $2, location_id = $3 WHERE id = $1`, [b.id, loc.type, loc.id]);
+      const { counts } = await revalidateDemoBatch(Number(b.id), module, { type: loc.type, id: Number(loc.id) });
+      const bad = counts.error + counts.needsMapping;
+      if (bad > 0) locBlocks.push(`${b.module}: ${bad} row${bad === 1 ? "" : "s"}`);
+    }
+    if (locBlocks.length > 0) {
+      await revert();
+      res.status(409).json({
+        error: `The chosen location rejected some rows (${locBlocks.join(", ")}) — e.g. a Location column naming a different branch, or documents already existing there. Fix the cause or pick another location, then re-run the demo.`,
+      });
+      return;
+    }
+
+    // ── The ONE all-or-nothing transaction across every file ──
+    const client = await pool.connect();
+    const runs: Array<{ module: DemoModule; batch: any; run: Awaited<ReturnType<typeof runBatchImport>> }> = [];
+    try {
+      await client.query("BEGIN");
+      const byModule = new Map<string, any>(batches.map((b: any) => [String(b.module), b]));
+      for (const module of WIZARD_RUN_ORDER) {
+        const b = byModule.get(module);
+        if (!b) continue;
+        const { rows: importRows } = await pool.query(
+          `SELECT * FROM import_rows WHERE batch_id = $1 ORDER BY row_number`, [b.id],
+        );
+        const run = await runBatchImport(client, {
+          batchId: Number(b.id), module, importRows, loc: { type: loc.type, id: Number(loc.id) }, user, mode: "approve",
+        });
+        runs.push({ module, batch: b, run });
+      }
+      await client.query("COMMIT");
+    } catch (e: any) {
+      // All-or-nothing across the WHOLE migration: the ROLLBACK erases every
+      // document any file created — the books are exactly as before.
+      await client.query("ROLLBACK").catch(() => {});
+      client.release();
+      await revert();
+      if (e instanceof ImportAbort) {
+        res.status(409).json({
+          error: `Import stopped at ${e.docLabel}: ${e.reasonText}. Nothing was imported from ANY file — fix the cause and approve again.`,
+        });
+        return;
+      }
+      throw e;
+    }
+    client.release();
+
+    // Committed — ordinary bookkeeping outside the all-or-nothing boundary.
+    const totals = { imported: 0, skipped: 0, failed: 0 };
+    const allLegacy: string[] = [];
+    const recordCounts: Record<string, number> = {};
+    for (const { batch: b, run } of runs) {
+      for (const o of run.outcomes) {
+        await pool.query(
+          `UPDATE import_rows SET status = $2, reason = $3, created_record_type = $4, created_record_id = $5 WHERE id = $1`,
+          [o.rowId, o.status, o.reason, o.createdType, o.createdId],
+        ).catch(() => {});
+        if (o.created) {
+          await pool.query(`UPDATE import_rows SET raw = raw || $2::jsonb WHERE id = $1`,
+            [o.rowId, JSON.stringify({ created: o.created })]).catch(() => {});
+        }
+      }
+      const legacySorted = sortLegacy(run.legacyNumbers);
+      allLegacy.push(...run.legacyNumbers);
+      await pool.query(
+        `UPDATE import_batches SET status = 'committed', committed_at = NOW(), committed_by = $2,
+            imported_rows = $3, updated_rows = 0, skipped_rows = $4, failed_rows = $5,
+            legacy_min = COALESCE($6, legacy_min), legacy_max = COALESCE($7, legacy_max)
+          WHERE id = $1`,
+        [b.id, user, run.counts.imported, run.counts.skipped, run.counts.failed,
+         legacySorted[0] ?? null, legacySorted[legacySorted.length - 1] ?? null],
+      );
+      totals.imported += run.counts.imported;
+      totals.skipped += run.counts.skipped;
+      totals.failed += run.counts.failed;
+      const rc = await batchRecordCounts(pool, Number(b.id));
+      for (const [k, v] of Object.entries(rc)) recordCounts[k] = (recordCounts[k] ?? 0) + Number(v);
+    }
+    const legacyAll = sortLegacy(allLegacy);
+    const { rows: [finished] } = await pool.query(
+      `UPDATE import_migrations SET status = 'committed', record_counts = $2,
+          legacy_min = COALESCE($3, legacy_min), legacy_max = COALESCE($4, legacy_max)
+        WHERE id = $1 AND status = 'committing' RETURNING *, (demo_report IS NOT NULL) AS has_demo_report`,
+      [id, JSON.stringify(recordCounts), legacyAll[0] ?? null, legacyAll[legacyAll.length - 1] ?? null],
+    );
+
+    logActivity({
+      action: "CREATE", module: "imports", entityType: "import_migration", entityId: id,
+      description: `Approved migration ${migrationDisplayId(id)} into ${loc.type === "headoffice" ? "Head Office" : `${loc.type} #${loc.id}`} — ${totals.imported} rows imported across ${runs.length} file${runs.length === 1 ? "" : "s"} (${describeCounts(recordCounts)})`,
+      user,
+    }).catch(() => {});
+
+    res.json({
+      migration: migrationJson(finished ?? mig),
+      summary: totals,
+      details: { recordCounts, timeTakenMs: Date.now() - startedAt },
+    });
+  } finally {
+    if (locked) await lockClient.query(`SELECT pg_advisory_unlock(hashtext($1))`, [`import_migration_${id}`]).catch(() => {});
+    lockClient.release();
+  }
+});
+
+router.post("/imports/migrations/:id/discard", requireModuleAction(PERM, "add"), async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid migration id" }); return; }
+  const user = username(req);
+  const { rows: [m] } = await pool.query(
+    `UPDATE import_migrations SET status = 'discarded', discarded_at = NOW(), discarded_by = $2
+      WHERE id = $1 AND status IN ('draft', 'demo_ready') RETURNING *`,
+    [id, user],
+  );
+  if (!m) {
+    const { rows: [cur] } = await pool.query(`SELECT status FROM import_migrations WHERE id = $1`, [id]);
+    if (!cur) { res.status(404).json({ error: "Migration not found" }); return; }
+    res.status(409).json({ error: `Migration ${migrationDisplayId(id)} is already ${String(cur.status).replace("_", " ")}.` });
+    return;
+  }
+  await pool.query(
+    `UPDATE import_batches SET status = 'discarded', discarded_at = NOW(), discarded_by = $2
+      WHERE migration_id = $1 AND status IN ('validated', 'demo_ready')`,
+    [id, user],
+  );
+  logActivity({
+    action: "UPDATE", module: "imports", entityType: "import_migration", entityId: id,
+    description: `Discarded migration ${migrationDisplayId(id)} — nothing was ever written to the books`,
+    user,
+  }).catch(() => {});
+  res.json({ migration: migrationJson(m) });
+});
+
+/** Reverse ONE committed wizard file inside the caller's transaction.
+ *  Mirrors the per-batch rollback blocks; kept separate on purpose — the
+ *  battle-tested per-batch handler stays untouched. */
+async function reverseWizardBatch(
+  client: PoolClient, batch: any,
+): Promise<{ blocked: Array<{ rowNumber: number; name: string; reason: string }>; removed: number }> {
+  const id = Number(batch.id);
+  const blocked: Array<{ rowNumber: number; name: string; reason: string }> = [];
+  let removed = 0;
+
+  if (batch.module === "sales" || batch.module === "purchases") {
+    const { rows: docRowsAll } = await client.query(
+      `SELECT * FROM import_rows
+        WHERE batch_id = $1 AND status = 'imported' AND created_record_id IS NOT NULL
+        ORDER BY row_number`, [id],
+    );
+    const seenDocs = new Set<number>();
+    for (const r of docRowsAll) {
+      const recId = Number(r.created_record_id);
+      if (seenDocs.has(recId)) continue;
+      seenDocs.add(recId);
+      const headRow = docRowsAll.find((x: any) => Number(x.created_record_id) === recId && x.raw?.created) ?? r;
+      const createdInfo = (headRow.raw?.created ?? {}) as Record<string, any>;
+      const label = String(createdInfo.invoiceNumber ?? headRow.raw?.norm?.invoiceNumber ?? "") || `row ${r.row_number}`;
+      const reason = batch.module === "sales"
+        ? await rollbackImportedSale(client as any, recId, {
+            salePaymentIds: createdInfo.salePaymentIds, clearingReceiptIds: createdInfo.clearingReceiptIds,
+          })
+        : await rollbackImportedPurchase(client as any, recId, { paymentId: createdInfo.paymentId ?? null });
+      if (reason) blocked.push({ rowNumber: Number(r.row_number), name: label, reason });
+      else removed++;
+    }
+    return { blocked, removed };
+  }
+
+  if (batch.module === "receipts" || batch.module === "payments") {
+    const { rows: vRows } = await client.query(
+      `SELECT * FROM import_rows
+        WHERE batch_id = $1 AND status = 'imported' AND created_record_id IS NOT NULL
+        ORDER BY row_number`, [id],
+    );
+    for (const r of vRows) {
+      const recId = Number(r.created_record_id);
+      const label = String(r.raw?.created?.voucherNumber ?? r.raw?.norm?.voucherNo ?? "") || `row ${r.row_number}`;
+      const reason = batch.module === "receipts"
+        ? await rollbackImportedReceiptVoucher(client as any, recId)
+        : await rollbackImportedPaymentVoucher(client as any, recId);
+      if (reason) blocked.push({ rowNumber: Number(r.row_number), name: label, reason });
+      else removed++;
+    }
+    return { blocked, removed };
+  }
+
+  if (batch.module === "daybook") {
+    const { rows: jvRows } = await client.query(
+      `SELECT DISTINCT created_record_id AS jv_id FROM import_rows
+        WHERE batch_id = $1 AND status = 'imported'
+          AND created_record_type = 'journal_voucher' AND created_record_id IS NOT NULL`, [id],
+    );
+    const jvIds = jvRows.map((r: any) => Number(r.jv_id));
+    if (jvIds.length > 0) {
+      await client.query(`DELETE FROM journal_voucher_lines WHERE voucher_id = ANY($1::int[])`, [jvIds]);
+      await client.query(`DELETE FROM journal_vouchers WHERE id = ANY($1::int[])`, [jvIds]);
+      removed += jvIds.length;
+    }
+    return { blocked, removed };
+  }
+
+  if (batch.module === "opening_stock") {
+    const { rows: verifRows } = await client.query(
+      `SELECT DISTINCT created_record_id AS vid FROM import_rows
+        WHERE batch_id = $1 AND status = 'imported'
+          AND created_record_type = 'stock_verification' AND created_record_id IS NOT NULL`, [id],
+    );
+    for (const v of verifRows) {
+      const reason = await rollbackImportedOpeningStock(client as any, Number(v.vid));
+      if (reason) blocked.push({ rowNumber: 0, name: `Opening stock upload #${v.vid}`, reason });
+      else removed++;
+    }
+    return { blocked, removed };
+  }
+
+  return { blocked, removed };
+}
+
+/** Roll back the ENTIRE migration — every file, in reverse import order,
+ *  inside ONE transaction. Never partial: one blocked document keeps the
+ *  whole migration in place. */
+router.post("/imports/migrations/:id/rollback", requireModuleAction(PERM, "delete"), async (req: Request, res: Response): Promise<void> => {
+  const id = parseInt(String(req.params.id), 10);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid migration id" }); return; }
+  const user = username(req);
+
+  // Same top-management gate as per-batch rollback — fails closed.
+  const hierarchyId = (req as any).employee?.hierarchyId ?? null;
+  const { rows: [lvl] } = await pool.query<any>(`SELECT level FROM hierarchies WHERE id = $1`, [hierarchyId]);
+  const roleLevel = lvl?.level == null ? null : Number(lvl.level);
+  if (roleLevel == null || roleLevel > 2) {
+    res.status(403).json({ error: "Only Admin or Management can delete a migration." });
+    return;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [lock] } = await client.query(
+      `SELECT pg_try_advisory_xact_lock(hashtext($1)) AS got`, [`import_migration_${id}`],
+    );
+    if (!lock?.got) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: "This migration is busy right now — try again in a moment." });
+      return;
+    }
+    const { rows: [mig] } = await client.query(`SELECT * FROM import_migrations WHERE id = $1 FOR UPDATE`, [id]);
+    if (!mig) { await client.query("ROLLBACK"); res.status(404).json({ error: "Migration not found" }); return; }
+    if (mig.rolled_back_at || mig.status === "rolled_back") {
+      await client.query("ROLLBACK"); res.status(409).json({ error: "This migration was already rolled back." }); return;
+    }
+    if (mig.status !== "committed") {
+      await client.query("ROLLBACK"); res.status(409).json({ error: "Only committed migrations can be rolled back." }); return;
+    }
+
+    const { rows: batches } = await client.query(
+      `SELECT * FROM import_batches WHERE migration_id = $1 AND status = 'committed'`, [id],
+    );
+    if (batches.length === 0) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: "This migration has no committed files, so there is nothing to roll back." });
+      return;
+    }
+    const byModule = new Map<string, any>(batches.map((b: any) => [String(b.module), b]));
+
+    // Captured BEFORE the deletes, for the audit trail and verification.
+    const removedCounts: Record<string, number> = {};
+    const invoicesByBatch = new Map<number, string[]>();
+    for (const b of batches) {
+      const rc = await batchRecordCounts(client, Number(b.id));
+      for (const [k, v] of Object.entries(rc)) removedCounts[k] = (removedCounts[k] ?? 0) + Number(v);
+      invoicesByBatch.set(Number(b.id), await batchSaleInvoiceNumbers(client, Number(b.id)));
+    }
+
+    // Reverse import order: money first, then documents, then opening stock.
+    const blocked: Array<{ module: string; rowNumber: number; name: string; reason: string }> = [];
+    let removed = 0;
+    for (const module of [...WIZARD_RUN_ORDER].reverse()) {
+      const b = byModule.get(module);
+      if (!b) continue;
+      const r = await reverseWizardBatch(client, b);
+      removed += r.removed;
+      for (const bl of r.blocked) blocked.push({ module, ...bl });
+    }
+    if (blocked.length > 0) {
+      await client.query("ROLLBACK");
+      res.status(409).json({
+        error: `Cannot roll back: ${blocked.length} imported record${blocked.length === 1 ? " has" : "s have"} since gained payments, returns or other activity. Remove that activity first, or leave the migration in place. Nothing was deleted.`,
+        blocked,
+      });
+      return;
+    }
+
+    for (const b of batches) {
+      await client.query(`UPDATE import_rows SET status = 'rolled_back' WHERE batch_id = $1 AND status = 'imported'`, [b.id]);
+      await client.query(
+        `UPDATE import_batches SET status = 'rolled_back', rolled_back_at = NOW(), rolled_back_by = $2 WHERE id = $1`,
+        [b.id, user],
+      );
+    }
+    const { rows: [finished] } = await client.query(
+      `UPDATE import_migrations SET status = 'rolled_back', rolled_back_at = NOW(), rolled_back_by = $2
+        WHERE id = $1 RETURNING *, (demo_report IS NOT NULL) AS has_demo_report`,
+      [id, user],
+    );
+    await client.query("COMMIT");
+
+    // Post-commit verification per file, aggregated.
+    const perBatch: Array<{ module: string; verification: Awaited<ReturnType<typeof verifyAfterRollback>> }> = [];
+    for (const b of batches) {
+      perBatch.push({
+        module: String(b.module),
+        verification: await verifyAfterRollback(Number(b.id), invoicesByBatch.get(Number(b.id)) ?? []),
+      });
+    }
+    const verification = {
+      ok: perBatch.every((p) => p.verification.ok),
+      perBatch,
+    };
+
+    logActivity({
+      action: "DELETE", module: "imports", entityType: "import_migration", entityId: id,
+      description: `Rolled back migration ${migrationDisplayId(id)} — removed ${describeCounts(removedCounts)} across ${batches.length} file${batches.length === 1 ? "" : "s"}; verification ${verification.ok ? "passed" : "FAILED"}`,
+      user,
+      metadata: { displayId: migrationDisplayId(id), removedCounts, verification },
+    }).catch(() => {});
+
+    res.json({ migration: migrationJson(finished), removed, removedCounts, verification });
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
     throw e;

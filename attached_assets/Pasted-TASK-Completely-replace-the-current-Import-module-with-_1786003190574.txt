@@ -1,0 +1,566 @@
+TASK: Completely replace the current Import module with a professional ERP Migration Import Wizard. The current import module should be removed and redesigned. Do NOT create a separate migration module. Modify the existing Import module.
+
+====================================================================
+OBJECTIVE
+====================================================================
+
+The Import module should allow complete migration from another ERP using Excel files.
+
+The system should not immediately import data.
+
+Instead, it should guide the user through:
+
+Upload
+→ Analyse
+→ Manual Mapping
+→ Demo Import
+→ Financial Verification
+→ Approval
+→ Production Import
+
+The objective is to ensure that the imported ERP books exactly match the old ERP before committing anything to the production database.
+
+====================================================================
+SUPPORTED IMPORT TYPES
+====================================================================
+
+The existing Import page should allow uploading:
+
+• Sales
+• Purchase
+• Receipt
+• Payment
+• Day Book
+• Customer Master
+• Vendor Master
+• Ledger Master
+• Item Master
+• Opening Stock (Optional)
+
+Each section should be imported separately.
+
+Example
+
+Upload Sales
+
+↓
+
+Complete Sales Import
+
+↓
+
+Upload Purchase
+
+↓
+
+Complete Purchase Import
+
+↓
+
+Upload Receipt
+
+↓
+
+Complete Receipt Import
+
+↓
+
+Upload Payment
+
+↓
+
+Complete Payment Import
+
+↓
+
+Upload Day Book
+
+↓
+
+Complete Day Book Import
+
+====================================================================
+STEP 1 – FILE ANALYSIS
+====================================================================
+
+After uploading an Excel file, do NOT import immediately.
+
+Analyse the uploaded file.
+
+Display:
+
+• Import Type
+• Total Rows
+• Total Transactions
+• Total Customers Found
+• Total Vendors Found
+• Total Ledgers Found
+• Total Items Found
+• Duplicate Voucher Numbers
+• Duplicate Invoice Numbers
+• Missing Masters
+• Missing Items
+• Invalid Rows
+• Warnings
+• Errors
+
+Nothing should be written to the database.
+
+====================================================================
+STEP 2 – MANUAL MASTER MAPPING
+====================================================================
+
+Do NOT perform automatic mapping.
+
+Every unique master found in the uploaded file must be mapped manually.
+
+==================================================
+CUSTOMER
+==================================================
+
+For every Customer found
+
+Ask
+
+Choose Existing Customer
+
+OR
+
+Create New Customer
+
+When creating
+
+Use the normal ERP Customer creation screen.
+
+====================================================================
+
+VENDOR
+
+Same workflow.
+
+====================================================================
+
+ITEM
+
+Same workflow.
+
+Choose
+
+Existing Item
+
+OR
+
+Create New Item
+
+====================================================================
+
+LEDGER
+
+Every ledger must be mapped manually.
+
+Choose
+
+Existing Ledger
+
+OR
+
+Create New Ledger
+
+If creating a ledger
+
+Ask
+
+• Account Group
+• Sub Group
+
+Examples
+
+Current Assets
+
+Current Liabilities
+
+Cash
+
+Bank
+
+Sales
+
+Purchase
+
+Direct Expense
+
+Indirect Expense
+
+Duties & Taxes
+
+Capital
+
+Loans
+
+Investments
+
+Current Assets
+
+Current Liabilities
+
+etc.
+
+====================================================================
+
+SAVE MAPPING
+
+After mapping
+
+Save permanently.
+
+If the same Customer
+
+Vendor
+
+Item
+
+Ledger
+
+appears again in future imports
+
+Use the saved mapping.
+
+Provide
+
+Manage Mapping
+
+screen.
+
+====================================================================
+STEP 3 – DATA VALIDATION
+====================================================================
+
+After mapping
+
+Validate
+
+Customer
+
+Vendor
+
+Ledger
+
+Item
+
+GST
+
+Voucher Number
+
+Invoice Number
+
+Quantity
+
+Rate
+
+Amount
+
+Tax
+
+Outstanding
+
+Generate an Error Report.
+
+Only invalid rows should fail.
+
+====================================================================
+STEP 4 – DEMO IMPORT
+====================================================================
+
+Perform a DEMO IMPORT.
+
+DO NOT WRITE ANYTHING TO PRODUCTION.
+
+Use the existing ERP business logic.
+
+Exactly as if the user entered every transaction manually.
+
+Generate ERP Voucher Numbers.
+
+DO NOT USE OLD ERP VOUCHER NUMBERS.
+
+Store the original number separately.
+
+Field
+
+Legacy Voucher Number
+
+Examples
+
+Old ERP
+
+Invoice 125
+
+ERP
+
+SB2B/2026-27/000542
+
+Legacy Voucher
+
+125
+
+This should be searchable later.
+
+====================================================================
+STEP 5 – GENERATE ERP REPORTS
+====================================================================
+
+After Demo Import
+
+Automatically generate
+
+✓ Trial Balance
+
+✓ Profit & Loss
+
+✓ Balance Sheet
+
+✓ Customer Receivable
+
+✓ Vendor Outstanding
+
+✓ Cash Book
+
+✓ Bank Book
+
+✓ Stock Valuation
+
+✓ Inventory Report
+
+✓ Dashboard Summary
+
+Generate these reports exactly as if the Demo Import had been committed.
+
+====================================================================
+STEP 6 – MANUAL VERIFICATION
+====================================================================
+
+The user should now compare
+
+Old ERP
+
+vs
+
+Demo ERP
+
+Compare
+
+Sales
+
+Purchases
+
+Receipts
+
+Payments
+
+Trial Balance
+
+Profit & Loss
+
+Balance Sheet
+
+Customer Outstanding
+
+Vendor Outstanding
+
+Cash Balance
+
+Bank Balance
+
+Inventory
+
+Stock
+
+Dashboard
+
+If everything matches
+
+Click
+
+Approve Import
+
+If anything differs
+
+Click
+
+Discard Demo
+
+Nothing should be written into Production.
+
+====================================================================
+STEP 7 – FINAL IMPORT
+====================================================================
+
+Only after clicking
+
+Approve Import
+
+should the ERP write everything into Production.
+
+Every transaction must pass through the existing ERP services.
+
+Never directly insert records.
+
+Generate:
+
+Sales
+
+Purchase
+
+Receipt
+
+Payment
+
+Journal
+
+Ledger Posting
+
+Inventory
+
+Stock Movement
+
+GST
+
+Customer Outstanding
+
+Vendor Outstanding
+
+Dashboard
+
+Reports
+
+using existing ERP logic.
+
+====================================================================
+PRICE HANDLING
+====================================================================
+
+Sales Import
+
+Uploaded Excel contains actual selling price.
+
+Example
+
+MRP = 250
+
+Old ERP Selling Price = 240
+
+Import as
+
+Price = 250
+
+Discount = 10
+
+If selling price is above MRP
+
+MRP = 250
+
+Selling Price = 260
+
+Import
+
+Price = 260
+
+Discount = 0
+
+Exactly like manual ERP Sales Entry.
+
+Purchase
+
+Import purchase rates exactly as provided.
+
+====================================================================
+IMPORT HISTORY
+====================================================================
+
+Store
+
+File Name
+
+Import Type
+
+Imported By
+
+Date
+
+Time
+
+Location
+
+Rows Imported
+
+Warnings
+
+Errors
+
+Legacy Voucher Range
+
+Allow viewing Import History.
+
+====================================================================
+ROLLBACK
+====================================================================
+
+Entire import must be transactional.
+
+If any error occurs
+
+Rollback everything.
+
+No partial accounting.
+
+====================================================================
+FINAL VERIFICATION
+====================================================================
+
+After final import verify
+
+✓ Trial Balance
+
+✓ Profit & Loss
+
+✓ Balance Sheet
+
+✓ Customer Receivable
+
+✓ Vendor Outstanding
+
+✓ Inventory
+
+✓ Cash Book
+
+✓ Bank Book
+
+✓ Dashboard
+
+✓ GST Reports
+
+Everything must reconcile exactly.
+
+====================================================================
+LOCATION
+====================================================================
+
+Before every import ask
+
+Import Into Location
+
+• Head Office
+• Warehouse
+• Outlet
+
+Every imported transaction must belong ONLY to the selected location.
+
+====================================================================
+OBJECTIVE
+====================================================================
+
+The new Import module should become a complete ERP Migration Wizard.
+
+The user should only upload Excel files, manually map Customers, Vendors, Ledgers and Items, verify ERP-generated financial reports (Trial Balance, Profit & Loss, Balance Sheet, Customer Receivables, Vendor Outstanding, Cash Book, Bank Book and Inventory), compare them with the old ERP, and only after approval commit the data into the production ERP.
+
+The existing Import module should be replaced entirely with this workflow. No separate migration module should be created.

@@ -73,7 +73,6 @@ import AuditLog from './pages/company/AuditLog';
 import LoginHistory from './pages/company/LoginHistory';
 import BackupRestore from './pages/company/BackupRestore';
 import ImportData from './pages/company/ImportData';
-import LegacyImport from './pages/company/LegacyImport';
 import Reconciliation from './pages/finance/Reconciliation';
 import CashInOutlet from './pages/finance/CashInOutlet';
 import ReportsCenter from './pages/reports/ReportsCenter';
@@ -393,10 +392,6 @@ function Router() {
       <Route path="/company/import">
         <PermGuard href="/company/import" pageName="Import Data"><ImportData /></PermGuard>
       </Route>
-      <Route path="/company/legacy-import">
-        <PermGuard href="/company/legacy-import" pageName="Legacy ERP Import"><LegacyImport /></PermGuard>
-      </Route>
-
       <Route path="/accounts/reconciliation">
         <PermGuard href="/accounts/reconciliation" pageName="Reconciliation"><Reconciliation /></PermGuard>
       </Route>

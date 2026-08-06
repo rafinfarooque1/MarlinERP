@@ -595,14 +595,6 @@ export const MODULE_REGISTRY: ModuleDef[] = [
     navGroup: 'Company',
     navEntries: [{ name: 'Import Data', href: '/company/import' }],
   },
-  {
-    // Data Migration: one-time import of a legacy ERP backup (ZIP of DBF
-    // tables) into a chosen location. Management and Admin only — the page
-    // permission is seeded to level-2 roles alone (level 1 bypasses checks).
-    key: 'Legacy ERP Import', permGroup: 'Company',
-    navGroup: 'Company',
-    navEntries: [{ name: 'Legacy ERP Import', href: '/company/legacy-import' }],
-  },
 ];
 
 // ── Derived exports ───────────────────────────────────────────────────────────

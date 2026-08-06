@@ -267,10 +267,6 @@
         {
           "name": "Import Data",
           "href": "/company/import"
-        },
-        {
-          "name": "Legacy ERP Import",
-          "href": "/company/legacy-import"
         }
       ]
     }

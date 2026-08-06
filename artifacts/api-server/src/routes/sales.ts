@@ -1,3 +1,4 @@
+import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehouseLifecycle";
 import { Router } from "express";
 import { requireModuleAction, requireModuleView, hasModuleAction } from "../middleware/permissions";
 import { db, salesTable, outletsTable, customersTable, stockEntriesTable, itemsTable, itemPricesTable, companySettingsTable } from "@workspace/db";
@@ -593,6 +594,12 @@ router.post("/sales", requireModuleAction("page:/sales/pos", "add"), async (req,
   if (!isLocationInScope(createScope, locationType, locationId)) {
     res.status(403).json({ error: "You can only record sales for a location in your assigned scope." });
     return;
+  }
+  // Lifecycle gate on the EFFECTIVE location — a disabled warehouse takes no
+  // new sales (its outlets included).
+  {
+    const disabledMsg = await disabledWarehouseError(pool, [{ type: locationType, id: locationId }]);
+    if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
   }
 
   // Look up location name, UPI ID, and ledger IDs

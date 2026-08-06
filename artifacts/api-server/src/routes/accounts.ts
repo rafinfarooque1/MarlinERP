@@ -1,3 +1,4 @@
+import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehouseLifecycle";
 import { Router } from "express";
 import { db, pool, accountLedgersTable, cashBankAccountsTable, expensesTable, salesTable, purchasesTable, warehousesTable } from "@workspace/db";
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
@@ -595,6 +596,7 @@ router.get("/accounts/payments", requireModuleView(["page:/accounts/vouchers", "
     return {
       id: r.id,
       voucherNumber: r.voucher_number,
+      legacyVoucherNumber: r.legacy_voucher_number ?? null,
       paymentDate: r.payment_date,
       paidFromLedgerId: r.paid_from_ledger_id,
       paidFromName: r.paid_from_name,
@@ -780,6 +782,10 @@ router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers"
   const payLocRes = await resolveMoneyVoucherLocation((req as any).employee, req.body as any, Number(paidFromLedgerId));
   if (!payLocRes.ok) { res.status(payLocRes.status).json({ error: payLocRes.error }); return; }
   const { locationType, locationId } = payLocRes.loc;
+  {
+    const disabledMsg = await disabledWarehouseError(pool, [{ type: locationType, id: locationId }]);
+    if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
+  }
 
   // ── Bill-wise settlement path (vendor bills) ──────────────────────────────
   // Purchases have no amount_paid column, so vendor allocations live in
@@ -1175,6 +1181,7 @@ router.get("/accounts/receipts", requireModuleView(["page:/accounts/vouchers", "
     return {
       id: r.id,
       voucherNumber: r.voucher_number,
+      legacyVoucherNumber: r.legacy_voucher_number ?? null,
       receiptDate: r.receipt_date,
       receivedFromLedgerId: r.received_from_ledger_id,
       receivedFromName: r.received_from_name,
@@ -1224,6 +1231,10 @@ router.post("/accounts/receipts", requireModuleAction(["page:/accounts/vouchers"
   const rcptLocRes = await resolveMoneyVoucherLocation((req as any).employee, req.body as any, Number(receivedInLedgerId));
   if (!rcptLocRes.ok) { res.status(rcptLocRes.status).json({ error: rcptLocRes.error }); return; }
   const { locationType, locationId } = rcptLocRes.loc;
+  {
+    const disabledMsg = await disabledWarehouseError(pool, [{ type: locationType, id: locationId }]);
+    if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
+  }
 
   // ── Bill-wise settlement path ─────────────────────────────────────────────
   // The voucher names the invoices it settles; any excess parks in the
@@ -2922,6 +2933,10 @@ router.post("/accounts/location-expenses", requireModuleAction("page:/sales/expe
   // stranding a live voucher where no location page can ever list it.
   if (!['warehouse', 'outlet'].includes(String(locationType))) {
     res.status(400).json({ error: "locationType must be 'warehouse' or 'outlet'" }); return;
+  }
+  {
+    const disabledMsg = await disabledWarehouseError(pool, [{ type: locationType, id: locationId }]);
+    if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
   }
   const { rows: [locRow] } = await pool.query(
     String(locationType) === 'warehouse'

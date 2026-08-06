@@ -1,7 +1,9 @@
+import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehouseLifecycle";
 import { Router } from "express";
 import { requireModuleAction, requireModuleView } from "../middleware/permissions";
 import { pool } from "@workspace/db";
 import { nextVoucherNumber, VOUCHER_TYPE_LABELS, financialYearLabel } from "../lib/voucherNumber";
+import { createJournalVoucherCore } from "../lib/journalCreate";
 import { logActivity } from "../lib/audit";
 import { lineTaxHeads } from "../lib/gst";
 import { clearsThroughBank } from "../lib/paymentModes";
@@ -10,6 +12,9 @@ import { callerLocation, ownLocationScope, foreignPartyLedgerIds, locationOwnedL
 import { outletWritesBlocked } from "../lib/featureFlags";
 
 const router = Router();
+
+/** A queryable database handle (pg pool or PoolClient), per lib/importVouchers.ts. */
+type Q = { query: Function };
 
 const JV_TYPES = new Set(["journal", "contra", "credit_note", "debit_note"]);
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -38,8 +43,8 @@ async function ledgerIdsUnderCodes(rootCodes: string[]): Promise<Set<number>> {
 }
 
 /** The given ledger id plus all of its descendants. */
-async function ledgerSubtreeIds(rootId: number): Promise<Set<number>> {
-  const { rows } = await pool.query(`SELECT id, parent_id FROM account_ledgers`);
+async function ledgerSubtreeIds(rootId: number, q: Q = pool): Promise<Set<number>> {
+  const { rows } = await q.query(`SELECT id, parent_id FROM account_ledgers`);
   const ids = new Set<number>([rootId]);
   for (let i = 0; i < 8; i++) {
     for (const r of rows) if (r.parent_id && ids.has(r.parent_id)) ids.add(r.id);
@@ -129,6 +134,8 @@ function serializeVoucher(v: any, lines: any[]) {
     id: v.id,
     voucherType: v.voucher_type,
     voucherNumber: v.voucher_number,
+    /** Old-ERP voucher number for migrated vouchers (searchable). */
+    legacyVoucherNumber: v.legacy_voucher_number ?? null,
     // A pg `date` reads back as a Date at LOCAL midnight; hand out the plain
     // calendar day so an edit form round-trips the date it was shown.
     voucherDate: v.voucher_date instanceof Date ? toLocalISODate(v.voucher_date) : v.voucher_date,
@@ -546,26 +553,20 @@ router.post("/accounts/journal-vouchers", requireModuleAction("page:/accounts/vo
   const locRes = await resolveVoucherLocation((req as any).employee, body, null);
   if (!locRes.ok) { res.status(locRes.status).json({ error: locRes.error }); return; }
   const { locationType, locationId } = locRes.loc;
+  {
+    const disabledMsg = await disabledWarehouseError(pool, [{ type: locationType, id: locationId }]);
+    if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
+  }
   const lineCheck = await checkLinesLocation(lines, locRes.loc, (req as any).employee);
   if (!lineCheck.ok) { res.status(lineCheck.status).json({ error: lineCheck.error }); return; }
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const voucherNumber = await nextVoucherNumber(client, voucherType, voucherDate);
-    const { rows: [v] } = await client.query(
-      `INSERT INTO journal_vouchers
-         (voucher_type, voucher_number, voucher_date, narration, party_ledger_id, reason, total_amount, created_by,
-          origin, source_module, location_type, location_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'manual', 'accounts', $9, $10) RETURNING id`,
-      [voucherType, voucherNumber, voucherDate, narration, partyLedgerId, reason, totalAmount, createdBy, locationType, locationId]
-    );
-    for (const l of lines) {
-      await client.query(
-        `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit) VALUES ($1, $2, $3, $4)`,
-        [v.id, l.ledgerId, l.debit, l.credit]
-      );
-    }
+    const { id: voucherId, voucherNumber } = await createJournalVoucherCore(client, {
+      voucherType, voucherDate, narration, partyLedgerId, reason, totalAmount, createdBy, locationType, locationId, lines,
+    });
+    const v = { id: voucherId };
     await client.query("COMMIT");
 
     logActivity({
@@ -705,6 +706,10 @@ router.patch("/accounts/journal-vouchers/:id", requireModuleAction("page:/accoun
     : null;
   const locRes = await resolveVoucherLocation(employee, body, currentLoc);
   if (!locRes.ok) { res.status(locRes.status).json({ error: locRes.error }); return; }
+  {
+    const disabledMsg = await disabledWarehouseError(pool, [{ type: locRes.loc.locationType, id: locRes.loc.locationId }]);
+    if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
+  }
   const lineCheck = await checkLinesLocation(lines, locRes.loc, employee);
   if (!lineCheck.ok) { res.status(lineCheck.status).json({ error: lineCheck.error }); return; }
 
@@ -887,8 +892,9 @@ export {
 };
 import { getLocationFilter, getPostingLocationFilter } from "../lib/requestLocation";
 
-export async function buildDerivedPostings(opts: { toDate?: string } = {}): Promise<Posting[]> {
+export async function buildDerivedPostings(opts: { toDate?: string; q?: Q } = {}): Promise<Posting[]> {
   const { toDate } = opts;
+  const q = opts.q ?? pool;
   const postings: Posting[] = [];
   /**
    * `date` is declared as a YYYY-MM-DD string, but pg hands back a JS Date for
@@ -926,7 +932,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
     return ` AND ${col} <= $${params.length}`;
   };
 
-  const { rows: ledgerRows } = await pool.query(`SELECT id, code, name FROM account_ledgers`);
+  const { rows: ledgerRows } = await q.query(`SELECT id, code, name FROM account_ledgers`);
   const byCode = new Map<string, any>(ledgerRows.filter((r: any) => r.code).map((r: any) => [r.code, r]));
   const idOf = (code: string): number => byCode.get(code)?.id ?? 0;
   const stdCash = idOf("STD-CASH"), stdBank = idOf("STD-BANK"), stdSales = idOf("STD-SALES"),
@@ -945,7 +951,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   // in the books instead of being lumped into one company-wide Purchases total.
   // Outlets have no purchase ledger of their own (they are sales points, stocked
   // by transfer), so theirs is NULL and falls back to the company Purchases ledger.
-  const { rows: locRows } = await pool.query(`
+  const { rows: locRows } = await q.query(`
     SELECT 'warehouse' AS lt, id, cash_ledger_id, sales_ledger_id, purchase_ledger_id FROM warehouses
     UNION ALL
     SELECT 'outlet' AS lt, id, cash_ledger_id, sales_ledger_id, NULL::integer AS purchase_ledger_id FROM outlets
@@ -957,7 +963,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   // without a location stamp, so the return document's location backfills it —
   // otherwise every historical refund would misfile under Head Office.
   const pp: any[] = [];
-  const { rows: pays } = await pool.query(
+  const { rows: pays } = await q.query(
     `SELECT p.id, p.payment_date AS date, p.paid_from_ledger_id AS f, p.paid_to_ledger_id AS t,
             p.amount, p.voucher_number, p.narration,
             p.advance_amount, p.advance_ledger_id,
@@ -996,7 +1002,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   // GST and credit Sales on collection. Section 5 derives the correct postings
   // from sales + sale_payments instead — including both would double-count.
   const rp: any[] = [];
-  const { rows: recs } = await pool.query(
+  const { rows: recs } = await q.query(
     `SELECT id, receipt_date AS date, received_from_ledger_id AS f, received_in_ledger_id AS t,
             amount, voucher_number, narration, location_type, location_id,
             advance_amount, advance_ledger_id
@@ -1031,7 +1037,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   // Dr received_in / Cr customer advance. Without this the money would land in
   // the till through section 5's legs while the advance liability never arose.
   const radvParams: any[] = [];
-  const { rows: allocAdvRecs } = await pool.query(
+  const { rows: allocAdvRecs } = await q.query(
     `SELECT id, receipt_date AS date, received_in_ledger_id AS t,
             advance_amount, advance_ledger_id, voucher_number, narration,
             location_type, location_id
@@ -1061,7 +1067,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   // outlet cash box).
   // (credit_note_id / debit_note_id are one-to-one, so the joins cannot fan out.)
   const jp: any[] = [];
-  const { rows: jls } = await pool.query(
+  const { rows: jls } = await q.query(
     `SELECT v.id AS voucher_id, v.voucher_date AS date, v.voucher_number, v.voucher_type, v.narration,
             l.ledger_id, l.debit, l.credit,
             COALESCE(sr.location_type, pu.location_type, v.location_type) AS location_type,
@@ -1091,7 +1097,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   //    Rows whose account predates the link (or was hand-deleted) fall back to
   //    the head itself, exactly as before.
   const ep: any[] = [];
-  const { rows: exps } = await pool.query(
+  const { rows: exps } = await q.query(
     `SELECT e.id, e.expense_number, e.expense_date AS date, e.ledger_account_id AS lid, e.amount, e.description,
             e.location_type, e.location_id,
             cb.account_type AS cb_type, cb.ledger_id AS cb_ledger
@@ -1118,7 +1124,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   const outCgst = byCode.get("STD-OUT-CGST")?.id, outSgst = byCode.get("STD-OUT-SGST")?.id, outIgst = byCode.get("STD-OUT-IGST")?.id;
   const inpCgst = byCode.get("STD-INP-CGST")?.id, inpSgst = byCode.get("STD-INP-SGST")?.id, inpIgst = byCode.get("STD-INP-IGST")?.id;
   const sp: any[] = [];
-  const { rows: sales } = await pool.query(
+  const { rows: sales } = await q.query(
     // A cancelled customer invoice carries no revenue, no tax and no debt, so
     // it must not post at all — leaving it in was what let a cancelled bill go
     // on inflating turnover and output GST after the fact.
@@ -1134,7 +1140,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
        ${upTo("sale_date", sp)}`, sp
   );
   const spp: any[] = [];
-  const { rows: salePays } = await pool.query(
+  const { rows: salePays } = await q.query(
     // Allocation receipts (bill-wise settlement vouchers) carry the ledger the
     // money actually landed in — their sale_payments legs must debit THAT
     // ledger, not the method-derived cash/clearing default.
@@ -1241,7 +1247,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   // 6. Purchases: Dr Purchases (taxable + round-off) + Dr Input GST / Cr vendor.
   //    Legacy rows without line-level GST detail stay as a single lump debit.
   const pup: any[] = [];
-  const { rows: purchases } = await pool.query(
+  const { rows: purchases } = await q.query(
     `SELECT id, vendor_id, purchase_date, invoice_number, total_amount, tax_total, line_items,
             location_type, location_id, branch_transfer_id, other_charges
      FROM purchases WHERE 1=1${upTo("purchase_date", pup)}`, pup
@@ -1313,7 +1319,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   // slice, so the payable only shows what is genuinely still owed. Rows join
   // purchases so a deleted bill drops its application with it.
   const paap: any[] = [];
-  const { rows: purchAdvApps } = await pool.query(
+  const { rows: purchAdvApps } = await q.query(
     `SELECT a.id, a.amount, a.vendor_id, p.purchase_date, p.invoice_number,
             p.location_type, p.location_id
      FROM purchase_advance_applications a
@@ -1351,7 +1357,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   // Rent *payments* are real vouchers and arrive via section 3, so the payable is
   // credited here and debited there — no double count.
   const rap: any[] = [];
-  const { rows: rentRows } = await pool.query(
+  const { rows: rentRows } = await q.query(
     `SELECT r.id, r.accrual_date AS date, r.amount, r.warehouse_id, w.name AS warehouse_name,
             a.expense_ledger_id, a.payable_ledger_id
      FROM rent_accruals r
@@ -1385,7 +1391,7 @@ export async function buildDerivedPostings(opts: { toDate?: string } = {}): Prom
   // because the sweep refuses to touch an approved month. Their original
   // full-value voucher therefore stands alone and history is unchanged.
   const sap: any[] = [];
-  const { rows: salaryRows } = await pool.query(
+  const { rows: salaryRows } = await q.query(
     `SELECT a.id, a.accrual_date AS date, a.amount, e.name AS employee_name,
             e.branch_type, e.branch_id,
             le.id AS expense_ledger_id, lp.id AS payable_ledger_id
@@ -1527,28 +1533,38 @@ router.get("/accounts/cash-bank-book/ledgers", requireModuleView(["page:/account
   })));
 });
 
-router.get("/accounts/cash-bank-book", requireModuleView(["page:/accounts/cash-book", "page:/accounts/bank-book"]), async (req, res): Promise<void> => {
-  // LBAC: full cash-bank book is Head Office only
-  if ((req as any).employee?.branchType !== 'headoffice') { res.json({ ledger: null, entries: [], openingBalance: 0, closingBalance: 0 }); return; }
-  const ledgerId = Number((req.query as any).ledgerId);
-  const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
-  if (!ledgerId) { res.status(400).json({ error: "ledgerId is required" }); return; }
+/**
+ * The Cash Book / Bank Book computation for one ledger (or a ledger group's
+ * whole subtree), extracted from the route so it can be run on a caller-supplied
+ * queryable. Returns `null` when the ledger does not exist (the route turns that
+ * into a 404); otherwise returns exactly the object the route sends. With no `q`
+ * it defaults to the shared pool.
+ */
+export async function computeCashBankBook(opts: {
+  q?: Q;
+  ledgerId: number;
+  fromDate?: string;
+  toDate?: string;
+  locFilter?: PostingLocationFilter | null;
+}): Promise<Record<string, any> | null> {
+  const q = opts.q ?? pool;
+  const { ledgerId, fromDate, toDate } = opts;
+  const locFilter = opts.locFilter ?? null;
 
-  const { rows: [ledger] } = await pool.query(
+  const { rows: [ledger] } = await q.query(
     `SELECT id, name, code, is_group FROM account_ledgers WHERE id = $1`, [ledgerId]
   );
-  if (!ledger) { res.status(404).json({ error: "Ledger not found" }); return; }
+  if (!ledger) return null;
 
   // Selecting a group (e.g. the Cash root) consolidates its whole subtree
-  const subtree = await ledgerSubtreeIds(ledgerId);
-  const locFilter = getPostingLocationFilter(req);
+  const subtree = await ledgerSubtreeIds(ledgerId, q);
 
   // Opening balances fold in as company-level postings dated at their as-of
   // date — the same mechanism the Trial Balance uses — so the Cash/Bank Book's
   // opening and closing agree with the TB, the Balance Sheet and the Cash &
   // Bank screen (all of which already count them).
   const { openingBalancePostings } = await import("../lib/openingBalances");
-  const subtreePostings = (await buildDerivedPostings({ toDate: isDate(toDate) ? toDate : undefined }))
+  const subtreePostings = (await buildDerivedPostings({ toDate: isDate(toDate) ? toDate : undefined, q }))
     .concat(await openingBalancePostings({ toDate: isDate(toDate) ? toDate : undefined }) as Posting[])
     .filter(p => subtree.has(p.ledgerId));
   const postings = filterPostingsByLocation(subtreePostings, locFilter);
@@ -1571,7 +1587,7 @@ router.get("/accounts/cash-bank-book", requireModuleView(["page:/accounts/cash-b
     };
   });
 
-  res.json({
+  return {
     ledger: { id: ledger.id, name: ledger.name, code: ledger.code ?? null },
     openingBalance: opening,
     entries,
@@ -1582,18 +1598,40 @@ router.get("/accounts/cash-bank-book", requireModuleView(["page:/accounts/cash-b
       location: { type: locFilter.type, id: locFilter.id },
       companyLevel: locFilter.type !== "company" ? companyLevelSummary(subtreePostings) : null,
     } : {}),
-  });
+  };
+}
+
+router.get("/accounts/cash-bank-book", requireModuleView(["page:/accounts/cash-book", "page:/accounts/bank-book"]), async (req, res): Promise<void> => {
+  // LBAC: full cash-bank book is Head Office only
+  if ((req as any).employee?.branchType !== 'headoffice') { res.json({ ledger: null, entries: [], openingBalance: 0, closingBalance: 0 }); return; }
+  const ledgerId = Number((req.query as any).ledgerId);
+  const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
+  if (!ledgerId) { res.status(400).json({ error: "ledgerId is required" }); return; }
+
+  const locFilter = getPostingLocationFilter(req);
+  const result = await computeCashBankBook({ ledgerId, fromDate, toDate, locFilter });
+  if (!result) { res.status(404).json({ error: "Ledger not found" }); return; }
+  res.json(result);
 });
 
 // ── Trial Balance ──────────────────────────────────────────────────────────
 
-router.get("/accounts/trial-balance", requireModuleView("page:/accounts/trial-balance"), async (req, res): Promise<void> => {
-  // LBAC: the trial balance is a Head Office accounting view
-  if ((req as any).employee?.branchType !== 'headoffice') { res.json([]); return; }
-  const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
-  const locFilter = getPostingLocationFilter(req);
+/**
+ * The Trial Balance computation, extracted from the route so it can be run on a
+ * caller-supplied queryable (e.g. an open transaction). With no `q` it defaults
+ * to the shared pool and returns exactly the object the route sends.
+ */
+export async function computeTrialBalance(opts: {
+  q?: Q;
+  fromDate?: string;
+  toDate?: string;
+  locFilter?: PostingLocationFilter | null;
+}): Promise<Record<string, any>> {
+  const q = opts.q ?? pool;
+  const { fromDate, toDate } = opts;
+  const locFilter = opts.locFilter ?? null;
 
-  let postings = await buildDerivedPostings({ toDate: isDate(toDate) ? toDate : undefined });
+  let postings = await buildDerivedPostings({ toDate: isDate(toDate) ? toDate : undefined, q });
   // Opening balances fold in as company-level postings dated at their as-of
   // date, so the TB agrees with the Balance Sheet, the Cash/Bank Books and the
   // Cash & Bank screen — all of which already count them.
@@ -1614,7 +1652,7 @@ router.get("/accounts/trial-balance", requireModuleView("page:/accounts/trial-ba
     agg.set(p.ledgerId, a);
   }
 
-  const { rows: ledgers } = await pool.query(
+  const { rows: ledgers } = await q.query(
     `SELECT l.id, l.name, l.type, l.code, l.parent_id, p.name AS parent_name
      FROM account_ledgers l
      LEFT JOIN account_ledgers p ON p.id = l.parent_id`
@@ -1642,7 +1680,7 @@ router.get("/accounts/trial-balance", requireModuleView("page:/accounts/trial-ba
   const totalCredit = round2(rows.reduce((s, r) => s + r.credit, 0));
   const difference = round2(totalDebit - totalCredit);
 
-  res.json({
+  return {
     fromDate: isDate(fromDate) ? fromDate : null,
     toDate: isDate(toDate) ? toDate : null,
     rows,
@@ -1651,7 +1689,15 @@ router.get("/accounts/trial-balance", requireModuleView("page:/accounts/trial-ba
     difference,
     balanced: Math.abs(difference) < 0.01,
     ...(locFilter ? { location: { type: locFilter.type, id: locFilter.id }, companyLevel } : {}),
-  });
+  };
+}
+
+router.get("/accounts/trial-balance", requireModuleView("page:/accounts/trial-balance"), async (req, res): Promise<void> => {
+  // LBAC: the trial balance is a Head Office accounting view
+  if ((req as any).employee?.branchType !== 'headoffice') { res.json([]); return; }
+  const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
+  const locFilter = getPostingLocationFilter(req);
+  res.json(await computeTrialBalance({ fromDate, toDate, locFilter }));
 });
 
 export default router;

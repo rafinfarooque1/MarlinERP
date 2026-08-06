@@ -59,17 +59,19 @@ async function applyPartyExtras(
  * Returns the ledger id (created or already existing), or null when the parent
  * head is missing — non-fatal by design, the ledger can be created manually.
  */
-export async function ensureCustomerLedger(customerId: number, name: string): Promise<number | null> {
+export async function ensureCustomerLedger(
+  customerId: number, name: string, q: { query: Function } = pool,
+): Promise<number | null> {
   try {
-    const { rows: [parent] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = 'SYS-DEBTORS'`);
+    const { rows: [parent] } = await (q as any).query(`SELECT id FROM account_ledgers WHERE code = 'SYS-DEBTORS'`);
     if (!parent) return null;
-    await pool.query(
+    await (q as any).query(
       `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_system_group, description)
        SELECT $1, 'asset', $2, 'balance_sheet', $3, false, $4
        WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $2)`,
       [name, `CUST-${customerId}`, parent.id, `Customer ledger — ${name}`],
     );
-    const { rows: [led] } = await pool.query(
+    const { rows: [led] } = await (q as any).query(
       `SELECT id FROM account_ledgers WHERE code = $1`, [`CUST-${customerId}`],
     );
     return led ? Number(led.id) : null;
@@ -78,18 +80,21 @@ export async function ensureCustomerLedger(customerId: number, name: string): Pr
   }
 }
 
-/** Auto-create the creditor ledger under Sundry Creditors. Same contract. */
-export async function ensureVendorLedger(vendorId: number, name: string): Promise<number | null> {
+/** Auto-create the creditor ledger under Sundry Creditors. Same contract.
+ *  `q` lets an import run this inside its own (possibly demo) transaction. */
+export async function ensureVendorLedger(
+  vendorId: number, name: string, q: { query: Function } = pool,
+): Promise<number | null> {
   try {
-    const { rows: [parent] } = await pool.query(`SELECT id FROM account_ledgers WHERE code = 'SYS-CREDITORS'`);
+    const { rows: [parent] } = await (q as any).query(`SELECT id FROM account_ledgers WHERE code = 'SYS-CREDITORS'`);
     if (!parent) return null;
-    await pool.query(
+    await (q as any).query(
       `INSERT INTO account_ledgers (name, type, code, section, parent_id, is_system_group, description)
        SELECT $1, 'liability', $2, 'balance_sheet', $3, false, $4
        WHERE NOT EXISTS (SELECT 1 FROM account_ledgers WHERE code = $2)`,
       [name, `VEND-${vendorId}`, parent.id, `Vendor ledger — ${name}`],
     );
-    const { rows: [led] } = await pool.query(
+    const { rows: [led] } = await (q as any).query(
       `SELECT id FROM account_ledgers WHERE code = $1`, [`VEND-${vendorId}`],
     );
     return led ? Number(led.id) : null;

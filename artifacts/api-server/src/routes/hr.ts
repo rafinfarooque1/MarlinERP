@@ -1,3 +1,4 @@
+import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehouseLifecycle";
 import { Router, type Response } from "express";
 import { requireModuleAction, requireModuleView, hasModuleAction } from "../middleware/permissions";
 import { clearLoginFailures } from "../middleware/auth";
@@ -1990,6 +1991,10 @@ router.post("/hr/payroll/:id/pay", requireModuleAction("page:/hr/payroll", "edit
   );
   if ('error' in resolvedPay) { res.status(400).json({ error: resolvedPay.error }); return; }
   const payLedgerId = resolvedPay.id;
+  {
+    const disabledMsg = await disabledWarehouseError(pool, [{ type: resolvedPay.locationType, id: resolvedPay.locationId }]);
+    if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
+  }
   const effectiveMode = resolvedPay.tree === 'bank'
     ? (paymentMode === 'upi' ? 'upi' : 'bank')
     : 'cash';
@@ -2110,6 +2115,10 @@ router.post("/hr/advances", requireModuleAction("page:/hr/advances", "add"), asy
   // accounting behind it.
   const resolvedAdv = await resolvePayLedger((req as any).employee, req.body.payLedgerId, 'STD-CASH');
   if ('error' in resolvedAdv) { res.status(400).json({ error: resolvedAdv.error }); return; }
+  {
+    const disabledMsg = await disabledWarehouseError(pool, [{ type: resolvedAdv.locationType, id: resolvedAdv.locationId }]);
+    if (disabledMsg) { res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE }); return; }
+  }
 
   const { rows: [row] } = await pool.query(
     `INSERT INTO employee_advances (employee_id, amount, date, note, is_deducted)
