@@ -20,4 +20,10 @@ description: Disabled-warehouse guards on every transaction producer; permanent 
 
 **Why:** deletion in a location-stamped double-entry system either takes everything in one atomic validated sweep or corrupts a counterparty; anything cross-location is a blocker, not a cascade target.
 
+## Clearing the imports blocker (learned during the Calicut demo purge)
+- The blocker counts ALL import_batches rows for the location regardless of status (validated/rolled_back/discarded included), but only migration-owned batches ever get DELETEd by any endpoint — standalone batches have no removal route, so stray batch rows can only be cleared by SQL (delete import_rows first; no FK cascade exists). UI gap: History cannot actually clear this blocker.
+- Batch rollback refuses when imported documents gained later activity (payments settled bills, stock consumed) — but if the whole warehouse is being deleted anyway, skip the rollback fight: the cascade deletes those records with in-txn validation; only the import bookkeeping rows need clearing.
+- Asset blocker counts purchased-at OR located-at, so transferring assets does NOT clear it; DELETE /assets/purchases/:id (active only) removes the register row + its JV atomically.
+- Items are NOT part of the cascade (global masters). Post-delete, purge demo-only items via NOT EXISTS checks on stock_ledger/entries/batches, item_prices, sales/purchases/quotations line_items jsonb, bom_templates, productions.
+
 **How to apply:** adding a new warehouse-stamped table? Add it to the cascade, the summary counts, AND the post-delete validation list — the validation is what catches a forgotten table at runtime.

@@ -1,0 +1,80 @@
+This is the DEMO environment only.
+
+I need to permanently delete the warehouse:
+
+Frozen Hub - Calicut
+
+This is a one-time cleanup for the demo database.
+
+Implement a complete warehouse deletion process.
+
+Deleting the warehouse must delete ALL data belonging to that warehouse.
+
+This includes, but is not limited to:
+
+• Sales Invoices
+• Quotations
+• Purchase Bills
+• Sales Returns
+• Purchase Returns
+• POS Bills
+• Receipt Vouchers
+• Payment Vouchers
+• Journal Vouchers belonging to that location
+• Expenses
+• Production Entries
+• Stock Transfers involving that warehouse
+• Stock Movements
+• Batch Records
+• Inventory Transactions
+• Customer balances created from that warehouse
+• Vendor balances created from that warehouse
+• Ledger postings belonging to that warehouse
+• Cash transactions
+• Bank transactions
+• Dashboard summaries
+• Reports
+• GST entries
+• Outstanding balances
+• Audit records related only to that warehouse (if appropriate)
+
+Also delete:
+
+• Customers created only for that warehouse if they have no transactions elsewhere.
+• Vendors created only for that warehouse if they have no transactions elsewhere.
+• Items that exist only in that warehouse and have no transactions anywhere else.
+
+Do NOT delete any master record that is shared with another warehouse.
+
+After deletion:
+
+• Trial Balance must still balance.
+• Balance Sheet must still balance.
+• Profit & Loss must still balance.
+• Customer Receivables must be correct.
+• Vendor Outstanding must be correct.
+• Inventory must reconcile.
+• Dashboard totals must reconcile.
+• Cash & Bank balances must reconcile.
+
+Run a complete integrity verification after deletion.
+
+Finally generate a report showing:
+
+- Warehouse deleted
+- Number of sales deleted
+- Number of purchases deleted
+- Number of receipts deleted
+- Number of payments deleted
+- Number of journal entries deleted
+- Number of stock transactions deleted
+- Number of inventory batches deleted
+- Number of ledger entries deleted
+- Number of customers removed
+- Number of vendors removed
+- Number of items removed
+- Verification passed (Yes/No)
+
+This operation is ONLY for the demo database.
+Do not implement a permanent UI delete button yet.
+Perform the deletion through a controlled backend operation and verify complete accounting integrity after completion.
