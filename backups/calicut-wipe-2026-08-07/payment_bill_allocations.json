@@ -1,0 +1,114 @@
+[
+ {
+  "id": 1,
+  "payment_id": 11,
+  "purchase_id": 16,
+  "amount": 5000,
+  "created_at": "2026-08-05T08:47:51.093938+00:00"
+ },
+ {
+  "id": 2,
+  "payment_id": 13,
+  "purchase_id": 3,
+  "amount": 9135,
+  "created_at": "2026-08-05T08:49:00.152239+00:00"
+ },
+ {
+  "id": 3,
+  "payment_id": 14,
+  "purchase_id": 12,
+  "amount": 10000,
+  "created_at": "2026-08-05T08:49:36.198686+00:00"
+ },
+ {
+  "id": 4,
+  "payment_id": 18,
+  "purchase_id": 12,
+  "amount": 7546,
+  "created_at": "2026-08-05T08:52:43.283399+00:00"
+ },
+ {
+  "id": 5,
+  "payment_id": 18,
+  "purchase_id": 13,
+  "amount": 5660,
+  "created_at": "2026-08-05T08:52:43.283399+00:00"
+ },
+ {
+  "id": 6,
+  "payment_id": 22,
+  "purchase_id": 13,
+  "amount": 12999.99,
+  "created_at": "2026-08-05T08:54:56.778997+00:00"
+ },
+ {
+  "id": 7,
+  "payment_id": 49,
+  "purchase_id": 6,
+  "amount": 23279,
+  "created_at": "2026-08-05T09:17:41.414554+00:00"
+ },
+ {
+  "id": 8,
+  "payment_id": 53,
+  "purchase_id": 16,
+  "amount": 5000,
+  "created_at": "2026-08-05T09:20:02.134901+00:00"
+ },
+ {
+  "id": 9,
+  "payment_id": 68,
+  "purchase_id": 7,
+  "amount": 12500,
+  "created_at": "2026-08-05T09:27:57.575358+00:00"
+ },
+ {
+  "id": 10,
+  "payment_id": 70,
+  "purchase_id": 7,
+  "amount": 730,
+  "created_at": "2026-08-05T09:31:49.816778+00:00"
+ },
+ {
+  "id": 11,
+  "payment_id": 76,
+  "purchase_id": 8,
+  "amount": 7220,
+  "created_at": "2026-08-05T09:35:31.85362+00:00"
+ },
+ {
+  "id": 12,
+  "payment_id": 85,
+  "purchase_id": 16,
+  "amount": 4035,
+  "created_at": "2026-08-05T09:49:20.611373+00:00"
+ },
+ {
+  "id": 13,
+  "payment_id": 87,
+  "purchase_id": 8,
+  "amount": 10000,
+  "created_at": "2026-08-05T09:50:17.856556+00:00"
+ },
+ {
+  "id": 14,
+  "payment_id": 89,
+  "purchase_id": 2,
+  "amount": 4700,
+  "created_at": "2026-08-05T09:51:00.24521+00:00"
+ },
+ {
+  "id": 15,
+  "payment_id": 149,
+  "purchase_id": 2,
+  "amount": 20520,
+  "created_at": "2026-08-05T12:28:23.579063+00:00"
+ },
+ {
+  "id": 16,
+  "payment_id": 149,
+  "purchase_id": 18,
+  "amount": 4700,
+  "created_at": "2026-08-05T12:28:23.579063+00:00"
+ }
+]

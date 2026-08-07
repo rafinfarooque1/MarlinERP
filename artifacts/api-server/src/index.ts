@@ -7,6 +7,7 @@ import { addMaterialLocations } from "./migrations/materialLocations";
 import { addMaterialBatches } from "./migrations/materialBatches";
 import { cleanupPreResetGhosts } from "./migrations/prodResetGhostCleanup";
 import { cleanupAllocationReceipts } from "./migrations/allocationReceiptCleanup";
+import { wipeCalicutTransactions } from "./migrations/calicutTxnWipe";
 import { sweepOrphanPartyLedgers } from "./migrations/orphanPartyLedgers";
 import { addWarehouseRent } from "./migrations/warehouseRent";
 import { addInvoiceShareLinks } from "./migrations/invoiceShareLinks";
@@ -2773,6 +2774,19 @@ try {
 }
 console.error(`[migration] ${receiptCleanupOutcome}`);
 
+// ── One-time Calicut transactional wipe (owner-requested, 2026-08-07) ────────
+// Deletes every sales invoice, purchase bill, receipt and payment voucher
+// stamped to Frozen Hub - Calicut plus all dependent rows, so that warehouse's
+// books restart from zero. Its own top-level step for the same reason as the
+// others; identity-pinned and environment-gated inside; see calicutTxnWipe.ts.
+let calicutWipeOutcome: string;
+try {
+  calicutWipeOutcome = await wipeCalicutTransactions(pool);
+} catch (err) {
+  calicutWipeOutcome = `calicut_txn_wipe FAILED: ${(err as Error).message} — nothing deleted (rolled back), will retry next boot`;
+}
+console.error(`[migration] ${calicutWipeOutcome}`);
+
 // ── Orphaned party-ledger sweep ──────────────────────────────────────────────
 // Party dropdowns in voucher entry / receipts / payments are built from the
 // chart of accounts, so a vendor/customer row deleted straight in the database
@@ -2789,7 +2803,7 @@ console.error(`[migration] ${orphanLedgerOutcome}`);
 await recordBootStatus(
   migrationsError,
   dateColumnsOutcome,
-  `${leaveRevertOutcome} | ${ghostCleanupOutcome} | ${receiptCleanupOutcome} | ${orphanLedgerOutcome}`,
+  `${leaveRevertOutcome} | ${ghostCleanupOutcome} | ${receiptCleanupOutcome} | ${calicutWipeOutcome} | ${orphanLedgerOutcome}`,
 );
 
 // ── MRP column on materials and raw_materials ────────────────────────────────

@@ -1,0 +1,28 @@
+{
+  "takenAt": "2026-08-07 (production replica, pre-wipe)",
+  "purpose": "Full backup of all tables affected by the Frozen Hub - Calicut transactional wipe",
+  "rowCounts": {
+    "account_ledgers": 212,
+    "advance_consumptions": 0,
+    "customers": 83,
+    "invoice_share_links": 1,
+    "items": 83,
+    "opening_balances": 0,
+    "payment_bill_allocations": 16,
+    "payments": 153,
+    "purchase_advance_applications": 0,
+    "purchases": 21,
+    "quotations": 7,
+    "receipts": 472,
+    "reconciliation_batch_items": 1,
+    "reconciliation_batches": 1,
+    "sale_payments": 15,
+    "sales": 283,
+    "stock_batches": 143,
+    "stock_entries": 112,
+    "stock_ledger": 2493,
+    "vendors": 15,
+    "warehouses": 2
+  },
+  "note": "employees.json removed: employees are not part of the wiped data set and the export contained credential hashes"
+}
