@@ -7,6 +7,7 @@ import { addMaterialLocations } from "./migrations/materialLocations";
 import { addMaterialBatches } from "./migrations/materialBatches";
 import { cleanupPreResetGhosts } from "./migrations/prodResetGhostCleanup";
 import { cleanupAllocationReceipts } from "./migrations/allocationReceiptCleanup";
+import { correctImportedPurchase5052 } from "./migrations/purchaseImportLineCorrection";
 import { wipeCalicutTransactions } from "./migrations/calicutTxnWipe";
 import { sweepOrphanPartyLedgers } from "./migrations/orphanPartyLedgers";
 import { addWarehouseRent } from "./migrations/warehouseRent";
@@ -2909,6 +2910,20 @@ try {
   calicutWipeOutcome = `calicut_txn_wipe FAILED: ${(err as Error).message} — nothing deleted (rolled back), will retry next boot`;
 }
 console.error(`[migration] ${calicutWipeOutcome}`);
+
+// ── One-time imported-bill line correction (owner-requested, 2026-08-07) ────
+// Imported purchase bill 5052 recorded its Packing & Transport ₹1,260 charge
+// as a bogus product line; the correction removes the line and stores the
+// charge properly, leaving stock history and the settled payable untouched.
+// Its own top-level step for the same reason as the others; shape-pinned and
+// one-shot inside; see purchaseImportLineCorrection.ts.
+let purchase5052Outcome: string;
+try {
+  purchase5052Outcome = await correctImportedPurchase5052(pool);
+} catch (err) {
+  purchase5052Outcome = `purchase_5052_line_correction FAILED: ${(err as Error).message} — nothing changed (rolled back), will retry next boot`;
+}
+console.error(`[migration] ${purchase5052Outcome}`);
 
 // ── Orphaned party-ledger sweep ──────────────────────────────────────────────
 // Party dropdowns in voucher entry / receipts / payments are built from the

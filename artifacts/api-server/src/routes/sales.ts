@@ -1475,6 +1475,22 @@ router.put("/sales/:id", requireModuleAction("page:/sales/pos", "edit"), async (
   try {
     await editTx.query('BEGIN');
 
+    // ── Serialize on the sale row, then re-derive the paid figure ──────────
+    // Collection-receipt deletes (allocation and the admin system delete)
+    // remove sale_payments rows and rewrite amount_paid under this same row
+    // lock. The SUM read before this transaction opened could therefore be
+    // stale by the time we write; the figure that goes into the UPDATE must
+    // come from the state visible AFTER the lock is held, or a concurrent
+    // unwind is silently overwritten.
+    await editTx.query(`SELECT id FROM sales WHERE id = $1 FOR UPDATE`, [id]);
+    if (!isSettledAtSale(newPaymentMode)) {
+      const { rows: [lockedPaid] } = await editTx.query<{ paid: string }>(
+        `SELECT COALESCE(SUM(amount::numeric), 0) AS paid FROM sale_payments WHERE sale_id = $1`, [id]
+      );
+      newAmountPaid = Number(lockedPaid?.paid ?? 0);
+      newPaymentStatus = newAmountPaid >= totalAmount - 0.004 ? 'paid' : newAmountPaid > 0.004 ? 'partially_paid' : 'unpaid';
+    }
+
     // ── Credit limit check on edit ───────────────────────────────────────────
     // Mirror of the POST credit-limit guard so edits can't silently bypass it.
     // Serialized on the same per-customer advisory lock the create path takes,

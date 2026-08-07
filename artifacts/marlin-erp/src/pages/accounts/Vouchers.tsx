@@ -34,6 +34,7 @@ import { useGetCompanySettings } from '@workspace/api-client-react';
 import { downloadVoucherPDF } from '@/lib/pdfUtils';
 import { useTableSort, SortableHead } from '@/lib/tableSort';
 import { useVoucherLocationChoice, parseLocKey, LocationSelectField } from '@/lib/voucherLocation';
+import { SystemReceiptDeleteDialog } from '@/components/accounts/SystemReceiptDeleteDialog';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const inr = (n: number) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
@@ -811,6 +812,8 @@ export default function Vouchers() {
   const [expanded, setExpanded]   = useState<string | null>(null);
   const [deleteRow, setDeleteRow] = useState<UnifiedRow | null>(null);
   const [editRow, setEditRow]     = useState<UnifiedRow | null>(null);
+  // Admin-only system receipt deletion — server flags qualifying rows.
+  const [sysDeleteId, setSysDeleteId] = useState<number | null>(null);
   const [newOpen, setNewOpen]     = useState(false);
   const [newType, setNewType]     = useState<VoucherType>('payment');
 
@@ -1123,6 +1126,20 @@ export default function Vouchers() {
                               <Trash2 className="h-3.5 w-3.5" />
                             </Button>
                           )}
+                          {/* Admin-only system delete — only on rows the server
+                              flagged (sale-generated receipts, level-1 admin).
+                              Opens the full-impact warning dialog; the API
+                              re-checks both admin level and eligibility. */}
+                          {canDel && row.type === 'receipt' && row.raw?.systemDeletable && (
+                            <Button
+                              variant="ghost" size="icon"
+                              className="h-7 w-7 text-destructive/70 hover:text-destructive"
+                              title="Delete system voucher (Administrator)"
+                              onClick={() => setSysDeleteId(row.id)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -1188,6 +1205,7 @@ export default function Vouchers() {
         ? <EditMoneyVoucherDialog row={editRow} onClose={() => setEditRow(null)} />
         : <EditVoucherDialog row={editRow} onClose={() => setEditRow(null)} />)}
       {deleteRow && <DeleteConfirm row={deleteRow} onClose={() => setDeleteRow(null)} />}
+      {sysDeleteId != null && <SystemReceiptDeleteDialog receiptId={sysDeleteId} onClose={() => setSysDeleteId(null)} />}
     </AppLayout>
   );
 }

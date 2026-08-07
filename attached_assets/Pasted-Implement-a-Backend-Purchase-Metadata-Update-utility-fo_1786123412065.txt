@@ -1,0 +1,103 @@
+Implement a Backend Purchase Metadata Update utility for imported purchase bills.
+
+Problem:
+Some imported purchase bills have incorrect MFG Date and Expiry Date. The normal Edit Purchase Bill screen performs full inventory validation, and because stock from those batches has already been sold/transferred/consumed, saving fails even though only metadata is being changed.
+
+Solution:
+
+Create a backend-only metadata update path that updates purchase batch information without modifying inventory or accounting.
+
+Requirements
+
+1. Locate the purchase bill by:
+   - Purchase Bill Number
+   - OR Purchase ID
+
+2. Locate the purchase line by:
+   - Batch Number
+   - Item
+   - Purchase Line ID
+
+3. Update ONLY these fields:
+   - mfgDate
+   - expiryDate
+   - optional batch remarks if applicable
+
+Do NOT modify:
+   - Quantity
+   - Rate
+   - GST
+   - Item
+   - Batch Number
+   - Vendor
+   - Purchase Date
+   - Stock Quantity
+   - Stock Ledger
+   - Inventory Valuation
+   - Vendor Balance
+   - Accounting Entries
+   - Journal Entries
+   - Batch Quantity
+
+4. Skip ALL stock movement validation because inventory is not changing.
+
+5. Skip recalculation of:
+   - Inventory
+   - Ledger
+   - Vendor Payable
+   - Trial Balance
+   - Balance Sheet
+   - Dashboard
+   - Batch Quantities
+
+6. Update only the batch metadata table and any cached batch metadata if required.
+
+7. Record an audit log:
+
+Purchase Bill
+Item
+Batch Number
+Old MFG
+New MFG
+Old Expiry
+New Expiry
+User
+Date & Time
+Reason:
+"Imported purchase metadata correction."
+
+8. Return success only if metadata was updated.
+
+Do not regenerate vouchers.
+Do not repost accounting.
+Do not rebuild stock movements.
+
+For the current bill:
+
+Purchase Bill: #0039
+
+Batch:
+PUR-20260711-00324
+
+Update:
+MFG: 22-02-2026
+Expiry: 22-02-2027
+
+Batch:
+PUR-20260711-00325
+
+Update:
+MFG: 22-02-2026
+Expiry: 22-02-2027
+
+After updating, verify:
+
+✓ Batch shows new MFG/Expiry.
+✓ Purchase Bill opens normally.
+✓ Batch stock unchanged.
+✓ Batch quantity unchanged.
+✓ Inventory unchanged.
+✓ Vendor ledger unchanged.
+✓ Accounting unchanged.
+✓ No stock movement regenerated.
+✓ No validation errors.

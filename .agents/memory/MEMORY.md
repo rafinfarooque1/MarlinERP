@@ -46,6 +46,7 @@
 - [Invoice numbering vs sequence](invoice-numbering-sequence.md) — renumbering strands allocators; SB2B/SB2C sales series rules: EVERY sales producer (POS + importer) must use the allocator, renames pair-rename receipts.
 - [Per-location invoice numbering](per-location-invoice-numbering.md) — identity = 4 stamped columns + plain unique indexes (CASE index broke publish); every producer stamps; receipt deletes need the location guard.
 - [Scratch-DB experiments](scratch-db-experiments.md) — `A && B &` backgrounds the WHOLE chain (vars lost) and `psql ""` silently hits dev; print current_database() before any scratch write.
+- [Cross-env record identity](cross-env-record-identity.md) — dev and prod imported the same documents separately: ids and PUR- batch numbers differ; match by invoice/voucher number; prod data fixes go through the app.
 - [Sale cancellation](sale-cancellation.md) — a terminal state obliges EVERY write path (payments, returns) to refuse it after the row lock; filtering it from reports is not enough.
 - [Opt-in list paging](list-paging.md) — never default-cap a list endpoint the UI reads wholesale; in-memory slicing after a full fetch is pure downside.
 - [Text→DATE conversion](date-column-conversion.md) — after converting, `col <> ''` guards AND every shape-only date regex become live 22007s — read filters most of all; audits never see it.
@@ -98,6 +99,7 @@
 - [Payroll pay ledger & JV location stamps](payroll-pay-ledger.md) — salary/advances pay from any scoped till; mode derived from ledger tree; journal_vouchers has raw location columns; branch default must never fall back to HO cash.
 - [Quotations module](quotations-module.md) — parallel doc store, zero books impact by construction; one-sale-per-quote via 2 partial uniques + FOR UPDATE; explicit JSX generics break the vite build; pdftotext for PDF checks.
 - [Money voucher provenance](money-voucher-provenance.md) — payments/receipts store `source`; every producer must stamp it; edit rights derive from it and NULL fails closed; never re-sweep NULL→manual.
+- [Admin system receipt delete](system-receipt-delete.md) — level-1-only unwind for source='sale' receipts; trail slice = paid−Σlegs, never raw amount; amount_paid writers must SUM under the sale row lock.
 - [Advance recovery vs payroll](advance-recovery.md) — one settlement path per advance; generate/recover/approve all serialize on the advance row lock; is_deducted TRUE + NULL payroll id = cash recovery.
 - [Dashboard money flows](dashboard-kpi-sources.md) — Dashboard UI reads /dashboard/bi (NOT /summary); moneyFlows follows the selected range+location (todayMoney = legacy mirror); /summary stays today-anchored.
 - [P&L returns split & GP/NP tiles](pnl-returns-split.md) — GP/NP tiles read the P&L's own summary (never recomputed); returns recovered from note-sourced postings on the sales/purchases subtrees; statement splits must be remainder-based.

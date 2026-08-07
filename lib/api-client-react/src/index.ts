@@ -23,6 +23,7 @@ export * from "./branch-transfers-report";
 export * from "./quick-search";
 export * from "./stock-ledger";
 export * from "./login-history";
+export * from "./system-voucher-delete";
 export * from "./paginated-lists";
 export * from "./expenses";
 export * from "./assets";

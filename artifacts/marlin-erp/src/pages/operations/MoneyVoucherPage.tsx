@@ -32,6 +32,7 @@ import {
 import { toast } from 'sonner';
 import { Form, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Textarea } from '@/components/ui/textarea';
+import { SystemReceiptDeleteDialog } from '@/components/accounts/SystemReceiptDeleteDialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { downloadCSV, downloadPDFFromEndpoint, printPDFFromEndpoint } from '@/lib/download';
 import { Badge } from '@/components/ui/badge';
@@ -163,6 +164,8 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
   const [settlement, setSettlement] = useState<SettlementSelection | null>(null);
   const [lastSaved, setLastSaved] = useState<{ id: number; voucherNumber: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  // Admin-only system receipt deletion — server flags qualifying rows.
+  const [sysDeleteId, setSysDeleteId] = useState<number | null>(null);
   const printTabRef = useRef<Window | null>(null);
   const scopeRef = useRef<HTMLFormElement>(null);
 
@@ -641,9 +644,18 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
                       </>
                     )}
                     {r.origin === 'system' ? (
-                      <span title="System voucher — created by another module (sales, expenses, payroll). Manage it there." className="inline-flex justify-center w-8">
-                        <Lock className="w-3.5 h-3.5 text-muted-foreground/60" />
-                      </span>
+                      <>
+                        <span title="System voucher — created by another module (sales, expenses, payroll). Manage it there." className="inline-flex justify-center w-8">
+                          <Lock className="w-3.5 h-3.5 text-muted-foreground/60" />
+                        </span>
+                        {/* Admin-only system delete — server flags qualifying
+                            sale-generated receipts for level-1 admins only. */}
+                        {isReceipt && perm.canDelete && r.systemDeletable && (
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive/70 hover:text-destructive" title="Delete system voucher (Administrator)" onClick={() => setSysDeleteId(r.id)}>
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        )}
+                      </>
                     ) : (
                       <>
                         {perm.canEdit && (
@@ -683,6 +695,8 @@ export function MoneyVoucherPage({ kind }: { kind: Kind }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {sysDeleteId != null && <SystemReceiptDeleteDialog receiptId={sysDeleteId} onClose={() => setSysDeleteId(null)} />}
     </AppLayout>
   );
 }

@@ -760,6 +760,126 @@ async function loadManualReceipt(client: { query: Function }, id: number, scopeW
   return { row };
 }
 
+/**
+ * Administrator = level-1 hierarchy. System-voucher deletion is gated on this,
+ * ON TOP of the page delete right: reversing a system-generated receipt
+ * rewrites an invoice's payment story, which is a bigger authority than
+ * deleting a voucher a user typed themselves.
+ */
+async function isLevelOneAdmin(employee: any): Promise<boolean> {
+  const hid = Number(employee?.hierarchyId);
+  if (!Number.isFinite(hid)) return false;
+  const { rows } = await pool.query(`SELECT level FROM hierarchies WHERE id = $1`, [hid]);
+  return Number(rows[0]?.level ?? 99) === 1;
+}
+
+type SaleReceiptImpactSale = {
+  saleId: number; invoiceNumber: string; customerName: string;
+  totalAmount: number; currentPaid: number; currentStatus: string;
+  reversal: number; newPaid: number; newStatus: string;
+};
+
+/**
+ * What deleting a system (source='sale') receipt would change.
+ *
+ * Two shapes exist (see the derivation notes in routes/journal.ts):
+ *   · collection — sale_payments rows point at it via clearing_receipt_id;
+ *     deleting removes those payment rows and their money from the invoice.
+ *   · invoice trail — written at sale creation with voucher_number = the
+ *     invoice number, recording counter money that has NO sale_payments row;
+ *     deleting removes that slice from sales.amount_paid. The slice is
+ *     measured as amount_paid − Σ sale_payments (never the raw receipt
+ *     amount) so a receipt left stale by later edits cannot eat into money
+ *     that separate collection receipts own.
+ *   · orphan — its sale is gone; the receipt posts to the books as an
+ *     ordinary receipt (no exclusion marker matches), so deleting it simply
+ *     removes that posting. Nothing else to unwind.
+ *
+ * The DELETE recomputes this INSIDE its transaction with rows locked — the
+ * GET preview is display only and must never be trusted as the verdict.
+ */
+async function computeSaleReceiptImpact(
+  q: { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> }, receipt: any, forUpdate: boolean,
+): Promise<{
+  kind: "collection" | "invoice" | "orphan";
+  sales: SaleReceiptImpactSale[];
+  legs: { id: number; sale_id: number; amount: number }[];
+  blockers: string[];
+}> {
+  const blockers: string[] = [];
+  const saleCols = `s.id, s.invoice_number, s.total_amount::numeric AS total_amount,
+                    s.amount_paid::numeric AS amount_paid, s.payment_status, s.cancelled_at,
+                    COALESCE(c.name, 'Walk-in Customer') AS customer_name`;
+  const lock = forUpdate ? " FOR UPDATE OF s" : "";
+
+  const { rows: legs } = await q.query(
+    `SELECT sp.id, sp.sale_id, sp.amount::numeric AS amount FROM sale_payments sp
+      WHERE sp.clearing_receipt_id = $1 ORDER BY sp.sale_id ASC, sp.id ASC`, [receipt.id],
+  );
+
+  const buildSale = async (saleRow: any, reversal: number): Promise<SaleReceiptImpactSale> => {
+    const currentPaid = Number(saleRow.amount_paid);
+    const newPaid = money2(Math.max(0, currentPaid - reversal));
+    const pos = await loadPaymentPosition(q, saleRow.id);
+    const newPos = computePaymentPosition({
+      totalAmount: Number(saleRow.total_amount), amountReceived: newPaid,
+      creditAdjustments: pos?.creditAdjustments ?? 0, cancelledAt: null,
+    });
+    if (saleRow.cancelled_at) {
+      blockers.push(`Invoice ${saleRow.invoice_number} is cancelled — its money records are frozen and cannot be rewritten.`);
+    }
+    return {
+      saleId: saleRow.id, invoiceNumber: saleRow.invoice_number, customerName: saleRow.customer_name,
+      totalAmount: Number(saleRow.total_amount), currentPaid, currentStatus: saleRow.payment_status,
+      reversal: money2(reversal), newPaid, newStatus: newPos.status,
+    };
+  };
+
+  if (legs.length > 0) {
+    const bySale = new Map<number, number>();
+    for (const leg of legs) bySale.set(leg.sale_id, money2((bySale.get(leg.sale_id) ?? 0) + Number(leg.amount)));
+    const sales: SaleReceiptImpactSale[] = [];
+    for (const [saleId, reversal] of bySale) {
+      const { rows: [saleRow] } = await q.query(
+        `SELECT ${saleCols} FROM sales s LEFT JOIN customers c ON c.id = s.customer_id
+          WHERE s.id = $1${lock}`, [saleId],
+      );
+      if (!saleRow) continue; // sale gone; its legs delete with the receipt
+      sales.push(await buildSale(saleRow, reversal));
+    }
+    return { kind: "collection", sales, legs, blockers };
+  }
+
+  // Invoice-trail shape: match the sale by the shared voucher/invoice number,
+  // disambiguating by the receipt's stored location when the number is reused
+  // across locations — the same rule the sale-edit path applies when it
+  // replaces these rows.
+  const { rows: candidates } = await q.query(
+    `SELECT ${saleCols}, COALESCE(s.location_type, 'outlet') AS loc_type,
+            COALESCE(s.location_id, s.outlet_id, 0) AS loc_id
+       FROM sales s LEFT JOIN customers c ON c.id = s.customer_id
+      WHERE s.invoice_number = $1${lock}`, [receipt.voucher_number],
+  );
+  if (candidates.length === 0) return { kind: "orphan", sales: [], legs: [], blockers };
+  let saleRow = candidates[0];
+  if (candidates.length > 1) {
+    const rt = receipt.location_type ?? "headoffice";
+    const rid = Number(receipt.location_id ?? 0);
+    const matched = candidates.filter((s: any) => s.loc_type === rt && Number(s.loc_id) === rid);
+    if (matched.length !== 1) {
+      blockers.push(`Invoice number ${receipt.voucher_number} is shared by ${candidates.length} invoices and the receipt's location does not single one out.`);
+      return { kind: "invoice", sales: [], legs: [], blockers };
+    }
+    saleRow = matched[0];
+  }
+  const { rows: [spSum] } = await q.query(
+    `SELECT COALESCE(SUM(amount), 0)::numeric AS total FROM sale_payments WHERE sale_id = $1`, [saleRow.id],
+  );
+  const counterSlice = Math.max(0, money2(Number(saleRow.amount_paid) - Number(spSum.total)));
+  const reversal = Math.min(Number(receipt.amount), counterSlice);
+  return { kind: "invoice", sales: [await buildSale(saleRow, reversal)], legs: [], blockers };
+}
+
 router.post("/accounts/payments", requireModuleAction(["page:/accounts/vouchers", "page:/operations/payment-voucher"], "add"), async (req, res): Promise<void> => {
   // paymentMode/attachmentUrl are deliberately NOT read: the chosen account is
   // the instrument, and old clients still sending them are silently ignored.
@@ -1184,6 +1304,7 @@ router.get("/accounts/receipts", requireModuleView(["page:/accounts/vouchers", "
     WHERE ${where}
     ORDER BY r.id DESC
   `, params);
+  const admin = await isLevelOneAdmin((req as any).employee);
   res.json(result.rows.map(r => {
     // Sale-linked rows belong to the sales flow; any non-manual (or unstamped)
     // source is likewise locked — same verdict as loadManualReceipt.
@@ -1203,6 +1324,10 @@ router.get("/accounts/receipts", requireModuleView(["page:/accounts/vouchers", "
       createdBy: r.created_by ?? null,
       origin: isSystem ? 'system' : 'manual',
       editable: !isSystem,
+      // Server verdict for the admin-only system delete: only sale-sourced
+      // receipts qualify, and only a level-1 Administrator sees the button.
+      // The endpoints re-check both — this flag is display routing, not a guard.
+      systemDeletable: admin && r.source === 'sale',
       locationType: r.location_type ?? 'headoffice',
       locationId: r.location_id ?? 0,
       createdAt: r.created_at,
@@ -1630,6 +1755,153 @@ router.delete("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vou
     metadata: { old: { voucherNumber: loaded.row.voucher_number, date: loaded.row.receipt_date, from: loaded.row.received_from_ledger_id, into: loaded.row.received_in_ledger_id, amount: Number(loaded.row.amount), narration: loaded.row.narration, reference: loaded.row.reference_number } },
   }).catch(() => {});
   res.status(204).send();
+});
+
+// ── Admin-only system receipt deletion ────────────────────────────────────
+// Sale-generated receipts (source='sale') are locked everywhere else: they
+// mirror money the sales flow owns. An Administrator may delete one HERE with
+// a full unwind — the linked sale_payments rows / counter-money slice come off
+// the invoice in the same transaction, so the books (all derived) behave as if
+// the voucher never existed. Every other system source keeps routing to its
+// owning module: an expense/refund/deposit/settlement voucher is a shadow of a
+// record that would be orphaned by deleting the shadow alone.
+
+/** Human label for a receipt's stored location stamp. */
+async function moneyLocationLabel(locType: string | null, locId: number | null): Promise<string> {
+  const t = locType ?? "headoffice";
+  if (t === "headoffice") return "Head Office";
+  const table = t === "warehouse" ? "warehouses" : "outlets";
+  const { rows } = await pool.query(`SELECT name FROM ${table} WHERE id = $1`, [Number(locId ?? 0)]);
+  return rows[0]?.name ?? `${t === "warehouse" ? "Warehouse" : "Outlet"} #${locId}`;
+}
+
+router.get("/accounts/receipts/:id/delete-impact", requireModuleAction(["page:/accounts/vouchers", "page:/operations/receipt-voucher"], "delete"), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid receipt id" }); return; }
+  if (!(await isLevelOneAdmin((req as any).employee))) {
+    res.status(403).json({ error: "Only Administrators can delete system-generated vouchers." });
+    return;
+  }
+  const scope = ownLocationScope((req as any).employee);
+  const ledgerIds = await scopeLedgerIds(scope);
+  const params: unknown[] = [id];
+  const where = scopeMoneyWhere(scope, ledgerIds, params, 'r', ['received_in_ledger_id', 'received_from_ledger_id']);
+  const { rows: [receipt] } = await pool.query(
+    `SELECT r.*, rf.name AS received_from_name, ri.name AS received_in_name
+       FROM receipts r
+       LEFT JOIN account_ledgers rf ON r.received_from_ledger_id = rf.id
+       LEFT JOIN account_ledgers ri ON r.received_in_ledger_id = ri.id
+      WHERE r.id = $1 AND ${where}`, params,
+  );
+  if (!receipt) { res.status(404).json({ error: "Receipt not found" }); return; }
+  if (receipt.source !== "sale") {
+    res.status(400).json({ error: "This is not a system-generated sale receipt. Use the normal voucher workflow." });
+    return;
+  }
+  const impact = await computeSaleReceiptImpact(pool, receipt, false);
+  res.json({
+    receiptId: receipt.id,
+    voucherNumber: receipt.voucher_number,
+    receiptDate: receipt.receipt_date,
+    amount: Number(receipt.amount),
+    narration: receipt.narration ?? null,
+    receivedFromName: receipt.received_from_name ?? null,
+    receivedInName: receipt.received_in_name ?? null,
+    locationLabel: await moneyLocationLabel(receipt.location_type, receipt.location_id),
+    kind: impact.kind,
+    sales: impact.sales,
+    blockers: impact.blockers,
+  });
+});
+
+router.post("/accounts/receipts/:id/system-delete", requireModuleAction(["page:/accounts/vouchers", "page:/operations/receipt-voucher"], "delete"), async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid receipt id" }); return; }
+  const employee = (req as any).employee;
+  if (!(await isLevelOneAdmin(employee))) {
+    res.status(403).json({ error: "Only Administrators can delete system-generated vouchers." });
+    return;
+  }
+  const reason = String((req.body as any)?.reason ?? "").trim();
+  if (reason.length < 5) {
+    res.status(400).json({ error: "A reason is required for the audit log (at least 5 characters)." });
+    return;
+  }
+  const scope = ownLocationScope(employee);
+  const ledgerIds = await scopeLedgerIds(scope);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Lock order matches the allocation-receipt delete: receipt row first,
+    // then each affected sale row inside computeSaleReceiptImpact.
+    const lockParams: unknown[] = [id];
+    const lockWhere = scopeMoneyWhere(scope, ledgerIds, lockParams, 'r', ['received_in_ledger_id', 'received_from_ledger_id']);
+    const { rows: [receipt] } = await client.query(
+      `SELECT r.* FROM receipts r WHERE r.id = $1 AND ${lockWhere} FOR UPDATE OF r`, lockParams,
+    );
+    if (!receipt) { await client.query("ROLLBACK"); res.status(404).json({ error: "Receipt not found — it may already have been deleted." }); return; }
+    if (receipt.source !== "sale") {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "This is not a system-generated sale receipt. Use the normal voucher workflow." });
+      return;
+    }
+    // Recompute the impact with the sale rows locked — the preview the client
+    // showed is not the verdict; the state under the lock is.
+    const impact = await computeSaleReceiptImpact(client, receipt, true);
+    if (impact.blockers.length > 0) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: impact.blockers.join(" ") });
+      return;
+    }
+    if (impact.kind === "collection") {
+      // Remove the payment rows this receipt cleared, then re-derive each
+      // invoice's paid figure and status the same way every other writer does.
+      await client.query(`DELETE FROM sale_payments WHERE clearing_receipt_id = $1`, [id]);
+      for (const s of impact.sales) {
+        await client.query(
+          `UPDATE sales SET amount_paid = $1, payment_status = $2 WHERE id = $3`,
+          [s.newPaid, s.newStatus, s.saleId],
+        );
+      }
+    } else if (impact.kind === "invoice") {
+      for (const s of impact.sales) {
+        await client.query(
+          `UPDATE sales SET amount_paid = $1, payment_status = $2 WHERE id = $3`,
+          [s.newPaid, s.newStatus, s.saleId],
+        );
+      }
+    }
+    // kind === 'orphan': nothing to unwind — the receipt is the only record.
+    await client.query(`DELETE FROM receipts WHERE id = $1`, [id]);
+    await client.query("COMMIT");
+    logActivity({
+      action: "DELETE", module: "accounts", entityType: "receipt_voucher", entityId: id,
+      user: employee?.username,
+      description: `System receipt ${receipt.voucher_number} deleted by Administrator — ₹${Number(receipt.amount).toLocaleString("en-IN")} reversed${impact.sales.length ? ` from ${impact.sales.map((s) => s.invoiceNumber).join(", ")}` : ""}. Reason: ${reason}`,
+      metadata: {
+        reason,
+        systemDelete: true,
+        old: {
+          voucherNumber: receipt.voucher_number, date: receipt.receipt_date,
+          from: receipt.received_from_ledger_id, into: receipt.received_in_ledger_id,
+          amount: Number(receipt.amount), narration: receipt.narration,
+          locationType: receipt.location_type ?? "headoffice", locationId: receipt.location_id ?? 0,
+        },
+        kind: impact.kind,
+        sales: impact.sales.map((s) => ({
+          saleId: s.saleId, invoiceNumber: s.invoiceNumber, customerName: s.customerName,
+          reversal: s.reversal, paidBefore: s.currentPaid, paidAfter: s.newPaid,
+          statusBefore: s.currentStatus, statusAfter: s.newStatus,
+        })),
+      },
+    }).catch(() => {});
+    res.json({ deleted: true, kind: impact.kind, sales: impact.sales });
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 });
 
 // ── Ledger Statement ──────────────────────────────────────────────────────

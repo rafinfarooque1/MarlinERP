@@ -44,3 +44,6 @@ line looks fine, search that file for a stray backtick before anything else.
 
 ## executeSql around environment restarts
 A write via executeSql that runs while the environment is being recycled can RETURN rows yet never commit (the txn dies with the connection). Evidence: an INSERT's RETURNING ids were later re-issued by the sequence to a different insert. After any environment restart, re-verify recent writes before building on them.
+
+## Multi-statement `psql -c` is ONE implicit transaction
+A `psql -c "stmt1; stmt2; stmt3"` string executes as a single implicit transaction: if any statement errors, EVERYTHING before it in that string rolls back — earlier DELETE/UPDATE counts printed as successful did not persist. When a cleanup batch partially fails, re-verify the row counts instead of trusting the printed tallies; run risky statements as separate -c flags if partial progress should commit.
