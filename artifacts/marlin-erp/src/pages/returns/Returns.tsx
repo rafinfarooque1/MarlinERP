@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import {
   useListSales, useListPurchases, useListItems,
-  useListSalesReturns, useCreateSalesReturn,
-  useListPurchaseReturns, useCreatePurchaseReturn,
+  useListSalesReturns, useCreateSalesReturn, useUpdateSalesReturn,
+  useListPurchaseReturns, useCreatePurchaseReturn, useUpdatePurchaseReturn,
   type SalesReturn, type PurchaseReturn,
 } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -16,8 +16,8 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Undo2, Plus, Search, Eye, PackageX, ShieldOff } from 'lucide-react';
+import { BillCombobox } from '@/components/ui/bill-combobox';
+import { Undo2, Plus, Search, Eye, Pencil, PackageX, ShieldOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { invalidateDashboard } from '@/lib/invalidateDashboard';
@@ -28,34 +28,55 @@ const today = () => new Date().toISOString().split('T')[0];
 
 // ─── New Sales Return dialog ──────────────────────────────────────────────────
 
-function NewSalesReturnDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; onOpenChange: (v: boolean) => void; editing?: SalesReturn | null }) {
   const { data: sales = [] } = useListSales();
   const { data: items = [] } = useListItems();
   const { data: allReturns = [] } = useListSalesReturns();
   const createMutation = useCreateSalesReturn();
+  const updateMutation = useUpdateSalesReturn();
   const queryClient = useQueryClient();
+  const isPending = createMutation.isPending || updateMutation.isPending;
 
-  const [saleId, setSaleId] = useState<number>(0);
-  const [returnDate, setReturnDate] = useState(today());
-  const [reason, setReason] = useState('');
-  const [qty, setQty] = useState<Record<number, string>>({});
+  // Edit mode remounts this component per return (keyed by the caller), so
+  // initializing state from `editing` is safe.
+  const [saleId, setSaleId] = useState<number>(editing?.saleId ?? 0);
+  const [returnDate, setReturnDate] = useState(editing ? String(editing.returnDate).slice(0, 10) : today());
+  const [reason, setReason] = useState(editing?.reason ?? '');
+  const [qty, setQty] = useState<Record<number, string>>(() =>
+    editing
+      ? Object.fromEntries((editing.lineItems || []).map((li: any) => [li.lineIndex, String(li.quantity)]))
+      : {},
+  );
 
   const itemName = (id: number) => (items as any[]).find(i => i.id === id)?.name || `Item #${id}`;
 
+  // Full list, newest first — the combobox searches over all of it and only
+  // caps how many rows it renders at once.
   const candidates = useMemo(
-    () => [...(sales as any[])].sort((a, b) => b.id - a.id).slice(0, 200),
+    () => [...(sales as any[])].sort((a, b) => b.id - a.id),
     [sales],
   );
   const sale: any = candidates.find(s => s.id === saleId);
+  const saleOptions = useMemo(
+    () => candidates.map((s: any) => ({
+      id: s.id,
+      number: s.invoiceNumber || `Sale #${s.id}`,
+      party: s.customerName || 'Walk-in',
+      amount: s.totalAmount,
+      date: s.saleDate,
+    })),
+    [candidates],
+  );
 
-  // Quantities already returned against this sale, per original line index
+  // Quantities already returned against this sale, per original line index —
+  // excluding the return being edited (its own quantities are being replaced).
   const returnedByIx = useMemo(() => {
     const m = new Map<number, number>();
-    (allReturns as SalesReturn[]).filter(r => r.saleId === saleId).forEach(r =>
+    (allReturns as SalesReturn[]).filter(r => r.saleId === saleId && r.id !== editing?.id).forEach(r =>
       (r.lineItems || []).forEach((li: any) => m.set(li.lineIndex, (m.get(li.lineIndex) ?? 0) + Number(li.quantity))),
     );
     return m;
-  }, [allReturns, saleId]);
+  }, [allReturns, saleId, editing?.id]);
 
   const lines: any[] = sale?.lineItems ?? [];
   const rows = lines.map((li, ix) => {
@@ -70,7 +91,7 @@ function NewSalesReturnDialog({ open, onOpenChange }: { open: boolean; onOpenCha
     return s + (q > 0 ? q * Number(r.li.unitPrice) : 0);
   }, 0);
 
-  const reset = () => { setSaleId(0); setReturnDate(today()); setReason(''); setQty({}); };
+  const reset = () => { if (!editing) { setSaleId(0); setReturnDate(today()); setReason(''); setQty({}); } };
 
   const submit = () => {
     if (!sale) { toast.error('Pick an invoice first'); return; }
@@ -80,6 +101,21 @@ function NewSalesReturnDialog({ open, onOpenChange }: { open: boolean; onOpenCha
     if (selected.length === 0) { toast.error('Enter a return quantity on at least one line'); return; }
     const bad = selected.find(l => l.quantity > l.remaining);
     if (bad) { toast.error(`Line ${bad.lineIndex + 1}: only ${bad.remaining} left to return`); return; }
+
+    if (editing) {
+      updateMutation.mutate(
+        { id: editing.id, returnDate, reason: reason.trim() || undefined, lines: selected.map(({ lineIndex, quantity }) => ({ lineIndex, quantity })) },
+        {
+          onSuccess: (r: any) => {
+            toast.success(`${editing.returnNumber} updated — new value ₹${fmt(r?.totalAmount)}`);
+            invalidateDashboard(queryClient);
+            onOpenChange(false);
+          },
+          onError: (e: any) => toast.error(e?.data?.error || e.message || 'Could not update the return'),
+        },
+      );
+      return;
+    }
 
     createMutation.mutate(
       { saleId: sale.id, returnDate, reason: reason.trim() || undefined, lines: selected.map(({ lineIndex, quantity }) => ({ lineIndex, quantity })) },
@@ -103,23 +139,30 @@ function NewSalesReturnDialog({ open, onOpenChange }: { open: boolean; onOpenCha
     <Dialog open={open} onOpenChange={v => { if (!v) reset(); onOpenChange(v); }}>
       <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>New Sales Return</DialogTitle>
-          <DialogDescription>Pick the original invoice, then enter how many units are coming back.</DialogDescription>
+          <DialogTitle>{editing ? `Edit ${editing.returnNumber}` : 'New Sales Return'}</DialogTitle>
+          <DialogDescription>
+            {editing
+              ? 'Change the date, reason or quantities. The invoice and the return number stay the same.'
+              : 'Pick the original invoice, then enter how many units are coming back.'}
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 pt-1">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Invoice</label>
-              <Select value={saleId ? String(saleId) : ''} onValueChange={v => { setSaleId(Number(v)); setQty({}); }}>
-                <SelectTrigger><SelectValue placeholder="Select invoice…" /></SelectTrigger>
-                <SelectContent>
-                  {candidates.map((s: any) => (
-                    <SelectItem key={s.id} value={String(s.id)}>
-                      {(s.invoiceNumber || `Sale #${s.id}`) + ' — ' + (s.customerName || 'Walk-in') + ' — ₹' + fmt(s.totalAmount)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {editing ? (
+                <Input value={editing.invoiceNumber || `Sale #${editing.saleId}`} disabled className="font-mono" />
+              ) : (
+                <BillCombobox
+                  options={saleOptions}
+                  value={saleId}
+                  onChange={id => { setSaleId(id); setQty({}); }}
+                  placeholder="Select invoice…"
+                  searchPlaceholder="Search invoice no. or customer…"
+                  emptyLabel="No matching invoices"
+                  data-testid="select-sales-return-invoice"
+                />
+              )}
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Return date</label>
@@ -180,8 +223,8 @@ function NewSalesReturnDialog({ open, onOpenChange }: { open: boolean; onOpenCha
         </div>
         <DialogFooter className="pt-2">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={submit} disabled={createMutation.isPending || !sale}>
-            {createMutation.isPending ? 'Recording…' : 'Record Return'}
+          <Button onClick={submit} disabled={isPending || !sale} data-testid="button-submit-sales-return">
+            {isPending ? 'Saving…' : editing ? 'Save Changes' : 'Record Return'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -191,30 +234,48 @@ function NewSalesReturnDialog({ open, onOpenChange }: { open: boolean; onOpenCha
 
 // ─── New Purchase Return dialog ───────────────────────────────────────────────
 
-function NewPurchaseReturnDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+function NewPurchaseReturnDialog({ open, onOpenChange, editing }: { open: boolean; onOpenChange: (v: boolean) => void; editing?: PurchaseReturn | null }) {
   const { data: purchases = [] } = useListPurchases();
   const { data: allReturns = [] } = useListPurchaseReturns();
   const createMutation = useCreatePurchaseReturn();
+  const updateMutation = useUpdatePurchaseReturn();
   const queryClient = useQueryClient();
+  const isPending = createMutation.isPending || updateMutation.isPending;
 
-  const [purchaseId, setPurchaseId] = useState<number>(0);
-  const [returnDate, setReturnDate] = useState(today());
-  const [reason, setReason] = useState('');
-  const [qty, setQty] = useState<Record<number, string>>({});
+  const [purchaseId, setPurchaseId] = useState<number>(editing?.purchaseId ?? 0);
+  const [returnDate, setReturnDate] = useState(editing ? String(editing.returnDate).slice(0, 10) : today());
+  const [reason, setReason] = useState(editing?.reason ?? '');
+  const [qty, setQty] = useState<Record<number, string>>(() =>
+    editing
+      ? Object.fromEntries((editing.lineItems || []).map((li: any) => [li.lineIndex, String(li.quantity)]))
+      : {},
+  );
 
+  // Full list, newest first — the combobox searches over all of it and only
+  // caps how many rows it renders at once.
   const candidates = useMemo(
-    () => [...(purchases as any[])].sort((a, b) => b.id - a.id).slice(0, 200),
+    () => [...(purchases as any[])].sort((a, b) => b.id - a.id),
     [purchases],
   );
   const purchase: any = candidates.find(p => p.id === purchaseId);
+  const purchaseOptions = useMemo(
+    () => candidates.map((p: any) => ({
+      id: p.id,
+      number: p.invoiceNumber || `PB #${String(p.id).padStart(4, '0')}`,
+      party: p.vendorName || 'Vendor',
+      amount: p.totalAmount,
+      date: p.purchaseDate,
+    })),
+    [candidates],
+  );
 
   const returnedByIx = useMemo(() => {
     const m = new Map<number, number>();
-    (allReturns as PurchaseReturn[]).filter(r => r.purchaseId === purchaseId).forEach(r =>
+    (allReturns as PurchaseReturn[]).filter(r => r.purchaseId === purchaseId && r.id !== editing?.id).forEach(r =>
       (r.lineItems || []).forEach((li: any) => m.set(li.lineIndex, (m.get(li.lineIndex) ?? 0) + Number(li.quantity))),
     );
     return m;
-  }, [allReturns, purchaseId]);
+  }, [allReturns, purchaseId, editing?.id]);
 
   const lines: any[] = purchase?.lineItems ?? [];
   const rows = lines.map((li, ix) => {
@@ -231,7 +292,7 @@ function NewPurchaseReturnDialog({ open, onOpenChange }: { open: boolean; onOpen
     return s + (q / r.bought) * lineTotal;
   }, 0);
 
-  const reset = () => { setPurchaseId(0); setReturnDate(today()); setReason(''); setQty({}); };
+  const reset = () => { if (!editing) { setPurchaseId(0); setReturnDate(today()); setReason(''); setQty({}); } };
 
   const submit = () => {
     if (!purchase) { toast.error('Pick a purchase bill first'); return; }
@@ -241,6 +302,21 @@ function NewPurchaseReturnDialog({ open, onOpenChange }: { open: boolean; onOpen
     if (selected.length === 0) { toast.error('Enter a return quantity on at least one line'); return; }
     const bad = selected.find(l => l.quantity > l.remaining);
     if (bad) { toast.error(`Line ${bad.lineIndex + 1}: only ${bad.remaining} left to return`); return; }
+
+    if (editing) {
+      updateMutation.mutate(
+        { id: editing.id, returnDate, reason: reason.trim() || undefined, lines: selected.map(({ lineIndex, quantity }) => ({ lineIndex, quantity })) },
+        {
+          onSuccess: (r: any) => {
+            toast.success(`${editing.returnNumber} updated — new value ₹${fmt(r?.totalAmount)}`);
+            invalidateDashboard(queryClient);
+            onOpenChange(false);
+          },
+          onError: (e: any) => toast.error(e?.data?.error || e.message || 'Could not update the return'),
+        },
+      );
+      return;
+    }
 
     createMutation.mutate(
       { purchaseId: purchase.id, returnDate, reason: reason.trim() || undefined, lines: selected.map(({ lineIndex, quantity }) => ({ lineIndex, quantity })) },
@@ -260,23 +336,30 @@ function NewPurchaseReturnDialog({ open, onOpenChange }: { open: boolean; onOpen
     <Dialog open={open} onOpenChange={v => { if (!v) reset(); onOpenChange(v); }}>
       <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>New Purchase Return</DialogTitle>
-          <DialogDescription>Pick the original purchase bill, then enter the quantities going back to the vendor.</DialogDescription>
+          <DialogTitle>{editing ? `Edit ${editing.returnNumber}` : 'New Purchase Return'}</DialogTitle>
+          <DialogDescription>
+            {editing
+              ? 'Change the date, reason or quantities. The bill and the return number stay the same.'
+              : 'Pick the original purchase bill, then enter the quantities going back to the vendor.'}
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 pt-1">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Purchase bill</label>
-              <Select value={purchaseId ? String(purchaseId) : ''} onValueChange={v => { setPurchaseId(Number(v)); setQty({}); }}>
-                <SelectTrigger><SelectValue placeholder="Select bill…" /></SelectTrigger>
-                <SelectContent>
-                  {candidates.map((p: any) => (
-                    <SelectItem key={p.id} value={String(p.id)}>
-                      {(p.invoiceNumber || `PB #${String(p.id).padStart(4, '0')}`) + ' — ' + (p.vendorName || 'Vendor') + ' — ₹' + fmt(p.totalAmount)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {editing ? (
+                <Input value={editing.invoiceNumber || `PB #${String(editing.purchaseId).padStart(4, '0')}`} disabled className="font-mono" />
+              ) : (
+                <BillCombobox
+                  options={purchaseOptions}
+                  value={purchaseId}
+                  onChange={id => { setPurchaseId(id); setQty({}); }}
+                  placeholder="Select bill…"
+                  searchPlaceholder="Search bill no. or vendor…"
+                  emptyLabel="No matching bills"
+                  data-testid="select-purchase-return-bill"
+                />
+              )}
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Return date</label>
@@ -337,8 +420,8 @@ function NewPurchaseReturnDialog({ open, onOpenChange }: { open: boolean; onOpen
         </div>
         <DialogFooter className="pt-2">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={submit} disabled={createMutation.isPending || !purchase}>
-            {createMutation.isPending ? 'Recording…' : 'Record Return'}
+          <Button onClick={submit} disabled={isPending || !purchase} data-testid="button-submit-purchase-return">
+            {isPending ? 'Saving…' : editing ? 'Save Changes' : 'Record Return'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -353,6 +436,8 @@ export default function Returns() {
   const [tab, setTab] = useState<'sales' | 'purchase'>('sales');
   const [search, setSearch] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
+  const [editSR, setEditSR] = useState<SalesReturn | null>(null);
+  const [editPR, setEditPR] = useState<PurchaseReturn | null>(null);
   const [view, setView] = useState<{ kind: 'sales'; doc: SalesReturn } | { kind: 'purchase'; doc: PurchaseReturn } | null>(null);
 
   const { data: salesReturns = [], isLoading: srLoading } = useListSalesReturns();
@@ -460,8 +545,11 @@ export default function Returns() {
                               ? <Badge variant="outline" className="text-amber-600 border-amber-500/40">Cash refund</Badge>
                               : <Badge variant="outline" className="text-emerald-600 border-emerald-500/40 font-mono">{r.creditNoteNumber || 'Credit Note'}</Badge>}
                           </td>
-                          <td className="px-4 py-2.5 text-right">
-                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView({ kind: 'sales', doc: r })}><Eye className="w-4 h-4" /></Button>
+                          <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView({ kind: 'sales', doc: r })} data-testid={`button-view-sr-${r.id}`}><Eye className="w-4 h-4" /></Button>
+                            {perm.canEdit && (
+                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditSR(r)} data-testid={`button-edit-sr-${r.id}`}><Pencil className="w-4 h-4" /></Button>
+                            )}
                           </td>
                         </tr>
                       ))
@@ -473,8 +561,11 @@ export default function Returns() {
                           <td className="px-3 py-2.5">{r.vendorName}</td>
                           <td className="px-3 py-2.5 text-right font-mono font-semibold">₹{fmt(r.totalAmount)}</td>
                           <td className="px-3 py-2.5"><Badge variant="outline" className="text-sky-600 border-sky-500/40 font-mono">{r.debitNoteNumber || 'Debit Note'}</Badge></td>
-                          <td className="px-4 py-2.5 text-right">
-                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView({ kind: 'purchase', doc: r })}><Eye className="w-4 h-4" /></Button>
+                          <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView({ kind: 'purchase', doc: r })} data-testid={`button-view-pr-${r.id}`}><Eye className="w-4 h-4" /></Button>
+                            {perm.canEdit && (
+                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditPR(r)} data-testid={`button-edit-pr-${r.id}`}><Pencil className="w-4 h-4" /></Button>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -488,6 +579,16 @@ export default function Returns() {
       {tab === 'sales'
         ? <NewSalesReturnDialog open={createOpen} onOpenChange={setCreateOpen} />
         : <NewPurchaseReturnDialog open={createOpen} onOpenChange={setCreateOpen} />}
+
+      {/* ── Edit dialogs (remounted per return so state prefills cleanly) ── */}
+      {editSR && (
+        <NewSalesReturnDialog key={`edit-sr-${editSR.id}`} open editing={editSR}
+          onOpenChange={v => { if (!v) setEditSR(null); }} />
+      )}
+      {editPR && (
+        <NewPurchaseReturnDialog key={`edit-pr-${editPR.id}`} open editing={editPR}
+          onOpenChange={v => { if (!v) setEditPR(null); }} />
+      )}
 
       {/* ── View return sheet ── */}
       <Sheet open={!!view} onOpenChange={v => !v && setView(null)}>

@@ -1,0 +1,128 @@
+Fix Ledger Balance Reconciliation Across the Entire ERP.
+
+Problem:
+
+The same ledger/account is showing different balances in different parts of the ERP.
+
+Examples:
+- Ledger View
+- Vendor List
+- Customer List
+- Chart of Accounts
+- Dashboard
+- Receivables/Payables
+- Balance Sheet
+- Trial Balance
+
+These balances must never differ unless different filters (date/location) are intentionally applied.
+
+Requirements
+
+1. Create a single balance calculation service.
+
+Every module must use the same accounting engine to calculate balances.
+
+Do NOT maintain separate balance calculations for:
+- Ledger page
+- Vendor page
+- Customer page
+- Chart of Accounts
+- Dashboard
+- Reports
+
+All must read from the same journal postings.
+
+2. Verify ledger balance calculation.
+
+The ledger closing balance must equal:
+
+Opening Balance
++ Debit postings
+− Credit postings
+(or vice versa depending on account type)
+
+No page should calculate balances independently.
+
+3. Vendor and Customer balances
+
+Vendor balance shown in:
+- Vendor List
+- Vendor Ledger
+- Payables Report
+- Dashboard
+
+must all be identical.
+
+Customer balance shown in:
+- Customer List
+- Customer Ledger
+- Receivables Report
+- Dashboard
+
+must all be identical.
+
+4. Chart of Accounts
+
+Every ledger balance displayed in Chart of Accounts must equal the actual ledger closing balance.
+
+Do not use cached values or stored balances unless they are rebuilt from journals.
+
+5. Location awareness
+
+Balances must always respect the selected location.
+
+Warehouse selected:
+Only that warehouse's journal entries.
+
+Head Office selected:
+Only Head Office journal entries.
+
+All Locations:
+Company-wide consolidated journal entries.
+
+Every module must use the same location filter.
+
+6. Remove duplicate balance logic.
+
+Search the codebase for every place that calculates:
+- balance
+- closing balance
+- receivable
+- payable
+- account balance
+- vendor balance
+- customer balance
+
+Replace all duplicate implementations with the shared balance service.
+
+7. Full accounting reconciliation
+
+Run a complete reconciliation and verify:
+
+✓ Ledger View = Chart of Accounts
+✓ Ledger View = Customer/Vendor List
+✓ Ledger View = Trial Balance
+✓ Ledger View = Balance Sheet
+✓ Receivables = Customer Ledgers
+✓ Payables = Vendor Ledgers
+✓ Dashboard = Accounting Reports
+✓ Every balance matches to the paisa.
+
+8. Regression testing
+
+Verify:
+- Sales
+- Purchases
+- Receipts
+- Payments
+- Journals
+- Expenses
+- Production
+- Stock Transfers
+- Opening Balances
+- Returns
+- Imports
+
+all update ledger balances correctly.
+
+The objective is that there is only ONE source of truth for ledger balances throughout the ERP. Every page must display the exact same balance for the same ledger under the same date and location filters. If any mismatch exists, identify the root cause and fix it instead of patching individual screens.

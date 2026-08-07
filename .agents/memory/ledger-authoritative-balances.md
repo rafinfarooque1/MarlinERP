@@ -53,3 +53,9 @@ SUM(payments)`, you are re-creating the bug.
 - The strongest end-to-end gate is: move money one way, assert every surface
   that claims to know the resulting balance agrees, then delete the fixtures and
   assert the trial balance returns to its opening totals.
+
+## Ledger statement endpoints (Aug 2026)
+Both Accounts→Ledger statement routes (`/accounts/ledger-statement`, `/accounts/ledger/:id/statement`) were the LAST surfaces stitching entries from source documents; rewritten onto buildDerivedPostings + openingBalancePostings via one shared helper. Rule: any new balance/statement surface must read the posting stream — a 400-check cross-surface harness (temp user, paisa-exact, company + located pass) is the cheap way to prove it.
+
+## Full integrity-audit recipe (Aug 2026 — came back clean)
+Two temp scripts prove the whole system: (1) stream-level via esbuild-bundled import of buildDerivedPostings — per-entry Dr=Cr, orphan ledger refs, duplicate legs, per-doc coverage, doc-level GST vs invoice tax; (2) HTTP harness (temp user) — every surface vs TB to the paisa. Audit-check traps that are BY DESIGN, not bugs: sale-mirror receipts have no receipt postings (sale posts the money legs — coverage checks must mirror the exclusion filter in journal.ts); vendor ledger endpoints return natural-side (credit-positive) balances while entries are raw Dr/Cr; the Cash & Bank screen's head rows show the heads' OWN balance (0), not subtree sums. `tsx` is not installed — bundle temp TS scripts with esbuild like build.mjs does.

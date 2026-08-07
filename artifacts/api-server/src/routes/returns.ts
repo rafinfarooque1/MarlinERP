@@ -12,7 +12,7 @@ import { disabledWarehouseError, WAREHOUSE_DISABLED_CODE } from "../lib/warehous
 import { Router, type IRouter, type Request, type Response } from "express";
 import { pool } from "@workspace/db";
 import { requireModuleView, requireModuleAction } from "../middleware/permissions";
-import { nextVoucherNumber } from "../lib/voucherNumber";
+import { nextVoucherNumber, financialYearLabel } from "../lib/voucherNumber";
 import { restoreBatches, consumeBatches, debitBatchByNumber, type BatchBreakdownEntry } from "../lib/batches";
 import { logActivity } from "../lib/audit";
 import { outletWritesBlocked, OUTLETS_DISABLED_MESSAGE, OUTLETS_DISABLED_CODE } from "../lib/featureFlags";
@@ -21,7 +21,7 @@ import {
   outstandingExpr, creditAdjustmentsExpr, computePaymentPosition,
   outstandingAsOfExpr, creditAdjustmentsAsOfExpr, amountReceivedAsOfExpr,
 } from "../lib/salePaymentPosition";
-import { deductMaterialAt, isMaterialKind } from "../lib/materialStock";
+import { deductMaterialAt, creditMaterialAt, isMaterialKind, type MaterialKind } from "../lib/materialStock";
 import { getUserDataScope, isLocationInScope } from "../lib/dataScope";
 import { getLocationFilter } from "../lib/requestLocation";
 import { availabilityAt, insufficientStockMessage } from "../lib/reservations";
@@ -132,6 +132,46 @@ async function insertVoucher(c: Q, args: {
 const userOf = (req: Request): string | null =>
   (req as any).employee?.username ?? null;
 
+/**
+ * Edits keep the return's (and its note's) preserved voucher numbers, and a
+ * voucher number embeds its financial year ("SR/2026-27/0012"). Moving the
+ * date across an FY boundary would make the number lie, so it is refused —
+ * the correction there is a fresh return in the right year.
+ * Returns an error message, or null when the new date is acceptable.
+ */
+async function fyChangeError(c: Q, existingNumber: string, newDate: string): Promise<string | null> {
+  const fySeg = String(existingNumber ?? "").split("/")[1] ?? "";
+  if (!fySeg) return null; // legacy number without an FY segment — nothing to protect
+  let fyStartMonth = 4;
+  try {
+    const { rows } = await c.query(`SELECT fy_start_month FROM company_settings LIMIT 1`);
+    fyStartMonth = Number(rows[0]?.fy_start_month ?? 4) || 4;
+  } catch { /* settings not migrated — default Indian FY */ }
+  if (financialYearLabel(newDate, fyStartMonth) !== fySeg) {
+    return `This return is numbered in financial year ${fySeg} — the return date must stay within that year. For a different year, record a new return instead.`;
+  }
+  return null;
+}
+
+/** Rewrite a note voucher in place: same number and type, new date/amount/lines. */
+async function rewriteVoucher(c: Q, voucherId: number, args: {
+  voucherDate: string; narration: string; reason: string | null; totalAmount: number;
+  lines: Array<{ ledgerId: number; debit: number; credit: number }>;
+}): Promise<void> {
+  await c.query(
+    `UPDATE journal_vouchers SET voucher_date = $1, narration = $2, reason = $3, total_amount = $4 WHERE id = $5`,
+    [args.voucherDate, args.narration, args.reason, args.totalAmount, voucherId]
+  );
+  await c.query(`DELETE FROM journal_voucher_lines WHERE voucher_id = $1`, [voucherId]);
+  for (const l of args.lines) {
+    if (!(l.debit > 0.004) && !(l.credit > 0.004)) continue;
+    await c.query(
+      `INSERT INTO journal_voucher_lines (voucher_id, ledger_id, debit, credit) VALUES ($1, $2, $3, $4)`,
+      [voucherId, l.ledgerId, r2(l.debit), r2(l.credit)]
+    );
+  }
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Sales returns
 // ═════════════════════════════════════════════════════════════════════════════
@@ -148,7 +188,8 @@ router.post("/sales-returns", requireModuleAction(["page:/returns", "page:/sales
   if (!isDateStr(returnDate)) { res.status(400).json({ error: "returnDate must be YYYY-MM-DD" }); return; }
   if (reqLines.length === 0) { res.status(400).json({ error: "At least one return line is required" }); return; }
   for (const l of reqLines) {
-    if (!Number.isInteger(Number(l?.lineIndex)) || Number(l?.lineIndex) < 0 || !(Number(l?.quantity) > 0)) {
+    if (!Number.isInteger(Number(l?.lineIndex)) || Number(l?.lineIndex) < 0
+        || !Number.isFinite(Number(l?.quantity)) || !(Number(l?.quantity) > 0)) {
       res.status(400).json({ error: "Each line needs a valid lineIndex and a quantity > 0" }); return;
     }
   }
@@ -564,6 +605,438 @@ router.get("/sales-returns", requireModuleView("page:/returns"), async (req: Req
   }
 });
 
+// PATCH /sales-returns/:id — edit a recorded return's date, reason and line
+// quantities. Stock moves by DELTA only: a date- or reason-only edit succeeds
+// even when the restored stock has since been sold on, and reducing a quantity
+// only needs the difference back, not the whole line. The return number and
+// the credit note / refund voucher keep their numbers — the note is rewritten
+// in place, so the date must stay inside the financial year those numbers
+// were drawn from.
+router.patch("/sales-returns/:id", requireModuleAction("page:/returns", "edit"), async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const body = req.body ?? {};
+  const returnDate = body.returnDate;
+  const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim() : null;
+  const reqLines = Array.isArray(body.lines) ? body.lines : [];
+
+  if (!Number.isInteger(id) || id <= 0) { res.status(404).json({ error: "Return not found" }); return; }
+  if (!isDateStr(returnDate)) { res.status(400).json({ error: "returnDate must be YYYY-MM-DD" }); return; }
+  if (reqLines.length === 0) { res.status(400).json({ error: "At least one return line is required" }); return; }
+  for (const l of reqLines) {
+    if (!Number.isInteger(Number(l?.lineIndex)) || Number(l?.lineIndex) < 0
+        || !Number.isFinite(Number(l?.quantity)) || !(Number(l?.quantity) > 0)) {
+      res.status(400).json({ error: "Each line needs a valid lineIndex and a quantity > 0" }); return;
+    }
+  }
+  const idxSeen = new Set<number>();
+  for (const l of reqLines) {
+    const ix = Number(l.lineIndex);
+    if (idxSeen.has(ix)) { res.status(400).json({ error: `Duplicate return line for lineIndex ${ix}` }); return; }
+    idxSeen.add(ix);
+  }
+
+  const client = await (pool as any).connect();
+  try {
+    await client.query("BEGIN");
+
+    // Lock order mirrors creation: the sale first, then the return row.
+    const { rows: [peek] } = await client.query(`SELECT sale_id FROM sales_returns WHERE id = $1`, [id]);
+    if (!peek) { await client.query("ROLLBACK"); res.status(404).json({ error: "Return not found" }); return; }
+    const { rows: [sale] } = await client.query(`SELECT * FROM sales WHERE id = $1 FOR UPDATE`, [peek.sale_id]);
+    const { rows: [ret] } = await client.query(`SELECT * FROM sales_returns WHERE id = $1 FOR UPDATE`, [id]);
+    if (!ret || !sale || Number(ret.sale_id) !== Number(sale.id)) {
+      await client.query("ROLLBACK"); res.status(404).json({ error: "Return not found" }); return;
+    }
+
+    if (sale.cancelled_at) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: "This invoice has been cancelled — its returns can no longer be changed.", code: "SALE_CANCELLED" });
+      return;
+    }
+    if (returnDate < dateOnly(sale.sale_date)) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: `Return date cannot be before the sale date (${dateOnly(sale.sale_date)})` });
+      return;
+    }
+
+    // Accounting location = the one stamped at creation (resolved from the sale).
+    const locationType: string = ret.location_type;
+    const locationId: number = Number(ret.location_id);
+
+    const srScope = await getUserDataScope((req as any).employee ?? { branchType: "headoffice", branchId: 0 });
+    if (!srScope.isHeadOffice && !isLocationInScope(srScope, locationType, locationId)) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Return not found" });
+      return;
+    }
+    if (locationType === "outlet" && await outletWritesBlocked(client)) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE });
+      return;
+    }
+    {
+      const disabledMsg = await disabledWarehouseError(client, [{ type: locationType, id: locationId }]);
+      if (disabledMsg) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE });
+        return;
+      }
+    }
+    {
+      const fyErr = await fyChangeError(client, ret.return_number, returnDate);
+      if (fyErr) { await client.query("ROLLBACK"); res.status(400).json({ error: fyErr }); return; }
+    }
+
+    const saleLines: any[] = Array.isArray(sale.line_items) ? sale.line_items : [];
+
+    // Prior returns for cap math — EXCLUDING this return, whose own quantities
+    // and batch restores are being replaced by this edit.
+    const { rows: priorRows } = await client.query(
+      `SELECT line_items FROM sales_returns WHERE sale_id = $1 AND id <> $2`, [sale.id, id]
+    );
+    const priorQty = new Map<number, number>();
+    const priorBatch = new Map<string, number>();
+    for (const pr of priorRows) {
+      for (const pl of (Array.isArray(pr.line_items) ? pr.line_items : [])) {
+        const ix = Number(pl.lineIndex);
+        priorQty.set(ix, r3((priorQty.get(ix) ?? 0) + Number(pl.quantity || 0)));
+        for (const br of (Array.isArray(pl.batchRestore) ? pl.batchRestore : [])) {
+          const k = `${ix}:${br.batchNumber}`;
+          priorBatch.set(k, r3((priorBatch.get(k) ?? 0) + Number(br.quantity || 0)));
+        }
+      }
+    }
+
+    // Build the return's NEW lines exactly like creation (caps, prorated money,
+    // fresh batch restore plan).
+    const retLines: any[] = [];
+    let subtotal = 0, taxTotal = 0, totalAmount = 0;
+    let totCgst = 0, totSgst = 0, totIgst = 0;
+
+    for (const rl of reqLines) {
+      const ix = Number(rl.lineIndex);
+      const rq = r3(Number(rl.quantity));
+      const li = saleLines[ix];
+      if (!li) { await client.query("ROLLBACK"); res.status(400).json({ error: `Sale has no line at index ${ix}` }); return; }
+
+      const soldQty = Number(li.quantity) || 0;
+      const already = priorQty.get(ix) ?? 0;
+      const returnable = r3(soldQty - already);
+      if (rq > returnable + 0.001) {
+        await client.query("ROLLBACK");
+        res.status(400).json({
+          error: `Cannot return ${rq} of "${li.itemName || `item ${li.itemId}`}" — sold ${soldQty}, returned on other returns ${already}, returnable ${Math.max(0, returnable)}`,
+        });
+        return;
+      }
+
+      const frac = soldQty > 0 ? rq / soldQty : 0;
+      const taxable = r2(Number(li.taxableAmount ?? li.lineSubtotal ?? 0) * frac);
+      const cgst = r2(Number(li.cgst ?? 0) * frac);
+      const sgst = r2(Number(li.sgst ?? 0) * frac);
+      const igst = r2(Number(li.igst ?? 0) * frac);
+      const tax = r2(cgst + sgst + igst);
+      const gross = r2(taxable + tax);
+
+      const breakdown: any[] = Array.isArray(li.batchBreakdown) ? li.batchBreakdown : [];
+      const alloc: BatchBreakdownEntry[] = [];
+      let remaining = rq;
+      for (let i = breakdown.length - 1; i >= 0 && remaining > 0.0005; i--) {
+        const b = breakdown[i];
+        if (!b?.batchNumber) continue;
+        const k = `${ix}:${b.batchNumber}`;
+        const avail = r3(Number(b.quantity || 0) - (priorBatch.get(k) ?? 0));
+        if (avail <= 0.0005) continue;
+        const take = r3(Math.min(avail, remaining));
+        alloc.push({
+          batchNumber: String(b.batchNumber),
+          mfgDate: b.mfgDate ?? null,
+          expiryDate: b.expiryDate ?? null,
+          quantity: take,
+          unitCost: Number(b.unitCost || 0),
+        });
+        priorBatch.set(k, r3((priorBatch.get(k) ?? 0) + take));
+        remaining = r3(remaining - take);
+      }
+
+      retLines.push({
+        lineIndex: ix,
+        itemId: Number(li.itemId),
+        itemName: li.itemName ?? "",
+        unit: li.unit ?? "",
+        quantity: rq,
+        unitPrice: Number(li.unitPrice ?? 0),
+        grossAmount: gross,
+        taxableAmount: taxable,
+        taxAmount: tax,
+        cgst, sgst, igst,
+        taxType: li.taxType ?? "cgst_sgst",
+        batchRestore: alloc.map(a => ({ batchNumber: a.batchNumber, quantity: a.quantity, unitCost: a.unitCost })),
+        _alloc: alloc,
+      });
+
+      subtotal = r2(subtotal + taxable);
+      taxTotal = r2(taxTotal + tax);
+      totalAmount = r2(totalAmount + gross);
+      totCgst = r2(totCgst + cgst); totSgst = r2(totSgst + sgst); totIgst = r2(totIgst + igst);
+    }
+
+    if (!(totalAmount > 0)) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "Return total must be greater than zero" });
+      return;
+    }
+
+    // ── Old state, for deltas ──────────────────────────────────────────────
+    const oldLines: any[] = Array.isArray(ret.line_items) ? ret.line_items : [];
+    const oldQty = new Map<number, number>();
+    const oldAlloc = new Map<number, Map<string, number>>();
+    const oldItemByIx = new Map<number, { itemId: number; itemName: string }>();
+    for (const ol of oldLines) {
+      const ix = Number(ol.lineIndex);
+      oldQty.set(ix, r3((oldQty.get(ix) ?? 0) + Number(ol.quantity || 0)));
+      oldItemByIx.set(ix, { itemId: Number(ol.itemId), itemName: ol.itemName ?? "" });
+      const m = oldAlloc.get(ix) ?? new Map<string, number>();
+      for (const br of (Array.isArray(ol.batchRestore) ? ol.batchRestore : [])) {
+        m.set(String(br.batchNumber), r3((m.get(String(br.batchNumber)) ?? 0) + Number(br.quantity || 0)));
+      }
+      oldAlloc.set(ix, m);
+    }
+    const oldTotal = Number(ret.total_amount);
+
+    // ── Apply stock DELTAS at the return's location ────────────────────────
+    // Increase: restore the extra (always possible). Decrease: the difference
+    // goes back out of stock — refuse if it has since been sold or moved.
+    const newByIx = new Map<number, any>(retLines.map(rl => [rl.lineIndex, rl]));
+    const allIx = new Set<number>([...oldQty.keys(), ...newByIx.keys()]);
+    const ledgerDeltas: Array<{ itemId: number; itemName: string; delta: number }> = [];
+
+    for (const ix of allIx) {
+      const nl = newByIx.get(ix);
+      const oldQ = oldQty.get(ix) ?? 0;
+      const newQ = nl ? Number(nl.quantity) : 0;
+      const itemId = nl ? Number(nl.itemId) : oldItemByIx.get(ix)!.itemId;
+      const itemName = (nl?.itemName || oldItemByIx.get(ix)?.itemName || `item ${itemId}`) as string;
+      const delta = r3(newQ - oldQ);
+
+      if (delta > 0.0005) {
+        const { rows: [se] } = await client.query(
+          `SELECT id FROM stock_entries
+            WHERE item_id = $1 AND material_type = 'item' AND branch_type = $2 AND branch_id = $3 FOR UPDATE`,
+          [itemId, locationType, locationId]
+        );
+        if (se) {
+          await client.query(
+            `UPDATE stock_entries SET quantity = quantity::numeric + $1, updated_at = now() WHERE id = $2`,
+            [delta, se.id]
+          );
+        } else {
+          const allocQty = (nl?._alloc ?? []).reduce((s: number, a: BatchBreakdownEntry) => s + a.quantity, 0);
+          const allocCost = (nl?._alloc ?? []).reduce((s: number, a: BatchBreakdownEntry) => s + a.quantity * a.unitCost, 0);
+          let cost = allocQty > 0 ? r2(allocCost / allocQty) : 0;
+          if (!(cost > 0)) {
+            const { rows: [it] } = await client.query(
+              `SELECT COALESCE(avg_cost, 0) AS avg_cost, COALESCE(cost, 0) AS cost FROM items WHERE id = $1`, [itemId]
+            );
+            cost = Number(it?.avg_cost) > 0 ? Number(it.avg_cost) : Number(it?.cost ?? 0);
+          }
+          await client.query(
+            `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price)
+             VALUES ($1, 'item', $2, $3, $4, $5)`,
+            [itemId, locationType, locationId, delta, cost]
+          );
+        }
+        ledgerDeltas.push({ itemId, itemName, delta });
+      } else if (delta < -0.0005) {
+        const need = r3(-delta);
+        const held = await availabilityAt(client, {
+          refId: itemId, materialType: 'item', branchType: locationType, branchId: locationId, lock: true,
+        });
+        if (held.available + 0.001 < need || !held.entryId) {
+          await client.query("ROLLBACK");
+          const locName = await locationName(pool as any, locationType, locationId);
+          res.status(400).json({
+            error: `Cannot reduce the return of "${itemName}" — ${need} would go back out of stock at ${locName}, but only ${Math.max(0, held.available)} is available (the returned stock may have been sold or moved since).`,
+            code: 'INSUFFICIENT_STOCK',
+          });
+          return;
+        }
+        await client.query(
+          `UPDATE stock_entries SET quantity = quantity::numeric - $1, updated_at = now() WHERE id = $2`,
+          [need, held.entryId]
+        );
+        ledgerDeltas.push({ itemId, itemName, delta });
+      }
+
+      // Lot layer follows the NEW stated allocation: diff per batch number.
+      const nMap = new Map<string, BatchBreakdownEntry>();
+      for (const a of (nl?._alloc ?? []) as BatchBreakdownEntry[]) {
+        const prev = nMap.get(a.batchNumber);
+        if (prev) prev.quantity = r3(prev.quantity + a.quantity);
+        else nMap.set(a.batchNumber, { ...a });
+      }
+      const oMap = oldAlloc.get(ix) ?? new Map<string, number>();
+      const batchNums = new Set<string>([...nMap.keys(), ...oMap.keys()]);
+      for (const bn of batchNums) {
+        const nq = nMap.get(bn)?.quantity ?? 0;
+        const oq = oMap.get(bn) ?? 0;
+        const d = r3(nq - oq);
+        if (d > 0.0005) {
+          const src = nMap.get(bn)!;
+          await restoreBatches(client, itemId, locationType, locationId,
+            [{ ...src, quantity: d }], "sales_return", id);
+        } else if (d < -0.0005) {
+          await debitBatchByNumber(client, {
+            itemId, materialType: "item", branchType: locationType, branchId: locationId,
+            batchNumber: bn, quantity: r3(-d),
+          });
+        }
+      }
+    }
+
+    // ── Money: rewrite the note/refund in place, numbers preserved ─────────
+    const { salesLedgerId, locationName: locName } = await locationLedgers(client, locationType, locationId);
+    const salesLedger = salesLedgerId ?? await ledgerIdByCode(client, "STD-SALES");
+    if (!salesLedger) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "Sales ledger not found (STD-SALES missing). Open Chart of Accounts to restore standard ledgers." });
+      return;
+    }
+    const invoiceRef = sale.invoice_number || `Sale #${sale.id}`;
+    let creditNoteNumber: string | null = null;
+
+    if (ret.refund_mode === "credit_note") {
+      if (!ret.credit_note_id) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: "This return's credit note is missing, so it cannot be edited safely." });
+        return;
+      }
+      const custLedger = await ledgerIdByCode(client, `CUST-${ret.customer_id}`);
+      if (!custLedger) {
+        await client.query("ROLLBACK");
+        res.status(400).json({ error: "Customer ledger not found. Open the customer record and save it once to create the ledger, then retry." });
+        return;
+      }
+      const { headLines, unresolved } = await resolveGstHeads(client, "output", totCgst, totSgst, totIgst);
+      await rewriteVoucher(client, ret.credit_note_id, {
+        voucherDate: returnDate,
+        narration: `Sales return ${ret.return_number} against ${invoiceRef}`,
+        reason: reason ?? `Sales return against ${invoiceRef}`,
+        totalAmount,
+        lines: [
+          { ledgerId: salesLedger, debit: r2(subtotal + unresolved), credit: 0 },
+          ...headLines.map(h => ({ ledgerId: h.ledgerId, debit: h.amount, credit: 0 })),
+          { ledgerId: custLedger, debit: 0, credit: totalAmount },
+        ],
+      });
+      const { rows: [jv] } = await client.query(`SELECT voucher_number FROM journal_vouchers WHERE id = $1`, [ret.credit_note_id]);
+      creditNoteNumber = jv?.voucher_number ?? null;
+      // Lifetime purchases: apply only the CHANGE in the return total.
+      await client.query(
+        `UPDATE customers SET total_purchases = GREATEST(0, COALESCE(total_purchases, 0)::numeric - $1), updated_at = now() WHERE id = $2`,
+        [r2(totalAmount - oldTotal), ret.customer_id]
+      );
+    } else {
+      if (!ret.refund_payment_id) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: "This return's refund voucher is missing, so it cannot be edited safely." });
+        return;
+      }
+      // Amount/date/narration change only — the refund keeps its original
+      // number and cash/sales ledgers.
+      await client.query(
+        `UPDATE payments SET payment_date = $1, amount = $2, narration = $3 WHERE id = $4`,
+        [returnDate, totalAmount,
+         `Cash refund ${ret.return_number} against ${invoiceRef}${locName ? ` at ${locName}` : ""}`,
+         ret.refund_payment_id]
+      );
+    }
+
+    // ── Persist the updated memo document ──────────────────────────────────
+    const lineItemsJson = retLines.map(({ _alloc, ...keep }) => keep);
+    await client.query(
+      `UPDATE sales_returns SET return_date = $1, reason = $2, line_items = $3::jsonb,
+              subtotal = $4, tax_total = $5, total_amount = $6 WHERE id = $7`,
+      [returnDate, reason, JSON.stringify(lineItemsJson), subtotal, taxTotal, totalAmount, id]
+    );
+
+    if (ret.refund_mode === "credit_note") {
+      const { rows: [posRow] } = await client.query(
+        `SELECT s.total_amount::numeric AS total, COALESCE(s.amount_paid, 0)::numeric AS paid,
+                ${creditAdjustmentsExpr("s")} AS credit_notes
+           FROM sales s WHERE s.id = $1`,
+        [sale.id]
+      );
+      if (posRow) {
+        await client.query(`UPDATE sales SET payment_status = $1 WHERE id = $2`, [
+          computePaymentPosition({
+            totalAmount: posRow.total, amountReceived: posRow.paid,
+            creditAdjustments: posRow.credit_notes, cancelledAt: null,
+          }).status,
+          sale.id,
+        ]);
+      }
+    }
+
+    // ── Stock ledger: business-date correction + delta movement rows ──────
+    if (dateOnly(ret.return_date) !== returnDate) {
+      await client.query(
+        `UPDATE stock_ledger SET txn_date = $1 WHERE doc_type = 'sales_return' AND doc_id = $2`,
+        [returnDate, id]
+      );
+    }
+    if (ledgerDeltas.length > 0) {
+      const meta = await batchResolveMeta(client, ledgerDeltas.map(d => ({ materialType: 'item', refId: d.itemId })));
+      await writeStockLedger(client, ledgerDeltas.map(d => {
+        const info = meta.get(`item:${d.itemId}`) ?? { name: d.itemName, unit: '' };
+        return {
+          txnType: 'sales_return', materialType: 'item' as const, refId: d.itemId,
+          itemName: info.name, unit: info.unit,
+          branchType: locationType, branchId: locationId, branchName: '',
+          qtyChange: d.delta, unitCost: 0,
+          docType: 'sales_return', docId: id, txnDate: returnDate,
+          notes: `${ret.return_number} — adjusted by edit`,
+        };
+      }));
+    }
+
+    await client.query("COMMIT");
+
+    logActivity({
+      action: "UPDATE", module: "sales", entityType: "sales_return", entityId: id,
+      description: `Sales return ${ret.return_number} against ${invoiceRef} edited — ₹${oldTotal.toFixed(2)} → ₹${totalAmount.toFixed(2)}`,
+      user: userOf(req) ?? undefined,
+      metadata: {
+        before: { returnDate: dateOnly(ret.return_date), totalAmount: oldTotal, lines: oldLines.length },
+        after: { returnDate, totalAmount, lines: lineItemsJson.length },
+      },
+    }).catch(() => {});
+
+    res.json({
+      id,
+      returnNumber: ret.return_number,
+      saleId: sale.id,
+      invoiceNumber: sale.invoice_number ?? null,
+      customerId: ret.customer_id ?? null,
+      locationType, locationId,
+      returnDate,
+      lineItems: lineItemsJson,
+      subtotal, taxTotal, totalAmount,
+      refundMode: ret.refund_mode,
+      creditNoteId: ret.credit_note_id,
+      creditNoteNumber,
+      refundPaymentId: ret.refund_payment_id,
+      reason,
+    });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("PATCH /sales-returns/:id failed:", err);
+    res.status(500).json({ error: "Failed to update sales return" });
+  } finally {
+    client.release();
+  }
+});
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Purchase returns
 // ═════════════════════════════════════════════════════════════════════════════
@@ -580,7 +1053,8 @@ router.post("/purchase-returns", requireModuleAction(["page:/returns", "page:/pr
   if (!isDateStr(returnDate)) { res.status(400).json({ error: "returnDate must be YYYY-MM-DD" }); return; }
   if (reqLines.length === 0) { res.status(400).json({ error: "At least one return line is required" }); return; }
   for (const l of reqLines) {
-    if (!Number.isInteger(Number(l?.lineIndex)) || Number(l?.lineIndex) < 0 || !(Number(l?.quantity) > 0)) {
+    if (!Number.isInteger(Number(l?.lineIndex)) || Number(l?.lineIndex) < 0
+        || !Number.isFinite(Number(l?.quantity)) || !(Number(l?.quantity) > 0)) {
       res.status(400).json({ error: "Each line needs a valid lineIndex and a quantity > 0" }); return;
     }
   }
@@ -930,6 +1404,371 @@ router.get("/purchase-returns", requireModuleView("page:/returns"), async (req: 
   } catch (err) {
     console.error("GET /purchase-returns failed:", err);
     res.status(500).json({ error: "Failed to list purchase returns" });
+  }
+});
+
+// PATCH /purchase-returns/:id — edit a recorded purchase return's date, reason
+// and line quantities. Stock moves by DELTA only: returning MORE sends just the
+// extra out (availability-checked), returning LESS puts just the difference
+// back into the purchase line's own lot. The return and debit note keep their
+// numbers — the note is rewritten in place, so the date must stay inside the
+// financial year those numbers were drawn from.
+router.patch("/purchase-returns/:id", requireModuleAction("page:/returns", "edit"), async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const body = req.body ?? {};
+  const returnDate = body.returnDate;
+  const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim() : null;
+  const reqLines = Array.isArray(body.lines) ? body.lines : [];
+
+  if (!Number.isInteger(id) || id <= 0) { res.status(404).json({ error: "Return not found" }); return; }
+  if (!isDateStr(returnDate)) { res.status(400).json({ error: "returnDate must be YYYY-MM-DD" }); return; }
+  if (reqLines.length === 0) { res.status(400).json({ error: "At least one return line is required" }); return; }
+  for (const l of reqLines) {
+    if (!Number.isInteger(Number(l?.lineIndex)) || Number(l?.lineIndex) < 0
+        || !Number.isFinite(Number(l?.quantity)) || !(Number(l?.quantity) > 0)) {
+      res.status(400).json({ error: "Each line needs a valid lineIndex and a quantity > 0" }); return;
+    }
+  }
+  const idxSeen = new Set<number>();
+  for (const l of reqLines) {
+    const ix = Number(l.lineIndex);
+    if (idxSeen.has(ix)) { res.status(400).json({ error: `Duplicate return line for lineIndex ${ix}` }); return; }
+    idxSeen.add(ix);
+  }
+
+  const client = await (pool as any).connect();
+  try {
+    await client.query("BEGIN");
+
+    // Lock order mirrors creation: the purchase first, then the return row.
+    const { rows: [peek] } = await client.query(`SELECT purchase_id FROM purchase_returns WHERE id = $1`, [id]);
+    if (!peek) { await client.query("ROLLBACK"); res.status(404).json({ error: "Return not found" }); return; }
+    const { rows: [purchase] } = await client.query(`SELECT * FROM purchases WHERE id = $1 FOR UPDATE`, [peek.purchase_id]);
+    const { rows: [ret] } = await client.query(`SELECT * FROM purchase_returns WHERE id = $1 FOR UPDATE`, [id]);
+    if (!ret || !purchase || Number(ret.purchase_id) !== Number(purchase.id)) {
+      await client.query("ROLLBACK"); res.status(404).json({ error: "Return not found" }); return;
+    }
+
+    const prLocType: string = purchase.location_type ?? "headoffice";
+    const prLocId: number = prLocType === "headoffice" ? 1 : Number(purchase.location_id ?? 0);
+    const prLocName = await locationName(client, prLocType, prLocId);
+
+    const prScope = await getUserDataScope((req as any).employee ?? { branchType: "headoffice", branchId: 0 });
+    if (!prScope.isHeadOffice && !isLocationInScope(prScope, prLocType, prLocId)) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Return not found" });
+      return;
+    }
+    {
+      const disabledMsg = await disabledWarehouseError(client, [{ type: prLocType, id: prLocId }]);
+      if (disabledMsg) {
+        await client.query("ROLLBACK");
+        res.status(409).json({ error: disabledMsg, code: WAREHOUSE_DISABLED_CODE });
+        return;
+      }
+    }
+    if (returnDate < dateOnly(purchase.purchase_date)) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: `Return date cannot be before the purchase date (${dateOnly(purchase.purchase_date)})` });
+      return;
+    }
+    {
+      const fyErr = await fyChangeError(client, ret.return_number, returnDate);
+      if (fyErr) { await client.query("ROLLBACK"); res.status(400).json({ error: fyErr }); return; }
+    }
+
+    const pLines: any[] = Array.isArray(purchase.line_items) ? purchase.line_items : [];
+
+    // Prior returns for cap math — EXCLUDING this return itself.
+    const { rows: priorRows } = await client.query(
+      `SELECT line_items FROM purchase_returns WHERE purchase_id = $1 AND id <> $2`, [purchase.id, id]
+    );
+    const priorQty = new Map<number, number>();
+    for (const pr of priorRows) {
+      for (const pl of (Array.isArray(pr.line_items) ? pr.line_items : [])) {
+        const ix = Number(pl.lineIndex);
+        priorQty.set(ix, r3((priorQty.get(ix) ?? 0) + Number(pl.quantity || 0)));
+      }
+    }
+
+    // ── Build the NEW lines: caps + money only (stock moves later, by delta) ─
+    const retLines: any[] = [];
+    let subtotal = 0, taxTotal = 0, totalAmount = 0;
+    let totCgst = 0, totSgst = 0, totIgst = 0;
+
+    for (const rl of reqLines) {
+      const ix = Number(rl.lineIndex);
+      const rq = r3(Number(rl.quantity));
+      const li = pLines[ix];
+      if (!li) { await client.query("ROLLBACK"); res.status(400).json({ error: `Purchase has no line at index ${ix}` }); return; }
+
+      const boughtQty = Number(li.quantity) || 0;
+      const already = priorQty.get(ix) ?? 0;
+      const returnable = r3(boughtQty - already);
+      const materialType = li.materialType === "raw_material" ? "raw_material" : li.materialType === "item" ? "item" : "material";
+      const materialId = Number(li.materialId);
+
+      const nameTable = materialType === "raw_material" ? "raw_materials" : materialType === "item" ? "items" : "materials";
+      const { rows: [mat] } = await client.query(`SELECT name FROM ${nameTable} WHERE id = $1`, [materialId]);
+      const materialName = li.materialName || mat?.name || `${materialType} #${materialId}`;
+
+      if (rq > returnable + 0.001) {
+        await client.query("ROLLBACK");
+        res.status(400).json({
+          error: `Cannot return ${rq} of "${materialName}" — purchased ${boughtQty}, returned on other returns ${already}, returnable ${Math.max(0, returnable)}`,
+        });
+        return;
+      }
+
+      const frac = boughtQty > 0 ? rq / boughtQty : 0;
+      const taxable = r2(Number(li.taxableValue ?? 0) * frac);
+      const cgst = r2(Number(li.cgst ?? 0) * frac);
+      const sgst = r2(Number(li.sgst ?? 0) * frac);
+      const igst = r2(Number(li.igst ?? 0) * frac);
+      const tax = r2(cgst + sgst + igst);
+      const gross = r2(taxable + tax);
+
+      retLines.push({
+        lineIndex: ix,
+        materialType, materialId, materialName,
+        quantity: rq,
+        unitCost: Number(li.unitCost ?? 0),
+        grossAmount: gross,
+        taxableAmount: taxable,
+        taxAmount: tax,
+        cgst, sgst, igst,
+        gstRate: Number(li.gstRate ?? 0),
+        taxType: li.taxType ?? "intra",
+      });
+
+      subtotal = r2(subtotal + taxable);
+      taxTotal = r2(taxTotal + tax);
+      totalAmount = r2(totalAmount + gross);
+      totCgst = r2(totCgst + cgst); totSgst = r2(totSgst + sgst); totIgst = r2(totIgst + igst);
+    }
+
+    if (!(totalAmount > 0)) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "Return total must be greater than zero" });
+      return;
+    }
+
+    // ── Old state, for deltas ──────────────────────────────────────────────
+    const oldLines: any[] = Array.isArray(ret.line_items) ? ret.line_items : [];
+    const oldQty = new Map<number, number>();
+    const oldMatByIx = new Map<number, { materialType: string; materialId: number; materialName: string; unitCost: number }>();
+    for (const ol of oldLines) {
+      const ix = Number(ol.lineIndex);
+      oldQty.set(ix, r3((oldQty.get(ix) ?? 0) + Number(ol.quantity || 0)));
+      oldMatByIx.set(ix, {
+        materialType: ol.materialType ?? "material",
+        materialId: Number(ol.materialId),
+        materialName: ol.materialName ?? "",
+        unitCost: Number(ol.unitCost ?? 0),
+      });
+    }
+    const oldTotal = Number(ret.total_amount);
+
+    // ── Apply stock DELTAS at the purchase's location ──────────────────────
+    // Returning MORE sends the extra out (availability-checked). Returning
+    // LESS puts the difference back into the purchase line's own lot.
+    const newByIx = new Map<number, any>(retLines.map(rl => [rl.lineIndex, rl]));
+    const allIx = new Set<number>([...oldQty.keys(), ...newByIx.keys()]);
+    const ledgerDeltas: Array<{ materialType: string; materialId: number; materialName: string; delta: number; unitCost: number }> = [];
+
+    for (const ix of allIx) {
+      const nl = newByIx.get(ix);
+      const om = oldMatByIx.get(ix);
+      const oldQ = oldQty.get(ix) ?? 0;
+      const newQ = nl ? Number(nl.quantity) : 0;
+      const materialType: string = nl?.materialType ?? om?.materialType ?? "material";
+      const materialId: number = Number(nl?.materialId ?? om?.materialId);
+      const materialName: string = (nl?.materialName || om?.materialName || `${materialType} #${materialId}`) as string;
+      const unitCost: number = Number(nl?.unitCost ?? om?.unitCost ?? 0);
+      const li = pLines[ix];
+      const batchNumber: string = (li?.batchNumber || `PUR-${purchase.id}`) as string;
+      const delta = r3(newQ - oldQ);
+      if (Math.abs(delta) <= 0.0005) continue;
+
+      if (delta > 0) {
+        // Extra quantity goes OUT — mirror creation's checks and writes.
+        if (isMaterialKind(materialType)) {
+          const tbl = materialType === "material" ? "materials" : "raw_materials";
+          const { rows: [row] } = await client.query(`SELECT id FROM ${tbl} WHERE id = $1 FOR UPDATE`, [materialId]);
+          if (!row) { await client.query("ROLLBACK"); res.status(400).json({ error: `${materialName} no longer exists` }); return; }
+          const held = await availabilityAt(client, {
+            refId: materialId, materialType: materialType as MaterialKind, branchType: prLocType, branchId: prLocId, lock: true,
+          });
+          if (held.available + 0.001 < delta) {
+            await client.query("ROLLBACK");
+            res.status(400).json({
+              error: insufficientStockMessage({
+                productName: materialName, locationName: prLocName,
+                quantity: held.quantity, reserved: held.reserved, requested: delta,
+              }),
+              code: 'INSUFFICIENT_STOCK',
+            });
+            return;
+          }
+          const sent = await deductMaterialAt(client, materialType as MaterialKind, materialId, prLocType, prLocId, delta);
+          if (!sent.ok) {
+            await client.query("ROLLBACK");
+            res.status(400).json({
+              error: insufficientStockMessage({
+                productName: materialName, locationName: prLocName,
+                quantity: sent.available, reserved: held.reserved, requested: delta,
+              }),
+              code: 'INSUFFICIENT_STOCK',
+            });
+            return;
+          }
+          await client.query(`UPDATE ${tbl} SET current_stock = current_stock::numeric - $1, updated_at = now() WHERE id = $2`, [delta, materialId]);
+          await consumeBatches(client, {
+            itemId: materialId, materialType: materialType as MaterialKind,
+            branchType: prLocType, branchId: prLocId, quantity: delta,
+          });
+        } else {
+          const held = await availabilityAt(client, {
+            refId: materialId, materialType: 'item', branchType: prLocType, branchId: prLocId, lock: true,
+          });
+          if (held.available + 0.001 < delta || !held.entryId) {
+            await client.query("ROLLBACK");
+            res.status(400).json({
+              error: insufficientStockMessage({
+                productName: materialName, locationName: prLocName,
+                quantity: held.quantity, reserved: held.reserved, requested: delta,
+              }),
+              code: 'INSUFFICIENT_STOCK',
+            });
+            return;
+          }
+          await client.query(`UPDATE stock_entries SET quantity = quantity::numeric - $1, updated_at = now() WHERE id = $2`, [delta, held.entryId]);
+          await client.query(`UPDATE items SET production_stock = GREATEST(0, COALESCE(production_stock, 0)::numeric - $1), updated_at = now() WHERE id = $2`, [delta, materialId]);
+          await debitBatchByNumber(client, {
+            itemId: materialId, materialType: "item",
+            branchType: prLocType, branchId: prLocId,
+            batchNumber, quantity: delta,
+          });
+        }
+      } else {
+        // Reduced return — the difference comes BACK into stock and the line's lot.
+        const back = r3(-delta);
+        if (isMaterialKind(materialType)) {
+          await creditMaterialAt(client, materialType as MaterialKind, materialId, prLocType, prLocId, back, unitCost, { mirror: true });
+          await restoreBatches(client, materialId, prLocType, prLocId,
+            [{ batchNumber, mfgDate: li?.mfgDate ?? null, expiryDate: li?.expiryDate ?? null, quantity: back, unitCost }],
+            "purchase_return", id, materialType as MaterialKind);
+        } else {
+          await client.query(
+            `INSERT INTO stock_entries (item_id, material_type, branch_type, branch_id, quantity, cost_price)
+             VALUES ($1, 'item', $2, $3, $4, $5)
+             ON CONFLICT (item_id, material_type, branch_type, branch_id) DO UPDATE SET
+               quantity = stock_entries.quantity::numeric + EXCLUDED.quantity::numeric, updated_at = now()`,
+            [materialId, prLocType, prLocId, back, unitCost]
+          );
+          await client.query(`UPDATE items SET production_stock = COALESCE(production_stock, 0)::numeric + $1, updated_at = now() WHERE id = $2`, [back, materialId]);
+          await restoreBatches(client, materialId, prLocType, prLocId,
+            [{ batchNumber, mfgDate: li?.mfgDate ?? null, expiryDate: li?.expiryDate ?? null, quantity: back, unitCost }],
+            "purchase_return", id, "item");
+        }
+      }
+      ledgerDeltas.push({ materialType, materialId, materialName, delta, unitCost });
+    }
+
+    // ── Money: rewrite the debit note in place, number preserved ───────────
+    if (!ret.debit_note_id) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: "This return's debit note is missing, so it cannot be edited safely." });
+      return;
+    }
+    const vendLedger = await ledgerIdByCode(client, `VEND-${ret.vendor_id}`);
+    if (!vendLedger) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "Vendor ledger not found. Open the vendor record and save it once to create the ledger, then retry." });
+      return;
+    }
+    const purLedger = await ledgerIdByCode(client, "STD-PUR");
+    if (!purLedger) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "Purchases ledger not found (STD-PUR missing). Open Chart of Accounts to restore standard ledgers." });
+      return;
+    }
+    const billRef = purchase.invoice_number || `Purchase #${purchase.id}`;
+    const { headLines, unresolved } = await resolveGstHeads(client, "input", totCgst, totSgst, totIgst);
+    await rewriteVoucher(client, ret.debit_note_id, {
+      voucherDate: returnDate,
+      narration: `Purchase return ${ret.return_number} against ${billRef}`,
+      reason: reason ?? `Purchase return against ${billRef}`,
+      totalAmount,
+      lines: [
+        { ledgerId: vendLedger, debit: totalAmount, credit: 0 },
+        { ledgerId: purLedger, debit: 0, credit: r2(subtotal + unresolved) },
+        ...headLines.map(h => ({ ledgerId: h.ledgerId, debit: 0, credit: h.amount })),
+      ],
+    });
+    const { rows: [jv] } = await client.query(`SELECT voucher_number FROM journal_vouchers WHERE id = $1`, [ret.debit_note_id]);
+    const dnNumber: string | null = jv?.voucher_number ?? null;
+
+    // ── Persist the updated memo document ──────────────────────────────────
+    await client.query(
+      `UPDATE purchase_returns SET return_date = $1, reason = $2, line_items = $3::jsonb,
+              subtotal = $4, tax_total = $5, total_amount = $6 WHERE id = $7`,
+      [returnDate, reason, JSON.stringify(retLines), subtotal, taxTotal, totalAmount, id]
+    );
+
+    // ── Stock ledger: business-date correction + delta movement rows ──────
+    if (dateOnly(ret.return_date) !== returnDate) {
+      await client.query(
+        `UPDATE stock_ledger SET txn_date = $1 WHERE doc_type = 'purchase_return' AND doc_id = $2`,
+        [returnDate, id]
+      );
+    }
+    if (ledgerDeltas.length > 0) {
+      await writeStockLedger(client, ledgerDeltas.map(d => ({
+        txnType: 'purchase_return', materialType: (d.materialType ?? 'material') as any,
+        refId: d.materialId, itemName: d.materialName ?? '', unit: '',
+        branchType: prLocType,
+        branchId: prLocType === 'headoffice' ? (d.materialType === 'item' ? 1 : 0) : prLocId,
+        branchName: prLocName,
+        // Creation writes returns as negative (stock out); a positive delta
+        // here means MORE went out, a negative delta means some came back.
+        qtyChange: -d.delta, unitCost: d.unitCost,
+        docType: 'purchase_return', docId: id, txnDate: returnDate,
+        notes: `${ret.return_number} — adjusted by edit`,
+      })));
+    }
+
+    await client.query("COMMIT");
+
+    logActivity({
+      action: "UPDATE", module: "purchases", entityType: "purchase_return", entityId: id,
+      description: `Purchase return ${ret.return_number} against ${billRef} edited — ₹${oldTotal.toFixed(2)} → ₹${totalAmount.toFixed(2)}`,
+      user: userOf(req) ?? undefined,
+      metadata: {
+        before: { returnDate: dateOnly(ret.return_date), totalAmount: oldTotal, lines: oldLines.length },
+        after: { returnDate, totalAmount, lines: retLines.length },
+      },
+    }).catch(() => {});
+
+    res.json({
+      id,
+      returnNumber: ret.return_number,
+      purchaseId: purchase.id,
+      invoiceNumber: purchase.invoice_number ?? null,
+      vendorId: ret.vendor_id,
+      returnDate,
+      lineItems: retLines,
+      subtotal, taxTotal, totalAmount,
+      debitNoteId: ret.debit_note_id,
+      debitNoteNumber: dnNumber,
+      reason,
+    });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("PATCH /purchase-returns/:id failed:", err);
+    res.status(500).json({ error: "Failed to update purchase return" });
+  } finally {
+    client.release();
   }
 });
 

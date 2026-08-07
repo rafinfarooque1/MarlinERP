@@ -31,8 +31,9 @@ import { loadLedgerUsage, deleteBlockReason } from "../lib/chartGroups";
 import { loadPaymentPosition, computePaymentPosition, outstandingExpr } from "../lib/salePaymentPosition";
 import { parsePartyLedgerCode, ensureAdvanceLedger, advanceAvailable, takeAdvanceLock, voucherAdvanceConsumed } from "../lib/advanceLedgers";
 import { purchaseSettlementIndex } from "../lib/vendorBillSettlement";
-import { parsePostingLocationFilter, companyLevelSummary, type PostingLocationFilter } from "../lib/postingLocation";
+import { parsePostingLocationFilter, companyLevelSummary, filterPostingsByLocation, type PostingLocationFilter } from "../lib/postingLocation";
 import { resolveGstScope, salesScopeCond, purchaseScopeCond } from "../lib/gstinScope";
+import { openingBalancePostings } from "../lib/openingBalances";
 
 /**
  * Location condition on a SOURCE DOCUMENT row, mirroring how the derived
@@ -1631,6 +1632,71 @@ router.delete("/accounts/receipts/:id", requireModuleAction(["page:/accounts/vou
 // vouchers it owns, its own sales and its own purchase bills. Head-Office-only
 // sources (the expenses table, journal-family vouchers) are left out for branch
 // users because they carry no location dimension.
+/**
+ * One ledger's statement, read off the SAME derived posting stream (plus
+ * opening-balance postings) that the Trial Balance, the ledger reports and
+ * the Cash/Bank Books consume. These two statement routes previously stitched
+ * their entries from source documents (payments, receipts, expenses, JV
+ * lines) with their own arithmetic — they could not see purchases, sales,
+ * payroll, rent or opening balances, so the "Ledger View" disagreed with
+ * every other balance surface. One stream, one figure.
+ */
+async function postingLedgerStatement(opts: {
+  ledgerId: number;
+  fromDate?: string;
+  toDate?: string;
+  locFilter: PostingLocationFilter | null;
+}): Promise<{
+  opening: number; closing: number; totalDebit: number; totalCredit: number;
+  entries: Array<{ date: string; reference: string | null; description: string; entryType: string; debit: number; credit: number; balance: number }>;
+}> {
+  const rnd = (n: number) => Math.round(n * 100) / 100;
+  const dateOpts = opts.toDate && isIsoDate(opts.toDate) ? { toDate: opts.toDate } : {};
+  const stream: Array<Record<string, any>> = (await buildDerivedPostings(dateOpts) as Array<Record<string, any>>)
+    .concat(await openingBalancePostings(dateOpts));
+  const sliced = filterPostingsByLocation(stream as any, opts.locFilter) as Array<Record<string, any>>;
+
+  const mine = sliced
+    .filter((p) => Number(p.ledgerId) === opts.ledgerId)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.entryId ?? "").localeCompare(String(b.entryId ?? "")));
+
+  const from = opts.fromDate && isIsoDate(opts.fromDate) ? opts.fromDate : null;
+  let opening = 0;
+  let running = 0;
+  let totalDebit = 0;
+  let totalCredit = 0;
+  const entries: Array<{ date: string; reference: string | null; description: string; entryType: string; debit: number; credit: number; balance: number }> = [];
+  for (const p of mine) {
+    const debit = Number(p.debit) || 0;
+    const credit = Number(p.credit) || 0;
+    running = rnd(running + debit - credit);
+    // Entries before the window roll into the opening figure instead of being
+    // dropped — the running balance must stay continuous across the window edge.
+    if (from && String(p.date).slice(0, 10) < from) { opening = running; continue; }
+    totalDebit = rnd(totalDebit + debit);
+    totalCredit = rnd(totalCredit + credit);
+    entries.push({
+      date: String(p.date).slice(0, 10),
+      reference: p.voucherNumber == null ? null : String(p.voucherNumber),
+      description: String(p.description ?? ""),
+      entryType: String(p.source ?? "journal"),
+      debit: rnd(debit),
+      credit: rnd(credit),
+      balance: running,
+    });
+  }
+  return { opening: rnd(opening), closing: running, totalDebit, totalCredit, entries };
+}
+
+/** LBAC first: a branch caller is pinned to their own location's slice of the books; Head Office may narrow freely via the global selector. */
+function statementLocationFilter(req: any): PostingLocationFilter | null {
+  const emp = req.employee as { branchType?: string; branchId?: number } | undefined;
+  if (emp?.branchType && emp.branchType !== "headoffice") {
+    return { type: emp.branchType, id: Number(emp.branchId ?? 0) } as PostingLocationFilter;
+  }
+  return getPostingLocationFilter(req);
+}
+
 router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledger"), async (req, res): Promise<void> => {
   const qp = GetLedgerStatementQueryParams.safeParse(req.query);
   if (!qp.success) { res.status(400).json({ error: qp.error.message }); return; }
@@ -1638,200 +1704,29 @@ router.get("/accounts/ledger-statement", requireModuleView("page:/accounts/ledge
   const accountId = Number(qp.data.accountId);
   const fromDate = qp.data.fromDate as string | undefined;
   const toDate = qp.data.toDate as string | undefined;
-  // Presentation narrowing only — LBAC above/below still decides what the
-  // caller may see at all. NOTE: read from req.query, not qp.data — the zod
-  // schema predates the location params and strips unknown keys.
-  const locFilter = getPostingLocationFilter(req);
 
   const [account] = await db.select().from(accountLedgersTable).where(eq(accountLedgersTable.id, accountId)).limit(1);
   if (!account) { res.status(404).json({ error: "Account not found" }); return; }
 
-  // Two scopes on purpose: money vouchers follow the caller's own till
-  // (`moneyScopeCtx`), while sales and purchases keep the wider location scope
-  // the Sales and Purchases modules already use.
-  const scope = await getUserDataScope((req as any).employee);
-  const moneyScopeCtx = ownLocationScope((req as any).employee);
-  const ledgerIds = await scopeLedgerIds(moneyScopeCtx);
-  if (!moneyScopeCtx.isHeadOffice) {
-    const foreign = await foreignLocationLedgerIds(moneyScopeCtx);
+  const scope = ownLocationScope((req as any).employee);
+  if (!scope.isHeadOffice) {
+    const foreign = await foreignLocationLedgerIds(scope);
     if (foreign.includes(accountId)) {
       res.status(403).json({ error: "That account belongs to another location." }); return;
     }
   }
+  const locFilter = statementLocationFilter(req);
 
-  const entries: any[] = [];
-
-  // Payments where this account is involved
-  const pmtParams: unknown[] = [accountId];
-  const pmtScope = scopeMoneyWhere(moneyScopeCtx, ledgerIds, pmtParams, 'p', ['paid_from_ledger_id', 'paid_to_ledger_id']);
-  const pmtRes = await pool.query(
-    `SELECT p.* FROM payments p
-     WHERE (p.paid_from_ledger_id = $1 OR p.paid_to_ledger_id = $1) AND ${pmtScope}${documentLocationCond(locFilter, 'p', pmtParams, 'headoffice')}`,
-    pmtParams,
-  );
-  for (const p of pmtRes.rows) {
-    entries.push({
-      date: p.payment_date,
-      description: p.narration || `Payment ${p.voucher_number}`,
-      debit: p.paid_to_ledger_id == accountId ? Number(p.amount) : 0,
-      credit: p.paid_from_ledger_id == accountId ? Number(p.amount) : 0,
-      entryType: 'payment',
-    });
-  }
-
-  // Receipts where this account is involved
-  const recParams: unknown[] = [accountId];
-  const recScope = scopeMoneyWhere(moneyScopeCtx, ledgerIds, recParams, 'r', ['received_in_ledger_id', 'received_from_ledger_id']);
-  const recRes = await pool.query(
-    `SELECT r.* FROM receipts r
-     WHERE (r.received_from_ledger_id = $1 OR r.received_in_ledger_id = $1) AND ${recScope}${documentLocationCond(locFilter, 'r', recParams, 'headoffice')}`,
-    recParams,
-  );
-  for (const r of recRes.rows) {
-    entries.push({
-      date: r.receipt_date,
-      description: r.narration || `Receipt ${r.voucher_number}`,
-      debit: r.received_in_ledger_id == accountId ? Number(r.amount) : 0,
-      credit: r.received_from_ledger_id == accountId ? Number(r.amount) : 0,
-      entryType: 'receipt',
-    });
-  }
-
-  // Expenses tagged to this account — the expenses table is Head Office only
-  // (branch spending is recorded as location-expense payments, already above).
-  // Raw SQL, not drizzle: location_type/location_id are startup-migration
-  // columns that db.select() cannot see.
-  if (scope.isHeadOffice) {
-    const expParams: unknown[] = [accountId];
-    const { rows: exps } = await pool.query(
-      `SELECT e.expense_date, e.description, e.amount FROM expenses e
-       WHERE e.ledger_account_id = $1${documentLocationCond(locFilter, 'e', expParams, 'headoffice')}`,
-      expParams,
-    );
-    entries.push(...exps.map((e: any) => ({
-      date: e.expense_date, description: e.description ?? "Expense",
-      debit: Number(e.amount), credit: 0, entryType: 'expense',
-    })));
-  }
-
-  // Sales rows feeding income and GST ledgers, scoped to the caller's locations
-  const needsSales = account.type === 'income' || (account as any).code === 'STD-DTX';
-  let scopedSales: Array<{ id: number; sale_date: string; invoice_number: string | null; total_amount: string; tax_total: string }> = [];
-  if (needsSales) {
-    const salesParams: unknown[] = [];
-    const salesWhere = scopeSalesWhere(scope, salesParams);
-    // fallback null: a sale with no stored location posts as company-level in
-    // the derived stream, so it matches only the 'company' slice here too.
-    const { rows } = await pool.query(
-      `SELECT s.id, s.sale_date, s.invoice_number, s.total_amount, s.tax_total
-       FROM sales s WHERE s.branch_transfer_id IS NULL AND s.cancelled_at IS NULL AND ${salesWhere}${documentLocationCond(locFilter, 's', salesParams, null)}`, salesParams,
-    );
-    scopedSales = rows as typeof scopedSales;
-  }
-
-  // Income accounts: include sales
-  if (account.type === 'income') {
-    entries.push(...scopedSales.map(s => ({
-      date: s.sale_date,
-      description: `Sales Invoice ${s.invoice_number || '#' + s.id}`,
-      debit: 0, credit: Number(s.total_amount), entryType: 'sale',
-    })));
-  }
-
-  // Duty & Tax ledger (STD-DTX): show GST collected on each sale as a credit
-  const accountCode = (account as any).code ?? null;
-  if (accountCode === 'STD-DTX') {
-    for (const s of scopedSales) {
-      const tax = Number(s.tax_total ?? 0);
-      if (tax > 0) {
-        entries.push({
-          date: s.sale_date,
-          description: `GST on ${s.invoice_number || 'Sale #' + s.id}`,
-          debit: 0, credit: tax, entryType: 'sale_gst',
-        });
-      }
-    }
-  }
-
-  // Purchase-type expense accounts: include purchases (branch-scoped — a
-  // warehouse buys on its own bills since Phase 7)
-  if (account.type === 'expense' && account.name.toLowerCase().includes('purchase')) {
-    const purParams: unknown[] = [];
-    const purWhere = scopeBranchWhere(scope, purParams, 'p');
-    const { rows: purRows } = await pool.query(
-      `SELECT p.id, p.purchase_date, p.invoice_number, p.total_amount
-       FROM purchases p WHERE p.branch_transfer_id IS NULL AND ${purWhere}${documentLocationCond(locFilter, 'p', purParams, 'headoffice')}`, purParams,
-    );
-    entries.push(...purRows.map((p: any) => ({
-      date: p.purchase_date,
-      description: `Purchase Bill ${p.invoice_number || '#' + p.id}`,
-      debit: Number(p.total_amount), credit: 0, entryType: 'purchase',
-    })));
-  }
-
-  // Other Purchase Charges booked to this expense ledger (freight, hamali… on
-  // purchase bills) — mirrors the Dr leg buildDerivedPostings creates, so the
-  // statement agrees with the P&L and Trial Balance for these ledgers.
-  if (account.type === 'expense') {
-    const ocParams: unknown[] = [accountId];
-    const ocWhere = scopeBranchWhere(scope, ocParams, 'p');
-    const { rows: ocRows } = await pool.query(
-      `SELECT p.purchase_date, p.invoice_number, p.id, (e->>'amount')::numeric AS amount
-         FROM purchases p, jsonb_array_elements(COALESCE(p.other_charges, '[]'::jsonb)) e
-        WHERE e->>'ledgerId' ~ '^[0-9]+$' AND (e->>'ledgerId')::int = $1
-          AND ${ocWhere}${documentLocationCond(locFilter, 'p', ocParams, 'headoffice')}`,
-      ocParams,
-    );
-    entries.push(...ocRows.map((p: any) => ({
-      date: p.purchase_date,
-      description: `Purchase charge — ${p.invoice_number || 'Bill #' + p.id}`,
-      debit: Number(p.amount), credit: 0, entryType: 'purchase',
-    })));
-  }
-
-  // Journal-family voucher lines touching this ledger (journal/contra/CN/DN).
-  // Location-aware since Aug 2026: manual vouchers carry a 'headoffice' stamp
-  // and return-linked notes inherit their document's location, so a location
-  // slice keeps the vouchers it can attribute instead of dropping them all.
-  // Branch callers see exactly their own return-linked notes (jvScopeCond).
-  const jvParams: unknown[] = [accountId];
-  const { rows: jvLines } = await pool.query(
-    `SELECT v.voucher_date AS date, v.voucher_number, v.voucher_type, v.narration,
-            l.debit, l.credit
-     FROM journal_voucher_lines l
-     JOIN journal_vouchers v ON v.id = l.voucher_id
-     LEFT JOIN sales_returns sr ON sr.credit_note_id = v.id
-     LEFT JOIN purchase_returns pr ON pr.debit_note_id = v.id
-     LEFT JOIN purchases pu ON pu.id = pr.purchase_id
-     WHERE l.ledger_id = $1${jvScopeCond(scope, jvParams)}${jvLocationCond(locFilter, jvParams)}`, jvParams
-  ).catch(() => ({ rows: [] as any[] }));
-  for (const jl of jvLines) {
-    entries.push({
-      date: jl.date,
-      description: jl.narration || `${jl.voucher_type === 'contra' ? 'Contra' : jl.voucher_type === 'credit_note' ? 'Credit Note' : jl.voucher_type === 'debit_note' ? 'Debit Note' : 'Journal'} ${jl.voucher_number}`,
-      debit: Number(jl.debit), credit: Number(jl.credit),
-      entryType: jl.voucher_type,
-    });
-  }
-
-  // Filter by date range
-  let filtered = entries;
-  if (fromDate) filtered = filtered.filter(e => e.date >= fromDate!);
-  if (toDate) filtered = filtered.filter(e => e.date <= toDate!);
-  filtered.sort((a, b) => a.date.localeCompare(b.date));
-
-  // Running balance
-  let balance = 0;
-  const entriesWithBalance = filtered.map(e => {
-    balance += (e.debit || 0) - (e.credit || 0);
-    return { ...e, balance };
-  });
-
+  const st = await postingLedgerStatement({ ledgerId: accountId, fromDate, toDate, locFilter });
   res.json({
-    accountId, accountName: account.name,
-    openingBalance: 0, closingBalance: balance,
-    entries: entriesWithBalance,
-    transactions: entriesWithBalance,
+    accountId,
+    accountName: account.name,
+    openingBalance: st.opening,
+    closingBalance: st.closing,
+    totalDebit: st.totalDebit,
+    totalCredit: st.totalCredit,
+    entries: st.entries,
+    transactions: st.entries,
     ...(locFilter ? { location: locFilter } : {}),
   });
 });
@@ -3152,8 +3047,6 @@ router.get("/accounts/ledger/:id/statement", requireModuleView("page:/accounts/l
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid ledger id" }); return; }
   const { fromDate, toDate } = req.query as { fromDate?: string; toDate?: string };
-  // Presentation narrowing only; LBAC below still applies first.
-  const locFilter = getPostingLocationFilter(req);
 
   const { rows: [ledger] } = await pool.query(
     `SELECT id, name, type, code FROM account_ledgers WHERE id = $1`, [id]
@@ -3161,156 +3054,22 @@ router.get("/accounts/ledger/:id/statement", requireModuleView("page:/accounts/l
   if (!ledger) { res.status(404).json({ error: "Ledger not found" }); return; }
 
   const scope = ownLocationScope((req as any).employee);
-  const ledgerIds = await scopeLedgerIds(scope);
   if (!scope.isHeadOffice) {
     const foreign = await foreignLocationLedgerIds(scope);
     if (foreign.includes(id)) {
       res.status(403).json({ error: "That account belongs to another location." }); return;
     }
   }
-  /** Money-voucher scope fragment for this caller, appended to `params`. */
-  const moneyScope = (params: any[], alias: 'p' | 'r'): string => {
-    const legs: [string, string] = alias === 'p'
-      ? ['paid_from_ledger_id', 'paid_to_ledger_id']
-      : ['received_in_ledger_id', 'received_from_ledger_id'];
-    return ` AND ${scopeMoneyWhere(scope, ledgerIds, params, alias, legs)}`;
-  };
+  const locFilter = statementLocationFilter(req);
 
-  // Build date-range helpers
-  const dateClause = (col: string, params: any[]) => {
-    const conds: string[] = [];
-    if (fromDate) { params.push(fromDate); conds.push(`${col} >= $${params.length}`); }
-    if (toDate)   { params.push(toDate);   conds.push(`${col} <= $${params.length}`); }
-    return conds.length ? ` AND ${conds.join(' AND ')}` : '';
-  };
-
-  // Payments where this ledger is the source (credit — money leaves)
-  const pFromParams: any[] = [id];
-  const { rows: payFromRows } = await pool.query(
-    `SELECT p.id, p.payment_date AS date, p.amount, p.voucher_number, p.narration,
-            pt.name AS other_name
-     FROM payments p
-     LEFT JOIN account_ledgers pt ON pt.id = p.paid_to_ledger_id
-     WHERE p.paid_from_ledger_id = $1${dateClause('p.payment_date', pFromParams)}${moneyScope(pFromParams, 'p')}${documentLocationCond(locFilter, 'p', pFromParams, 'headoffice')}
-     ORDER BY p.payment_date, p.id`, pFromParams
-  );
-
-  // Payments where this ledger is the destination (debit — money arrives)
-  const pToParams: any[] = [id];
-  const { rows: payToRows } = await pool.query(
-    `SELECT p.id, p.payment_date AS date, p.amount, p.voucher_number, p.narration,
-            pf.name AS other_name
-     FROM payments p
-     LEFT JOIN account_ledgers pf ON pf.id = p.paid_from_ledger_id
-     WHERE p.paid_to_ledger_id = $1${dateClause('p.payment_date', pToParams)}${moneyScope(pToParams, 'p')}${documentLocationCond(locFilter, 'p', pToParams, 'headoffice')}
-     ORDER BY p.payment_date, p.id`, pToParams
-  );
-
-  // Receipts where this ledger is the source (credit)
-  const rFromParams: any[] = [id];
-  const { rows: recFromRows } = await pool.query(
-    `SELECT r.id, r.receipt_date AS date, r.amount, r.voucher_number, r.narration,
-            ri.name AS other_name
-     FROM receipts r
-     LEFT JOIN account_ledgers ri ON ri.id = r.received_in_ledger_id
-     WHERE r.received_from_ledger_id = $1${dateClause('r.receipt_date', rFromParams)}${moneyScope(rFromParams, 'r')}${documentLocationCond(locFilter, 'r', rFromParams, 'headoffice')}
-     ORDER BY r.receipt_date, r.id`, rFromParams
-  ).catch(() => ({ rows: [] }));
-
-  // Receipts where this ledger is the destination (debit)
-  const rToParams: any[] = [id];
-  const { rows: recToRows } = await pool.query(
-    `SELECT r.id, r.receipt_date AS date, r.amount, r.voucher_number, r.narration,
-            rf.name AS other_name
-     FROM receipts r
-     LEFT JOIN account_ledgers rf ON rf.id = r.received_from_ledger_id
-     WHERE r.received_in_ledger_id = $1${dateClause('r.receipt_date', rToParams)}${moneyScope(rToParams, 'r')}${documentLocationCond(locFilter, 'r', rToParams, 'headoffice')}
-     ORDER BY r.receipt_date, r.id`, rToParams
-  ).catch(() => ({ rows: [] }));
-
-  // Expenses charged to this ledger (debit) — Head Office table only
-  const expParams: any[] = [id];
-  const { rows: expRows } = scope.isHeadOffice ? await pool.query(
-    `SELECT e.id, e.expense_date AS date, e.amount, e.description, e.category
-     FROM expenses e
-     WHERE e.ledger_account_id = $1${dateClause('e.expense_date', expParams)}${documentLocationCond(locFilter, 'e', expParams, 'headoffice')}
-     ORDER BY e.expense_date, e.id`, expParams
-  ).catch(() => ({ rows: [] })) : { rows: [] as any[] };
-
-  // Journal-family voucher lines touching this ledger. Location-aware since
-  // Aug 2026: manual vouchers are stamped 'headoffice', return-linked notes
-  // inherit their document's location, unstamped system vouchers stay
-  // company-level. Branch callers see exactly their own return-linked notes
-  // (jvScopeCond); manual/HO vouchers remain Head Office reading.
-  const jvParams: any[] = [id];
-  const { rows: jvRows } = await pool.query(
-    `SELECT l.id, v.voucher_date AS date, v.voucher_number, v.voucher_type, v.narration,
-            l.debit, l.credit
-     FROM journal_voucher_lines l
-     JOIN journal_vouchers v ON v.id = l.voucher_id
-     LEFT JOIN sales_returns sr ON sr.credit_note_id = v.id
-     LEFT JOIN purchase_returns pr ON pr.debit_note_id = v.id
-     LEFT JOIN purchases pu ON pu.id = pr.purchase_id
-     WHERE l.ledger_id = $1${dateClause('v.voucher_date', jvParams)}${jvScopeCond(scope, jvParams)}${jvLocationCond(locFilter, jvParams)}
-     ORDER BY v.voucher_date, l.id`, jvParams
-  ).catch(() => ({ rows: [] }));
-
-  // Merge all entries
-  const combined: { sortKey: string; date: string; description: string; reference: string; entryType: string; debit: number; credit: number }[] = [];
-
-  for (const r of payFromRows) combined.push({
-    sortKey: `${r.date}P-${String(r.id).padStart(8,'0')}`,
-    date: r.date, reference: r.voucher_number,
-    description: r.narration || `Payment to ${r.other_name}`,
-    entryType: 'payment', debit: 0, credit: Number(r.amount),
-  });
-  for (const r of payToRows) combined.push({
-    sortKey: `${r.date}P+${String(r.id).padStart(8,'0')}`,
-    date: r.date, reference: r.voucher_number,
-    description: r.narration || `Payment from ${r.other_name}`,
-    entryType: 'payment', debit: Number(r.amount), credit: 0,
-  });
-  for (const r of recFromRows) combined.push({
-    sortKey: `${r.date}R-${String(r.id).padStart(8,'0')}`,
-    date: r.date, reference: r.voucher_number,
-    description: r.narration || `Receipt to ${r.other_name}`,
-    entryType: 'receipt', debit: 0, credit: Number(r.amount),
-  });
-  for (const r of recToRows) combined.push({
-    sortKey: `${r.date}R+${String(r.id).padStart(8,'0')}`,
-    date: r.date, reference: r.voucher_number,
-    description: r.narration || `Receipt from ${r.other_name}`,
-    entryType: 'receipt', debit: Number(r.amount), credit: 0,
-  });
-  for (const r of expRows) combined.push({
-    sortKey: `${r.date}E+${String(r.id).padStart(8,'0')}`,
-    date: r.date, reference: `EXP-${r.id}`,
-    description: r.description || r.category || 'Expense',
-    entryType: 'expense', debit: Number(r.amount), credit: 0,
-  });
-  for (const r of jvRows) combined.push({
-    sortKey: `${r.date}J+${String(r.id).padStart(8,'0')}`,
-    date: r.date, reference: r.voucher_number,
-    description: r.narration || (r.voucher_type === 'contra' ? 'Contra entry'
-      : r.voucher_type === 'credit_note' ? 'Credit note'
-      : r.voucher_type === 'debit_note' ? 'Debit note' : 'Journal entry'),
-    entryType: r.voucher_type, debit: Number(r.debit), credit: Number(r.credit),
-  });
-
-  combined.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
-
-  let balance = 0;
-  const entries = combined.map(({ sortKey: _sk, ...e }) => {
-    balance += e.debit - e.credit;
-    return { ...e, balance };
-  });
-
-  const totalDebit  = entries.reduce((s, e) => s + e.debit,  0);
-  const totalCredit = entries.reduce((s, e) => s + e.credit, 0);
-
+  const st = await postingLedgerStatement({ ledgerId: id, fromDate, toDate, locFilter });
   res.json({
     ledger: { id: ledger.id, name: ledger.name, type: ledger.type, code: ledger.code },
-    entries, totalDebit, totalCredit, closingBalance: balance,
+    entries: st.entries,
+    totalDebit: st.totalDebit,
+    totalCredit: st.totalCredit,
+    openingBalance: st.opening,
+    closingBalance: st.closing,
     ...(locFilter ? { location: locFilter } : {}),
   });
 });

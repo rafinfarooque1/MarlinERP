@@ -11,3 +11,6 @@ description: Durable lessons from the intermittent-login-rejection incident — 
 - **Production proxy strips client IPs** — login audit rows all show 127.0.0.1, so per-device forensics/throttling need trust-proxy work first (follow-up task exists).
 - When exercising the limiter in dev, never burn failures against `admin` — use a disposable user.
 - Auth-state tables belong on the company-reset table list, or a pre-reset lock outlives the reseed and blocks the fresh admin.
+
+## Stale hardcoded admin creds in test suites (Aug 2026)
+Several node --test suites (e.g. balance-reconciliation.test.mjs) hardcode `admin` + an OLD password and now fail at login — and every run burns a failed-login attempt toward the 5-failure/15-min lockout on the REAL admin account. Do not rerun them to "check if it's flaky"; clear `login_lockouts` for 'admin' after any accidental run. Regression evidence should come from a temp-user harness instead.

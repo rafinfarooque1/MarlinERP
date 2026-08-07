@@ -60,6 +60,14 @@ export interface CreatePurchaseReturnBody {
   lines: ReturnLineInput[];
 }
 
+/** Edit an existing return: date, reason and line quantities (source bill fixed). */
+export interface UpdateReturnBody {
+  id: number;
+  returnDate: string;
+  reason?: string;
+  lines: ReturnLineInput[];
+}
+
 export interface PurchaseReturnLine {
   lineIndex: number;
   materialType: string;
@@ -231,6 +239,25 @@ export function useCreateSalesReturn() {
   });
 }
 
+export function useUpdateSalesReturn() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: UpdateReturnBody) =>
+      customFetch<SalesReturn>(`/api/sales-returns/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: getSalesReturnsQueryKey() });
+      qc.invalidateQueries({ queryKey: getReceivablesAgingQueryKey() });
+      qc.invalidateQueries({ queryKey: getCollectionsQueryKey() });
+      qc.invalidateQueries({ queryKey: ['/api/sales'] });
+      qc.invalidateQueries({ queryKey: ['/api/customers'] });
+    },
+  });
+}
+
 export function useListPurchaseReturns(purchaseId?: number) {
   return useQuery({
     queryKey: purchaseId ? ([...getPurchaseReturnsQueryKey(), purchaseId] as const) : getPurchaseReturnsQueryKey(),
@@ -244,6 +271,23 @@ export function useCreatePurchaseReturn() {
     mutationFn: (body: CreatePurchaseReturnBody) =>
       customFetch<PurchaseReturn>('/api/purchase-returns', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: getPurchaseReturnsQueryKey() });
+      qc.invalidateQueries({ queryKey: getPayablesAgingQueryKey() });
+      qc.invalidateQueries({ queryKey: ['/api/purchases'] });
+    },
+  });
+}
+
+export function useUpdatePurchaseReturn() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: UpdateReturnBody) =>
+      customFetch<PurchaseReturn>(`/api/purchase-returns/${id}`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       }),

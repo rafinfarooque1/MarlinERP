@@ -1,0 +1,330 @@
+Perform a complete ERP Accounting Integrity Audit and fix any inconsistencies.
+
+Objective:
+Every transaction entered anywhere in the ERP must create the correct accounting entries, update the correct ledgers, and display the exact same balances across every module. There must be only ONE source of truth for accounting balances.
+
+====================================================
+1. Journal / Ledger Integrity
+====================================================
+
+Every financial transaction must create the proper journal entries.
+
+This includes:
+
+• Sales
+• Purchase Bills
+• Sales Returns
+• Purchase Returns
+• Receipt Vouchers
+• Payment Vouchers
+• Journal Vouchers
+• Cash Entries
+• Bank Entries
+• Expenses
+• Production
+• Stock Transfers
+• Opening Balances
+• Inventory Adjustments
+• Asset Transactions
+• Imports (Sales, Purchase, Receipt, Payment, Journal)
+
+Verify every transaction creates:
+
+✓ Correct Debit Ledger
+✓ Correct Credit Ledger
+✓ Correct Amount
+✓ Correct GST postings
+✓ Correct Location
+✓ Correct Voucher Reference
+
+No transaction should exist without journal entries.
+
+====================================================
+2. Ledger Consistency
+====================================================
+
+Every ledger balance must be identical everywhere.
+
+For every Customer:
+
+Customer List
+=
+Customer Ledger
+=
+Receivable Report
+=
+Dashboard
+=
+Trial Balance
+=
+Balance Sheet
+
+For every Vendor:
+
+Vendor List
+=
+Vendor Ledger
+=
+Payables Report
+=
+Dashboard
+=
+Trial Balance
+=
+Balance Sheet
+
+For every General Ledger:
+
+Ledger View
+=
+Chart of Accounts
+=
+Trial Balance
+=
+Balance Sheet
+=
+Profit & Loss
+=
+Dashboard
+
+There must never be different balances shown for the same ledger.
+
+====================================================
+3. Chart of Accounts
+====================================================
+
+Every account balance shown in Chart of Accounts must come directly from journal entries.
+
+Do not use cached balances.
+
+Do not use manually maintained totals.
+
+Recalculate balances from accounting entries.
+
+====================================================
+4. Dashboard
+====================================================
+
+Dashboard totals must exactly equal accounting.
+
+Verify:
+
+Sales
+Purchases
+Receivables
+Payables
+Cash
+Bank
+Inventory
+Expenses
+Profit
+Stock Value
+
+All must reconcile with reports.
+
+====================================================
+5. Customer & Vendor Ledgers
+====================================================
+
+Opening Balance
++
+Invoices
++
+Receipts
++
+Returns
++
+Adjustments
+
+must equal Closing Balance.
+
+Customer/Vendor balances must match:
+
+Customer/Vendor List
+Customer/Vendor Ledger
+Dashboard
+Receivable/Payable reports
+
+====================================================
+6. Cash & Bank
+====================================================
+
+Cash Book
+
+Bank Book
+
+Cash & Bank screen
+
+Ledger
+
+Trial Balance
+
+Balance Sheet
+
+must all show identical balances.
+
+====================================================
+7. Inventory Integration
+====================================================
+
+Every Purchase
+
+Every Sale
+
+Every Return
+
+Every Production
+
+Every Transfer
+
+must update:
+
+Stock
+
+Inventory Ledger
+
+Inventory Valuation
+
+Accounting
+
+No inventory movement should exist without accounting.
+
+====================================================
+8. Import Verification
+====================================================
+
+Verify imported:
+
+Sales
+
+Purchases
+
+Receipts
+
+Payments
+
+Journals
+
+Customers
+
+Vendors
+
+Items
+
+Opening Balances
+
+All create exactly the same accounting entries as manually entered transactions.
+
+====================================================
+9. Location Integrity
+====================================================
+
+Every accounting entry must belong to the selected location.
+
+Warehouse:
+
+Only warehouse entries.
+
+Head Office:
+
+Only Head Office entries.
+
+All Locations:
+
+Consolidated totals.
+
+Ledger balances, dashboard, reports and financial statements must all respect the selected location.
+
+====================================================
+10. Accounting Validation
+====================================================
+
+Verify:
+
+✓ Trial Balance balances exactly.
+
+✓ Balance Sheet balances exactly.
+
+✓ Profit & Loss matches ledger postings.
+
+✓ Inventory valuation matches stock.
+
+✓ Receivables match customer ledgers.
+
+✓ Payables match vendor ledgers.
+
+✓ Cash equals cash ledger.
+
+✓ Bank equals bank ledger.
+
+✓ GST reports match invoices.
+
+✓ No orphan journal entries.
+
+✓ No duplicate journal entries.
+
+✓ No transaction missing ledger postings.
+
+====================================================
+11. Code Refactoring
+====================================================
+
+Search the entire codebase for every place that calculates balances.
+
+Remove duplicate calculations.
+
+Create one shared accounting service.
+
+Every screen must read balances from the same service.
+
+No module should calculate balances independently.
+
+====================================================
+12. Final Verification
+====================================================
+
+Run a complete regression test.
+
+Verify every module:
+
+Sales
+Purchases
+Sales Returns
+Purchase Returns
+Receipt Voucher
+Payment Voucher
+Journal
+Expenses
+Production
+Inventory
+Stock Transfer
+Cash
+Bank
+Customers
+Vendors
+Assets
+Imports
+Reports
+Dashboard
+
+Confirm:
+
+✓ Every transaction creates the correct journal entry.
+
+✓ Every ledger updates correctly.
+
+✓ Every customer/vendor balance is identical across all modules.
+
+✓ Chart of Accounts matches Ledger View.
+
+✓ Dashboard matches reports.
+
+✓ Trial Balance matches Balance Sheet.
+
+✓ Profit & Loss is correct.
+
+✓ Inventory matches accounting.
+
+✓ Every amount reconciles to the paisa.
+
+The ERP should behave like a professional accounting system where every financial figure has one source of truth and every screen displays exactly the same balance for the same account.

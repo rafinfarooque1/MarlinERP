@@ -128,4 +128,5 @@
 - [Expo Metro in pnpm monorepo](expo-metro-pnpm.md) — watchFolders must include root node_modules or every import fails (blank app, JSON bundle error); it's config, not cache.
 - [RN Web dialogs](rn-web-dialogs.md) — Alert.alert is a no-op on web; all confirms/error popups in the employee app go through lib/dialogs.ts.
 - [401 = dead session contract](session-401-contract.md) — clients log out on any 401; wrong typed credentials must be 400; self-service GETs self-scope instead of 403 (a 403 zeroes mobile tiles silently).
+- [Returns edit](returns-edit.md) — full-state PATCH, delta-based stock (date-only edits never fail), numbers FY-pinned, note JV rewritten in place; lot debits clamp at zero by design.
 - [Location data wipe pattern](location-data-wipe.md) — soft-link tables found by column scan (no FKs); refuse mixed cross-location rows; rehearse on scratch DB with real prod data; backups to workspace, never a prod schema.
