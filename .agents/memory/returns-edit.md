@@ -16,3 +16,11 @@ description: How editing a sales/purchase return works — delta-based stock, FY
 **How to apply:** any future return-adjacent write path (delete/cancel a return, imports) must follow the same delta/number rules; delete/cancel is intentionally NOT implemented yet.
 
 **UI:** the create dialogs in pages/returns/Returns.tsx double as edit dialogs via an optional `editing` prop; edit instances are keyed per return id so state initializes from props; the bill picker is replaced by a disabled input in edit mode.
+
+# Return pricing display (Aug 2026 complaint: "shows MRP, not the sold rate")
+
+- The backend was ALWAYS invoice-anchored: create/edit prorate the ORIGINAL document line's stored money (sales: `taxableAmount ?? lineSubtotal` + cgst/sgst/igst legs; purchases: `taxableValue` + legs), never the item master. Any "wrong rate" complaint here is a DISPLAY bug.
+- Sale line `unitPrice` is the GROSS pre-discount rate (looks like MRP to users); the credited value is the discounted taxable+tax. Return UIs must show the effective "Net Rate" = (taxable+tax)/qty and estimate refunds with the SAME per-component r2 rounding chain as the server (round each prorated component to paise, then sum) or partial/fractional quantities drift from the note total.
+- Post-tax bill coupons (`discountTotal`) are NOT prorated into returns by design — the CN reverses pre-coupon line values. Label discounts "Line Disc." and disclose the coupon exclusion, or users can't reconcile against the invoice total.
+
+**How to apply:** any new surface previewing a return value (PDF, mobile, reports) must reuse this proration + rounding, and must never show gross unitPrice as if it were the refund rate.

@@ -38,6 +38,7 @@
 - [Inventory valuation & ageing](inventory-valuation-ageing.md) — ONE at-cost valuation (3 kinds + in-transit, sender-owned) feeds report+dashboard+P&L; movement class = last OUTBOUND only.
 - [GST transfer invoicing](gst-transfer-invoicing.md) — cross-GSTIN transfers write REAL sales/purchase rows that replace the dispatch/receive JVs; every revenue/spend query must exclude branch_transfer_id.
 - [Attendance-driven salary accrual](salary-accrual-attendance.md) — copy payroll's rounding expression verbatim (unrounded rate); approval must re-check attendance inside the lock or it trues up to a stale figure.
+- [Employment status & LWD](employment-status-lwd.md) — status is truth, is_active derived; leaving bounds accrual/payroll at the last working date; untracked month = ZERO pay post-cutover; draft teardown must take approval's row lock.
 - [Statutory payroll](statutory-payroll.md) — rates snapshotted per run (never re-read); approved payroll is locked, corrections are reversals; salary JV recognises full cost incl. employer PF/ESI; attendance is fractional.
 - [Historical stock dating](historical-stock-dating.md) — stock_ledger.created_at is an INSERT time, not a business date; past-date stock is mostly not derivable; anchor "held nothing" on document dates.
 - [Sale location resolution](sale-location-resolution.md) — resolve via location_type+location_id; sale_payments.outlet_id is legacy+NULL for warehouse sales so joining it silently deletes rows; warehouses holds outlet rows too
@@ -128,6 +129,6 @@
 - [Expo Metro in pnpm monorepo](expo-metro-pnpm.md) — watchFolders must include root node_modules or every import fails (blank app, JSON bundle error); it's config, not cache.
 - [RN Web dialogs](rn-web-dialogs.md) — Alert.alert is a no-op on web; all confirms/error popups in the employee app go through lib/dialogs.ts.
 - [401 = dead session contract](session-401-contract.md) — clients log out on any 401; wrong typed credentials must be 400; self-service GETs self-scope instead of 403 (a 403 zeroes mobile tiles silently).
-- [Returns edit](returns-edit.md) — full-state PATCH, delta-based stock (date-only edits never fail), numbers FY-pinned, note JV rewritten in place; lot debits clamp at zero by design.
+- [Returns edit](returns-edit.md) — full-state PATCH, delta-based stock, numbers FY-pinned, note JV in place; returns are invoice-anchored (never item master) — sale unitPrice is GROSS, show Net Rate + server's r2 chain; coupons excluded.
 - [Location data wipe pattern](location-data-wipe.md) — soft-link tables found by column scan (no FKs); refuse mixed cross-location rows; rehearse on scratch DB with real prod data; backups to workspace, never a prod schema.
 - [Sale overpayment & one-sided entries](sale-overpayment-books.md) — overpayment = natural Cr remainder on CUST- (gross model; explicit leg only on walk-in fallback); sale EDIT is the live producer; prod-only BS gaps = data divergence, query the prod replica for clamp classes.

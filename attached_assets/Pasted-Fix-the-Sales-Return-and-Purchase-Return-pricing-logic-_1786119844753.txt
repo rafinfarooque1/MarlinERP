@@ -1,0 +1,138 @@
+Fix the Sales Return and Purchase Return pricing logic.
+
+Current Problem
+
+The Sales Return screen displays the current Item Master MRP/Rate instead of the actual rate at which the item was sold.
+
+Similarly, Purchase Return should use the original purchase rate, not the current item cost or MRP.
+
+This is incorrect accounting and inventory behaviour.
+
+====================================================
+Sales Return
+====================================================
+
+When creating a Sales Return from an invoice:
+
+Do NOT fetch the current Item Master MRP.
+
+Instead, load the exact values stored in the original Sales Invoice.
+
+For every returned line display:
+
+• Item
+• Original Sold Quantity
+• Already Returned Quantity
+• Remaining Returnable Quantity
+• Original Selling Rate
+• Original Discount
+• Original GST Rate
+• Original Taxable Value
+• Original Line Total
+• Return Quantity
+
+The return value must be calculated using the original invoice values.
+
+Example:
+
+Item Master MRP today = ₹350
+
+Original Sale:
+
+MRP = ₹350
+Discount = ₹90
+Actual Selling Price = ₹260
+
+Sales Return must use:
+
+Rate = ₹260
+
+NOT ₹350.
+
+If the invoice contained a custom selling price, discount or overridden MRP, the return must use those exact values.
+
+====================================================
+Purchase Return
+====================================================
+
+When creating a Purchase Return:
+
+Do NOT use the current Item Master purchase price.
+
+Load the original Purchase Bill line.
+
+Use:
+
+• Original Purchase Rate
+• Original Discount
+• Original GST
+• Original Taxable Value
+• Original Batch
+• Original MFG Date
+• Original Expiry Date
+• Original Line Total
+
+The Purchase Return must reverse the exact original purchase transaction.
+
+====================================================
+Inventory
+====================================================
+
+Returned stock must update inventory using the original batch and costing information.
+
+====================================================
+Accounting
+====================================================
+
+Credit Note (Sales Return)
+
+Debit Note (Purchase Return)
+
+must use the original transaction value.
+
+Never recalculate using today's item price.
+
+====================================================
+UI
+====================================================
+
+Display:
+
+Original Rate
+
+Original Discount
+
+Effective Rate
+
+GST
+
+Original Invoice Number
+
+The user should clearly see the original selling/purchase values being reversed.
+
+====================================================
+Validation
+====================================================
+
+Verify:
+
+✓ Full return
+✓ Partial return
+✓ Multiple returns
+✓ Discounted sale
+✓ Custom selling price
+✓ Custom MRP
+✓ GST inclusive
+✓ GST exclusive
+✓ Imported invoices
+✓ Batch-controlled items
+
+====================================================
+Final Objective
+====================================================
+
+Sales Returns must always reverse the original Sales Invoice.
+
+Purchase Returns must always reverse the original Purchase Bill.
+
+Never use the current Item Master MRP, selling price, or purchase price when processing returns.

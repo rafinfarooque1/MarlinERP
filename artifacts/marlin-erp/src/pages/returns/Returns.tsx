@@ -23,6 +23,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { invalidateDashboard } from '@/lib/invalidateDashboard';
 
 const fmt = (n: unknown) => Number(n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+// Paise rounding — must match the API's r2 so estimates equal the note total.
+const r2 = (n: number) => Math.round(n * 100) / 100;
 const dfmt = (d?: string | null) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
 const today = () => new Date().toISOString().split('T')[0];
 
@@ -83,12 +85,29 @@ function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; 
     const sold = Number(li.quantity);
     const returned = returnedByIx.get(ix) ?? 0;
     const remaining = Math.max(0, sold - returned);
-    return { ix, li, sold, returned, remaining };
+    // Mirror the server's credit-note math exactly: the CN prorates the
+    // ORIGINAL invoice line's stored money — taxable value (net of every
+    // discount) plus its GST legs. Today's item master price plays no part,
+    // and neither does the gross unitPrice: a discounted line refunds the
+    // discounted value.
+    const taxable = Number(li.taxableAmount ?? li.lineSubtotal ?? 0);
+    const tax = Number(li.cgst ?? 0) + Number(li.sgst ?? 0) + Number(li.igst ?? 0);
+    const lineValue = taxable + tax; // full original line, incl. GST
+    const effRate = sold > 0 ? lineValue / sold : 0; // per-unit refund value
+    const discount = Number(li.discount ?? 0); // item discount + bill-discount share
+    const gstRate = Number(li.taxRate ?? 0);
+    return { ix, li, sold, returned, remaining, effRate, discount, gstRate, lineValue };
   });
 
+  // Same per-component paise rounding sequence as the API's create path, so
+  // this figure equals the credit note total even on fractional quantities.
   const estRefund = rows.reduce((s, r) => {
     const q = Number(qty[r.ix] || 0);
-    return s + (q > 0 ? q * Number(r.li.unitPrice) : 0);
+    if (!(q > 0) || !(r.sold > 0)) return s;
+    const frac = q / r.sold;
+    const taxable = r2(Number(r.li.taxableAmount ?? r.li.lineSubtotal ?? 0) * frac);
+    const tax = r2(r2(Number(r.li.cgst ?? 0) * frac) + r2(Number(r.li.sgst ?? 0) * frac) + r2(Number(r.li.igst ?? 0) * frac));
+    return r2(s + r2(taxable + tax));
   }, 0);
 
   const reset = () => { if (!editing) { setSaleId(0); setReturnDate(today()); setReason(''); setQty({}); } };
@@ -137,7 +156,7 @@ function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; 
 
   return (
     <Dialog open={open} onOpenChange={v => { if (!v) reset(); onOpenChange(v); }}>
-      <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{editing ? `Edit ${editing.returnNumber}` : 'New Sales Return'}</DialogTitle>
           <DialogDescription>
@@ -173,12 +192,14 @@ function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; 
           {sale && (
             <>
               <div className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs flex flex-wrap gap-x-4 gap-y-1">
+                <span><span className="text-muted-foreground">Invoice:</span> <strong className="font-mono">{sale.invoiceNumber || `Sale #${sale.id}`}</strong></span>
                 <span><span className="text-muted-foreground">Customer:</span> <strong>{sale.customerName || 'Walk-in'}</strong></span>
                 <span><span className="text-muted-foreground">Sold on:</span> {dfmt(sale.saleDate)}</span>
                 <span><span className="text-muted-foreground">Refund via:</span> <strong>{sale.customerId ? 'Credit Note' : 'Cash refund'}</strong></span>
               </div>
               <div className="border border-border rounded-lg overflow-hidden">
-                <table className="w-full text-xs">
+                <div className="overflow-x-auto">
+                <table className="w-full min-w-[600px] text-xs">
                   <thead className="bg-muted/30">
                     <tr>
                       <th className="text-left px-3 py-2">Item</th>
@@ -186,7 +207,10 @@ function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; 
                       <th className="text-right px-2 py-2">Returned</th>
                       <th className="text-right px-2 py-2">Left</th>
                       <th className="text-right px-2 py-2">Rate</th>
-                      <th className="text-right px-3 py-2 w-28">Return Qty</th>
+                      <th className="text-right px-2 py-2" title="Item discount plus this line's share of any bill discount (pre-tax)">Line Disc.</th>
+                      <th className="text-right px-2 py-2">GST</th>
+                      <th className="text-right px-2 py-2" title="Per-unit refund value from the original invoice, incl. GST">Net Rate</th>
+                      <th className="text-right px-3 py-2 w-24">Return Qty</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -197,6 +221,9 @@ function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; 
                         <td className="text-right px-2 py-2">{r.returned > 0 ? r.returned : '—'}</td>
                         <td className="text-right px-2 py-2 font-semibold">{r.remaining}</td>
                         <td className="text-right px-2 py-2 font-mono">₹{fmt(r.li.unitPrice)}</td>
+                        <td className="text-right px-2 py-2 font-mono">{r.discount > 0 ? `−₹${fmt(r.discount)}` : '—'}</td>
+                        <td className="text-right px-2 py-2">{r.gstRate > 0 ? `${r.gstRate}%` : '—'}</td>
+                        <td className="text-right px-2 py-2 font-mono font-semibold">₹{fmt(r.effRate)}</td>
                         <td className="text-right px-3 py-1.5">
                           <Input
                             type="number" min={0} max={r.remaining} step="any" disabled={r.remaining === 0}
@@ -209,7 +236,13 @@ function NewSalesReturnDialog({ open, onOpenChange, editing }: { open: boolean; 
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
+              <p className="text-[11px] text-muted-foreground">
+                Rate, line discounts and GST come from the original invoice — the refund reverses the line values
+                actually charged (Net Rate × quantity), never today's item price. Bill-level coupon discounts are
+                not prorated into returns.
+              </p>
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Reason <span className="text-muted-foreground font-normal">(optional)</span></label>
                 <Textarea rows={2} value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Damaged in transit, wrong flavour delivered…" />
@@ -282,14 +315,27 @@ function NewPurchaseReturnDialog({ open, onOpenChange, editing }: { open: boolea
     const bought = Number(li.quantity);
     const returned = returnedByIx.get(ix) ?? 0;
     const remaining = Math.max(0, bought - returned);
-    return { ix, li, bought, returned, remaining };
+    // Mirror the server's debit-note math exactly: it prorates the ORIGINAL
+    // bill line's stored taxable value (net of discount) plus its GST legs —
+    // never the current item cost.
+    const taxable = Number(li.taxableValue ?? 0);
+    const tax = Number(li.cgst ?? 0) + Number(li.sgst ?? 0) + Number(li.igst ?? 0);
+    const lineValue = taxable + tax; // full original line, incl. GST
+    const effRate = bought > 0 ? lineValue / bought : 0;
+    const discount = Number(li.discountAmt ?? li.discount ?? 0);
+    const gstRate = Number(li.gstRate ?? 0);
+    return { ix, li, bought, returned, remaining, effRate, discount, gstRate, lineValue };
   });
 
+  // Same per-component paise rounding sequence as the API's create path, so
+  // this figure equals the debit note total even on fractional quantities.
   const estValue = rows.reduce((s, r) => {
     const q = Number(qty[r.ix] || 0);
-    if (q <= 0 || r.bought <= 0) return s;
-    const lineTotal = Number(r.li.lineTotal ?? r.li.grossAmount ?? r.bought * Number(r.li.unitCost));
-    return s + (q / r.bought) * lineTotal;
+    if (!(q > 0) || !(r.bought > 0)) return s;
+    const frac = q / r.bought;
+    const taxable = r2(Number(r.li.taxableValue ?? 0) * frac);
+    const tax = r2(r2(Number(r.li.cgst ?? 0) * frac) + r2(Number(r.li.sgst ?? 0) * frac) + r2(Number(r.li.igst ?? 0) * frac));
+    return r2(s + r2(taxable + tax));
   }, 0);
 
   const reset = () => { if (!editing) { setPurchaseId(0); setReturnDate(today()); setReason(''); setQty({}); } };
@@ -334,7 +380,7 @@ function NewPurchaseReturnDialog({ open, onOpenChange, editing }: { open: boolea
 
   return (
     <Dialog open={open} onOpenChange={v => { if (!v) reset(); onOpenChange(v); }}>
-      <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{editing ? `Edit ${editing.returnNumber}` : 'New Purchase Return'}</DialogTitle>
           <DialogDescription>
@@ -370,12 +416,14 @@ function NewPurchaseReturnDialog({ open, onOpenChange, editing }: { open: boolea
           {purchase && (
             <>
               <div className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs flex flex-wrap gap-x-4 gap-y-1">
+                <span><span className="text-muted-foreground">Bill:</span> <strong className="font-mono">{purchase.invoiceNumber || `PB #${String(purchase.id).padStart(4, '0')}`}</strong></span>
                 <span><span className="text-muted-foreground">Vendor:</span> <strong>{purchase.vendorName}</strong></span>
                 <span><span className="text-muted-foreground">Billed on:</span> {dfmt(purchase.purchaseDate)}</span>
                 <span><span className="text-muted-foreground">Adjustment via:</span> <strong>Debit Note</strong></span>
               </div>
               <div className="border border-border rounded-lg overflow-hidden">
-                <table className="w-full text-xs">
+                <div className="overflow-x-auto">
+                <table className="w-full min-w-[600px] text-xs">
                   <thead className="bg-muted/30">
                     <tr>
                       <th className="text-left px-3 py-2">Material</th>
@@ -383,17 +431,30 @@ function NewPurchaseReturnDialog({ open, onOpenChange, editing }: { open: boolea
                       <th className="text-right px-2 py-2">Returned</th>
                       <th className="text-right px-2 py-2">Left</th>
                       <th className="text-right px-2 py-2">Rate</th>
-                      <th className="text-right px-3 py-2 w-28">Return Qty</th>
+                      <th className="text-right px-2 py-2" title="This line's discount on the original bill (pre-tax)">Line Disc.</th>
+                      <th className="text-right px-2 py-2">GST</th>
+                      <th className="text-right px-2 py-2" title="Per-unit debit value from the original bill, incl. GST">Net Rate</th>
+                      <th className="text-right px-3 py-2 w-24">Return Qty</th>
                     </tr>
                   </thead>
                   <tbody>
                     {rows.map(r => (
                       <tr key={r.ix} className={`border-t border-border ${r.remaining === 0 ? 'opacity-50' : ''}`}>
-                        <td className="px-3 py-2 font-medium">{r.li.materialName || `#${r.li.materialId}`}</td>
+                        <td className="px-3 py-2 font-medium">
+                          {r.li.materialName || `#${r.li.materialId}`}
+                          {r.li.batchNumber && (
+                            <div className="text-[10px] text-muted-foreground font-mono font-normal">
+                              Batch {r.li.batchNumber}{r.li.expiryDate ? ` · exp ${dfmt(r.li.expiryDate)}` : ''}
+                            </div>
+                          )}
+                        </td>
                         <td className="text-right px-2 py-2">{r.bought}</td>
                         <td className="text-right px-2 py-2">{r.returned > 0 ? r.returned : '—'}</td>
                         <td className="text-right px-2 py-2 font-semibold">{r.remaining}</td>
                         <td className="text-right px-2 py-2 font-mono">₹{fmt(r.li.unitCost)}</td>
+                        <td className="text-right px-2 py-2 font-mono">{r.discount > 0 ? `−₹${fmt(r.discount)}` : '—'}</td>
+                        <td className="text-right px-2 py-2">{r.gstRate > 0 ? `${r.gstRate}%` : '—'}</td>
+                        <td className="text-right px-2 py-2 font-mono font-semibold">₹{fmt(r.effRate)}</td>
                         <td className="text-right px-3 py-1.5">
                           <Input
                             type="number" min={0} max={r.remaining} step="any" disabled={r.remaining === 0}
@@ -406,7 +467,12 @@ function NewPurchaseReturnDialog({ open, onOpenChange, editing }: { open: boolea
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
+              <p className="text-[11px] text-muted-foreground">
+                Rate, discount and GST come from the original purchase bill — the debit note reverses exactly what
+                was billed (Net Rate × quantity), and stock goes out against the original batch and cost.
+              </p>
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Reason <span className="text-muted-foreground font-normal">(optional)</span></label>
                 <Textarea rows={2} value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Quality rejection, short supply…" />
@@ -610,7 +676,7 @@ export default function Returns() {
                     <tr>
                       <th className="text-left px-3 py-2">{view.kind === 'sales' ? 'Item' : 'Material'}</th>
                       <th className="text-right px-2 py-2">Qty</th>
-                      <th className="text-right px-2 py-2">Rate</th>
+                      <th className="text-right px-2 py-2" title="Per-unit value credited/debited, incl. GST — from the original document">Net Rate</th>
                       <th className="text-right px-2 py-2">Tax</th>
                       <th className="text-right px-3 py-2">Total</th>
                     </tr>
@@ -627,9 +693,13 @@ export default function Returns() {
                           )}
                         </td>
                         <td className="text-right px-2 py-2">{li.quantity}</td>
-                        <td className="text-right px-2 py-2 font-mono">₹{fmt(li.unitPrice ?? li.unitCost)}</td>
+                        <td className="text-right px-2 py-2 font-mono">₹{fmt(
+                          Number(li.quantity) > 0 && li.grossAmount != null
+                            ? Number(li.grossAmount) / Number(li.quantity)
+                            : (li.unitPrice ?? li.unitCost),
+                        )}</td>
                         <td className="text-right px-2 py-2 font-mono">₹{fmt(li.taxAmount)}</td>
-                        <td className="text-right px-3 py-2 font-mono font-semibold">₹{fmt(li.lineTotal ?? li.grossAmount ?? Number(li.quantity ?? 0) * Number(li.unitPrice ?? li.unitCost ?? 0))}</td>
+                        <td className="text-right px-3 py-2 font-mono font-semibold">₹{fmt(li.grossAmount ?? li.lineTotal ?? Number(li.quantity ?? 0) * Number(li.unitPrice ?? li.unitCost ?? 0))}</td>
                       </tr>
                     ))}
                   </tbody>

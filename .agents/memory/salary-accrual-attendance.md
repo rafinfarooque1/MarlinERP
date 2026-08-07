@@ -48,9 +48,27 @@ with the stored figure ("regenerate, then approve"). Checking outside the lock i
 worthless — a sweep can land between the check and the voucher. This is a conflict the
 approver can fix, so it is a 409, not a 500.
 
-## Untracked months are full attendance
+## Untracked months: zero in the attendance era, full before it
 
-A month with no attendance rows at all earns a full salary, matching payroll. The
-consequence is a cliff: once **one** row exists in a month, every dateless day in that
-month counts as absent. Deliberate — mirrored from payroll rather than invented — but
-it means partial attendance backfill silently cuts a month's salary.
+Since Aug 2026 the owner reversed the legacy convention: a month with no attendance
+rows at all earns **nothing** — but only for months on/after the accrual cutover
+(`salary_accrual_config.attendance_from`) AND while the leave policy has LOP enabled
+(LOP off means pay isn't attendance-based, so full pay stands). Pre-cutover months
+keep the legacy full-pay reading forever — approved history must never restate.
+
+**How to apply:** in the accrual walk no cutover check is needed (pre-cutover days
+exit earlier); in payroll/monthLeaveSummary it's the `untrackedIsAbsent` calendar
+flag, which generation and approval must BOTH set from `monthFirst >= cutover` or
+approvals 409 forever. Zero-value accrual rows are still written (audit trail);
+derived postings skip ≤0. The one-row cliff remains: partial backfill silently
+prices every dateless day as absent.
+
+## Employment status bounds the walk
+
+Employees carry `employment_status` + `last_working_date` (LWD) — raw-migration
+columns, raw SQL only; status is truth and `is_active` is derived from it. The
+accrual clamps each span to `min(asOf, LWD)` and deletes rows dated after the LWD
+in non-approved months, inside the employee accrual lock; the sweep includes
+non-active employees that HAVE an LWD (it bounds the rebuild). Rows before an
+employee's `salary_accrual_resume_from` are never re-walked — stranded relics
+there need one-time corrections. See employment-status-lwd.md.

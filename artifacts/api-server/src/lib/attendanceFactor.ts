@@ -377,6 +377,15 @@ export interface MonthCalendarContext {
   /** Holiday dates (YYYY-MM-DD) anywhere in the month. */
   holidays: ReadonlySet<string>;
   /**
+   * When true, a month with NO attendance rows pays nothing instead of the
+   * legacy full salary. Payroll and approval set this for months on or after
+   * the attendance cutover — once tracking is live, salary is paid for
+   * recorded attendance, never assumed. Months before the cutover keep the
+   * old convention (they were never expected to have rows). Ignored when
+   * loss of pay is disabled: with LOP off, pay is not attendance-based at all.
+   */
+  untrackedIsAbsent?: boolean;
+  /**
    * Last date (YYYY-MM-DD) the calendar may synthesise a rowless day for.
    * The mid-month leave-balance view sets this to today so a weekly off that
    * has not happened yet is not reported as leave already taken. Payroll and
@@ -419,10 +428,16 @@ export function monthLeaveSummary(
 ): MonthLeaveSummary {
   const wd = policy.workingDays;
   if (!monthHasAttendance(rowsInMonth)) {
+    // No attendance at all. In the attendance-tracking era (untrackedIsAbsent)
+    // that means nothing was earned — never assume presence. Before the
+    // cutover, the legacy convention stands: an untracked month is full
+    // attendance. LOP disabled always pays in full — pay is not
+    // attendance-based then, so an empty month proves nothing.
+    const zero = Boolean(calendar?.untrackedIsAbsent) && policy.lopEnabled;
     return {
-      tracked: false, workedDays: wd, leaveTaken: 0, paidLeaveUsed: 0,
+      tracked: false, workedDays: zero ? 0 : wd, leaveTaken: 0, paidLeaveUsed: 0,
       sickLeaveTaken: 0, paidSickLeaveUsed: 0, paidOffDays: 0,
-      payableDays: wd, lopDays: 0,
+      payableDays: zero ? 0 : wd, lopDays: zero ? wd : 0,
     };
   }
   let worked = 0, casual = 0, sick = 0, paidOff = 0;

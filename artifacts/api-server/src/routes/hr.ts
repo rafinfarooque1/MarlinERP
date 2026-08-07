@@ -21,7 +21,7 @@ import { provisionSalaryLedgers } from "../lib/payrollLedgers";
 import {
   accruedForMonth, lockSalaryAccrual, recalcUnapprovedSalaryAccruals,
   runSalaryAccrual, dailyAccrualRate, reaccrueForAttendanceChange,
-  withEmployeeAccrualLock, DEFAULT_WORKING_DAYS, type Querier,
+  withEmployeeAccrualLock, DEFAULT_WORKING_DAYS, loadAccrualCutover, type Querier,
 } from "../lib/salaryAccrual";
 import {
   loadAttendanceThresholds, loadPayrollSettings, monthLeaveSummary,
@@ -739,18 +739,34 @@ async function postSalaryApproval(opts: {
         WHERE a.employee_id = $1 AND a.date >= $2 AND a.date <= $3`,
       [employeeId, `${pr.year}-${mStr}-01`, `${pr.year}-${mStr}-${String(lastDay).padStart(2, "0")}`],
     );
+    // Mirror generation EXACTLY — same last-working-day clamp, same employed-
+    // days cap, same untracked-month rule — or every approval of an affected
+    // month would 409 forever against the draft generation itself wrote.
+    const monthFirst = `${pr.year}-${mStr}-01`;
+    const monthLast = `${pr.year}-${mStr}-${String(lastDay).padStart(2, "0")}`;
+    const { rows: [empEmployment] } = await client.query(
+      `SELECT to_char(last_working_date, 'YYYY-MM-DD') AS lwd FROM employees WHERE id = $1`,
+      [employeeId],
+    );
+    const liveLwd: string | null = empEmployment?.lwd ?? null;
+    const liveAtt = liveLwd
+      ? attRows.filter((a: any) => attDateStr(a.date) <= liveLwd)
+      : attRows;
+    const liveCutover = await loadAccrualCutover(pool);
     const liveCalendar = {
       year: Number(pr.year), month: Number(pr.month),
-      holidays: await loadHolidaySet(
-        pool, `${pr.year}-${mStr}-01`, `${pr.year}-${mStr}-${String(lastDay).padStart(2, "0")}`),
+      holidays: await loadHolidaySet(pool, monthFirst, monthLast),
+      untrackedIsAbsent: monthFirst >= liveCutover,
     };
     // Recomputed with the live company leave policy. Comparing payable days
     // alone is not enough: an allowance or working-days change can leave the
     // payable count untouched (no leave taken) while the per-day rate or the
     // stored leave snapshot is now wrong — so every policy-bearing stored
     // figure is checked, and any drift forces a regenerate.
-    const liveSummary = monthLeaveSummary(attRows, livePolicy, liveThresholds, liveCalendar);
-    const livePresentDays = liveSummary.payableDays;
+    const liveSummary = monthLeaveSummary(liveAtt, livePolicy, liveThresholds, liveCalendar);
+    let livePresentDays = liveSummary.payableDays;
+    const liveDaysCap = employedDaysCap(liveLwd, monthFirst, monthLast);
+    if (liveDaysCap != null) livePresentDays = Math.min(livePresentDays, liveDaysCap);
     const storedPresentDays = Number(pr.present_days ?? wd);
     const attendanceMoved = Math.abs(livePresentDays - storedPresentDays) > 0.005;
     const drift = (stored: unknown, live: number) =>
@@ -1184,7 +1200,9 @@ router.get("/hr/employees", requireModuleView("page:/hr/employees"), async (req,
               e.hierarchy_id AS "hierarchyId", e.branch_type AS "branchType", e.branch_id AS "branchId",
               e.salary, e.join_date AS "joinDate", e.photo_url AS "photoUrl",
               e.is_active AS "isActive", e.must_change_password AS "mustChangePassword",
-              e.is_production_staff AS "isProductionStaff"
+              e.is_production_staff AS "isProductionStaff",
+              e.employment_status AS "employmentStatus",
+              to_char(e.last_working_date, 'YYYY-MM-DD') AS "lastWorkingDate"
        FROM employees e WHERE ${scopeCond} ORDER BY e.id`,
       scopeParams,
     ),
@@ -1202,6 +1220,8 @@ router.get("/hr/employees", requireModuleView("page:/hr/employees"), async (req,
     branchName: await getBranchName(e.branchType, e.branchId),
     salary: Number(e.salary), joinDate: e.joinDate, photoUrl: e.photoUrl ?? null, isActive: e.isActive, mustChangePassword: e.mustChangePassword ?? false,
     isProductionStaff: e.isProductionStaff ?? false,
+    employmentStatus: e.employmentStatus ?? "active",
+    lastWorkingDate: e.lastWorkingDate ?? null,
   })));
   res.json(enriched);
 });
@@ -1221,6 +1241,69 @@ async function saveProductionStaffFlag(id: number, body: any): Promise<boolean |
 async function readProductionStaffFlag(id: number): Promise<boolean> {
   const { rows } = await pool.query(`SELECT is_production_staff FROM employees WHERE id = $1`, [id]);
   return rows[0]?.is_production_staff ?? false;
+}
+
+/** Every status other than 'active' means "no longer on the payroll" and
+ *  implies is_active = FALSE. 'inactive' is the legacy plain deactivation;
+ *  'resigned' and 'terminated' record WHY someone left. */
+const EMPLOYMENT_STATUSES = ["active", "resigned", "terminated", "inactive"];
+
+/** Employment status + last working date are raw-migration columns (invisible
+ *  to drizzle), read and written with explicit SQL like the production-staff
+ *  flag. The date comes back as text so no timezone can shift it. */
+async function readEmploymentFields(id: number): Promise<{ status: string; lastWorkingDate: string | null }> {
+  const { rows } = await pool.query(
+    `SELECT employment_status AS s, to_char(last_working_date, 'YYYY-MM-DD') AS lwd
+       FROM employees WHERE id = $1`,
+    [id],
+  );
+  return { status: rows[0]?.s ?? "active", lastWorkingDate: rows[0]?.lwd ?? null };
+}
+
+/** Same conversion `dayStr` in the attendance-factor module uses, so a pg DATE
+ *  compares against a YYYY-MM-DD string identically everywhere. */
+const attDateStr = (d: unknown): string =>
+  d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10);
+
+/** How many days of a month employment covered, or null for the whole month.
+ *  Shared by payroll generation and approval — they must cap identically or
+ *  every approval of a leaver's month would 409 against generation's own draft. */
+function employedDaysCap(lwd: string | null, monthFirst: string, monthLast: string): number | null {
+  if (!lwd || lwd >= monthLast) return null;
+  return lwd < monthFirst ? 0 : Number(lwd.slice(8, 10));
+}
+
+/** Tear down a stale draft payroll, releasing its advance claims so a later
+ *  month can recover them. Serializes with approval by taking the SAME payroll
+ *  row lock approval takes, and re-checking the status while holding it —
+ *  releasing the advances first and only then discovering (via a 0-row DELETE)
+ *  that approval won the race would still commit the release and strand the
+ *  approval's advance deduction. Returns true if the draft was removed. */
+async function teardownDraftPayroll(payrollId: number): Promise<boolean> {
+  const zc = await pool.connect();
+  try {
+    await zc.query("BEGIN");
+    const { rows: [locked] } = await zc.query(
+      `SELECT status FROM payroll WHERE id = $1 FOR UPDATE`, [payrollId],
+    );
+    if (!locked || locked.status !== "draft") {
+      await zc.query("ROLLBACK");
+      return false;
+    }
+    await zc.query(
+      `UPDATE employee_advances SET deducted_payroll_id = NULL
+        WHERE deducted_payroll_id = $1 AND is_deducted = FALSE`,
+      [payrollId],
+    );
+    await zc.query(`DELETE FROM payroll WHERE id = $1`, [payrollId]);
+    await zc.query("COMMIT");
+    return true;
+  } catch (e) {
+    await zc.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    zc.release();
+  }
 }
 
 router.post("/hr/employees", requireModuleAction("page:/hr/employees", "add"), async (req, res): Promise<void> => {
@@ -1276,6 +1359,7 @@ router.post("/hr/employees", requireModuleAction("page:/hr/employees", "add"), a
     salary: Number(row.salary), joinDate: row.joinDate, photoUrl: row.photoUrl ?? null,
     isActive: row.isActive, mustChangePassword: row.mustChangePassword ?? true,
     isProductionStaff,
+    employmentStatus: "active", lastWorkingDate: null,
   });
 });
 
@@ -1291,6 +1375,9 @@ router.get("/hr/employees/:id", requireModuleView("page:/hr/employees"), async (
     branchName: await getBranchName(row.branchType, row.branchId),
     salary: Number(row.salary), joinDate: row.joinDate, photoUrl: row.photoUrl ?? null, isActive: row.isActive,
     isProductionStaff: await readProductionStaffFlag(id),
+    ...(await readEmploymentFields(id).then((f) => ({
+      employmentStatus: f.status, lastWorkingDate: f.lastWorkingDate,
+    }))),
   });
 });
 
@@ -1314,6 +1401,40 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
   if (movingToOutlet && await outletWritesBlocked(pool)) {
     res.status(409).json({ error: OUTLETS_DISABLED_MESSAGE, code: OUTLETS_DISABLED_CODE }); return;
   }
+
+  // Employment status and last working date travel outside the validated body
+  // (zod strips unknown keys) and live in raw-migration columns invisible to
+  // drizzle — the production-staff pattern. The status is the richer truth and
+  // is_active is DERIVED from it, so the two can never disagree; a legacy
+  // isActive-only toggle is mapped back onto a status rather than written alone.
+  const prevEmployment = await readEmploymentFields(id);
+  const rawStatus = (req.body as any)?.employmentStatus;
+  if (rawStatus !== undefined && !EMPLOYMENT_STATUSES.includes(String(rawStatus))) {
+    res.status(400).json({ error: `employmentStatus must be one of: ${EMPLOYMENT_STATUSES.join(", ")}` });
+    return;
+  }
+  const rawLwd = (req.body as any)?.lastWorkingDate;
+  if (rawLwd !== undefined && rawLwd !== null && !/^\d{4}-\d{2}-\d{2}$/.test(String(rawLwd))) {
+    res.status(400).json({ error: "lastWorkingDate must be a YYYY-MM-DD date" });
+    return;
+  }
+  let nextStatus: string | undefined = rawStatus !== undefined ? String(rawStatus) : undefined;
+  if (nextStatus === undefined && (parsed.data as any).isActive !== undefined) {
+    // Legacy toggle: reactivation restores 'active'; deactivation records
+    // 'inactive' unless a richer status (resigned/terminated) is already stored.
+    nextStatus = (parsed.data as any).isActive
+      ? "active"
+      : (prevEmployment.status !== "active" ? prevEmployment.status : "inactive");
+  }
+  const effStatus = nextStatus ?? prevEmployment.status;
+  // An active employee has no leaving day; a non-active one always has one —
+  // it is the boundary salary accrues up to, so it defaults to today rather
+  // than being left blank (guard the effective value, not just the body).
+  const effLwd = effStatus === "active"
+    ? null
+    : ((rawLwd !== undefined ? (rawLwd as string | null) : prevEmployment.lastWorkingDate)
+        ?? new Date().toISOString().slice(0, 10));
+  if (nextStatus !== undefined) (parsed.data as any).isActive = nextStatus === "active";
   const updateData: Record<string, unknown> = { ...parsed.data };
   if (parsed.data.salary !== undefined) updateData.salary = String(parsed.data.salary);
   const beforeFlag = await readProductionStaffFlag(id);
@@ -1326,6 +1447,39 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
   if (!row) { res.status(404).json({ error: "Not found" }); return; }
   const [h] = await db.select().from(hierarchiesTable).where(eq(hierarchiesTable.id, row.hierarchyId)).limit(1);
   const isProductionStaff = (await saveProductionStaffFlag(id, req.body)) ?? beforeFlag;
+
+  const employmentChanged = effStatus !== prevEmployment.status
+    || (effLwd ?? null) !== (prevEmployment.lastWorkingDate ?? null);
+  if (employmentChanged) {
+    await pool.query(
+      `UPDATE employees SET employment_status = $1, last_working_date = $2 WHERE id = $3`,
+      [effStatus, effLwd, id],
+    );
+    logActivity({
+      action: "UPDATE", module: "hr", entityType: "employee", entityId: id,
+      user: (req as any).employee?.username ?? "system",
+      description: effStatus === "active"
+        ? `Employee ${row.name} reactivated`
+        : `Employee ${row.name} marked ${effStatus} — last working day ${effLwd}`,
+      metadata: {
+        employeeId: id, employeeName: row.name,
+        previousStatus: prevEmployment.status, newStatus: effStatus,
+        previousLastWorkingDate: prevEmployment.lastWorkingDate, newLastWorkingDate: effLwd,
+      },
+    }).catch(() => {});
+  }
+  if (employmentChanged && effStatus !== "active") {
+    // Leaving (or a corrected leaving day) re-bounds the books immediately:
+    // open days after the last working date are torn down and the rest
+    // re-priced, inside the employee's accrual lock. Idempotent — the hourly
+    // sweep now covers ex-employees with a recorded date and would catch up
+    // anyway, so a failure here is loud but not fatal.
+    try {
+      await recalcUnapprovedSalaryAccruals(pool, id);
+    } catch (e) {
+      console.error("[hr] accrual cleanup after employment change failed:", e);
+    }
+  }
 
   const prevSalary = before ? Number(before.salary) : 0;
   const newSalary = Number(row.salary);
@@ -1416,6 +1570,7 @@ router.patch("/hr/employees/:id", requireModuleAction("page:/hr/employees", "edi
     branchName: await getBranchName(row.branchType, row.branchId),
     salary: Number(row.salary), joinDate: row.joinDate, photoUrl: row.photoUrl ?? null, isActive: row.isActive, mustChangePassword: row.mustChangePassword ?? false,
     isProductionStaff,
+    employmentStatus: effStatus, lastWorkingDate: effLwd,
   });
 });
 
@@ -1563,8 +1718,18 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
   // changing them later only affects runs generated after the change.
   const rates = await loadStatutoryRates();
 
-  // Fetch employees to generate for
-  let employees = await db.select().from(employeesTable).where(eq(employeesTable.isActive, true));
+  // Fetch employees to generate for. Ex-employees whose last working day falls
+  // inside or after this month still get a run for the days they served —
+  // leaving stops FUTURE pay, not pay already earned. The employment columns
+  // are raw-migration columns (invisible to drizzle), read separately and merged.
+  const { rows: employmentRows } = await pool.query(
+    `SELECT id, employment_status AS status, to_char(last_working_date, 'YYYY-MM-DD') AS lwd
+       FROM employees`,
+  );
+  const employmentById = new Map<number, { status: string; lwd: string | null }>(
+    employmentRows.map((r: any) => [Number(r.id), { status: String(r.status ?? "active"), lwd: r.lwd ?? null }]),
+  );
+  let employees = await db.select().from(employeesTable);
   if (employeeId) employees = employees.filter(e => e.id === Number(employeeId));
 
   // Date range for the month
@@ -1572,6 +1737,21 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
   const daysInMonth = new Date(year, month, 0).getDate();
   const startDate = `${year}-${monthStr}-01`;
   const endDate = `${year}-${monthStr}-${String(daysInMonth).padStart(2, "0")}`;
+
+  employees = employees.filter((e) => {
+    if (e.isActive) return true;
+    const lwd = employmentById.get(e.id)?.lwd ?? null;
+    // A legacy deactivation records no leaving day, so there is nothing to
+    // bound a partial month by — those employees stay excluded as before.
+    return lwd != null && lwd >= startDate;
+  });
+
+  // Attendance-era months (on or after the accrual cutover) pay only recorded
+  // attendance: a month with no rows at all earns nothing — never assume
+  // presence. Months before the cutover keep the legacy full-pay convention;
+  // they were never expected to have rows and their history must stand.
+  const attendanceFrom = await loadAccrualCutover(pool);
+  const untrackedIsAbsent = startDate >= attendanceFrom;
 
   // Fetch attendance for the whole month (raw SQL to get checkIn/checkOut
   // timestamps, plus total punched hours — multi-punch days are priced on the
@@ -1591,6 +1771,7 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
   const monthCalendar = {
     year: Number(year), month: Number(month),
     holidays: await loadHolidaySet(pool, startDate, endDate),
+    untrackedIsAbsent,
   };
 
   const results = [];
@@ -1628,9 +1809,28 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
     // daily accrual engine walks the very same policy across the month, which
     // is what makes the month-end true-up a rounding difference rather than a
     // real correction.
-    const empAtt = monthAttendance.filter((a: any) => Number(a.employeeId) === emp.id);
+    // Attendance past the last working day earns nothing even if rows exist —
+    // the day a record was corrected is not the day it was worked — and the
+    // payable total is capped at the days the month actually contained
+    // employment, so a pre-cutover (untracked, full-pay) month cannot pay past
+    // the exit either.
+    const lwd = employmentById.get(emp.id)?.lwd ?? null;
+    const empAtt = monthAttendance.filter((a: any) =>
+      Number(a.employeeId) === emp.id && (!lwd || attDateStr(a.date) <= lwd));
     const leaveSummary = monthLeaveSummary(empAtt, policy, thresholds, monthCalendar);
-    const effectivePresentDays = leaveSummary.payableDays;
+    let effectivePresentDays = leaveSummary.payableDays;
+    const daysCap = employedDaysCap(lwd, startDate, endDate);
+    if (daysCap != null) effectivePresentDays = Math.min(effectivePresentDays, daysCap);
+
+    // No employment or no attendance means no pay — and no payroll row either.
+    // A zero-payable month generates nothing, and a stale draft from before
+    // the rule (or before the leaving was recorded) is torn down with its
+    // advance claims released, so a later month can still recover them.
+    // Approved and paid rows never reach here (skipped above).
+    if (effectivePresentDays <= 0.004) {
+      if (existing) await teardownDraftPayroll(existing.id);
+      continue;
+    }
 
     // Advances awaiting recovery. A draft run *claims* the advances it nets off
     // (deducted_payroll_id) without marking them recovered; approval completes
@@ -1769,6 +1969,27 @@ router.post("/hr/payroll/generate", requireModuleAction("page:/hr/payroll", "add
       branchName: await getBranchName(emp.branchType, emp.branchId),
       employeeName: emp.name,
     });
+  }
+
+  // Drafts for people who had already left before the month began are stale
+  // documents that the loop above never visits (those employees are excluded
+  // from the run). Tear them down, releasing their advance claims, rather than
+  // leaving ghost rows that show a full month's pay for someone who had left.
+  // Approved and paid rows are financially final and untouched, and legacy
+  // deactivations without a leaving date keep their old drafts as before.
+  if (!employeeId) {
+    const { rows: staleDrafts } = await pool.query(
+      `SELECT p.id FROM payroll p
+         JOIN employees e ON e.id = p.employee_id
+        WHERE p.month = $1 AND p.year = $2 AND p.status = 'draft'
+          AND e.is_active = FALSE
+          AND e.last_working_date IS NOT NULL
+          AND to_char(e.last_working_date, 'YYYY-MM-DD') < $3`,
+      [month, year, startDate],
+    );
+    for (const d of staleDrafts) {
+      await teardownDraftPayroll(d.id);
+    }
   }
 
   res.json(results);

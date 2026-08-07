@@ -1,0 +1,356 @@
+Implement a secure Admin-only Delete feature for Receipt Vouchers and Payment Vouchers.
+
+This is a HIGH-RISK accounting operation and must be implemented carefully.
+
+====================================================
+1. Admin Only
+====================================================
+
+Only users with Administrator permission can see the Delete button.
+
+Normal users must never see or access it.
+
+This applies to:
+
+• Receipt Voucher
+• Payment Voucher
+
+====================================================
+2. Only System Generated Vouchers
+====================================================
+
+The Delete button should ONLY appear for system-generated vouchers.
+
+Examples:
+
+✓ Receipt generated from Sales Payment
+✓ Receipt generated from POS
+✓ Receipt generated from Customer Payment
+✓ Payment generated from Purchase Payment
+✓ Payment generated automatically by ERP
+
+Do NOT allow deletion of manually entered vouchers through this feature.
+
+Manual vouchers will continue using the normal accounting workflow.
+
+====================================================
+3. Confirmation Dialog
+====================================================
+
+When Admin clicks Delete,
+
+Show a large warning dialog.
+
+Title:
+
+Delete System Generated Voucher
+
+Warning:
+
+This operation will permanently remove the voucher and reverse every accounting effect created by it.
+
+The following records will be updated:
+
+✓ Voucher
+✓ Ledger Entries
+✓ Customer/Vendor Ledger
+✓ Cash/Bank Ledger
+✓ Party Balance
+✓ Dashboard
+✓ Trial Balance
+✓ Balance Sheet
+✓ Profit & Loss (if affected)
+✓ Cash Book
+✓ Bank Book
+✓ Day Book
+✓ Payment History
+✓ Invoice Status
+✓ Outstanding Amount
+✓ Receivable/Payable
+✓ Audit References
+✓ Location Reports
+
+This action cannot be undone.
+
+====================================================
+4. Show Exactly What Will Change
+====================================================
+
+Before deletion calculate and display:
+
+Voucher Number
+
+Voucher Date
+
+Party Name
+
+Location
+
+Amount
+
+Linked Invoice
+
+Cash/Bank Account
+
+Ledger Entries
+
+Then display:
+
+The following actions will be performed:
+
+✓ Voucher deleted
+
+✓ Ledger posting reversed
+
+✓ Customer balance updated
+
+✓ Vendor balance updated
+
+✓ Cash/Bank balance updated
+
+✓ Invoice payment removed
+
+✓ Invoice status recalculated
+(Paid / Partially Paid / Unpaid)
+
+✓ Outstanding recalculated
+
+✓ Dashboard refreshed
+
+✓ Reports recalculated
+
+====================================================
+5. Deletion Logic
+====================================================
+
+Deleting the voucher must completely remove the accounting route created by that voucher.
+
+For example
+
+Receipt Voucher
+
+Reverse:
+
+Cash/Bank Debit
+
+Customer Credit
+
+Payment Allocation
+
+Invoice Settlement
+
+Outstanding
+
+Ledger Entries
+
+Customer Ledger
+
+Cash Ledger
+
+Reports
+
+Dashboard
+
+Trial Balance
+
+Balance Sheet
+
+Receivable
+
+Payment History
+
+Receipt Record
+
+--------------------------------------------
+
+Payment Voucher
+
+Reverse:
+
+Vendor Debit
+
+Cash/Bank Credit
+
+Payment Allocation
+
+Vendor Outstanding
+
+Ledger Entries
+
+Vendor Ledger
+
+Cash Ledger
+
+Reports
+
+Dashboard
+
+Trial Balance
+
+Balance Sheet
+
+Payables
+
+Payment History
+
+Voucher Record
+
+====================================================
+6. Complete Cleanup
+====================================================
+
+After deletion there must NOT be:
+
+Orphan Ledger Entries
+
+Broken Payment Allocation
+
+Broken Invoice References
+
+Broken Settlement Records
+
+Broken Cash Entries
+
+Broken Bank Entries
+
+Broken Dashboard Totals
+
+Broken Reports
+
+Everything should behave as if that voucher never existed.
+
+====================================================
+7. Recalculate Everything
+====================================================
+
+After deletion automatically recalculate:
+
+Customer Balance
+
+Vendor Balance
+
+Ledger Balance
+
+Cash Balance
+
+Bank Balance
+
+Outstanding
+
+Receivable
+
+Payable
+
+Trial Balance
+
+Balance Sheet
+
+P&L
+
+Dashboard
+
+Location Dashboard
+
+Cash Book
+
+Bank Book
+
+Day Book
+
+====================================================
+8. Audit Log
+====================================================
+
+Do NOT physically erase history without audit.
+
+Store:
+
+Deleted By
+
+Deleted Date
+
+Voucher Number
+
+Voucher Type
+
+Reason
+
+Affected Invoice
+
+Affected Party
+
+Affected Amount
+
+Location
+
+====================================================
+9. Validation
+====================================================
+
+Before deleting verify:
+
+Voucher exists
+
+Voucher is system generated
+
+User is Administrator
+
+Voucher has not already been deleted
+
+If any validation fails
+
+Show proper error.
+
+====================================================
+10. Regression Testing
+====================================================
+
+Test:
+
+✓ Receipt deletion
+
+✓ Payment deletion
+
+✓ Fully paid invoice
+
+✓ Partially paid invoice
+
+✓ Multiple receipts
+
+✓ Multiple payments
+
+✓ Customer advance
+
+✓ Vendor advance
+
+✓ Cash account
+
+✓ Bank account
+
+✓ Multi-location vouchers
+
+✓ Head Office
+
+✓ Warehouse
+
+✓ Dashboard
+
+✓ Trial Balance
+
+✓ Balance Sheet
+
+✓ Receivable
+
+✓ Payable
+
+✓ Customer Ledger
+
+✓ Vendor Ledger
+
+✓ Cash Book
+
+✓ Bank Book
+
+✓ Day Book
+
+Verify that after deleting a voucher, every accounting report, ledger, balance, dashboard, and financial statement remains perfectly reconciled to the paisa.

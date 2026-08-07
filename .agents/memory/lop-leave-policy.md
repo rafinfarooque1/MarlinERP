@@ -17,10 +17,14 @@ effective value).
   hrs≥half={0.5,0.5} (missing half CONSUMES allowance); <half or absent={0,0}
   (straight LOP, does NOT consume allowance); checkIn-only/present={1,0};
   half_day status={0.5,0.5}.
-- `monthLeaveSummary()`: untracked month = full attendance; paidLeaveUsed =
+- `monthLeaveSummary()`: untracked month = full attendance ONLY pre-cutover —
+  since Aug 2026, callers pass `untrackedIsAbsent` on the calendar for months
+  ≥ `salary_accrual_config.attendance_from`, and an untracked month then pays
+  ZERO (payableDays=0, lopDays=wd) when lopEnabled; paidLeaveUsed =
   min(leaveTaken, allowance); payableDays = min(wd, worked+paidLeaveUsed);
   lopDays = wd − payableDays; lopEnabled=false ⇒ payableDays=wd (full pay,
-  accrual basis `no_lop`).
+  accrual basis `no_lop`, untracked included). Generation and approval must set
+  the flag identically or approvals 409 forever (see employment-status-lwd.md).
 - Consumers: payroll generate, approval re-check, daily accrual (cumulative
   cumWork/cumLeave deltas), all through these two helpers. **Why:** a second
   hand-rolled copy is exactly how the pre-policy accrual drifted paise from

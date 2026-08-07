@@ -1,0 +1,124 @@
+Fix the Walk-in Customer migration and customer master logic.
+
+Current Problems
+
+1. There are two different Walk-in customers in the ERP.
+
+Examples:
+• WALKING CUSTOMER
+• System Walk-in Customer (or another automatically created walk-in customer)
+
+There must only be ONE Walk-in Customer in the entire ERP.
+
+====================================================
+1. Single Walk-in Customer
+====================================================
+
+The ERP should maintain only one system Walk-in Customer.
+
+All cash sales, POS sales and migrated walk-in invoices must use this single customer.
+
+Do not create duplicate walk-in customers.
+
+If duplicate walk-in customers already exist:
+
+• Merge them into the single system Walk-in Customer.
+• Move all invoices, receipts, ledger entries and references.
+• Remove the duplicate customer records.
+• Do not lose any transaction history.
+
+====================================================
+2. Migration Fix
+====================================================
+
+During legacy data migration, cash sales were already fully paid in the old software.
+
+However, the migration imported:
+
+• Cash Sale
+AND
+• Receipt Voucher
+
+for the same transaction.
+
+Because of this, the Walk-in Customer now has an advance/credit balance, which is incorrect.
+
+Cash sales should NEVER create customer advances.
+
+====================================================
+3. Correct Migration Logic
+====================================================
+
+For every migrated cash sale:
+
+If the invoice was already marked as Cash/Paid in the old ERP:
+
+• Create only the Sales Invoice with payment completed (or follow the ERP's standard paid-sale workflow).
+• Do NOT import an additional Receipt Voucher for the same invoice.
+• Do NOT create an advance.
+• Do NOT leave any customer outstanding.
+• Do NOT create duplicate payment entries.
+
+Only import separate Receipt Vouchers for invoices that were actually credit sales and later settled separately.
+
+====================================================
+4. Existing Data Cleanup
+====================================================
+
+Find all Walk-in Customer transactions.
+
+Identify duplicate payment postings created during migration.
+
+Remove or reverse only the incorrect duplicate receipt postings.
+
+Do NOT delete genuine receipts.
+
+After cleanup:
+
+• Walk-in Customer balance should be zero unless a genuine credit balance exists.
+• Customer Ledger must reconcile.
+• Sales Ledger must reconcile.
+• Cash/Bank Ledger must reconcile.
+• Dashboard must reconcile.
+• Trial Balance must reconcile.
+
+====================================================
+5. Customer Ledger
+====================================================
+
+The Walk-in Customer ledger should contain only legitimate entries.
+
+No artificial advance balances.
+
+No duplicate receipts.
+
+No duplicate payments.
+
+Every cash sale should be fully settled by its own payment.
+
+====================================================
+6. Validation
+====================================================
+
+Verify:
+
+✓ Only one Walk-in Customer exists.
+✓ No duplicate Walk-in customers remain.
+✓ All cash sales are fully paid.
+✓ No cash sale creates an advance.
+✓ Credit sales still work normally.
+✓ Receipt vouchers exist only where actually required.
+✓ Customer balances reconcile.
+✓ Cash/Bank balances reconcile.
+✓ Trial Balance balances.
+✓ Balance Sheet balances.
+✓ Dashboard matches accounting.
+✓ No transaction history is lost.
+
+Provide a report listing:
+
+• Duplicate Walk-in customers found.
+• Duplicate receipts found.
+• Corrections made.
+• Final Walk-in Customer balance.
+• Verification that all reports reconcile after cleanup.

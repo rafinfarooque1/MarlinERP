@@ -137,7 +137,19 @@ async function runMigrations() {
   await pool.query(`
     ALTER TABLE employees ADD COLUMN IF NOT EXISTS must_change_password boolean NOT NULL DEFAULT false;
     ALTER TABLE employees ADD COLUMN IF NOT EXISTS work_experience jsonb DEFAULT '[]'::jsonb;
+    ALTER TABLE employees ADD COLUMN IF NOT EXISTS employment_status text NOT NULL DEFAULT 'active';
+    ALTER TABLE employees ADD COLUMN IF NOT EXISTS last_working_date date;
   `);
+
+  // Employment status is richer than the is_active flag: resigned, terminated
+  // and inactive all imply is_active = FALSE, and the two must never disagree.
+  // Rows deactivated before the status column existed read as plain 'inactive'
+  // (their leaving day was never recorded, so no last_working_date is invented
+  // for them). The WHERE keeps this a no-op once the columns are in sync.
+  await pool.query(
+    `UPDATE employees SET employment_status = 'inactive'
+      WHERE is_active = FALSE AND employment_status = 'active'`,
+  );
 
   // Migrate admin: set securely hashed marlin1458 password and force change on first login.
   // The WHERE clause ensures this is a no-op once admin has already set their own bcrypt password.

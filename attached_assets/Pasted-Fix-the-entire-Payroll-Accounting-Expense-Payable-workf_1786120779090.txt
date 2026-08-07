@@ -1,0 +1,371 @@
+Fix the entire Payroll → Accounting → Expense → Payable workflow to follow proper accounting principles.
+
+Current Problem
+
+Salary expense is being generated incorrectly for employees who are resigned or have no attendance.
+
+Also, salary expense, salary payable, and employee ledger postings are not consistently linked.
+
+Implement the following complete payroll accounting workflow.
+
+====================================================
+1. Attendance-Based Payroll
+====================================================
+
+Salary must ONLY be calculated based on attendance.
+
+Rules:
+
+Present = Full Day Salary
+
+Half Day = Half Salary
+
+Absent = No Salary
+
+Leave With Pay = Salary according to leave policy
+
+Leave Without Pay = No Salary
+
+No attendance = No Salary
+
+Never assume an employee is present.
+
+====================================================
+2. Employee Status Validation
+====================================================
+
+Payroll should process ONLY employees whose status is:
+
+✓ Active
+
+Employees marked as:
+
+• Resigned
+• Terminated
+• Inactive
+• Left Company
+
+must NOT receive salary from the day after their Last Working Date.
+
+Stop:
+
+• Daily salary accrual
+• Payroll calculation
+• Salary expense
+• Salary payable
+• Salary ledger entries
+
+Historical payroll must remain unchanged.
+
+====================================================
+3. Payroll Generation
+====================================================
+
+Payroll should calculate:
+
+• Working Days
+• Present Days
+• Half Days
+• Paid Leave
+• Unpaid Leave
+• Overtime
+• Daily Rate
+• Gross Salary
+• Deductions
+• Net Salary
+
+using attendance records only.
+
+====================================================
+4. Automatic Accounting Entries
+====================================================
+
+Once payroll is finalized for a payroll period, automatically create accounting entries.
+
+Journal Entry:
+
+Dr Salary Expense
+
+Cr Salary Payable
+
+This entry must be created automatically.
+
+Salary Expense should appear under:
+
+Profit & Loss
+Expenses
+Salary Expense
+
+Salary Payable should appear under:
+
+Current Liabilities
+Salary Payable
+
+====================================================
+5. Employee Ledger
+====================================================
+
+Every payroll run must also update the Employee Ledger.
+
+Employee Ledger should show:
+
+Opening Balance
+
+Salary Earned
+
+Salary Adjustment
+
+Salary Payment
+
+Journal Entries
+
+Closing Balance
+
+Each entry must contain:
+
+Date
+
+Payroll Period
+
+Voucher Number
+
+Reference
+
+Debit
+
+Credit
+
+Running Balance
+
+====================================================
+6. Salary Payable
+====================================================
+
+Salary Payable must increase automatically after payroll.
+
+Example
+
+Payroll Generated
+
+₹50,000
+
+Journal
+
+Dr Salary Expense ₹50,000
+
+Cr Salary Payable ₹50,000
+
+Salary Payable ledger increases.
+
+Balance Sheet updates.
+
+Trial Balance updates.
+
+====================================================
+7. Salary Payment
+====================================================
+
+When salary is paid:
+
+Dr Salary Payable
+
+Cr Cash / Bank
+
+Employee Ledger updates.
+
+Salary Payable reduces.
+
+Cash/Bank reduces.
+
+Dashboard updates.
+
+Trial Balance updates.
+
+Balance Sheet updates.
+
+====================================================
+8. Expense Integration
+====================================================
+
+Salary Expense must automatically appear in:
+
+• Expense Ledger
+
+• Profit & Loss
+
+• Expense Reports
+
+• Dashboard
+
+No manual expense entry should be required.
+
+Payroll itself creates the expense.
+
+====================================================
+9. Payable Integration
+====================================================
+
+Salary Payable must automatically appear in:
+
+• Chart of Accounts
+
+• Current Liabilities
+
+• Salary Payable Ledger
+
+• Balance Sheet
+
+• Trial Balance
+
+• Dashboard
+
+====================================================
+10. Ledger Posting
+====================================================
+
+Every payroll transaction must generate complete ledger entries.
+
+Salary Expense Ledger
+
+Salary Payable Ledger
+
+Employee Ledger
+
+General Journal
+
+General Ledger
+
+All must reconcile.
+
+====================================================
+11. Validation
+====================================================
+
+Verify:
+
+✓ Employee with attendance
+
+Salary generated.
+
+Expense created.
+
+Payable created.
+
+Ledger updated.
+
+✓ Employee resigned
+
+No payroll.
+
+No expense.
+
+No payable.
+
+No ledger posting.
+
+✓ Employee with zero attendance
+
+No payroll.
+
+No expense.
+
+No payable.
+
+✓ Half-day employee
+
+Correct half salary.
+
+✓ Paid Leave
+
+Salary according to policy.
+
+✓ Unpaid Leave
+
+No salary.
+
+====================================================
+12. Reports
+====================================================
+
+Verify all reports automatically update.
+
+Dashboard
+
+Payroll Report
+
+Expense Report
+
+Salary Register
+
+Trial Balance
+
+Balance Sheet
+
+Profit & Loss
+
+Employee Ledger
+
+Salary Payable Ledger
+
+Chart of Accounts
+
+All figures must match exactly.
+
+====================================================
+13. Historical Data
+====================================================
+
+Find employees whose payroll was incorrectly generated after resignation or without attendance.
+
+Reverse incorrect Salary Expense.
+
+Reverse incorrect Salary Payable.
+
+Reverse incorrect Employee Ledger entries.
+
+Maintain a complete audit trail.
+
+====================================================
+14. Final Objective
+====================================================
+
+The payroll workflow must always be:
+
+Attendance
+↓
+
+Payroll Calculation
+↓
+
+Salary Expense (Dr)
+↓
+
+Salary Payable (Cr)
+↓
+
+Employee Ledger Update
+↓
+
+Trial Balance
+↓
+
+Balance Sheet
+↓
+
+Profit & Loss
+
+When salary is paid:
+
+Salary Payable (Dr)
+↓
+
+Cash/Bank (Cr)
+↓
+
+Employee Ledger Update
+
+Every step must happen automatically.
+
+No manual journal or manual expense entry should ever be required.
+
+Run a complete regression after implementation and verify that payroll, accounting, ledgers, expenses, liabilities, dashboard, Trial Balance, Balance Sheet, and Profit & Loss all reconcile to the paisa.

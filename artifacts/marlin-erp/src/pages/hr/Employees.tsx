@@ -241,6 +241,10 @@ export default function Employees() {
   const [viewItem, setViewItem] = useState<any>(null);
   const [payStructureEmp, setPayStructureEmp] = useState<any>(null);
   const [confirmResign, setConfirmResign] = useState<any>(null);
+  // Leaving details for the Mark-as-Left dialog: why they left and their last
+  // working day — salary stops accruing after that day.
+  const [leaveStatus, setLeaveStatus] = useState<string>('resigned');
+  const [leaveDate, setLeaveDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [resetTarget, setResetTarget] = useState<any>(null);
   // Set only after a successful reset, so one dialog covers confirm → result.
@@ -328,21 +332,52 @@ export default function Employees() {
     });
   };
 
-  const toggleActive = (emp: any, active: boolean) => {
+  const openMarkAsLeft = (emp: any) => {
+    setLeaveStatus('resigned');
+    setLeaveDate(new Date().toISOString().split('T')[0]);
+    setConfirmResign(emp);
+  };
+
+  // Marking someone as left records WHY (resigned / terminated / inactive) and
+  // their last working day. The server stops salary from the day after it and
+  // cleans up any open-month accruals past that date.
+  const markAsLeft = () => {
+    const emp = confirmResign;
+    if (!emp || !leaveDate) return;
     updateMutation.mutate(
-      { id: emp.id, data: { isActive: active } },
+      { id: emp.id, data: { employmentStatus: leaveStatus, lastWorkingDate: leaveDate } as any },
       {
         onSuccess: () => {
-          toast.success(active ? `${emp.name} reactivated` : `${emp.name} marked as resigned`);
+          toast.success(`${emp.name} marked as ${leaveStatus} — pay stops after ${new Date(leaveDate).toLocaleDateString('en-IN')}`);
           queryClient.invalidateQueries({ queryKey: getListEmployeesQueryKey() });
           setConfirmResign(null);
-          // Close detail sheet if open for this employee
-          if (viewItem?.id === emp.id) setViewItem((prev: any) => ({ ...prev, isActive: active }));
+          if (viewItem?.id === emp.id) setViewItem((prev: any) => ({ ...prev, isActive: false, employmentStatus: leaveStatus, lastWorkingDate: leaveDate }));
         },
         onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
       },
     );
   };
+
+  // Reactivation restores 'active', clears the last working date, and resumes
+  // salary accrual from today (never backfilling the gap).
+  const reactivate = (emp: any) => {
+    updateMutation.mutate(
+      { id: emp.id, data: { employmentStatus: 'active' } as any },
+      {
+        onSuccess: () => {
+          toast.success(`${emp.name} reactivated`);
+          queryClient.invalidateQueries({ queryKey: getListEmployeesQueryKey() });
+          if (viewItem?.id === emp.id) setViewItem((prev: any) => ({ ...prev, isActive: true, employmentStatus: 'active', lastWorkingDate: null }));
+        },
+        onError: (e: any) => toast.error(e?.data?.error || e.message || 'Failed'),
+      },
+    );
+  };
+
+  const statusLabel = (e: any) => e.isActive ? 'Active'
+    : e.employmentStatus === 'terminated' ? 'Terminated'
+    : e.employmentStatus === 'inactive' ? 'Inactive'
+    : 'Resigned';
 
   const filtered = employees.filter(e => {
     const matchSearch = e.name.toLowerCase().includes(search.toLowerCase()) || e.username.toLowerCase().includes(search.toLowerCase());
@@ -357,7 +392,7 @@ export default function Employees() {
     role: (e: any) => e.hierarchyName,
     location: (e: any) => e.branchName,
     salary: (e: any) => Number(e.salary || 0),
-    status: (e: any) => (e.isActive ? 'Active' : 'Resigned'),
+    status: (e: any) => statusLabel(e),
   });
 
   const activeCount   = employees.filter(e => e.isActive).length;
@@ -385,7 +420,7 @@ export default function Employees() {
           </div>
           <div className="flex gap-2">
             {perm.canDownload && (
-              <Button variant="outline" size="sm" onClick={() => downloadCSV('employees.csv', filtered.map(e => ({ Name: e.name, Username: e.username, Role: e.hierarchyName, Branch: e.branchName, Type: e.branchType, Salary: e.salary, 'Production Staff': (e as any).isProductionStaff ? 'Yes' : 'No', Status: e.isActive ? 'Active' : 'Resigned' })))}>
+              <Button variant="outline" size="sm" onClick={() => downloadCSV('employees.csv', filtered.map(e => ({ Name: e.name, Username: e.username, Role: e.hierarchyName, Branch: e.branchName, Type: e.branchType, Salary: e.salary, 'Production Staff': (e as any).isProductionStaff ? 'Yes' : 'No', Status: statusLabel(e), 'Last Working Day': (e as any).lastWorkingDate || '' })))}>
                 <Download className="w-4 h-4 mr-2" /> Export
               </Button>
             )}
@@ -489,7 +524,12 @@ export default function Employees() {
                     {emp.isActive ? (
                       <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">Active</Badge>
                     ) : (
-                      <Badge variant="outline" className="text-rose-400 border-rose-400/30 bg-rose-400/5">Resigned</Badge>
+                      <div>
+                        <Badge variant="outline" className="text-rose-400 border-rose-400/30 bg-rose-400/5">{statusLabel(emp)}</Badge>
+                        {(emp as any).lastWorkingDate && (
+                          <div className="text-[10px] text-muted-foreground mt-0.5">till {new Date((emp as any).lastWorkingDate).toLocaleDateString('en-IN')}</div>
+                        )}
+                      </div>
                     )}
                   </TableCell>
                   <TableCell className="text-right">
@@ -505,11 +545,11 @@ export default function Employees() {
                         </Button>
                       )}
                       {perm.canEdit && (emp.isActive ? (
-                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-rose-500" onClick={() => setConfirmResign(emp)} title="Mark as Resigned">
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-rose-500" onClick={() => openMarkAsLeft(emp)} title="Mark as Left">
                           <UserX className="w-4 h-4" />
                         </Button>
                       ) : (
-                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-500" onClick={() => toggleActive(emp, true)} title="Reactivate" disabled={updateMutation.isPending}>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-emerald-500" onClick={() => reactivate(emp)} title="Reactivate" disabled={updateMutation.isPending}>
                           <UserCheck className="w-4 h-4" />
                         </Button>
                       ))}
@@ -527,30 +567,48 @@ export default function Employees() {
         </div>
       </div>
 
-      {/* Confirm Resignation Dialog */}
+      {/* Mark as Left Dialog — reason + last working day */}
       <Dialog open={!!confirmResign} onOpenChange={v => !v && setConfirmResign(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-rose-500">
-              <UserX className="w-5 h-5" /> Mark as Resigned
+              <UserX className="w-5 h-5" /> Mark as Left
             </DialogTitle>
           </DialogHeader>
-          <div className="py-2 space-y-2">
+          <div className="py-2 space-y-4">
             <p className="text-sm text-muted-foreground">
-              Are you sure you want to mark <span className="font-semibold text-foreground">{confirmResign?.name}</span> as resigned?
+              Record that <span className="font-semibold text-foreground">{confirmResign?.name}</span> has left.
+              Salary stops after the last working day — days already worked stay paid, and a month with no attendance pays nothing.
             </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Reason</label>
+                <Select value={leaveStatus} onValueChange={setLeaveStatus}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="resigned">Resigned</SelectItem>
+                    <SelectItem value="terminated">Terminated</SelectItem>
+                    <SelectItem value="inactive">Inactive (other)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Last Working Day</label>
+                <Input type="date" value={leaveDate} onChange={e => setLeaveDate(e.target.value)} />
+              </div>
+            </div>
             <p className="text-xs text-muted-foreground">
-              The employee will be set to inactive and excluded from payroll generation. This can be reversed using the Reactivate button.
+              They will no longer be able to sign in. This can be reversed with the Reactivate button.
             </p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmResign(null)}>Cancel</Button>
             <Button
               variant="destructive"
-              onClick={() => toggleActive(confirmResign, false)}
-              disabled={updateMutation.isPending}
+              onClick={markAsLeft}
+              disabled={updateMutation.isPending || !leaveDate}
             >
-              {updateMutation.isPending ? 'Saving…' : 'Mark as Resigned'}
+              {updateMutation.isPending ? 'Saving…' : 'Confirm'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -838,6 +896,9 @@ export default function Employees() {
                 ['Basic Salary', `₹${Number(viewItem.salary || 0).toLocaleString('en-IN')}/mo`],
                 ['Production Staff', (viewItem as any).isProductionStaff ? 'Yes — wage charged to batches' : 'No'],
                 ['Join Date', viewItem.joinDate ? new Date(viewItem.joinDate).toLocaleDateString('en-IN') : '—'],
+                ...((viewItem as any).lastWorkingDate
+                  ? [['Last Working Day', new Date((viewItem as any).lastWorkingDate).toLocaleDateString('en-IN')]]
+                  : []),
               ].map(([k, v]) => (
                 <div key={k} className="flex flex-col gap-1 border-b border-border pb-3">
                   <span className="text-xs text-muted-foreground uppercase tracking-wider">{k}</span>
@@ -852,14 +913,14 @@ export default function Employees() {
                   {viewItem.isActive ? (
                     <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">Active</Badge>
                   ) : (
-                    <Badge variant="outline" className="text-rose-400 border-rose-400/30 bg-rose-400/5">Resigned</Badge>
+                    <Badge variant="outline" className="text-rose-400 border-rose-400/30 bg-rose-400/5">{statusLabel(viewItem)}</Badge>
                   )}
                   {viewItem.isActive ? (
-                    <Button variant="outline" size="sm" className="h-7 text-xs text-rose-500 border-rose-400/30 hover:bg-rose-500/10" onClick={() => { setViewItem(null); setConfirmResign(viewItem); }}>
-                      <UserX className="w-3 h-3 mr-1" /> Mark Resigned
+                    <Button variant="outline" size="sm" className="h-7 text-xs text-rose-500 border-rose-400/30 hover:bg-rose-500/10" onClick={() => { setViewItem(null); openMarkAsLeft(viewItem); }}>
+                      <UserX className="w-3 h-3 mr-1" /> Mark as Left
                     </Button>
                   ) : (
-                    <Button variant="outline" size="sm" className="h-7 text-xs text-emerald-500 border-emerald-500/30 hover:bg-emerald-500/10" onClick={() => toggleActive(viewItem, true)} disabled={updateMutation.isPending}>
+                    <Button variant="outline" size="sm" className="h-7 text-xs text-emerald-500 border-emerald-500/30 hover:bg-emerald-500/10" onClick={() => reactivate(viewItem)} disabled={updateMutation.isPending}>
                       <UserCheck className="w-3 h-3 mr-1" /> Reactivate
                     </Button>
                   )}

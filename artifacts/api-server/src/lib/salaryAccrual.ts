@@ -180,6 +180,7 @@ interface EmployeeRow {
   join_date: unknown;
   created_at: unknown;
   salary_accrual_resume_from: unknown;
+  last_working_date: unknown;
 }
 
 /**
@@ -236,10 +237,18 @@ export async function runSalaryAccrual(
   // the employees table records no "inactive from" day, so there is nothing to
   // accrue up to. Deactivation therefore stops future accrual and leaves every
   // day already accrued untouched.
+  //
+  // Someone with a recorded last working date (resigned or terminated) is the
+  // exception: they stay in the sweep even though is_active is FALSE, because
+  // their open days up to that date still need re-pricing when attendance or
+  // policy moves, and any day written beyond it must be torn down. Legacy
+  // deactivations without a date keep the old behaviour.
   const { rows: employees } = await pool.query<EmployeeRow>(
-    `SELECT e.id, e.name, e.salary, e.join_date, e.created_at, e.salary_accrual_resume_from
+    `SELECT e.id, e.name, e.salary, e.join_date, e.created_at, e.salary_accrual_resume_from,
+            e.last_working_date
        FROM employees e
-      WHERE e.is_active = TRUE AND e.salary > 0${only.replace(" AND id =", " AND e.id =")}
+      WHERE (e.is_active = TRUE OR e.last_working_date IS NOT NULL)
+        AND e.salary > 0${only.replace(" AND id =", " AND e.id =")}
       ORDER BY e.id`,
     params,
   );
@@ -278,7 +287,7 @@ export async function runSalaryAccrual(
     const perEmployee = await withEmployeeAccrualLock(pool, e.id, (q) =>
       accrueEmployee(
         q,
-        { id: e.id, startDate, monthlySalary },
+        { id: e.id, startDate, monthlySalary, lastWorkingDate: ymd(e.last_working_date) },
         { asOf, settings, attendanceFrom },
       ),
     );
@@ -327,12 +336,32 @@ export interface AccrueOutcome {
  */
 async function accrueEmployee(
   q: Querier,
-  e: { id: number; startDate: string; monthlySalary: number },
+  e: { id: number; startDate: string; monthlySalary: number; lastWorkingDate?: string | null },
   opts: { asOf: string; settings: PayrollSettings; attendanceFrom: string },
 ): Promise<AccrueOutcome> {
   const { policy, thresholds } = opts.settings;
   const workingDays = policy.workingDays;
   const locked = await lockedMonths(q, e.id);
+
+  // Employment bounds the span. Pay stops with the last working date: the walk
+  // never prices a day past it, and rows already written beyond it (accrued
+  // before the leaving date was recorded) are deleted here, inside the same
+  // lock — except in approved or paid months, which are financially final.
+  const asOf = e.lastWorkingDate && e.lastWorkingDate < opts.asOf ? e.lastWorkingDate : opts.asOf;
+  if (e.lastWorkingDate) {
+    await q.query(
+      `DELETE FROM salary_accruals a
+        WHERE a.employee_id = $1
+          AND a.accrual_date > $2
+          AND NOT EXISTS (
+            SELECT 1 FROM payroll p
+             WHERE p.employee_id = a.employee_id AND p.year = a.year AND p.month = a.month
+               AND p.status IN ('approved', 'paid')
+          )`,
+      [e.id, e.lastWorkingDate],
+    );
+  }
+  if (e.startDate > asOf) return { days: 0, total: 0, changed: 0, previousTotal: 0 };
 
   // Attendance is loaded for whole MONTHS, not just the accrued span. Whether a
   // month counts as tracked is a property of the month as a whole (see
@@ -345,7 +374,7 @@ async function accrueEmployee(
        FROM attendance a
        ${PUNCHED_HOURS_JOIN("a")}
       WHERE a.employee_id = $1 AND a.date >= $2 AND a.date <= $3`,
-    [e.id, monthStart(e.startDate), monthEnd(opts.asOf)],
+    [e.id, monthStart(e.startDate), monthEnd(asOf)],
   );
 
   // Company holidays for the span: a holiday (or weekly off) pays a rowless
@@ -354,7 +383,7 @@ async function accrueEmployee(
     `SELECT to_char(holiday_date, 'YYYY-MM-DD') AS d
        FROM company_holidays
       WHERE holiday_date >= $1 AND holiday_date <= $2`,
-    [monthStart(e.startDate), monthEnd(opts.asOf)],
+    [monthStart(e.startDate), monthEnd(asOf)],
   );
   const holidaySet = new Set<string>(holRows.map((r: any) => String(r.d)));
   const attByDate = new Map<string, AttendanceDay>();
@@ -374,7 +403,7 @@ async function accrueEmployee(
     `SELECT accrual_date, amount, attendance_factor, working_days, attendance_basis
        FROM salary_accruals
       WHERE employee_id = $1 AND accrual_date >= $2 AND accrual_date <= $3`,
-    [e.id, e.startDate, opts.asOf],
+    [e.id, e.startDate, asOf],
   );
   const existing = new Map<string, { amount: number; factor: number; workingDays: number | null; basis: string | null }>();
   for (const r of existingRows) {
@@ -422,7 +451,7 @@ async function accrueEmployee(
       + Math.min(cumSick, policy.paidSickLeavesPerMonth),
   );
 
-  for (let day = e.startDate; day <= opts.asOf; day = addDays(day, 1)) {
+  for (let day = e.startDate; day <= asOf; day = addDays(day, 1)) {
     const { y, m } = parse(day);
     const mk = monthKey(y, m);
     if (mk !== curMonth) { curMonth = mk; cumWork = 0; cumCasual = 0; cumSick = 0; cumPaidOff = 0; prevPayable = 0; prevExpected = 0; }
@@ -450,16 +479,22 @@ async function accrueEmployee(
     const tracked = trackedMonths.has(mk);
     const att = attByDate.get(day);
     const cal = calendarDayInfo(day, policy, holidaySet);
-    // An untracked month is full attendance, exactly as payroll treats it —
-    // the calendar is NOT synthesised into it, or a holiday row would flip the
-    // month to tracked economics. Once any row exists for the month, a day
-    // without one is judged on the calendar first (holidays and weekly offs
-    // are paid without a row) and is genuinely absent otherwise. With loss of
-    // pay disabled, every day is a full paid day by definition — the month
-    // must accrue to the full salary no matter what attendance says.
-    const c = !policy.lopEnabled || !tracked
+    // An untracked month earns NOTHING. Every day this branch prices is on or
+    // after the attendance cutover (earlier days exit above), so attendance
+    // tracking was live and nobody recorded a single day — salary is paid for
+    // attendance, never assumed. The zero rows written below are the audit
+    // that each day was evaluated and earned nothing; recording attendance
+    // later re-prices them. The calendar is NOT synthesised into an untracked
+    // month — a rowless holiday must not flip it to tracked economics. Once
+    // any row exists for the month, a day without one is judged on the
+    // calendar first (holidays and weekly offs are paid without a row) and is
+    // genuinely absent otherwise. With loss of pay disabled, every day is a
+    // full paid day by definition — attendance does not price the month.
+    const c = !policy.lopEnabled
       ? { work: 1, casualLeave: 0, sickLeave: 0, paidOff: 0 }
-      : dayContribution(att, thresholds, cal);
+      : !tracked
+        ? { work: 0, casualLeave: 0, sickLeave: 0, paidOff: 0 }
+        : dayContribution(att, thresholds, cal);
     const basis = !policy.lopEnabled ? "no_lop"
       : !tracked ? "untracked"
       : (att?.status === "company_holiday" || (!att && cal.holiday)) ? "holiday"
@@ -609,16 +644,19 @@ export async function recalcUnapprovedSalaryAccruals(
     // Read the employee inside the lock: this runs straight after the PATCH that
     // changed the salary, and the revised figure is the whole point of rebuilding.
     const { rows } = await q.query(
-      `SELECT id, name, salary, join_date, created_at, salary_accrual_resume_from, is_active
+      `SELECT id, name, salary, join_date, created_at, salary_accrual_resume_from,
+              is_active, last_working_date
          FROM employees WHERE id = $1`,
       [employeeId],
     );
     const e = rows[0] as (EmployeeRow & { is_active: boolean }) | undefined;
-    // Nothing is deleted for someone no longer on the payroll. The employees table
-    // records no "inactive from" day, so a rebuild could only guess how far to
-    // accrue — and deactivation is defined to leave the days already accrued
-    // exactly as they stand.
-    if (!e || !e.is_active) return empty;
+    const lastWorkingDate = ymd(e?.last_working_date);
+    // A recorded last working date gives the rebuild a boundary: open days up
+    // to it are re-priced and days beyond it are torn down inside the lock. A
+    // legacy deactivation without one keeps the old rule — nothing is deleted
+    // for someone no longer on the payroll, because the row records no day to
+    // accrue up to and a rebuild could only guess.
+    if (!e || (!e.is_active && !lastWorkingDate)) return empty;
 
     const employedFrom = ymd(e.join_date) ?? ymd(e.created_at);
     const startDate = maxDate(employedFrom, ymd(e.salary_accrual_resume_from)) ?? null;
@@ -682,7 +720,7 @@ export async function recalcUnapprovedSalaryAccruals(
     const attendanceFrom = await loadAccrualCutover(pool);
     const rebuilt = await accrueEmployee(
       q,
-      { id: employeeId, startDate, monthlySalary },
+      { id: employeeId, startDate, monthlySalary, lastWorkingDate },
       { asOf, settings, attendanceFrom },
     );
 
